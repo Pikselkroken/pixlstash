@@ -30,14 +30,18 @@ from pixlstash.hub.workflow_group_writes import delete_manual_workflow
 import pixlstash.routes.comfyui as comfyui_routes
 import pixlstash.hub.workflow_group_convert as convert
 from pixlstash.hub.workflow_group_convert import (
+    _CORE_RULE_V1,
     _GROUP_NAMESPACE,
+    _core_strip_v1,
     convert_card_state,
     dissolve_manual_groups,
+    rederive_cores,
 )
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflows import get_document, record_api_graph, record_ui_graph
 from pixlstash.server import Server
 import pixlstash.routes.workflows as workflows_routes
+from pixlstash.services.workflow_hash import graph_key, node_labels
 from pixlstash.services.workflow_identity import (
     core_node_labels,
     topology_node_labels,
@@ -46,7 +50,7 @@ from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
     MissingSavedRecipeWorkflowFinder,
 )
 from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY
-from tests.test_workflow_identity import _graph
+from tests.test_workflow_identity import CORE_V2_TWINS, _graph
 
 API = "/api/v1"
 LIB = "test-library"
@@ -581,7 +585,7 @@ def test_the_hub_open_runs_step_7_on_the_user_folder(tmp_path, monkeypatch):
     hub.close()
     reopened = HubDatabase(path)
     try:
-        assert reopened.fetchone("PRAGMA user_version")[0] == 7
+        assert reopened.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
         assert reopened.fetchone("SELECT COUNT(*) FROM workflow_document")[0] == 3
     finally:
         reopened.close()
@@ -679,6 +683,188 @@ def test_the_hub_open_runs_the_conversion_once(world, tmp_path):
     finally:
         reopened.close()
         world.hub = HubDatabase(path)
+
+
+# ── data step 8: core rule v2 ───────────────────────────────────────────────
+
+STEP_8_TABLES = (
+    "workflow_topology_core",
+    "workflow_core_successor",
+    "workflow_group",
+    "workflow_group_attr",
+    "workflow_group_default",
+    "workflow_group_pins",
+    "workflow_group_picture_input",
+    "workflow_key_successor",
+    "workflow_id_successor",
+    "workflow_document",
+)
+MANUAL_ID = "manual:" + "c" * 32
+
+
+def _back_to_v1(hub, *filed) -> dict:
+    """Put *filed*'s topologies back on core rule v1, as a v7 hub holds them.
+
+    Returns ``{name: (v1 workflow id, {node id: v1 core label})}``.
+    """
+    found = {}
+    for keys in filed:
+        v1 = _core_strip_v1(get_document(hub, keys.structural_hash))
+        found[keys.topology_hash] = (
+            f"auto:{graph_key(v1)}",
+            node_labels(v1, rounds=None),
+        )
+    with hub.transaction() as conn:
+        for topology_hash, (old_id, _) in found.items():
+            conn.execute(
+                "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+                "WHERE topology_hash = ?",
+                (_CORE_RULE_V1, old_id[len("auto:") :], topology_hash),
+            )
+    return found
+
+
+def _step_8_rows(hub) -> dict:
+    return {
+        table: sorted(tuple(row) for row in hub.fetchall(f"SELECT * FROM {table}"))
+        for table in STEP_8_TABLES
+    }
+
+
+@pytest.fixture
+def step_8(tmp_path):
+    """Three v1 workflows v2 makes one: plain, an orphan encoder, seed variance.
+
+    Each carries owner state on its v1 id, addressed on its v1 core; a manual
+    workflow names the orphan one as where it came from.
+    """
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    w = SimpleNamespace(hub=hub)
+    w.plain = record_api_graph(hub, _graph(), library_uuid=LIB)
+    w.orphan = record_api_graph(
+        hub, _graph(extra=CORE_V2_TWINS["orphan-encoder"][1]), library_uuid=LIB
+    )
+    w.sve = record_api_graph(
+        hub, _graph(extra=CORE_V2_TWINS["seed-variance"][1]), library_uuid=LIB
+    )
+    v1 = _back_to_v1(hub, w.plain, w.orphan, w.sve)
+    (w.plain_id, plain_labels) = v1[w.plain.topology_hash]
+    (w.orphan_id, orphan_labels) = v1[w.orphan.topology_hash]
+    (w.sve_id, sve_labels) = v1[w.sve.topology_hash]
+    assert len({w.plain_id, w.orphan_id, w.sve_id}) == 3
+    w.new_sampler = core_node_labels(get_document(hub, w.plain.structural_hash))["5"]
+    w.sve_slot = topology_node_labels(get_document(hub, w.sve.structural_hash))["94"]
+    w.orphan_key = _card(hub, w.orphan)
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_group (workflow_id, kind, core_hash) "
+            "VALUES (?, 'auto', ?)",
+            [(i, i[len("auto:") :]) for i in (w.plain_id, w.orphan_id)],
+        )
+        conn.executemany(
+            "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+            "VALUES (?, ?, ?, 0)",
+            [(w.plain_id, "Plain", None), (w.orphan_id, "Orphan", "Orphan notes.")],
+        )
+        conn.executemany(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, ?)",
+            [
+                (w.plain_id, f"core:{plain_labels['5']}/steps", "8"),
+                (w.orphan_id, f"core:{orphan_labels['5']}/steps", "30"),
+                (w.orphan_id, f"core:{orphan_labels['5']}/cfg", "5"),
+                # The orphan is pruned and its topology is not the base: dropped.
+                (w.orphan_id, f"core:{orphan_labels['97']}/text", "left"),
+                # Seed variance is a stage now, on the base topology.
+                (w.sve_id, f"core:{sve_labels['94']}/strength", "0.5"),
+                (w.orphan_id, "lora:" + "5" * 64, "0.7"),
+                (MANUAL_ID, "some-slot/steps", "4"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO workflow_group_pins (workflow_id, pins) VALUES (?, ?)",
+            [
+                (w.plain_id, json.dumps([f"core:{plain_labels['5']}/steps"])),
+                (w.orphan_id, json.dumps([f"core:{orphan_labels['5']}/cfg"])),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO workflow_key_successor (workflow_key, workflow_id) "
+            "VALUES (?, ?)",
+            (w.orphan_key, w.orphan_id),
+        )
+        conn.execute(
+            "INSERT INTO workflow_document (workflow_id, document, origin, "
+            "from_workflow_id, from_name, created_at) "
+            "VALUES (?, '{}', 'duplicate', ?, 'Orphan', 't')",
+            (MANUAL_ID, w.orphan_id),
+        )
+    try:
+        yield w
+    finally:
+        hub.close()
+
+
+def test_step_8_moves_every_v1_workflow_and_its_state_onto_v2(step_8, caplog):
+    caplog.set_level("INFO")
+    w = step_8
+    with w.hub.transaction() as conn:
+        assert rederive_cores(conn) == 3
+    rows = _step_8_rows(w.hub)
+    new_id = w.plain_id  # nothing in the plain graph changes under v2
+    steps, cfg = f"core:{w.new_sampler}/steps", f"core:{w.new_sampler}/cfg"
+
+    # The v2 rows are written, so no card is pending and the grid never blanks.
+    assert {(r[1], r[2]) for r in rows["workflow_topology_core"]} == {
+        (new_id[len("auto:") :], workflow_cards.CORE_RULE_VERSION)
+    }
+    assert workflow_cards.unidentified_variants(w.hub, 10) == []
+    successors = {r[0]: r for r in rows["workflow_core_successor"]}
+    assert {r[1:3] for r in successors.values()} == {
+        (w.plain_id, new_id),
+        (w.orphan_id, new_id),
+        (w.sve_id, new_id),
+    }
+    assert None in json.loads(successors[w.orphan.topology_hash][3]).values()
+
+    assert rows["workflow_group_default"] == sorted(
+        [
+            (new_id, steps, "8"),  # the heir's own wins over the orphan's 30
+            (new_id, cfg, "5"),
+            (new_id, f"{w.sve_slot}/strength", "0.5"),
+            (new_id, "lora:" + "5" * 64, "0.7"),
+            (MANUAL_ID, "some-slot/steps", "4"),  # manual: untouched
+        ]
+    )
+    assert "'30'" in caplog.text and "'left'" in caplog.text
+    assert rows["workflow_group_pins"] == [(new_id, json.dumps([steps, cfg]))]
+    ((_, name, notes, _),) = rows["workflow_group_attr"]
+    assert name == "Plain" and "Orphan notes." in notes
+    assert rows["workflow_group"] == [(new_id, "auto", new_id[len("auto:") :])]
+    assert rows["workflow_key_successor"] == [(w.orphan_key, new_id)]
+    assert rows["workflow_id_successor"] == sorted(
+        [(w.orphan_id, new_id), (w.sve_id, new_id)]
+    )
+    assert rows["workflow_document"][0][4] == new_id
+
+    with w.hub.transaction() as conn:
+        assert rederive_cores(conn) == 0
+    assert _step_8_rows(w.hub) == rows
+
+
+def test_the_hub_open_runs_step_8_once(step_8):
+    w = step_8
+    path = w.hub.path
+    with w.hub.transaction() as conn:
+        conn.execute("PRAGMA user_version = 7")
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert w.hub.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
+    rows = _step_8_rows(w.hub)
+    assert len(rows["workflow_core_successor"]) == 3
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert _step_8_rows(w.hub) == rows
 
 
 # ── the vault half: a saved recipe keeps its checkpoint ────────────────────
@@ -1068,3 +1254,68 @@ def test_a_recipe_on_a_file_only_card_follows_its_file_into_step_7(
         lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
         priority=DBPriority.IMMEDIATE,
     )
+
+
+def test_a_recipe_on_a_v1_workflow_is_refiled_onto_v2_with_its_addresses(run_env):
+    """Data step 8 retires `auto:<v1>`; the conversion moves a recipe naming it,
+    and rewrites its `core:` overrides and model pins through the label map."""
+    server = run_env.server
+    hub = server.hub
+    library = server.vault.library_uuid
+    plain = record_api_graph(hub, _graph(hires=True), library)
+    orphan = record_api_graph(
+        hub, _graph(hires=True, extra=CORE_V2_TWINS["orphan-encoder"][1]), library
+    )
+    v1 = _back_to_v1(hub, plain, orphan)
+    old_id, old_labels = v1[orphan.topology_hash]
+    with hub.transaction() as conn:
+        rederive_cores(conn)
+    new_id = f"auto:{_core_hash_of(hub, orphan)}"
+    assert new_id != old_id
+    new_labels = core_node_labels(get_document(hub, orphan.structural_hash))
+    old_steps = f"core:{old_labels['5']}/steps"
+    old_ckpt = f"core:{old_labels['1']}/ckpt_name"
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        recipe = SavedRecipe(
+            name="v1",
+            workflow_key=_card(hub, orphan),
+            workflow_id=old_id,
+            prompt="x",
+            overrides=json.dumps({old_steps: 12, "lora:" + "5" * 64: 0.7}),
+            models=json.dumps([{"address": old_ckpt, "filename": "b.safetensors"}]),
+        )
+        session.add(recipe)
+        session.commit()
+        return recipe.id
+
+    recipe_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+    task = finder.find_task()
+    assert task.params["recipe_ids"] == [recipe_id]
+    task.result = task._run_task()
+    finder.on_task_complete(task, None)
+    assert finder.find_task() is None, "a re-filed recipe was handed out again"
+    (stored,) = server.vault.db.run_immediate_read_task(
+        lambda session: session.exec(select(SavedRecipe)).all()
+    )
+    assert stored.workflow_id == new_id
+    assert json.loads(stored.overrides) == {
+        f"core:{new_labels['5']}/steps": 12,
+        "lora:" + "5" * 64: 0.7,
+    }
+    assert json.loads(stored.models) == [
+        {"address": f"core:{new_labels['1']}/ckpt_name", "filename": "b.safetensors"}
+    ]
+    server.vault.db.run_task(
+        lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
+        priority=DBPriority.IMMEDIATE,
+    )
+
+
+def _core_hash_of(hub, keys) -> str:
+    return hub.fetchone(
+        "SELECT core_hash FROM workflow_topology_core WHERE topology_hash = ?",
+        (keys.topology_hash,),
+    )["core_hash"]

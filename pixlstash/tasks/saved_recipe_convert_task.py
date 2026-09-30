@@ -30,8 +30,10 @@ from pixlstash.hub.workflow_card_reads import (
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 from pixlstash.hub.workflow_group_convert import (
     card_document,
+    core_label_maps,
     label_map,
     model_pins,
+    rewritten_address,
     translate,
 )
 from pixlstash.pixl_logging import get_logger
@@ -119,8 +121,31 @@ class SavedRecipeConvertTask(BaseTask):
                 deferred.append(recipe_id)
                 continue
             found = card_document(hub, card) if card is not None else None
-            labels = label_map(found[1]) if found else None
             overrides = _overrides(recipe_id, raw_overrides)
+            core_map = _core_successor_map(hub, was, card)
+            if core_map is not None:
+                # Retired by core rule v2 (data step 8): the overrides and
+                # models are already workflow addresses, on the v1 core.
+                stage_slots = (
+                    core_label_maps(found[1])[1]
+                    if found and card.topology_hash == bases.get(workflow_id)
+                    else {}
+                )
+                updates.append(
+                    _onto_core_v2(
+                        recipe_id,
+                        was,
+                        workflow_key,
+                        workflow_id,
+                        overrides,
+                        raw_overrides,
+                        raw_models,
+                        core_map,
+                        stage_slots,
+                    )
+                )
+                continue
+            labels = label_map(found[1]) if found else None
             converted = {}
             for address, value in (overrides or {}).items():
                 slot_label, _, input_name = str(address).rpartition("/")
@@ -190,6 +215,98 @@ class SavedRecipeConvertTask(BaseTask):
         if updates:
             self._vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
         return {"converted": len(updates), "deferred": deferred}
+
+
+def _core_successor_map(hub, was, card):
+    """``{v1 core label: v2 label or None}`` when *was* was retired by data step 8.
+
+    The card's own topology's row first, then every other topology of the
+    retired workflow, so a recipe on a card the hub no longer holds still maps.
+    """
+    if was is None:
+        return None
+    rows = hub.fetchall(
+        "SELECT topology_hash, label_map FROM workflow_core_successor "
+        "WHERE old_workflow_id = ? ORDER BY topology_hash",
+        (was,),
+    )
+    if not rows:
+        return None
+    own = card.topology_hash if card is not None else None
+    labels: dict = {}
+    for row in sorted(rows, key=lambda r: r["topology_hash"] != own):
+        for old, new in json.loads(row["label_map"]).items():
+            labels.setdefault(old, new)
+    return labels
+
+
+def _onto_core_v2(
+    recipe_id,
+    was,
+    workflow_key,
+    workflow_id,
+    overrides,
+    raw_overrides,
+    raw_models,
+    labels,
+    stage_slots,
+) -> dict:
+    """One recipe's update, its ``core:`` addresses rewritten onto the v2 core.
+
+    **Nothing is dropped**: an address naming a node v2 removed, with no stage
+    to hold it, is kept as it was and logged, as a card override is.
+    """
+
+    def moved(address: str, what: str, value) -> str:
+        new = rewritten_address(address, labels, stage_slots)
+        if new is None:
+            logger.warning(
+                "Saved recipe %s: %s %s = %r names a node core rule v2 removed; "
+                "it is kept as it was and a run applies nothing for it.",
+                recipe_id,
+                what,
+                address,
+                value,
+            )
+        return new or address
+
+    converted = {
+        moved(str(address), "override", value): value
+        for address, value in (overrides or {}).items()
+    }
+    models = raw_models
+    try:
+        pins = json.loads(raw_models) if raw_models else None
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "Saved recipe %s has unreadable models, kept as they are: %s",
+            recipe_id,
+            exc,
+        )
+        pins = None
+    if isinstance(pins, list):
+        models = json.dumps(
+            [
+                dict(pin, address=moved(pin["address"], "model", pin.get("filename")))
+                if isinstance(pin, dict) and isinstance(pin.get("address"), str)
+                else pin
+                for pin in pins
+            ]
+        )
+    logger.info(
+        "Saved recipe %s moves from workflow %s to %s under core rule v2.",
+        recipe_id,
+        was,
+        workflow_id,
+    )
+    return {
+        "id": recipe_id,
+        "was": was,
+        "workflow_key": workflow_key,
+        "workflow_id": workflow_id,
+        "overrides": json.dumps(converted) if overrides is not None else raw_overrides,
+        "models": models,
+    }
 
 
 def _overrides(recipe_id: int, raw: str):

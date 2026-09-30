@@ -2242,7 +2242,7 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | Table | Holds |
 |---|---|
 | `workflow_variant` | Which card each stored variant belongs to, with the `key_version` that keyed it. **No timestamp column**, here or on the cache below: deriving the same hub twice has to write byte-identical rows, or "the backfill runs twice with identical rows" is a claim no test can make |
-| `workflow_topology_core` | Per topology: the automatic workflow key (`core_hash` + `core_version`), the workflow type, the slot list the internal marks and the card-era overrides address, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
+| `workflow_topology_core` | Per topology: the automatic workflow key (`core_hash` + `core_version`), the workflow type, the slot list the internal marks and the card-era overrides address, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`, `seed_variance`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
 | `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, guessed from the filename the first time the slot is seen and never recomputed. An internal input to the card key only: no route reads or writes it, and the cut-over read it once (below) |
 | `workflow_lora_promotion` | One LoRA **file** promoted into the card key at one slot, per **(topology, slot label, asset reference)**. **No longer written** (#1623: its route went with the slot marks, the same mechanism); the rows already there still key cards. The per-file counterpart of the slot mark: `workflow_key(..., promoted=)` keys a recipe slot only while it holds exactly that file, so only that file's pictures split off. Read by every writer of `workflow_variant.workflow_key` (`workflow_cards.promoted_pairs`, in `record_identity` and `_rekey_variants`) and by nothing owner-facing. Names the file by its `asset:` reference, never the filename, so a forget leaves the split standing and nameless, as it does a mark. A card a promotion made is never a one-off |
 | `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets — unless ComfyUI has converted it (#1530): `POST /comfyui/workflows/convert` stores the API graph beside the file as `<name>.json.api` (`{converted_from, prompt}`, the digest of the editor file it was made from), and `_file_in_hub` files that graph instead, so the row gets a structural hash. `runnable_document` is what every run, list and parameter read goes through to see it; a conversion of another version of the file is ignored, and delete removes it. Deleting the file drops the row and leaves the card, which its pictures made |
@@ -2327,6 +2327,7 @@ nothing in the vault moves; a manual workflow's own runs are the one exception
 | `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and a topology placed in one by hand (one workflow per topology: the member row's primary key). Merge and split move **topologies**, never cards: what told two cards of one topology apart is a checkpoint or a LoRA, which are recipe values now |
 | `workflow_group_attr`, `workflow_group_default`, `workflow_group_pins`, `workflow_group_picture_input` | The owner's name, notes and hidden flag; edits to the default recipe; pins; picture inputs (library-keyed, pictures by `pixel_sha`). All keyed by `workflow_id` and addressed by **address**, never slot label |
 | `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
+| `workflow_core_successor` | Per topology, the automatic workflow core rule v1 put it in, the one v2 puts it in, and the v1 -> v2 core label map (data step 8, below) |
 
 Reads (`hub/workflow_card_reads.py`): `workflow_of_topology` (a member row, else
 `auto:<core_hash>` under this build's `CORE_RULE_VERSION`, else none),
@@ -2339,7 +2340,7 @@ D3, automatic); its busiest card is `base_card`, whose source a run resolves.
 **Addresses.** A slot label is refined over the whole topology, so it means
 nothing in a workflow spanning several. `workflow_identity.core_node_labels`
 refines on the graph `core_hash` strips (plumbing, stages, LoRA loaders
-stepped through), from the same `_strip`, so the hash and the address cannot
+stepped through, then core rule v2's pass), from the same `_core_graph`, so the hash and the address cannot
 disagree; equal core hashes mean isomorphic stripped graphs, so a sampler,
 latent or checkpoint loader has the same **core address**
 `core:<label>/<input>` in every topology of the group. A node inside a stage
@@ -2561,6 +2562,60 @@ uuid5 of the file name and every write keeps what is there, so a second run
 writes nothing. Files and `workflow_file` rows are left in place; nothing
 writes a `workflow_file` row any more, and a legacy row on an automatic card
 still names it.
+
+#### The core rule and data step 8
+
+`core_hash` and `core_node_labels` share one strip, `_core_graph`, stamped
+`CORE_RULE_VERSION` (`CORE_VERSION` plus the LoRA flag). **v1** removes, and
+re-wires through, plumbing (PreviewImage, Primitive*), the stages (upscale and
+hires-fix sampler, face detailer and its detectors) and LoRA loaders. **v2**
+(`_core_v2`) is a second pass over the v1 graph, never over the document:
+
+* string primitives (`Textbox`, `Text Multiline`, `JWString`, the Literal
+  String node) are plumbing: where a prompt was typed is not a step;
+* picture filters of one image in, one out (`PhotoFilmGrain`, `Image Levels
+  Adjustment`, `ImageSharpen`, `ImageBlur`) are `POST_PROCESS`, a look;
+* `SeedVarianceEnhancer` is `SEED_VARIANCE`, a new **stage**: in
+  `SPECIAL_GROUPS` and `specials`, on or off in the default recipe as upscale
+  is, and skippable per run (`bypass_stage` exempts it from the "feeds a
+  sampler" refusal, since feeding its sampler is what it does). It is never
+  printed in a generated name;
+* **dead nodes are pruned**: every node nothing reads whose class does not
+  write, show or send (`Save|Preview|Output|Combine|Export|Upload|Saver|Send`),
+  repeatedly - an orphan prompt encoder is left-over editing. **Refused
+  whole** when it would remove every sampler the graph had (a graph whose only
+  output was a preview v1 stripped) or everything;
+* loader variants read as the stock loader (`GGUF`, `DisTorch`, `MultiGPU`
+  spellings, the PixlStash shelf loaders; `_CANONICAL_LOADERS`).
+
+The prune runs after the v1 strip rather than on the document on purpose: that
+makes v2 a function of the v1 core, so **workflows only combine, never split**
+(a node feeding only a PreviewImage and a node feeding nothing have the same v1
+core; pruning before the strip would split them). Mis-grouping is accepted
+(the owner's fix is a manual duplicate); manual workflows are untouched, their
+addresses being their own slot labels. `scripts/workflow_core_dry_run.py`
+previews the change on a hub opened read-only and asserts the many-to-one.
+
+**Data step 8** (`workflow_group_convert.rederive_cores`, at hub open, in the
+data-version transaction): each `workflow_topology_core` row at the v1 stamp
+is re-derived from its card's stored document (`card_document`) and the v2 row
+written **there**, so `_VARIANT_PENDING` finds nothing and the grid never
+blanks. `workflow_core_successor` records per topology `auto:<v1>` ->
+`auto:<v2>` and `label_map`, `{v1 core label: v2 core label | null}` by node
+id (the v1 strip survives only as `_core_strip_v1` there). Each retired id's
+`workflow_group_default` / `_pins` / `_picture_input` addresses are rewritten
+through it (`rewritten_address`: null goes to the node's slot label when its
+topology is the new workflow's base, else the row is dropped and logged with
+its value), then `_carry_group_state` merges them onto the new id, olds in
+sorted order: the heir's own win, the losers are logged with their values,
+pins are unioned, a second name lands in the notes. `workflow_key_successor`,
+`workflow_id_successor` (retired id -> successor) and
+`workflow_document.from_workflow_id` follow. A second run finds no v1 row. The
+vault needs no migration: the retired ids in `workflow_id_successor` put every
+recipe naming one in front of `MissingSavedRecipeWorkflowFinder`, and
+`SavedRecipeConvertTask` rewrites its `core:` overrides and `models[].address`
+through the label map (its card's topology first), keeping anything it cannot
+place as it was.
 
 #### Converting cards to workflows (#1623)
 

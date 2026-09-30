@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 7
+CURRENT_DATA_VERSION = 8
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -1294,6 +1294,20 @@ CREATE TABLE IF NOT EXISTS workflow_id_successor (
 )
 """
 
+# What core rule v2 (data step 8) made of each topology's automatic workflow:
+# `auto:<v1 core>` -> `auto:<v2 core>`, and `label_map`, JSON
+# `{v1 core label: v2 core label or null}` (null: v2 took the node off the
+# core). Read by the vault's saved-recipe conversion, which rewrites a
+# recipe's `core:` addresses through it.
+_V2_WORKFLOW_CORE_SUCCESSOR = """
+CREATE TABLE IF NOT EXISTS workflow_core_successor (
+    topology_hash    TEXT PRIMARY KEY,
+    old_workflow_id  TEXT NOT NULL,
+    new_workflow_id  TEXT NOT NULL,
+    label_map        TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1366,6 +1380,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_KEY_SUCCESSOR,
     _V2_WORKFLOW_DOCUMENT,
     _V2_WORKFLOW_ID_SUCCESSOR,
+    _V2_WORKFLOW_CORE_SUCCESSOR,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -1987,6 +2002,12 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     from pixlstash.services.workflow_inbox import workflow_user_dir
 
                     adopt_workflow_files(conn, workflow_user_dir())
+                if data_version < 8:
+                    # Core rule v2: every topology re-derived here, so no
+                    # card is pending, and its workflow's state carried.
+                    from pixlstash.hub.workflow_group_convert import rederive_cores
+
+                    rederive_cores(conn)
                 # No placeholder: PRAGMA takes no parameters, and the value is
                 # this module's own constant rather than anything from outside.
                 conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")
