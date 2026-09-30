@@ -8,12 +8,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
-const mergeWorkflows = vi.fn();
-const splitWorkflow = vi.fn();
 vi.mock("../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
-  mergeWorkflows: (...args) => mergeWorkflows(...args),
-  splitWorkflow: (...args) => splitWorkflow(...args),
 }));
 
 import { useWorkflowsStore } from "./useWorkflowsStore";
@@ -64,8 +60,6 @@ beforeEach(async () => {
   setActivePinia(createPinia());
   listWorkflowCards.mockReset();
   listWorkflowCards.mockResolvedValue({ cards: CARDS, one_offs: 3, hidden: 1 });
-  mergeWorkflows.mockReset();
-  splitWorkflow.mockReset();
 });
 
 describe("the sort keys", () => {
@@ -141,73 +135,6 @@ describe("the selection", () => {
     expect(store.runnableCard?.id).toBe("workhorse");
     store.select("the-stack", { additive: true });
     expect(store.runnableCard).toBe(null);
-  });
-});
-
-// Merge and Split (#1623) replace the stack routes. Each re-reads the grid and
-// moves the selection to the workflow the write produced: the ids it named
-// before are gone or changed.
-describe("merge and split", () => {
-  it("merges the selection in its order and selects the result", async () => {
-    mergeWorkflows.mockResolvedValue({
-      id: "merged",
-      ids: ["the-stack", "workhorse"],
-    });
-    const store = useWorkflowsStore();
-    await store.fetchCards();
-    store.selectRange(["the-stack", "workhorse"]);
-    listWorkflowCards.mockClear();
-
-    expect(await store.mergeSelected()).toBe(true);
-
-    // The FIRST selected is the cover, so the order is the request.
-    expect(mergeWorkflows).toHaveBeenCalledWith(["the-stack", "workhorse"]);
-    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
-    expect(store.selectedKeys).toEqual(["merged"]);
-    expect(store.verbBusy).toBe("");
-  });
-
-  it("merges only what the grid can still resolve, cover first", async () => {
-    mergeWorkflows.mockResolvedValue({ id: "merged" });
-    const store = useWorkflowsStore();
-    await store.fetchCards();
-    store.selectRange(["the-stack", "gone-since", "workhorse"]);
-    expect(await store.mergeSelected()).toBe(true);
-    expect(mergeWorkflows).toHaveBeenCalledWith(["the-stack", "workhorse"]);
-  });
-
-  it("refuses to merge one workflow, and says why a refused merge failed", async () => {
-    const store = useWorkflowsStore();
-    await store.fetchCards();
-    store.select("workhorse");
-    expect(await store.mergeSelected()).toBe(false);
-    expect(mergeWorkflows).not.toHaveBeenCalled();
-
-    mergeWorkflows.mockRejectedValue(new Error("400"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      store.selectRange(["workhorse", "the-stack"]);
-      expect(await store.mergeSelected()).toBe(false);
-      expect(store.error).not.toBe("");
-      // The selection stands: nothing was merged.
-      expect(store.selectedKeys).toEqual(["workhorse", "the-stack"]);
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
-  it("splits one topology out and selects the new workflow", async () => {
-    splitWorkflow.mockResolvedValue({ id: "split-off" });
-    const store = useWorkflowsStore();
-    await store.fetchCards();
-    store.select("few-but-loved");
-    listWorkflowCards.mockClear();
-
-    expect(await store.splitOut("few-but-loved", "t2")).toBe("split-off");
-
-    expect(splitWorkflow).toHaveBeenCalledWith("few-but-loved", "t2");
-    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
-    expect(store.selectedKeys).toEqual(["split-off"]);
   });
 });
 

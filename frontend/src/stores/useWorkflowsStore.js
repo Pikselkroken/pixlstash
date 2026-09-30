@@ -6,9 +6,7 @@ import {
   deleteWorkflowFile,
   duplicateWorkflow,
   listWorkflowCards,
-  mergeWorkflows,
   patchWorkflowCard,
-  splitWorkflow,
 } from "../api/workflows";
 import {
   WORKFLOW_SOURCE_LABELS,
@@ -330,8 +328,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   // The grid's selection bar and the rail's Workflow tab offer the same bulk
   // verbs, so they live here and not in either surface.
   //
-  // Every one of them re-reads the grid: hiding, merging, splitting and
-  // deleting all change what the cards SAY, and none of that can be
+  // Every one of them re-reads the grid: hiding and deleting both change what the cards SAY, and none of that can be
   // re-derived from a response that only names what was written.
 
   /** The selected cards; an id the grid no longer lists is dropped. */
@@ -377,56 +374,6 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       verbBusy.value = "";
     }
     return { done: keys.length - refused, refused };
-  }
-
-  /**
-   * Merge every selected workflow into one (#1623). The first selected is the
-   * cover: its name, notes, defaults, pins and inputs are what the merged
-   * workflow keeps.
-   *
-   * The selection moves to the merged workflow: the ids it named are gone.
-   */
-  async function mergeSelected() {
-    // Off `selectedCards`, as `deleteSelected` is: an id the grid can no
-    // longer resolve would refuse the whole merge. Selection order is kept,
-    // so the first selected is still the cover.
-    const ids = selectedCards.value.map((card) => card.id);
-    if (ids.length < 2 || verbBusy.value) return false;
-    verbBusy.value = "merge";
-    try {
-      const body = await mergeWorkflows(ids);
-      await refetch();
-      selectedKeys.value = body?.id ? [body.id] : [];
-      return true;
-    } catch (err) {
-      console.warn("[workflows] could not merge the selection", ids, err);
-      error.value = errorMessage(err, "Could not merge those workflows.");
-      return false;
-    } finally {
-      verbBusy.value = "";
-    }
-  }
-
-  /**
-   * Split one topology out of workflow `id` into a workflow of its own.
-   *
-   * Answers the new workflow's id, which becomes the selection, or null.
-   */
-  async function splitOut(id, topology) {
-    if (!id || !topology || verbBusy.value) return null;
-    verbBusy.value = "split";
-    try {
-      const body = await splitWorkflow(id, topology);
-      await refetch();
-      if (body?.id) selectedKeys.value = [body.id];
-      return body?.id ?? null;
-    } catch (err) {
-      console.warn(`[workflows] could not split ${topology} out of ${id}`, err);
-      error.value = errorMessage(err, "Could not split that workflow.");
-      return null;
-    } finally {
-      verbBusy.value = "";
-    }
   }
 
   /**
@@ -681,8 +628,6 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     fetchCards,
     refetch,
     invalidate,
-    mergeSelected,
-    splitOut,
     hideSelected,
     renameCard,
     duplicateCard,

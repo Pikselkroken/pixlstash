@@ -30,6 +30,7 @@ from pixlstash.hub.workflow_card_reads import (
     variants_in_workflow,
 )
 from pixlstash.hub.workflows import shelf_model_names
+from pixlstash.routes.comfyui import _picture_workflow_key
 from pixlstash.routes.workflows import RunModel
 from pixlstash.services.workflow_library_service import read_variant_picture_counts
 from pixlstash.services.workflow_export import download_name
@@ -380,9 +381,18 @@ def create_router(server) -> APIRouter:
             if payload.models is None
             else [model.model_dump(exclude_none=True) for model in payload.models]
         )
-        # The NOT NULL card column, internal since #1623: the card a run of
-        # this workflow starts from, which is what a card re-key follows.
-        fields["workflow_key"] = workflow.base_card
+        # The NOT NULL card column, internal since #1623, and the graph the
+        # recipe runs on: the source picture's own card when it is in this
+        # workflow, so a look saved off the plain graph runs plain rather than
+        # on the base graph's stages. Else the base card.
+        source_card = (
+            _picture_workflow_key(server, payload.source_picture_id)
+            if payload.source_picture_id is not None
+            else None
+        )
+        fields["workflow_key"] = (
+            source_card if source_card in workflow.cards else workflow.base_card
+        )
         try:
             recipe = saved_recipe_service.create_recipe(server.vault, fields)
         except saved_recipe_service.UnknownSourcePicture as exc:

@@ -44,8 +44,6 @@ vi.mock("vue-router", () => ({
 const listWorkflowCards = vi.fn();
 const getWorkflowCard = vi.fn();
 const patchWorkflowCard = vi.fn();
-const mergeWorkflows = vi.fn();
-const splitWorkflow = vi.fn();
 const duplicateWorkflow = vi.fn();
 const deleteWorkflowFile = vi.fn();
 const exportWorkflow = vi.fn();
@@ -64,8 +62,6 @@ vi.mock("../../api/workflows", () => ({
   // calls them: `vi.mock` replaces the WHOLE module, so a name the store
   // imports and this factory omits is `undefined` at the call - which fails
   // as "not a function" inside a handler rather than as a missing mock.
-  mergeWorkflows: (...args) => mergeWorkflows(...args),
-  splitWorkflow: (...args) => splitWorkflow(...args),
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
   deleteWorkflowFile: (...args) => deleteWorkflowFile(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
@@ -197,8 +193,6 @@ beforeEach(() => {
     },
   );
   listImportFolders.mockResolvedValue({ folders: [] });
-  mergeWorkflows.mockReset();
-  splitWorkflow.mockReset();
   patchWorkflowCard.mockReset();
   patchWorkflowCard.mockResolvedValue({ card: card("b") });
   // A FRESH array per call, as a real response is: the store assigns it to
@@ -1019,31 +1013,6 @@ describe("the verbs the bar fires", () => {
       workflowId: "b",
     });
     expect(useRunDialogStore().source.workflowKey).toBeUndefined();
-  });
-
-  it("Merge sends the selection in its order and selects the result", async () => {
-    mergeWorkflows.mockResolvedValue({ id: "merged", ids: ["c", "a"] });
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    store.selectRange(["c", "a"]);
-
-    await bar(wrapper).vm.$emit("merge");
-    await flush();
-    expect(mergeWorkflows).toHaveBeenCalledWith(["c", "a"]);
-    expect(store.selectedKeys).toEqual(["merged"]);
-    expect(wrapper.find('[role="status"]').text()).toBe("2 workflows merged");
-  });
-
-  it("Split sends the one selected workflow and the topology picked", async () => {
-    splitWorkflow.mockResolvedValue({ id: "split-off" });
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    store.select("b");
-
-    await bar(wrapper).vm.$emit("split", "topology-b2");
-    await flush();
-    expect(splitWorkflow).toHaveBeenCalledWith("b", "topology-b2");
-    expect(store.selectedKeys).toEqual(["split-off"]);
   });
 
   it("Delete asks first, and deletes nothing when the answer is no", async () => {

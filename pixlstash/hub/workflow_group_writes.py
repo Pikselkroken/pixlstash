@@ -2,8 +2,7 @@
 
 The workflow-level twin of :mod:`pixlstash.hub.workflow_card_writes`: the
 owner's name, notes and hidden flag, the edits to a workflow's default recipe,
-its pins and picture inputs, and the two gestures that move topologies between
-workflows, merge and split. Every table here is keyed by ``workflow_id``
+and its pins and picture inputs. Every table here is keyed by ``workflow_id``
 (``auto:<core hash>`` or a manual group's uuid hex) and addresses a parameter
 by its **address** (``<slot label>/<input name>``, the slot label a
 ``core:<label>`` or a base-topology label), never by node id.
@@ -16,11 +15,9 @@ module writes rows, one transaction per logical write.
 from __future__ import annotations
 
 import json
-import uuid
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_card_reads import AUTO_STACK_PREFIX
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import model_fix_kind
 
@@ -30,20 +27,8 @@ logger = get_logger(__name__)
 # spells the same prefix; the service imports the hub, not the other way).
 LORA_ADDRESS_PREFIX = "lora:"
 
-# The owner's own tables, all keyed by ``workflow_id``. What a merge moves from
-# its cover, and what an emptied workflow loses.
-_GROUP_TABLES = (
-    "workflow_group_attr",
-    "workflow_group_default",
-    "workflow_group_pins",
-    "workflow_group_picture_input",
-)
-
 # Sentinel: this attribute was not in the request, so it stands.
 UNSET = object()
-
-# How the notes of a merge name the workflows it folded in (#1620 D4).
-ALSO_NAMED = "Also named: "
 
 
 def is_parameter_address(address: str) -> bool:
@@ -184,138 +169,3 @@ def replace_group_picture_inputs(
                 for address, mode, pixel_sha in inputs
             ],
         )
-
-
-def merge_workflows(
-    hub: HubDatabase, ids: list[str], topologies: dict[str, list[str]]
-) -> str:
-    """Put every topology of the named workflows in one; return its id.
-
-    ``ids[0]`` is the cover: its name, notes, hidden flag, defaults, pins and
-    picture inputs are what the merged workflow has. Every other distinct name
-    is appended to the notes as ``Also named: …`` (#1620 D4), and every other
-    workflow's notes follow, headed by its name, so nothing typed is lost. Its
-    defaults, pins and inputs are not kept: they address its own graph. A manual cover keeps its id; an automatic one is
-    replaced by a new manual group, since ``auto:<core hash>`` names only the
-    topologies sharing that hash.
-
-    Args:
-        ids: The workflows, cover first, validated and distinct.
-        topologies: ``{workflow_id: [topology_hash]}`` for each of *ids*.
-    """
-    cover = ids[0]
-    target = cover if not cover.startswith(AUTO_STACK_PREFIX) else uuid.uuid4().hex
-    with hub.transaction() as conn:
-        attrs = {
-            row[0]: row
-            for row in conn.execute(
-                "SELECT workflow_id, name, notes, hidden FROM workflow_group_attr "
-                f"WHERE workflow_id IN ({','.join('?' * len(ids))})",
-                tuple(ids),
-            ).fetchall()
-        }
-        cover_attr = attrs.get(cover)
-        cover_name = cover_attr[1] if cover_attr else None
-        others = list(
-            dict.fromkeys(
-                attrs[other][1]
-                for other in ids[1:]
-                if other in attrs and attrs[other][1] and attrs[other][1] != cover_name
-            )
-        )
-        conn.execute(
-            "INSERT INTO workflow_group (workflow_id, kind, core_hash) "
-            "VALUES (?, 'manual', NULL) ON CONFLICT(workflow_id) DO NOTHING",
-            (target,),
-        )
-        if target != cover:
-            for table in _GROUP_TABLES:
-                _copy_rows(conn, table, cover, target)
-        conn.executemany(
-            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
-            "VALUES (?, ?) ON CONFLICT(topology_hash) "
-            "DO UPDATE SET workflow_id = excluded.workflow_id",
-            [
-                (topology_hash, target)
-                for workflow_id in ids
-                for topology_hash in topologies.get(workflow_id, ())
-            ],
-        )
-        # A card the vault has not converted yet still names its old workflow
-        # through its successor row; it follows the merge, or its saved
-        # recipes would land on an id that no longer resolves.
-        conn.executemany(
-            "UPDATE workflow_key_successor SET workflow_id = ? WHERE workflow_id = ?",
-            [(target, emptied) for emptied in ids if emptied != target],
-        )
-        carried = [
-            f"{attrs[other][1] or 'Unnamed workflow'}:\n{attrs[other][2]}"
-            for other in ids[1:]
-            if other in attrs and attrs[other][2]
-        ]
-        for emptied in ids:
-            if emptied == target:
-                continue
-            for table in _GROUP_TABLES:
-                conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (emptied,))
-            conn.execute(
-                "DELETE FROM workflow_group WHERE workflow_id = ? AND NOT EXISTS "
-                "(SELECT 1 FROM workflow_group_member WHERE workflow_id = ?)",
-                (emptied, emptied),
-            )
-        if others or carried:
-            notes = cover_attr[2] if cover_attr else None
-            additions = carried + ([ALSO_NAMED + ", ".join(others)] if others else [])
-            conn.execute(
-                "INSERT INTO workflow_group_attr (workflow_id, notes) VALUES (?, ?) "
-                "ON CONFLICT(workflow_id) DO UPDATE SET notes = excluded.notes",
-                (target, "\n\n".join(filter(None, [notes, *additions]))),
-            )
-    logger.info(
-        "Merged workflows %s into %s (%d topologies).",
-        ", ".join(ids),
-        target,
-        sum(len(topologies.get(workflow_id, ())) for workflow_id in ids),
-    )
-    return target
-
-
-def split_topology(hub: HubDatabase, workflow_id: str, topology_hash: str) -> str:
-    """Take one topology out of *workflow_id* into a new manual group; its id.
-
-    The workflow it leaves keeps its name, notes and settings; the new one
-    starts with none of its own.
-    """
-    new_id = uuid.uuid4().hex
-    with hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_group (workflow_id, kind, core_hash) "
-            "VALUES (?, 'manual', NULL)",
-            (new_id,),
-        )
-        conn.execute(
-            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
-            "VALUES (?, ?) ON CONFLICT(topology_hash) "
-            "DO UPDATE SET workflow_id = excluded.workflow_id",
-            (topology_hash, new_id),
-        )
-    logger.info(
-        "Split topology %s out of workflow %s into %s.",
-        topology_hash,
-        workflow_id,
-        new_id,
-    )
-    return new_id
-
-
-def _copy_rows(conn, table: str, source: str, target: str) -> None:
-    """Copy every row of *table* keyed on *source* onto *target*."""
-    columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
-    selected = ", ".join(
-        "?" if column == "workflow_id" else column for column in columns
-    )
-    conn.execute(
-        f"INSERT INTO {table} ({', '.join(columns)}) "
-        f"SELECT {selected} FROM {table} WHERE workflow_id = ?",
-        (target, source),
-    )

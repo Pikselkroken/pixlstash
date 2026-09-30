@@ -737,6 +737,34 @@ def test_credit_survives_whitespace_around_the_prompt(recipe_env):
 # ===========================================================================
 
 
+def _picture_id(recipe_env, file_path: str) -> int:
+    return recipe_env.server.vault.db.run_immediate_read_task(
+        lambda session: session.exec(
+            select(Picture.id).where(Picture.file_path == file_path)
+        ).one()
+    )
+
+
+def test_a_recipe_saved_from_a_picture_runs_on_that_pictures_graph(recipe_env):
+    """Card B, not the base card A: a look saved off B's graph runs on B.
+
+    A source picture from another workflow does not move it there: the base
+    card stands.
+    """
+    on_b = _save(
+        recipe_env.owner,
+        WF_AB,
+        source_picture_id=_picture_id(recipe_env, "b_match.png"),
+    )
+    assert _internal_card(recipe_env, on_b["id"]) == CARD_B
+    elsewhere = _save(
+        recipe_env.owner,
+        WF_AB,
+        source_picture_id=_picture_id(recipe_env, "c_match.png"),
+    )
+    assert _internal_card(recipe_env, elsewhere["id"]) == CARD_A
+
+
 def test_a_source_picture_this_library_does_not_hold_is_refused(recipe_env):
     """422, not the vault's foreign key surfacing as a 500 in the owner's log."""
     r = recipe_env.owner.post(

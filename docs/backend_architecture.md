@@ -751,7 +751,6 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                                |
 | POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                           |
 | GET    | /api/v1/workflows                                                             | workflows       | The Workflows grid                                          |
-| POST   | /api/v1/workflows/merge                                                       | workflows       | Merge workflows                                             |
 | GET    | /api/v1/workflows/recipes/{structural_hash}/graph                             | workflows       | A recipe's stored graph                                     |
 | POST   | /api/v1/workflows/run                                                         | workflows       | Run a workflow                                              |
 | POST   | /api/v1/workflows/run/preflight                                               | workflows       | Check what a run would do                                   |
@@ -775,7 +774,6 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/workflows/{workflow_id}/pictures                                      | workflows       | Pictures made with a workflow                               |
 | PUT    | /api/v1/workflows/{workflow_id}/pins                                          | workflows       | Set a workflow's pinned parameters                          |
 | POST   | /api/v1/workflows/{workflow_id}/set-clone-plans                               | workflows       | What cloning a workflow onto each workflow set would write  |
-| POST   | /api/v1/workflows/{workflow_id}/split                                         | workflows       | Split a topology out of a workflow                          |
 | GET    | /version                                                                      | server          | Read Version                                                |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
 | WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                   |

@@ -21,7 +21,11 @@ from typing import TYPE_CHECKING
 from sqlalchemy import text
 
 from pixlstash.database import DBPriority
-from pixlstash.hub.workflow_card_reads import card_index, workflow_index
+from pixlstash.hub.workflow_card_reads import (
+    card_index,
+    workflow_index,
+    workflow_of_topology,
+)
 from pixlstash.hub.workflow_group_convert import (
     card_document,
     label_map,
@@ -83,7 +87,17 @@ class SavedRecipeConvertTask(BaseTask):
                 "SELECT workflow_id FROM workflow_key_successor WHERE workflow_key = ?",
                 (workflow_key,),
             )
-            if successor is None:
+            card = by_key.get(workflow_key)
+            # A card saved on after the cut-over has no successor row: it is
+            # in the workflow its own topology is in.
+            workflow_id = (
+                successor["workflow_id"]
+                if successor is not None
+                else workflow_of_topology(hub, card.topology_hash)
+                if card is not None
+                else None
+            )
+            if workflow_id is None:
                 logger.warning(
                     "Saved recipe %s names card %s, which became no workflow; it "
                     "is left as it is and runs on that card.",
@@ -92,8 +106,6 @@ class SavedRecipeConvertTask(BaseTask):
                 )
                 deferred.append(recipe_id)
                 continue
-            workflow_id = successor["workflow_id"]
-            card = by_key.get(workflow_key)
             found = card_document(hub, card) if card is not None else None
             labels = label_map(found[1]) if found else None
             overrides = _overrides(recipe_id, raw_overrides)

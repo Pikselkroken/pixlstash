@@ -4,8 +4,7 @@
 // confirm either.
 //
 // **The gates**, because each one is a refusal the SERVER also enforces: Run
-// takes one workflow, Merge needs two, Split needs one workflow holding more
-// than one topology, and Delete needs a file — so a gate that disagrees with the route
+// takes one workflow, Rename one, and Delete needs a file — so a gate that disagrees with the route
 // is a button that can only come back refused.
 //
 // **The parity**, because `menu-parity.spec.js` exists: the picture grid's
@@ -157,39 +156,6 @@ describe("the pill's gates", () => {
     expect(tooltip(many, "rename")).toContain("Select one workflow");
   });
 
-  it("Merge needs two, and names the first selected as what is kept", async () => {
-    const one = bar(["a"]).wrapper;
-    expect(enabled(one, "merge")).toBe(false);
-    expect(tooltip(one, "merge")).toContain("Select two or more");
-
-    const two = bar(["a", "b"]).wrapper;
-    expect(enabled(two, "merge")).toBe(true);
-    expect(tooltip(two, "merge")).toContain("Merge these 2");
-    await verb(two, "merge").trigger("click");
-    expect(two.emitted("merge")).toHaveLength(1);
-  });
-
-  it("offers one Split row per topology, only on a workflow holding several", async () => {
-    // One topology: nothing to split, and no row at all rather than a refusal
-    // naming a hash nobody has heard of.
-    expect(bar(["a"]).wrapper.vm.splitTopologies).toEqual([]);
-    // Two selected: Split acts on one workflow.
-    expect(bar(["c", "a"]).wrapper.vm.splitTopologies).toEqual([]);
-
-    const { wrapper } = bar(["c"]);
-    const rows = verbMenus(wrapper)[0]
-      .findAll(".ctx-item")
-      .filter((el) => el.attributes("data-verb") === "split");
-    expect(rows.map((el) => el.find(".ctx-label-text").text())).toEqual([
-      "Split out graph 1 of 3",
-      "Split out graph 2 of 3",
-      "Split out graph 3 of 3",
-    ]);
-    // Each row sends ITS topology, which is what the route takes.
-    await rows[1].trigger("click");
-    expect(wrapper.emitted("split")).toEqual([["b".repeat(64)]]);
-  });
-
   it("Delete needs EVERY selected card to have a file, not merely one", () => {
     const imported = bar(["b", "c"]).wrapper;
     expect(enabled(imported, "delete")).toBe(true);
@@ -262,7 +228,6 @@ describe("the two menus cannot diverge", () => {
     expect(labels).toEqual(
       expect.arrayContaining([
         "Run…",
-        "Merge",
         "Rename",
         "Hide",
         "Delete file…",
@@ -308,32 +273,32 @@ describe("the two menus cannot diverge", () => {
   });
 
   it("refuses a verb with aria-disabled, so its reason stays hoverable", () => {
-    // Merge with one workflow selected is listed anyway and refused with its
-    // reason.
+    // Rename with two workflows selected is listed anyway and refused with
+    // its reason.
     //
     // **Never the NATIVE `disabled`.** That fires no pointer events, so the
     // tooltip carrying the reason never opens — and "the verb stays on screen
     // because the refusal is one hover away" is the entire argument for not
     // hiding it. A row that is grey with no way to learn why is worse than a
     // row that is not there.
-    const { wrapper } = bar(["a"]);
+    const { wrapper } = bar(["a", "b"]);
     const row = verbMenus(wrapper)[0]
       .findAll(".ctx-item")
-      .find((el) => el.find(".ctx-label-text").text() === "Merge");
+      .find((el) => el.find(".ctx-label-text").text() === "Rename");
     expect(row.attributes("aria-disabled")).toBe("true");
     expect(row.attributes("disabled")).toBeUndefined();
     expect(row.classes()).toContain("ctx-item--disabled");
   });
 
   it("drops a refused row's click rather than firing the verb", async () => {
-    const { wrapper } = bar(["a"]);
+    const { wrapper } = bar(["a", "b"]);
     const row = verbMenus(wrapper)[0]
       .findAll(".ctx-item")
-      .find((el) => el.find(".ctx-label-text").text() === "Merge");
+      .find((el) => el.find(".ctx-label-text").text() === "Rename");
     await row.trigger("click");
     // Without the native attribute the browser no longer swallows the press,
     // so the handler has to. A refused row that still fired would be strictly
     // worse than the disabled one it replaced.
-    expect(wrapper.emitted("merge")).toBeUndefined();
+    expect(wrapper.emitted("rename")).toBeUndefined();
   });
 });

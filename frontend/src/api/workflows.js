@@ -223,36 +223,6 @@ export async function setWorkflowInputs(workflowId, inputs) {
 }
 
 /**
- * Merge several workflows into one (#1623). `ids[0]` is the cover: its name,
- * notes, defaults, pins and inputs are kept, and every other distinct name is
- * appended to the notes. Every topology of every named workflow joins it.
- *
- * @param {Array<string>} ids - two or more workflow ids.
- * @returns {Promise<{id: string, ids: Array<string>}>} the merged workflow.
- */
-export async function mergeWorkflows(ids) {
-  return unwrap(apiClient.post("/workflows/merge", { ids }));
-}
-
-/**
- * Split one topology out of a workflow into a workflow of its own (#1623).
- *
- * `topology` is one of the card's `topologies`; the route refuses a workflow
- * holding only one.
- *
- * @param {string} workflowId
- * @param {string} topology
- * @returns {Promise<{id: string}>} the new workflow.
- */
-export async function splitWorkflow(workflowId, topology) {
-  return unwrap(
-    apiClient.post(`/workflows/${encodeURIComponent(workflowId)}/split`, {
-      topology,
-    }),
-  );
-}
-
-/**
  * What a run would do, doing none of it (v1.12 B7).
  *
  * The same body `runWorkflowCard` takes. Every card the request resolves to

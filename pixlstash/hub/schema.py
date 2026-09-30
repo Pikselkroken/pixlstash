@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 5
+CURRENT_DATA_VERSION = 6
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -1936,6 +1936,15 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     )
 
                     convert_card_state(conn)
+                if data_version < 6:
+                    # Workflows are automatic: the groups merge, split and
+                    # the cut-over's stacks made go back, their owner state
+                    # carried to the automatic workflow holding most of each.
+                    from pixlstash.hub.workflow_group_convert import (
+                        dissolve_manual_groups,
+                    )
+
+                    dissolve_manual_groups(conn)
                 # No placeholder: PRAGMA takes no parameters, and the value is
                 # this module's own constant rather than anything from outside.
                 conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")
