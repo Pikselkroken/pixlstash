@@ -9,6 +9,7 @@ import {
   mergeWorkflows,
   patchWorkflowCard,
   splitWorkflow,
+  unmergeWorkflow,
 } from "../api/workflows";
 import {
   WORKFLOW_SOURCE_LABELS,
@@ -430,6 +431,27 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
+   * Undo the newest merge into workflow `id`. The selection becomes the
+   * workflows it came apart into.
+   */
+  async function unmerge(id) {
+    if (!id || verbBusy.value) return false;
+    verbBusy.value = "unmerge";
+    try {
+      const body = await unmergeWorkflow(id);
+      await refetch();
+      selectedKeys.value = body?.ids ?? [];
+      return true;
+    } catch (err) {
+      console.warn(`[workflows] could not unmerge ${id}`, err);
+      error.value = errorMessage(err, "Could not unmerge that workflow.");
+      return false;
+    } finally {
+      verbBusy.value = "";
+    }
+  }
+
+  /**
    * Hide, or unhide, every selected card.
    *
    * Both directions through one function because they are one route and one
@@ -683,6 +705,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     invalidate,
     mergeSelected,
     splitOut,
+    unmerge,
     hideSelected,
     renameCard,
     duplicateCard,

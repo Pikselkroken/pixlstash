@@ -1783,6 +1783,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Take one topology out of a workflow into one of its own; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/workflows/{workflow_id}/unmerge"): RoutePolicy(
+        _OWNER,
+        justification="Undo a merge, moving its topologies and saved recipes back; POST blocked for READ tokens; owner only",
+    ),
     # The workflow's LoRAs counted over the whole vault.
     ("GET", "/api/v1/workflows/{workflow_id}/lora-summary"): RoutePolicy(
         _OWNER,

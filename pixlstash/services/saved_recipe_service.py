@@ -686,6 +686,40 @@ def rehome_recipes(vault, old_ids: list[str], new_id: str) -> int:
     return vault.db.run_task(rehome_in_session, old_ids, new_id)
 
 
+def rehome_by_card_in_session(
+    session: Session,
+    workflow_id: str,
+    by_card: dict[str, str],
+    fallback: Optional[str],
+) -> int:
+    """Move every recipe of *workflow_id* to its card's workflow; how many moved.
+
+    For an unmerge: *by_card* is ``{workflow_key: workflow}`` for the cards the
+    merged workflow held. A recipe saved on a card it did not list (an
+    unconverted key) goes to *fallback*, the workflow of the base graph.
+    """
+    rows = session.exec(
+        select(SavedRecipe).where(SavedRecipe.workflow_id == workflow_id)
+    ).all()
+    moved = 0
+    for row in rows:
+        target = by_card.get(row.workflow_key, fallback)
+        if target and target != workflow_id:
+            row.workflow_id = target
+            session.add(row)
+            moved += 1
+    if moved:
+        session.commit()
+    return moved
+
+
+def rehome_by_card(
+    vault, workflow_id: str, by_card: dict[str, str], fallback: Optional[str]
+) -> int:
+    """Follow an unmerge: see :func:`rehome_by_card_in_session`."""
+    return vault.db.run_task(rehome_by_card_in_session, workflow_id, by_card, fallback)
+
+
 def read_in_session(session: Session, recipe_id: int) -> Optional[SavedRecipe]:
     """One saved recipe row by id, or ``None``."""
     return session.get(SavedRecipe, recipe_id)

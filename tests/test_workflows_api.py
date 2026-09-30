@@ -175,6 +175,7 @@ _WORKFLOW_WRITE_ROUTES = (
     ("PATCH", "/api/v1/workflows/{workflow_id}"),
     ("POST", "/api/v1/workflows/merge"),
     ("POST", "/api/v1/workflows/{workflow_id}/split"),
+    ("POST", "/api/v1/workflows/{workflow_id}/unmerge"),
     ("PUT", "/api/v1/workflows/{workflow_id}/model-fix"),
     ("PUT", "/api/v1/workflows/{workflow_id}/defaults"),
     ("PUT", "/api/v1/workflows/{workflow_id}/default-lora"),
@@ -625,6 +626,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_group_picture_input")
         conn.execute("DELETE FROM workflow_group_member")
         conn.execute("DELETE FROM workflow_group")
+        conn.execute("DELETE FROM workflow_merge_undo")
         conn.execute(
             "DELETE FROM model WHERE filename IN (?, ?, ?, ?)",
             (
@@ -3789,6 +3791,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ("PATCH", f"{API}/workflows/{BUSY_WF}", {"name": "nope"}),
         ("POST", f"{API}/workflows/merge", {"ids": [BUSY_WF, FORGOTTEN_WF]}),
         ("POST", f"{API}/workflows/{BUSY_WF}/split", {"topology": BUSY_TOPOLOGY}),
+        ("POST", f"{API}/workflows/{BUSY_WF}/unmerge", None),
         (
             "PUT",
             f"{API}/workflows/{BUSY_WF}/model-fix",
@@ -3945,6 +3948,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "/workflows/{workflow_id}/split",
         f"/workflows/{BUSY_WF}/split",
         {"topology": BUSY_TOPOLOGY},
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/unmerge",
+        f"/workflows/{BUSY_WF}/unmerge",
+        None,
     ),
     (
         "POST",
@@ -4278,6 +4287,35 @@ def test_a_workflows_defaults_pins_and_inputs_are_written_whole(workflow_env):
     )
 
 
+def _make_alike(server, *recipes) -> None:
+    """Give these recipes' workflows BUSY's type and checkpoint, so they merge.
+
+    The seeded workflows are of three types and none loads BUSY's
+    checkpoint, which is exactly what a merge refuses. A graph with no
+    loader at all (BINNED's) is given BUSY_RECIPE_B's one loader slot.
+    """
+    with server.hub.transaction() as conn:
+        for recipe in recipes:
+            conn.execute(
+                "UPDATE workflow_topology_core SET workflow_type = 'txt2img', "
+                "slots = COALESCE(?, slots) "
+                "WHERE topology_hash = (SELECT topology_hash FROM workflow_recipe "
+                "WHERE structural_hash = ?)",
+                (
+                    None
+                    if _slot_list(recipe)
+                    else json.dumps(_slot_list(BUSY_RECIPE_B)),
+                    recipe,
+                ),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_recipe_asset "
+                "(structural_hash, widget_name, normalized_filename) "
+                "VALUES (?, 'ckpt_name', 'realvisxl.safetensors')",
+                (recipe,),
+            )
+
+
 def test_merging_workflows_keeps_the_covers_state_and_names_the_rest(workflow_env):
     """#1620 D4: the cover's name wins and every other name goes to the notes.
 
@@ -4287,6 +4325,7 @@ def test_merging_workflows_keeps_the_covers_state_and_names_the_rest(workflow_en
     """
     owner, server = workflow_env.owner, workflow_env.server
     hub = server.hub
+    _make_alike(server, FORGOTTEN_RECIPE, BINNED_RECIPE)
     owner.patch(
         f"{API}/workflows/{BUSY_WF}", json={"name": "Portraits", "notes": "cfg 7"}
     )
@@ -4387,6 +4426,117 @@ def test_a_merge_is_refused_whole_rather_than_half_applied(workflow_env):
     # Nothing was written by any of them.
     assert workflow_env.server.hub.fetchone("SELECT 1 FROM workflow_group") is None
     assert set(_by_key(_cards(owner))) == {BUSY_WF, FORGOTTEN_WF}
+
+
+def test_a_merge_of_unlike_workflows_is_refused(workflow_env):
+    """Only one workflow split in two may be merged: one type, one checkpoint."""
+    owner, server = workflow_env.owner, workflow_env.server
+    cards = _by_key(_cards(owner))
+    assert cards[BUSY_WF]["merge_checkpoints"] == ["realvisxl"]
+    # txt2img beside img2img.
+    r = owner.post(f"{API}/workflows/merge", json={"ids": [BUSY_WF, FORGOTTEN_WF]})
+    assert r.status_code == 409, r.text
+    assert "same type" in r.json()["detail"]
+    # The same type, but FORGOTTEN loads no checkpoint BUSY does.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET workflow_type = 'txt2img' "
+            "WHERE topology_hash = ?",
+            (FORGOTTEN_TOPOLOGY,),
+        )
+    r = owner.post(f"{API}/workflows/merge", json={"ids": [BUSY_WF, FORGOTTEN_WF]})
+    assert r.status_code == 409, r.text
+    assert "checkpoint" in r.json()["detail"]
+    # A picture's checkpoint counts, folder and case as ComfyUI spelled it.
+    _set_picture_models(
+        server, {"forgotten.png": (["SDXL\\RealVisXL.safetensors"], [])}
+    )
+    assert _by_key(_cards(owner))[FORGOTTEN_WF]["merge_checkpoints"] == ["realvisxl"]
+    r = owner.post(f"{API}/workflows/merge", json={"ids": [BUSY_WF, FORGOTTEN_WF]})
+    assert r.status_code == 201, r.text
+
+
+def test_unmerging_puts_back_what_the_merge_replaced(workflow_env):
+    """Each folded-in workflow comes back whole: name, notes, settings, recipes.
+
+    Merges stack, so the newest is undone first.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    hub = server.hub
+    _make_alike(server, FORGOTTEN_RECIPE, BINNED_RECIPE)
+    owner.patch(f"{API}/workflows/{BUSY_WF}", json={"name": "Portraits"})
+    owner.patch(
+        f"{API}/workflows/{FORGOTTEN_WF}",
+        json={"name": "Old portraits", "notes": "loose light"},
+    )
+    owner.put(
+        f"{API}/workflows/{FORGOTTEN_WF}/defaults",
+        json={"defaults": [{"slot_label": "s", "input_name": "cfg", "value": 3}]},
+    )
+    _save_recipe(server, FORGOTTEN_WF, name="Kept on the other one")
+    assert not _by_key(_cards(owner))[BUSY_WF]["unmergeable"]
+
+    merged = owner.post(
+        f"{API}/workflows/merge", json={"ids": [BUSY_WF, FORGOTTEN_WF]}
+    ).json()["id"]
+    r = owner.post(f"{API}/workflows/merge", json={"ids": [merged, BINNED_WF]})
+    assert r.status_code == 201, r.text
+    assert _by_key(_cards(owner))[merged]["unmergeable"]
+
+    # The newest merge first: BINNED leaves, the other two stay merged.
+    r = owner.post(f"{API}/workflows/{merged}/unmerge")
+    assert r.status_code == 200, r.text
+    assert set(r.json()["ids"]) == {merged, BINNED_WF}
+    cards = _by_key(_cards(owner, "?include_one_offs=true"))
+    assert cards[merged]["topologies"] == sorted([BUSY_TOPOLOGY, FORGOTTEN_TOPOLOGY])
+    assert cards[BINNED_WF]["topologies"] == [BINNED_TOPOLOGY]
+
+    seen, stop = _events(server)
+    try:
+        r = owner.post(f"{API}/workflows/{merged}/unmerge")
+    finally:
+        stop()
+    assert r.status_code == 200, r.text
+    assert set(r.json()["ids"]) == {BUSY_WF, FORGOTTEN_WF}
+    assert set(seen[0]["keys"]) == {merged, BUSY_WF, FORGOTTEN_WF}
+    assert hub.fetchone("SELECT 1 FROM workflow_group_member") is None
+    assert hub.fetchone("SELECT 1 FROM workflow_merge_undo") is None
+    assert _attr_row(server, merged) is None
+    assert _attr_row(server, BUSY_WF)["name"] == "Portraits"
+    assert _attr_row(server, FORGOTTEN_WF)["name"] == "Old portraits"
+    assert _attr_row(server, FORGOTTEN_WF)["notes"] == "loose light"
+    assert _group_defaults(hub, FORGOTTEN_WF) == {"s/cfg": "3"}
+    listed = owner.get(f"{API}/recipes", params={"workflow_id": FORGOTTEN_WF}).json()
+    assert [recipe["name"] for recipe in listed] == ["Kept on the other one"]
+    # Nothing is left to take apart.
+    r = owner.post(f"{API}/workflows/{BUSY_WF}/unmerge")
+    assert r.status_code == 400, r.text
+    assert owner.post(f"{API}/workflows/{merged}/unmerge").status_code == 404
+
+
+def test_unmerging_a_merge_older_than_its_snapshot(workflow_env):
+    """No snapshot: back to the automatic grouping, the name kept by the base."""
+    owner, server = workflow_env.owner, workflow_env.server
+    hub = server.hub
+    _make_alike(server, FORGOTTEN_RECIPE)
+    merged = owner.post(
+        f"{API}/workflows/merge", json={"ids": [BUSY_WF, FORGOTTEN_WF]}
+    ).json()["id"]
+    owner.patch(f"{API}/workflows/{merged}", json={"name": "Both"})
+    _save_recipe(server, merged, name="On the merge")
+    base = _by_key(_cards(owner))[merged]["base_topology"]
+    heir = BUSY_WF if base == BUSY_TOPOLOGY else FORGOTTEN_WF
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_merge_undo")
+
+    r = owner.post(f"{API}/workflows/{merged}/unmerge")
+    assert r.status_code == 200, r.text
+    assert set(r.json()["ids"]) == {BUSY_WF, FORGOTTEN_WF}
+    assert hub.fetchone("SELECT 1 FROM workflow_group_member") is None
+    assert _attr_row(server, merged) is None
+    assert _attr_row(server, heir)["name"] == "Both"
+    listed = owner.get(f"{API}/recipes", params={"workflow_id": heir}).json()
+    assert [recipe["name"] for recipe in listed] == ["On the merge"]
 
 
 def test_splitting_a_topology_out_makes_a_workflow_of_it(workflow_env):

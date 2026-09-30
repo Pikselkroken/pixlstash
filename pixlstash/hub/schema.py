@@ -1263,6 +1263,17 @@ CREATE TABLE IF NOT EXISTS workflow_key_successor (
 )
 """
 
+# What a merge replaced, so Unmerge can put it back: every row the merge wrote
+# over or deleted, as JSON ``{table: [row]}``. A stack per merged workflow, the
+# newest undone first, since a workflow can be merged into more than once.
+_V2_WORKFLOW_MERGE_UNDO = """
+CREATE TABLE IF NOT EXISTS workflow_merge_undo (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id  TEXT NOT NULL,
+    snapshot     TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1333,6 +1344,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_GROUP_PINS,
     _V2_WORKFLOW_GROUP_PICTURE_INPUT,
     _V2_WORKFLOW_KEY_SUCCESSOR,
+    _V2_WORKFLOW_MERGE_UNDO,
     *_V2_WORKFLOW_INDEXES,
 )
 

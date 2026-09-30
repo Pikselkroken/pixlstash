@@ -776,6 +776,7 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/workflows/{workflow_id}/pins                                          | workflows       | Set a workflow's pinned parameters                          |
 | POST   | /api/v1/workflows/{workflow_id}/set-clone-plans                               | workflows       | What cloning a workflow onto each workflow set would write  |
 | POST   | /api/v1/workflows/{workflow_id}/split                                         | workflows       | Split a topology out of a workflow                          |
+| POST   | /api/v1/workflows/{workflow_id}/unmerge                                       | workflows       | Unmerge a workflow                                          |
 | GET    | /version                                                                      | server          | Read Version                                                |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
 | WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                   |

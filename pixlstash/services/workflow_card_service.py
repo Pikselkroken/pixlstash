@@ -540,6 +540,43 @@ def _describe_recipe_values(
         }
 
 
+def merge_checkpoints(figure: WorkflowFigures) -> list[str]:
+    """The checkpoints a merge compares: the base graph's and its pictures'.
+
+    Each lowercased through :func:`derive_model_name`, which the base graph's
+    slot name already went through: a picture keeps the raw widget value,
+    folder and extension included, and two precisions of one checkpoint are
+    one checkpoint to a merge.
+    """
+    names = {name for name, _pictures in figure.recipe_values.get("checkpoints", ())}
+    names.update(
+        slot.name
+        for slot in figure.models
+        if slot.kind in BASE_MODEL_KINDS and slot.name
+    )
+    return sorted(
+        {
+            key
+            for name in names
+            if (key := derive_model_name(normalized_filename(name)).lower())
+        }
+    )
+
+
+def merge_refusal(figures: list[WorkflowFigures]) -> Optional[str]:
+    """Why these workflows may not be merged, or ``None`` when they may.
+
+    A merge is for one workflow the automatic grouping split in two: the same
+    kind of graph run on the same checkpoint. Anything else put together is a
+    workflow whose default recipe and pins describe only some of its graphs.
+    """
+    if len({figure.card.workflow_type for figure in figures}) > 1:
+        return "Only workflows of the same type can be merged."
+    if not set.intersection(*(set(merge_checkpoints(f)) for f in figures)):
+        return "Only workflows that share a checkpoint can be merged."
+    return None
+
+
 def _shelf_candidates(
     hub: HubDatabase, names: list[str]
 ) -> tuple[dict[str, set[int]], dict[int, Optional[str]]]:

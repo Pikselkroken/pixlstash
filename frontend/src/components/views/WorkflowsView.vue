@@ -317,6 +317,7 @@
         @open-cover="openCoverPicture"
         @run="runSelected"
         @merge="mergeSelected"
+        @unmerge="unmergeSelected"
         @split="splitSelected"
         @rename="startRename"
         @hide="hideSelected"
@@ -1033,6 +1034,14 @@ async function mergeSelected() {
   const count = store.selectedKeys.length;
   if (await store.mergeSelected()) {
     announcement.value = `${count} workflows merged`;
+  }
+}
+
+async function unmergeSelected() {
+  const card = onlyCard.value;
+  if (!card) return;
+  if (await store.unmerge(card.id)) {
+    announcement.value = `Unmerged into ${store.selectedKeys.length} workflows`;
   }
 }
 

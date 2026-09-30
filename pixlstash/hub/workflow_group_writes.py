@@ -21,6 +21,7 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import AUTO_STACK_PREFIX
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import model_fix_kind
 
@@ -37,6 +38,15 @@ _GROUP_TABLES = (
     "workflow_group_default",
     "workflow_group_pins",
     "workflow_group_picture_input",
+)
+
+# Every table a merge writes over or deletes from, in the order an unmerge
+# puts them back: a member row references its group row.
+_UNDO_TABLES = (
+    "workflow_group",
+    "workflow_group_member",
+    *_GROUP_TABLES,
+    "workflow_key_successor",
 )
 
 # Sentinel: this attribute was not in the request, so it stands.
@@ -206,6 +216,10 @@ def merge_workflows(
     cover = ids[0]
     target = cover if not cover.startswith(AUTO_STACK_PREFIX) else uuid.uuid4().hex
     with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_merge_undo (workflow_id, snapshot) VALUES (?, ?)",
+            (target, json.dumps(_snapshot(conn, [*ids, target]))),
+        )
         attrs = {
             row[0]: row
             for row in conn.execute(
@@ -306,6 +320,116 @@ def split_topology(hub: HubDatabase, workflow_id: str, topology_hash: str) -> st
         new_id,
     )
     return new_id
+
+
+def unmerge_workflow(hub: HubDatabase, workflow_id: str, base_topology: str) -> None:
+    """Undo the newest merge into *workflow_id*.
+
+    Puts back every row that merge replaced: each folded-in workflow's
+    topologies, name, notes, defaults, pins and picture inputs, and the cover's
+    own as they were. A topology split out since stays where it went, and the
+    other workflows' saved recipes are re-homed by the caller, from the card
+    each was saved on.
+
+    A merge made before the snapshot existed (no ``workflow_merge_undo`` row)
+    cannot be put back exactly. Its topologies return to their automatic
+    workflows, and its name, notes and settings go to the workflow
+    *base_topology* lands in, which is the graph they address, unless that one
+    already has settings of its own.
+    """
+    with hub.transaction() as conn:
+        row = conn.execute(
+            "SELECT id, snapshot FROM workflow_merge_undo WHERE workflow_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (workflow_id,),
+        ).fetchone()
+        held = {
+            topology_hash
+            for (topology_hash,) in conn.execute(
+                "SELECT topology_hash FROM workflow_group_member WHERE workflow_id = ?",
+                (workflow_id,),
+            )
+        }
+        conn.execute(
+            "DELETE FROM workflow_group_member WHERE workflow_id = ?", (workflow_id,)
+        )
+        if row is None:
+            core = conn.execute(
+                "SELECT core_hash FROM workflow_topology_core "
+                "WHERE topology_hash = ? AND core_version = ?",
+                (base_topology, CORE_RULE_VERSION),
+            ).fetchone()
+            heir = AUTO_STACK_PREFIX + (core[0] if core else base_topology)
+            taken = conn.execute(
+                "SELECT 1 FROM workflow_group_attr WHERE workflow_id = ?", (heir,)
+            ).fetchone()
+            if taken is None:
+                for table in _GROUP_TABLES:
+                    _copy_rows(conn, table, workflow_id, heir)
+            else:
+                logger.warning(
+                    "Unmerged %s, which predates merge snapshots; %s already "
+                    "has settings of its own, so the merged workflow's name, "
+                    "notes and settings are dropped.",
+                    workflow_id,
+                    heir,
+                )
+            conn.execute(
+                "UPDATE workflow_key_successor SET workflow_id = ? "
+                "WHERE workflow_id = ?",
+                (heir, workflow_id),
+            )
+        for table in _GROUP_TABLES:
+            conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (workflow_id,))
+        conn.execute("DELETE FROM workflow_group WHERE workflow_id = ?", (workflow_id,))
+        if row is not None:
+            conn.execute("DELETE FROM workflow_merge_undo WHERE id = ?", (row[0],))
+            _restore(conn, json.loads(row[1]), workflow_id, held)
+    logger.info(
+        "Unmerged workflow %s (%d topologies, %s).",
+        workflow_id,
+        len(held),
+        "from its snapshot" if row is not None else "back to automatic grouping",
+    )
+
+
+def _snapshot(conn, ids: list[str]) -> dict[str, list[dict]]:
+    """``{table: [row]}``: every row of :data:`_UNDO_TABLES` keyed on *ids*."""
+    placeholders = ",".join("?" * len(ids))
+    snapshot = {}
+    for table in _UNDO_TABLES:
+        cursor = conn.execute(
+            f"SELECT * FROM {table} WHERE workflow_id IN ({placeholders})", tuple(ids)
+        )
+        columns = [column[0] for column in cursor.description]
+        snapshot[table] = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    return snapshot
+
+
+def _restore(conn, snapshot: dict, merged: str, held: set[str]) -> None:
+    """Write a merge's :func:`_snapshot` back over what the merge left.
+
+    A member row comes back only for a topology the merged workflow still
+    held; a successor only where it still names the merged workflow. Any
+    other row is ``OR IGNORE``: an edit made since, to a workflow the merge
+    had emptied, is newer than the snapshot and stands.
+    """
+    for table in _UNDO_TABLES:
+        for row in snapshot.get(table, ()):
+            if table == "workflow_group_member" and row["topology_hash"] not in held:
+                continue
+            if table == "workflow_key_successor":
+                conn.execute(
+                    "UPDATE workflow_key_successor SET workflow_id = ? "
+                    "WHERE workflow_key = ? AND workflow_id = ?",
+                    (row["workflow_id"], row["workflow_key"], merged),
+                )
+                continue
+            conn.execute(
+                f"INSERT OR IGNORE INTO {table} ({', '.join(row)}) "
+                f"VALUES ({', '.join('?' * len(row))})",
+                tuple(row.values()),
+            )
 
 
 def _copy_rows(conn, table: str, source: str, target: str) -> None:
