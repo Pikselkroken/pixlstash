@@ -2491,6 +2491,27 @@ back to the automatic workflow their variant is in. Ceiling (logged in the
 code): an output the watch folder imports before the poller sees it is not
 marked.
 
+**A run started in ComfyUI files the same way.** Every editor-format document
+stored as a manual workflow carries its id at `extra.pixlstash_workflow_id`
+(`utils/workflow_ids.stamp_workflow_id`, applied in `create_manual_workflow`,
+which every import, inbox file, pull, built-in, duplicate, copy, conversion
+and extract goes through, and in data step 7's adoption). A tag the document
+arrived with is replaced, so a foreign one never files pictures. ComfyUI keeps
+`extra` across edit and save, and SaveImage (and the ComfyUI-PixlStash saver,
+which writes `extra_pnginfo` the same way) embeds the editor graph as the
+picture's `workflow` chunk. `ComfyUIExtractionTask._run_workflow_tag` reads it
+on every new picture, whatever brought it in: a manual id
+(`WORKFLOW_ID_PATTERN`) the hub holds is written to `run_workflow_id` **only
+where that is still NULL**, so PixlStash's own run keeps its value; an id the
+hub does not hold is logged at info and files nothing. The tag never reaches a
+key: the hash tiers read the API `prompt` chunk, `reduce_ui_graph` reads only
+nodes, links and definitions, and `workflow_bindings.canonical` (the dedup and
+conversion-match key) drops it. Gaps: an API-format document has nowhere to
+carry a tag (every top-level key is a node), and *Open in ComfyUI* serves an
+API graph (`GET /workflows/{id}/graph`, loaded with `app.loadApiJson`), so the
+tag reaches that canvas only once the node sets `app.graph.extra` itself.
+Pictures made before the tag existed are not rescanned.
+
 **Deduplication is on `workflow_origin` alone** (`workflow_origin.stored_as`),
 never on a folder. A pull records `(ComfyUI URL, path)` naming the manual id
 and matches a content some origin already stored as a live workflow, so a

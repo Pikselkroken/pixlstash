@@ -45,6 +45,7 @@ from pixlstash.services.workflow_identity import (
 from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
     MissingSavedRecipeWorkflowFinder,
 )
+from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY
 from tests.test_workflow_identity import _graph
 
 API = "/api/v1"
@@ -520,6 +521,12 @@ def test_step_7_makes_every_stored_file_a_manual_workflow_once(tmp_path):
         "pulled": "pull",
     }
     editor = rows["Upscale only"]
+    # Tagged with its id, so a ComfyUI run of it files its pictures on it.
+    document = hub.fetchone(
+        "SELECT document FROM workflow_document WHERE workflow_id = ?",
+        (editor["workflow_id"],),
+    )[0]
+    assert json.loads(document)["extra"][WORKFLOW_TAG_KEY] == editor["workflow_id"]
     # The file-only card's owner state came with it, off `auto:<topology>`.
     assert (editor["notes"], editor["hidden"]) == ("Run at night.", 1)
     assert (

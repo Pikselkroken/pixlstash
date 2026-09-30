@@ -76,7 +76,7 @@ from pixlstash.services.workflow_identity import (
 from pixlstash.services.workflow_bindings import migrate_placeholders
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.sql_chunking import chunked
-from pixlstash.utils.workflow_ids import MANUAL_PREFIX
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX, stamp_workflow_id
 
 logger = get_logger(__name__)
 
@@ -380,7 +380,8 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
     rows naming the file then name the workflow. **Idempotent**: the id is
     derived from the file name and every write is an insert that keeps what
     is there, so a second run writes nothing. Files and ``workflow_file`` rows
-    are left as they are.
+    are left as they are; the stored document is tagged with its new id, as
+    ``create_manual_workflow`` tags one.
 
     A file that was a card of its own (#1466, no variant) had its owner state
     carried to ``auto:<topology hash>`` by steps 5 and 6; it is carried on
@@ -443,7 +444,7 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
             "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
             (
                 workflow_id,
-                json.dumps(document),
+                json.dumps(stamp_workflow_id(document, workflow_id)),
                 json.dumps(converted) if converted is not None else None,
                 "pull" if name in pulled else "import",
                 created,

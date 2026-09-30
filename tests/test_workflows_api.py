@@ -118,6 +118,7 @@ from pixlstash.services.workflow_export import (
     scrub_for_export,
 )
 from pixlstash.services.workflow_inputs import card_input_modes
+from pixlstash.utils.workflow_ids import stamp_workflow_id
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.services import (
@@ -2614,15 +2615,12 @@ def test_a_workflow_not_stored_yet_is_stored_by_its_conversion(
     assert (r.json()["name"], r.json()["matched"]) == ("editor", False)
     hub = workflow_env.server.hub
     assert _api_document(hub, r.json()["workflow_id"]) == _EDITOR_CONVERTED
-    assert (
-        json.loads(
-            hub.fetchone(
-                "SELECT document FROM workflow_document WHERE workflow_id = ?",
-                (r.json()["workflow_id"],),
-            )[0]
-        )
-        == other
-    )
+    assert json.loads(
+        hub.fetchone(
+            "SELECT document FROM workflow_document WHERE workflow_id = ?",
+            (r.json()["workflow_id"],),
+        )[0]
+    ) == stamp_workflow_id(other, r.json()["workflow_id"])
 
 
 @pytest.mark.parametrize(
