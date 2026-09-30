@@ -6,11 +6,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import axios from "axios";
 
 vi.mock("../utils/apiClient", () => ({
-  apiClient: { get: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn() },
 }));
 
 import { apiClient } from "../utils/apiClient";
-import { listSavedRecipes, listUsedLooks } from "./recipes";
+import {
+  extractRecipeWorkflow,
+  listSavedRecipes,
+  listUnfiledRecipes,
+  listUsedLooks,
+} from "./recipes";
 
 /** The query string axios would put on the wire for this call's config. */
 function wireQuery(call) {
@@ -38,5 +43,16 @@ describe("recipes api", () => {
     for (const call of apiClient.get.mock.calls) {
       expect(wireQuery(call)).toBe("workflow_id=a");
     }
+  });
+
+  it("asks for the unfiled recipes with unfiled=true and no workflow id", async () => {
+    await listUnfiledRecipes();
+    expect(wireQuery(apiClient.get.mock.calls[0])).toBe("unfiled=true");
+  });
+
+  it("extracts a recipe's workflow on its own route", async () => {
+    apiClient.post.mockResolvedValue({ data: { workflow_id: "manual:x" } });
+    expect(await extractRecipeWorkflow(7)).toEqual({ workflow_id: "manual:x" });
+    expect(apiClient.post).toHaveBeenCalledWith("/recipes/7/extract-workflow");
   });
 });

@@ -21,6 +21,10 @@ const deleteSavedRecipe = vi.fn();
 const listUsedLooks = vi.fn();
 const getWorkflowCard = vi.fn();
 const setWorkflowDefaults = vi.fn();
+const extractRecipeWorkflow = vi.fn();
+const listUnfiledRecipes = vi.fn();
+const push = vi.fn();
+vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
 vi.mock("../../api/comfyui", () => ({
   getPictureRecipe: (...args) => getPictureRecipe(...args),
 }));
@@ -31,6 +35,8 @@ vi.mock("../../api/recipes", () => ({
   reorderSavedRecipes: (...args) => reorderSavedRecipes(...args),
   editSavedRecipe: (...args) => editSavedRecipe(...args),
   deleteSavedRecipe: (...args) => deleteSavedRecipe(...args),
+  extractRecipeWorkflow: (...args) => extractRecipeWorkflow(...args),
+  listUnfiledRecipes: (...args) => listUnfiledRecipes(...args),
   exportSavedRecipe: vi.fn(),
 }));
 vi.mock("../../api/workflows", () => ({
@@ -214,8 +220,8 @@ describe("WorkflowRecipesTab", () => {
     confirmed.value = false;
     const wrapper = render();
     await flushPromises();
-    // Three ⋯ entries per card, so the second card's Delete is the sixth.
-    const deleteSecond = () => wrapper.findAll(".ctx-item")[5].trigger("click");
+    // Four ⋯ entries per card, so the second card's Delete is the eighth.
+    const deleteSecond = () => wrapper.findAll(".ctx-item")[7].trigger("click");
 
     await deleteSecond();
     await flushPromises();
@@ -610,8 +616,8 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     expect(wrapper.find(".wfrt-marked").exists()).toBe(true);
 
-    // Rename, Export…, Delete.
-    await wrapper.findAll(".ctx-item")[2].trigger("click");
+    // Rename, Export…, Extract workflow, Delete.
+    await wrapper.findAll(".ctx-item")[3].trigger("click");
     await flushPromises();
 
     expect(deleteSavedRecipe).toHaveBeenCalledWith(1);
@@ -630,7 +636,7 @@ describe("WorkflowRecipesTab", () => {
     );
     const wrapper = render();
     await flushPromises();
-    await wrapper.findAll(".ctx-item")[2].trigger("click"); // first card's Remove
+    await wrapper.findAll(".ctx-item")[3].trigger("click"); // first card's Remove
     await flushPromises();
 
     const other = [recipe(1, "Another card's recipe")];
@@ -987,5 +993,78 @@ describe("WorkflowRecipesTab", () => {
     const wrapper = render();
     await flushPromises();
     expect(wrapper.find("[data-testid='wfrt-make-defaults']").exists()).toBe(false);
+  });
+
+  // ── Extract workflow, and the recipes whose workflow is gone ─────────────
+
+  /** One ⋯ row of the first card, by what it says. */
+  const menuRow = (wrapper, label) =>
+    wrapper.findAll(".wfrt-card")[0].findAll(".ctx-item").find((el) => el.text().endsWith(label));
+
+  it("extracts a workflow, re-reads the grid, then opens the new one", async () => {
+    extractRecipeWorkflow.mockResolvedValue({ workflow_id: "manual:abc", name: "Rainy tram platform" });
+    const store = useWorkflowsStore();
+    const order = [];
+    vi.spyOn(store, "refetch").mockImplementation(async () => order.push("refetch"));
+    push.mockImplementation(() => order.push("push"));
+    const wrapper = render();
+    await flushPromises();
+
+    await menuRow(wrapper, "Extract workflow").trigger("click");
+    await flushPromises();
+
+    expect(extractRecipeWorkflow).toHaveBeenCalledWith(1);
+    // Re-read FIRST, or the link lands on a grid that does not hold the card.
+    expect(order).toEqual(["refetch", "push"]);
+    expect(push).toHaveBeenCalledWith({ name: "workflows", query: { workflow: "manual:abc" } });
+    expect(useNoticeStore().notices.at(-1)).toMatchObject({ level: "success" });
+    expect(useNoticeStore().notices.at(-1).text).toContain("Rainy tram platform");
+  });
+
+  it("says why an extract was refused, and opens nothing", async () => {
+    extractRecipeWorkflow.mockRejectedValue(
+      Object.assign(new Error("409"), { response: { status: 409, data: { detail: "No graph to build on." } } }),
+    );
+    const wrapper = render();
+    await flushPromises();
+    await menuRow(wrapper, "Extract workflow").trigger("click");
+    await flushPromises();
+    expect(push).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1).level).toBe("error");
+  });
+
+  it("lists the unfiled recipes, with Extract and Delete and no Run or order", async () => {
+    listUnfiledRecipes.mockResolvedValue([recipe(9, "Orphan", { workflow_id: null })]);
+    const wrapper = render({ unfiled: true, workflowIds: [], workflowName: "Unfiled recipes" });
+    await flushPromises();
+
+    expect(listUnfiledRecipes).toHaveBeenCalled();
+    expect(listSavedRecipes).not.toHaveBeenCalled();
+    expect(listUsedLooks).not.toHaveBeenCalled();
+    expect(wrapper.find(".wfrt-title").text()).toBe("Unfiled recipes");
+    expect(namesOf(wrapper)).toEqual(["Orphan"]);
+    expect(wrapper.find(".wfrt-handle").exists()).toBe(false);
+    expect(wrapper.find(".wfrt-card").text()).not.toContain("Run…");
+    expect(menuRow(wrapper, "Extract workflow")).toBeDefined();
+    expect(menuRow(wrapper, "Delete")).toBeDefined();
+  });
+
+  it("draws nothing at all while no recipe is unfiled", async () => {
+    listUnfiledRecipes.mockResolvedValue([]);
+    const wrapper = render({ unfiled: true, workflowIds: [], workflowName: "Unfiled recipes" });
+    await flushPromises();
+    expect(wrapper.find(".wfrt-head").exists()).toBe(false);
+    expect(wrapper.find(".wfrt-note").exists()).toBe(false);
+    expect(wrapper.find(".wfrt-card").exists()).toBe(false);
+  });
+
+  it("re-reads the unfiled list when recipes change elsewhere", async () => {
+    listUnfiledRecipes.mockResolvedValue([]);
+    render({ unfiled: true, workflowIds: [] });
+    await flushPromises();
+    listUnfiledRecipes.mockResolvedValue([recipe(9, "Orphan", { workflow_id: null })]);
+    useWorkflowsStore().notedRecipesChanged();
+    await flushPromises();
+    expect(listUnfiledRecipes).toHaveBeenCalledTimes(2);
   });
 });

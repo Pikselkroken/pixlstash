@@ -8,8 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
+const deleteWorkflow = vi.fn();
 vi.mock("../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
+  deleteWorkflow: (...args) => deleteWorkflow(...args),
 }));
 
 import { useWorkflowsStore } from "./useWorkflowsStore";
@@ -241,5 +243,41 @@ describe("invalidate", () => {
     await first;
 
     expect(store.cards).toHaveLength(1);
+  });
+});
+
+describe("deleteSelected", () => {
+  it("deletes each selected workflow, clears the selection and says recipes moved", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.selectRange(["workhorse", "the-stack"]);
+    deleteWorkflow.mockReset();
+    deleteWorkflow.mockResolvedValue({ deleted: "x" });
+    const epoch = store.recipesEpoch;
+
+    const result = await store.deleteSelected();
+
+    expect(result).toEqual({ done: 2, refused: 0 });
+    expect(deleteWorkflow.mock.calls.map(([id]) => id)).toEqual([
+      "workhorse",
+      "the-stack",
+    ]);
+    // Gone from the grid, so gone from the selection.
+    expect(store.selectedKeys).toEqual([]);
+    // Their saved recipes are unfiled now: the Unfiled list re-reads.
+    expect(store.recipesEpoch).toBe(epoch + 1);
+  });
+
+  it("keeps the selection, and moves no recipe, when every delete is refused", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.selectRange(["workhorse"]);
+    deleteWorkflow.mockReset();
+    deleteWorkflow.mockRejectedValue(new Error("409"));
+    const epoch = store.recipesEpoch;
+
+    expect(await store.deleteSelected()).toEqual({ done: 0, refused: 1 });
+    expect(store.selectedKeys).toEqual(["workhorse"]);
+    expect(store.recipesEpoch).toBe(epoch);
   });
 });

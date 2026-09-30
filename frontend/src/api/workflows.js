@@ -6,10 +6,10 @@
 // `listWorkflowPictures` and `getWorkflowGraph`. B9 (#1410) then deleted the
 // topology routes themselves and moved the cards onto `/workflows`, so the
 // grid and the detail are what this module fronts, with `exportWorkflow`,
-// `duplicateWorkflow` and `deleteWorkflowFile` at the foot of the file for the
+// `duplicateWorkflow` and `deleteWorkflow` at the foot of the file for the
 // grid's own verb menu (#1455), and the LoRA chain editor's `getLoraChain` /
 // `saveLoraChain` after them (#1478). Since #1623 every route is addressed by
-// a workflow `id` (`auto:<core hash>` or a manual group's uuid), never by a
+// a workflow `id` (opaque: `auto:<core hash>` or `manual:<uuid hex>`), never by a
 // card key. `GET /workflows/{id}/pictures` is served and has no caller in the
 // app - the picture grid reaches a workflow's pictures through
 // `GET /pictures?workflow=`, which filters like every other facet - so there
@@ -289,14 +289,13 @@ export async function exportWorkflow(workflowId) {
 }
 
 /**
- * Write this workflow into the user's workflow folder under a free name.
+ * Copy this workflow as a new MANUAL workflow (`… (copy)`).
  *
  * Unscrubbed, unlike the export: the copy stays on this machine and is meant
- * to run. A card the library only knows from its pictures gets a file of its
- * own this way, so the answer's `workflow_id` can be a NEW workflow.
+ * to run. The answer's `workflow_id` is the new manual workflow.
  *
  * @param {string} workflowId
- * @returns {Promise<{name: string, workflow_id: ?string}>}
+ * @returns {Promise<{name: string, workflow_id: string}>}
  */
 export async function duplicateWorkflow(workflowId) {
   return unwrap(
@@ -388,16 +387,16 @@ export async function cloneWorkflowWithModels(workflowId, body) {
 }
 
 /**
- * Send this card's workflow file to the system trash.
+ * Delete a MANUAL workflow; its document goes to the system trash.
  *
- * Only a card with a file has one: a workflow the library knows from its
- * pictures answers 409, which is why every caller gates on `imported`. The
- * card and its pictures stay either way - this deletes a file, not a card.
+ * Its pictures stay, back on the automatic workflow their graph is in, and
+ * its saved recipes become unfiled. An automatic workflow answers 409 (hide
+ * it instead), which is why every caller gates on `manual`.
  *
  * @param {string} workflowId
- * @returns {Promise<{deleted: string, workflow_id: string}>}
+ * @returns {Promise<{deleted: string, workflow_id: string}>} `deleted` is its name.
  */
-export async function deleteWorkflowFile(workflowId) {
+export async function deleteWorkflow(workflowId) {
   return unwrap(
     apiClient.delete(`/workflows/${encodeURIComponent(workflowId)}`),
   );

@@ -27,36 +27,12 @@ describe("api/comfyui", () => {
     expect(result).toEqual({ workflows: [] });
   });
 
-  it("importWorkflow defaults overwrite to false", async () => {
+  it("importWorkflow posts the name and the file, and nothing else", async () => {
     apiClient.post.mockResolvedValue({ data: {} });
     await importWorkflow({ name: "flow", workflow: { nodes: [] } });
     expect(apiClient.post).toHaveBeenCalledWith("/comfyui/workflows/import", {
       name: "flow",
       workflow: { nodes: [] },
-      overwrite: false,
-      keep_both: false,
-    });
-  });
-
-  it("importWorkflow forwards an explicit overwrite", async () => {
-    apiClient.post.mockResolvedValue({ data: {} });
-    await importWorkflow({ name: "flow", workflow: {}, overwrite: true });
-    expect(apiClient.post).toHaveBeenCalledWith("/comfyui/workflows/import", {
-      name: "flow",
-      workflow: {},
-      overwrite: true,
-      keep_both: false,
-    });
-  });
-
-  it("importWorkflow forwards keepBoth as keep_both", async () => {
-    apiClient.post.mockResolvedValue({ data: {} });
-    await importWorkflow({ name: "flow", workflow: {}, keepBoth: true });
-    expect(apiClient.post).toHaveBeenCalledWith("/comfyui/workflows/import", {
-      name: "flow",
-      workflow: {},
-      overwrite: false,
-      keep_both: true,
     });
   });
 

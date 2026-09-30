@@ -3,7 +3,7 @@ import { defineStore } from "pinia";
 
 import {
   cloneWorkflowWithModels,
-  deleteWorkflowFile,
+  deleteWorkflow,
   duplicateWorkflow,
   listWorkflowCards,
   patchWorkflowCard,
@@ -417,10 +417,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
-   * Copy one card's workflow into the user's folder, under a free name.
+   * Copy one workflow as a new manual workflow.
    *
    * The copy is a card of its own, so the grid is re-read; the answer's
-   * `workflow_id` is where it landed and is handed back for the notice.
+   * `workflow_id` is where it landed and is handed back to select it.
    */
   async function duplicateCard(key) {
     if (verbBusy.value) return null;
@@ -462,21 +462,27 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
-   * Send every selected card's workflow FILE to the system trash.
+   * Delete every selected MANUAL workflow.
    *
-   * The cards and their pictures stay: this deletes the file that runs them.
-   * A card the library knows only from its pictures has none and the route
-   * 409s, which is why the bar offers this only when every selected card is
-   * `imported`.
+   * Their pictures stay, back on their automatic workflows. An automatic
+   * workflow is not a record and the route 409s, which is why the bar offers
+   * this only when every selected card is `manual`. The deleted workflows'
+   * saved recipes become unfiled, so the recipe lists are told to re-read.
    */
   async function deleteSelected() {
     // Off `selectedCards`, not `selectedKeys`: those are the cards the bar's
-    // `imported` gate actually vetted, and a key the grid can no longer
-    // resolve was never in that check. The one verb here that touches bytes
-    // acts on exactly what was looked at.
+    // `manual` gate actually vetted, and a key the grid can no longer
+    // resolve was never in that check. The one destructive verb here acts on
+    // exactly what was looked at.
     const keys = selectedCards.value.map((card) => card.id);
     if (!keys.length || verbBusy.value) return { done: 0, refused: 0 };
-    return writeEach("delete", keys, (key) => deleteWorkflowFile(key));
+    const result = await writeEach("delete", keys, (key) =>
+      deleteWorkflow(key),
+    );
+    if (result.done) notedRecipesChanged();
+    // The deleted cards left the grid, and the selection goes with them.
+    if (!result.refused) clearSelection();
+    return result;
   }
 
   /** Replace the selection, or toggle one id into it (Ctrl/Cmd). */

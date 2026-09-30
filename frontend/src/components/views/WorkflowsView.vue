@@ -291,6 +291,16 @@
           </div>
         </template>
       </div>
+
+      <!-- Saved recipes whose workflow is gone (deleted, or never filed).
+           The Recipes tab's own rows, laid on this grid's columns; the tab
+           hides itself while there are none. -->
+      <WorkflowRecipesTab
+        unfiled
+        class="wfv-unfiled"
+        workflow-name="Unfiled recipes"
+        :style="{ '--wf-columns': columns }"
+      />
     </div>
 
     <!-- The pill floats over the END of the list, exactly as the shelf's and
@@ -417,6 +427,7 @@ import FilterStrip from "../panels/FilterStrip.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
 import WorkflowPullSummary from "../panels/WorkflowPullSummary.vue";
+import WorkflowRecipesTab from "../panels/WorkflowRecipesTab.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
 import CloneOntoSetDialog from "../io/CloneOntoSetDialog.vue";
 import CloneWithModelsDialog from "../io/CloneWithModelsDialog.vue";
@@ -1196,6 +1207,20 @@ async function duplicateSelected() {
   const body = await store.duplicateCard(card.id);
   if (!body) return;
   notices.push({ level: "success", text: `Copied to ${body.name}.` });
+  landOn(body.workflow_id);
+}
+
+/**
+ * Select a workflow this view just made (a copy, a clone, an import) and put
+ * the cursor on its card, so the reader's next look is at what they made.
+ * The grid has been re-read by then; a card a filter hides is still selected,
+ * and the inspector shows it.
+ */
+function landOn(workflowId) {
+  if (!workflowId) return;
+  store.select(workflowId);
+  const at = flatRows.value.findIndex((entry) => entry.key === workflowId);
+  if (at >= 0) moveCursor(at);
 }
 
 // Clone onto a workflow set: one dialog, one new card, asked for through the
@@ -1267,33 +1292,27 @@ function clonedWithModels(body) {
       ? { level: "warning", text: `Cloned to ${body.name}. ${warnings.join(" ")}` }
       : { level: "success", text: `Cloned to ${body.name}.` },
   );
-  if (body.workflow_id) store.select(body.workflow_id);
+  landOn(body.workflow_id);
 }
 
 /**
- * Delete the selected cards' workflow FILES, after saying so in as many words.
+ * Delete the selected MANUAL workflows, after saying what happens to their
+ * pictures.
  *
- * The one verb here that touches bytes, so the one that asks first. It is not
- * a "permanent" delete — the file goes to the system trash — and the card and
- * its pictures stay, which the question says, because "delete this workflow"
- * reads like losing the pictures it made.
+ * The one destructive verb here, so the one that asks first. The pictures
+ * stay, filed back under their automatic workflow, which the question says,
+ * because "delete this workflow" reads like losing the pictures it made.
  */
 async function confirmDelete() {
   const cards = [...store.selectedCards];
   if (!cards.length) return;
-  const what =
-    cards.length === 1
-      ? `“${cards[0].name}”`
-      : `${cards.length} workflow files`;
+  const one = cards.length === 1;
   const ok = await confirm({
-    title:
-      cards.length === 1
-        ? "Delete this workflow file?"
-        : "Delete these workflow files?",
+    title: one ? "Delete this workflow?" : `Delete these ${cards.length} workflows?`,
     message:
-      `The file for ${what} goes to your system trash. The card stays in ` +
-      "this grid and so do the pictures it made — what is lost is the ability " +
-      "to run it from a file on this machine.",
+      `${one ? `“${cards[0].name}”` : "They"} ${one ? "goes" : "go"} to your ` +
+      "system trash. The pictures stay, filed under their automatic " +
+      "workflow, and saved recipes on it are listed under Unfiled recipes.",
     confirmLabel: "Delete",
     danger: true,
   });
@@ -1304,15 +1323,14 @@ async function confirmDelete() {
       level: "error",
       text:
         refused === cards.length
-          ? "None of those workflow files could be deleted."
-          : `${cards.length - refused} of ${cards.length} files were deleted; the rest could not be.`,
+          ? "None of those workflows could be deleted."
+          : `${cards.length - refused} of ${cards.length} workflows were deleted; the rest could not be.`,
     });
     return;
   }
-  announcement.value =
-    cards.length === 1
-      ? "Workflow file deleted"
-      : `${cards.length} workflow files deleted`;
+  announcement.value = one
+    ? "Workflow deleted"
+    : `${cards.length} workflows deleted`;
 }
 
 // ── The card menu ─────────────────────────────────────────────────────────
@@ -1408,19 +1426,18 @@ const MAX_WORKFLOW_BYTES = 50 * 1024 * 1024;
 async function filesChosen(event) {
   const files = Array.from(event.target?.files ?? []);
   event.target.value = "";
-  let added = false;
+  let last = null;
   for (const file of files) {
     if (file.size > MAX_WORKFLOW_BYTES) {
       store.error = `${file.name} is too large to be a workflow.`;
       continue;
     }
     try {
-      await importWorkflow({
+      // Every import is a new manual workflow; the last one is opened.
+      last = await importWorkflow({
         name: file.name.replace(/\.json$/i, ""),
         workflow: JSON.parse(await file.text()),
-        keepBoth: true,
       });
-      added = true;
     } catch (err) {
       store.error = errorMessage(
         err,
@@ -1429,7 +1446,10 @@ async function filesChosen(event) {
       console.warn(`[workflows] could not add ${file.name}`, err);
     }
   }
-  if (added) await store.fetchCards();
+  if (!last) return;
+  await store.refetch();
+  landOn(last.workflow_id);
+  announcement.value = `Added ${last.name}`;
 }
 </script>
 
@@ -1597,6 +1617,18 @@ async function filesChosen(event) {
 
 .wfv-cell {
   border-radius: var(--radius-md);
+}
+
+/* Below the cards, on their columns: `--wf-columns` is set inline from the
+   same measurement the grid uses. */
+.wfv-unfiled {
+  margin-top: var(--space-6);
+}
+
+.wfv-unfiled :deep(.wfrt-list) {
+  display: grid;
+  grid-template-columns: repeat(var(--wf-columns), minmax(0, 1fr));
+  gap: var(--space-3);
 }
 
 /* The selection mark is the CARD's own (`WorkflowCard.vue`,
