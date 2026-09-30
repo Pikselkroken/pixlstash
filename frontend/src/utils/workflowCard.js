@@ -6,12 +6,17 @@
 // this app reads**:
 //
 //   {
-//     id,                               // the workflow: `auto:<core hash>`,
-//                                       // or a manual group's uuid hex. Every
+//     id,                               // the workflow, OPAQUE: `auto:<core
+//                                       // hash>` or `manual:<uuid hex>`. Every
 //                                       // `/workflows/{id}/…` route, the Run
 //                                       // body's `workflow_id` and the picture
 //                                       // grid's `workflow=` filter take it
 //     name, type, type_label, imported, hidden,
+//     manual, from_name,                // `manual`: a stored document of its
+//                                       // own (imported, pulled, duplicated,
+//                                       // extracted from a recipe), never
+//                                       // grouped. `from_name` names what a
+//                                       // manual one was made from, or null
 //                                       // `hidden` is only ever true when the
 //                                       // grid asked for the hidden cards
 //                                       // (F7's *Hidden: Show*), and
@@ -339,8 +344,14 @@ export function modelDisplayName(model) {
 const SHORT_TYPE_LABELS = { txt2img: "T2I", img2img: "I2I" };
 
 /**
- * The special-facts row: the workflow's type and whether it was imported.
- * `short` spells the type the way the card's chip does (`T2I`).
+ * The special-facts row: the workflow's type, whether it is manual or was
+ * imported, and what a manual one was made from. `short` spells the type the
+ * way the card's chip does (`T2I`).
+ *
+ * "Manual" is the one BADGE in the row (a pill, semibold, still the fact's
+ * neutral ink): it is the kind of workflow, not one more datum. It replaces
+ * "imported", which every manual workflow is. "from <name>" goes last because
+ * it is the longest and the first the row may clip; ⓘ prints it whole.
  */
 export function factChips(card, { short = false } = {}) {
   const labels = [
@@ -349,15 +360,23 @@ export function factChips(card, { short = false } = {}) {
     // clipped away is a card that reads as an ordinary one in the grid it was
     // deliberately kept out of.
     card.hidden ? "hidden" : null,
+    // Second, for the same reason: what kind of workflow this is.
+    card.manual ? "Manual" : null,
     // The SERVED label, so the chip and a generated name say the type in
     // one vocabulary rather than reading `Text to Image` on row 1 and
     // `txt2img` on row 4 - or its abbreviation, which a generated name
     // already spells out in full. Falls back to the token for a payload
     // that predates `type_label`.
     (short && SHORT_TYPE_LABELS[card.type]) || card.type_label || card.type,
-    card.imported ? "imported" : null,
+    card.imported && !card.manual ? "imported" : null,
+    card.manual && card.from_name ? `from ${card.from_name}` : null,
   ].filter(Boolean);
-  return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));
+  return labels.map((label, i) => ({
+    key: `fact-${i}`,
+    label,
+    fact: true,
+    badge: Boolean(card.manual) && label === "Manual",
+  }));
 }
 
 /** "4.9 of 5", or null when nothing is rated (0 or missing). */

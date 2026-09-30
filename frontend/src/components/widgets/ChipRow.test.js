@@ -150,6 +150,26 @@ describe("ChipRow", () => {
     expect(chips[1].classes()).toContain("chip-row__chip--fact");
   });
 
+  it("draws a badge fact as a semibold pill, and measures it as one", () => {
+    const wrapper = mount(ChipRow, {
+      props: { items: [{ label: "Manual", fact: true, badge: true }] },
+    });
+    // The probe decides what fits; a regular-weight probe measures the
+    // semibold pill short and the row overflows.
+    for (const chip of [
+      wrapper.find(".chip-row > .chip-row__chip"),
+      wrapper.find(".chip-row__measure .chip-row__chip"),
+    ]) {
+      expect(chip.classes()).toContain("chip-row__chip--badge");
+    }
+    const [badge] = rules(
+      "src/components/widgets/ChipRow.vue",
+      ".chip-row__chip--badge",
+    );
+    expect(badge).toContain("border-radius: var(--radius-pill)");
+    expect(badge).toContain("font-weight: var(--weight-semibold)");
+  });
+
   it("gives the measuring copy the same glyph as the chip it stands for", () => {
     // The probe is what decides how many chips fit. A glyph drawn only on the
     // visible chip measures every chip short and the row overflows.
