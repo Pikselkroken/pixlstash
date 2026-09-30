@@ -25,7 +25,6 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from pixlstash.hub.workflow_card_reads import (
-    AUTO_STACK_PREFIX,
     find_workflow,
     variants_in_workflow,
 )
@@ -38,6 +37,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import normalized_filename
 from pixlstash.services import saved_recipe_service
 from pixlstash.services.workflow_events import announce_changed_workflows
+from pixlstash.utils.workflow_ids import WORKFLOW_ID_PATTERN
 
 logger = get_logger(__name__)
 
@@ -66,9 +66,8 @@ MAX_REORDER_IDS = 500
 MAX_UNION_KEYS = 100
 # The models one recipe may pin: one per loader, and no real graph has more.
 MAX_MODELS = 64
-# ``auto:<core hash>`` or a manual group's uuid. Declared on the ITEM:
+# ``auto:<core hash>`` or ``manual:<uuid hex>``. Declared on the ITEM:
 # `max_length` on a `list[str]` bounds the list, not each id.
-WORKFLOW_ID_PATTERN = rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$"
 WorkflowId = Annotated[str, StringConstraints(pattern=WORKFLOW_ID_PATTERN)]
 
 

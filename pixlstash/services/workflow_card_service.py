@@ -43,6 +43,7 @@ from pixlstash.hub.workflow_card_reads import (
     card_index,
     find_workflow,
     instance_documents,
+    manual_document,
     variant_documents,
     workflow_group_defaults,
     workflow_index,
@@ -50,7 +51,10 @@ from pixlstash.hub.workflow_card_reads import (
 from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, loader_swaps_of
 from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
+from pixlstash.services.comfyui_recipe_service import (
+    LORA_DIGEST_FIELD_RE,
+    sanitize_prompt_graph,
+)
 from pixlstash.services.model_shelf_service import (
     adapter_digest_index,
     models_for_digest,
@@ -61,6 +65,7 @@ from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     asset_reference,
     normalized_filename,
+    structural_document,
 )
 from pixlstash.services.workflow_identity import (
     CORE_ADDRESS_PREFIX,
@@ -83,6 +88,7 @@ from pixlstash.services.workflow_library_service import (
     read_picture_variant,
     read_variant_picture_counts,
 )
+from pixlstash.services.workflow_io import api_graph
 from pixlstash.services.workflow_parameters import FEATURED_NAMES, FEATURED_ORDER
 from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_TEXT_ENCODER, FILE_UNKNOWN
 from pixlstash.utils.known_base_models import fold
@@ -92,6 +98,7 @@ from pixlstash.utils.model_utils import (
     quant_from_filename,
 )
 from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 logger = get_logger(__name__)
 
@@ -173,8 +180,8 @@ class SlotModel:
 
     **A LoRA slot of a stored recipe carries no name.** Which LoRA fills it is
     the recipe's business (``recipe_values`` and the default recipe say what
-    ran); only a workflow known from its file alone names the LoRA the file
-    loads.
+    ran); only a manual workflow, read off its own document, names the LoRA
+    the document loads.
     """
 
     name: Optional[str]
@@ -455,7 +462,7 @@ def read_grid(
     *,
     include_hidden: bool = False,
     include_one_offs: bool = False,
-    file_models=None,
+    manual_models=None,
 ) -> Grid:
     """Everything ``GET /workflows`` answers: one entry per workflow.
 
@@ -465,11 +472,10 @@ def read_grid(
     in no workflow yet - its topology not reached by the backfill - is not on
     the grid.
 
-    *file_models* is how a workflow whose base card has **no variant** gets
-    its models (#1466): ``(file name) -> [(widget name, filename)]``, or
-    ``None`` to leave it without any. Passed in rather than done here because
-    reading a stored workflow file is I/O against a folder this layer does not
-    know.
+    *manual_models* is how a manual workflow, which has **no variant**, gets
+    its models: ``(workflow id) -> [(widget name, filename)]`` read off its
+    own document, or ``None`` to leave it without any. Passed in so the
+    caller can cache the parse per document.
 
     The two flags are the Filters panel's *Show hidden workflows* and the
     unticked *Hide one-offs* (F7). They widen what is DRAWN; ``hidden`` and
@@ -514,7 +520,7 @@ def read_grid(
         and (include_one_offs or not figure.one_off)
     ]
     drawn.sort(key=_rank_order)
-    _describe_slots(hub, figures, names, _recovered_slots(figures, file_models))
+    _describe_slots(hub, figures, names, _recovered_slots(figures, manual_models))
     _describe_ghosts(hub, vault, figures, names)
     _describe_recipe_values(figures, model_values)
     return Grid(cards=drawn, one_offs=one_offs, hidden=hidden, figures=figures)
@@ -675,14 +681,13 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     return marks
 
 
-def _recovered_slots(figures: list[WorkflowFigures], file_models) -> dict[str, list]:
-    """``{workflow_key: [(widget name, filename)]}`` for the cards with no recipe.
+def _recovered_slots(figures: list[WorkflowFigures], manual_models) -> dict[str, list]:
+    """``{workflow_key: [(widget name, filename)]}`` for the manual workflows.
 
-    A card with no variant is a stored workflow file and nothing else (#1466),
-    so the cached slot list ``_describe_slots`` reads - which is written per
-    recipe - has nothing to say about it and its rows would read "no
-    checkpoint" about a workflow nobody had looked at. *file_models* is
-    :func:`read_grid`'s reader; see there for why the I/O is the caller's.
+    A manual workflow is a document and nothing else, so the cached slot list
+    ``_describe_slots`` reads - which is written per recipe - has nothing to
+    say about it and its rows would read "no checkpoint" about a workflow
+    nobody had looked at. *manual_models* is :func:`read_grid`'s reader.
 
     Best effort by construction, and **empty is "not read"**: the recovery
     reads an editor-format file's widget values by position and reads nothing
@@ -690,14 +695,14 @@ def _recovered_slots(figures: list[WorkflowFigures], file_models) -> dict[str, l
     card that recovers nothing keeps no models, and its client is told which
     of the two it is by ``variant_count: 0``.
     """
-    if file_models is None:
+    if manual_models is None:
         return {}
     found = {}
     for figure in figures:
         card = figure.card
-        if card.variants or not card.file_name:
+        if not card.manual:
             continue
-        loaded = file_models(card.file_name)
+        loaded = manual_models(card.workflow_key)
         if loaded:
             found[card.workflow_key] = loaded
     return found
@@ -779,11 +784,11 @@ def _describe_slots(
                     )
                 )
 
-        # A card with no recipe has no cached slots at all, so this is the
-        # other branch of the same `if` rather than an addition to it: the
-        # loop above ran zero times. **No `label`** - a slot label is an
-        # address inside a stored topology and these slots have none. A LoRA
-        # here is named: it is in the file, and there is no recipe to fill it.
+        # A manual card has no cached slots at all, so this is the other
+        # branch of the same `if` rather than an addition to it: the loop
+        # above ran zero times. **No `label`** - these are read off the
+        # document by widget, not by topology. A LoRA here is named: it is in
+        # the document, and there is no recipe to fill it.
         for widget, filename in recovered.get(card.workflow_key, ()):
             fields = _mark_fields(marks_by_name.get(filename.lower()), filename)
             name = _derived(filename)
@@ -1096,19 +1101,26 @@ def workflow_defaults(
 
     provenance = FROM_BEST
     documents: list[tuple[str, dict]] = []
-    if library_uuid:
-        hashes = read_instance_hashes(
-            vault, workflow.variants, BEST_SCORE, DEFAULT_SAMPLE
-        )
-        if not hashes:
-            provenance = FROM_ALL
+    manual_names: Optional[dict[str, str]] = None
+    if workflow_id.startswith(MANUAL_PREFIX):
+        # A manual workflow's sample is its own document, read by its own
+        # slot labels: never a picture's run, and never a `core:` address.
+        provenance = FROM_ALL
+        documents, reads, manual_names = _manual_sample(hub, workflow_id)
+    else:
+        if library_uuid:
             hashes = read_instance_hashes(
-                vault, workflow.variants, None, DEFAULT_SAMPLE
+                vault, workflow.variants, BEST_SCORE, DEFAULT_SAMPLE
             )
-        documents = instance_documents(hub, library_uuid, hashes)
-    reads = _variant_reads(
-        hub, workflow, {structural_hash for structural_hash, _ in documents}
-    )
+            if not hashes:
+                provenance = FROM_ALL
+                hashes = read_instance_hashes(
+                    vault, workflow.variants, None, DEFAULT_SAMPLE
+                )
+            documents = instance_documents(hub, library_uuid, hashes)
+        reads = _variant_reads(
+            hub, workflow, {structural_hash for structural_hash, _ in documents}
+        )
 
     values: dict[tuple[str, str], Counter] = {}
     models: dict[str, Counter] = {}
@@ -1175,11 +1187,15 @@ def workflow_defaults(
             staged += 1
             without.update(stage for stage in base_stages if stage not in ran)
 
-    names = {
-        asset_reference(filename): filename
-        for pairs in asset_names(hub, list(reads)).values()
-        for _widget, filename in pairs
-    }
+    names = (
+        manual_names
+        if manual_names is not None
+        else {
+            asset_reference(filename): filename
+            for pairs in asset_names(hub, list(reads)).values()
+            for _widget, filename in pairs
+        }
+    )
     overrides = workflow_group_defaults(hub, workflow_id)
     recipe = DefaultRecipe(
         workflow_id=workflow_id,
@@ -1296,6 +1312,41 @@ def workflow_defaults(
         or any(address.startswith(LORA_ADDRESS_PREFIX) for address in overrides)
     )
     return recipe
+
+
+def _manual_sample(
+    hub: HubDatabase, workflow_id: str
+) -> tuple[list[tuple[str, dict]], dict[str, _VariantRead], dict[str, str]]:
+    """``(documents, reads, names)`` of a manual workflow: its own graph, once.
+
+    The one instance is the document's API graph, addressed by its own slot
+    labels (no core), and its model names are the ones it spells. An editor
+    document nobody has converted, or one that will not reduce, has nothing
+    to sample, which leaves a default recipe of the owner's edits alone.
+    """
+    graph = api_graph(manual_document(hub, workflow_id) or {})
+    if graph is None:
+        return [], {}, {}
+    graph = sanitize_prompt_graph(graph)
+    try:
+        structural = structural_document(graph)
+        read = _VariantRead(
+            core={}, base=topology_node_labels(structural), slots=slots(structural)
+        )
+    except WorkflowGraphError as exc:
+        logger.info(
+            "Manual workflow %s will not reduce, so its default recipe is its "
+            "owner's edits alone: %s",
+            workflow_id,
+            exc,
+        )
+        return [], {}, {}
+    names = {}
+    for slot in read.slots:
+        value = ((graph.get(slot.node_id) or {}).get("inputs") or {}).get(slot.widget)
+        if isinstance(value, str) and value:
+            names[slot.asset] = value
+    return [(workflow_id, graph)], {workflow_id: read}, names
 
 
 def _variant_reads(

@@ -34,6 +34,7 @@ notes and hidden flag, its default-recipe parameters, pins and picture inputs
 from __future__ import annotations
 
 import functools
+import json
 import sqlite3
 import os
 import re
@@ -53,7 +54,6 @@ from pydantic import (
 )
 
 from pixlstash.hub.workflow_card_reads import (
-    AUTO_STACK_PREFIX,
     Workflow,
     asset_names,
     card_index,
@@ -62,6 +62,7 @@ from pixlstash.hub.workflow_card_reads import (
     group_picture_inputs,
     group_pins,
     instance_documents,
+    manual_document,
     model_fix_labels,
     model_fixes,
     workflow_of_topology,
@@ -214,6 +215,7 @@ from pixlstash.utils.adapter_header import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import family_of, modality_of
+from pixlstash.utils.workflow_ids import WORKFLOW_ID_PATTERN
 
 logger = get_logger(__name__)
 
@@ -288,10 +290,10 @@ class WorkflowSlotModel(BaseModel):
     which LoRA went in it is the recipe's business (``recipe_values``,
     ``default_recipe``) — and for a model whose name was forgotten.
 
-    On a card with **no recipe** (``variant_count: 0``, #1466) these are not
-    read off a stored slot list at all: they are recovered from the workflow
-    file itself, which is best effort and comes back empty on a document the
-    recovery cannot read. An empty ``models`` on such a card therefore means
+    On a **manual** workflow (``variant_count: 0``) these are not read off a
+    stored slot list at all: they are recovered from its own document, which
+    is best effort and comes back empty on a document the recovery cannot
+    read. An empty ``models`` on such a card therefore means
     *nobody has read this workflow's models*, never *it has none*.
     """
 
@@ -353,8 +355,8 @@ class WorkflowSlotModel(BaseModel):
         description=(
             "The shelf file this slot loads, or null where the shelf does not "
             "hold it or the name could be more than one file. A LoRA slot "
-            "carries one only where it carries a `name`: on a card known from "
-            "its file alone."
+            "carries one only where it carries a `name`: on a manual workflow, "
+            "read off its own document."
         ),
     )
     base_model_family: str | None = Field(
@@ -390,8 +392,8 @@ class WorkflowSlotModel(BaseModel):
         description=(
             "The slot's label on the base topology. "
             "Null for a slot the cached list gave no label — which is every "
-            "slot of a card that has no recipe (#1466), since a label is an "
-            "address inside a stored topology and such a card has none."
+            "slot of a manual workflow, whose models are read off its "
+            "document rather than a stored topology."
         ),
     )
 
@@ -546,7 +548,7 @@ class WorkflowCard(BaseModel):
     """
 
     id: str = Field(
-        description="The workflow: `auto:<core hash>`, or a hand-made group's id."
+        description="The workflow: `auto:<core hash>`, or `manual:<uuid hex>`."
     )
     name: str | None = Field(
         None,
@@ -566,7 +568,26 @@ class WorkflowCard(BaseModel):
         ),
     )
     imported: bool = Field(
-        False, description="A workflow file on this machine runs this workflow."
+        False,
+        description=(
+            "A workflow document the owner holds runs this workflow: a manual "
+            "one, or an automatic one with a legacy workflow file."
+        ),
+    )
+    manual: bool = Field(
+        False,
+        description=(
+            "A manual workflow: its own stored document, imported, pulled, "
+            "duplicated or extracted, never grouped with another. Deletable."
+        ),
+    )
+    from_name: str | None = Field(
+        None,
+        description=(
+            "The name of the workflow or recipe a manual workflow was made "
+            "from (duplicate, fixed copy, clone, LoRA edit, extract), as it "
+            "was called then; null for an imported or pulled one."
+        ),
     )
     hidden: bool = Field(
         False,
@@ -774,11 +795,12 @@ BEST_PICTURE_DEPTH = 5
 OVERRIDE_ADDRESS_SEPARATOR = "/"
 
 # A workflow is named either by ``auto:`` and the core hash that IS the
-# automatic group, or by the uuid hex of a hand-made one. Checked rather
-# than trusted, so a malformed id is a 422 naming the parameter instead of a
-# write against a workflow nothing will ever read. Checked with `fullmatch`:
-# `$` also matches before a trailing newline, so `.match` let `<id>\n` through.
-_WORKFLOW_ID_RE = re.compile(rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$")
+# automatic group, or by ``manual:`` and the uuid hex of a manual one. Checked
+# rather than trusted, so a malformed id is a 422 naming the parameter instead
+# of a write against a workflow nothing will ever read. Checked with
+# `fullmatch`: `$` also matches before a trailing newline, so `.match` let
+# `<id>\n` through.
+_WORKFLOW_ID_RE = re.compile(WORKFLOW_ID_PATTERN)
 
 # The extension a picture keeps when it is uploaded into ComfyUI's input folder.
 # Anything else is dropped rather than carried into a name another program
@@ -2213,72 +2235,35 @@ def _display_names(figures) -> dict[str, str]:
     return names
 
 
-# What a workflow file may be before the grid declines to parse it. A real one
-# is tens to hundreds of kilobytes; the largest in this repo's own fixtures is
-# under 300 KB, and the watched folder is a place anything can be dropped. The
-# size is already in hand from the ``stat`` the cache key needs, so refusing
-# costs nothing - and this read now happens on the grid and on every workflow
-# write, where it used to happen on neither.
-# ponytail: one entry per file version; stale versions age out of the LRU.
-@functools.lru_cache(maxsize=256)
-def _file_model_widgets(path: str, mtime_ns: int, size: int) -> tuple:
-    """``((widget, filename), ...)`` read off one stored workflow file (#1466).
+# ponytail: one entry per manual workflow, keyed on its id alone because a
+# row's `document` is never rewritten (a conversion fills `api_document`).
+@functools.lru_cache(maxsize=512)
+def _manual_model_widgets(hub, workflow_id: str) -> tuple:
+    """``((widget, filename), ...)`` read off one manual workflow's document.
 
-    Keyed on mtime and size exactly as ``comfyui._describe_workflow`` is, so
-    the grid parses each file once per version of it rather than once per
-    request, and a file that will not read is logged once rather than on every
-    open of the view.
+    Cached, so the grid parses each document once rather than once per
+    request, and a document that will not read is logged once.
     """
-    try:
-        document = _load_workflow_json(path)
-    except (OSError, ValueError, RecursionError) as exc:
-        logger.warning(
-            "Workflow file %s will not load, so the card it is the whole of "
-            "is described with no models: %s",
-            path,
-            exc,
-        )
+    row = hub.fetchone(
+        "SELECT document FROM workflow_document WHERE workflow_id = ?",
+        (workflow_id,),
+    )
+    if row is None:
         return ()
     try:
-        return tuple(loaded_model_widgets(document))
+        return tuple(loaded_model_widgets(json.loads(row["document"])))
     except Exception as exc:
-        # The reader indexes into whatever the file holds, so a malformed one
-        # (a `nodes` entry that is not a dict, a non-list `widgets_values`)
-        # raises something other than a ValueError. A card described without
-        # its models is the failure this whole function exists to soften; it
-        # must not be one that takes the grid down.
+        # The reader indexes into whatever the document holds, so a malformed
+        # one raises something other than a ValueError. A workflow described
+        # without its models must not take the grid down.
         logger.warning(
-            "Could not read the models out of workflow file %s, which failed "
-            "with %s; its card is described with none: %s",
-            path,
+            "Could not read the models out of manual workflow %s, which failed "
+            "with %s; it is described with none: %s",
+            workflow_id,
             type(exc).__name__,
             exc,
         )
         return ()
-
-
-def _file_models(file_name: str) -> tuple:
-    """:func:`read_grid`'s reader: the models one stored file loads.
-
-    The I/O half of #1466, here rather than in the service because the folder
-    a workflow file lives in is this layer's - the same split
-    :func:`_source_graph_for` already keeps, where the route does the reads
-    and the service decides what they mean.
-    """
-    path, _source = _resolve_workflow_path(file_name)
-    if not path:
-        return ()
-    try:
-        stat = os.stat(path)
-    except OSError as exc:
-        logger.warning(
-            "Could not stat workflow file %s, so the card it is the whole of "
-            "is described with no models: %s",
-            path,
-            exc,
-        )
-        return ()
-    return _file_model_widgets(path, stat.st_mtime_ns, stat.st_size)
 
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:
@@ -2314,6 +2299,8 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         type=figure.card.workflow_type,
         type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
+        manual=figure.card.manual,
+        from_name=figure.card.from_name,
         hidden=figure.card.hidden,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
@@ -2499,11 +2486,17 @@ def create_router(server) -> APIRouter:
             return None
         return read_variant_picture_counts(server.vault)
 
+    def _manual_models(workflow_id: str) -> tuple:
+        return _manual_model_widgets(_hub(), workflow_id)
+
     def _workflow_id(workflow_id: str) -> str:
         if not _WORKFLOW_ID_RE.fullmatch(workflow_id):
             raise HTTPException(
                 status_code=422,
-                detail="Invalid workflow_id: expected auto:<core hash> or a group id.",
+                detail=(
+                    "Invalid workflow_id: expected auto:<core hash> or "
+                    "manual:<uuid hex>."
+                ),
             )
         return workflow_id
 
@@ -2566,7 +2559,7 @@ def create_router(server) -> APIRouter:
             server.vault,
             include_hidden=include_hidden,
             include_one_offs=include_one_offs,
-            file_models=_file_models,
+            manual_models=_manual_models,
         )
         names = _display_names(grid.figures)
         return WorkflowCards(
@@ -2598,7 +2591,7 @@ def create_router(server) -> APIRouter:
         workflow. A write answers with this so the caller sees the workflow it
         just changed rather than an echo of its own request.
         """
-        grid = read_grid(hub, server.vault, file_models=_file_models)
+        grid = read_grid(hub, server.vault, manual_models=_manual_models)
         figure = grid.figure(workflow_id)
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow.")
@@ -2977,6 +2970,16 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         _workflow, card = _require_base(hub, workflow_id)
+        if card.manual:
+            # A fix re-keys the cards of a topology; a manual workflow is on
+            # none. Its own graph changes by making a new one.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A manual workflow's models are changed by cloning it "
+                    "with other models, not replaced in place."
+                ),
+            )
         was, now, kind = payload.was, payload.now, payload.slot_kind
         if now is not None:
             # A shelf model of a kind a slot can take, and nothing else,
@@ -3452,6 +3455,11 @@ def create_router(server) -> APIRouter:
         the tiers are tried in is testable without a vault: this function only
         stops early because reading the next tier costs a file or a query.
         """
+        if card.manual:
+            # Its own row and nothing else: no file, no picture, no instance.
+            return run_service.resolve_source(
+                card, file_document=manual_document(_hub(), card.workflow_key)
+            )
         file_document = None
         if card.file_name:
             path, _source = _resolve_workflow_path(card.file_name)

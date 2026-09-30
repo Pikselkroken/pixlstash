@@ -46,6 +46,7 @@ from typing import Callable
 from platformdirs import user_cache_dir, user_config_dir
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.workflow_ids import WORKFLOW_ID_PATTERN
 
 logger = get_logger(__name__)
 
@@ -180,10 +181,9 @@ _PROJECT_ID = {
 }
 # `GET /pictures` and `/pictures/count` take it; `/pictures/search` does not,
 # so search_pictures leaves it out rather than drop it without a word.
-# A workflow id: `auto:<core hash>` or a manual group's uuid. The pattern is
+# A workflow id: `auto:<core hash>` or `manual:<uuid hex>`. The pattern is
 # also the JSON-schema one, where `$` is the end; Python checks it with
 # `fullmatch`, since there `$` also matches before a trailing newline.
-WORKFLOW_ID_PATTERN = r"^(auto:[0-9a-f]{64}|[0-9a-f]{32})$"
 _WORKFLOW_ID_RE = re.compile(WORKFLOW_ID_PATTERN)
 _WORKFLOW_FILTER = {
     "type": "string",

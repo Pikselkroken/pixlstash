@@ -86,7 +86,11 @@ from pixlstash.services.workflow_hash import (
     topology_hash as api_topology_hash,
     ui_topology_hash,
 )
-from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.services.workflow_io import (
+    api_graph,
+    detect_workflow_io,
+    with_converted_graph,
+)
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.comfyui_workflow_pull_task import ComfyUIWorkflowPullTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -266,18 +270,7 @@ def runnable_document(path: str, workflow: dict) -> dict:
     """
     if api_graph(workflow) is not None:
         return workflow
-    graph = converted_graph(path, workflow)
-    if graph is None:
-        return workflow
-    # Not the bindings: theirs are paths into the editor structure (or the
-    # start-up migration's empty list), and either would suppress detection
-    # on the API graph and fill nothing.
-    own = {
-        k: v
-        for k, v in workflow.items()
-        if str(k).startswith("pixlstash_") and k != workflow_bindings.BINDINGS_KEY
-    }
-    return {**own, **graph}
+    return with_converted_graph(workflow, converted_graph(path, workflow))
 
 
 def _converted_mtime_ns(path: str) -> int:

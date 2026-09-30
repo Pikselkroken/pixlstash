@@ -60,6 +60,7 @@ from pixlstash.hub.workflow_card_reads import (
     workflow_of_topology,
 )
 from pixlstash.hub import workflow_cards
+from pixlstash.hub.workflow_group_writes import create_manual_workflow
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, STRIP_LORAS_FOR_STACKS
 from pixlstash.hub.workflows import (
     PictureGhost,
@@ -623,6 +624,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_group_picture_input")
         conn.execute("DELETE FROM workflow_group_member")
         conn.execute("DELETE FROM workflow_group")
+        conn.execute("DELETE FROM workflow_document")
         conn.execute(
             "DELETE FROM model WHERE filename IN (?, ?, ?, ?)",
             (
@@ -5403,6 +5405,35 @@ def test_the_linked_imported_file_is_the_first_source_tried(runnable, monkeypatc
     assert r.json()["groups"][0]["source"] == "file", r.json()
     # The file's own values, not the instance document's 24/6.5.
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 11
+
+
+def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
+    """A manual workflow is its document: no file, picture or instance tier.
+
+    It is on the grid as a workflow of its own, badged manual, and its default
+    recipe is its own graph addressed by its own slot labels, never `core:`.
+    """
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"].update({"steps": 13, "cfg": 1.5, "seed": 5})
+    document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    document["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    manual = create_manual_workflow(runnable.server.hub, "Mine", document, "import")
+
+    card = _by_key(_cards(runnable.owner))[manual]
+    assert (card["manual"], card["from_name"], card["imported"]) == (True, None, True)
+    assert (card["name"], card["picture_count"], card["topologies"]) == (
+        "Mine",
+        0,
+        [],
+    )
+    values = _detail(runnable.owner, manual)["card"]["default_recipe"]["values"]
+    assert values and not any(v["slot_label"].startswith("core:") for v in values)
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": manual})
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert (group["source"], group["workflow_id"]) == ("file", manual), group
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 13
 
 
 def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypatch):

@@ -46,7 +46,11 @@ from pixlstash.hub.workflow_card_reads import (
     variant_documents,
     workflow_index,
 )
-from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, loader_swaps_of
+from pixlstash.hub.workflow_cards import (
+    STRIP_LORAS_FOR_STACKS,
+    loader_swaps_of,
+    topology_only_key,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
 from pixlstash.services.model_shelf_service import adapter_digest_index
@@ -62,10 +66,12 @@ from pixlstash.services.workflow_identity import (
     core_hash,
     core_node_labels,
     model_fix_kind,
+    WORKFLOW_KEY_VERSION,
     slots,
     topology_node_labels,
     unswapped,
 )
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -107,6 +113,63 @@ class _Reader:
         return self._cursor(sql, params).fetchall()
 
 
+def _cards_as_filed(hub) -> list[Card]:
+    """The cards as data steps 5 and 6 were written against: files included.
+
+    Until manual workflows (data step 7) a workflow FILE with no recipe was a
+    card of its own (#1466, ``auto:<topology hash>``), and these steps carry
+    the owner's state onto that id; step 7 then carries it on to the file's
+    manual workflow. Frozen here, so a hub upgraded from before step 5 still
+    converts what its owner typed on such a card. No manual card: none
+    exists before step 7.
+    """
+    cards = [card for card in card_index(hub) if not card.manual]
+    return cards + _file_only_cards(hub, {card.workflow_key for card in cards})
+
+
+def _file_only_cards(hub, keyed: set[str]) -> list[Card]:
+    """The cards whose whole content is a stored workflow file (#1466).
+
+    The key is derived (``topology_only_key``) rather than read, since a
+    stored ``workflow_file.workflow_key`` can be stale. NOT EXISTS rather
+    than NOT IN, which one NULL would make NULL for every row.
+    """
+    found = {}
+    for row in hub.fetchall(
+        "SELECT f.topology_hash AS topology_hash, "
+        "MIN(f.workflow_name) AS workflow_name "
+        "FROM workflow_file f "
+        "WHERE NOT EXISTS (SELECT 1 FROM workflow_variant v "
+        "WHERE v.structural_hash = f.structural_hash AND v.key_version = ?) "
+        "GROUP BY f.topology_hash ORDER BY f.topology_hash",
+        (WORKFLOW_KEY_VERSION,),
+    ):
+        key = topology_only_key(row["topology_hash"])
+        if key not in keyed:
+            found[key] = (row["topology_hash"], row["workflow_name"])
+    attrs = {}
+    for batch in chunked(sorted(found)):
+        placeholders = ",".join("?" * len(batch))
+        for row in hub.fetchall(
+            "SELECT workflow_key, name, notes, hidden FROM workflow_attr "
+            f"WHERE workflow_key IN ({placeholders})",
+            tuple(batch),
+        ):
+            attrs[row["workflow_key"]] = row
+    return [
+        Card(
+            workflow_key=key,
+            topology_hash=topology_hash,
+            name=attrs[key]["name"] if key in attrs else None,
+            notes=attrs[key]["notes"] if key in attrs else None,
+            hidden=bool(attrs[key]["hidden"]) if key in attrs else False,
+            imported=True,
+            file_name=file_name,
+        )
+        for key, (topology_hash, file_name) in sorted(found.items())
+    ]
+
+
 def convert_card_state(conn: sqlite3.Connection) -> int:
     """Write every card's state onto its workflow; return how many cards moved.
 
@@ -114,7 +177,7 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
         conn: An open hub connection, inside the caller's transaction.
     """
     hub = _Reader(conn)
-    cards = card_index(hub)
+    cards = _cards_as_filed(hub)
     if not cards:
         return 0
     stacks = stack_rows(hub)
@@ -235,7 +298,7 @@ def dissolve_manual_groups(conn: sqlite3.Connection) -> int:
     ]
     if not groups:
         return 0
-    cards = card_index(hub)
+    cards = _cards_as_filed(hub)
     core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
     auto_of: dict[str, str] = {}
     weight: Counter = Counter()

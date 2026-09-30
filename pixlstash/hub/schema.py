@@ -1263,6 +1263,26 @@ CREATE TABLE IF NOT EXISTS workflow_key_successor (
 )
 """
 
+# A MANUAL workflow: its own document, not a topology and not a file. What the
+# owner imported, pulled, duplicated or extracted, verbatim (placeholders
+# migrated, `pixlstash_bindings` kept), editor or API format. `api_document` is
+# the API graph ComfyUI converted an editor document into
+# (`POST /comfyui/workflows/convert`). Name, notes, defaults, pins and picture
+# inputs are the `workflow_group_*` rows keyed by the same id.
+_V2_WORKFLOW_DOCUMENT = """
+CREATE TABLE IF NOT EXISTS workflow_document (
+    workflow_id       TEXT PRIMARY KEY,
+    document          TEXT NOT NULL,
+    api_document      TEXT,
+    origin            TEXT NOT NULL CHECK (origin IN ('import', 'inbox', 'pull',
+                          'builtin', 'duplicate', 'fixed', 'clone', 'chain',
+                          'recipe')),
+    from_workflow_id  TEXT,
+    from_name         TEXT,
+    created_at        TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1333,6 +1353,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_GROUP_PINS,
     _V2_WORKFLOW_GROUP_PICTURE_INPUT,
     _V2_WORKFLOW_KEY_SUCCESSOR,
+    _V2_WORKFLOW_DOCUMENT,
     *_V2_WORKFLOW_INDEXES,
 )
 

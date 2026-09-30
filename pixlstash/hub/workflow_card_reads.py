@@ -30,10 +30,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_cards import (
-    CORE_RULE_VERSION,
-    topology_only_key,
-)
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import asset_reference, normalized_filename
 from pixlstash.services.workflow_identity import (
@@ -41,14 +38,17 @@ from pixlstash.services.workflow_identity import (
     model_fix_kind,
     slots,
 )
+from pixlstash.services.workflow_io import with_converted_graph
 from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.workflow_ids import AUTO_PREFIX
 
 logger = get_logger(__name__)
 
 # The prefix an automatic workflow's id carries. An automatic grouping is not a
 # row - it IS the set of topologies sharing a ``core_hash`` - so ``auto:`` and
-# that hash are the only thing that names one.
-AUTO_STACK_PREFIX = "auto:"
+# that hash are the only thing that names one. A manual workflow is a row,
+# ``workflow_document``, named ``manual:<uuid hex>``.
+AUTO_STACK_PREFIX = AUTO_PREFIX
 
 
 @dataclass
@@ -86,6 +86,10 @@ class Card:
     file_name: Optional[str] = None
     variants: list[str] = field(default_factory=list)
     slots: list[dict] = field(default_factory=list)
+    # A manual workflow's card (``workflow_document``): its own record, with
+    # the id as both key and topology, and the workflow it was made from.
+    manual: bool = False
+    from_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -120,8 +124,8 @@ def card_index(hub: HubDatabase) -> list[Card]:
     the owner's attributes, grouped in memory. Variants are returned sorted so
     two reads of an unchanged hub answer identically.
 
-    Then one more small query for the cards that have **no variant at all**:
-    see :func:`_file_only_cards`.
+    Then one more small query for the manual workflows, each its own card
+    with no variant (:func:`_manual_cards`).
     """
     rows = hub.fetchall(
         "SELECT v.workflow_key AS workflow_key, v.topology_hash AS topology_hash, "
@@ -162,91 +166,64 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 file_name=row["file_name"],
             )
         card.variants.append(row["structural_hash"])
-    return list(cards.values()) + _file_only_cards(hub, set(cards))
+    return list(cards.values()) + _manual_cards(hub)
 
 
-def _file_only_cards(hub: HubDatabase, keyed: set[str]) -> list[Card]:
-    """The cards whose whole content is a stored workflow file (#1466).
+def _manual_cards(hub: HubDatabase) -> list[Card]:
+    """One card per manual workflow: its own ``workflow_document`` row.
 
-    ComfyUI saves in **editor** format unless somebody deliberately exports
-    the API one, and an editor-format file names its widget values by
-    position: :func:`pixlstash.hub.workflows.record_ui_graph` files its
-    topology and stops there, so no ``workflow_recipe`` and no
-    ``workflow_variant`` row is ever written for it.
-    :func:`pixlstash.hub.workflow_cards.record_file` keys the file on
-    :func:`~pixlstash.hub.workflow_cards.topology_only_key` instead. The query
-    above starts at the variant table, so such a file had a row in the hub, a
-    file in the folder, and no card at all - which is the answer
-    ``record_file``'s own comment calls the worse one. A document that would
-    not reduce lands here for the same reason.
-
-    **A file belongs here when its own variant is missing, and the card's key
-    is derived rather than read.** ``workflow_file.workflow_key`` is a digest
-    written at filing time and the re-key pass only updates rows it can reach
-    through a ``structural_hash`` (``workflow_card_writes``), so a stored key
-    is the one thing here that can go stale - and a card surfaced under a
-    stale key would be an undeletable duplicate whose attribute rows had
-    already been swept. Deriving it means a rule change moves this card the
-    way it moves every other one.
-
-    **Topology and file name only.** ``core_hash`` and ``slots`` are left
-    unread rather than joined off ``workflow_topology_core``: that cache is
-    written per *recipe*, so a row there describes the models some API graph
-    of this topology named, not the ones in this file. A NULL ``core_hash`` is
-    already "stacks with nothing", which is the right answer for a card whose
-    models nobody has read, and it keeps this card out of the automatic groups
-    :func:`workflow_index` builds.
+    **Never on a topology.** ``topology_hash`` is the workflow's own id, so
+    nothing keyed per topology (a model fix, a slot mark, a core hash) can
+    reach it from an automatic workflow or reach an automatic one from it. No
+    variants: the document is the whole of it. ``hand_imported`` for anything
+    but a pull, so an imported, duplicated or extracted workflow is never
+    folded into the one-offs.
     """
-    found = {}
-    for row in hub.fetchall(
-        # NOT EXISTS rather than NOT IN: `workflow_variant.structural_hash` is
-        # a TEXT primary key, which SQLite does not imply NOT NULL on, and one
-        # NULL there makes a NOT IN predicate NULL for every row - silently
-        # returning no file-only cards at all. No writer does it today; this
-        # costs the same and cannot be made to.
-        "SELECT f.topology_hash AS topology_hash, "
-        "MIN(f.workflow_name) AS workflow_name, "
-        f"MAX({_HAND_IMPORTED.replace('workflow_file.', 'f.')}) AS hand_imported "
-        "FROM workflow_file f "
-        "WHERE NOT EXISTS (SELECT 1 FROM workflow_variant v "
-        "WHERE v.structural_hash = f.structural_hash AND v.key_version = ?) "
-        "GROUP BY f.topology_hash ORDER BY f.topology_hash",
-        (WORKFLOW_KEY_VERSION,),
-    ):
-        key = topology_only_key(row["topology_hash"])
-        # A topology whose variants include a model-less one already has this
-        # very card, and the file row is on it: yielding it again would hand
-        # the grid two Cards under one key.
-        if key not in keyed:
-            found[key] = (
-                row["topology_hash"],
-                row["workflow_name"],
-                bool(row["hand_imported"]),
-            )
-    if not found:
-        return []
-    attrs = {}
-    for batch in chunked(sorted(found)):
-        placeholders = ",".join("?" * len(batch))
-        for row in hub.fetchall(
-            "SELECT workflow_key, name, notes, hidden FROM workflow_attr "
-            f"WHERE workflow_key IN ({placeholders})",
-            tuple(batch),
-        ):
-            attrs[row["workflow_key"]] = row
     return [
         Card(
-            workflow_key=key,
-            topology_hash=topology_hash,
-            name=attrs[key]["name"] if key in attrs else None,
-            notes=attrs[key]["notes"] if key in attrs else None,
-            hidden=bool(attrs[key]["hidden"]) if key in attrs else False,
+            workflow_key=row["workflow_id"],
+            topology_hash=row["workflow_id"],
             imported=True,
-            hand_imported=hand_imported,
-            file_name=file_name,
+            hand_imported=row["origin"] != "pull",
+            manual=True,
+            from_name=row["from_name"],
         )
-        for key, (topology_hash, file_name, hand_imported) in sorted(found.items())
+        for row in hub.fetchall(
+            "SELECT workflow_id, origin, from_name FROM workflow_document "
+            "ORDER BY workflow_id"
+        )
     ]
+
+
+def manual_document(hub: HubDatabase, workflow_id: str) -> Optional[dict]:
+    """A manual workflow's runnable document, or ``None`` for no such row.
+
+    The stored document, or the API graph ComfyUI converted it into, exactly
+    as ``routes/comfyui.runnable_document`` reads a file and its sidecar. A
+    row that will not parse is logged and answers ``None``: the caller then
+    reports no runnable source rather than raising.
+    """
+    row = hub.fetchone(
+        "SELECT document, api_document FROM workflow_document WHERE workflow_id = ?",
+        (workflow_id,),
+    )
+    if row is None:
+        return None
+    try:
+        document = json.loads(row["document"])
+        converted = json.loads(row["api_document"]) if row["api_document"] else None
+    except json.JSONDecodeError as exc:
+        logger.error(
+            "Stored document of manual workflow %s is not valid JSON, so it has "
+            "no graph to run: %s",
+            workflow_id,
+            exc,
+        )
+        return None
+    if not isinstance(document, dict):
+        logger.error("Manual workflow %s holds a non-object document.", workflow_id)
+        return None
+    return with_converted_graph(document, converted)
 
 
 def _specials(raw: Optional[str]) -> Optional[tuple[str, ...]]:
@@ -505,16 +482,14 @@ def key_pins(hub: HubDatabase, workflow_key: str) -> Optional[list[tuple[str, st
 # ---------------------------------------------------------------------------
 # Workflows as the owner sees them (#1622): variant -> topology -> workflow.
 #
-# What every route reads since the cut-over (#1623). A workflow is a group of
-# TOPOLOGIES: a manual placement
-# (``workflow_group_member``) first, else ``auto:<core_hash>`` under the rule
-# this build applies. A topology known only from a stored workflow FILE (an
-# editor-format file has a topology and no recipe, #1466) has no core hash and
-# is a workflow of its own, ``auto:<topology_hash>``: the grid showed such a
-# file as a card before the cut-over and must not lose it. Any other topology
-# with neither - the backfill has not reached it, or it was cached under a
-# superseded rule - is in no workflow yet, for the reason ``Card.core_hash``
-# gives: a NULL bucket would read as one enormous workflow.
+# What every route reads since the cut-over (#1623). An AUTOMATIC workflow is
+# a group of TOPOLOGIES, ``auto:<core_hash>`` under the rule this build applies
+# (a ``workflow_group_member`` placement first, which data step 6 emptied). A
+# topology with no core hash - the backfill has not reached it, or it was
+# cached under a superseded rule - is in no workflow yet, for the reason
+# ``Card.core_hash`` gives: a NULL bucket would read as one enormous workflow.
+# A MANUAL workflow is its own ``workflow_document`` row, ``manual:<uuid>``,
+# on no topology: it never joins an automatic one and none absorbs it.
 # ---------------------------------------------------------------------------
 
 
@@ -563,29 +538,14 @@ def workflow_of_topology(hub: HubDatabase, topology_hash: str) -> Optional[str]:
     )
     if row is not None:
         return f"{AUTO_STACK_PREFIX}{row['core_hash']}"
-    if _file_only_topology(hub, topology_hash):
-        return f"{AUTO_STACK_PREFIX}{topology_hash}"
     return None
-
-
-def _file_only_topology(hub: HubDatabase, topology_hash: str) -> bool:
-    """A topology a stored file names and no current variant is filed under."""
-    return (
-        hub.fetchone(
-            "SELECT 1 FROM workflow_file f WHERE f.topology_hash = ? "
-            "AND NOT EXISTS (SELECT 1 FROM workflow_variant v "
-            "WHERE v.topology_hash = f.topology_hash AND v.key_version = ?)",
-            (topology_hash, WORKFLOW_KEY_VERSION),
-        )
-        is not None
-    )
 
 
 def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
     """Every topology one workflow holds, sorted; empty for an unknown id.
 
     An automatic workflow subtracts the topologies placed elsewhere by hand,
-    so a topology is only ever in one workflow.
+    so a topology is only ever in one workflow. A manual workflow has none.
     """
     if not workflow_id.startswith(AUTO_STACK_PREFIX):
         return [
@@ -597,7 +557,7 @@ def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
             )
         ]
     digest = workflow_id[len(AUTO_STACK_PREFIX) :]
-    found = [
+    return [
         topology_hash
         for (topology_hash,) in hub.fetchall(
             "SELECT c.topology_hash FROM workflow_topology_core c "
@@ -608,13 +568,6 @@ def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
             (CORE_RULE_VERSION, digest),
         )
     ]
-    if found:
-        return found
-    # A file-only topology is its own workflow, `auto:<topology_hash>`.
-    placed = hub.fetchone(
-        "SELECT 1 FROM workflow_group_member WHERE topology_hash = ?", (digest,)
-    )
-    return [digest] if placed is None and _file_only_topology(hub, digest) else []
 
 
 def variants_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
@@ -640,9 +593,8 @@ def workflow_index(
 ) -> list[Workflow]:
     """Every workflow this hub holds, built from :func:`card_index`.
 
-    A file-only card (#1466) is ``auto:<topology_hash>`` unless its topology
-    is in a workflow already; any other card whose topology is in no workflow
-    (the backfill has not reached it) is left out.
+    A card whose topology is in no workflow (the backfill has not reached it)
+    is left out. A manual card is a workflow of its own, its id its base card.
 
     Args:
         hub: The hub.
@@ -659,18 +611,25 @@ def workflow_index(
     workflows: dict[str, Workflow] = {}
     loras: dict[str, int] = {}
     cards = cards if cards is not None else card_index(hub)
-    # A file-only card reads no core hash of its own, so it joins whatever
-    # workflow another card of its topology is in.
+    # A card of a topology with no variant under the current key (a legacy
+    # file row) reads no core hash of its own, so it joins whatever workflow
+    # another card of its topology is in.
     core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
+    manual: list[Workflow] = []
     topology_of: dict[str, str] = {}
     for card in cards:
+        if card.manual:
+            manual.append(
+                Workflow(
+                    card.workflow_key,
+                    cards=[card.workflow_key],
+                    base_card=card.workflow_key,
+                )
+            )
+            continue
         core = core_of.get(card.topology_hash)
         workflow_id = placed.get(card.topology_hash) or (
-            f"{AUTO_STACK_PREFIX}{core}"
-            if core
-            else None
-            if card.variants
-            else f"{AUTO_STACK_PREFIX}{card.topology_hash}"
+            f"{AUTO_STACK_PREFIX}{core}" if core else None
         )
         if workflow_id is None:
             continue
@@ -679,9 +638,8 @@ def workflow_index(
         topology_of[card.workflow_key] = card.topology_hash
         if card.topology_hash not in entry.topologies:
             entry.topologies.append(card.topology_hash)
-        # Per topology, so every card on it agrees - except a file-only card
-        # (#1466), which carries neither. The fullest answer wins, never the
-        # last card read.
+        # Per topology, so every card on it agrees. The fullest answer wins,
+        # never the last card read.
         known = entry.specials.get(card.topology_hash)
         if known is None or len(card.specials or ()) > len(known):
             entry.specials[card.topology_hash] = card.specials
@@ -693,6 +651,7 @@ def workflow_index(
             entry.variants.append(structural_hash)
             entry.variant_topology[structural_hash] = card.topology_hash
             entry.variant_card[structural_hash] = card.workflow_key
+    workflows.update((entry.workflow_id, entry) for entry in manual)
     attrs = {
         row["workflow_id"]: row
         for row in hub.fetchall(
@@ -701,6 +660,13 @@ def workflow_index(
     }
     counts = picture_counts or {}
     for entry in workflows.values():
+        attr = attrs.get(entry.workflow_id)
+        if attr is not None:
+            entry.name, entry.notes = attr["name"], attr["notes"]
+            entry.hidden = bool(attr["hidden"])
+        if not entry.topologies:
+            # A manual workflow: no topology to choose a base from.
+            continue
         entry.topologies.sort()
         entry.variants.sort()
         entry.cards.sort()
@@ -724,8 +690,7 @@ def workflow_index(
         for structural_hash, key in entry.variant_card.items():
             if entry.variant_topology[structural_hash] == entry.base_topology:
                 on_base[key] = on_base.get(key, 0) + counts.get(structural_hash, 0)
-        # A base topology no variant is filed on is a file-only card's, which
-        # runs from its file.
+        # A base topology no variant is filed on is a legacy file row's card.
         entry.base_card = (
             min(on_base, key=lambda key: (-on_base[key], key))
             if on_base
@@ -734,10 +699,6 @@ def workflow_index(
                 default=None,
             )
         )
-        attr = attrs.get(entry.workflow_id)
-        if attr is not None:
-            entry.name, entry.notes = attr["name"], attr["notes"]
-            entry.hidden = bool(attr["hidden"])
     return sorted(workflows.values(), key=lambda entry: entry.workflow_id)
 
 

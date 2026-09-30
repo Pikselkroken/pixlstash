@@ -45,6 +45,7 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
+from pixlstash.hub.workflow_group_writes import create_manual_workflow
 from pixlstash.server import Server
 from pixlstash.services import saved_recipe_service
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -86,7 +87,6 @@ CORE_OTHER = _h("core-other")
 WF_AB = f"auto:{CORE_SHARED}"
 WF_C = f"auto:{CORE_OTHER}"
 # A manual group's id: 32 hex, a uuid's.
-WF_MANUAL = _h("manual-group")[:32]
 
 PROMPT = "a cold portrait, rim light"
 OTHER_PROMPT = "a warm portrait, soft light"
@@ -122,6 +122,7 @@ def _seed_hub(server) -> None:
         # Children before parents: the hub enforces foreign keys.
         conn.execute("DELETE FROM workflow_group_member")
         conn.execute("DELETE FROM workflow_group")
+        conn.execute("DELETE FROM workflow_document")
         conn.execute("DELETE FROM workflow_stack_member")
         conn.execute("DELETE FROM workflow_stack")
         conn.execute("DELETE FROM workflow_unstacked")
@@ -521,31 +522,20 @@ def test_a_recipe_pins_its_models_and_a_malformed_pin_is_refused(recipe_env):
         assert r.status_code == 422, f"{bad}: {r.status_code} {r.text}"
 
 
-def test_a_manual_group_reads_its_own_topologies(recipe_env):
-    """A and C placed in one manual group: its recipes, credited with A's and
-    C's pictures, and B's automatic workflow no longer holds A's."""
-    with recipe_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_group (workflow_id, kind) VALUES (?, 'manual')",
-            (WF_MANUAL,),
-        )
-        conn.executemany(
-            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
-            "VALUES (?, ?)",
-            ((TOPO_A, WF_MANUAL), (TOPO_C, WF_MANUAL)),
-        )
-    grouped = _save(recipe_env.owner, WF_MANUAL, name="Grouped", loras=_ada())
-    on_b = _save(recipe_env.owner, WF_AB, name="On B", loras=_ada())
+def test_a_recipe_saved_on_a_manual_workflow_runs_on_its_document(recipe_env):
+    """The manual id is both the recipe's workflow and its card: nothing to
+    resolve through a topology, and no automatic workflow lists it."""
+    hub = recipe_env.server.hub
+    manual = create_manual_workflow(hub, "Mine", {"1": {"class_type": "X"}}, "import")
+    saved = _save(recipe_env.owner, manual, name="On mine", loras=_ada())
 
-    listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_id": WF_MANUAL}
-    ).json()
-    # a_match and c_match; b_match is in the other workflow.
-    assert [(row["id"], row["pictures"]) for row in listed] == [(grouped["id"], 2)]
-    from_b = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_id": WF_AB}
-    ).json()
-    assert [(row["id"], row["pictures"]) for row in from_b] == [(on_b["id"], 1)]
+    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": manual})
+    assert [row["id"] for row in listed.json()] == [saved["id"]]
+    assert saved["workflow_id"] == manual
+    row = saved_recipe_service.read_recipe(recipe_env.server.vault, saved["id"])
+    assert row.workflow_key == manual
+    from_ab = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": WF_AB})
+    assert saved["id"] not in [row["id"] for row in from_ab.json()]
 
 
 def test_a_malformed_workflow_id_is_refused_on_the_reads(recipe_env):

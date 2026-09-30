@@ -15,11 +15,14 @@ module writes rows, one transaction per logical write.
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import model_fix_kind
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 logger = get_logger(__name__)
 
@@ -169,3 +172,51 @@ def replace_group_picture_inputs(
                 for address, mode, pixel_sha in inputs
             ],
         )
+
+
+def create_manual_workflow(
+    hub: HubDatabase,
+    name: str,
+    document: dict,
+    origin: str,
+    from_workflow_id: Optional[str] = None,
+    from_name: Optional[str] = None,
+    api_document: Optional[dict] = None,
+) -> str:
+    """Store *document* as a new manual workflow called *name*; return its id.
+
+    Always a new row, even for a document already stored: identical copies are
+    allowed, and deduplicating is the importer's decision, not this one's. The
+    row and the name go in one transaction, so a workflow never shows nameless.
+
+    Args:
+        origin: How it arrived (``import``, ``inbox``, ``pull``, ``builtin``,
+            ``duplicate``, ``fixed``, ``clone``, ``chain``, ``recipe``); the
+            table's CHECK refuses anything else.
+        from_workflow_id: The workflow (or, for ``recipe``, the recipe's
+            workflow) it was made from, and *from_name* what that was called.
+        api_document: The API graph an editor *document* converted into.
+    """
+    workflow_id = f"{MANUAL_PREFIX}{uuid.uuid4().hex}"
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_document (workflow_id, document, api_document, "
+            "origin, from_workflow_id, from_name, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                workflow_id,
+                json.dumps(document),
+                json.dumps(api_document) if api_document is not None else None,
+                origin,
+                from_workflow_id,
+                from_name,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_attr (workflow_id, name) VALUES (?, ?) "
+            "ON CONFLICT(workflow_id) DO UPDATE SET name = excluded.name",
+            (workflow_id, name),
+        )
+    logger.info("Stored manual workflow %s (%s) from %s.", workflow_id, name, origin)
+    return workflow_id

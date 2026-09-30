@@ -7,6 +7,7 @@ asserted there cannot drift apart.
 
 import json
 import logging
+import re
 import sqlite3
 from dataclasses import replace
 from types import SimpleNamespace
@@ -26,6 +27,7 @@ from pixlstash.hub.workflows import (
 from pixlstash.hub.workflow_card_reads import (
     Card,
     card_index,
+    manual_document,
     model_fix_labels,
     model_fixes,
     Workflow,
@@ -40,6 +42,7 @@ from pixlstash.hub.workflow_card_writes import (
     record_loader_swaps,
     set_model_fix,
 )
+from pixlstash.hub.workflow_group_writes import create_manual_workflow
 from pixlstash.services.workflow_card_service import _figures, _superseded_variants
 from pixlstash.services.workflow_library_service import CoverCandidate
 from pixlstash.services.workflow_identity import (
@@ -638,28 +641,9 @@ def test_a_ui_file_lands_on_a_card_with_no_assets(hub):
     assert (row["topology_hash"], row["structural_hash"]) == (topology, None)
     assert row["workflow_key"] == key == workflow_cards.topology_only_key(topology)
 
-    # ...and the grid can read that card (#1466). No variant carries this key,
-    # so a card index that started at the variant table had nothing to join
-    # the file row to and the workflow appeared nowhere at all.
-    cards = card_index(hub)
-    assert [card.workflow_key for card in cards] == [key]
-    assert (cards[0].topology_hash, cards[0].file_name) == (topology, "ui.json")
-    assert (cards[0].variants, cards[0].slots) == ([], [])
-    # NULL is "stacks with nothing", which is the right answer for a card
-    # whose models nobody has read.
-    assert cards[0].core_hash is None
-    assert cards[0].imported is True
-
-    # A file that DOES reduce keeps its own card, and the two do not merge.
-    keys = record_api_graph(hub, _graph())
-    workflow_cards.record_file(
-        hub, "api.json", keys.topology_hash, keys.structural_hash
-    )
-    assert len(hub.fetchall("SELECT workflow_name FROM workflow_file")) == 2
-    assert sorted(card.file_name for card in card_index(hub)) == [
-        "api.json",
-        "ui.json",
-    ]
+    # A variant-less file row is no card: files are not workflows. What the
+    # owner imports is a manual workflow of its own (`workflow_document`).
+    assert card_index(hub) == []
 
 
 def test_a_file_never_forks_a_card_a_variant_already_holds(hub):
@@ -700,48 +684,6 @@ def test_a_file_never_forks_a_card_a_variant_already_holds(hub):
     assert len(cards) == 1
     assert cards[0].variants == [keys.structural_hash]
     assert cards[0].file_name == "modelless.json"
-
-
-def test_a_files_card_is_derived_rather_than_read_back(hub):
-    """The key `card_index` puts a file-only card on is computed, not stored.
-
-    ``workflow_file.workflow_key`` is a digest written at filing time, and the
-    re-key pass reaches a row only through its ``structural_hash`` - which an
-    editor-format file has none of. A stale stored key would surface the card
-    twice over: once under the key nothing else uses any more, with the
-    attribute rows for it already swept.
-    """
-    ui = {
-        "nodes": [
-            {
-                "id": 1,
-                "type": "UNETLoader",
-                "inputs": [],
-                "outputs": [{"name": "MODEL", "links": [1]}],
-                "widgets_values": ["base.safetensors"],
-            },
-            {
-                "id": 2,
-                "type": "SaveImage",
-                "inputs": [{"name": "images", "link": 1}],
-                "outputs": [],
-                "widgets_values": ["out"],
-            },
-        ],
-        "links": [[1, 1, 0, 2, 0, "*"]],
-    }
-    topology = record_ui_graph(hub, ui)
-    workflow_cards.record_file(hub, "ui.json", topology)
-    with hub.transaction() as conn:
-        conn.execute(
-            "UPDATE workflow_file SET workflow_key = ? WHERE workflow_name = 'ui.json'",
-            ("0" * 64,),
-        )
-
-    cards = card_index(hub)
-    assert [card.workflow_key for card in cards] == [
-        workflow_cards.topology_only_key(topology)
-    ]
 
 
 def test_replacing_a_file_moves_it_to_the_new_card(hub):
@@ -785,53 +727,17 @@ def test_a_workflow_file_past_the_cap_is_refused_by_the_loader(tmp_path, monkeyp
         comfyui_routes._load_workflow_json(str(path))
 
 
-def test_a_card_whose_file_is_past_the_cap_is_described_with_no_models(
-    tmp_path, monkeypatch, caplog
-):
-    """And the refusal reaches the card as "no models", not as a 500.
-
-    `WorkflowFileTooLarge` is a `ValueError` precisely so the callers that
-    already handle one from `json.load` treat it the same way - the document
-    did not read - rather than each needing to learn a new exception.
-    """
-    from pixlstash.routes import comfyui as comfyui_routes
-    from pixlstash.routes import workflows as workflow_routes
-
-    path = tmp_path / "card.json"
-    path.write_text(json.dumps({"nodes": []}), encoding="utf-8")
-    stat = path.stat()
-
-    monkeypatch.setattr(comfyui_routes, "MAX_WORKFLOW_FILE_BYTES", 4)
-    workflow_routes._file_model_widgets.cache_clear()
-    with caplog.at_level(logging.WARNING):
-        assert (
-            workflow_routes._file_model_widgets(
-                str(path), stat.st_mtime_ns, stat.st_size
-            )
-            == ()
-        )
-    assert "will not load" in caplog.text
-    workflow_routes._file_model_widgets.cache_clear()
-
-
 def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
-    """#1440: ``hand_imported`` on both halves of the card index.
+    """#1440: ``hand_imported`` off a legacy file row on an automatic card.
 
-    The variant-backed card and the file-only one read it from different
-    queries, so each is checked. A file a pull wrote is not hand-imported; a
-    second, hand-dropped file on the same card makes it so.
+    A file a pull wrote is not hand-imported; a second, hand-dropped file on
+    the same card makes it so.
     """
     keys = record_api_graph(hub, _graph())
     workflow_cards.record_identity(hub, keys.structural_hash)
     api_key = workflow_cards.record_file(
         hub, "api.json", keys.topology_hash, keys.structural_hash
     )
-    ui = {
-        "nodes": [{"id": 1, "type": "SaveImage", "inputs": [], "outputs": []}],
-        "links": [],
-    }
-    topology = record_ui_graph(hub, ui)
-    ui_key = workflow_cards.record_file(hub, "ui.json", topology)
 
     def pulled(name):
         with hub.transaction() as conn:
@@ -842,9 +748,7 @@ def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
     def hand():
         return {card.workflow_key: card.hand_imported for card in card_index(hub)}
 
-    assert hand() == {api_key: True, ui_key: True}
-    pulled("ui.json")
-    assert hand() == {api_key: True, ui_key: False}
+    assert hand() == {api_key: True}
     pulled("api.json")
     assert hand()[api_key] is False
     workflow_cards.record_file(
@@ -1588,23 +1492,76 @@ def test_a_saved_recipe_with_malformed_models_inherits_the_default():
         assert body["models"] == expected, stored
 
 
-def test_a_file_only_card_does_not_blank_its_topology_s_stages(hub):
-    """A manual workflow's topology can carry a file-only card (#1466) too."""
-    detailed = record_api_graph(hub, _graph(face_detailer=True))
-    workflow_cards.record_file(hub, "test-detailer.json", detailed.topology_hash)
+def test_a_manual_workflow_is_its_own_record_and_never_an_automatic_ones(hub):
+    """The same graph an automatic workflow runs, kept by hand, stays apart.
+
+    Its card sits on no topology (its id is its topology), so no core hash
+    can fold it into the automatic workflow and the automatic one can never
+    absorb it; a row that will not read is a workflow with no graph, not a
+    500.
+    """
+    runs = _four_runs(hub)
+    auto = workflow_of_topology(hub, runs[0].topology_hash)
+    manual = create_manual_workflow(hub, "Mine", _graph(ckpt="a.safetensors"), "import")
+    assert re.fullmatch(r"manual:[0-9a-f]{32}", manual)
+
+    by_id = {entry.workflow_id: entry for entry in workflow_index(hub)}
+    assert set(by_id) == {auto, manual}
+    mine = by_id[manual]
+    assert (mine.topologies, mine.variants, mine.cards) == ([], [], [manual])
+    assert (mine.base_card, mine.base_topology, mine.name) == (manual, None, "Mine")
+    assert manual not in by_id[auto].cards
+    assert set(by_id[auto].topologies) == {keys.topology_hash for keys in runs}
+    assert topologies_in_workflow(hub, manual) == []
+    (card,) = [card for card in card_index(hub) if card.manual]
+    assert (card.workflow_key, card.topology_hash) == (manual, manual)
+    assert (card.imported, card.hand_imported, card.variants) == (True, True, [])
+    assert manual_document(hub, manual) == _graph(ckpt="a.safetensors")
+
     with hub.transaction() as conn:
         conn.execute(
-            "INSERT INTO workflow_group (workflow_id, kind) VALUES (?, 'manual')",
-            ("a" * 32,),
+            "UPDATE workflow_document SET document = '{' WHERE workflow_id = ?",
+            (manual,),
         )
-        conn.execute(
-            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
-            "VALUES (?, ?)",
-            (detailed.topology_hash, "a" * 32),
-        )
-    (entry,) = [w for w in workflow_index(hub) if w.workflow_id == "a" * 32]
-    assert len(entry.cards) == 2, entry.cards
-    assert entry.specials[detailed.topology_hash] == ("face_detailer",)
+    assert manual_document(hub, manual) is None
+
+
+def test_a_pulled_manual_workflow_is_not_hand_imported(hub):
+    """The one-off rule keeps its #1440 reading: a pull is not a statement."""
+    pulled = create_manual_workflow(hub, "p", _graph(), "pull")
+    dropped = create_manual_workflow(hub, "d", _graph(), "inbox")
+    hand = {c.workflow_key: c.hand_imported for c in card_index(hub) if c.manual}
+    assert hand == {pulled: False, dropped: True}
+
+
+def test_a_manual_default_recipe_is_its_own_graph_by_its_own_slot_labels(
+    hub, monkeypatch
+):
+    """Never a `core:` address: nothing keyed on the core can reach it."""
+    _four_runs(hub)
+    graph = _graph(ckpt="a.safetensors", loras=("x.safetensors",))
+    graph["5"]["inputs"]["steps"] = 33
+    manual = create_manual_workflow(hub, "Mine", graph, "import")
+    monkeypatch.setattr(
+        workflow_card_service, "read_variant_picture_counts", lambda vault: {}
+    )
+    recipe = workflow_card_service.workflow_defaults(
+        hub, SimpleNamespace(library_uuid="test-library"), manual
+    )
+
+    assert (recipe.base_card, recipe.base_topology, recipe.sampled) == (
+        manual,
+        None,
+        1,
+    )
+    assert recipe.values and not any(
+        d.slot_label.startswith("core:") for d in recipe.values
+    )
+    assert {d.input_name: d.value for d in recipe.values}["steps"] == 33
+    assert recipe.models == []
+    assert [(lora.filename, lora.strength) for lora in recipe.loras] == [
+        ("x.safetensors", 1.0)
+    ]
 
 
 def test_a_lora_split_with_no_majority_decides_nothing(hub, monkeypatch):
