@@ -14,10 +14,10 @@ import pytest
 from fastapi import HTTPException
 
 import pixlstash.routes.comfyui as comfyui_module
+import pixlstash.routes.workflows as workflows_module
 import pixlstash.server as server_module
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub import workflow_cards
-from pixlstash.hub.workflows import topology_exists
+from pixlstash.hub.workflow_card_reads import manual_document
 from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.services.workflow_inputs import (
     FIXED,
@@ -32,7 +32,6 @@ from pixlstash.services.workflow_inputs import (
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     reduce_ui_graph,
-    structural_hash,
     topology_hash,
 )
 from pixlstash.services.workflow_bindings import run_targets
@@ -468,17 +467,22 @@ def test_a_fresh_install_takes_the_marker_so_an_as_is_import_keeps_detection(
     monkeypatch.setattr(
         comfyui_module, "_workflow_dirs", lambda: [("user", str(user_dir))]
     )
-    endpoint = _route(
-        comfyui_module.create_router(MagicMock(hub=None)), "/comfyui/workflows/import"
-    )
-    graph = _t2i_graph()
-    graph["7"] = _node("LoadImage", image="a.png")
-    endpoint(_request(), {"name": "mine", "workflow": graph})
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        endpoint = _route(
+            comfyui_module.create_router(MagicMock(hub=hub)),
+            "/comfyui/workflows/import",
+        )
+        graph = _t2i_graph()
+        graph["7"] = _node("LoadImage", image="a.png")
+        body = endpoint(_request(), {"name": "mine", "workflow": graph})
 
-    assert workflow_bindings.migrate_workflow_folder(str(user_dir)) == 0
-    stored = _load(user_dir / "mine.json")
-    assert stored == graph
-    assert comfyui_module._missing_placeholders(stored) == []
+        assert workflow_bindings.migrate_workflow_folder(str(user_dir)) == 0
+        stored = manual_document(hub, body["workflow_id"])
+        assert stored == graph
+        assert comfyui_module._missing_placeholders(stored) == []
+    finally:
+        hub.close()
 
 
 def test_a_file_that_could_not_be_written_is_retried_and_nothing_else(
@@ -541,7 +545,8 @@ def test_server_start_up_runs_the_migration_on_the_user_folder(tmp_path, monkeyp
     try:
         assert workflow_bindings.BINDINGS_KEY in _load(user_dir / "old.json")
         assert (user_dir / workflow_bindings.MIGRATION_MARKER).exists()
-        assert _load(user_dir / "dropped.json") == _t2i_graph()
+        (stored,) = server.hub.fetchall("SELECT document FROM workflow_document")
+        assert json.loads(stored["document"]) == _t2i_graph()
         assert server._workflow_inbox_watcher is not None
     finally:
         server.__exit__(None, None, None)
@@ -672,6 +677,7 @@ def import_route(tmp_path, monkeypatch):
     hub = HubDatabase(str(tmp_path / "hub.db"))
     server = MagicMock()
     server.hub = hub
+    server.vault.library_uuid = None
     endpoint = _route(comfyui_module.create_router(server), "/comfyui/workflows/import")
 
     def call(**payload):
@@ -679,117 +685,75 @@ def import_route(tmp_path, monkeypatch):
 
     call.inbox = inbox
     call.trash = trash
-    call.store = lambda name, workflow: comfyui_module._store_workflow(
-        hub, name, workflow, keep_both=True
+    call.store = lambda name, workflow: comfyui_module.store_inbox_workflow(
+        hub, name, workflow
     )
     call.delete = _route(
         comfyui_module.create_router(server),
         "/comfyui/workflows/{workflow_name}",
         "DELETE",
     )
+    delete_workflow = _route(
+        workflows_module.create_router(server), "/workflows/{workflow_id}", "DELETE"
+    )
+    call.delete_workflow = lambda workflow_id: delete_workflow(_request(), workflow_id)
     try:
         yield call, user_dir, built_in, hub
     finally:
         hub.close()
 
 
-def test_import_stores_the_file_unchanged_and_files_it_in_the_library(import_route):
+def _manual(hub) -> dict:
+    """``{workflow id: (name, origin, document)}`` of every manual workflow."""
+    return {
+        row["workflow_id"]: (row["name"], row["origin"], json.loads(row["document"]))
+        for row in hub.fetchall(
+            "SELECT d.workflow_id, d.origin, d.document, a.name "
+            "FROM workflow_document d LEFT JOIN workflow_group_attr a "
+            "ON a.workflow_id = d.workflow_id"
+        )
+    }
+
+
+def test_an_import_is_a_manual_workflow_holding_the_document_unchanged(import_route):
+    """No file, no filing: the document is the workflow, and joins no card."""
     call, user_dir, _built_in, hub = import_route
     graph = _t2i_graph()
     graph["7"] = _node("LoadImage", image="a.png")
 
     body = call(name="flow", workflow=graph)
 
-    assert (body["name"], body["matched"]) == ("flow.json", False)
-    assert _load(user_dir / "flow.json") == graph
-    assert body["topology_hash"] == topology_hash(graph)
-    assert topology_exists(hub, body["topology_hash"])
-
+    assert (body["name"], body["matched"]) == ("flow", False)
+    assert body["workflow_id"].startswith("manual:")
+    assert manual_document(hub, body["workflow_id"]) == graph
+    assert _manual(hub)[body["workflow_id"]] == ("flow", "import", graph)
     ui = _load(UI_FIXTURES / "image_z_image.json")
-    body = call(name="ui", workflow=ui)
-    assert _load(user_dir / "ui.json") == ui
-    assert topology_exists(hub, body["topology_hash"])
+    assert manual_document(hub, call(name="ui", workflow=ui)["workflow_id"]) == ui
+    assert not user_dir.exists()
+    for table in ("workflow_file", "workflow_variant", "workflow_recipe"):
+        assert hub.fetchone(f"SELECT COUNT(*) FROM {table}")[0] == 0, table
 
 
-def test_an_imported_file_lands_on_the_card_its_pictures_made(import_route):
-    """The filing hook (§B2): a file joins a card rather than starting one."""
+def test_an_identical_import_under_a_taken_name_is_a_second_workflow(import_route):
+    """Identical copies are allowed, and a name is no key."""
     call, _user_dir, _built_in, hub = import_route
-    graph = _t2i_graph()
-
-    call(name="flow", workflow=graph)
-
-    row = hub.fetchone("SELECT * FROM workflow_file WHERE workflow_name = 'flow.json'")
-    assert row["structural_hash"] == structural_hash(graph)
-    assert (
-        row["workflow_key"]
-        == hub.fetchone(
-            "SELECT workflow_key FROM workflow_variant WHERE structural_hash = ?",
-            (row["structural_hash"],),
-        )["workflow_key"]
-    )
-
-    # A UI-format file names its widgets by position, so it has no models and
-    # lands on a card with no assets rather than on no card at all.
-    body = call(name="ui", workflow=_load(UI_FIXTURES / "image_z_image.json"))
-    ui_row = hub.fetchone("SELECT * FROM workflow_file WHERE workflow_name = 'ui.json'")
-    assert ui_row["structural_hash"] is None
-    assert ui_row["workflow_key"] == workflow_cards.topology_only_key(
-        body["topology_hash"]
-    )
-
-
-def test_a_dropped_copy_matches_the_stored_workflow(import_route):
-    call, user_dir, built_in, _hub = import_route
-    graph = _t2i_graph()
-    call(name="flow", workflow=graph)
-    copy = json.loads(json.dumps(graph, indent=4))
-
-    body = call(name="renamed copy", workflow=copy, keep_both=True)
-    assert (body["name"], body["matched"]) == ("flow.json", True)
-    assert sorted(p.name for p in user_dir.iterdir()) == ["flow.json"]
-
-    # PixlStash's own keys are not part of the workflow ComfyUI sees.
-    stored = _t2i_graph()
-    stored["pixlstash_output_nodes"] = ["6"]
-    stored["2"]["inputs"]["text"] = "a fox"
-    (user_dir / "chosen.json").write_text(json.dumps(stored), encoding="utf-8")
-    plain = _t2i_graph()
-    plain["2"]["inputs"]["text"] = "a fox"
-    assert call(name="plain", workflow=plain)["name"] == "chosen.json"
-
-    shipped = {"1": _node("SaveImage")}
-    (built_in / "Shipped.json").write_text(json.dumps(shipped), encoding="utf-8")
-    body = call(name="shipped", workflow=shipped)
-    assert (body["name"], body["matched"]) == ("Shipped.json", True)
-
-
-def test_a_taken_name_is_refused_or_kept_beside(import_route):
-    call, user_dir, _built_in, _hub = import_route
-    call(name="flow", workflow=_t2i_graph())
-    other = _t2i_graph()
-    other["2"]["inputs"]["text"] = "a dog"
-
-    with pytest.raises(HTTPException) as refused:
-        call(name="flow", workflow=other)
-    assert refused.value.status_code == 409
-
-    assert call(name="flow", workflow=other, keep_both=True)["name"] == "flow (2).json"
-    assert _load(user_dir / "flow (2).json") == other
-    assert _load(user_dir / "flow.json") == _t2i_graph()
+    first = call(name="flow", workflow=_t2i_graph())["workflow_id"]
+    second = call(name="flow", workflow=_t2i_graph())["workflow_id"]
+    assert first != second
+    assert [name for name, _o, _d in _manual(hub).values()] == ["flow", "flow"]
 
 
 def test_an_unfileable_or_too_deep_import_is_handled(import_route):
-    call, user_dir, _built_in, _hub = import_route
-    # Reducing this raises AttributeError, not WorkflowGraphError: the file is
-    # still stored, just not filed.
+    call, _user_dir, _built_in, hub = import_route
+    # Reducing this raises AttributeError, not WorkflowGraphError: the
+    # workflow is still stored, it just has no topology.
     odd = {
         "nodes": [{"id": 1, "type": "SaveImage"}],
         "links": [],
         "definitions": ["x"],
     }
     body = call(name="odd", workflow=odd)
-    assert body["topology_hash"] is None
-    assert _load(user_dir / "odd.json") == odd
+    assert manual_document(hub, body["workflow_id"]) == odd
 
     deep = current = {}
     for _ in range(5000):
@@ -801,7 +765,7 @@ def test_an_unfileable_or_too_deep_import_is_handled(import_route):
         call(name="deep", workflow=deep)
     assert refused.value.status_code == 400
     assert refused.value.detail == "Workflow JSON nests too deeply"
-    assert not (user_dir / "deep.json").exists()
+    assert [name for name, _o, _d in _manual(hub).values()] == ["odd"]
 
 
 @pytest.mark.parametrize(
@@ -824,12 +788,12 @@ def test_an_unfileable_or_too_deep_import_is_handled(import_route):
     ],
 )
 def test_a_document_that_is_not_a_workflow_is_refused(import_route, document):
-    call, user_dir, _built_in, _hub = import_route
+    call, _user_dir, _built_in, hub = import_route
     with pytest.raises(HTTPException) as refused:
         call(name="unrelated", workflow=document)
     assert refused.value.status_code == 400
     assert "not a ComfyUI workflow" in refused.value.detail
-    assert not (user_dir / "unrelated.json").exists()
+    assert _manual(hub) == {}
 
 
 def test_both_formats_are_accepted_with_pixlstash_keys_or_a_prompt_wrapper():
@@ -872,14 +836,11 @@ def test_deleting_a_workflow_removes_its_migration_backup(import_route):
 
 
 def test_an_imported_tokened_file_is_stored_migrated(import_route):
-    call, user_dir, _built_in, _hub = import_route
+    call, _user_dir, _built_in, hub = import_route
     graph = _t2i_graph()
     graph["2"]["inputs"]["text"] = "{{caption}}"
-    call(name="old", workflow=graph)
-    stored = _load(user_dir / "old.json")
+    stored = manual_document(hub, call(name="old", workflow=graph)["workflow_id"])
     assert stored[workflow_bindings.BINDINGS_KEY][0]["path"] == ["2", "inputs", "text"]
-    # Re-dropping the same old export is a copy of what was stored.
-    assert call(name="again", workflow=graph)["matched"] is True
 
 
 def _inbox_names(call) -> list[str]:
@@ -894,30 +855,34 @@ def test_a_file_in_the_inbox_is_imported_and_named_by_its_content(import_route):
     digest = workflow_inbox.content_hash(graph)
 
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
-    assert _load(user_dir / "flow.json") == graph
-    assert topology_exists(hub, topology_hash(graph))
+    assert list(_manual(hub).values()) == [("flow", "inbox", graph)]
+    assert not user_dir.exists()
     assert _inbox_names(call) == [f"flow.{digest}.json"]
 
-    # Idempotent, and a file already named by its hash is not renamed again.
+    # Idempotent - a restart reads every file again and imports nothing - and
+    # a file already named by its hash is not renamed again.
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 0
     assert _inbox_names(call) == [f"flow.{digest}.json"]
+    assert len(_manual(hub)) == 1
 
-    # A different workflow under a taken name is kept beside it, like a drop.
+    # A different workflow under a taken name is a workflow of its own.
     other = _t2i_graph()
     other["2"]["inputs"]["text"] = "a dog"
     (call.inbox / "flow.json").write_text(json.dumps(other), encoding="utf-8")
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
-    assert _load(user_dir / "flow (2).json") == other
 
     # An inbox: removing its files never deletes a workflow.
     for path in call.inbox.iterdir():
         path.unlink()
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 0
-    assert sorted(p.name for p in user_dir.iterdir()) == ["flow (2).json", "flow.json"]
+    assert sorted(d["2"]["inputs"]["text"] for _n, _o, d in _manual(hub).values()) == [
+        "a cat",
+        "a dog",
+    ]
 
 
 def test_a_broken_inbox_file_is_left_and_the_rest_imported(import_route, caplog):
-    call, user_dir, _built_in, _hub = import_route
+    call, _user_dir, _built_in, hub = import_route
     call.inbox.mkdir()
     (call.inbox / "broken.json").write_text("{not json", encoding="utf-8")
     (call.inbox / "list.json").write_text("[]", encoding="utf-8")
@@ -926,13 +891,13 @@ def test_a_broken_inbox_file_is_left_and_the_rest_imported(import_route, caplog)
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
     for left in ("broken.json", "list.json", "other.json"):
         assert left in caplog.text and left in _inbox_names(call)
-    assert sorted(p.name for p in user_dir.iterdir()) == ["fine.json"]
+    assert [name for name, _o, _d in _manual(hub).values()] == ["fine"]
 
 
 def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
-    call, user_dir, _built_in, hub = import_route
+    call, _user_dir, _built_in, hub = import_route
     graph = _t2i_graph()
-    call(name="flow", workflow=graph)
+    workflow_id = call(name="flow", workflow=graph)["workflow_id"]
     digest = workflow_inbox.content_hash(graph)
     # A copy dropped under another name carries the same hash and goes too, or
     # the next start would import the deleted workflow again.
@@ -941,11 +906,15 @@ def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
     # And one the watcher has not renamed yet.
     (call.inbox / "fresh.json").write_text(json.dumps(graph), encoding="utf-8")
 
-    assert call.delete("flow") == {"status": "success", "name": "flow.json"}
-    assert not (user_dir / "flow.json").exists()
-    # The card stays - its pictures made it - but nothing claims a file to run.
-    assert hub.fetchall("SELECT workflow_name FROM workflow_file") == []
-    assert hub.fetchone("SELECT COUNT(*) AS n FROM workflow_variant")["n"] == 1
+    deleted = call.delete_workflow(workflow_id)
+    assert (deleted.deleted, deleted.workflow_id) == ("flow", workflow_id)
+    assert _manual(hub) == {}
+    assert (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_group_attr WHERE workflow_id = ?", (workflow_id,)
+        )
+        is None
+    )
     assert _inbox_names(call) == []
     assert sorted(p.name for p in call.trash.iterdir()) == [
         f"copy.{digest}.json",
@@ -957,15 +926,17 @@ def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
     # Restoring it from the trash puts it back in the inbox, under its name.
     shutil.move(call.trash / f"flow.{digest}.json", call.inbox)
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
-    assert _load(user_dir / "flow.json") == graph
+    assert list(_manual(hub).values()) == [("flow", "inbox", graph)]
 
 
-def test_deleting_keeps_an_inbox_edit_the_watcher_has_not_imported(import_route):
-    call, user_dir, _built_in, _hub = import_route
+def test_deleting_an_inbox_workflow_lets_its_content_back_in(import_route):
+    """The inbox origin row goes with the workflow, so a restore re-imports."""
+    call, _user_dir, _built_in, hub = import_route
     graph = _t2i_graph()
     call.inbox.mkdir()
     (call.inbox / "flow.json").write_text(json.dumps(graph), encoding="utf-8")
     workflow_inbox.reconcile(str(call.inbox), call.store)
+    (workflow_id,) = _manual(hub)
     digest = workflow_inbox.content_hash(graph)
     # Edited in place: the name still carries the old hash.
     edited = _t2i_graph()
@@ -974,28 +945,30 @@ def test_deleting_keeps_an_inbox_edit_the_watcher_has_not_imported(import_route)
         json.dumps(edited), encoding="utf-8"
     )
 
-    call.delete("flow")
+    call.delete_workflow(workflow_id)
 
+    assert hub.fetchone("SELECT COUNT(*) FROM workflow_origin")[0] == 0
     assert _load(call.inbox / f"flow.{digest}.json") == edited
-    assert _inbox_names(call) == [f"flow.{digest}.json"]
     assert [p.name for p in call.trash.iterdir()] == [f"flow (2).{digest}.json"]
     assert _load(call.trash / f"flow (2).{digest}.json") == graph
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
-    assert _load(user_dir / "flow.json") == edited
+    assert [d for _n, _o, d in _manual(hub).values()] == [edited]
+    shutil.move(call.trash / f"flow (2).{digest}.json", call.inbox)
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
 
 
 def test_a_workflow_the_trash_refuses_is_kept(import_route, monkeypatch):
-    call, user_dir, _built_in, _hub = import_route
-    call(name="flow", workflow=_t2i_graph())
+    call, _user_dir, _built_in, hub = import_route
+    workflow_id = call(name="flow", workflow=_t2i_graph())["workflow_id"]
 
     def no_trash(path):
         raise OSError("no trash on this mount")
 
     monkeypatch.setattr(workflow_inbox, "send2trash", no_trash)
     with pytest.raises(HTTPException) as refused:
-        call.delete("flow")
+        call.delete_workflow(workflow_id)
     assert refused.value.status_code == 500
-    assert _load(user_dir / "flow.json") == _t2i_graph()
+    assert manual_document(hub, workflow_id) == _t2i_graph()
 
 
 def test_an_unreadable_stored_workflow_is_trashed_as_it_is(import_route):
@@ -1008,7 +981,7 @@ def test_an_unreadable_stored_workflow_is_trashed_as_it_is(import_route):
 
 
 def test_the_watcher_imports_a_file_put_in_the_inbox(import_route, monkeypatch):
-    call, user_dir, _built_in, _hub = import_route
+    call, _user_dir, _built_in, _hub = import_route
     monkeypatch.setattr(workflow_inbox, "_DEBOUNCE_S", 0.05)
     watcher = workflow_inbox.WorkflowInboxWatcher(str(call.inbox), call.store)
     watcher.start()
@@ -1024,7 +997,7 @@ def test_the_watcher_imports_a_file_put_in_the_inbox(import_route, monkeypatch):
             time.sleep(0.05)
     finally:
         watcher.stop()
-    assert _load(user_dir / "dropped.json") == _t2i_graph()
+    assert list(_manual(_hub).values()) == [("dropped", "inbox", _t2i_graph())]
 
 
 # ---------------------------------------------------------------------------
@@ -1270,7 +1243,8 @@ def test_an_editor_hint_on_the_envelope_does_not_make_the_graph_an_editor_graph(
         reduce_ui_graph(envelope)  # what filing it as an editor graph would do
 
     body = call(name="envelope", workflow=envelope)
-    assert body["topology_hash"] == topology_hash(envelope["prompt"])
+    assert api_graph(manual_document(_hub, body["workflow_id"])) == envelope["prompt"]
+    assert comfyui_module._topology_of(envelope) == topology_hash(envelope["prompt"])
     assert run_targets(envelope)["caption"] == [
         {"path": ["prompt", "2", "inputs", "text"], "template": None}
     ]
@@ -1287,9 +1261,9 @@ def test_a_file_that_carries_both_graphs_is_read_as_the_one_it_can_run(import_ro
     executable graph sat in the file unread. One sniff makes the wrapped
     prompt the answer to all three, which is the graph this file can actually
     run. **Three of the moved sites are pinned here and nowhere else**: revert
-    `_file_in_hub`, `run_targets` or `_raw_node` and one of these fails.
+    `_topology_of`, `run_targets` or `_raw_node` and one of these fails.
     """
-    call, _user_dir, _built_in, _hub = import_route
+    call, _user_dir, _built_in, hub = import_route
     prompt = _t2i_graph()
     prompt["7"] = _node("LoadImage", image="a.png")
     prompt["7"]["_meta"] = {"title": "Run title"}
@@ -1311,7 +1285,8 @@ def test_a_file_that_carries_both_graphs_is_read_as_the_one_it_can_run(import_ro
     assert api_graph(document) is prompt
 
     body = call(name="both", workflow=document)
-    assert body["topology_hash"] == topology_hash(prompt)
+    assert api_graph(manual_document(hub, body["workflow_id"])) is not None
+    assert comfyui_module._topology_of(document) == topology_hash(prompt)
     assert run_targets(document)["image"] == [
         {"path": ["prompt", "7", "inputs", "image"], "template": None}
     ]

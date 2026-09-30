@@ -38,6 +38,7 @@ from pixlstash.services.workflow_identity import (
     model_fix_kind,
     slots,
 )
+from pixlstash.services import workflow_bindings
 from pixlstash.services.workflow_io import with_converted_graph
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.workflow_ids import AUTO_PREFIX
@@ -193,6 +194,30 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             "ORDER BY workflow_id"
         )
     ]
+
+
+def manual_documents_holding(hub: HubDatabase, canonical: str) -> list[str]:
+    """Every manual workflow whose document is *canonical*, sorted by id.
+
+    ``canonical`` is ``workflow_bindings.canonical`` of a placeholder-migrated
+    document, which is how every row was stored.
+    """
+    # ponytail: parses every manual document per call; a stored content hash
+    # column if conversions (the one caller) ever meet a large library.
+    found = []
+    for row in hub.fetchall(
+        "SELECT workflow_id, document FROM workflow_document ORDER BY workflow_id"
+    ):
+        try:
+            if workflow_bindings.canonical(json.loads(row["document"])) == canonical:
+                found.append(row["workflow_id"])
+        except (ValueError, RecursionError) as exc:
+            logger.warning(
+                "Manual workflow %s will not read to compare: %s",
+                row["workflow_id"],
+                exc,
+            )
+    return found
 
 
 def manual_document(hub: HubDatabase, workflow_id: str) -> Optional[dict]:

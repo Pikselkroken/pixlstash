@@ -76,7 +76,7 @@ _RESERVED_WINDOWS_NAMES = frozenset(
 # `` (N)`` suffix a name collision adds.
 _MAX_STEM_CHARS = 200
 
-# What ``store`` answers with, per the import route's ``_store_workflow``.
+# What ``store`` answers with (``routes/comfyui.store_pulled_workflow``).
 StoreFn = Callable[[str, dict], dict]
 
 # What `_pull_one` answers for a workflow the owner deleted here. A sentinel
@@ -514,10 +514,9 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     self._hub,
                     self._comfyui_url,
                     entry.path,
-                    outcome["name"],
+                    outcome.get("workflow_id"),
                     entry.modified_ms,
                     digest,
-                    wrote_file=not outcome.get("matched"),
                 )
             except sqlite3.Error as exc:
                 # The file is stored and on its card; what is lost is the memory

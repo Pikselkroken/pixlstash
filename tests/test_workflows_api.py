@@ -57,16 +57,14 @@ from pixlstash.hub.workflow_card_reads import (
     group_picture_inputs,
     instance_documents,
     variant_documents,
-    workflow_of_topology,
 )
-from pixlstash.hub import workflow_cards
+from pixlstash.hub.workflow_card_reads import manual_document
 from pixlstash.hub.workflow_group_writes import create_manual_workflow
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, STRIP_LORAS_FOR_STACKS
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.hub.workflows import (
     PictureGhost,
     get_document,
     record_picture_ghosts,
-    record_ui_graph,
 )
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
@@ -102,7 +100,6 @@ from pixlstash.services.workflow_card_service import (
 from pixlstash.services.workflow_identity import (
     CORE_ADDRESS_PREFIX,
     FACE_DETAILER,
-    core_hash,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
     core_node_labels,
@@ -2253,26 +2250,19 @@ _EDITOR_BASE_MODEL_FOLDED = fold(_EDITOR_BASE_MODEL)
 _EDITOR_FAMILY = family_of(_EDITOR_BASE_MODEL)
 
 
-def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -> str:
-    """Store *workflow* as a user file and file it. Returns its workflow's id.
+def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow) -> str:
+    """Import *workflow* as the import route does: a manual workflow. Its id.
 
-    Filed the way the import route files one: an editor-format document goes
-    through `record_ui_graph`, which writes a topology and nothing else, and
-    `record_file` keys the file on it. Such a file is a workflow of its own,
-    `auto:<topology hash>` (#1623).
+    ``tmp_path`` and ``monkeypatch`` isolate the workflow folders, which no
+    manual workflow reads: a test that finds a file there has found a bug.
     """
-    (tmp_path / name).write_text(json.dumps(workflow), encoding="utf-8")
     monkeypatch.setattr(
         comfyui_module, "_workflow_dirs", lambda: [("user", str(tmp_path))]
     )
-    comfyui_module._describe_workflow.cache_clear()
-    workflows_routes._file_model_widgets.cache_clear()
-    if keys is not None:
-        workflow_cards.record_file(server.hub, name, *keys)
-        return workflow_of_topology(server.hub, keys[0])
-    topology = record_ui_graph(server.hub, workflow)
-    workflow_cards.record_file(server.hub, name, topology)
-    return workflow_of_topology(server.hub, topology)
+    workflows_routes._manual_model_widgets.cache_clear()
+    return comfyui_module.store_manual_workflow(
+        server.hub, name.removesuffix(".json"), workflow, "import"
+    )
 
 
 def _give_the_shelf_model_a_picture(server) -> None:
@@ -2293,13 +2283,8 @@ def _give_the_shelf_model_a_picture(server) -> None:
 def test_an_editor_format_file_is_a_card_of_its_own(
     workflow_env, tmp_path, monkeypatch
 ):
-    """#1466: filed with no variant, it used to land on no card at all.
-
-    ComfyUI saves in editor format unless somebody deliberately exports the
-    API one, so this is most of what an owner drops into the folder. The file
-    row existed, the folder had the file, and the grid - which starts at the
-    variant table - had nothing to join it to.
-    """
+    """#1466, now a manual workflow: an imported editor document is on the
+    grid as a workflow of its own, with no topology and no recipe."""
     key = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
     )
@@ -2307,11 +2292,10 @@ def test_an_editor_format_file_is_a_card_of_its_own(
     cards = _by_key(_cards(workflow_env.owner))
     assert set(cards) == {BUSY_WF, FORGOTTEN_WF, key}
     card = cards[key]
-    # Topology and file name only: no recipe, no pictures, and so no core
-    # hash - it is a workflow of its own, named by its topology.
-    assert key == AUTO_STACK_PREFIX + card["base_topology"]
+    assert key.startswith("manual:")
+    assert (card["base_topology"], card["topologies"]) == (None, [])
     assert (card["variant_count"], card["picture_count"]) == (0, 0)
-    assert (card["imported"], card["name"]) == (True, "editor")
+    assert (card["imported"], card["manual"], card["name"]) == (True, True, "editor")
     # And it opens on its own route, which is what every write answers with.
     assert _detail(workflow_env.owner, key)["card"]["id"] == key
 
@@ -2499,93 +2483,67 @@ def _listed(owner) -> dict:
 
 @pytest.fixture
 def converting(workflow_env, tmp_path, monkeypatch):
-    """An editor-format file stored in an isolated user folder, no ComfyUI."""
+    """An imported editor-format workflow, no ComfyUI."""
     _isolate_workflow_folders(tmp_path, monkeypatch)
     monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (None, "refused")
     )
-    topology_only = _file_a_workflow(
+    manual = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
     )
-    return SimpleNamespace(folder=tmp_path, topology_only=topology_only)
+    return SimpleNamespace(folder=tmp_path, manual=manual)
+
+
+def _api_document(hub, workflow_id):
+    row = hub.fetchone(
+        "SELECT api_document FROM workflow_document WHERE workflow_id = ?",
+        (workflow_id,),
+    )
+    return json.loads(row[0]) if row[0] else None
 
 
 def test_a_converted_editor_file_runs_from_the_graph_stored_beside_it(
     workflow_env, converting
 ):
-    """#1530: ComfyUI's conversion makes a pulled editor file runnable."""
+    """#1530: ComfyUI's conversion makes an imported editor workflow runnable."""
     owner = workflow_env.owner
-    before = (converting.folder / "editor.json").read_bytes()
-    assert _listed(owner)["editor.json"]["runnable"] is False
+    assert owner.get(f"{API}/workflows/{converting.manual}/graph").status_code == 409
 
     r = _convert(owner)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert (body["name"], body["matched"]) == ("editor.json", True)
-    # Filed as its API graph: a recipe's workflow, no longer a file's.
-    assert body["workflow_id"] != converting.topology_only
-
-    # Beside the file, never over it, and never listed as a workflow of its own.
-    assert (converting.folder / "editor.json").read_bytes() == before
-    assert sorted(p.name for p in converting.folder.iterdir() if p.is_file()) == [
-        "editor.json",
-        "editor.json.api",
-    ]
-    assert _listed(owner)["editor.json"]["runnable"] is True
-    # The card is the recipe's now, and runs the converted graph from the file.
-    r = owner.get(f"{API}/workflows/{body['workflow_id']}/graph")
+    assert body == {"name": "editor", "matched": True, "workflow_id": converting.manual}
+    # Stored on the workflow's own row, and nothing written to any folder.
+    assert _api_document(workflow_env.server.hub, converting.manual) == (
+        _EDITOR_CONVERTED
+    )
+    assert list(converting.folder.glob("*.json*")) == []
+    r = owner.get(f"{API}/workflows/{converting.manual}/graph")
     assert r.status_code == 200, r.text
     assert r.json()["source"] == "file"
     assert r.json()["workflow"]["2"]["inputs"]["lora_name"] == _EDITOR_UNRESOLVED
 
 
-def test_a_conversion_of_another_version_of_the_file_is_not_run(
-    workflow_env, converting
-):
-    """A file overwritten since it was converted is a different workflow."""
+def test_a_conversion_of_another_editor_document_is_not_run(workflow_env, converting):
+    """Matched on the whole document: another version is another workflow."""
     owner = workflow_env.owner
-    assert _convert(owner).status_code == 200
     changed = json.loads(json.dumps(_EDITOR_WORKFLOW))
     changed["nodes"][2]["widgets_values"] = ["elsewhere"]
-    r = owner.post(
-        f"{API}/comfyui/workflows/import",
-        json={"name": "editor.json", "workflow": changed, "overwrite": True},
-    )
+    r = _convert(owner, workflow=changed)
     assert r.status_code == 200, r.text
-
-    assert _listed(owner)["editor.json"]["runnable"] is False
-    topology = record_ui_graph(workflow_env.server.hub, changed)
-    workflow_cards.record_file(workflow_env.server.hub, "editor.json", topology)
-    key = workflow_of_topology(workflow_env.server.hub, topology)
-    assert owner.get(f"{API}/workflows/{key}/graph").status_code == 409
-
-
-def test_converting_a_pulled_file_hands_it_to_the_owner(workflow_env, converting):
-    """A matched file is claimed as the import claims it, so no longer a one-off."""
-    hub = workflow_env.server.hub
-    with hub.transaction() as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO workflow_pulled_file (workflow_name) VALUES (?)",
-            ("editor.json",),
-        )
-    assert _convert(workflow_env.owner).json()["matched"] is True
-    assert (
-        hub.fetchone(
-            "SELECT 1 FROM workflow_pulled_file WHERE workflow_name = ?",
-            ("editor.json",),
-        )
-        is None
-    )
+    assert r.json()["matched"] is False
+    assert r.json()["workflow_id"] != converting.manual
+    assert _api_document(workflow_env.server.hub, converting.manual) is None
+    assert owner.get(f"{API}/workflows/{converting.manual}/graph").status_code == 409
 
 
 def test_a_converted_file_runs_without_its_editor_bindings(workflow_env, converting):
     """Bindings address the editor structure; the API graph is detected afresh."""
     bound = {**_EDITOR_WORKFLOW, "pixlstash_bindings": []}
-    (converting.folder / "editor.json").write_text(json.dumps(bound))
-    assert _convert(workflow_env.owner, workflow=bound).status_code == 200
-    document = comfyui_module.runnable_document(
-        str(converting.folder / "editor.json"), bound
-    )
+    r = _convert(workflow_env.owner, workflow=bound)
+    assert r.status_code == 200, r.text
+    assert r.json()["workflow_id"] == converting.manual
+    document = manual_document(workflow_env.server.hub, converting.manual)
     assert "pixlstash_bindings" not in document
     assert document["3"]["class_type"] == "SaveImage"
 
@@ -2593,8 +2551,9 @@ def test_a_converted_file_runs_without_its_editor_bindings(workflow_env, convert
 def test_an_enveloped_conversion_is_stored_unwrapped(workflow_env, converting):
     r = _convert(workflow_env.owner, output={"prompt": _EDITOR_CONVERTED})
     assert r.status_code == 200, r.text
-    stored = json.loads((converting.folder / "editor.json.api").read_text())
-    assert stored["prompt"] == _EDITOR_CONVERTED
+    assert _api_document(workflow_env.server.hub, converting.manual) == (
+        _EDITOR_CONVERTED
+    )
 
 
 def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
@@ -2617,9 +2576,12 @@ def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
     r = owner.post(path)
     assert r.status_code == 200, r.text
     key = r.json()["workflow_id"]
+    assert key.startswith("manual:")
     assert r.json()["name"] == "Flux2-Klein-Image-Edit.json"
     # Idempotent: the second ask answers the same workflow.
     assert owner.post(path).json()["workflow_id"] == key
+    card = _by_key(_cards(owner))[key]
+    assert (card["manual"], card["name"]) == (True, "Flux2-Klein-Image-Edit")
 
     r = owner.get(f"{API}/workflows/{key}/graph")
     assert r.status_code == 200, r.text
@@ -2629,15 +2591,14 @@ def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
     assert owner.post(f"{API}/comfyui/workflows/nope.json/card").status_code == 404
 
 
-def test_deleting_a_converted_file_takes_its_conversion_with_it(
+def test_deleting_a_converted_workflow_takes_its_conversion_with_it(
     workflow_env, converting
 ):
     owner = workflow_env.owner
     key = _convert(owner).json()["workflow_id"]
-    assert (converting.folder / "editor.json.api").is_file()
     r = owner.delete(f"{API}/workflows/{key}")
     assert r.status_code == 200, r.text
-    assert list(converting.folder.glob("editor.json*")) == []
+    assert manual_document(workflow_env.server.hub, key) is None
 
 
 def test_a_workflow_not_stored_yet_is_stored_by_its_conversion(
@@ -2647,9 +2608,18 @@ def test_a_workflow_not_stored_yet_is_stored_by_its_conversion(
     other["nodes"][2]["widgets_values"] = ["another"]
     r = _convert(workflow_env.owner, workflow=other)
     assert r.status_code == 200, r.text
-    assert (r.json()["name"], r.json()["matched"]) == ("editor (2).json", False)
-    assert json.loads((converting.folder / "editor (2).json").read_text()) == other
-    assert _listed(workflow_env.owner)["editor (2).json"]["runnable"] is True
+    assert (r.json()["name"], r.json()["matched"]) == ("editor", False)
+    hub = workflow_env.server.hub
+    assert _api_document(hub, r.json()["workflow_id"]) == _EDITOR_CONVERTED
+    assert (
+        json.loads(
+            hub.fetchone(
+                "SELECT document FROM workflow_document WHERE workflow_id = ?",
+                (r.json()["workflow_id"],),
+            )[0]
+        )
+        == other
+    )
 
 
 @pytest.mark.parametrize(
@@ -2668,35 +2638,24 @@ def test_a_conversion_is_an_editor_workflow_and_its_api_graph(
 ):
     r = _convert(workflow_env.owner, workflow=workflow, output=output)
     assert r.status_code == 400, r.text
-    assert not (converting.folder / "editor.json.api").exists()
+    assert _api_document(workflow_env.server.hub, converting.manual) is None
 
 
-def test_two_files_of_one_topology_make_one_card(workflow_env, tmp_path, monkeypatch):
-    """A card key is a content address, so two copies of one graph share it.
-
-    The dedup guard: the same key must not arrive twice from the file pass, and
-    it must not arrive from the file pass at all once a variant already carries
-    it.
-    """
-    key = _file_a_workflow(
+def test_two_imports_of_one_graph_are_two_workflows(
+    workflow_env, tmp_path, monkeypatch
+):
+    """A manual workflow is a record, not a content address: identical copies
+    are allowed and never fold into one."""
+    first = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
     )
-    # The same graph under a second name, which files a second row on one key.
     same = json.loads(json.dumps(_EDITOR_WORKFLOW))
-    assert (
-        _file_a_workflow(
-            workflow_env.server, tmp_path, monkeypatch, "editor-copy.json", same
-        )
-        == key
+    second = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor-copy.json", same
     )
-
     cards = _by_key(_cards(workflow_env.owner))
-    assert set(cards) == {BUSY_WF, FORGOTTEN_WF, key}
-    # `MIN(workflow_name)`, the same rule the variant half of `card_index`
-    # uses, so a card names itself the same way on two reads of one hub. That
-    # is SQLite's byte order, where `editor-copy.json` sorts under
-    # `editor.json` because `-` precedes `.`.
-    assert cards[key]["name"] == "editor-copy"
+    assert set(cards) == {BUSY_WF, FORGOTTEN_WF, first, second}
+    assert (cards[first]["name"], cards[second]["name"]) == ("editor", "editor-copy")
 
 
 def test_a_loader_this_build_does_not_know_leaves_the_row_silent(
@@ -2737,14 +2696,17 @@ def test_a_card_with_a_recipe_never_reads_its_models_off_the_file(
     """
     other = json.loads(json.dumps(_EDITOR_WORKFLOW))
     other["nodes"][0]["widgets_values"] = ["not-the-recipes-model.safetensors"]
-    _file_a_workflow(
-        workflow_env.server,
-        tmp_path,
-        monkeypatch,
-        "busy.json",
-        other,
-        keys=(BUSY_TOPOLOGY, BUSY_RECIPE_A),
+    (tmp_path / "busy.json").write_text(json.dumps(other), encoding="utf-8")
+    monkeypatch.setattr(
+        comfyui_module, "_workflow_dirs", lambda: [("user", str(tmp_path))]
     )
+    # A legacy file row, as an import wrote one before manual workflows.
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_file (workflow_name, topology_hash, "
+            "structural_hash, workflow_key) VALUES ('busy.json', ?, ?, ?)",
+            (BUSY_TOPOLOGY, BUSY_RECIPE_A, BUSY_CARD),
+        )
 
     card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert [model["name"] for model in card["models"]] == [_SHELF_DERIVED]
@@ -2771,9 +2733,12 @@ def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
     card = _by_key(_cards(workflow_env.owner))[key]
     assert (card["models"], card["loras"]) == ([], [])
     assert card["variant_count"] == 0
-    # A file that is not there at all answers the same way rather than raising.
-    monkeypatch.setattr(comfyui_module, "_workflow_dirs", lambda: [])
-    workflows_routes._file_model_widgets.cache_clear()
+    # A document that will not read answers the same way rather than raising.
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_document SET document = '{' WHERE workflow_id = ?", (key,)
+        )
+    workflows_routes._manual_model_widgets.cache_clear()
     assert _by_key(_cards(workflow_env.owner))[key]["models"] == []
 
 
@@ -9390,20 +9355,31 @@ def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(
     _isolate_workflow_folders(tmp_path, exportable.monkeypatch)
     r = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate")
     assert r.status_code == 201, r.text
-    name = r.json()["name"]
-    written = json.loads((tmp_path / name).read_text())
+    body = r.json()
+    # A manual workflow of its own, made from the original and saying so.
+    assert body["workflow_id"].startswith("manual:")
+    card = _by_key(_cards(exportable.owner, "?include_one_offs=true"))[
+        body["workflow_id"]
+    ]
+    assert (card["manual"], card["name"]) == (True, body["name"])
+    assert (
+        card["from_name"]
+        == _by_key(_cards(exportable.owner, "?include_one_offs=true"))[RUN_WF]["name"]
+    )
+    assert list(tmp_path.glob("*.json")) == []
+    written = _written(exportable, body)
     assert written["5"]["inputs"]["text"] == EXPORT_PROMPT
     assert written["2"]["inputs"]["lora_name"] == FORGOTTEN_LORA
     assert written["3"]["inputs"]["seed"] == 4242
 
 
 def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_path):
-    """The `(2)` counter, so a duplicate never overwrites the one before it."""
+    """Identical copies are two workflows: a duplicate never replaces one."""
     _isolate_workflow_folders(tmp_path, exportable.monkeypatch)
-    first = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()["name"]
-    second = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()["name"]
-    assert first != second, "the second duplicate overwrote the first"
-    assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
+    first = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()
+    second = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()
+    assert first["workflow_id"] != second["workflow_id"], "one copy replaced another"
+    assert _written(exportable, first) == _written(exportable, second)
 
 
 # ---------------------------------------------------------------------------
@@ -9426,7 +9402,7 @@ def _mcp_json(fetch, tool: str, **arguments) -> dict:
     return json.loads(content[0]["text"])
 
 
-def test_the_mcp_round_trip_stores_an_edit_as_a_new_card_once(exportable, tmp_path):
+def test_the_mcp_round_trip_stores_an_edit_as_a_manual_workflow(exportable, tmp_path):
     """Export → edit → import → preflight, through the tools an agent calls."""
     (tmp_path / "store").mkdir()
     _isolate_workflow_folders(tmp_path / "store", exportable.monkeypatch)
@@ -9450,17 +9426,17 @@ def test_the_mcp_round_trip_stores_an_edit_as_a_new_card_once(exportable, tmp_pa
     )
     assert stored["matched"] is False, stored
     new_key = stored["workflow_id"]
-    assert new_key
+    assert new_key.startswith("manual:")
     assert exportable.owner.get(f"{API}/workflows/{new_key}").status_code == 200
 
-    # The same file again, under another name, is matched rather than stored:
-    # an agent retrying does not litter the grid.
+    # The same file again is a second manual workflow: identical copies are
+    # allowed, and nothing is written to the folder either way.
     again = _mcp_json(
         fetch, "import_workflow_graph", name="mcp-edited-again.json", path=str(out)
     )
-    assert again["matched"] is True, again
-    assert again["name"] == "mcp-edited.json"
-    assert not (tmp_path / "store" / "mcp-edited-again.json").exists()
+    assert (again["matched"], again["name"]) == (False, "mcp-edited-again")
+    assert again["workflow_id"] != new_key
+    assert list((tmp_path / "store").glob("*.json")) == []
 
     # Preflight reads the stored file: this ComfyUI lacks two of its nodes, and
     # saying so is the agent's feedback. Nothing is submitted.
@@ -9503,6 +9479,18 @@ def cloneable(exportable, tmp_path):
         conn.execute("DELETE FROM model WHERE id = ?", (checkpoint_id,))
 
 
+def _written(env, body) -> dict:
+    """The document a copy stored as its manual workflow."""
+    return manual_document(env.server.hub, body["workflow_id"])
+
+
+def _manual_ids(env) -> list[str]:
+    return [
+        row[0]
+        for row in env.server.hub.fetchall("SELECT workflow_id FROM workflow_document")
+    ]
+
+
 def _clone(env, swaps, name="Portrait on Krea"):
     return env.owner.post(
         f"{API}/workflows/{RUN_WF}/clone-with-models",
@@ -9515,17 +9503,19 @@ def test_cloning_writes_a_file_in_comfyuis_spelling_in_the_same_workflow(cloneab
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["verified"] is True
-    written = json.loads((cloneable.folder / body["name"]).read_text())
+    written = _written(cloneable, body)
     # The option ComfyUI lists, never the shelf's bare name.
     assert written["1"]["inputs"]["ckpt_name"] == f"flux/{CLONE_CHECKPOINT}"
     # The rest of the run travels, as a Duplicate's does.
     assert written["5"]["inputs"]["text"] == EXPORT_PROMPT
-    # Only a filename changed, so the clone is the same graph and the same
-    # workflow as the one it was cloned from (#1623): its checkpoint is a
-    # recipe value, not an identity.
-    source = workflow_of_topology(cloneable.server.hub, topology_hash(cloneable.graph))
-    assert body["workflow_id"] == source
+    # A manual workflow of its own, remembering what it was cloned from.
+    assert body["workflow_id"].startswith("manual:")
     assert "workflow_key" not in body
+    row = cloneable.server.hub.fetchone(
+        "SELECT origin, from_workflow_id FROM workflow_document WHERE workflow_id = ?",
+        (body["workflow_id"],),
+    )
+    assert tuple(row) == ("clone", RUN_WF)
     # The original file is untouched.
     assert cloneable.graph["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
 
@@ -9537,7 +9527,7 @@ def test_cloning_with_comfyui_down_writes_the_names_unchecked(cloneable):
     r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
     assert r.status_code == 201, r.text
     assert r.json()["verified"] is False
-    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    written = _written(cloneable, r.json())
     assert written["1"]["inputs"]["ckpt_name"] == CLONE_CHECKPOINT
 
 
@@ -9545,7 +9535,7 @@ def test_a_clone_where_nothing_could_be_swapped_is_refused(cloneable):
     r = _clone(cloneable, {_SHELF_FILENAME: "not-on-comfyui.safetensors"})
     assert r.status_code == 409, r.text
     assert "not_on_comfyui" in r.json()["detail"]
-    assert list(cloneable.folder.glob("*.json")) == []
+    assert _manual_ids(cloneable) == []
 
 
 def test_a_clone_that_cannot_take_every_model_is_not_written(cloneable):
@@ -9558,7 +9548,7 @@ def test_a_clone_that_cannot_take_every_model_is_not_written(cloneable):
         },
     )
     assert r.status_code == 409, r.text
-    assert list(cloneable.folder.glob("*.json")) == []
+    assert _manual_ids(cloneable) == []
 
 
 def test_a_clone_onto_the_files_it_already_loads_says_so(cloneable):
@@ -9584,7 +9574,7 @@ def test_a_copy_keeps_the_picture_inputs_its_file_opted_out_of(cloneable, verb):
         else cloneable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate")
     )
     assert r.status_code == 201, r.text
-    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    written = _written(cloneable, r.json())
     assert written["pixlstash_bindings"] == []
 
 
@@ -9677,7 +9667,7 @@ def test_a_set_plan_names_the_swap_and_the_loader_before_and_after(cloneable):
         }
     ]
     # A plan writes nothing.
-    assert list(cloneable.folder.glob("*.json")) == []
+    assert _manual_ids(cloneable) == []
 
 
 def test_a_workflow_with_no_checkpoint_says_so_for_every_set(cloneable):
@@ -9933,7 +9923,7 @@ def test_a_clone_can_carry_a_chain_with_its_loras_removed(cloneable):
         },
     )
     assert r.status_code == 201, r.text
-    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    written = _written(cloneable, r.json())
     assert written["1"]["inputs"]["ckpt_name"] == f"flux/{CLONE_CHECKPOINT}"
     # The loader is gone and the wires are joined past it.
     assert "2" not in written
@@ -9950,7 +9940,7 @@ def test_a_clone_can_carry_a_chain_with_its_loras_removed(cloneable):
         },
     )
     assert again.status_code == 201, again.text
-    kept = json.loads((cloneable.folder / again.json()["name"]).read_text())
+    kept = _written(cloneable, again.json())
     assert kept["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
     assert "2" not in kept
 
@@ -9968,7 +9958,7 @@ def test_a_clone_carrying_a_chain_needs_comfyui(cloneable):
         },
     )
     assert r.status_code == 503, r.text
-    assert list(cloneable.folder.glob("*.json")) == []
+    assert _manual_ids(cloneable) == []
 
 
 def test_the_swap_options_name_the_graphs_files_and_the_shelf(cloneable):
@@ -10465,10 +10455,14 @@ def test_deleting_a_card_the_library_knows_from_its_pictures_is_refused(workflow
     assert workflow_env.owner.get(f"{API}/workflows/{BUSY_WF}").status_code == 200
 
 
-def test_deleting_an_imported_workflow_trashes_it_and_takes_it_off_the_card(
+def test_deleting_a_manual_workflow_leaves_the_automatic_one_and_its_file(
     runnable, tmp_path
 ):
-    """The file goes, the card and its variants stay: they are made by pictures."""
+    """A manual workflow is deletable; an automatic one is not, legacy file or no.
+
+    The copy goes to the trash by way of the inbox and its rows go; the
+    workflow it was made from, and a legacy file row on it, stay.
+    """
     _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
     (tmp_path / "imported.json").write_text(json.dumps(RUN_DOCUMENT))
     with runnable.server.hub.transaction() as conn:
@@ -10479,16 +10473,25 @@ def test_deleting_an_imported_workflow_trashes_it_and_takes_it_off_the_card(
             (RUN_CARD, RUN_TOPOLOGY, RUN_RECIPE),
         )
     r = runnable.owner.delete(f"{API}/workflows/{RUN_WF}")
+    assert r.status_code == 409, r.text
+    assert (tmp_path / "imported.json").exists()
+
+    copy = runnable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()
+    manual = copy["workflow_id"]
+    runnable.owner.patch(f"{API}/workflows/{manual}", json={"notes": "mine"})
+    r = runnable.owner.delete(f"{API}/workflows/{manual}")
     assert r.status_code == 200, r.text
-    assert r.json() == {"deleted": "imported.json", "workflow_id": RUN_WF}
-    assert not (tmp_path / "imported.json").exists()
-    assert (
-        runnable.server.hub.fetchall(
-            "SELECT 1 FROM workflow_file WHERE workflow_name = 'imported.json'"
-        )
-        == []
-    )
+    assert r.json() == {"deleted": copy["name"], "workflow_id": manual}
+    assert runnable.owner.get(f"{API}/workflows/{manual}").status_code == 404
+    assert runnable.owner.delete(f"{API}/workflows/{manual}").status_code == 404
+    hub = runnable.server.hub
+    for table in ("workflow_document", "workflow_group_attr"):
+        assert (
+            hub.fetchone(f"SELECT 1 FROM {table} WHERE workflow_id = ?", (manual,))
+            is None
+        ), table
     assert runnable.owner.get(f"{API}/workflows/{RUN_WF}").status_code == 200
+    assert (tmp_path / "imported.json").exists()
 
 
 # A graph with no LoRA loader at all: the state `no_lora_loader` names and the
@@ -10561,7 +10564,7 @@ def test_inserting_a_lora_loader_writes_a_copy_with_a_slot_to_swap_into(loaderle
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["class_type"] == "LoraLoaderModelOnly"
-    written = json.loads((loaderless.tmp_path / body["name"]).read_text())
+    written = _written(loaderless, body)
     loader = written[body["node_id"]]
     # ComfyUI's own widget default, the way dropping the node there would
     # leave it. The gesture adds the slot; which LoRA goes in it is a later
@@ -10894,9 +10897,9 @@ def test_the_fixed_workflow_is_saved_with_the_loader_swapped(runnable, tmp_path)
     r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["name"].endswith("(fixed).json"), body
+    assert body["name"].endswith("(fixed)"), body
     assert len(body["changes"]) == 1 and "ComfyUI-PixlStash" in body["changes"][0]
-    written = json.loads((tmp_path / body["name"]).read_text())
+    written = _written(runnable, body)
     assert written["2"]["class_type"] == "PixlStashAdapterLoader"
     assert written["2"]["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
     assert written["3"]["inputs"]["model"] == ["2", 0]
@@ -10907,7 +10910,7 @@ def test_a_workflow_with_nothing_to_fix_is_not_copied(runnable, tmp_path):
     _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
     r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
     assert r.status_code == 409, r.text
-    assert not list(tmp_path.glob("*(fixed)*"))
+    assert _manual_ids(runnable) == []
 
 
 def test_a_fixed_copy_needs_comfyui(runnable, tmp_path):
@@ -10934,7 +10937,7 @@ def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
     original.write_text(json.dumps(LOADERLESS_DOCUMENT))
     body = loaderless.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader").json()
     assert json.loads(original.read_text()) == LOADERLESS_DOCUMENT
-    written = json.loads((loaderless.tmp_path / body["name"]).read_text())
+    written = _written(loaderless, body)
     assert written != LOADERLESS_DOCUMENT
     assert len(written) == len(LOADERLESS_DOCUMENT) + 1
 
@@ -10951,7 +10954,7 @@ def test_inserting_a_loader_into_a_workflow_that_has_one_adds_it_after_the_sourc
     r = chained.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
     assert r.status_code == 201, r.text
     body = r.json()
-    written = json.loads((chained.tmp_path / body["name"]).read_text())
+    written = _written(chained, body)
     new = body["node_id"]
     assert written[new]["inputs"]["model"] == ["1", 0]
     assert written["2"]["inputs"]["model"] == [new, 0]
@@ -10973,7 +10976,7 @@ def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_p
     )
     r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
     assert r.status_code == 503, r.text
-    assert list(tmp_path.glob("*.json")) == [], "a file was written anyway"
+    assert _manual_ids(runnable) == [], "a workflow was stored anyway"
 
 
 # --- the LoRA chain editor's routes (#1478) ---------------------------------
@@ -11237,7 +11240,7 @@ def test_a_loader_moved_across_the_fork_is_written_to_both_passes(chained):
     assert body["changes"][0]["text"] == (
         "#5 Mystery_Style moved before the fork: both passes get it"
     )
-    written = json.loads((chained.tmp_path / body["name"]).read_text())
+    written = _written(chained, body)
     assert written["3"]["inputs"]["model"] == ["5", 0]
     assert written["7"]["inputs"]["model"] == ["5", 0]
     assert written["6"]["inputs"]["clip"] == ["5", 1]
@@ -11295,7 +11298,7 @@ def test_a_character_prompt_builder_does_not_stop_a_lora_being_added(chained):
         {"sha256": RUN_ADAPTER_DIGEST, "strength": 1.0},
     )
     assert r.status_code == 201, r.text
-    written = json.loads((chained.tmp_path / r.json()["name"]).read_text())
+    written = _written(chained, r.json())
     added = [
         node_id
         for node_id, node in written.items()
@@ -11315,7 +11318,7 @@ def test_a_dry_run_lists_the_changes_and_writes_nothing(chained):
     assert body["dry_run"] is True
     assert body["workflow_id"] is None
     assert ("deleted", "5") in {(c["kind"], c["node_id"]) for c in body["changes"]}
-    assert list(chained.tmp_path.glob("*.json")) == [], "a dry run wrote a file"
+    assert _manual_ids(chained) == [], "a dry run wrote a file"
 
 
 def test_deleting_a_loader_writes_a_new_file_whose_readers_skip_it(chained):
@@ -11328,13 +11331,11 @@ def test_deleting_a_loader_writes_a_new_file_whose_readers_skip_it(chained):
     r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
     assert r.status_code == 201, r.text
     body = r.json()
-    # The new file's workflow: a LoRA loader is not part of the core, so the
-    # edited graph is in the same workflow as the chain it was edited from.
-    assert body["workflow_id"] == AUTO_STACK_PREFIX + core_hash(
-        structural_document(CHAIN_DOCUMENT), strip_loras=STRIP_LORAS_FOR_STACKS
-    )
+    # A manual workflow of its own, never folded into the automatic one its
+    # source is in.
+    assert body["workflow_id"].startswith("manual:")
     assert "workflow_key" not in body
-    written = json.loads((chained.tmp_path / body["name"]).read_text())
+    written = _written(chained, body)
     assert "5" not in written, written
     assert written["3"]["inputs"]["model"] == ["2", 0]
     assert written["6"]["inputs"]["clip"] == ["2", 1]
@@ -11348,7 +11349,7 @@ def test_reordering_two_loaders_rewires_every_link_and_keeps_their_ids(chained):
         {"node_id": "2", "strength": 0.8},
     )
     assert r.status_code == 201, r.text
-    written = json.loads((chained.tmp_path / r.json()["name"]).read_text())
+    written = _written(chained, r.json())
     assert written["5"]["inputs"]["model"] == ["1", 0]
     assert written["5"]["inputs"]["clip"] == ["1", 1]
     assert written["2"]["inputs"]["model"] == ["5", 0]
@@ -11372,7 +11373,7 @@ def test_reordering_two_loaders_rewires_every_link_and_keeps_their_ids(chained):
 def test_an_edit_that_cannot_be_made_is_a_409_and_writes_nothing(chained, entries):
     r = _chain_edit(chained.owner, *entries)
     assert r.status_code == 409, r.text
-    assert list(chained.tmp_path.glob("*.json")) == [], "a refused edit wrote a file"
+    assert _manual_ids(chained) == [], "a refused edit wrote a file"
 
 
 def test_an_edit_without_comfyui_is_a_503_not_a_guess(chained):
@@ -11381,7 +11382,7 @@ def test_an_edit_without_comfyui_is_a_503_not_a_guess(chained):
     )
     r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
     assert r.status_code == 503, r.text
-    assert list(chained.tmp_path.glob("*.json")) == []
+    assert _manual_ids(chained) == []
 
 
 def test_an_edit_never_changes_the_linked_workflow_file(chained):
@@ -11411,7 +11412,7 @@ def test_an_edit_never_changes_the_linked_workflow_file(chained):
     try:
         r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
         assert r.status_code == 201, r.text
-        written = json.loads((chained.tmp_path / r.json()["name"]).read_text())
+        written = _written(chained, r.json())
         assert written["3"]["inputs"]["seed"] == 42, "not edited from the file"
         assert "5" not in written
         assert original.read_bytes() == before
@@ -12063,4 +12064,4 @@ def test_a_comfyui_with_no_lora_files_refuses_the_insert_rather_than_writing_one
     r = loaderless.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
     assert r.status_code == 409, r.text
     assert "which LoRA files" in r.json()["detail"]
-    assert list(loaderless.tmp_path.glob("*.json")) == [], "a file was written anyway"
+    assert _manual_ids(loaderless) == [], "a file was written anyway"

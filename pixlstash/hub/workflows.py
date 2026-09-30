@@ -232,9 +232,8 @@ def record_reduction(
             # indexes into a parsed document, so a malformed one raises
             # KeyError or TypeError rather than WorkflowGraphError, and this
             # runs inside the extraction task's ingest of a picture: a card is
-            # secondary to the filing, exactly as it is on the import route
-            # (`routes/comfyui.py._file_in_hub`), and the backfill finder is
-            # what retries it.
+            # secondary to the filing, and the backfill finder is what
+            # retries it.
             logger.warning(
                 "Recipe %s is filed but has no workflow card yet, deriving it "
                 "failed with %s: %s",

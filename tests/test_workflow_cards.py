@@ -106,6 +106,26 @@ def all_card_rows(hub):
     }
 
 
+def _legacy_file(hub, name, topology_hash, structural_hash=None):
+    """A ``workflow_file`` row as imports wrote them before manual workflows.
+
+    Nothing writes one any more; hubs upgraded from then still hold them.
+    """
+    key = (
+        workflow_cards.record_identity(hub, structural_hash)
+        if structural_hash
+        else workflow_cards.topology_only_key(topology_hash)
+    )
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES (?, ?, ?, ?)",
+            (name, topology_hash, structural_hash, key),
+        )
+    return key
+
+
 def test_the_card_tables_land_in_the_hub(hub):
     """Amended into v2, never a v3: a released build refuses a newer hub."""
     present = {
@@ -215,9 +235,7 @@ def test_a_forgotten_model_name_leaves_no_readable_copy(hub):
     keys = record_api_graph(
         hub, _graph(ckpt="test-private-name.safetensors", loras=(CHARACTER_LORA,))
     )
-    workflow_cards.record_file(
-        hub, "portrait.json", keys.topology_hash, keys.structural_hash
-    )
+    _legacy_file(hub, "portrait.json", keys.topology_hash, keys.structural_hash)
 
     assert forget_asset_names(hub, CHARACTER_LORA) == 1
     assert forget_asset_names(hub, "test-private-name.safetensors") == 1
@@ -613,7 +631,7 @@ def test_only_an_error_that_will_not_pass_retires_a_batch(hub):
     assert finder.find_task() is None
 
 
-def test_a_ui_file_lands_on_a_card_with_no_assets(hub):
+def test_a_legacy_ui_file_row_is_no_card(hub):
     """A UI-format file names its widgets by position, so it has no models."""
     ui = {
         "nodes": [
@@ -635,7 +653,7 @@ def test_a_ui_file_lands_on_a_card_with_no_assets(hub):
         "links": [[1, 1, 0, 2, 0, "*"]],
     }
     topology = record_ui_graph(hub, ui)
-    key = workflow_cards.record_file(hub, "ui.json", topology)
+    key = _legacy_file(hub, "ui.json", topology)
 
     row = hub.fetchone("SELECT * FROM workflow_file WHERE workflow_name = 'ui.json'")
     assert (row["topology_hash"], row["structural_hash"]) == (topology, None)
@@ -686,23 +704,6 @@ def test_a_file_never_forks_a_card_a_variant_already_holds(hub):
     assert cards[0].file_name == "modelless.json"
 
 
-def test_replacing_a_file_moves_it_to_the_new_card(hub):
-    """A name is the owner's; the row says what is in the file now."""
-    first = record_api_graph(hub, _graph())
-    second = record_api_graph(hub, _graph(ckpt="dreamshaper.safetensors"))
-    workflow_cards.record_file(
-        hub, "flow.json", first.topology_hash, first.structural_hash
-    )
-    workflow_cards.record_file(
-        hub, "flow.json", second.topology_hash, second.structural_hash
-    )
-
-    rows = hub.fetchall("SELECT structural_hash, workflow_key FROM workflow_file")
-    assert len(rows) == 1
-    assert rows[0]["structural_hash"] == second.structural_hash
-    assert rows[0]["workflow_key"] == card_of(hub, second.structural_hash)
-
-
 def test_a_workflow_file_past_the_cap_is_refused_by_the_loader(tmp_path, monkeypatch):
     """The size cap lives on the loader, so every caller gets it (#1483).
 
@@ -735,9 +736,7 @@ def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
     """
     keys = record_api_graph(hub, _graph())
     workflow_cards.record_identity(hub, keys.structural_hash)
-    api_key = workflow_cards.record_file(
-        hub, "api.json", keys.topology_hash, keys.structural_hash
-    )
+    api_key = _legacy_file(hub, "api.json", keys.topology_hash, keys.structural_hash)
 
     def pulled(name):
         with hub.transaction() as conn:
@@ -751,9 +750,7 @@ def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
     assert hand() == {api_key: True}
     pulled("api.json")
     assert hand()[api_key] is False
-    workflow_cards.record_file(
-        hub, "api copy.json", keys.topology_hash, keys.structural_hash
-    )
+    _legacy_file(hub, "api copy.json", keys.topology_hash, keys.structural_hash)
     assert hand()[api_key] is True
 
 

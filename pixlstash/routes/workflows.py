@@ -73,6 +73,7 @@ from pixlstash.hub.workflow_card_writes import (
 )
 from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS
 from pixlstash.hub.workflow_group_writes import (
+    delete_manual_workflow,
     is_parameter_address,
     replace_group_picture_inputs,
     replace_group_pins,
@@ -124,7 +125,7 @@ from pixlstash.services.comfyui_service import (
     swap_pixlstash_savers,
     unfed_picture_loaders,
 )
-from pixlstash.services import workflow_bindings
+from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
@@ -159,8 +160,7 @@ from pixlstash.routes.comfyui import (
     _resolve_workflow_path,
     _shelf_adapter,
     runnable_document,
-    store_workflow_copy,
-    trash_user_workflow,
+    store_manual_workflow,
 )
 from pixlstash.services.workflow_export import (
     LORA_SLOTS,
@@ -215,7 +215,9 @@ from pixlstash.utils.adapter_header import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import family_of, modality_of
-from pixlstash.utils.workflow_ids import WORKFLOW_ID_PATTERN
+from pixlstash.utils.comfyui_utilities import NotAWorkflowError
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX, WORKFLOW_ID_PATTERN
+from send2trash import TrashPermissionError
 
 logger = get_logger(__name__)
 
@@ -1953,9 +1955,9 @@ class ClonedWorkflow(WorkflowFile):
 
 
 class WorkflowDeleted(BaseModel):
-    """Which file went to the trash, and which workflow it came off."""
+    """Which manual workflow was deleted, by name and id."""
 
-    deleted: str
+    deleted: str = Field(description="The deleted workflow's name.")
     workflow_id: str
 
 
@@ -2520,11 +2522,6 @@ def create_router(server) -> APIRouter:
                 detail="This workflow has no graph filed to act on.",
             )
         return workflow, card
-
-    def _workflow_of_card(hub, key: str | None) -> str | None:
-        """The workflow a card is in, for an answer that names a new file's."""
-        card = find_card(hub, key) if key else None
-        return workflow_of_topology(hub, card.topology_hash) if card else None
 
     @router.get(
         "/workflows",
@@ -5394,8 +5391,8 @@ def create_router(server) -> APIRouter:
         embedded graph comes out of a picture that arrived from somewhere else,
         so its nesting depth is not ours to trust, and ``sanitize_prompt_graph``
         deep-copies it before anything of ours has looked at it.
-        ``_store_workflow`` and ``_trash_stored_workflow`` already name this
-        class for the same reason.
+        ``store_manual_workflow`` and ``_trash_stored_workflow`` already name
+        this class for the same reason.
         """
         try:
             source, reason = _source_graph_for(card, object_info)
@@ -5668,14 +5665,16 @@ def create_router(server) -> APIRouter:
         source = _card_source(card)
         # Unscrubbed on purpose: this file stays on the owner's machine and is
         # meant to RUN, and a copy with its models blanked would not.
-        name, key = _store_copy(
+        name, landed = _store_copy(
             hub,
             f"{_file_stem(card, workflow.name)} (copy)",
             source.graph,
             source.bindings,
+            "duplicate",
+            workflow,
+            card,
         )
-        landed = _workflow_of_card(hub, key)
-        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
+        _announce(request, [landed], "imported")
         return WorkflowFile(name=name, workflow_id=landed)
 
     @router.post(
@@ -5720,11 +5719,16 @@ def create_router(server) -> APIRouter:
             loader = insert_adapter(graph, plan, None, object_info)
         except LookupError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        name, key = _store_copy(
-            hub, f"{_file_stem(card, workflow.name)} (LoRA)", graph, source.bindings
+        name, landed = _store_copy(
+            hub,
+            f"{_file_stem(card, workflow.name)} (LoRA)",
+            graph,
+            source.bindings,
+            "chain",
+            workflow,
+            card,
         )
-        landed = _workflow_of_card(hub, key)
-        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
+        _announce(request, [landed], "imported")
         return InsertedLoader(
             name=name,
             workflow_id=landed,
@@ -5850,11 +5854,16 @@ def create_router(server) -> APIRouter:
                 status_code=409,
                 detail="Nothing in this workflow needs fixing on this ComfyUI.",
             )
-        name, key = _store_copy(
-            hub, f"{_file_stem(card, workflow.name)} (fixed)", graph, source.bindings
+        name, landed = _store_copy(
+            hub,
+            f"{_file_stem(card, workflow.name)} (fixed)",
+            graph,
+            source.bindings,
+            "fixed",
+            workflow,
+            card,
         )
-        landed = _workflow_of_card(hub, key)
-        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
+        _announce(request, [landed], "imported")
         logger.info(
             "Workflow %s saved as %s with this ComfyUI's repairs: %s",
             workflow_id,
@@ -6175,14 +6184,16 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         asked = re.sub(r"\.json$", "", (payload.name or "").strip(), flags=re.I)
         stem = download_stem(asked) if asked else ""
-        name, key = _store_copy(
+        name, landed = _store_copy(
             hub,
             stem or f"{_file_stem(card, workflow.name)} (edited)",
             graph,
             source.bindings,
+            "chain",
+            workflow,
+            card,
         )
-        landed = _workflow_of_card(hub, key)
-        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
+        _announce(request, [landed], "imported")
         return LoraChainSaved(
             dry_run=False, name=name, workflow_id=landed, changes=plan["changes"]
         )
@@ -6862,7 +6873,7 @@ def create_router(server) -> APIRouter:
     def clone_with_models(request: Request, workflow_id: str, body: CloneWithModels):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        _workflow, card = _require_base(hub, workflow_id)
+        workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
         graph = deepcopy(source.graph)
         # Not `insert_lora_loader`'s 503: nothing here depends on ComfyUI's link
@@ -6919,14 +6930,18 @@ def create_router(server) -> APIRouter:
                     + "; ".join(f"{u['now']} ({u['reason']})" for u in unswapped)
                 ),
             )
-        # Where only filenames changed the clone has the original's topology
-        # and is a file of the same workflow (#1623); a new loader class or
-        # chain makes it another one, as Edit LoRAs' copy is.
-        name, key = _store_copy(
-            hub, download_stem(body.name) or "workflow", graph, source.bindings
+        # A manual workflow of its own, whatever changed: it never joins the
+        # original's automatic workflow, even where only filenames moved.
+        name, landed = _store_copy(
+            hub,
+            download_stem(body.name) or "workflow",
+            graph,
+            source.bindings,
+            "clone",
+            workflow,
+            card,
         )
-        landed = _workflow_of_card(hub, key)
-        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
+        _announce(request, [landed], "imported")
         return ClonedWorkflow(
             name=name,
             workflow_id=landed,
@@ -6955,79 +6970,99 @@ def create_router(server) -> APIRouter:
         return loaders, swapped, unswapped
 
     def _store_copy(
-        hub, stem: str, graph: dict, bindings: list | None = None
-    ) -> tuple[str, str | None]:
-        """Write one graph into the user folder, or raise the 500 that says why.
+        hub,
+        stem: str,
+        graph: dict,
+        bindings: list | None,
+        origin: str,
+        workflow,
+        card,
+    ) -> tuple[str, str]:
+        """Store one graph as a new manual workflow made from *workflow*.
 
-        *bindings* are the source file's ``pixlstash_bindings``, which the
-        resolved graph has lost (``Source.bindings``). They go back in, or a
-        copy of a file that opted out of a picture input would opt back in on
-        its first run.
+        Returns ``(its name, its id)``, or raises the 500 that says why not.
+        *bindings* are the source's ``pixlstash_bindings``, which the resolved
+        graph has lost (``Source.bindings``). They go back in, or a copy of a
+        workflow that opted out of a picture input would opt back in on its
+        first run. The copy remembers where it came from, by id and by the
+        name the source had then.
         """
         if bindings is not None:
             graph = {**graph, BINDINGS_KEY: bindings}
+        name = stem or "workflow"
+        # The source's name as the grid shows it now, generated or typed.
+        shown = _display_names(
+            read_grid(hub, server.vault, manual_models=_manual_models).figures
+        ).get(workflow.workflow_id)
         try:
-            return store_workflow_copy(hub, f"{stem}.json", graph)
-        except (OSError, ValueError) as exc:
-            logger.error(
-                "A workflow copy named %r could not be written to the user folder: %s",
-                stem,
-                exc,
+            return name, store_manual_workflow(
+                hub,
+                name,
+                graph,
+                origin,
+                from_workflow_id=workflow.workflow_id,
+                from_name=shown or workflow.name or _display_name(card),
             )
+        except (NotAWorkflowError, RecursionError, sqlite3.Error) as exc:
+            logger.error("A workflow copy named %r could not be stored: %s", stem, exc)
             raise HTTPException(
                 status_code=500,
-                detail="PixlStash could not write the workflow file.",
+                detail="PixlStash could not store the workflow copy.",
             ) from exc
 
     @router.delete(
         "/workflows/{workflow_id}",
-        summary="Delete an imported workflow's file",
+        summary="Delete a manual workflow",
         description=(
-            "Send this workflow's file to the system trash: its base card's, "
-            "else the first file any of its graphs has. Only a file this "
-            "machine holds can be deleted: a workflow the library knows from "
-            "its pictures has no file, and is hidden rather than deleted. The "
-            "workflow itself and its pictures stay."
+            "Delete one manual workflow: its document is written back to the "
+            "watched workflows folder and sent to the system trash from there, "
+            "so restoring it from the trash imports it again; a pull from "
+            "ComfyUI does not bring it back. Its pictures stay, on the "
+            "automatic workflow their graph is in, and its saved recipes stay, "
+            "unfiled. An automatic workflow is not a record and cannot be "
+            "deleted: hide it instead."
         ),
         response_model=WorkflowDeleted,
         responses={
-            404: {
-                "description": (
-                    "This machine has no such workflow, or it names a file "
-                    "the user folder does not hold — a built-in, or one "
-                    "already gone from disk."
-                )
-            },
-            409: {"description": "This workflow has no file to delete."},
-            500: {"description": "The file could not be moved to the trash."},
+            404: {"description": "This machine has no such workflow."},
+            409: {"description": "An automatic workflow, which is hidden instead."},
+            500: {"description": "The document could not be moved to the trash."},
         },
     )
     def delete_workflow(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        cards = card_index(hub)
-        workflow = find_workflow(hub, _workflow_id(workflow_id), _counts(), cards)
-        if workflow is None:
-            raise HTTPException(status_code=404, detail="Unknown workflow.")
-        by_key = {c.workflow_key: c for c in cards}
-        card = next(
-            (
-                by_key[key]
-                for key in [workflow.base_card, *workflow.cards]
-                if key in by_key and by_key[key].file_name
-            ),
-            None,
-        )
-        if card is None:
+        workflow = _require_workflow(hub, workflow_id)
+        if not workflow.workflow_id.startswith(MANUAL_PREFIX):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "This workflow has no file on this machine — the library "
-                    "knows it from its pictures. Hide it instead."
+                    "This workflow is automatic — the library knows it from its "
+                    "pictures. Hide it instead."
                 ),
             )
-        deleted = trash_user_workflow(hub, card.file_name)
+        row = hub.fetchone(
+            "SELECT document FROM workflow_document WHERE workflow_id = ?",
+            (workflow_id,),
+        )
+        name = workflow.name or "workflow"
+        try:
+            with workflow_inbox.INBOX_LOCK:
+                # The trash copy first, the rows once it is there: a failed
+                # trash never loses the workflow. Under the lock a pull
+                # checks its dismissals under, so it cannot land between.
+                workflow_inbox.trash_workflow(
+                    workflow_inbox.workflow_inbox_dir(),
+                    f"{download_stem(name) or 'workflow'}.json",
+                    json.loads(row["document"]),
+                )
+                delete_manual_workflow(hub, workflow_id)
+        except (OSError, ValueError, RecursionError, TrashPermissionError) as exc:
+            logger.warning("Failed to delete workflow %s: %s", workflow_id, exc)
+            raise HTTPException(
+                status_code=500, detail="Failed to delete the workflow."
+            ) from exc
         _announce(request, [workflow_id], "changed")
-        return WorkflowDeleted(deleted=deleted, workflow_id=workflow_id)
+        return WorkflowDeleted(deleted=name, workflow_id=workflow_id)
 
     return router

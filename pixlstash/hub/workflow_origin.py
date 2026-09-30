@@ -23,8 +23,13 @@ next pull.
 decides, as the delete does around its dismissal: a check made before a delete
 and a store made after it would otherwise put the deleted file straight back.
 
-Which stored FILES a pull wrote is kept apart, in ``workflow_pulled_file``, so
-it survives whatever happens to the path: the one-off test reads it.
+``workflow_name`` names the manual workflow (``manual:<uuid>``) a document is
+stored as; rows written before data step 7 named a file, and that step renamed
+them. The watched inbox (``INBOX_ORIGIN``, keyed by content hash) and a
+built-in made a workflow (``BUILTIN_ORIGIN``, keyed by file name) record rows
+here too, so every way in deduplicates on this table alone
+(:func:`stored_as`) and never on a folder. What a pull stored is the
+workflow's own ``origin = 'pull'``: the one-off test reads it.
 """
 
 from __future__ import annotations
@@ -33,6 +38,15 @@ from datetime import datetime, timezone
 from typing import Iterable, Optional
 
 from pixlstash.hub.db import HubDatabase
+
+# The origin a watched-inbox file is recorded under, keyed by its content hash
+# (``remote_path`` is the hash too): one row per content, so a restart that
+# reads every inbox file again matches each.
+INBOX_ORIGIN = "inbox"
+
+# The origin a built-in stored as a manual workflow is recorded under, keyed by
+# its file name, so ``POST /comfyui/workflows/{name}/card`` makes it once.
+BUILTIN_ORIGIN = "builtin"
 
 
 def _now() -> str:
@@ -82,15 +96,12 @@ def record_pulled(
     workflow_name: str,
     remote_modified: Optional[int],
     content_hash: Optional[str],
-    *,
-    wrote_file: bool,
 ) -> None:
     """Remember that *remote_path* at *origin* is stored as *workflow_name*.
 
-    An upsert that keeps ``first_pulled_at`` and never clears ``dismissed``.
-    *wrote_file* adds the file to the pull-written set; a pull that only
-    matched a stored file leaves it as it was, so the owner's own file stays
-    theirs.
+    *workflow_name* is the manual workflow's id (``None`` for a copy of a
+    built-in, which is not stored). An upsert that keeps ``first_pulled_at``
+    and never clears ``dismissed``.
     """
     now = _now()
     with hub.transaction() as conn:
@@ -113,11 +124,6 @@ def record_pulled(
                 content_hash,
             ),
         )
-        if wrote_file:
-            conn.execute(
-                "INSERT OR IGNORE INTO workflow_pulled_file (workflow_name) VALUES (?)",
-                (workflow_name,),
-            )
 
 
 def prune_gone(hub: HubDatabase, origin: str, listed: Iterable[str]) -> int:
@@ -176,20 +182,31 @@ def dismiss_file(hub: HubDatabase, workflow_name: str) -> int:
         )
 
 
-def claim_file(hub: HubDatabase, workflow_name: str) -> int:
-    """Record that the owner handed *workflow_name* over themselves.
+def stored_as(hub: HubDatabase, content_hash: Optional[str]) -> Optional[str]:
+    """The live manual workflow some origin already stored this content as.
 
-    Called by both hand-over paths, the import route and the watched inbox,
-    whenever they store or match a file: a file the owner gave PixlStash is
-    theirs whether a pull wrote it first or not, so it leaves the pull-written
-    set and can no longer be folded into the hidden one-offs. Returns ``1``
-    when it was pull-written, else ``0``.
+    Any origin - a pull, the inbox, a built-in - and never a dismissed row, so
+    a content the owner deleted is stored again when they hand it over again.
+    The oldest wins, so two reads agree. ``None`` for no hash.
     """
-    with hub.transaction() as conn:
-        return (
-            conn.execute(
-                "DELETE FROM workflow_pulled_file WHERE workflow_name = ?",
-                (workflow_name,),
-            ).rowcount
-            or 0
-        )
+    if content_hash is None:
+        return None
+    row = hub.fetchone(
+        "SELECT o.workflow_name FROM workflow_origin o "
+        "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
+        "WHERE o.content_hash = ? AND o.dismissed = 0 "
+        "ORDER BY o.first_pulled_at, o.origin, o.remote_path LIMIT 1",
+        (content_hash,),
+    )
+    return row["workflow_name"] if row else None
+
+
+def stored_at(hub: HubDatabase, origin: str, remote_path: str) -> Optional[str]:
+    """The live manual workflow one origin's path is stored as, or ``None``."""
+    row = hub.fetchone(
+        "SELECT o.workflow_name FROM workflow_origin o "
+        "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
+        "WHERE o.origin = ? AND o.remote_path = ?",
+        (origin, remote_path),
+    )
+    return row["workflow_name"] if row else None

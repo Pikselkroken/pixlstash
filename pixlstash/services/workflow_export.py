@@ -96,7 +96,7 @@ DEFAULT_OUTPUT_PREFIX = "PixlStash"
 
 # How much of a name the owner typed a download or a copy may carry, in BYTES.
 # 255 is the component limit on every filesystem PixlStash runs on, and the
-# rest is room for the longest suffix `store_workflow_copy` appends,
+# rest is room for the longest suffix a copy's name gets,
 # `` (copy) (2).json``.
 _MAX_STEM_BYTES = 200
 
@@ -368,8 +368,8 @@ def download_stem(name: str | None) -> str:
     bounded — a name the owner typed has no length limit and a file name does.
     **Bounded in BYTES**, because that is the unit a filesystem counts in: 100
     CJK characters are 300 of them, past ext4's 255-byte component limit, and
-    `store_workflow_copy` would then fail with an ``OSError`` the duplicate
-    route can only answer 500 to — for that card, permanently.
+    writing a file named after it would fail with an ``OSError`` a route
+    can only answer 500 to — for that workflow, permanently.
 
     Here rather than in either route because both name a download this
     way, and a second spelling is a second rule to get wrong.

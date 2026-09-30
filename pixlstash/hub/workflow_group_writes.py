@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN, INBOX_ORIGIN
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
@@ -220,3 +221,43 @@ def create_manual_workflow(
         )
     logger.info("Stored manual workflow %s (%s) from %s.", workflow_id, name, origin)
     return workflow_id
+
+
+def set_manual_api_document(
+    hub: HubDatabase, workflow_ids: list[str], api_document: dict
+) -> None:
+    """Store ComfyUI's API conversion on each named manual workflow."""
+    with hub.transaction() as conn:
+        conn.executemany(
+            "UPDATE workflow_document SET api_document = ? WHERE workflow_id = ?",
+            [(json.dumps(api_document), workflow_id) for workflow_id in workflow_ids],
+        )
+
+
+def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
+    """Forget one manual workflow's rows, in one transaction.
+
+    Its inbox and built-in origin rows go, so handing the same content over
+    again stores it again; every pull row naming it is **dismissed**, so the
+    next pull does not bring it back. Then its document, name, defaults, pins
+    and picture inputs. Nothing in any vault is written: its pictures fall
+    back to the automatic workflow their graph is in.
+    """
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_origin WHERE workflow_name = ? AND origin IN (?, ?)",
+            (workflow_id, INBOX_ORIGIN, BUILTIN_ORIGIN),
+        )
+        conn.execute(
+            "UPDATE workflow_origin SET dismissed = 1 WHERE workflow_name = ?",
+            (workflow_id,),
+        )
+        for table in (
+            "workflow_group_default",
+            "workflow_group_pins",
+            "workflow_group_picture_input",
+            "workflow_group_attr",
+            "workflow_document",
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (workflow_id,))
+    logger.info("Deleted manual workflow %s.", workflow_id)

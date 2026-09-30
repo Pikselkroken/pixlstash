@@ -50,6 +50,15 @@ def workflow_inbox_dir() -> str:
     return os.path.join(user_data_dir("pixlstash"), "workflows")
 
 
+def workflow_user_dir() -> str:
+    """Where imported workflow FILES were stored before manual workflows.
+
+    Nothing is written here any more; hub data step 7 read what is, and the
+    legacy file routes still list and delete it.
+    """
+    return os.path.join(user_data_dir("pixlstash"), "comfyui-workflows", "user")
+
+
 def content_hash(workflow: dict) -> str:
     """The hash that names *workflow*'s file in the inbox.
 
@@ -87,8 +96,8 @@ def reconcile(folder: str, store: Callable[[str, dict], dict]) -> int:
 
     Args:
         folder: The inbox. Created when missing.
-        store: Stores one workflow under a name, matching a stored copy; the
-            import route's own ``_store_workflow`` with ``keep_both``.
+        store: Stores one workflow under a name, matching a stored copy
+            (``routes/comfyui.store_inbox_workflow``).
 
     Returns:
         How many files were stored as new workflows.
