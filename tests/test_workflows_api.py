@@ -9450,15 +9450,61 @@ def test_exporting_an_unknown_card_is_a_404(workflow_env):
 
 
 def test_the_runnable_graph_is_the_run_unscrubbed(exportable):
-    """Open in ComfyUI hands the owner's own ComfyUI what ran, not the export."""
+    """Open in ComfyUI hands the owner's own ComfyUI what ran, not the export.
+
+    And it answers although Run would refuse this graph: ComfyUI is where the
+    missing nodes are fixed.
+    """
+    assert not _preflight(exportable.owner, workflow_id=RUN_WF)["ok"]
     r = exportable.owner.get(f"{API}/workflows/{RUN_WF}/graph")
     assert r.status_code == 200, r.text
     payload = r.json()
     assert payload["source"] == "picture"
     assert payload["name"]
     assert payload["workflow"]["5"]["inputs"]["text"] == EXPORT_PROMPT
-    assert payload["workflow"]["2"]["inputs"]["lora_name"] == FORGOTTEN_LORA
     assert payload["workflow"]["3"]["inputs"]["seed"] == 4242
+
+
+def test_the_runnable_graph_is_the_graph_run_submits(runnable):
+    """Open in ComfyUI opens what Run runs, default recipe and all (#1623).
+
+    The default recipe's steps are the value only Run's plan puts there. The
+    seed is left out: Run rolls a new one per submission.
+    """
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '31')",
+            (RUN_WORKFLOW, _core_address("3", "steps")),
+        )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    ran = runnable.submitted[0]["graph"]
+    opened = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    assert opened["3"]["inputs"]["steps"] == 31
+    for graph in (ran, opened):
+        graph["3"]["inputs"].pop("seed")
+    assert opened == ran
+
+
+def test_the_runnable_graph_keeps_a_pixlstash_saver(exportable):
+    """Run swaps it for SaveImage and imports itself; ComfyUI by hand has no import."""
+    exportable.graph["4"]["class_type"] = "PixlStashPictureSaver"
+    graph = exportable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    assert graph["4"]["class_type"] == "PixlStashPictureSaver"
+
+
+def test_the_runnable_graph_keeps_a_loader_whose_lora_comfyui_lacks(runnable):
+    """Run bypasses it; opened, it stays for the owner to fix in ComfyUI."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoraLoader"]["input"]["required"]["lora_name"] = [["other.safetensors"], {}]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    ran = _preflight(runnable.owner, workflow_id=RUN_WF)["groups"][0]
+    assert [b["node_id"] for b in ran["bypassed_loras"]] == ["2"]
+    graph = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    assert graph["2"]["class_type"] == "LoraLoader"
 
 
 def test_the_runnable_graph_of_a_card_without_one_is_a_409_and_unknown_a_404(
@@ -9503,10 +9549,8 @@ def test_the_runnable_graph_loads_the_copy_run_would(runnable, merged_checkpoint
     assert graph["1"]["inputs"]["ckpt_name"] == "kept.safetensors"
 
 
-def test_a_runnable_graph_from_a_stored_recipe_says_it_has_no_seed(
-    runnable, monkeypatch
-):
-    """The instance tier nulls seeds by design; the node has to be told."""
+def test_a_runnable_graph_from_a_stored_recipe_gets_a_seed(runnable, monkeypatch):
+    """The instance tier nulls seeds by design, so Open writes a fresh one."""
 
     def gone(server, picture_id, object_info=None):
         raise HTTPException(status_code=404, detail="Picture file missing")
@@ -9514,7 +9558,10 @@ def test_a_runnable_graph_from_a_stored_recipe_says_it_has_no_seed(
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
     payload = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
     assert payload["source"] == "instance", payload
-    assert payload["seedless"] is True
+    assert payload["seedless"] is False
+    # Not the input's declared default of 0, which is what a nulled seed reads
+    # as without the seed pass: every queue of it would make the same picture.
+    assert payload["workflow"]["3"]["inputs"]["seed"] != 0
 
 
 def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(

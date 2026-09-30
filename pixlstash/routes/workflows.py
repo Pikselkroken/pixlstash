@@ -1408,8 +1408,9 @@ class WorkflowExport(BaseModel):
 class WorkflowRunnableGraph(BaseModel):
     """``GET /workflows/{workflow_id}/graph``: the graph as it runs, for this owner's ComfyUI.
 
-    The unscrubbed sibling of :class:`WorkflowExport`. Duplicate writes the
-    same graph into a file; this hands it to the ComfyUI-PixlStash node, which
+    The unscrubbed sibling of :class:`WorkflowExport`, built by Run's own plan
+    so it is the graph Run would submit. This hands it to the ComfyUI-PixlStash
+    node, which
     opens it in the ComfyUI editor when the Workflow tab's *Open in ComfyUI*
     sends ComfyUI there with ``?pixlstash_workflow=<workflow_id>``.
     """
@@ -1422,8 +1423,8 @@ class WorkflowRunnableGraph(BaseModel):
     seedless: bool = Field(
         False,
         description=(
-            "True when the graph came from a stored recipe, whose seeds are "
-            "null by design: set one before queueing it."
+            "Always false: a stored recipe's nulled seeds are filled before "
+            "the graph is sent. Kept for ComfyUI-PixlStash nodes that read it."
         ),
     )
     forgotten: int = Field(
@@ -2006,6 +2007,9 @@ class Plan:
     # ``(card, graph, swapped)`` per submittable graph a model fix swapped a
     # PixlStash loader into (#1605), recorded when the graph is submitted.
     loader_swaps: list[tuple] = dataclass_field(default_factory=list)
+    # ``(graph, source, card, swapped)`` per graph built, refused or not: what
+    # Open in ComfyUI opens, since a refusal is often the thing to fix there.
+    built: list[tuple] = dataclass_field(default_factory=list)
 
 
 def _shelf_digest(hub, kind: str):
@@ -4643,8 +4647,14 @@ def create_router(server) -> APIRouter:
             )
         return [(key, ids, []) for key, ids in sorted(grouped.items())] + orphans
 
-    def _plan(request: Request, body: RunRequest) -> Plan:
+    def _plan(request: Request, body: RunRequest, opening: bool = False) -> Plan:
         """Resolve, judge and prepare every run this body asks for.
+
+        ``opening`` is Open in ComfyUI's plan: the owner's and the recipe's
+        choices, none of Run's workarounds. The savers stay PixlStash ones,
+        since a run queued by hand in ComfyUI has no import but theirs, and
+        the repair registry does not run: a LoRA loader it bypassed would be
+        gone from the graph ComfyUI saves, where the owner came to fix it.
 
         ComfyUI is asked for its ``object_info`` **once** and the answer is
         carried in the plan: the pre-flight, the LoRA resolution, the seed
@@ -4730,6 +4740,7 @@ def create_router(server) -> APIRouter:
         planned: list[RunGroup] = []
         submittable: list[tuple[dict, RunGroup, list[Feed]]] = []
         loader_swaps: list[tuple] = []
+        built: list[tuple] = []
         # Which requested skips some graph of this run holds, and whether any
         # graph was resolved to look in: a skip no graph has is refused below.
         skips_found: set[tuple[str, str]] = set()
@@ -5041,7 +5052,8 @@ def create_router(server) -> APIRouter:
             # The ComfyUI-PixlStash policy (#1521): a saver runs as SaveImage,
             # so the import below is the only one, and a loader's frozen
             # project, set or character id is looked up in this library.
-            swap_pixlstash_savers(graph)
+            if not opening:
+                swap_pixlstash_savers(graph)
             node_policy = {
                 "library_ids": read_library_ids(server.vault, library_ids_named(graph)),
                 "picture_loader": True,
@@ -5055,7 +5067,7 @@ def create_router(server) -> APIRouter:
                 lora_slots=slots_in_graph,
                 **node_policy,
             )
-            if object_info is not None and not found:
+            if object_info is not None and not found and not opening:
                 # Judge, repair what the registry knows how to, judge AGAIN
                 # (#1463): a repair can leave its refusal standing, and only
                 # the second verdict says whether this graph now runs. After
@@ -5114,6 +5126,7 @@ def create_router(server) -> APIRouter:
             if unfed:
                 found = run_service.with_pixlstash_refusals(found, unfed)
             group.reasons = [r.as_dict() for r in found]
+            built.append((graph, source, card, swapped))
             if run_service.blocks_group(found, allow_unchecked=body.allow_unchecked):
                 planned.append(group)
                 continue
@@ -5212,6 +5225,7 @@ def create_router(server) -> APIRouter:
             object_info_error=object_info_error,
             files=_upload_files(submittable),
             loader_swaps=loader_swaps,
+            built=built,
         )
 
     @router.post(
@@ -5679,15 +5693,22 @@ def create_router(server) -> APIRouter:
         "/workflows/{workflow_id}/graph",
         summary="A workflow's runnable graph",
         description=(
-            "This workflow as Run would submit it, prompt and seed kept, for "
-            "opening in the owner's own ComfyUI: resolved against what that "
-            "ComfyUI lists, with model names swapped to the copy it loads, "
-            "and the owner's model fixes applied (a loader that cannot load a "
-            "replacement swapped for a ComfyUI-PixlStash one). Credential widgets are blanked. A graph from a stored recipe has "
-            "no seeds (`seedless`) and may name models the library forgot "
+            "This workflow as Run would submit it with nothing changed in the "
+            "Run popup, for opening in the owner's own ComfyUI: the same graph "
+            "Run picks, with the default recipe (values, LoRAs, stages, "
+            "models), the owner's model fixes and the model-name swaps applied, "
+            "and the recipe's fixed seed written. A "
+            "stored recipe's nulled seeds get a fresh one, so `seedless` is "
+            "always false. Three differences: a ComfyUI-PixlStash saver stays one, "
+            "so a picture queued by hand still comes back; Run's repairs "
+            "(a missing LoRA's loader bypassed, a missing seed node replaced) "
+            "are not made, so ComfyUI shows what is missing; and a graph Run "
+            "would refuse is answered anyway, since ComfyUI is where a missing "
+            "node or model is fixed. Credential widgets are blanked. A graph "
+            "from a stored recipe may name models the library forgot "
             "(`forgotten`). The ComfyUI-PixlStash node reads it when ComfyUI "
-            "is opened with `?pixlstash_workflow=<workflow_id>`. Export instead to "
-            "give it away."
+            "is opened with `?pixlstash_workflow=<workflow_id>`. Export instead "
+            "to give it away."
         ),
         response_model=WorkflowRunnableGraph,
         responses={
@@ -5698,25 +5719,36 @@ def create_router(server) -> APIRouter:
     def get_runnable_graph(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        workflow, card = _require_base(hub, workflow_id)
-        # Resolved the way Run… resolves it: with ComfyUI's own model list, so
-        # an editor-only picture graph is rebuilt and a renamed model loads
-        # (#1439). Without ComfyUI the file and picture tiers still answer.
-        object_info, _error = _read_object_info(_comfyui_url(_user(request)))
-        source = _card_source(card, object_info)
-        graph = source.graph
-        swapped: dict[str, tuple[dict, dict]] = {}
-        _apply_model_fixes(card, graph, object_info, swapped)
-        if object_info is not None:
-            apply_model_swap(
-                graph,
-                detect_model_targets(graph, object_info),
-                model_name_aliases(hub),
-                object_info,
+        workflow, _card = _require_base(hub, workflow_id)
+        # Run's own plan, so what opens is what Run would submit (#1623 left a
+        # workflow several graphs; this is the one Run picks).
+        plan = _plan(
+            request, RunRequest(workflow_id=workflow.workflow_id), opening=True
+        )
+        if not plan.built:
+            reasons = [r for group in plan.groups for r in group.reasons]
+            logger.info(
+                "[workflows] Nothing to open for %s: no graph was built (%s).",
+                workflow_id,
+                reasons,
             )
+            raise HTTPException(
+                status_code=409, detail="There is no graph for this workflow."
+            )
+        graph, source, card, swapped = plan.built[0]
         if swapped:
             # What ComfyUI opens is what it runs: its pictures card here too.
             _record_loader_swaps(card, graph, swapped)
+        # The recipe's fixed seed, as Run writes it. Otherwise the graph keeps
+        # its own, which ComfyUI re-rolls itself, unless a stored recipe nulled
+        # it: that one gets a fresh seed, or it could not be queued at all.
+        fixed = plan.body.seed_mode == "fixed"
+        if fixed or source.seedless:
+            apply_seeds(
+                graph,
+                run_service.run_seed_targets(graph, plan.object_info),
+                plan.body.seed if fixed else None,
+            )
         # Otherwise unscrubbed, for Duplicate's reason: it stays with the owner
         # and is meant to RUN. But it travels over the network into ComfyUI's
         # page, whose own save and share would keep a key, so credentials go.
@@ -5732,7 +5764,7 @@ def create_router(server) -> APIRouter:
             name=_file_stem(card, workflow.name),
             workflow=graph,
             source=source.origin,
-            seedless=source.seedless,
+            seedless=False,
             forgotten=source.forgotten,
         )
 
