@@ -9513,15 +9513,38 @@ def test_the_runnable_graph_of_a_card_without_one_is_a_409_and_unknown_a_404(
     monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (None, "refused")
     )
-    assert (
-        workflow_env.owner.get(f"{API}/workflows/{BINNED_WF}/graph").status_code == 409
-    )
+    r = workflow_env.owner.get(f"{API}/workflows/{BINNED_WF}/graph")
+    assert r.status_code == 409
+    # The reason code, as Export's 409 names it.
+    assert "no graph" in r.json()["detail"].lower()
+    assert f"({run_service.NO_RUNNABLE_SOURCE})" in r.json()["detail"]
     assert (
         workflow_env.owner.get(
             f"{API}/workflows/{AUTO_STACK_PREFIX}{_h('nope')}/graph"
         ).status_code
         == 404
     )
+
+
+def test_a_runnable_graph_nested_too_deeply_is_a_409_like_export(runnable, monkeypatch):
+    def too_deep(server, picture_id, object_info=None):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", too_deep)
+    for route in ("graph", "export"):
+        r = runnable.owner.get(f"{API}/workflows/{RUN_WF}/{route}")
+        assert r.status_code == 409, (route, r.text)
+        assert "nested too deeply" in r.json()["detail"]
+
+
+def test_the_runnable_graph_keeps_the_batch_size(exportable):
+    """Run pins the batch to 1 for its count; opened, the owner's 4 stays."""
+    exportable.graph["9"] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 512, "height": 512, "batch_size": 4},
+    }
+    graph = exportable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    assert graph["9"]["inputs"]["batch_size"] == 4
 
 
 def test_the_runnable_graph_blanks_a_credential_widget(exportable):
@@ -9562,6 +9585,26 @@ def test_a_runnable_graph_from_a_stored_recipe_gets_a_seed(runnable, monkeypatch
     # Not the input's declared default of 0, which is what a nulled seed reads
     # as without the seed pass: every queue of it would make the same picture.
     assert payload["workflow"]["3"]["inputs"]["seed"] != 0
+
+
+def test_a_runnable_graph_takes_the_default_recipe_seed_over_a_fresh_one(
+    runnable, monkeypatch
+):
+    """The seed is a parameter: the inspector's default is what opens."""
+
+    def gone(server, picture_id, object_info=None):
+        raise HTTPException(status_code=404, detail="Picture file missing")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '777')",
+            (RUN_WORKFLOW, _core_address("3", "seed")),
+        )
+    payload = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
+    assert payload["source"] == "instance", payload
+    assert payload["workflow"]["3"]["inputs"]["seed"] == 777
 
 
 def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(

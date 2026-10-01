@@ -4652,9 +4652,11 @@ def create_router(server) -> APIRouter:
 
         ``opening`` is Open in ComfyUI's plan: the owner's and the recipe's
         choices, none of Run's workarounds. The savers stay PixlStash ones,
-        since a run queued by hand in ComfyUI has no import but theirs, and
-        the repair registry does not run: a LoRA loader it bypassed would be
-        gone from the graph ComfyUI saves, where the owner came to fix it.
+        since a run queued by hand in ComfyUI has no import but theirs; the
+        batch size is not pinned, since there is no count to stand in for
+        it; and the repair registry does not run: a LoRA loader it bypassed
+        would be gone from the graph ComfyUI saves, where the owner came to
+        fix it.
 
         ComfyUI is asked for its ``object_info`` **once** and the answer is
         carried in the plan: the pre-flight, the LoRA resolution, the seed
@@ -4814,7 +4816,7 @@ def create_router(server) -> APIRouter:
             # After every value: `count` is the number of pictures, one per
             # submission, and a batch saved in the graph (or a recipe) would
             # multiply it.
-            pinned = run_service.pin_batch_size(graph, object_info)
+            pinned = [] if opening else run_service.pin_batch_size(graph, object_info)
             if pinned:
                 logger.info(
                     "[workflows] Run of %s: batch_size pinned to 1 on nodes %s so "
@@ -5696,14 +5698,17 @@ def create_router(server) -> APIRouter:
             "This workflow as Run would submit it with nothing changed in the "
             "Run popup, for opening in the owner's own ComfyUI: the same graph "
             "Run picks, with the default recipe (values, LoRAs, stages, "
-            "models), the owner's model fixes and the model-name swaps applied, "
-            "and the recipe's fixed seed written. A "
-            "stored recipe's nulled seeds get a fresh one, so `seedless` is "
-            "always false. Three differences: a ComfyUI-PixlStash saver stays one, "
-            "so a picture queued by hand still comes back; Run's repairs "
-            "(a missing LoRA's loader bypassed, a missing seed node replaced) "
-            "are not made, so ComfyUI shows what is missing; and a graph Run "
-            "would refuse is answered anyway, since ComfyUI is where a missing "
+            "models), the owner's model fixes and the model-name swaps applied. "
+            "The seed is a parameter like the rest: the default recipe's, else "
+            "the graph's own; only a stored recipe's nulled seeds get a fresh "
+            "one, so `seedless` is always false. Four "
+            "differences from Run: a ComfyUI-PixlStash saver stays one, so a "
+            "picture queued by hand still comes back; the batch size is not "
+            "pinned to 1, since there is no count here; Run's repairs (a "
+            "missing LoRA's loader bypassed, a missing seed node replaced) are "
+            "not made, so ComfyUI shows what is missing; and a graph Run would "
+            "refuse is answered anyway (its 409 names the reason only when no "
+            "graph could be built at all), since ComfyUI is where a missing "
             "node or model is fixed. Credential widgets are blanked. A graph "
             "from a stored recipe may name models the library forgot "
             "(`forgotten`). The ComfyUI-PixlStash node reads it when ComfyUI "
@@ -5722,33 +5727,58 @@ def create_router(server) -> APIRouter:
         workflow, _card = _require_base(hub, workflow_id)
         # Run's own plan, so what opens is what Run would submit (#1623 left a
         # workflow several graphs; this is the one Run picks).
-        plan = _plan(
-            request, RunRequest(workflow_id=workflow.workflow_id), opening=True
-        )
+        # `RecursionError` for `_card_source`'s reason: the source graph came
+        # out of a picture from somewhere else, so its depth is not ours to trust.
+        try:
+            plan = _plan(
+                request, RunRequest(workflow_id=workflow.workflow_id), opening=True
+            )
+        except RecursionError as exc:
+            logger.warning(
+                "Workflow %s has a source graph too deeply nested to read: %s",
+                workflow_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "PixlStash cannot read this workflow: its graph is nested "
+                    "too deeply to walk."
+                ),
+            ) from exc
         if not plan.built:
-            reasons = [r for group in plan.groups for r in group.reasons]
+            codes = [r["code"] for group in plan.groups for r in group.reasons]
             logger.info(
                 "[workflows] Nothing to open for %s: no graph was built (%s).",
                 workflow_id,
-                reasons,
+                codes,
             )
             raise HTTPException(
-                status_code=409, detail="There is no graph for this workflow."
+                status_code=409,
+                detail=(
+                    "PixlStash has no graph for this workflow "
+                    f"({codes[0] if codes else run_service.NO_RUNNABLE_SOURCE})."
+                ),
             )
         graph, source, card, swapped = plan.built[0]
         if swapped:
             # What ComfyUI opens is what it runs: its pictures card here too.
             _record_loader_swaps(card, graph, swapped)
-        # The recipe's fixed seed, as Run writes it. Otherwise the graph keeps
-        # its own, which ComfyUI re-rolls itself, unless a stored recipe nulled
-        # it: that one gets a fresh seed, or it could not be queued at all.
-        fixed = plan.body.seed_mode == "fixed"
-        if fixed or source.seedless:
-            apply_seeds(
-                graph,
-                run_service.run_seed_targets(graph, plan.object_info),
-                plan.body.seed if fixed else None,
-            )
+        # The seed is a parameter like any other, and the default recipe's is
+        # already applied. A stored recipe keeps none by design, and
+        # `resolve_references` stands a 0 in for each null it had: those get a
+        # fresh seed, or every queue of the graph would make the same picture.
+        # ponytail: a default recipe seed of exactly 0 is re-rolled with them.
+        if source.seedless:
+            placeholders = [
+                target
+                for target in run_service.run_seed_targets(graph, plan.object_info)
+                if ((graph.get(target["node_id"]) or {}).get("inputs") or {}).get(
+                    target["field"]
+                )
+                == 0
+            ]
+            apply_seeds(graph, placeholders, None)
         # Otherwise unscrubbed, for Duplicate's reason: it stays with the owner
         # and is meant to RUN. But it travels over the network into ComfyUI's
         # page, whose own save and share would keep a key, so credentials go.
