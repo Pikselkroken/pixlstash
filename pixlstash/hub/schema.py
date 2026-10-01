@@ -1895,6 +1895,23 @@ def _backfill_base_model_canonical(conn: sqlite3.Connection) -> int:
     return len(updates)
 
 
+def _has_v1_cores(conn: sqlite3.Connection) -> bool:
+    """Whether a filed topology's core is cached under core rule v1.
+
+    Data step 8's trigger beyond the version: an older build sharing this hub
+    writes them. Spelled out rather than imported (`hub.workflow_cards`
+    imports this module through `hub.db`).
+    """
+    return (
+        conn.execute(
+            "SELECT 1 FROM workflow_topology_core c WHERE c.core_version LIKE "
+            "'v1-loras-%' AND EXISTS (SELECT 1 FROM workflow_variant v "
+            "WHERE v.topology_hash = c.topology_hash) LIMIT 1"
+        ).fetchone()
+        is not None
+    )
+
+
 def apply_migrations(conn: sqlite3.Connection) -> int:
     """Bring *conn* up to :data:`CURRENT_SCHEMA_VERSION` and return that version.
 
@@ -1972,10 +1989,13 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
     # reason the schema steps do: an interrupted backfill must leave the counter
     # where it was, so the next open retries it rather than skipping it.
     data_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    if data_version < CURRENT_DATA_VERSION:
+    if data_version < CURRENT_DATA_VERSION or _has_v1_cores(conn):
         try:
             with conn:
                 conn.execute("BEGIN IMMEDIATE")
+                # Again, under the write lock: a second process may have run
+                # the steps between the read above and here.
+                data_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
                 if data_version < 1:
                     _backfill_component_roles(conn)
                 if data_version < 2:
@@ -2018,15 +2038,19 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     from pixlstash.services.workflow_inbox import workflow_user_dir
 
                     adopt_workflow_files(conn, workflow_user_dir())
-                if data_version < 8:
+                if data_version < 8 or _has_v1_cores(conn):
                     # Core rule v2: every topology re-derived here, so no
-                    # card is pending, and its workflow's state carried.
+                    # card is pending, and its workflow's state carried. Not
+                    # only once: an older build opening this shared hub (a
+                    # second checkout) writes v1 rows again, and state its
+                    # owner edits there lands on their v1 ids.
                     from pixlstash.hub.workflow_group_convert import rederive_cores
 
-                    rederive_cores(conn)
-                # No placeholder: PRAGMA takes no parameters, and the value is
-                # this module's own constant rather than anything from outside.
-                conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")
+                    rederive_cores(conn, include_uncached=data_version < 8)
+                if data_version < CURRENT_DATA_VERSION:
+                    # No placeholder: PRAGMA takes no parameters, and the value
+                    # is this module's own constant, nothing from outside.
+                    conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")
         except sqlite3.Error as exc:
             logger.error(
                 "Hub data backfill to version %d failed, hub stays on data "

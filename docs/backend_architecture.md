@@ -2642,7 +2642,11 @@ addresses being their own slot labels. `scripts/workflow_core_dry_run.py`
 previews the change on a hub opened read-only.
 
 **Data step 8** (`workflow_group_convert.rederive_cores`, at hub open, in the
-data-version transaction): each `workflow_topology_core` row at the v1 stamp
+data-version transaction, and on **every** open that finds a v1 row for a
+filed topology: an older build sharing this hub writes them, and owner edits
+made there land on their v1 ids): each `workflow_topology_core` row at the v1
+stamp, and at the upgrade each card topology with no cache row at all (steps 5
+and 6 filed it on its document's v1 core),
 is re-derived from its card's stored document (`card_document`) and the v2 row
 written **there**, with every variant's family row (one family set per card),
 so `_VARIANT_PENDING` finds nothing and the grid never blanks.
@@ -2661,6 +2665,13 @@ their values, pins are unioned, a second name lands in the notes. A card's
 `workflow_document.from_workflow_id` follow the primary. A second run finds no v1 row. The
 vault needs no migration: the retired ids in `workflow_id_successor` put every
 recipe naming one in front of `MissingSavedRecipeWorkflowFinder`, and
+A card none of whose own variants reduces gets no family row (it stays
+pending, never another card's). Afterwards every `auto:` id the owner's rows
+name that is neither live nor retired is logged (`stranded_workflow_ids`; the
+dry run reports the count). A retired id can come back to life (a checkpoint
+renamed back to a name the shelf does not know): `record_identity` and
+`_retire_workflow` take a live id off `workflow_id_successor`, and the
+conversion leaves a recipe whose target is the id it already names.
 `SavedRecipeConvertTask` files it on its own card's workflow
 (`workflow_of_variant`, the primary only when the card is gone) and rewrites
 its `core:` overrides and `models[].address` through the label map (its

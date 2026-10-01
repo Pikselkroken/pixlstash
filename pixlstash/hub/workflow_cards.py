@@ -140,7 +140,9 @@ _BASE_DIGEST_WIDGETS = frozenset({"ckpt_sha256", "unet_sha256"})
 UNRESOLVED_FAMILY = "unresolved"
 
 
-def variant_families(hub, structural_hash: str, document: dict) -> str:
+def variant_families(
+    hub, structural_hash: str, document: dict, shelf: Optional[list] = None
+) -> str:
     """The base-model families a variant loads, sorted and comma-joined.
 
     One family per base-model loader node (``base_model_kind``'s widgets and
@@ -156,7 +158,13 @@ def variant_families(hub, structural_hash: str, document: dict) -> str:
     than combine, logged. "No base model" (the empty string) is a graph with
     no base-model loader. Frozen by the caller on first sight, as a slot mark
     is; :func:`~pixlstash.hub.workflow_group_convert.reidentify_families`
-    moves an unknown one once the shelf learns it.
+    moves an unknown one once the shelf learns it. *shelf* is a cache of the
+    shelf index a caller deriving many variants passes to every call.
+
+    ponytail: two models of different families whose loaders name no model
+    anywhere (no document value, no stored run) share :data:`UNRESOLVED_FAMILY`
+    and combine; a stored run arriving later does not re-trigger the family
+    pass, which watches the shelf only.
     """
     names = {
         asset_reference(name): name
@@ -166,7 +174,7 @@ def variant_families(hub, structural_hash: str, document: dict) -> str:
             (structural_hash,),
         )
     }
-    shelf: list = []
+    shelf = shelf if shelf is not None else []
     runs: Optional[list[dict]] = None
     families = set()
     for node_id, node in sorted(document.items()):
@@ -413,7 +421,39 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
                 "(structural_hash, families) VALUES (?, ?)",
                 (structural_hash, families),
             )
+        revive_workflows(conn, [structural_hash])
     return key
+
+
+def revive_workflows(conn: sqlite3.Connection, structural_hashes: list[str]) -> None:
+    """Take the workflows these variants are in off the retired list.
+
+    A retired id (``workflow_id_successor``) is a digest of a core and a family
+    set, so a variant can bring it back: a checkpoint renamed back to a name
+    the shelf does not know derives the unknown family it was retired from.
+    Left on the list, the vault's conversion would re-file every recipe on
+    the living workflow, on every sweep.
+    """
+    for structural_hash in structural_hashes:
+        row = conn.execute(
+            "SELECT c.core_hash, vf.families FROM workflow_variant v "
+            "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+            "AND c.core_version = ? "
+            "JOIN workflow_variant_family vf ON vf.structural_hash = v.structural_hash "
+            "WHERE v.structural_hash = ?",
+            (CORE_RULE_VERSION, structural_hash),
+        ).fetchone()
+        if row is None:
+            continue
+        live = auto_workflow_id(row[0], row[1])
+        if conn.execute(
+            "DELETE FROM workflow_id_successor WHERE workflow_id = ?", (live,)
+        ).rowcount:
+            logger.info(
+                "Workflow %s is live again (variant %s), so it is no longer retired.",
+                live,
+                structural_hash,
+            )
 
 
 def loader_swaps_of(fetchall, swapped_topology_hash: str) -> list[LoaderSwap]:

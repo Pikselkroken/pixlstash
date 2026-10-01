@@ -914,10 +914,108 @@ def test_the_hub_open_runs_step_8_once(step_8):
     w.hub = HubDatabase(path)
     assert w.hub.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
     rows = _step_8_rows(w.hub)
-    assert len(rows["workflow_core_successor"]) == 5
+    flux = workflow_of_variant(w.hub, w.plain.structural_hash)
+    qwen = workflow_of_variant(w.hub, w.qwen.structural_hash)
+    assert {r[:3] for r in rows["workflow_core_successor"]} == {
+        (w.plain.topology_hash, w.plain_id, flux),
+        (w.plain.topology_hash, w.plain_id, qwen),
+        (w.lora.topology_hash, w.plain_id, flux),
+        (w.orphan.topology_hash, w.orphan_id, flux),
+        (w.sve.topology_hash, w.sve_id, flux),
+    }
+    assert {r[0]: r[1] for r in rows["workflow_id_successor"]} == {
+        w.plain_id: flux,
+        w.orphan_id: flux,
+        w.sve_id: flux,
+    }
     w.hub.close()
     w.hub = HubDatabase(path)
     assert _step_8_rows(w.hub) == rows
+
+
+def test_a_v1_row_an_older_build_writes_is_moved_on_the_next_open(step_8):
+    """A second checkout on an older build shares this hub: the v1 rows it
+    writes, and the state its owner edits land on, move on the next open."""
+    w = step_8
+    with w.hub.transaction() as conn:
+        rederive_cores(conn)
+    flux = workflow_of_variant(w.hub, w.orphan.structural_hash)
+    # The older build re-caches the orphan topology on v1; the owner names
+    # that v1 workflow there.
+    (old_id, _labels) = _back_to_v1(w.hub, w.orphan)[w.orphan.topology_hash]
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_group_attr (workflow_id, name, notes, "
+            "hidden) VALUES (?, 'Named on the old build', NULL, 0)",
+            (old_id,),
+        )
+    path = w.hub.path
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert workflow_of_variant(w.hub, w.orphan.structural_hash) == flux
+    notes = w.hub.fetchone(
+        "SELECT notes FROM workflow_group_attr WHERE workflow_id = ?", (flux,)
+    )["notes"]
+    assert "Named on the old build" in notes
+    assert (
+        w.hub.fetchone(
+            "SELECT 1 FROM workflow_group_attr WHERE workflow_id = ?", (old_id,)
+        )
+        is None
+    )
+
+
+def test_a_card_with_no_cache_row_is_moved_and_a_stranded_id_is_named(step_8, caplog):
+    """Steps 5 and 6 file a card with no cache row on its document's v1 core;
+    step 8 moves it. State on an id nothing leads to is logged."""
+    caplog.set_level("WARNING")
+    w = step_8
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_topology_core WHERE topology_hash = ?",
+            (w.sve.topology_hash,),
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+            "VALUES (?, 'Nowhere', NULL, 0)",
+            ("auto:" + "9" * 64,),
+        )
+        rederive_cores(conn)
+    flux = workflow_of_variant(w.hub, w.sve.structural_hash)
+    assert (
+        w.hub.fetchone(
+            "SELECT successor_id FROM workflow_id_successor WHERE workflow_id = ?",
+            (w.sve_id,),
+        )[0]
+        == flux
+    )
+    assert w.hub.fetchone(
+        "SELECT 1 FROM workflow_group_default WHERE workflow_id = ? AND address = ?",
+        (flux, f"{w.sve_slot}/strength"),
+    )
+    assert "auto:" + "9" * 64 in caplog.text
+
+
+def test_a_card_none_of_whose_variants_reduces_gets_no_family(step_8, caplog):
+    """Never another card's family: it stays pending for the backfill."""
+    caplog.set_level("WARNING")
+    w = step_8
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_graph SET document = '{\"1\": 7}' "
+            "WHERE structural_hash = ?",
+            (w.qwen.structural_hash,),
+        )
+        rederive_cores(conn)
+    assert (
+        w.hub.fetchone(
+            "SELECT 1 FROM workflow_variant_family WHERE structural_hash = ?",
+            (w.qwen.structural_hash,),
+        )
+        is None
+    )
+    assert workflow_of_variant(w.hub, w.qwen.structural_hash) is None
+    assert f"Card {w.qwen_key}: no variant of it reduces" in caplog.text
 
 
 # ── the vault half: a saved recipe keeps its checkpoint ────────────────────
@@ -1424,6 +1522,12 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
             "INSERT INTO workflow_group_pins (workflow_id, pins) VALUES (?, ?)",
             (unknown_id, json.dumps([steps])),
         )
+        # A stale retired row for the heir: it is live, so it must go.
+        conn.execute(
+            "INSERT INTO workflow_id_successor (workflow_id, successor_id) "
+            "VALUES (?, ?)",
+            (qwen_id, "auto:" + "e" * 64),
+        )
 
     def seed(session):
         session.exec(delete(SavedRecipe))
@@ -1455,6 +1559,12 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
     assert backfill.find_task() is None
 
     assert workflow_of_variant(hub, unknown.structural_hash) == qwen_id
+    assert (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_id_successor WHERE workflow_id = ?", (qwen_id,)
+        )
+        is None
+    )
     attr = hub.fetchone(
         "SELECT name, notes FROM workflow_group_attr WHERE workflow_id = ?", (qwen_id,)
     )
@@ -1492,3 +1602,58 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
         lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
         priority=DBPriority.IMMEDIATE,
     )
+
+
+def test_a_recipe_on_a_workflow_live_again_is_left_where_it_is(run_env):
+    """The vault's conversion does not move a recipe onto the id it names."""
+    server = run_env.server
+    hub = server.hub
+    keys = record_api_graph(
+        hub,
+        _graph(ckpt="house-finetune-v9.safetensors", hires=True),
+        server.vault.library_uuid,
+    )
+    live = workflow_of_variant(hub, keys.structural_hash)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_id_successor (workflow_id, successor_id) "
+            "VALUES (?, ?)",
+            (live, "auto:" + "f" * 64),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_core_successor (topology_hash, "
+            "old_workflow_id, new_workflow_id, label_map) VALUES (?, ?, ?, '{}')",
+            (keys.topology_hash, live, "auto:" + "f" * 64),
+        )
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        recipe = SavedRecipe(
+            name="live", workflow_key=_card(hub, keys), workflow_id=live, prompt="x"
+        )
+        session.add(recipe)
+        session.commit()
+        return recipe.id
+
+    recipe_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    try:
+        finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+        task = finder.find_task()
+        assert task.params["recipe_ids"] == [recipe_id]
+        task.result = task._run_task()
+        assert task.result == {"converted": 0, "deferred": [recipe_id]}
+        finder.on_task_complete(task, None)
+        assert finder.find_task() is None, "handed out again"
+        (stored,) = server.vault.db.run_immediate_read_task(
+            lambda session: session.exec(select(SavedRecipe)).all()
+        )
+        assert stored.workflow_id == live
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_id_successor WHERE workflow_id = ?", (live,)
+            )
+        server.vault.db.run_task(
+            lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
+            priority=DBPriority.IMMEDIATE,
+        )
