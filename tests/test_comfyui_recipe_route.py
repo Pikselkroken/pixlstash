@@ -44,7 +44,7 @@ from pixlstash.services.workflow_hash import (
     ui_topology_hash,
 )
 from pixlstash.db_models import Picture, Project
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, auto_workflow_id
 from pixlstash.db_models.generation import Generation, GenerationInput
 from pixlstash.server import Server
 from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
@@ -522,6 +522,13 @@ def _card_picture(server, pic_id: int, key: str, core: str) -> str:
             "VALUES (?, ?, ?, ?)",
             (structural, row["topology_hash"], key, WORKFLOW_KEY_VERSION),
         )
+        # Hand-picked like the key: the empty family set, whatever the
+        # pipeline derived, so the workflow is the one this test names.
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_variant_family "
+            "(structural_hash, families) VALUES (?, '')",
+            (structural,),
+        )
         conn.execute(
             # `specials` is written even though this row is a stand-in:
             # NULL means "no pass has read this topology", so the live backfill
@@ -631,7 +638,7 @@ class TestRecipeReadsTheWholeRecipe:
         structural = _card_picture(server, pic_id, "key-alpha", CORE_OTHER)
 
         body = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe").json()
-        assert body["workflow_id"] == f"auto:{CORE_OTHER}"
+        assert body["workflow_id"] == auto_workflow_id(CORE_OTHER, "")
         assert "workflow_key" not in body
 
         topology = server.hub.fetchone(
@@ -693,8 +700,12 @@ class TestPictureListWorkflowFilters:
         server, client, pic_id = env
         alpha, beta = self._two_carded_pictures(server, client, CORE_OTHER)
 
-        assert self._ids(client, f"?workflow=auto:{CORE_SHARED}") == {alpha}
-        assert self._ids(client, f"?workflow=auto:{CORE_OTHER}") == {beta}
+        assert self._ids(client, "?workflow=" + auto_workflow_id(CORE_SHARED, "")) == {
+            alpha
+        }
+        assert self._ids(client, "?workflow=" + auto_workflow_id(CORE_OTHER, "")) == {
+            beta
+        }
         # The control: without the filter all three are there, so the two
         # assertions above are narrowing rather than describing an empty grid.
         assert {alpha, beta, pic_id} <= self._ids(client, "")
@@ -703,7 +714,10 @@ class TestPictureListWorkflowFilters:
         server, client, _pic_id = env
         alpha, beta = self._two_carded_pictures(server, client)
 
-        assert self._ids(client, f"?workflow=auto:{CORE_SHARED}") == {alpha, beta}
+        assert self._ids(client, "?workflow=" + auto_workflow_id(CORE_SHARED, "")) == {
+            alpha,
+            beta,
+        }
 
     def test_a_manual_group_lists_the_topologies_it_holds(self, env):
         """Placed by hand, a topology leaves its automatic workflow."""
@@ -726,7 +740,9 @@ class TestPictureListWorkflowFilters:
             )
         try:
             assert self._ids(client, f"?workflow={MANUAL_ID}") == {alpha}
-            assert self._ids(client, f"?workflow=auto:{CORE_SHARED}") == {beta}
+            assert self._ids(
+                client, "?workflow=" + auto_workflow_id(CORE_SHARED, "")
+            ) == {beta}
         finally:
             with server.hub.transaction() as conn:
                 conn.execute(
@@ -751,14 +767,21 @@ class TestPictureListWorkflowFilters:
         model = "sd_xl_base_1.0.safetensors"
 
         assert {pic_id, alpha} <= self._ids(client, f"?comfyui_model={model}")
-        assert beta in self._ids(client, f"?workflow=auto:{CORE_SHARED}")
+        assert beta in self._ids(
+            client, "?workflow=" + auto_workflow_id(CORE_SHARED, "")
+        )
         assert self._ids(
-            client, f"?workflow=auto:{CORE_SHARED}&comfyui_model={model}"
+            client,
+            "?workflow="
+            + auto_workflow_id(CORE_SHARED, "")
+            + f"&comfyui_model={model}",
         ) == {alpha}
         assert (
             self._ids(
                 client,
-                f"?workflow=auto:{CORE_SHARED}&comfyui_model=nobody.safetensors",
+                "?workflow="
+                + auto_workflow_id(CORE_SHARED, "")
+                + "&comfyui_model=nobody.safetensors",
             )
             == set()
         )

@@ -456,7 +456,7 @@ List and import workflow files; read the workflow a picture carries. Running one
 
 **The infotext parser is linear, which is what makes it safe on a request path.** `_PARAM_RE`'s key run was unbounded before the literal `:`, so a line with no colon after a long run backtracked over every length: measured, 8,000 characters cost 0.14 s and 32,000 cost 2.34 s, and `_MAX_FIELDS_LINE` bounds a *line* rather than the total, so a window of such lines multiplied it. Bounding the key at 63 characters (A1111's longest real key is around 19 — `Denoising strength`, `ADetailer model 2nd`) costs the same inputs 0.0024 s and 0.011 s and parses real infotext identically. The line ceiling and the 32-line window stay as bounds on absurdity, not as the thing holding the line.
 
-**What `workflow_id` tells a share-token holder, stated rather than denied.** An automatic workflow's id is `auto:<core_hash>`, a digest of the stripped graph that same token can already read whole from the `/workflow` sibling, so it discloses nothing the graph does not. A manual one is a random uuid, and what it tells the holder is that the owner grouped this topology by hand — not with what. The card key it replaced (#1623) folded in slot marks frozen from the first-filed picture's filenames and the owner's LoRA promotions, recoverable by a sweep over the slot set; neither is in a workflow id. What an id *groups* — the saved-recipe match banner, the workflow's pictures — is an owner-only question answered by the Workflows routes, not by this one.
+**What `workflow_id` tells a share-token holder, stated rather than denied.** An automatic workflow's id is `auto:<digest>`, a digest of the stripped graph and its base models' families, both of which that same token can already read whole from the `/workflow` sibling, so it discloses nothing the graph does not. A manual one is a random uuid, and what it tells the holder is that the owner grouped this topology by hand — not with what. The card key it replaced (#1623) folded in slot marks frozen from the first-filed picture's filenames and the owner's LoRA promotions, recoverable by a sweep over the slot set; neither is in a workflow id. What an id *groups* — the saved-recipe match banner, the workflow's pictures — is an owner-only question answered by the Workflows routes, not by this one.
 
 **A picture with no graph but with A1111 infotext answers from that** (`reduce_a1111`, `services/a1111_recipe.py`), as `source: "a1111"` with `available: false` and `reason: "a1111"`: its recipe is readable but is not a graph any ComfyUI could be handed, so there is nothing to replay and nothing to pre-flight. The fields are read off the reduced nodes rather than by re-parsing the infotext, so this endpoint and the hub agree about what the picture's recipe is. `node_count` and `node_classes` stay at zero and empty on that branch on purpose: they exist for the consent decision — what would execute — and a count of the reduction the hub builds would be a number about PixlStash, not about the picture. A client that does not know the new `reason` falls through to "nothing to replay", which is true.
 
@@ -2311,11 +2311,12 @@ ingest and the file's import do not depend on a card, and the backfill retries.
 
 #### Workflows: identity, core addresses and the default recipe (#1622)
 
-The owner-facing **workflow** is a group of topologies, and since the cut-over
+The owner-facing **workflow** is a group of variants, and since the cut-over
 (#1623) it is what every route reads: the card is internal storage.
-`variant (structural_hash) -> topology -> workflow (workflow_id)`, where the id
-is `auto:<core_hash>` for an automatic group (the spelling an automatic stack
-already has), or `manual:<uuid hex>` for a manual workflow, which is a record
+`variant (structural_hash) -> workflow (workflow_id)`, where the id is
+`auto:<digest>` for an automatic group (`workflow_cards.auto_workflow_id` of
+the variant's topology core and its base-model families, so one topology can
+hold workflows of several families), or `manual:<uuid hex>` for a manual workflow, which is a record
 of its own and on no topology (next subsection). One pattern,
 `utils/workflow_ids.WORKFLOW_ID_PATTERN`, is what every route and the MCP
 server check an id against. Pictures stay filed by `structural_hash`, so
@@ -2327,13 +2328,15 @@ nothing in the vault moves; a manual workflow's own runs are the one exception
 | `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and a topology placed in one by hand (one workflow per topology: the member row's primary key). Merge and split move **topologies**, never cards: what told two cards of one topology apart is a checkpoint or a LoRA, which are recipe values now |
 | `workflow_group_attr`, `workflow_group_default`, `workflow_group_pins`, `workflow_group_picture_input` | The owner's name, notes and hidden flag; edits to the default recipe; pins; picture inputs (library-keyed, pictures by `pixel_sha`). All keyed by `workflow_id` and addressed by **address**, never slot label |
 | `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
-| `workflow_core_successor` | Per topology, the automatic workflow core rule v1 put it in, the one v2 puts it in, and the v1 -> v2 core label map (data step 8, below) |
+| `workflow_core_successor` | Per (topology, new workflow), the automatic workflow core rule v1 put the topology in, each one v2 puts its variants in, and the v1 -> v2 core label map (data step 8, below) |
+| `workflow_variant_family` | Per variant, its base-model families (`variant_families`), frozen on first derivation: part of its workflow's id, so a later shelf scan never moves it |
 
-Reads (`hub/workflow_card_reads.py`): `workflow_of_topology` (a member row, else
-`auto:<core_hash>` under this build's `CORE_RULE_VERSION`, else none),
-`topologies_in_workflow` (an automatic workflow minus topologies placed
-elsewhere), `variants_in_workflow`, and `workflow_index`, one `Workflow` per
-group built from `card_index`. The **base topology** is the one with the most
+Reads (`hub/workflow_card_reads.py`): `workflow_of_variant` (its topology's
+member row, else the id of its core under this build's `CORE_RULE_VERSION` and
+its family row, else none), `variants_in_workflow` and `topologies_in_workflow`
+(an automatic id is a digest, so these scan the current variants and keep the
+ones whose id it is), and `workflow_index`, one `Workflow` per group built
+from `card_index`, variant by variant. The **base topology** is the one with the most
 stage groups, then the most LoRA loaders, then the most kept pictures (#1620
 D3, automatic); its busiest card is `base_card`, whose source a run resolves.
 
@@ -2439,7 +2442,7 @@ as a recipe's overrides do, so NULL and `[]` both leave the defaults; a recipe w
 
 #### Manual workflows
 
-Workflows are **automatic** (`auto:<core hash>`, the topologies sharing a core)
+Workflows are **automatic** (`auto:<digest>`, the variants sharing a core and a family set)
 or **manual**: a hub record holding one document, `manual:<uuid4 hex>`. Every
 way a workflow arrives makes a manual one: `POST /comfyui/workflows/import`,
 the watched inbox, the ComfyUI pull, a built-in asked for by
@@ -2588,34 +2591,80 @@ hires-fix sampler, face detailer and its detectors) and LoRA loaders. **v2**
 * loader variants read as the stock loader (`GGUF`, `DisTorch`, `MultiGPU`
   spellings, the PixlStash shelf loaders; `_CANONICAL_LOADERS`).
 
+**A graph with no sampler of its own keeps what it does.** With a sampler,
+every stage (upscale, face detailer, seed variance) is an optional addition
+and stripped. With no sampler, a face detailer is the core and an upscale
+after it stays optional; with neither, the upscale is the core. So a
+detailer-only graph and the same graph plus an upscale are one workflow, and
+an upscale-only graph is another; the kept model chain is never made dead and
+pruned (`has_sampler`; a WanVideoWrapper sampler does not match `Sampler` and
+reads the same way, the safe direction).
+
+**Base-model families never combine.** The automatic id is
+`auto_workflow_id(core, families)`: each variant's families are the sorted set
+of one family per base-model loader node (`base_model_kind`'s widgets,
+checkpoint, UNET and the shelf loader's `checkpoint_id`, plus a base model's
+digest widget `ckpt_sha256`), from whichever of its values resolves: the file
+its reference names in `workflow_recipe_asset` (never by slot order), or a
+shelf id or digest through the shelf. A value the stored document nulled (an
+older hash version) is read from a stored run. The family is the shelf's
+`base_model_family` where its candidate rows agree, else what `identify` reads
+from an unidentified row's own base-model text and filename, else
+`family_of(identify(filename))`. A model of no known family is its own family,
+spelled by its asset reference (no filename lands in a card row); a loader
+naming no model anywhere is `unresolved`; both are logged. The empty set means
+a graph with no base-model loader, never an unresolved value. A workflow
+loading two checkpoints combines only with one of the identical set. Stored in
+`workflow_variant_family`, frozen as a slot mark is.
+
+**An unknown family is not a dead end.** Once the backfill is drained,
+`WorkflowCardBackfillFinder` hands out a `FamilyReidentifyTask` whenever the
+shelf's base models changed (`shelf_family_signature`: a scan, or the owner
+setting a base model). `reidentify_families` re-derives every variant whose
+set carries an unknown and moves those that now derive fewer: the family row
+is rewritten and the retiring workflow handed on with `_retire_workflow`, the
+same carry data step 8 uses (owner state merged, never dropped; successor,
+retired-id and `from` rows; `workflow_core_successor` with an empty label map,
+so the vault conversion re-files a recipe on its card's workflow and rewrites
+nothing). A workflow some of whose variants stay unknown keeps living; its
+state is copied to where the others went. `identify` reads the Z-Image
+community abbreviations `zib` / `zit` as whole filename tokens; a name that
+glues them to a version (`zitv6`) is left to the shelf.
+
 The prune runs after the v1 strip rather than on the document on purpose: that
-makes v2 a function of the v1 core, so **workflows only combine, never split**
-(a node feeding only a PreviewImage and a node feeding nothing have the same v1
-core; pruning before the strip would split them). Mis-grouping is accepted
+makes v2 a function of the v1 core for every graph that samples (a node
+feeding only a PreviewImage and a node feeding nothing have the same v1 core;
+pruning before the strip would split them). **Workflows split only by family
+and by a graph with no sampler**; the dry run lists splits apart from
+combines and fails on any other. Mis-grouping is accepted
 (the owner's fix is a manual duplicate); manual workflows are untouched, their
 addresses being their own slot labels. `scripts/workflow_core_dry_run.py`
-previews the change on a hub opened read-only and asserts the many-to-one.
+previews the change on a hub opened read-only.
 
 **Data step 8** (`workflow_group_convert.rederive_cores`, at hub open, in the
 data-version transaction): each `workflow_topology_core` row at the v1 stamp
 is re-derived from its card's stored document (`card_document`) and the v2 row
-written **there**, so `_VARIANT_PENDING` finds nothing and the grid never
-blanks. `workflow_core_successor` records per topology `auto:<v1>` ->
+written **there**, with every variant's family row (one family set per card),
+so `_VARIANT_PENDING` finds nothing and the grid never blanks.
+`workflow_core_successor` records per (topology, new workflow) `auto:<v1>` ->
 `auto:<v2>` and `label_map`, `{v1 core label: v2 core label | null}` by node
 id (the v1 strip survives only as `_core_strip_v1` there). Each retired id's
 `workflow_group_default` / `_pins` / `_picture_input` addresses are rewritten
 through it (`rewritten_address`: null goes to the node's slot label when its
 topology is the new workflow's base, else the row is dropped and logged with
-its value), then `_carry_group_state` merges them onto the new id, olds in
-sorted order: the heir's own win, the losers are logged with their values,
-pins are unioned, a second name lands in the notes. `workflow_key_successor`,
-`workflow_id_successor` (retired id -> successor) and
-`workflow_document.from_workflow_id` follow. A second run finds no v1 row. The
+its value), then copied (`_carry_group_state(keep=True)`) to every successor of a split
+but the **primary** (the one holding most of its variants), and merged onto the
+primary, olds in sorted order: the heir's own win, the losers are logged with
+their values, pins are unioned, a second name lands in the notes. A card's
+`workflow_key_successor` row follows its own variants;
+`workflow_id_successor` (retired id -> primary) and
+`workflow_document.from_workflow_id` follow the primary. A second run finds no v1 row. The
 vault needs no migration: the retired ids in `workflow_id_successor` put every
 recipe naming one in front of `MissingSavedRecipeWorkflowFinder`, and
-`SavedRecipeConvertTask` rewrites its `core:` overrides and `models[].address`
-through the label map (its card's topology first), keeping anything it cannot
-place as it was.
+`SavedRecipeConvertTask` files it on its own card's workflow
+(`workflow_of_variant`, the primary only when the card is gone) and rewrites
+its `core:` overrides and `models[].address` through the label map (its
+card's topology first), keeping anything it cannot place as it was.
 
 #### Converting cards to workflows (#1623)
 
@@ -2658,11 +2707,13 @@ card readers (`card_index`, `stack_rows`, `default_overrides`, `key_pins`,
 The **cover** of a workflow is its card at stack position 0 (the manual
 stack it came from, or the ordered `auto:` stack), else the one with most
 variants, then the key. A card's workflow is its topology's manual placement,
-else `auto:<core_hash>` from the cache (any card of its topology), else
+else the current id from the cache and the card's families (any card of its
+topology), else
 `auto:<topology_hash>` for a file-only card (#1466, as `workflow_index`
 files it), else a core hash computed from a stored variant document (with a swapped loader put back, as
 `record_identity` reads it); a card with neither is logged and gets no
-successor. An automatic workflow that receives any owner state also gets its
+successor. A hub whose cache is still on core rule v1 gets the v1 id,
+`auto:<v1 core>`, which data step 8 moves on. An automatic workflow that receives any owner state also gets its
 `workflow_group` row (`kind = 'auto'`). A workflow whose conversion raises
 is rolled back to its own savepoint, logged with its cards and skipped,
 rather than rolling back the rest (its successor rows stay: its saved

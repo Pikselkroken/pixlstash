@@ -34,7 +34,7 @@ from pixlstash.hub.workflow_card_reads import (
     topologies_in_workflow,
     variants_in_workflow,
     workflow_index,
-    workflow_of_topology,
+    workflow_of_variant,
 )
 from pixlstash.services import workflow_card_service
 from pixlstash.services.workflow_run_service import saved_recipe_body
@@ -1320,35 +1320,37 @@ def _defaults(hub, monkeypatch, runs):
         "read_variant_picture_counts",
         lambda vault: {keys.structural_hash: 1 for keys in runs},
     )
-    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    workflow_id = workflow_of_variant(hub, runs[0].structural_hash)
     vault = SimpleNamespace(library_uuid="test-library")
     return workflow_id, workflow_card_service.workflow_defaults(hub, vault, workflow_id)
 
 
 def _four_runs(hub):
     return [
-        _file_run(hub, ckpt="a.safetensors", loras=("x.safetensors",), strength=0.8),
+        _file_run(
+            hub, ckpt="sdxl_a.safetensors", loras=("x.safetensors",), strength=0.8
+        ),
         _file_run(
             hub,
-            ckpt="a.safetensors",
+            ckpt="sdxl_a.safetensors",
             loras=("x.safetensors",),
             strength=0.8,
             face_detailer=True,
         ),
         _file_run(
             hub,
-            ckpt="b.safetensors",
+            ckpt="sdxl_b.safetensors",
             loras=("x.safetensors", "y.safetensors"),
             strength=0.6,
             steps=30,
         ),
-        _file_run(hub, ckpt="a.safetensors"),
+        _file_run(hub, ckpt="sdxl_a.safetensors"),
     ]
 
 
 def test_one_workflow_spans_the_topologies_its_core_hash_groups(hub):
     runs = _four_runs(hub)
-    ids = {workflow_of_topology(hub, keys.topology_hash) for keys in runs}
+    ids = {workflow_of_variant(hub, keys.structural_hash) for keys in runs}
     assert len(ids) == 1
     (workflow_id,) = ids
     assert workflow_id.startswith("auto:")
@@ -1368,7 +1370,7 @@ def test_one_workflow_spans_the_topologies_its_core_hash_groups(hub):
 
 def test_a_topology_placed_by_hand_leaves_its_automatic_workflow(hub):
     runs = _four_runs(hub)
-    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    workflow_id = workflow_of_variant(hub, runs[0].structural_hash)
     with hub.transaction() as conn:
         conn.execute(
             "INSERT INTO workflow_group (workflow_id, kind) VALUES ('0' || ?, 'manual')",
@@ -1379,7 +1381,7 @@ def test_a_topology_placed_by_hand_leaves_its_automatic_workflow(hub):
             "VALUES (?, ?)",
             (runs[3].topology_hash, "0" + "1" * 31),
         )
-    assert workflow_of_topology(hub, runs[3].topology_hash) == "0" + "1" * 31
+    assert workflow_of_variant(hub, runs[3].structural_hash) == "0" + "1" * 31
     assert runs[3].topology_hash not in topologies_in_workflow(hub, workflow_id)
     assert topologies_in_workflow(hub, "0" + "1" * 31) == [runs[3].topology_hash]
 
@@ -1391,10 +1393,13 @@ def test_the_default_recipe_is_the_modal_checkpoint_and_the_majority_loras(
     workflow_id, recipe = _defaults(hub, monkeypatch, runs)
 
     assert recipe.workflow_id == workflow_id
-    # a.safetensors in three runs of four, b in one.
+    # One family (SDXL), so one workflow: sdxl_a in three runs of four, sdxl_b in one.
     (checkpoint,) = [m for m in recipe.models if m.address.endswith("/ckpt_name")]
     assert checkpoint.address.startswith("core:")
-    assert (checkpoint.filename, checkpoint.kind) == ("a.safetensors", "checkpoint")
+    assert (checkpoint.filename, checkpoint.kind) == (
+        "sdxl_a.safetensors",
+        "checkpoint",
+    )
     # x in three runs of four (more than half) at its modal strength; y in one.
     assert [(lora.filename, lora.strength) for lora in recipe.loras] == [
         ("x.safetensors", 0.8)
@@ -1419,7 +1424,7 @@ def test_exactly_half_is_not_a_majority(hub, monkeypatch):
 
 def test_the_owner_s_edits_replace_what_they_name(hub, monkeypatch):
     runs = _four_runs(hub)
-    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    workflow_id = workflow_of_variant(hub, runs[0].structural_hash)
     _, computed = _defaults(hub, monkeypatch, runs)
     steps = next(d for d in computed.values if d.input_name == "steps")
     checkpoint = next(m for m in computed.models if m.address.endswith("/ckpt_name"))
@@ -1498,7 +1503,7 @@ def test_a_manual_workflow_is_its_own_record_and_never_an_automatic_ones(hub):
     500.
     """
     runs = _four_runs(hub)
-    auto = workflow_of_topology(hub, runs[0].topology_hash)
+    auto = workflow_of_variant(hub, runs[0].structural_hash)
     manual = create_manual_workflow(hub, "Mine", _graph(ckpt="a.safetensors"), "import")
     assert re.fullmatch(r"manual:[0-9a-f]{32}", manual)
 
@@ -1639,3 +1644,201 @@ def test_the_defaults_list_the_sampler_before_the_size_whatever_the_slot_labels(
         "height",
         "seed_extra",
     ]
+
+
+# ── core rule v2: base-model families never combine ────────────────────────
+
+
+def _workflow(hub, graph) -> str:
+    keys = record_api_graph(hub, graph, library_uuid="test-library")
+    return workflow_of_variant(hub, keys.structural_hash)
+
+
+def test_checkpoints_of_different_families_are_different_workflows(hub):
+    """Qwen and Flux Krea share a topology and never a workflow."""
+    krea = _workflow(hub, _graph(ckpt="flux1-krea-dev.safetensors"))
+    assert _workflow(hub, _graph(ckpt="qwen_image_fp8.safetensors")) != krea
+    # Two files of one family still combine.
+    assert _workflow(hub, _graph(ckpt="flux1-dev-fp8.safetensors")) == krea
+    rows = dict(
+        hub.fetchall("SELECT structural_hash, families FROM workflow_variant_family")
+    )
+    assert set(rows.values()) == {"flux1", "qwen"}
+
+
+def test_a_unet_only_graph_reads_its_family_from_the_unet(hub):
+    unet = {"1": _node("UNETLoader", unet_name="flux1-krea-dev.safetensors")}
+    other = {"1": _node("UNETLoader", unet_name="qwen_image_fp8.safetensors")}
+    assert _workflow(hub, _graph(extra=unet)) != _workflow(hub, _graph(extra=other))
+    assert set(
+        dict(
+            hub.fetchall(
+                "SELECT structural_hash, families FROM workflow_variant_family"
+            )
+        ).values()
+    ) == {"flux1", "qwen"}
+
+
+def test_a_base_model_of_no_known_family_is_a_family_of_its_own(hub, caplog):
+    caplog.set_level(logging.INFO)
+    first = _workflow(hub, _graph(ckpt="my-finetune.safetensors"))
+    assert _workflow(hub, _graph(ckpt="another-finetune.safetensors")) != first
+    assert _workflow(hub, _graph(ckpt="my-finetune.safetensors")) == first
+    families = {
+        r[0] for r in hub.fetchall("SELECT families FROM workflow_variant_family")
+    }
+    # Spelled by asset reference: no filename reaches a card row.
+    assert all(f.startswith("asset:") for f in families)
+    assert not any("finetune" in f for f in families)
+    assert "no known family" in caplog.text
+
+
+def _two_checkpoints(generate: str, refine: str) -> dict:
+    """Generate on one checkpoint, refine on a second."""
+    return _graph(
+        ckpt=generate,
+        extra={
+            "60": _node("CheckpointLoaderSimple", ckpt_name=refine),
+            "61": _node(
+                "KSampler", model=["60", 0], positive=["2", 0], latent_image=["5", 0]
+            ),
+            "6": _node("VAEDecode", samples=["61", 0], vae=["60", 2]),
+        },
+    )
+
+
+def test_a_workflow_of_two_checkpoints_combines_only_with_the_same_family_set(hub):
+    pair = _workflow(
+        hub, _two_checkpoints("sdxl_a.safetensors", "flux1-dev.safetensors")
+    )
+    same_set = _two_checkpoints("sdxl_b.safetensors", "flux1-krea-dev.safetensors")
+    assert _workflow(hub, same_set) == pair
+    other_set = _two_checkpoints("sdxl_a.safetensors", "sdxl_b.safetensors")
+    assert _workflow(hub, other_set) != pair
+
+
+def test_a_family_is_frozen_when_first_derived(hub):
+    """A later shelf identification never moves a variant to another workflow.
+
+    Re-deriving the card (a key bump, the backfill) keeps the family row; a
+    variant first seen after the shelf learned the file takes the shelf's.
+    """
+    keys = record_api_graph(
+        hub, _graph(ckpt="my-finetune.safetensors"), library_uuid="test-library"
+    )
+    before = workflow_of_variant(hub, keys.structural_hash)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance, "
+            "base_model, base_model_canonical) VALUES "
+            "('checkpoint', 'my-finetune.safetensors', ?, 'scanned', 'Qwen-Image', "
+            "'Qwen-Image')",
+            ("f" * 64,),
+        )
+        conn.execute(
+            "DELETE FROM workflow_variant WHERE structural_hash = ?",
+            (keys.structural_hash,),
+        )
+    record_identity(hub, keys.structural_hash)
+    assert workflow_of_variant(hub, keys.structural_hash) == before
+    later = _workflow(hub, _graph(ckpt="my-finetune.safetensors", preview=True))
+    assert later != before
+
+
+def _shelf_model(hub, filename: str, base_model: str, sha256: str) -> int:
+    with hub.transaction() as conn:
+        return conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance, base_model, "
+            "base_model_canonical) VALUES ('checkpoint', ?, ?, 'scanned', ?, ?)",
+            (filename, sha256, base_model, base_model),
+        ).lastrowid
+
+
+def _families(hub, keys) -> str:
+    return hub.fetchone(
+        "SELECT families FROM workflow_variant_family WHERE structural_hash = ?",
+        (keys.structural_hash,),
+    )[0]
+
+
+def test_a_shelf_loader_s_model_takes_its_family_from_the_shelf(hub):
+    """By shelf id (`checkpoint_id`) and by digest (`ckpt_sha256`): never "none"."""
+    qwen = _shelf_model(hub, "house-model-a.safetensors", "Qwen-Image", "a" * 64)
+    krea = _shelf_model(hub, "house-model-b.safetensors", "FLUX.1 dev", "b" * 64)
+    by_id = {
+        model: record_api_graph(
+            hub,
+            _graph(
+                extra={
+                    "1": _node("PixlStashCheckpointLoader", checkpoint_id=str(model))
+                }
+            ),
+            library_uuid="test-library",
+        )
+        for model in (qwen, krea)
+    }
+    assert [_families(hub, keys) for keys in by_id.values()] == ["qwen", "flux1"]
+    by_digest = record_api_graph(
+        hub,
+        _graph(extra={"1": _node("CheckpointLoaderSimple", ckpt_sha256="b" * 10)}),
+        library_uuid="test-library",
+    )
+    assert _families(hub, by_digest) == "flux1"
+    # A row the shelf has not identified reads its own text and filename.
+    with hub.transaction() as conn:
+        klein = conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance, base_model) "
+            "VALUES ('checkpoint', 'flux-2-klein-9b.safetensors', ?, 'scanned', "
+            "'House Klein')",
+            ("d" * 64,),
+        ).lastrowid
+    unidentified = record_api_graph(
+        hub,
+        _graph(
+            extra={"1": _node("PixlStashCheckpointLoader", checkpoint_id=str(klein))}
+        ),
+        library_uuid="test-library",
+    )
+    assert _families(hub, unidentified) == "flux2"
+
+
+def test_a_value_the_stored_document_lost_is_read_from_a_stored_run(hub):
+    """An older hash version nulled the shelf id; a stored run still has it."""
+    model = _shelf_model(hub, "house-model-c.safetensors", "Qwen-Image", "c" * 64)
+    keys = record_api_graph(
+        hub,
+        _graph(
+            extra={"1": _node("PixlStashCheckpointLoader", checkpoint_id=str(model))}
+        ),
+        library_uuid="test-library",
+    )
+    document = json.loads(
+        hub.fetchone(
+            "SELECT document FROM workflow_recipe_graph WHERE structural_hash = ?",
+            (keys.structural_hash,),
+        )[0]
+    )
+    document["1"]["inputs"]["checkpoint_id"] = None
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_graph SET document = ? WHERE structural_hash = ?",
+            (json.dumps(document), keys.structural_hash),
+        )
+        conn.execute(
+            "DELETE FROM workflow_variant_family WHERE structural_hash = ?",
+            (keys.structural_hash,),
+        )
+    record_identity(hub, keys.structural_hash)
+    assert _families(hub, keys) == "qwen"
+    # No value anywhere: its own family, never "no base model".
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_recipe_instance WHERE structural_hash = ?",
+            (keys.structural_hash,),
+        )
+        conn.execute(
+            "DELETE FROM workflow_variant_family WHERE structural_hash = ?",
+            (keys.structural_hash,),
+        )
+    record_identity(hub, keys.structural_hash)
+    assert _families(hub, keys) == workflow_cards.UNRESOLVED_FAMILY

@@ -649,7 +649,33 @@ def core_node_labels(document: dict, *, strip_loras: bool = True) -> dict[str, s
 
 
 def _core_graph(document: dict, strip_loras: bool) -> dict[str, ReducedNode]:
-    return _core_v2(_strip(_reduce(document), _core_strip(strip_loras)))[0]
+    return _core_pass(document, strip_loras)[0]
+
+
+def _core_pass(
+    document: dict, strip_loras: bool
+) -> tuple[dict[str, ReducedNode], Counter, bool]:
+    """:func:`_core_v2`'s answer for a whole document: the live core rule."""
+    nodes = _reduce(document)
+    strip = _core_strip(strip_loras)
+    if not has_sampler(nodes):
+        # Every stage is an optional addition to a graph that samples. With no
+        # sampler, a face detailer is what the graph does: kept as its core,
+        # an upscale after it still optional. With no detailer either, the
+        # upscale is the core. Kept, so the model chain is not made dead.
+        groups = node_groups(nodes)
+        detailer = any(
+            group == FACE_DETAILER
+            and not _LOADER_CLASS_RE.search(nodes[node_id].class_type)
+            for node_id, group in groups.items()
+        )
+        strip -= {FACE_DETAILER} if detailer else {UPSCALE, FACE_DETAILER}
+    return _core_v2(_strip(nodes, strip))
+
+
+def has_sampler(nodes: dict[str, ReducedNode]) -> bool:
+    """Whether a reduced graph has a sampler-class node of its own."""
+    return any(_SAMPLER_CLASS_RE.search(n.class_type) for n in nodes.values())
 
 
 def _core_strip(strip_loras: bool) -> set[str]:
@@ -662,8 +688,10 @@ def _core_v2(
     """Core rule v2's second pass over an already v1-stripped graph.
 
     ``(core graph, pruned classes, whether the prune was refused)``. Applied to
-    the v1 core and never to the document, so two graphs with one v1 core have
-    one v2 core (the many-to-one the upgrade relies on, data step 8). In order:
+    the stripped graph and never to the document, so two graphs with one v1
+    core have one v2 core unless the graph has no sampler (whose stages
+    :func:`_core_graph` keeps): workflows only split by that and by base-model
+    family (data step 8). In order:
 
     * string primitives (plumbing), picture filters (``POST_PROCESS``) and
       seed variance are stripped, edges re-wired through them;

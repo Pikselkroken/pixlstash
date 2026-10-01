@@ -1,7 +1,7 @@
 """The Workflows view: the grid of workflows, one opened, and what the owner writes.
 
 **One entry per workflow** (#1623). A workflow is a group of topologies:
-``auto:<core hash>`` for the automatic group, or a uuid hex for one the owner
+``auto:<core and families digest>`` for the automatic group, or a uuid hex for one the owner
 merged or split (``hub/workflow_card_reads.workflow_index``). Its variants are
 every recipe filed under those topologies, and checkpoint, LoRAs and values are
 its *recipe* - a default recipe read off its best pictures, which the owner can
@@ -66,7 +66,7 @@ from pixlstash.hub.workflow_card_reads import (
     manual_workflow_ids,
     model_fix_labels,
     model_fixes,
-    workflow_of_topology,
+    workflow_of_variant,
 )
 from pixlstash.hub.workflow_card_writes import (
     record_loader_swaps,
@@ -555,7 +555,7 @@ class WorkflowCard(BaseModel):
     """
 
     id: str = Field(
-        description="The workflow: `auto:<core hash>`, or `manual:<uuid hex>`."
+        description="The workflow: `auto:<core and families digest>`, or `manual:<uuid hex>`."
     )
     name: str | None = Field(
         None,
@@ -1159,7 +1159,7 @@ class RunRequest(BaseModel):
         default_factory=list, max_length=MAX_RUN_PICTURES
     )
     saved_recipe_id: int | None = None
-    # A workflow (#1622): `auto:<core hash>` or an owner's group. It runs its
+    # A workflow (#1622): `auto:<core and families digest>` or an owner's group. It runs its
     # base topology's graph with its DEFAULT RECIPE applied by the server, and
     # this body's values, models, LoRAs and skipped stages over that.
     workflow_id: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
@@ -2508,8 +2508,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "Invalid workflow_id: expected auto:<core hash> or "
-                    "manual:<uuid hex>."
+                    "Invalid workflow_id: expected auto:<64 hex> or manual:<uuid hex>."
                 ),
             )
         return workflow_id
@@ -4713,7 +4712,11 @@ def create_router(server) -> APIRouter:
                 continue
             if group.workflow_id is None:
                 # A picture-sourced group runs the workflow its variant is in.
-                group.workflow_id = workflow_of_topology(hub, card.topology_hash)
+                group.workflow_id = (
+                    workflow_of_variant(hub, card.variants[0])
+                    if card.variants
+                    else None
+                )
             source, failure = _source_graph_for(card, object_info)
             if source is None:
                 group.reasons = [

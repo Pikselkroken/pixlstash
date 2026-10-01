@@ -25,7 +25,7 @@ from pixlstash.hub.workflow_card_reads import (
     card_index,
     workflow_id_successors,
     workflow_index,
-    workflow_of_topology,
+    workflow_of_variant,
 )
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 from pixlstash.hub.workflow_group_convert import (
@@ -106,8 +106,8 @@ class SavedRecipeConvertTask(BaseTask):
                 if was is not None
                 else successor["workflow_id"]
                 if successor is not None
-                else workflow_of_topology(hub, card.topology_hash)
-                if card is not None
+                else workflow_of_variant(hub, card.variants[0])
+                if card is not None and card.variants
                 else None
             )
             workflow_id = successors.get(workflow_id, workflow_id)
@@ -125,7 +125,12 @@ class SavedRecipeConvertTask(BaseTask):
             core_map = _core_successor_map(hub, was, card)
             if core_map is not None:
                 # Retired by core rule v2 (data step 8): the overrides and
-                # models are already workflow addresses, on the v1 core.
+                # models are already workflow addresses, on the v1 core. A
+                # split workflow's recipe follows its own card's variant.
+                if card is not None and card.variants:
+                    workflow_id = (
+                        workflow_of_variant(hub, card.variants[0]) or workflow_id
+                    )
                 stage_slots = (
                     core_label_maps(found[1])[1]
                     if found and card.topology_hash == bases.get(workflow_id)

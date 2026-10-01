@@ -1299,12 +1299,27 @@ CREATE TABLE IF NOT EXISTS workflow_id_successor (
 # `{v1 core label: v2 core label or null}` (null: v2 took the node off the
 # core). Read by the vault's saved-recipe conversion, which rewrites a
 # recipe's `core:` addresses through it.
+#
+# One row per (topology, new workflow): workflows of different base-model
+# families never combine, so one topology's v1 workflow can become several.
 _V2_WORKFLOW_CORE_SUCCESSOR = """
 CREATE TABLE IF NOT EXISTS workflow_core_successor (
-    topology_hash    TEXT PRIMARY KEY,
+    topology_hash    TEXT NOT NULL,
     old_workflow_id  TEXT NOT NULL,
     new_workflow_id  TEXT NOT NULL,
-    label_map        TEXT NOT NULL
+    label_map        TEXT NOT NULL,
+    PRIMARY KEY (topology_hash, new_workflow_id)
+)
+"""
+
+# The base-model families a variant loads (`workflow_cards.variant_families`),
+# sorted and comma-joined, frozen on first derivation as a slot mark is: part
+# of its automatic workflow's id, so a later shelf scan must not move it. A
+# family nothing identifies is spelled by its asset reference, never a name.
+_V2_WORKFLOW_VARIANT_FAMILY = """
+CREATE TABLE IF NOT EXISTS workflow_variant_family (
+    structural_hash  TEXT PRIMARY KEY,
+    families         TEXT NOT NULL
 )
 """
 
@@ -1381,6 +1396,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_DOCUMENT,
     _V2_WORKFLOW_ID_SUCCESSOR,
     _V2_WORKFLOW_CORE_SUCCESSOR,
+    _V2_WORKFLOW_VARIANT_FAMILY,
     *_V2_WORKFLOW_INDEXES,
 )
 

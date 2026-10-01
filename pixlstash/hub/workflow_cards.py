@@ -35,14 +35,26 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_hash import asset_reference
+from pixlstash.services.model_shelf_service import (
+    base_model_family,
+    models_for_digest,
+    recipe_asset_index,
+)
+from pixlstash.services.workflow_hash import (
+    _digest,
+    asset_reference,
+    is_link,
+    normalized_filename,
+)
 from pixlstash.services.workflow_identity import (
+    ASSET_REFERENCE_PREFIX,
     CORE_VERSION,
     RECIPE,
     STRUCTURAL,
     WORKFLOW_KEY_VERSION,
     LoaderSwap,
     Slot,
+    base_model_kind,
     core_hash,
     guess_mark,
     lora_assets,
@@ -52,7 +64,9 @@ from pixlstash.services.workflow_identity import (
     workflow_key,
     workflow_type,
 )
+from pixlstash.utils.known_base_models import family_of, identify
 from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.workflow_ids import AUTO_PREFIX
 
 logger = get_logger(__name__)
 
@@ -90,6 +104,7 @@ _VARIANT_JOIN = (
     "LEFT JOIN workflow_topology_core c "
     "ON c.topology_hash = COALESCE(v.topology_hash, r.topology_hash) "
     "AND c.core_version = ? "
+    "LEFT JOIN workflow_variant_family vf ON vf.structural_hash = r.structural_hash "
 )
 _VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION)
 # `c.specials IS NULL` is the third case and it is not redundant: a topology
@@ -101,8 +116,168 @@ _VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION)
 # (see WorkflowCardBackfillFinder): work exists exactly while a stored document
 # has no current row, so nothing has to remember to run anything.
 _VARIANT_PENDING = (
-    "(v.structural_hash IS NULL OR c.topology_hash IS NULL OR c.specials IS NULL)"
+    "(v.structural_hash IS NULL OR c.topology_hash IS NULL OR c.specials IS NULL "
+    "OR vf.structural_hash IS NULL)"
 )
+
+
+def auto_workflow_id(core: str, families: str) -> str:
+    """An automatic workflow's id: its core and its base-model families.
+
+    Workflows whose base models are of different families never combine, so
+    the family set (:func:`variant_families`) is part of the id.
+    """
+    return f"{AUTO_PREFIX}{_digest([core, families])}"
+
+
+# A base model named by digest rather than by file: A1111's `Model hash`
+# (`a1111_recipe._CHECKPOINT_HASHES`). Beside `base_model_kind`'s widgets,
+# which include the shelf loader's `checkpoint_id`.
+_BASE_DIGEST_WIDGETS = frozenset({"ckpt_sha256", "unet_sha256"})
+
+# What a base-model loader names when neither its document nor any stored run
+# says which model: a family of its own, never "no base model".
+UNRESOLVED_FAMILY = "unresolved"
+
+
+def variant_families(hub, structural_hash: str, document: dict) -> str:
+    """The base-model families a variant loads, sorted and comma-joined.
+
+    One family per base-model loader node (``base_model_kind``'s widgets and
+    a base model's digest widget), from whichever of its values resolves: the
+    file the stored reference names (``workflow_recipe_asset``, by digest,
+    never by slot order), a shelf id or a digest through the shelf. The
+    shelf's family where its candidate rows agree on one
+    (``base_model_family``), else the family the filename identifies. A
+    document that nulled the value (an older hash version) is read through a
+    stored run of the variant. A model of no known family is a family of its
+    own, spelled by its asset reference so no filename lands here; a loader
+    naming no model at all is :data:`UNRESOLVED_FAMILY`. Both split rather
+    than combine, logged. "No base model" (the empty string) is a graph with
+    no base-model loader. Frozen by the caller on first sight, as a slot mark
+    is; :func:`~pixlstash.hub.workflow_group_convert.reidentify_families`
+    moves an unknown one once the shelf learns it.
+    """
+    names = {
+        asset_reference(name): name
+        for (name,) in hub.fetchall(
+            "SELECT normalized_filename FROM workflow_recipe_asset "
+            "WHERE structural_hash = ?",
+            (structural_hash,),
+        )
+    }
+    shelf: list = []
+    runs: Optional[list[dict]] = None
+    families = set()
+    for node_id, node in sorted(document.items()):
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        widgets = [
+            widget
+            for widget in (inputs or {})
+            if base_model_kind(widget) or widget in _BASE_DIGEST_WIDGETS
+        ]
+        if not widgets:
+            continue
+        stored = [inputs[w] for w in widgets if isinstance(inputs[w], str)]
+        if not stored:
+            if runs is None:
+                runs = _stored_runs(hub, structural_hash)
+            for run in runs:
+                for widget in widgets:
+                    value = ((run.get(node_id) or {}).get("inputs") or {}).get(widget)
+                    if value in (None, "") or is_link(value):
+                        continue
+                    # A run stores a reference as the document does, or (an
+                    # older one) the raw value.
+                    value = str(value)
+                    if not value.startswith(ASSET_REFERENCE_PREFIX):
+                        names[asset_reference(normalized_filename(value))] = (
+                            normalized_filename(value)
+                        )
+                        value = asset_reference(normalized_filename(value))
+                    stored.append(value)
+        candidates = [names[ref] for ref in stored if ref in names]
+        family = next(
+            filter(None, (_family_of_name(hub, name, shelf) for name in candidates)),
+            None,
+        )
+        if family is None:
+            family = stored[0] if stored else UNRESOLVED_FAMILY
+            logger.info(
+                "Variant %s: the base model of node %s has no known family (%s), "
+                "so its workflow combines with no other until the shelf learns it.",
+                structural_hash,
+                node_id,
+                family,
+            )
+        families.add(family)
+    return ",".join(sorted(families))
+
+
+def shelf_family_signature(hub) -> str:
+    """A digest of the shelf's base models: what a family pass can learn from.
+
+    A variant derived after the shelf last changed already has every family
+    the shelf knows, so only a change here can identify an unknown one.
+    """
+    return _digest(
+        [
+            list(row)
+            for row in hub.fetchall(
+                "SELECT id, base_model, base_model_canonical FROM model ORDER BY id"
+            )
+        ]
+    )
+
+
+def _stored_runs(hub, structural_hash: str) -> list[dict]:
+    """The variant's stored runs (``workflow_recipe_instance``), unreadable ones left out."""
+    runs = []
+    for (raw,) in hub.fetchall(
+        "SELECT document FROM workflow_recipe_instance WHERE structural_hash = ? "
+        "ORDER BY library_uuid, instance_hash",
+        (structural_hash,),
+    ):
+        try:
+            run = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "A stored run of %s will not parse: %s", structural_hash, exc
+            )
+            continue
+        if isinstance(run, dict):
+            runs.append(run)
+    return runs
+
+
+def _family_of_name(hub, name: str, shelf: list) -> Optional[str]:
+    """The family of one base-model value: filename, shelf id or digest.
+
+    *shelf* caches the shelf index across calls (empty until first needed).
+    """
+    if not shelf:
+        by_name, by_digest, _, _ = recipe_asset_index(hub)
+        shelf.extend((by_name, by_digest, sorted(by_digest)))
+    ids = set(shelf[0].get(name, ())) | models_for_digest(name, shelf[1], shelf[2])
+    if name.isdigit():
+        ids.add(int(name))
+    rows = hub.fetchall(
+        "SELECT base_model, base_model_canonical, filename FROM model "
+        f"WHERE id IN ({','.join(str(int(i)) for i in ids) or 'NULL'})"
+    )
+    for found in (
+        {base_model_family(row) for row in rows},
+        # A row the shelf has not identified: its own base-model text and
+        # filename, as the shelf's identification would read them.
+        {
+            family_of(identify([row["base_model"]], [row["filename"]])[0])
+            for row in rows
+        },
+    ):
+        found.discard(None)
+        if len(found) == 1:
+            return found.pop()
+    return family_of(identify([], [name])[0])
 
 
 def topology_only_key(topology_hash: str) -> str:
@@ -134,7 +309,7 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     row = hub.fetchone(
         "SELECT r.topology_hash AS topology_hash, g.document AS document, "
         "v.workflow_key AS workflow_key, c.topology_hash AS core_cached, "
-        "c.specials AS core_specials "
+        "c.specials AS core_specials, vf.families AS families "
         f"{_VARIANT_JOIN} WHERE r.structural_hash = ?",
         (*_VARIANT_VERSIONS, structural_hash),
     )
@@ -153,7 +328,12 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     # two words. That row is UPDATEd in place instead.
     core_missing = row["core_cached"] is None
     specials_missing = row["core_specials"] is None
-    if row["workflow_key"] is not None and not core_missing and not specials_missing:
+    if (
+        row["workflow_key"] is not None
+        and not core_missing
+        and not specials_missing
+        and row["families"] is not None
+    ):
         return row["workflow_key"]
     try:
         document = json.loads(row["document"])
@@ -177,6 +357,11 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
         # the original's, which a card made from a workflow file alone lacks.
         core_missing = True
     document_slots = slots(document)
+    families = (
+        variant_families(hub, structural_hash, document)
+        if row["families"] is None
+        else None
+    )
     # Computed before the transaction opens: this is the CPU of the pass (a
     # Weisfeiler-Leman refinement and a strip), and the write lock is shared
     # with a second process. Only when the cache is missing or stale, because a
@@ -221,6 +406,13 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
             "VALUES (?, ?, ?, ?)",
             (structural_hash, topology_hash, key, WORKFLOW_KEY_VERSION),
         )
+        if families is not None:
+            # IGNORE is the freeze: what the shelf says later never moves it.
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_variant_family "
+                "(structural_hash, families) VALUES (?, ?)",
+                (structural_hash, families),
+            )
     return key
 
 

@@ -433,6 +433,86 @@ def test_a_dead_node_that_is_not_the_last_sampler_is_pruned():
     assert "97" not in core_node_labels(_doc(_graph(extra=extra)))
 
 
+def _detailer_only(flux: bool) -> dict:
+    """A FaceDetailer over an input picture, with no sampler of its own."""
+    g = {
+        "1": _node("UNETLoader", unet_name="model.safetensors"),
+        "3": _node("VAELoader", vae_name="ae.safetensors"),
+        "6": _node("LoadImage", image="in.png"),
+        "30": _node("UltralyticsDetectorProvider", model_name="face_yolo.pt"),
+        "7": _node("SaveImage", images=["31", 0], filename_prefix="out"),
+    }
+    model = ["1", 0]
+    if flux:
+        g["2"] = _node("DualCLIPLoader", clip_name1="t5.safetensors", type="flux")
+        g["4"] = _node("CLIPTextEncode", text="a face", clip=["2", 0])
+        g["5"] = _node("FluxGuidance", conditioning=["4", 0], guidance=3.5)
+        positive = ["5", 0]
+    else:
+        g["2"] = _node("CLIPLoader", clip_name="qwen_3_4b.safetensors", type="lumina2")
+        g["4"] = _node("CLIPTextEncode", text="a face", clip=["2", 0])
+        g["8"] = _node("ModelSamplingAuraFlow", model=["1", 0], shift=3)
+        model, positive = ["8", 0], ["4", 0]
+    g["31"] = _node(
+        "FaceDetailer",
+        image=["6", 0],
+        model=model,
+        clip=["2", 0],
+        vae=["3", 0],
+        positive=positive,
+        negative=["4", 0],
+        bbox_detector=["30", 0],
+    )
+    return g
+
+
+UPSCALE_ONLY = {
+    "6": _node("LoadImage", image="in.png"),
+    "40": _node("UpscaleModelLoader", model_name="4x.pth"),
+    "41": _node("ImageUpscaleWithModel", upscale_model=["40", 0], image=["6", 0]),
+    "7": _node("SaveImage", images=["41", 0], filename_prefix="out"),
+}
+
+
+def _upscaled(graph: dict) -> dict:
+    """*graph* with a model upscale between its last stage and the save."""
+    graph = dict(graph)
+    graph["40"] = _node("UpscaleModelLoader", model_name="4x.pth")
+    graph["41"] = _node(
+        "ImageUpscaleWithModel", upscale_model=["40", 0], image=["31", 0]
+    )
+    graph["7"] = _node("SaveImage", images=["41", 0], filename_prefix="out")
+    return graph
+
+
+def test_a_graph_with_no_sampler_keeps_what_it_does_as_its_core():
+    """With a sampler every stage is optional; without one, a detailer is the
+    core and an upscale after it optional; with neither, the upscale is.
+
+    Stripped as optional additions, all three were a picture loader feeding a
+    save, and their model chains dead nodes to prune.
+    """
+    cores = {
+        core_hash(_doc(graph))
+        for graph in (UPSCALE_ONLY, _detailer_only(True), _detailer_only(False))
+    }
+    assert len(cores) == 3
+    flux_labels = core_node_labels(_doc(_detailer_only(True)))
+    assert {"1", "2", "5", "31"} <= set(flux_labels), "the model chain was pruned"
+    upscale_labels = core_node_labels(_doc(UPSCALE_ONLY))
+    assert {"40", "41"} <= set(upscale_labels), "the upscale-only core is empty"
+    # A detailer-only graph with an upscale after it is the same workflow.
+    upscaled = _upscaled(_detailer_only(True))
+    assert core_hash(_doc(upscaled)) == core_hash(_doc(_detailer_only(True)))
+    assert not {"40", "41"} & set(core_node_labels(_doc(upscaled)))
+    assert core_hash(_doc(upscaled)) != core_hash(_doc(UPSCALE_ONLY))
+    # With a sampler, the detailer and the upscale are both optional stages.
+    assert core_hash(_doc(_graph(face_detailer=True))) == core_hash(_doc(_graph()))
+    assert core_hash(_doc(_graph(face_detailer=True, upscale=True))) == core_hash(
+        _doc(_graph())
+    )
+
+
 def test_seed_variance_is_a_stage_the_card_has_and_chips():
     member = _doc(_graph(extra=CORE_V2_TWINS["seed-variance"][1]))
     assert special_groups(member) == (SEED_VARIANCE,)

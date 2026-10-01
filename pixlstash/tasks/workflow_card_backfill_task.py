@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import record_identity
+from pixlstash.hub.workflow_group_convert import reidentify_families
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
@@ -77,3 +78,24 @@ class WorkflowCardBackfillTask(BaseTask):
             else:
                 identified += 1
         return {"identified": identified, "deferred": deferred}
+
+
+class FamilyReidentifyTask(BaseTask):
+    """Move variants whose unknown base model the shelf has since identified."""
+
+    def __init__(self, hub: HubDatabase):
+        """Initialise the task.
+
+        Args:
+            hub: The hub database holding the workflow tables.
+        """
+        super().__init__(task_type="FamilyReidentifyTask", params={})
+        self._hub = hub
+
+    @property
+    def priority(self) -> TaskPriority:
+        """LOW, as the backfill it follows."""
+        return TaskPriority.LOW
+
+    def _run_task(self):
+        return {"moved": reidentify_families(self._hub)}

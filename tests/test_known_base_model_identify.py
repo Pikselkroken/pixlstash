@@ -168,3 +168,17 @@ def test_a_person_outranks_every_scan():
     ]
     ranks = [rank(source) for source in order]
     assert ranks == sorted(ranks, reverse=True) and len(set(ranks)) == len(ranks), ranks
+
+
+def test_z_image_community_abbreviations_are_whole_tokens_only():
+    """`zib` / `zit` name Z-Image Base / Turbo fine-tunes; never inside a word."""
+    assert identify([], ["clementine-zib-3c_000002750.safetensors"]) == (
+        "Z-Image Base",
+        SOURCE_FILENAME,
+    )
+    assert identify([], ["clementine-zit.safetensors"]) == (
+        "Z-Image Turbo",
+        SOURCE_FILENAME,
+    )
+    assert identify([], ["zitherplayer.safetensors"]) == (None, None)
+    assert identify([], ["unzipped.safetensors"]) == (None, None)
