@@ -562,7 +562,7 @@ def rewritten_address(
     return None
 
 
-def rederive_cores(conn: sqlite3.Connection) -> int:
+def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> int:
     """Put every topology on core rule v2 and its workflow's state with it.
 
     Hub data step 8. For each ``workflow_topology_core`` row at the v1 stamp,
@@ -585,29 +585,48 @@ def rederive_cores(conn: sqlite3.Connection) -> int:
 
     **Idempotent**: a second run finds no v1 row and writes nothing. A
     topology whose documents will not reduce keeps its v1 row, logged; the
-    card backfill re-derives it, without a successor row.
+    card backfill re-derives it, without a successor row. *include_uncached*
+    also moves the cards with no cache row at all (the upgrade's run); a later
+    run, for v1 rows an older build wrote into a shared hub, leaves those to
+    the backfill. Every ``auto:`` id the owner's rows still name that is
+    neither live nor retired is logged afterwards (:func:`stranded_workflow_ids`).
 
     Returns:
         How many topologies moved to v2.
     """
     hub = _Reader(conn)
-    rows = conn.execute(
-        "SELECT topology_hash, core_hash FROM workflow_topology_core "
-        "WHERE core_version = ? ORDER BY topology_hash",
-        (_CORE_RULE_V1,),
-    ).fetchall()
-    if not rows:
-        return 0
+    v1_rows = dict(
+        conn.execute(
+            "SELECT topology_hash, core_hash FROM workflow_topology_core "
+            "WHERE core_version = ?",
+            (_CORE_RULE_V1,),
+        ).fetchall()
+    )
     cards_of: dict[str, list[Card]] = {}
     for card in card_index(hub):
         if not card.manual:
             cards_of.setdefault(card.topology_hash, []).append(card)
+    todo = set(v1_rows)
+    if include_uncached:
+        # A card with no cache row at all: steps 5 and 6 filed its state on the
+        # v1 core computed from its document (`_auto_id`), so it moves too.
+        todo |= set(cards_of) - {
+            row[0]
+            for row in conn.execute(
+                "SELECT topology_hash FROM workflow_topology_core "
+                "WHERE core_version = ?",
+                (CORE_RULE_VERSION,),
+            )
+        }
+    if not todo:
+        return 0
     heirs_of: dict[str, Counter] = {}  # old id -> {new id: variants}
     topologies_of: dict[str, set[str]] = {}
     new_of_card: dict[str, str] = {}
     stage_slots_of: dict[str, dict[str, str]] = {}
     labels_of: dict[str, dict[str, Optional[str]]] = {}
-    for topology_hash, old_core in rows:
+    shelf: list = []  # one shelf index for the whole step
+    for topology_hash in sorted(todo):
         cards = cards_of.get(topology_hash, [])
         documents = {c.workflow_key: card_document(hub, c) for c in cards}
         found = next(filter(None, documents.values()), None)
@@ -615,13 +634,14 @@ def rederive_cores(conn: sqlite3.Connection) -> int:
             logger.warning(
                 "Topology %s has no stored graph that reduces, so it stays on "
                 "core rule v1 until the card backfill re-derives it; owner state "
-                "on auto:%s is not carried from it.",
+                "on its v1 workflow is not carried from it.",
                 topology_hash,
-                old_core,
             )
             continue
         document = found[1]
-        if graph_key(_core_strip_v1(document)) != old_core:
+        derived = graph_key(_core_strip_v1(document))
+        old_core = v1_rows.get(topology_hash, derived)
+        if derived != old_core:
             logger.warning(
                 "Topology %s: its stored v1 core %s is not what v1 derives now; "
                 "its label map may name the wrong nodes.",
@@ -637,11 +657,29 @@ def rederive_cores(conn: sqlite3.Connection) -> int:
         heirs = heirs_of.setdefault(old_id, Counter())
         for card in cards:
             # One family set per card: its key holds its base models. A card
-            # whose every variant fails to reduce reads as its topology's.
-            structural_hash, card_doc = documents[card.workflow_key] or found
+            # none of whose own variants reduces gets none, never another
+            # card's: it stays pending for the backfill, and its state goes
+            # with its workflow's primary.
+            if documents[card.workflow_key] is None:
+                logger.warning(
+                    "Card %s: no variant of it reduces, so it gets no base-model "
+                    "family and stays pending.",
+                    card.workflow_key,
+                )
+                continue
+            structural_hash, card_doc = documents[card.workflow_key]
             families = card.families.get(structural_hash)
             if families is None:
-                families = variant_families(hub, structural_hash, card_doc)
+                families = variant_families(hub, structural_hash, card_doc, shelf)
+            if UNRESOLVED_FAMILY in families.split(","):
+                logger.warning(
+                    "Card %s (variants %s): a base-model loader names no model in "
+                    "its document or any stored run; it shares the '%s' family "
+                    "with every other such card of its core.",
+                    card.workflow_key,
+                    card.variants,
+                    UNRESOLVED_FAMILY,
+                )
             conn.executemany(
                 "INSERT OR IGNORE INTO workflow_variant_family "
                 "(structural_hash, families) VALUES (?, ?)",
@@ -684,6 +722,22 @@ def rederive_cores(conn: sqlite3.Connection) -> int:
             labels,
             stage_slots_of[base] if base in topologies_of[old_id] else {},
         )
+    stranded = stranded_workflow_ids(
+        hub,
+        {w.workflow_id for w in workflow_index(hub)},
+        {
+            row[0]
+            for row in conn.execute("SELECT workflow_id FROM workflow_id_successor")
+        },
+    )
+    if stranded:
+        logger.warning(
+            "Core rule v2: %d automatic workflow id(s) the owner's rows name are "
+            "neither live nor retired, so what is stored on them shows nowhere: "
+            "%s",
+            len(stranded),
+            stranded,
+        )
     moved = sum(len(t) for t in topologies_of.values())
     logger.info(
         "Core rule v2: %d topologies re-derived; %d workflows become %d.",
@@ -712,6 +766,12 @@ def _retire_workflow(
     recorded so the vault's conversion re-files a recipe naming it.
     """
     primary = min(heirs, key=lambda h: (-heirs[h], h))
+    # An heir is live by definition: never on the retired list it may have
+    # been on before (a family the shelf once knew, then forgot).
+    conn.executemany(
+        "DELETE FROM workflow_id_successor WHERE workflow_id = ?",
+        [(heir,) for heir in heirs],
+    )
     _rewrite_addresses(conn, old_id, labels, stage_slots)
     had_row = conn.execute(
         "DELETE FROM workflow_group WHERE workflow_id = ?", (old_id,)
@@ -746,6 +806,40 @@ def _retire_workflow(
     )
 
 
+# Where an owner's rows name a workflow id: (table, column).
+_WORKFLOW_ID_COLUMNS = (
+    ("workflow_group", "workflow_id"),
+    ("workflow_group_attr", "workflow_id"),
+    ("workflow_group_default", "workflow_id"),
+    ("workflow_group_pins", "workflow_id"),
+    ("workflow_group_picture_input", "workflow_id"),
+    ("workflow_key_successor", "workflow_id"),
+    ("workflow_id_successor", "successor_id"),
+    ("workflow_document", "from_workflow_id"),
+)
+
+
+def stranded_workflow_ids(hub, live: set[str], retired: set[str]) -> list[str]:
+    """Every ``auto:`` id the owner's rows name that is neither *live* nor *retired*.
+
+    What would show nowhere: state on a workflow no variant is in and no
+    successor row leads away from. A table this hub does not have yet is
+    skipped (the dry run reads a hub before the upgrade).
+    """
+    tables = {row[0] for row in hub.fetchall("SELECT name FROM sqlite_master")}
+    named = set()
+    for table, column in _WORKFLOW_ID_COLUMNS:
+        if table in tables:
+            named.update(
+                row[0]
+                for row in hub.fetchall(
+                    f"SELECT DISTINCT {column} FROM {table} WHERE {column} LIKE ?",
+                    (f"{AUTO_STACK_PREFIX}%",),
+                )
+            )
+    return sorted(named - live - retired)
+
+
 def reidentify_families(hub) -> int:
     """Move variants whose unknown base model the shelf has since identified.
 
@@ -772,6 +866,7 @@ def reidentify_families(hub) -> int:
         (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION),
     )
     moves = []
+    shelf: list = []
     for row in rows:
         card = Card(
             workflow_key=row["workflow_key"],
@@ -781,7 +876,7 @@ def reidentify_families(hub) -> int:
         found = card_document(hub, card)
         if found is None:
             continue
-        families = variant_families(hub, row["structural_hash"], found[1])
+        families = variant_families(hub, row["structural_hash"], found[1], shelf)
         if _unknowns(families) < _unknowns(row["families"]):
             moves.append((row, families))
     if not moves:

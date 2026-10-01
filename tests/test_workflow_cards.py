@@ -1842,3 +1842,24 @@ def test_a_value_the_stored_document_lost_is_read_from_a_stored_run(hub):
         )
     record_identity(hub, keys.structural_hash)
     assert _families(hub, keys) == workflow_cards.UNRESOLVED_FAMILY
+
+
+def test_a_retired_workflow_a_new_variant_lands_in_is_live_again(hub):
+    """A family the shelf learned, then forgot (a checkpoint renamed back):
+    the id comes back to life and leaves the retired list."""
+    first = _workflow(hub, _graph(ckpt="house-finetune.safetensors"))
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_id_successor (workflow_id, successor_id) "
+            "VALUES (?, ?)",
+            (first, "auto:" + "f" * 64),
+        )
+    assert (
+        _workflow(hub, _graph(ckpt="house-finetune.safetensors", preview=True)) == first
+    )
+    assert (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_id_successor WHERE workflow_id = ?", (first,)
+        )
+        is None
+    )

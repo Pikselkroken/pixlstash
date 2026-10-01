@@ -14,21 +14,21 @@
         <!-- The name is the way THERE. Saying a recipe keeps this look and
              then leaving the reader to go and find it was the dead end #1480
              names; this is the same gesture Open makes for the workflow, one
-             query further, and it stays plain text when there is no topology
+             query further, and it stays plain text when there is no workflow
              to send anybody to - exactly where Open is not offered either. -->
         <div v-if="matched" class="recipe-match">
           <v-icon size="16">mdi-bookmark</v-icon>
           <span
             >Matches your saved recipe
             <component
-              :is="recipe.topologyHash ? 'button' : 'b'"
+              :is="workflowQuery ? 'button' : 'b'"
               class="recipe-match-name"
-              :class="{ 'recipe-match-name--linked': !!recipe.topologyHash }"
-              :type="recipe.topologyHash ? 'button' : undefined"
-              @click="recipe.topologyHash ? openSavedRecipes() : undefined"
+              :class="{ 'recipe-match-name--linked': !!workflowQuery }"
+              :type="workflowQuery ? 'button' : undefined"
+              @click="workflowQuery ? openSavedRecipes() : undefined"
             >
               <Tooltip
-                v-if="recipe.topologyHash"
+                v-if="workflowQuery"
                 text="Show this recipe in the Workflows view"
                 activator="parent"
                 :describe="false"
@@ -40,7 +40,7 @@
         <div class="section-label section-label--on-dark recipe-sec">
           <span>Workflow</span>
           <button
-            v-if="recipe.topologyHash"
+            v-if="workflowQuery"
             class="recipe-sec-act"
             type="button"
             @click="openWorkflowsView"
@@ -894,18 +894,26 @@ function openModelOnShelf(modelId) {
   router.push({ name: "models", query: { model: String(modelId) } });
 }
 
+/**
+ * Where this picture's workflow opens: by its id, else (a picture the hub has
+ * not keyed yet) by its topology. One topology can sit in several workflows
+ * (one per base-model family), so the topology is only the fallback.
+ */
+const workflowQuery = computed(() => {
+  if (props.recipe?.workflowId) return { workflow: props.recipe.workflowId };
+  if (props.recipe?.topologyHash) return { topology: props.recipe.topologyHash };
+  return null;
+});
+
 function openWorkflowsView() {
-  router.push({
-    name: "workflows",
-    query: { topology: props.recipe.topologyHash },
-  });
+  router.push({ name: "workflows", query: { ...workflowQuery.value } });
 }
 
 /** The same place, with the rail open on the recipes rather than the card. */
 function openSavedRecipes() {
   router.push({
     name: "workflows",
-    query: { topology: props.recipe.topologyHash, tab: "recipes" },
+    query: { ...workflowQuery.value, tab: "recipes" },
   });
 }
 

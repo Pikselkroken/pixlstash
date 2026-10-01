@@ -122,7 +122,7 @@ class SavedRecipeConvertTask(BaseTask):
                 continue
             found = card_document(hub, card) if card is not None else None
             overrides = _overrides(recipe_id, raw_overrides)
-            core_map = _core_successor_map(hub, was, card)
+            core_map = _core_successor_map(hub, was)
             if core_map is not None:
                 # Retired by core rule v2 (data step 8): the overrides and
                 # models are already workflow addresses, on the v1 core. A
@@ -131,6 +131,17 @@ class SavedRecipeConvertTask(BaseTask):
                     workflow_id = (
                         workflow_of_variant(hub, card.variants[0]) or workflow_id
                     )
+                if workflow_id == was:
+                    # Its card's workflow is the very id the list calls
+                    # retired (a family the shelf learned, then forgot):
+                    # nothing to move, and moving it would repeat every sweep.
+                    logger.info(
+                        "Saved recipe %s: workflow %s is live again; left as it is.",
+                        recipe_id,
+                        was,
+                    )
+                    deferred.append(recipe_id)
+                    continue
                 stage_slots = (
                     core_label_maps(found[1])[1]
                     if found and card.topology_hash == bases.get(workflow_id)
@@ -222,24 +233,24 @@ class SavedRecipeConvertTask(BaseTask):
         return {"converted": len(updates), "deferred": deferred}
 
 
-def _core_successor_map(hub, was, card):
+def _core_successor_map(hub, was):
     """``{v1 core label: v2 label or None}`` when *was* was retired by data step 8.
 
-    The card's own topology's row first, then every other topology of the
-    retired workflow, so a recipe on a card the hub no longer holds still maps.
+    Every topology of the retired workflow shares its v1 core, so their maps
+    agree; read in topology order, so a recipe on a card the hub no longer
+    holds still maps.
     """
     if was is None:
         return None
     rows = hub.fetchall(
-        "SELECT topology_hash, label_map FROM workflow_core_successor "
+        "SELECT label_map FROM workflow_core_successor "
         "WHERE old_workflow_id = ? ORDER BY topology_hash",
         (was,),
     )
     if not rows:
         return None
-    own = card.topology_hash if card is not None else None
     labels: dict = {}
-    for row in sorted(rows, key=lambda r: r["topology_hash"] != own):
+    for row in rows:
         for old, new in json.loads(row["label_map"]).items():
             labels.setdefault(old, new)
     return labels

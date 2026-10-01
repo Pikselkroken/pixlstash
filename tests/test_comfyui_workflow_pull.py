@@ -24,6 +24,7 @@ from pixlstash.hub.workflow_card_reads import card_index, manual_document
 from pixlstash.hub.workflow_group_writes import delete_manual_workflow
 from pixlstash.routes import comfyui as comfyui_module
 from pixlstash.server import Server
+from pixlstash.utils.workflow_ids import tagged_workflow_id, untagged
 from pixlstash.services import comfyui_userdata, workflow_inbox
 from pixlstash.services.comfyui_userdata import (
     MultiUserComfyUIError,
@@ -356,8 +357,12 @@ def test_a_pull_stores_every_workflow_and_a_second_matches_them(comfy, folders, 
     first = _pull(hub, announced)
     assert (first["pulled"], first["matched"], first["failed"]) == (2, 0, 0)
     assert _stored(hub) == ["Plain", "Sub - Needs pack"]
-    # Stored as ComfyUI holds it, as a manual workflow: no file is written.
-    assert manual_document(hub, _manual_id(hub, "Plain")) == PLAIN
+    # Stored as ComfyUI holds it plus its own tag, as a manual workflow: no
+    # file is written.
+    plain = _manual_id(hub, "Plain")
+    stored = manual_document(hub, plain)
+    assert tagged_workflow_id(stored) == plain
+    assert untagged(stored) == PLAIN
     assert list(user.iterdir()) == []
     assert announced == first["workflow_ids"]
     assert len(set(announced)) == 2
