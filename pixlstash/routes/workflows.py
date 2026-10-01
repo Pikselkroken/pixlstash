@@ -2135,6 +2135,7 @@ _TYPE_LABELS = {
     "inpaint": "Inpaint",
     "outpaint": "Outpaint",
     "upscale": "Upscale",
+    "video": "Video",
 }
 
 
@@ -2199,7 +2200,7 @@ def _display_name(card, models=()) -> str:
     is what a person calls the workflow, the verb only tells two of them apart
     once the model already has, and the post-processing is what separates two
     cards that agree on both. A graph loading two base models names both,
-    ``Wan 2.2 High + Wan 2.2 Low: Text to Image`` (:func:`_base_model_slots`). The card contract, this fallback chain included,
+    ``Wan 2.2 High + Wan 2.2 Low: Video`` (:func:`_base_model_slots`). The card contract, this fallback chain included,
     is ``docs/integration_architecture.md`` §2.
 
     **The model is named as the shelf names it, not as the file is spelled.**

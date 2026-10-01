@@ -1899,6 +1899,11 @@ def test_a_card_is_never_nameless(workflow_env):
         workflows_routes._display_name(unet_only, wan)
         == "Wan 2.2 High + wan2.2_t2v_low_noise_14B: Text to Image"
     )
+    # A graph that saves a video is a Video workflow, and says so.
+    assert (
+        workflows_routes._display_name(_nameless("video"), wan)
+        == "Wan 2.2 High + wan2.2_t2v_low_noise_14B: Video"
+    )
 
     # **The shelf's name for the model beats the file's spelling** (#1454).
     # `realvisxl` is a filename stem; `Krea 2` is what the trainer wrote in the

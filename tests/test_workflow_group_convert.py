@@ -13,6 +13,7 @@ import sqlite3
 import tempfile
 import time
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -903,6 +904,42 @@ def test_step_8_moves_every_v1_workflow_and_its_state_onto_v2(step_8, caplog):
     with w.hub.transaction() as conn:
         assert rederive_cores(conn) == 0
     assert _step_8_rows(w.hub) == rows
+
+
+def test_step_8_re_derives_the_type_so_a_wan_video_reads_video(tmp_path):
+    """No data step of its own for the ``video`` type: step 8 re-derives it.
+
+    ``rederive_cores`` rewrites every v1 ``workflow_topology_core`` row
+    through ``_cache_topology``, which calls ``workflow_type`` afresh, so a
+    Wan 2.2 text-to-video graph a v1 hub cached as ``txt2img`` (its
+    ``EmptyHunyuanLatentVideo`` met the ``^Empty.*Latent`` rule) is ``video``
+    under the current ``CORE_RULE_VERSION`` as soon as the hub opens.
+    """
+    graph = json.loads(
+        (
+            Path(__file__).parent
+            / "comfyui_workflows/paired/multigpu/api/wan2_2 distorch2 double_unet no_cpu.json"
+        ).read_text("utf-8")
+    )
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        wan = record_api_graph(hub, graph, library_uuid=LIB)
+        _back_to_v1(hub, wan)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE workflow_topology_core SET workflow_type = 'txt2img' "
+                "WHERE topology_hash = ?",
+                (wan.topology_hash,),
+            )
+            assert rederive_cores(conn) == 1
+        row = hub.fetchone(
+            "SELECT core_version, workflow_type FROM workflow_topology_core "
+            "WHERE topology_hash = ?",
+            (wan.topology_hash,),
+        )
+        assert tuple(row) == (workflow_cards.CORE_RULE_VERSION, "video")
+    finally:
+        hub.close()
 
 
 def test_the_hub_open_runs_step_8_once(step_8):

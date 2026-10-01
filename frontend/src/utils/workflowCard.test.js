@@ -384,6 +384,7 @@ describe("the type chip", () => {
     expect(short({ type: "inpaint", type_label: "Inpaint" })).toContain(
       "Inpaint",
     );
+    expect(short({ type: "video", type_label: "Video" })).toContain("Video");
     // The accessible name reads the served label in full.
     expect(cardAccessibleName(card)).toContain("Text to Image");
     expect(cardAccessibleName(card)).not.toContain("T2I");

@@ -164,6 +164,11 @@ _FACE_DETAILER_CLASS_RE = re.compile(
     r"|BboxDetector|SegmDetector|ONNXDetector)"
 )
 _SAMPLER_CLASS_RE = re.compile(r"Sampler")
+# A node that writes frames out as a video or an animation: ComfyUI's
+# SaveVideo / SaveWEBM / SaveAnimatedWEBP|PNG, and VideoHelperSuite's combine.
+# The OUTPUT decides, not the latent: Wan 2.2 text to image starts from
+# `EmptyHunyuanLatentVideo` and saves one picture, and is text to image.
+_VIDEO_OUTPUT_RE = re.compile(r"^Save(Video|WEBM|Animated)|VideoCombine")
 # Noise on the conditioning before sampling: a variation knob, not a different
 # workflow, so it is a stage (on or off in the default recipe), not core.
 _SEED_VARIANCE_CLASSES = frozenset({"SeedVarianceEnhancer"})
@@ -813,14 +818,18 @@ def _strip(
 def workflow_type(document: dict) -> Optional[str]:
     """What kind of picture the workflow makes, from its node classes.
 
-    One of ``outpaint``, ``inpaint``, ``upscale``, ``img2img``, ``txt2img``,
-    tested in that order because an outpaint graph also encodes for inpaint
-    and an img2img graph may still carry an empty latent. ``None`` when none
-    applies. A picture source is whatever ``workflow_io`` calls a picture
-    loader, the PixlStash one included.
+    One of ``video``, ``outpaint``, ``inpaint``, ``upscale``, ``img2img``,
+    ``txt2img``, tested in that order: a graph that saves a video is a video
+    workflow whatever it starts from (an empty video latent would otherwise
+    read as ``txt2img``, a start frame as ``img2img``), an outpaint graph also
+    encodes for inpaint, and an img2img graph may still carry an empty latent.
+    ``None`` when none applies. A picture source is whatever ``workflow_io``
+    calls a picture loader, the PixlStash one included.
     """
     nodes = _reduce(document)
     classes = {node.class_type for node in nodes.values()}
+    if any(_VIDEO_OUTPUT_RE.search(cls) for cls in classes):
+        return "video"
     if "ImagePadForOutpaint" in classes:
         return "outpaint"
     if classes & {
