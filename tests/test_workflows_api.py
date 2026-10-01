@@ -1886,6 +1886,20 @@ def test_a_card_is_never_nameless(workflow_env):
         workflows_routes._display_name(unet_only, both) == "juggernautXL: Text to Image"
     )
 
+    # **Two loaders of one kind are both the model** (a Wan 2.2 high + low
+    # noise pair), shelf title first, and two loaders of ONE file read once.
+    # Never which is high and which low: the set is right, the slot order not.
+    wan = [
+        SlotModel(name="wan2.2_t2v_high_noise_14B", kind="unet", title="Wan 2.2 High"),
+        SlotModel(name="umt5_xxl", kind="clip"),
+        SlotModel(name="wan2.2_t2v_low_noise_14B", kind="unet"),
+        SlotModel(name="wan2.2_t2v_high_noise_14B", kind="unet", title="Wan 2.2 High"),
+    ]
+    assert (
+        workflows_routes._display_name(unet_only, wan)
+        == "Wan 2.2 High + wan2.2_t2v_low_noise_14B: Text to Image"
+    )
+
     # **The shelf's name for the model beats the file's spelling** (#1454).
     # `realvisxl` is a filename stem; `Krea 2` is what the trainer wrote in the
     # header or what the owner typed, and it is in the same database as the

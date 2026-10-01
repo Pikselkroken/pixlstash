@@ -2152,13 +2152,20 @@ _SPECIAL_LABELS = {
 }
 
 
-def _base_model_slot(models):
-    """The slot a card is named after, or ``None`` if it loads no base model."""
+def _base_model_slots(models) -> list:
+    """The slots a card is named after: every named one of its first base kind.
+
+    A Wan 2.2 graph loads two UNETs (high and low noise) and is both of them,
+    so every one is named, never the first. Which loader holds which file is
+    not claimed: ``asset_names`` pairs same-widget slots with filenames in
+    sorted order, so the SET is right and the order is not. Empty if the
+    graph loads no base model.
+    """
     for kind in BASE_MODEL_KINDS:
-        for slot in models:
-            if slot.kind == kind and slot.name:
-                return slot
-    return None
+        found = [slot for slot in models if slot.kind == kind and slot.name]
+        if found:
+            return found
+    return []
 
 
 def _specials_suffix(card) -> str:
@@ -2191,7 +2198,8 @@ def _display_name(card, models=()) -> str:
     does extra** - ``Krea 2: Text to Image + FaceDetailer`` - because the model
     is what a person calls the workflow, the verb only tells two of them apart
     once the model already has, and the post-processing is what separates two
-    cards that agree on both. The card contract, this fallback chain included,
+    cards that agree on both. A graph loading two base models names both,
+    ``Wan 2.2 High + Wan 2.2 Low: Text to Image`` (:func:`_base_model_slots`). The card contract, this fallback chain included,
     is ``docs/integration_architecture.md`` §2.
 
     **The model is named as the shelf names it, not as the file is spelled.**
@@ -2208,11 +2216,15 @@ def _display_name(card, models=()) -> str:
     if card.file_name:
         stem = card.file_name.rsplit("/", 1)[-1]
         return stem[: -len(".json")] if stem.lower().endswith(".json") else stem
-    slot = _base_model_slot(models)
     # The shelf's name first. Stripped, because `display_name` is free text off
     # a safetensors header or a text field, and a name of three spaces renders
-    # the row blank exactly as the empty stem below would.
-    stem = ((slot.title or "").strip() or _model_stem(slot.name)) if slot else ""
+    # the row blank exactly as the empty stem below would. Two loaders of one
+    # file read once (`dict.fromkeys` keeps the order and drops repeats).
+    stems = dict.fromkeys(
+        (slot.title or "").strip() or _model_stem(slot.name)
+        for slot in _base_model_slots(models)
+    )
+    stem = " + ".join(filter(None, stems))
     label = _TYPE_LABELS.get(card.workflow_type)
     if not stem:
         # No base model: every name forgotten, a graph that loads none, or a
@@ -2608,7 +2620,7 @@ def create_router(server) -> APIRouter:
         pins = group_pins(hub, workflow_id)
         graph_models = (
             None
-            if _base_model_slot(figure.models) or figure.base is None
+            if _base_model_slots(figure.models) or figure.base is None
             else _graph_base_models(figure.base)
         )
         return WorkflowCardDetail(

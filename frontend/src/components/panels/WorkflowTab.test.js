@@ -1023,6 +1023,24 @@ describe("the default recipe (#1623)", () => {
     expect(text).not.toContain("realvisXL_v5");
   });
 
+  it("names both checkpoints of a two-loader workflow, once each", async () => {
+    // A Wan 2.2 high + low pair, the low file on two loaders: never one of
+    // them, and never which loader is high.
+    const shown = detail();
+    shown.card.default_recipe.models = [
+      ["core:a/unet_name", "wan2.2_high.safetensors"],
+      ["core:b/unet_name", "wan2.2_low.safetensors"],
+      ["core:c/unet_name", "wan2.2_low.safetensors"],
+    ].map(([address, filename]) => ({ address, kind: "checkpoint", filename }));
+    getWorkflowCard.mockResolvedValue(shown);
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find("[data-testid='wftab-row-checkpoint']");
+    expect(row.find(".wftab-label").text()).toBe("Checkpoints");
+    expect(row.find(".wftab-value").text()).toBe(
+      "wan2.2_high.safetensors + wan2.2_low.safetensors",
+    );
+  });
+
   it("lists the default recipe's values as the defaults, not the card's", async () => {
     const shown = detail({ card: { defaults: [SAMPLER] } });
     shown.card.default_recipe.values = [STEPS];

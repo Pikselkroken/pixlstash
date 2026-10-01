@@ -307,12 +307,30 @@ const BASE_MODEL_KINDS = ["checkpoint", "unet"];
  * so the row can say so rather than name an accessory.
  */
 export function checkpointModel(card) {
+  return baseModels(card)[0] ?? null;
+}
+
+/**
+ * Every base model the card is about: each named slot of its first base kind,
+ * one per name. A Wan 2.2 graph loads a high- and a low-noise UNET and is both,
+ * so a surface that names "the" model lists these, never only the first. Which
+ * loader holds which file is not claimed: the server pairs same-widget slots
+ * with filenames in sorted order, so the set is right and the order is not.
+ * Mirrors `_base_model_slots` in `routes/workflows.py`, which names the card.
+ */
+export function baseModels(card) {
   const models = card.models ?? [];
   for (const kind of BASE_MODEL_KINDS) {
-    const match = models.find((model) => model.kind === kind && model.name);
-    if (match) return match;
+    const named = models.filter((model) => model.kind === kind && model.name);
+    if (named.length) {
+      const seen = new Set();
+      return named.filter((model) => {
+        const name = modelDisplayName(model);
+        return !seen.has(name) && seen.add(name);
+      });
+    }
   }
-  return null;
+  return [];
 }
 
 /**
@@ -390,7 +408,8 @@ export function ratingLabel(rating) {
  */
 export function cardAccessibleName(card) {
   const count = card.picture_count ?? 0;
-  const checkpoint = checkpointModel(card);
+  const bases = baseModels(card);
+  const checkpoint = bases[0];
   const loras = (card.loras ?? []).map((lora) => {
     const quant = quantBadge(lora.quant);
     return `${modelDisplayName(lora)}, ${quant ? `${quant.title}, ` : ""}workflow LoRA`;
@@ -405,11 +424,14 @@ export function cardAccessibleName(card) {
     checkpoint
       ? [
           checkpoint.kind,
-          modelDisplayName(checkpoint),
-          quantBadge(checkpoint.quant)?.title,
-        ]
-          .filter(Boolean)
-          .join(" ")
+          bases
+            .map((model) =>
+              [modelDisplayName(model), quantBadge(model.quant)?.title]
+                .filter(Boolean)
+                .join(" "),
+            )
+            .join(" and "),
+        ].join(" ")
       : null,
     // "not read" rather than "no LoRAs" where nothing was read at all: such a
     // card is silent about its models, not certain it has none.

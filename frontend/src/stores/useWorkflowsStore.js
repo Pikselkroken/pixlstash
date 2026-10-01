@@ -12,7 +12,7 @@ import {
   WORKFLOW_SOURCE_LABELS,
   workflowFilterChips,
 } from "../utils/filterChips";
-import { checkpointModel } from "../utils/workflowCard";
+import { baseModels } from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
 
@@ -156,7 +156,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       if (view.type != null && card.type !== view.type) return false;
       if (
         view.checkpoint != null &&
-        checkpointModel(card)?.name !== view.checkpoint
+        !baseModels(card).some((model) => model.name === view.checkpoint)
       ) {
         return false;
       }
@@ -216,7 +216,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * read as "this library has none", which is the opposite of true.
    *
    * The Checkpoint list names each workflow's base card's checkpoint, which is
-   * what `checkpointModel` reads off the card.
+   * what `baseModels` reads off the card: each of them.
    */
   const filterOptions = computed(() => {
     const types = new Map();
@@ -234,8 +234,8 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         seen.count += 1;
         types.set(card.type, seen);
       }
-      const name = checkpointModel(card)?.name;
-      if (name) {
+      // Every base model: a Wan 2.2 workflow is listed under both its UNETs.
+      for (const { name } of baseModels(card)) {
         checkpoints.set(name, (checkpoints.get(name) ?? 0) + 1);
       }
       if (card.imported) imported += 1;

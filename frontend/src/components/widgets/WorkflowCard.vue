@@ -191,7 +191,7 @@ import { workflowCoverUrl } from "../../api/workflows";
 import { quantBadge } from "../../utils/modelShelf";
 import {
   cardAccessibleName,
-  checkpointModel,
+  baseModels,
   coverCellStyle,
   factChips,
   checkpointMissing,
@@ -318,18 +318,20 @@ function markLabel(model) {
   return quant ? `${name} · ${quant.label}` : name;
 }
 /**
- * The base model, as row 3 prints it. Only `checkpointModel`'s pick, never an
- * accessory slot: a VAE or a text encoder is named in ⓘ and nowhere on the
- * card, as it always was.
+ * The base model, as row 3 prints it: every one `baseModels` names (a Wan 2.2
+ * high + low pair reads `A + B`), never an accessory slot: a VAE or a text
+ * encoder is named in ⓘ and nowhere on the card, as it always was. The
+ * precision is printed once when they share it; each tooltip says its own.
  */
 const base = computed(() => {
-  const model = checkpointModel(props.card);
-  if (!model) return null;
+  const models = baseModels(props.card);
+  if (!models.length) return null;
+  const quants = new Set(models.map((model) => quantBadge(model.quant)?.label));
   return {
-    model,
-    text: modelDisplayName(model),
-    label: markLabel(model),
-    quant: quantBadge(model.quant)?.label ?? null,
+    models,
+    text: models.map(modelDisplayName).join(" + "),
+    label: models.map(markLabel).join(" + "),
+    quant: quants.size === 1 ? ([...quants][0] ?? null) : null,
   };
 });
 /**
@@ -343,16 +345,16 @@ const allMarks = computed(() => {
     row: markRow(lora),
   }));
   if (!base.value) return loras;
-  const model = base.value.model;
+  const models = base.value.models;
   return [
-    {
-      key: "base",
-      label: base.value.label,
+    ...models.map((model, i) => ({
+      key: `base-${i}`,
+      label: markLabel(model),
       row: markRow(model),
-      // The hairline says "the base model ends here"; nothing to separate on
+      // The hairline says "the base models end here"; nothing to separate on
       // a card with no LoRAs.
-      ruled: loras.length > 0,
-    },
+      ruled: i === models.length - 1 && loras.length > 0,
+    })),
     ...loras,
   ];
 });

@@ -9,6 +9,7 @@ import {
   factChips,
   fitChipCount,
   ratingLabel,
+  baseModels,
   checkpointModel,
   checkpointUnread,
   lorasUnread,
@@ -275,6 +276,43 @@ describe("checkpointModel", () => {
       ],
     };
     expect(checkpointModel(forgotten).name).toBe("flux1-dev.safetensors");
+  });
+});
+
+// A Wan 2.2 graph loads a high- and a low-noise UNET and is both of them.
+describe("baseModels", () => {
+  const wan = {
+    name: "Wan",
+    models: [
+      { name: "wan2.2_high", title: "Wan 2.2 High", kind: "unet", quant: "fp8_e4m3" },
+      { name: "umt5_xxl", kind: "clip" },
+      { name: "wan2.2_low", kind: "unet" },
+      { name: "wan2.2_high", title: "Wan 2.2 High", kind: "unet", quant: "fp8_e4m3" },
+    ],
+  };
+
+  it("lists every base model once, never only the first", () => {
+    expect(baseModels(wan).map(modelDisplayName)).toEqual([
+      "Wan 2.2 High",
+      "wan2.2_low",
+    ]);
+    expect(checkpointModel(wan).name).toBe("wan2.2_high");
+  });
+
+  it("keeps to the preferred kind, as the card's name does", () => {
+    const both = {
+      models: [
+        { name: "flux1-dev", kind: "unet" },
+        { name: "juggernautXL", kind: "checkpoint" },
+      ],
+    };
+    expect(baseModels(both).map((m) => m.name)).toEqual(["juggernautXL"]);
+  });
+
+  it("speaks both in the accessible name, with no high or low claimed", () => {
+    expect(cardAccessibleName(wan)).toContain(
+      "unet Wan 2.2 High FP8 E4M3 and wan2.2_low",
+    );
   });
 });
 
