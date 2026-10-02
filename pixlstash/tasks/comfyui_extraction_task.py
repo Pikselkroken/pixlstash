@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Generation, Picture
+from pixlstash.hub.workflow_card_reads import is_manual_workflow
 from pixlstash.hub.workflows import record_api_graph, record_reduction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.a1111_recipe import reduce_a1111
@@ -17,9 +18,12 @@ from pixlstash.utils.comfyui_utilities import (
     extract_comfy_workflow_info,
     extract_generation_info,
     find_comfy_api_prompt,
+    find_comfy_workflow,
+    is_api_format,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
+from pixlstash.utils.workflow_ids import tagged_workflow_id
 
 
 logger = get_logger(__name__)
@@ -120,7 +124,8 @@ class ComfyUIExtractionTask(BaseTask):
         # or been stripped replaces real stored models and LoRAs with the "[]"
         # sentinel. The extraction happened once; the revisit only adds keys.
         updates: list[tuple] = []
-        # (picture_id, topology_hash, structural_hash, instance_hash, seed). Absent from
+        # (picture_id, topology_hash, structural_hash, instance_hash, seed,
+        # run_workflow_id). Absent from
         # this list when it was NOT scanned for a workflow -- no hub attached, or
         # a hub write that failed -- so `workflow_hash_version IS NULL` keeps
         # meaning "never scanned" and the finder hands it back later.
@@ -225,7 +230,7 @@ class ComfyUIExtractionTask(BaseTask):
                     # Destroyed while its file was being read. Its delete queued
                     # the cascade already, but that may have run before the
                     # instance row below was written, so it is queued again.
-                    if scanned_workflows.get(pid, (None,) * 4)[2]:
+                    if scanned_workflows.get(pid, (None,) * 5)[2]:
                         vanished.append(scanned_workflows[pid][2])
                     continue
                 if write_comfyui:
@@ -240,7 +245,13 @@ class ComfyUIExtractionTask(BaseTask):
                     if clear_embedding:
                         db_pic.text_embedding = None
                 if pid in scanned_workflows:
-                    topology, structural, instance, seed = scanned_workflows[pid]
+                    topology, structural, instance, seed, run_workflow_id = (
+                        scanned_workflows[pid]
+                    )
+                    # The manual workflow its ComfyUI run was tagged with. A
+                    # value already there is PixlStash's own run's, and stays.
+                    if run_workflow_id and db_pic.run_workflow_id is None:
+                        db_pic.run_workflow_id = run_workflow_id
                     # Never replaced by NULL: nothing found this time is a fact
                     # about the read, and the keys came from a read that worked.
                     # Written for 0118's same-version revisit. A HASH_VERSION
@@ -291,8 +302,10 @@ class ComfyUIExtractionTask(BaseTask):
         be filed" and "this picture has no workflow" must never be the same row.
 
         Appends ``(picture_id, topology_hash, structural_hash, instance_hash,
-        seed)`` when the picture was scanned, and appends nothing when it was
-        not. The seed is text; see :class:`~pixlstash.db_models.Generation`.
+        seed, run_workflow_id)`` when the picture was scanned, and appends
+        nothing when it was not. The seed is text; see
+        :class:`~pixlstash.db_models.Generation`. ``run_workflow_id`` is
+        :meth:`_run_workflow_tag`'s.
 
         Args:
             workflow_updates: Accumulator for the batch's persist step.
@@ -305,13 +318,14 @@ class ComfyUIExtractionTask(BaseTask):
         if self._hub is None:
             return
         try:
+            run_tag = self._run_workflow_tag(picture_id, embedded_metadata)
             api_graph = find_comfy_api_prompt(embedded_metadata)
             a1111 = None if api_graph else reduce_a1111(embedded_metadata)
             if api_graph is None and a1111 is None:
                 # No executable `prompt` chunk and no A1111 generation data: an
                 # imported JPEG or a file whose metadata was stripped. Normal,
                 # not a failure, and roughly a third of a real library.
-                workflow_updates.append((picture_id, None, None, None, None))
+                workflow_updates.append((picture_id, None, None, None, None, run_tag))
                 return
             if a1111 is not None:
                 keys = record_reduction(
@@ -334,7 +348,7 @@ class ComfyUIExtractionTask(BaseTask):
                 picture_id,
                 exc,
             )
-            workflow_updates.append((picture_id, None, None, None, None))
+            workflow_updates.append((picture_id, None, None, None, None, run_tag))
             return
         except Exception as exc:
             self._stand_down(picture_id, exc)
@@ -355,8 +369,35 @@ class ComfyUIExtractionTask(BaseTask):
                 keys.structural_hash,
                 keys.instance_hash,
                 seed,
+                run_tag,
             )
         )
+
+    def _run_workflow_tag(self, picture_id: int, embedded_metadata) -> str | None:
+        """The manual workflow the picture's ComfyUI run was tagged with, if held.
+
+        Read off the editor workflow ComfyUI embeds (its ``workflow`` chunk),
+        where every document PixlStash stores as a manual workflow carries its
+        id. A tag this hub holds no workflow for (deleted since, or another
+        machine's) files nothing: the picture falls to its automatic workflow.
+        """
+        if not embedded_metadata:
+            return None
+        workflow = find_comfy_workflow(embedded_metadata)
+        if workflow is None or is_api_format(workflow):
+            return None
+        tag = tagged_workflow_id(workflow)
+        if tag is None:
+            return None
+        if not is_manual_workflow(self._hub, tag):
+            logger.info(
+                "Picture %s was made by manual workflow %s, which this hub does "
+                "not hold, so it is filed by its graph instead.",
+                picture_id,
+                tag,
+            )
+            return None
+        return tag
 
     def _stand_down(self, picture_id: int, exc: Exception) -> None:
         """Give up on the workflow scan for the rest of this process.

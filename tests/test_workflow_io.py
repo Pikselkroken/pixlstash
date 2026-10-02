@@ -47,6 +47,7 @@ from pixlstash.utils.comfyui_utilities import (
     is_comfy_workflow,
     loaded_model_widgets,
 )
+from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY, stamp_workflow_id
 
 BUILT_IN = (
     pathlib.Path(comfyui_module.__file__).parent.parent
@@ -723,7 +724,10 @@ def _manual(hub) -> dict:
 
 
 def test_an_import_is_a_manual_workflow_holding_the_document_unchanged(import_route):
-    """No file, no filing: the document is the workflow, and joins no card."""
+    """No file, no filing: the document is the workflow, and joins no card.
+
+    Unchanged but for the tag an editor document carries its own id in.
+    """
     call, user_dir, _built_in, hub = import_route
     graph = _t2i_graph()
     graph["7"] = _node("LoadImage", image="a.png")
@@ -735,7 +739,11 @@ def test_an_import_is_a_manual_workflow_holding_the_document_unchanged(import_ro
     assert manual_document(hub, body["workflow_id"]) == graph
     assert _manual(hub)[body["workflow_id"]] == ("flow", "import", graph)
     ui = _load(UI_FIXTURES / "image_z_image.json")
-    assert manual_document(hub, call(name="ui", workflow=ui)["workflow_id"]) == ui
+    # An editor document gains one key: its id, replacing a tag it came with.
+    ui["extra"][WORKFLOW_TAG_KEY] = "manual:" + "f" * 32
+    ui_id = call(name="ui", workflow=ui)["workflow_id"]
+    assert manual_document(hub, ui_id) == stamp_workflow_id(ui, ui_id)
+    assert manual_document(hub, ui_id)["extra"][WORKFLOW_TAG_KEY] == ui_id
     assert not user_dir.exists()
     for table in ("workflow_file", "workflow_variant", "workflow_recipe"):
         assert hub.fetchone(f"SELECT COUNT(*) FROM {table}")[0] == 0, table
@@ -760,7 +768,9 @@ def test_an_unfileable_or_too_deep_import_is_handled(import_route):
         "definitions": ["x"],
     }
     body = call(name="odd", workflow=odd)
-    assert manual_document(hub, body["workflow_id"]) == odd
+    assert manual_document(hub, body["workflow_id"]) == stamp_workflow_id(
+        odd, body["workflow_id"]
+    )
 
     deep = current = {}
     for _ in range(5000):

@@ -29,6 +29,7 @@ from pixlstash.services.comfyui_recipe_service import INPUT_IMAGE_FIELDS
 from pixlstash.services.comfyui_service import PIXLSTASH_PICTURE_LOADER
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.utils.workflow_ids import untagged
 
 logger = get_logger(__name__)
 
@@ -465,11 +466,13 @@ def canonical(document: dict) -> str:
     """The document as one string, ignoring PixlStash's own keys.
 
     Two files are copies of one workflow when these match, whatever their
-    whitespace or key order.
+    whitespace or key order. The manual-workflow tag in ``extra`` is one of
+    those keys: every stored document carries its own, so a copy handed back
+    untagged, or tagged by another workflow, still matches.
     """
     body = {
         key: value
-        for key, value in document.items()
+        for key, value in untagged(document).items()
         if not str(key).startswith("pixlstash_")
     }
     return json.dumps(body, sort_keys=True, separators=(",", ":"))

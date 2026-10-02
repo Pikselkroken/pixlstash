@@ -216,6 +216,16 @@ def manual_workflow_ids(hub: HubDatabase) -> list[str]:
     ]
 
 
+def is_manual_workflow(hub: HubDatabase, workflow_id: str) -> bool:
+    """Whether this hub holds the manual workflow *workflow_id*."""
+    return (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_document WHERE workflow_id = ?", (workflow_id,)
+        )
+        is not None
+    )
+
+
 def manual_documents_holding(hub: HubDatabase, canonical: str) -> list[str]:
     """Every manual workflow whose document is *canonical*, sorted by id.
 

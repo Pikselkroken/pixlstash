@@ -7,3 +7,5 @@
   files you imported before are carried over as manual workflows.
 - A saved recipe can be turned into a workflow of its own with Extract
   workflow, even when the workflow it was saved on is gone.
+- A picture made in ComfyUI from a manual workflow counts on that workflow
+  too, however it reaches your library.

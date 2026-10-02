@@ -118,6 +118,7 @@ from pixlstash.services.workflow_export import (
     scrub_for_export,
 )
 from pixlstash.services.workflow_inputs import card_input_modes
+from pixlstash.utils.workflow_ids import stamp_workflow_id
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.services import (
@@ -2614,15 +2615,12 @@ def test_a_workflow_not_stored_yet_is_stored_by_its_conversion(
     assert (r.json()["name"], r.json()["matched"]) == ("editor", False)
     hub = workflow_env.server.hub
     assert _api_document(hub, r.json()["workflow_id"]) == _EDITOR_CONVERTED
-    assert (
-        json.loads(
-            hub.fetchone(
-                "SELECT document FROM workflow_document WHERE workflow_id = ?",
-                (r.json()["workflow_id"],),
-            )[0]
-        )
-        == other
-    )
+    assert json.loads(
+        hub.fetchone(
+            "SELECT document FROM workflow_document WHERE workflow_id = ?",
+            (r.json()["workflow_id"],),
+        )[0]
+    ) == stamp_workflow_id(other, r.json()["workflow_id"])
 
 
 @pytest.mark.parametrize(
@@ -4633,6 +4631,20 @@ def test_the_picture_grid_narrows_a_workflow_to_one_lora(workflow_env):
         owner.get(f"{API}/workflows/{FLIP_WF}/lora-summary").json()["workflow_id"]
         == FLIP_WF
     )
+
+    # A manual workflow's own runs narrow the same way, and only its own.
+    manual = create_manual_workflow(
+        server.hub, "Mine", {"1": {"class_type": "SaveImage", "inputs": {}}}, "import"
+    )
+    mine_a, mine_b = min(a_ids), min(b_ids)
+    try:
+        comfyui_service._set_run_workflow_id(server, manual, [mine_a, mine_b])
+        assert ids(workflow=manual) == {mine_a, mine_b}
+        assert ids(workflow=manual, workflow_lora=_ADA) == {mine_a}
+        assert ids(workflow=manual, workflow_lora=_BO) == {mine_b}
+        assert ids(workflow=FLIP_WF, workflow_lora=_ADA) == a_ids - {mine_a}
+    finally:
+        delete_manual_workflow(server.hub, manual)
 
 
 def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(

@@ -39,6 +39,10 @@ from sqlmodel import delete as sqlmodel_delete, select
 
 from pixlstash.db_models import DeletedFileLog, Generation, Picture
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.workflow_group_writes import (
+    create_manual_workflow,
+    delete_manual_workflow,
+)
 from pixlstash.hub.workflows import (
     PictureGhost,
     assets_for_recipe,
@@ -49,6 +53,7 @@ from pixlstash.hub.workflows import (
     record_picture_ghosts,
     recipes_for_topology,
 )
+from pixlstash.services.workflow_bindings import canonical
 from pixlstash.services.a1111_recipe import (
     _parse_fields,
     parse_infotext,
@@ -110,6 +115,7 @@ from pixlstash.tasks.missing_comfyui_extraction_finder import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import KNOWN_BASE_MODELS
+from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY
 
 LIBRARY = "11111111-2222-4333-8444-555555555555"
 OTHER_LIBRARY = "99999999-8888-4777-8666-555555555555"
@@ -1486,14 +1492,17 @@ def _wipe_pictures(session):
     session.commit()
 
 
-def write_png(directory, name, api=None, parameters=None):
+def write_png(directory, name, api=None, parameters=None, workflow=None):
     """A real PNG, carrying an API graph in its ``prompt`` chunk when given one.
 
-    ``parameters`` is A1111 generation data, in the chunk A1111 writes it to.
+    ``parameters`` is A1111 generation data, in the chunk A1111 writes it to;
+    ``workflow`` the editor graph, in the chunk ComfyUI's SaveImage writes.
     """
     info = PngInfo()
     if api is not None:
         info.add_text("prompt", json.dumps(api))
+    if workflow is not None:
+        info.add_text("workflow", json.dumps(workflow))
     if parameters is not None:
         info.add_text("parameters", parameters)
     path = directory / name
@@ -1551,6 +1560,111 @@ def test_ingest_files_the_workflow_and_stamps_the_picture(store):
     assert picture.workflow_instance_hash == instance_hash(api_graph(TXT2IMG))
     # The hub holds the graph the vault is now pointing at.
     assert get_document(store.hub, picture.workflow_structural_hash) is not None
+
+
+@pytest.fixture
+def manual_flow(store):
+    """A manual workflow of TXT2IMG's editor graph, as an import stores it."""
+    workflow_id = create_manual_workflow(
+        store.hub, "flow", ui_workflow(TXT2IMG), "import"
+    )
+    try:
+        yield workflow_id
+    finally:
+        delete_manual_workflow(store.hub, workflow_id)
+
+
+def stored_document(store, workflow_id):
+    row = store.hub.fetchone(
+        "SELECT document FROM workflow_document WHERE workflow_id = ?", (workflow_id,)
+    )
+    return json.loads(row["document"])
+
+
+def test_a_stored_manual_workflow_is_tagged_with_its_own_id(store, manual_flow):
+    """The tag a ComfyUI run carries back, replacing one it arrived with."""
+    assert stored_document(store, manual_flow)["extra"] == {
+        "pixlstash_workflow_id": manual_flow
+    }
+    foreign = "manual:" + "f" * 32
+    tagged = {**ui_workflow(TXT2IMG), "extra": {"ds": 1, WORKFLOW_TAG_KEY: foreign}}
+    copy = create_manual_workflow(store.hub, "copy", tagged, "import")
+    try:
+        assert stored_document(store, copy)["extra"] == {
+            "ds": 1,
+            WORKFLOW_TAG_KEY: copy,
+        }
+    finally:
+        delete_manual_workflow(store.hub, copy)
+    # An API document has nowhere to carry one: every top-level key is a node.
+    api_only = create_manual_workflow(store.hub, "api", api_graph(TXT2IMG), "import")
+    try:
+        assert stored_document(store, api_only) == api_graph(TXT2IMG)
+    finally:
+        delete_manual_workflow(store.hub, api_only)
+
+
+def test_the_tag_reaches_no_key(store, manual_flow):
+    """Two documents differing only in the tag are one workflow to every key."""
+    tagged = stored_document(store, manual_flow)
+    assert ui_topology_hash(tagged) == ui_topology_hash(ui_workflow(TXT2IMG))
+    assert canonical(tagged) == canonical(ui_workflow(TXT2IMG))
+
+
+def test_a_comfyui_run_of_a_manual_workflow_is_filed_on_it(store, manual_flow):
+    """The editor graph SaveImage embeds names the manual workflow that ran."""
+    name = write_png(
+        Path(store.image_root),
+        "tagged.png",
+        api=api_graph(TXT2IMG),
+        workflow=stored_document(store, manual_flow),
+    )
+    picture_id = add_picture(store, name)
+
+    run_extraction(store, [picture_id])
+
+    picture = read_picture(store, picture_id)
+    assert picture.run_workflow_id == manual_flow
+    # Filed on the workflow, keyed exactly as an untagged picture of the graph.
+    assert picture.workflow_structural_hash == structural_hash(api_graph(TXT2IMG))
+    assert picture.workflow_instance_hash == instance_hash(api_graph(TXT2IMG))
+
+
+def test_a_tag_this_hub_does_not_hold_files_nothing(store):
+    """Another machine's workflow, or one deleted since, is not a filing."""
+    tagged = {**ui_workflow(TXT2IMG), "extra": {WORKFLOW_TAG_KEY: "manual:" + "e" * 32}}
+    name = write_png(
+        Path(store.image_root), "foreign.png", api=api_graph(TXT2IMG), workflow=tagged
+    )
+    picture_id = add_picture(store, name)
+
+    run_extraction(store, [picture_id])
+
+    picture = read_picture(store, picture_id)
+    assert picture.run_workflow_id is None
+    assert picture.workflow_structural_hash == structural_hash(api_graph(TXT2IMG))
+
+
+def test_the_tag_never_overwrites_the_workflow_pixlstash_ran(store, manual_flow):
+    """PixlStash's own run path knows which workflow ran; the tag defers to it."""
+    name = write_png(
+        Path(store.image_root),
+        "ran.png",
+        api=api_graph(TXT2IMG),
+        workflow=stored_document(store, manual_flow),
+    )
+    picture_id = add_picture(store, name)
+    ran = "manual:" + "d" * 32
+
+    def set_ran(session):
+        session.get(Picture, picture_id).run_workflow_id = ran
+        session.commit()
+
+    store.vault.run_task(set_ran)
+
+    run_extraction(store, [picture_id])
+
+    assert read_picture(store, picture_id).run_workflow_id == ran
 
 
 def test_every_return_path_reports_the_same_keys(store):

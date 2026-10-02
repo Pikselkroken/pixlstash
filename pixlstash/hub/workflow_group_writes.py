@@ -24,7 +24,7 @@ from pixlstash.hub import workflow_origin
 from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN, FILE_ORIGIN, INBOX_ORIGIN
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import model_fix_kind
-from pixlstash.utils.workflow_ids import MANUAL_PREFIX
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX, stamp_workflow_id
 
 logger = get_logger(__name__)
 
@@ -203,8 +203,13 @@ def create_manual_workflow(
             ``workflow_origin`` row that says where it came from, written in
             the same transaction: a row stored without it would be stored
             again by the next hand-over.
+
+    An editor-format *document* is stored tagged with the new id
+    (``extra.pixlstash_workflow_id``), replacing any tag it came with, so a
+    run of it started in ComfyUI files its pictures here.
     """
     workflow_id = f"{MANUAL_PREFIX}{uuid.uuid4().hex}"
+    document = stamp_workflow_id(document, workflow_id)
     with hub.transaction() as conn:
         conn.execute(
             "INSERT INTO workflow_document (workflow_id, document, api_document, "
