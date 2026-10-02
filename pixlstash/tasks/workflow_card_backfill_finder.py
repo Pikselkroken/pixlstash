@@ -123,9 +123,20 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
     def on_task_complete(self, task, error) -> None:
         """Record which variants must not be handed out again this session."""
         if isinstance(task, FamilyReidentifyTask) and error is not None:
-            # Retried on the next sweep: nothing about the shelf was learned.
-            logger.warning("Base-model family pass did not finish: %s", error)
-            self._family_signature = None
+            if isinstance(error, (TaskCancelledError, sqlite3.OperationalError)):
+                # Never ran, or a busy hub: nothing was learned, so the next
+                # sweep asks again.
+                logger.warning("Base-model family pass did not run: %s", error)
+                self._family_signature = None
+                return
+            # A real failure keeps the signature `_reidentify_task` set, so
+            # the pass is asked again only once the shelf changes: handing it
+            # out every sweep would keep the planner awake forever.
+            logger.warning(
+                "Base-model family pass failed: %s. It runs again when the "
+                "shelf's base models change.",
+                error,
+            )
             return
         hashes = (getattr(task, "params", None) or {}).get("structural_hashes") or []
         self._handed_out.difference_update(hashes)
