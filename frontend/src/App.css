@@ -268,11 +268,6 @@ body {
   opacity: 0.9 !important;
 }
 
-.v-img {
-  display: block;
-  position: relative;
-  z-index: var(--z-raised);
-}
 /* Make disabled hand-rolled buttons more faded. The two button dialects and the
    menu row own their disabled state (`--opacity-disabled`, no filter) and the
    dialects their pending one, which must not fade at all, so they are excluded

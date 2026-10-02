@@ -161,7 +161,8 @@ fourth distinct occurrence of that bug in this codebase.
 > not foregrounds, which is correct). `SelectionBar`'s `6px` is **gone**: the bar was merged
 > into the grid action pill (`35c9f519`) and the old rule with it; the action-bar height
 > reconciliation it was waiting on is still the §8 decision. The z-index retrofit is
-> **done** (#1671): no raw numeric z-index is left under `frontend/src`, and
+> **done** (#1671): every z-index under `frontend/src` is a `--z-*` token (the filter
+> strip's `calc(var(--z-sticky) - 1)` is the one named exception), and
 > `styles/designDrift.test.js` keeps it that way.
 
 - **~40 `error`-on-`dark-surface` declarations** in the review overlay measure 3.12:1 and

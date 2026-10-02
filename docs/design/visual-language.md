@@ -1022,7 +1022,7 @@ number.**
 | `--z-base` | 0 | in-flow content; the grid itself |
 | `--z-raised` | 10 | lifted over an immediate sibling: a tile badge, a hover scrim |
 | `--z-sticky` | 100 | sticky headers/toolbars inside a scroll container |
-| `--z-floating` | 200 | chrome anchored to the content area: selection pill, breadcrumb, range pill |
+| `--z-floating` | 200 | chrome anchored to the content area: selection pill, action receipt, progress pill |
 | `--z-dropdown` | 300 | menus, popovers, tooltips anchored to a control |
 | `--z-drawer` | 1000 | full-panel overlays inside the shell: the lightbox |
 | `--z-overlay` | 2000 | app-level overlays and context menus |

@@ -14,11 +14,11 @@ import { describe, expect, it } from "vitest";
 
 const SRC = dirname(dirname(fileURLToPath(import.meta.url)));
 
-function sources(dir = SRC) {
+function sources(dir = SRC, pattern = /\.(vue|css)$/) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) return sources(path);
-    return /\.(vue|css)$/.test(entry.name) ? [path] : [];
+    if (entry.isDirectory()) return sources(path, pattern);
+    return pattern.test(entry.name) ? [path] : [];
   });
 }
 
@@ -120,10 +120,28 @@ describe("design drift", () => {
     expect(hits(/border-radius:[^;}]*\b(?:4|8|12|999|9999)px\b/g)).toEqual([]);
   });
 
-  // A layer picks a rung, not a number (visual-language.md §14). Above
-  // --z-drawer that includes "be an overlay": `StackLayer` puts a hand-placed
-  // layer on Vuetify's stack instead of out-bidding it.
-  it("writes no z-index as a raw number", () => {
-    expect(hits(/z-index:\s*-?\d[^;}]*/g)).toEqual([]);
+  // A layer picks a rung, not a number (visual-language.md §14), and not a
+  // rung plus or minus one either. Above --z-drawer that includes "be an
+  // overlay": `StackLayer` puts a hand-placed layer on Vuetify's stack instead
+  // of out-bidding it. Any digit in the value is a number someone chose.
+  //
+  // One exception, named: the filter strip tucks its top 2px under the grid
+  // toolbar so the toolbar's divider shows. An equal rung would need the strip
+  // before the toolbar in the template, which moves it ahead in tab order.
+  it("writes no z-index as a number", () => {
+    expect(hits(/z-index:[^;}]*\d[^;}]*/g)).toEqual([
+      "components/panels/FilterStrip.vue: z-index: calc(var(--z-sticky) - 1)",
+    ]);
+    // Inline styles: a `zIndex` bound in a template or set from script.
+    const scripts = sources(SRC, /\.(vue|js)$/)
+      .filter((path) => !/\.test\.js$/.test(path))
+      .flatMap((path) =>
+        [
+          ...withoutComments(readFileSync(path, "utf8")).matchAll(
+            /zIndex\s*[:=][^,;}\n]*\d[^,;}\n]*/g,
+          ),
+        ].map((m) => `${relative(SRC, path)}: ${m[0].trim()}`),
+      );
+    expect(scripts).toEqual([]);
   });
 });

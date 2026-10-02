@@ -835,7 +835,9 @@
   position: absolute;
   inset: 0;
   pointer-events: auto;
-  z-index: var(--z-floating);
+  /* Over all of the lightbox's chrome, the floating pills included: draw mode
+     takes every pointerdown until a box is drawn or cancelled. */
+  z-index: var(--z-dropdown);
   cursor: crosshair;
 }
 

@@ -1,3 +1,6 @@
+import { config } from "@vue/test-utils";
+import { h, Teleport } from "vue";
+
 // Global test environment, loaded by vitest via `setupFiles` in vite.config.js.
 //
 // jsdom implements neither observer API, and any component that measures itself
@@ -61,3 +64,17 @@ if (typeof HTMLCanvasElement !== "undefined") {
     return null;
   };
 }
+
+// `StackLayer` is a `v-overlay`, and most suites mount without Vuetify, where
+// the tag does not resolve: each mount warned, and the layer rendered inline
+// instead of in <body>. Stubbed once here as what it is to its callers, a
+// teleport to <body>. A render function, so the slot's nodes are the
+// Teleport's own children rather than a fragment: suites that empty <body>
+// before unmounting would strand a fragment's anchors. `StackLayer.test.js`
+// opts out and mounts the real one against a real dialog.
+config.global.stubs.StackLayer = {
+  props: ["open"],
+  setup(_, { slots }) {
+    return () => h(Teleport, { to: "body" }, slots.default?.());
+  },
+};

@@ -5,7 +5,6 @@
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import { h, Teleport } from "vue";
 
 // The thumbnail URL builder pulls in the Axios client; the dialog only needs a
 // string for `<img src>`.
@@ -49,24 +48,12 @@ const TooltipStub = {
     /><span v-else-if="text" class="tip" :data-tip="text" />`,
 };
 
-// The zoom's own stacking is `StackLayer`'s concern (StackLayer.test.js); here
-// it only has to land in <body>, where the suite reads it. A render function so
-// the slot's nodes are the Teleport's own children, not a fragment: suites here
-// empty <body> before unmounting, which strands a fragment's anchors.
-const StackLayerStub = {
-  props: ["open"],
-  setup(_, { slots }) {
-    return () => h(Teleport, { to: "body" }, slots.default?.());
-  },
-};
-
 const globalOpts = {
   global: {
     stubs: {
       Tooltip: TooltipStub,
       "v-icon": true,
       AppDialog: AppDialogStub,
-      StackLayer: StackLayerStub,
     },
   },
 };

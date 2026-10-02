@@ -28,7 +28,11 @@ async function dialogThenLayer() {
           <div v-if="layer" class="the-layer">layer</div>
         </StackLayer>`,
     },
-    { attachTo: document.body, global: { plugins: [vuetify] } },
+    {
+      attachTo: document.body,
+      // The suite-wide stub (testing/setup.js) is what this file tests against.
+      global: { plugins: [vuetify], stubs: { StackLayer: false } },
+    },
   );
   mounted.push(wrapper);
   await nextTick();
@@ -56,6 +60,22 @@ describe("StackLayer", () => {
 
     expect(content.classList.contains("v-overlay__content")).toBe(true);
     expect(content.classList.contains("stack-layer")).toBe(true);
+  });
+
+  // Its owner handles its own keys (a completion list's first Escape closes
+  // the list); the layer itself must not close, or take the list away from
+  // under the owner's handler.
+  it("is not closed by Escape", async () => {
+    const wrapper = await dialogThenLayer();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await new Promise((resolve) => setTimeout(resolve));
+    await nextTick();
+
+    expect(wrapper.vm.layer).toBe(true);
+    expect(document.querySelector(".the-layer")).not.toBeNull();
+    expect(
+      document.querySelector(".the-layer").closest(".v-overlay--active"),
+    ).not.toBeNull();
   });
 
   it("puts nothing on the stack while closed", async () => {
