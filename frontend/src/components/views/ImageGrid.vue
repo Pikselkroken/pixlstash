@@ -2914,7 +2914,11 @@ function getFaceBboxStyle(bbox, idx, img, el, isSelected) {
     width: `${width}px`,
     height: `${height}px`,
     pointerEvents: "auto",
-    zIndex: isSelected ? 60 : 40,
+    // Over the tile's badges (`--z-sticky`), a selected face over its
+    // neighbours. Ordering inside one tile: `.image-card` is its own stacking
+    // context. The top-right badge column shares the selected face's rung and
+    // stays above both by coming later in the template.
+    zIndex: isSelected ? "var(--z-dropdown)" : "var(--z-floating)",
     display: "block",
   };
 }

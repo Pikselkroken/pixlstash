@@ -66,20 +66,6 @@ function hits(re, only = () => true) {
     );
 }
 
-/**
- * Raw z-indexes above --z-drawer that are known and not yet fixed. Each one is
- * a teleported or fixed element that has to clear a modal, which means it has
- * to become an overlay rather than carry a bigger number; that is a
- * restructuring per site, not a substitution. This list may only shrink.
- */
-const Z_ABOVE_DRAWER_DEBT = [
-  "components/editors/CharacterEditor.vue: z-index: 9999",
-  "components/panels/SideBar.css: z-index: 1200",
-  "components/panels/TbTagPanel.vue: z-index: 9999",
-  "components/widgets/AddToEntityControl.vue: z-index: 2500",
-  "components/widgets/BaseModelInput.vue: z-index: 9999",
-];
-
 describe("design drift", () => {
   it("has one tooltip surface", () => {
     expect(
@@ -134,10 +120,10 @@ describe("design drift", () => {
     expect(hits(/border-radius:[^;}]*\b(?:4|8|12|999|9999)px\b/g)).toEqual([]);
   });
 
-  it("writes no z-index above --z-drawer beyond the known debt", () => {
-    const found = hits(/z-index:\s*\d{4,}/g).filter(
-      (hit) => Number(hit.match(/\d+$/)[0]) > 1000,
-    );
-    expect(found.sort()).toEqual([...Z_ABOVE_DRAWER_DEBT].sort());
+  // A layer picks a rung, not a number (visual-language.md §14). Above
+  // --z-drawer that includes "be an overlay": `StackLayer` puts a hand-placed
+  // layer on Vuetify's stack instead of out-bidding it.
+  it("writes no z-index as a raw number", () => {
+    expect(hits(/z-index:\s*-?\d[^;}]*/g)).toEqual([]);
   });
 });

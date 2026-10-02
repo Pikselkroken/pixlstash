@@ -444,7 +444,7 @@ test.describe('notice surface', () => {
   // ── Contrast + token conformance (spec §8 table, check 12) ──────────────
   // Stands in for an axe-core colour-contrast run: axe is not a dependency of
   // this repo (see the QA report) and, more to the point, it would measure the
-  // card's untinted `background-color` and miss the rgba(status,.08) ::before
+  // card's untinted `background-color` and miss the rgba(status,.08) tint
   // layer that is the card's real background.
 
   for (const theme of ['light', 'dark']) {

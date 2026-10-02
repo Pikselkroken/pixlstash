@@ -1035,7 +1035,7 @@ defineExpose({
   position: absolute;
   bottom: 12px;
   right: 12px;
-  z-index: 120;
+  z-index: var(--z-floating);
   background: rgba(var(--v-theme-dark-surface), 0.75);
   color: rgb(var(--v-theme-on-dark-surface));
   padding: var(--space-3) var(--space-3);

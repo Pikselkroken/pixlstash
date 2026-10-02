@@ -160,9 +160,9 @@ fourth distinct occurrence of that bug in this codebase.
 > 49 declarations moved; the two `v-theme-error` uses left in the lightbox are fills,
 > not foregrounds, which is correct). `SelectionBar`'s `6px` is **gone**: the bar was merged
 > into the grid action pill (`35c9f519`) and the old rule with it; the action-bar height
-> reconciliation it was waiting on is still the §8 decision. The z-index retrofit
-> **stays opportunistic by decision** (`visual-language.md` §14): 91 raw numeric values remain,
-> and moving them wholesale is exactly the unreviewable stacking change §14 rules out.
+> reconciliation it was waiting on is still the §8 decision. The z-index retrofit is
+> **done** (#1671): no raw numeric z-index is left under `frontend/src`, and
+> `styles/designDrift.test.js` keeps it that way.
 
 - **~40 `error`-on-`dark-surface` declarations** in the review overlay measure 3.12:1 and
   want `dark-surface-error` (4.12:1). Pre-existing, mechanical, large enough to want its
@@ -172,11 +172,6 @@ fourth distinct occurrence of that bug in this codebase.
   because it moves pixels on the app's most-used control. The three **view toolbars**
   are out of that list: they were reconciled with each other at 36px rather than onto
   the token (`toolbar-responsive-decisions.md` Amendment #5).
-- **The 40+ raw z-index call sites.** The ladder is shipped; retrofitting is
-  opportunistic (touch a rule, move it onto the ladder). The ladder's own values and the
-  migration of the remaining squatters are owned by the concurrent layering lane — read
-  `frontend/src/styles/design-tokens.css` for the current rungs rather than any copy of
-  them here.
 ### 9.4 There are two focus languages, and the second one is not documented anywhere
 
 > **Status: done (`82a8f22c`, 2026-08-06, and `3b8b1035`, 2026-09-13), by a different route.** `--focus-ring` is

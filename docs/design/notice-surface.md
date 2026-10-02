@@ -763,8 +763,7 @@ moves pixels somewhere; the list is the record of where to look.
   declarations point at it; their siblings `.rs-tally-kept` / `.rs-archived-kept` already
   read `dark-surface-success`. Full rationale in `visual-language.md` §4.
 - **The 40+ raw z-index call sites.** The ladder is shipped (`--z-base` … `--z-modal`,
-  visual-language §14) so new code has a target; retrofitting the existing ones is
-  opportunistic, because each move is pixel-visible on a different screen.
+  visual-language §14) and every call site is on it (#1671).
 
 The original findings, kept for the evidence:
 

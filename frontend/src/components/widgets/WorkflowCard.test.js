@@ -1098,8 +1098,9 @@ describe("the selection mark", () => {
     expect(mark.position).toBe("absolute");
     expect(mark.inset).toBe("0");
     expect(mark["z-index"]).toBe("var(--z-raised)");
-    // Above the badges, which sit on the cover at a bare z-index of 1.
-    expect(Number(rule(".wf-card__pic-flag")["z-index"])).toBeLessThan(10);
+    // Above the per-picture flag, which shares the rung: the mark is the
+    // card's ::after, the last thing in it, so it wins on DOM order.
+    expect(rule(".wf-card__pic-flag")["z-index"]).toBe("var(--z-raised)");
     // And it must not eat the clicks meant for the controls underneath.
     expect(mark["pointer-events"]).toBe("none");
   });

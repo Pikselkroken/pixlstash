@@ -206,10 +206,10 @@ const hostEl = ref(null);
    Opaque on purpose: the selection pill's translucent + backdrop-filter look is
    a legibility gamble over an arbitrary photo grid, and a message the user must
    read does not take that gamble. The status tint is a separate layer over the
-   opaque base (::before), so the fill never affects the text. */
+   opaque base (a background image over the background colour), so the fill
+   never affects the text. */
 .notice-card {
   position: relative;
-  isolation: isolate;
   pointer-events: auto;
   box-sizing: border-box;
   width: min(100% - 2 * var(--space-5), var(--notice-max-w));
@@ -219,22 +219,19 @@ const hostEl = ref(null);
   gap: var(--space-3);
   padding: var(--space-4) var(--space-5);
   padding-inline-start: calc(var(--space-5) + var(--space-2));
-  background: rgb(var(--v-theme-surface));
+  background-color: rgb(var(--v-theme-surface));
+  /* The status tint, painted over the colour above. A gradient because a
+     background image cannot be a bare colour; one stop each end makes it flat. */
+  background-image: linear-gradient(
+    var(--notice-tint, transparent),
+    var(--notice-tint, transparent)
+  );
   border: 1px solid rgba(var(--v-theme-on-surface), 0.2);
   border-radius: var(--radius-md);
   /* --elevation-3, not -4: -4 is reserved for dialogs and lightbox chrome, and
      a notice must read as lighter than a modal. */
   box-shadow: var(--elevation-3);
   overflow: hidden;
-}
-
-/* Status tint layer - sits over the opaque base, under the content. */
-.notice-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: var(--notice-tint, transparent);
 }
 
 /* The rail follows the card's radius because the card clips. */
@@ -354,7 +351,7 @@ const hostEl = ref(null);
 .notice-host--on-dark .notice-card {
   /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
   --v-theme-accent: var(--v-theme-dark-surface-accent);
-  background: rgb(var(--v-theme-dark-surface));
+  background-color: rgb(var(--v-theme-dark-surface));
   border-color: rgba(var(--v-theme-on-dark-surface), 0.2);
 }
 .notice-host--on-dark .notice-glyph,

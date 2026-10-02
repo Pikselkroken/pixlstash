@@ -15,11 +15,12 @@
     @keydown="onKeydown"
     @blur="onBlur"
   />
-  <!-- Teleported and fixed, like the tag panel's list, because both places this
-       field lands in clip: a dialog body scrolls and a shelf row hides its
-       overflow, so an absolutely positioned menu would be cut off in one and
-       cropped in the other. -->
-  <Teleport to="body">
+  <!-- A layer on the overlay stack and fixed, like the tag panel's list,
+       because both places this field lands in clip: a dialog body scrolls and a
+       shelf row hides its overflow, so an absolutely positioned menu would be
+       cut off in one and cropped in the other. The stack also puts it above the
+       dialog, which no z-index can promise. -->
+  <StackLayer :open="menuShown">
     <div
       v-if="menuShown"
       :id="menuId"
@@ -55,7 +56,7 @@
         >
       </button>
     </div>
-  </Teleport>
+  </StackLayer>
 </template>
 
 <script setup>
@@ -111,6 +112,7 @@ import {
 } from "vue";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import StackLayer from "./StackLayer.vue";
 
 defineOptions({ inheritAttrs: false });
 
@@ -282,7 +284,6 @@ defineExpose({
    from `OverlayTagsPanel.vue` along with the reasons they are off-token. */
 .bmi-menu {
   position: fixed;
-  z-index: 9999;
   max-height: 240px;
   overflow-y: auto;
   background: color-mix(in srgb, rgb(var(--v-theme-shadow)) 85%, transparent);

@@ -137,7 +137,7 @@ body {
      it. The dock/full header band keeps the content below the toolbar. */
   top: 0;
   bottom: 0;
-  z-index: 150;
+  z-index: var(--z-floating);
   transform: translateX(-100%);
   /* Clearly-visible slide for the auto-show/auto-hide drawer; the shadow grows in
      alongside it so the reveal reads as depth, not just a jump. */
@@ -172,14 +172,12 @@ body {
      would re-introduce the bug the drawer itself was just moved off. */
   position: absolute;
   inset: 0;
-  /* Wedged directly under the drawer (150) and above the hover trigger (140),
-     which the drawer already uses as a local micro-ladder between --z-sticky
-     (100) and --z-floating (200). The named rungs cannot express "just below
-     the drawer": the only rung above 100 is 200, which would paint the scrim
-     OVER the panel it dismisses, and lifting the panel to --z-drawer (1000) to
-     make room would change its stacking against every piece of grid chrome.
-     Keeping the wedge is the smaller, reversible choice. */
-  z-index: 145;
+  /* The drawer's own rung, under the drawer by DOM order: App.vue renders this
+     scrim BEFORE `.sidebar-shell`, and an equal z-index goes to the later
+     sibling (visual-language.md §14, no "just below my own layer"). Keep that
+     order, or the scrim paints over the panel it dismisses. The hover trigger
+     shares the rung too, but never shows with either of them. */
+  z-index: var(--z-floating);
   background: var(--scrim-drawer);
 }
 /* Reduced-motion exception, matching .sidebar-shell.sidebar-overlay above, and
@@ -208,7 +206,7 @@ body {
   top: 36px;
   bottom: 0;
   width: 8px;
-  z-index: 140;
+  z-index: var(--z-floating);
   display: flex;
   align-items: center;
   overflow: visible;
@@ -273,7 +271,7 @@ body {
 .v-img {
   display: block;
   position: relative;
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 /* Make disabled hand-rolled buttons more faded. The two button dialects and the
    menu row own their disabled state (`--opacity-disabled`, no filter) and the

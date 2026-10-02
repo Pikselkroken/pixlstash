@@ -175,7 +175,7 @@ function onFilmstripWheel(event) {
   transition: opacity 0.2s ease;
   overflow: hidden;
   height: calc(100% - var(--topbar-height));
-  z-index: 3;
+  z-index: var(--z-raised);
 }
 
 .overlay-rail.hidden {
@@ -254,7 +254,7 @@ function onFilmstripWheel(event) {
 
 .filmstrip-thumb-image-active {
   box-shadow: 0 0 0 4px rgb(var(--v-theme-dark-surface-primary));
-  z-index: 2;
+  z-index: var(--z-raised);
 }
 
 .filmstrip-thumb-placeholder {
@@ -279,7 +279,7 @@ function onFilmstripWheel(event) {
   padding: var(--space-1) var(--space-2);
   color: rgb(var(--v-theme-on-dark-surface));
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
-  z-index: 2;
+  z-index: var(--z-raised);
 }
 
 .filmstrip-badge--top-left {

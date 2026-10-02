@@ -89,7 +89,7 @@ Checked against `develop` on 2026-09-23. A row not listed here is not built
 | All 44 dialogs on `AppDialog`, four widths | Done | 44 `AppDialog` users, no bare `v-dialog`; `--dialog-w-sm` to `--dialog-w-xl` |
 | One `Tooltip` surface, `HelpTip` its preset, the `tooltip` prop | Done | `HelpTip.vue` renders `Tooltip`; `AppBarButton` takes `tooltip` |
 | No sub-pixel type | Done | No fractional `px` font size under `frontend/src` |
-| The z-index ladder stops at `--z-drawer` | **Partial** | 18 files still set a raw `z-index`; `styles/designDrift.test.js` lists the known ones above the ladder |
+| The z-index ladder stops at `--z-drawer` | Done | No raw `z-index` number left under `frontend/src` (`styles/designDrift.test.js`); what clears a dialog is a `StackLayer` (#1671) |
 | Native `title` only for clipped-text reveals; a raw value equal to a token; the 16px dialog gutter and `gap` spacing; the pill progress track | **Not audited** | Not checked site by site |
 | Outlined sites folding into the filled neutral (Open) | Not built | 4 `variant="outlined"` sites remain |
 | Selection-pill verbs 34 to 32px (Open) | Not built | Still 34px |

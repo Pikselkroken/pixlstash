@@ -543,7 +543,7 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   top: auto;
   bottom: var(--space-2);
   left: var(--space-2);
-  z-index: 1;
+  z-index: var(--z-raised);
   color: rgb(var(--v-theme-dark-surface-warning));
   pointer-events: auto;
 }

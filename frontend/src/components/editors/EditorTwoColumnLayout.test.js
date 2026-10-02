@@ -149,8 +149,8 @@ describe("CharacterEditor layout", () => {
   });
 
   it("never strands the full-screen reference preview", async () => {
-    // The preview is teleported to <body> at z-index 9999 and covers the whole
-    // app, and the Escape that dismisses it lives on the dialog's own listener.
+    // The preview is a layer of its own on the overlay stack and covers the
+    // whole app, and the Escape that dismisses it lives on the dialog's own listener.
     // Ctrl+Enter saves and closes from under an open preview, so a preview that
     // outlives its dialog can only be cleared with a mouse.
     getReferencePictures.mockResolvedValueOnce({ reference_picture_ids: [1] });
