@@ -294,6 +294,7 @@ def store_manual_workflow(
     from_workflow_id: str | None = None,
     from_name: str | None = None,
     api_document: dict | None = None,
+    record: tuple[str, str, str | None] | None = None,
 ) -> str:
     """Store *workflow* as a new manual workflow called *name*; return its id.
 
@@ -323,6 +324,7 @@ def store_manual_workflow(
         from_workflow_id=from_workflow_id,
         from_name=from_name,
         api_document=api_document,
+        record=record,
     )
 
 
@@ -342,7 +344,7 @@ def _within_the_cap(document: dict) -> None:
         )
 
 
-def _topology_of(workflow: dict) -> str | None:
+def _topology_of(workflow: dict, name: str = "workflow") -> str | None:
     """*workflow*'s topology hash, or ``None`` when it will not reduce. No write."""
     try:
         graph = api_graph(workflow)
@@ -351,7 +353,12 @@ def _topology_of(workflow: dict) -> str | None:
         # The reducers index into whatever the document holds; the hash is
         # only the pull's has-pictures count, so a document without one is
         # counted as having none.
-        logger.info("A pulled workflow's topology could not be read: %s", exc)
+        logger.info(
+            "Pulled workflow %s: its topology could not be read (%s): %s",
+            name,
+            type(exc).__name__,
+            exc,
+        )
         return None
 
 
@@ -366,7 +373,7 @@ def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
     """
     check_comfy_workflow(workflow)
     migrated, _ = workflow_bindings.migrate_placeholders(workflow)
-    topology_hash = _topology_of(migrated)
+    topology_hash = _topology_of(migrated, name)
     stored = workflow_origin.stored_as(hub, workflow_inbox.content_hash(workflow))
     if stored is not None:
         return {
@@ -410,9 +417,12 @@ def store_inbox_workflow(hub, name: str, workflow: dict) -> dict:
     stored = workflow_origin.stored_as(hub, digest)
     if stored is not None:
         return {"name": _stem(name), "matched": True, "workflow_id": stored}
-    workflow_id = store_manual_workflow(hub, _stem(name), workflow, "inbox")
-    workflow_origin.record_pulled(
-        hub, workflow_origin.INBOX_ORIGIN, digest, workflow_id, None, digest
+    workflow_id = store_manual_workflow(
+        hub,
+        _stem(name),
+        workflow,
+        "inbox",
+        record=(workflow_origin.INBOX_ORIGIN, digest, digest),
     )
     return {"name": _stem(name), "matched": False, "workflow_id": workflow_id}
 
@@ -2219,12 +2229,19 @@ def create_router(server) -> APIRouter:
                     # conversion rides along as the row's API document.
                     stored = _load_workflow_json(path)
                     converted = converted_graph(path, stored)
+                    # Its origin row in the same transaction, with the content
+                    # hash, so the inbox and a pull dedupe against it too.
                     workflow_id = store_manual_workflow(
                         hub,
                         _stem(name),
                         stored,
                         "builtin",
                         api_document=converted,
+                        record=(
+                            workflow_origin.BUILTIN_ORIGIN,
+                            name,
+                            workflow_inbox.content_hash(stored),
+                        ),
                     )
                 except (NotAWorkflowError, RecursionError, ValueError) as exc:
                     logger.warning(
@@ -2236,9 +2253,6 @@ def create_router(server) -> APIRouter:
                         status_code=409,
                         detail=f"PixlStash could not store the workflow {name}.",
                     ) from exc
-                workflow_origin.record_pulled(
-                    hub, workflow_origin.BUILTIN_ORIGIN, name, workflow_id, None, None
-                )
                 announce_changed_workflows(
                     server,
                     [workflow_id],

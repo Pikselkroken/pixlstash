@@ -1,8 +1,8 @@
 """Saying that a workflow changed (v1.12 B4, workflow ids since #1623).
 
 One emitter, because there are several places that change a workflow and they
-must agree about the envelope: the workflow writes, merge and split
-(``routes/workflows.py``), a workflow file being imported or dropped in the
+must agree about the envelope: the workflow writes (``routes/workflows.py``),
+a workflow file being imported or dropped in the
 watched inbox (``routes/comfyui.py``, ``Server``), and a saved recipe being
 written (``routes/recipes.py``).
 

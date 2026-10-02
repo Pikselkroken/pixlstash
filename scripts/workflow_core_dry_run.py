@@ -28,6 +28,7 @@ import sqlite3
 import sys
 from collections import Counter
 from types import SimpleNamespace
+from urllib.parse import quote
 
 from pixlstash.hub.db import default_hub_path
 from pixlstash.hub.workflow_cards import (
@@ -59,7 +60,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--hub", default=default_hub_path())
     args = parser.parse_args()
-    conn = sqlite3.connect(f"file:{args.hub}?mode=ro", uri=True)
+    # Quoted: a `?` or `#` in the path would be read as URI syntax.
+    conn = sqlite3.connect(f"file:{quote(os.path.abspath(args.hub))}?mode=ro", uri=True)
     hub = _Reader(conn)
 
     v1_rows = {
