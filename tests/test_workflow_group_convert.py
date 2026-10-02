@@ -1713,6 +1713,43 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
     )
 
 
+def test_a_failed_family_pass_waits_for_the_shelf_to_change(run_env):
+    """A crash must not hand the same pass out on every sweep forever.
+
+    A cancelled or locked-out pass learned nothing and is asked again; any
+    other failure keeps the signature it was handed out under, so the finder
+    goes quiet until the shelf's base models change.
+    """
+    hub = run_env.server.hub
+    backfill = WorkflowCardBackfillFinder(hub=hub)
+    assert backfill.find_task() is None
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance, base_model, "
+            "base_model_canonical, base_model_source) VALUES ('checkpoint', "
+            "'quiet-after-crash.safetensors', ?, 'scanned', 'SDXL', 'SDXL', 'user')",
+            ("8" * 64,),
+        )
+    task = backfill.find_task()
+    assert isinstance(task, FamilyReidentifyTask)
+    backfill.on_task_complete(task, RuntimeError("the worker died"))
+    assert backfill.find_task() is None, "a failed pass was handed out again"
+
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'SD 1.5', base_model_canonical = 'SD 1.5' "
+            "WHERE sha256 = ?",
+            ("8" * 64,),
+        )
+    task = backfill.find_task()
+    assert isinstance(task, FamilyReidentifyTask), "a shelf change re-arms it"
+    backfill.on_task_complete(task, sqlite3.OperationalError("database is locked"))
+    assert isinstance(backfill.find_task(), FamilyReidentifyTask), (
+        "a locked-out pass is asked again"
+    )
+    backfill.on_task_complete(backfill.find_task() or task, None)
+
+
 def test_a_recipe_on_a_workflow_live_again_is_left_where_it_is(run_env):
     """The vault's conversion does not move a recipe onto the id it names."""
     server = run_env.server
