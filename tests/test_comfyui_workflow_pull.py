@@ -8,8 +8,10 @@ folders, with ComfyUI faked at ``requests.get``.
 from __future__ import annotations
 
 import copy
+import functools
 import json
 import os
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -19,6 +21,7 @@ import pytest
 import requests
 from fastapi import HTTPException
 
+from pixlstash.hub import workflow_origin
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import card_index, manual_document
 from pixlstash.hub.workflow_group_writes import delete_manual_workflow
@@ -186,7 +189,7 @@ def _pull(hub, announced=None) -> dict:
     task = ComfyUIWorkflowPullTask(
         hub,
         BASE,
-        store=lambda name, doc: comfyui_module.store_pulled_workflow(hub, name, doc),
+        store=functools.partial(comfyui_module.store_pulled_workflow, hub),
         announce=announced.extend if announced is not None else None,
     )
     result = task._run_task()
@@ -372,6 +375,34 @@ def test_a_pull_stores_every_workflow_and_a_second_matches_them(comfy, folders, 
     second = _pull(hub)
     assert (second["pulled"], second["matched"]) == (0, 2)
     assert _stored(hub) == ["Plain", "Sub - Needs pack"]
+
+
+def test_a_workflow_whose_origin_cannot_be_recorded_is_not_stored(
+    comfy, folders, hub, monkeypatch
+):
+    # One transaction (#1694): a workflow stored without its origin row would
+    # come back after a delete, so a failed origin write stores nothing.
+    def refuse(*_args, **_kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(workflow_origin, "upsert", refuse)
+        first = _pull(hub)
+    assert (first["pulled"], first["failed"]) == (0, 2)
+    assert _stored(hub) == []
+    assert hub.fetchone("SELECT COUNT(*) FROM workflow_document")[0] == 0
+
+    again = _pull(hub)
+    assert again["pulled"] == 2
+    assert {
+        row["remote_path"]: row["workflow_name"]
+        for row in hub.fetchall(
+            "SELECT remote_path, workflow_name FROM workflow_origin"
+        )
+    } == {
+        "Plain.json": _manual_id(hub, "Plain"),
+        "Sub/Needs pack.json": _manual_id(hub, "Sub - Needs pack"),
+    }
 
 
 def test_the_triage_names_the_workflow_this_comfyui_cannot_run(comfy, folders, hub):
@@ -709,8 +740,7 @@ def _pull_with(hub, store=None, origin=BASE) -> dict:
     task = ComfyUIWorkflowPullTask(
         hub,
         origin,
-        store=store
-        or (lambda name, doc: comfyui_module.store_pulled_workflow(hub, name, doc)),
+        store=store or functools.partial(comfyui_module.store_pulled_workflow, hub),
         lock=workflow_inbox.INBOX_LOCK,
     )
     return task._run_task()
@@ -734,15 +764,15 @@ def test_a_delete_made_while_a_pull_runs_is_not_undone_by_it(comfy, folders, hub
     real = comfyui_module.store_pulled_workflow
     deleted = []
 
-    def store(name, doc):
-        return real(hub, name, doc)
+    def store(name, doc, record):
+        return real(hub, name, doc, record)
 
     order = sorted(comfy.workflows)  # the listing is sorted
     assert order == ["Plain.json", "Sub/Needs pack.json"]
     comfy.workflows = {"A first.json": NEEDS_PACK, **comfy.workflows}
 
-    def store_then_delete(name, doc):
-        outcome = store(name, doc)
+    def store_then_delete(name, doc, record):
+        outcome = store(name, doc, record)
         if name == "A first.json" and not deleted:
             deleted.append(True)
             # Released and re-taken around the delete, as a request thread

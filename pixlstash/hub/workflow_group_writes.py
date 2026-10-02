@@ -184,7 +184,7 @@ def create_manual_workflow(
     from_workflow_id: Optional[str] = None,
     from_name: Optional[str] = None,
     api_document: Optional[dict] = None,
-    record: Optional[tuple[str, str, Optional[str]]] = None,
+    record: Optional[tuple[str, str, Optional[int], Optional[str]]] = None,
 ) -> str:
     """Store *document* as a new manual workflow called *name*; return its id.
 
@@ -199,7 +199,7 @@ def create_manual_workflow(
         from_workflow_id: The workflow (or, for ``recipe``, the recipe's
             workflow) it was made from, and *from_name* what that was called.
         api_document: The API graph an editor *document* converted into.
-        record: ``(origin, remote_path, content_hash)`` of the
+        record: ``(origin, remote_path, remote_modified, content_hash)`` of the
             ``workflow_origin`` row that says where it came from, written in
             the same transaction: a row stored without it would be stored
             again by the next hand-over.
@@ -231,9 +231,14 @@ def create_manual_workflow(
             (workflow_id, name),
         )
         if record is not None:
-            record_origin, remote_path, content_hash = record
+            record_origin, remote_path, remote_modified, content_hash = record
             workflow_origin.upsert(
-                conn, record_origin, remote_path, workflow_id, None, content_hash
+                conn,
+                record_origin,
+                remote_path,
+                workflow_id,
+                remote_modified,
+                content_hash,
             )
     logger.info("Stored manual workflow %s (%s) from %s.", workflow_id, name, origin)
     return workflow_id

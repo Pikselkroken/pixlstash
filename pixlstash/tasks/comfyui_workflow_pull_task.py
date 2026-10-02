@@ -76,8 +76,9 @@ _RESERVED_WINDOWS_NAMES = frozenset(
 # `` (N)`` suffix a name collision adds.
 _MAX_STEM_CHARS = 200
 
-# What ``store`` answers with (``routes/comfyui.store_pulled_workflow``).
-StoreFn = Callable[[str, dict], dict]
+# ``routes/comfyui.store_pulled_workflow`` bound to the hub: ``store(name,
+# document, (origin, remote_path, remote_modified, content_hash))``.
+StoreFn = Callable[[str, dict, tuple], dict]
 
 # What `_pull_one` answers for a workflow the owner deleted here. A sentinel
 # rather than a string, so it can never be mistaken for a result.
@@ -225,7 +226,8 @@ class ComfyUIWorkflowPullTask(BaseTask):
             hub: The hub, where the origin rows live.
             comfyui_url: The ComfyUI base URL, without a trailing slash. Also
                 the ``origin`` its rows are recorded under.
-            store: Files one document under a name and answers with the import
+            store: Files one document under a name, writing its origin row
+                (the third argument) with it, and answers with the import
                 route's result (``name``, ``matched``, ``workflow_id``,
                 ``topology_hash``, and ``builtin`` when the match is a workflow
                 PixlStash ships). Called with *lock* held.
@@ -499,8 +501,20 @@ class ComfyUIWorkflowPullTask(BaseTask):
                 )
                 return None
             try:
-                outcome = self._store(name, document)
-            except (NotAWorkflowError, RecursionError, ValueError, OSError) as exc:
+                # The origin row goes in with the workflow, in one transaction
+                # (#1694): one stored without it would come back after a delete.
+                outcome = self._store(
+                    name,
+                    document,
+                    (self._comfyui_url, entry.path, entry.modified_ms, digest),
+                )
+            except (
+                NotAWorkflowError,
+                RecursionError,
+                TypeError,
+                ValueError,
+                OSError,
+            ) as exc:
                 logger.warning(
                     "Could not store ComfyUI workflow %s as %s: %s: %s",
                     entry.path,
@@ -509,26 +523,14 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     exc,
                 )
                 return None
-            try:
-                workflow_origin.record_pulled(
-                    self._hub,
-                    self._comfyui_url,
-                    entry.path,
-                    outcome.get("workflow_id"),
-                    entry.modified_ms,
-                    digest,
-                )
             except sqlite3.Error as exc:
-                # The file is stored and on its card; what is lost is the memory
-                # of where it came from, so deleting it here will not stop a
-                # later pull from bringing it back.
                 logger.error(
-                    "Stored ComfyUI workflow %s as %s but could not record its "
-                    "origin; deleting it will not keep it from being pulled "
-                    "again: %s",
+                    "Could not store ComfyUI workflow %s as %s with its origin "
+                    "row; no new workflow was stored: %s",
                     entry.path,
-                    outcome["name"],
+                    name,
                     exc,
                 )
+                return None
         changed = previous is not None and digest is not None and previous != digest
         return document, outcome, changed
