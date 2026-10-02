@@ -66,6 +66,7 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { useWsStore } from "../stores/useWsStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useGridStore } from "../stores/useGridStore";
+import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 // The real ones: the apiClient mock below spreads `importOriginal`, so a test
 // can drive an actual session transition rather than a stand-in for one.
 import { API_BASE_URL, notifySessionReset } from "../utils/apiClient";
@@ -674,5 +675,62 @@ describe("useUpdatesSocket: a picture was turned (#1419)", () => {
     ).toBe(false);
     // The control: an unknown field still does.
     expect(realtimeDeps.pictureChangeAffectsView(["tags"])).toBe(true);
+  });
+});
+
+describe("useUpdatesSocket: workflows_changed (#1696)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("delivers a burst once, a second later, with every rename and the recipes bump", async () => {
+    vi.useFakeTimers();
+    connect();
+    const store = useWorkflowsStore();
+    const changed = vi.spyOn(store, "onWorkflowsChanged");
+    store.selectedKeys = ["auto:a"];
+    const epoch = store.recipesEpoch;
+
+    receive({ type: "workflows_changed", reason: "regrouped", keys: [], renamed: { "auto:a": "auto:b" } });
+    receive({ type: "workflows_changed", reason: "recipes", keys: [], renamed: {} });
+    receive({ type: "workflows_changed", reason: "regrouped", keys: [], renamed: { "auto:b": "auto:c" } });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(changed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(changed.mock.calls[0][0]).toEqual({
+      reason: "recipes",
+      renamed: { "auto:a": "auto:b", "auto:b": "auto:c" },
+    });
+    // Both halves land: the rename is followed even though the reason the
+    // burst carries is "recipes", and the Recipes tab is told.
+    expect(store.selectedKeys).toEqual(["auto:c"]);
+    expect(store.recipesEpoch).toBe(epoch + 1);
+  });
+
+  it("skips this tab's own echo", async () => {
+    vi.useFakeTimers();
+    connect();
+    useWsStore().clientId = "this-tab";
+    const changed = vi.spyOn(useWorkflowsStore(), "onWorkflowsChanged");
+
+    receive({ type: "workflows_changed", reason: "changed", keys: [], renamed: {}, origin_client_id: "this-tab" });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(changed).not.toHaveBeenCalled();
+
+    receive({ type: "workflows_changed", reason: "changed", keys: [], renamed: {}, origin_client_id: "other-tab" });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers nothing once the socket's host is gone", async () => {
+    vi.useFakeTimers();
+    connect();
+    const changed = vi.spyOn(useWorkflowsStore(), "onWorkflowsChanged");
+
+    receive({ type: "workflows_changed", reason: "changed", keys: [], renamed: {} });
+    host.unmount();
+    host = null;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(changed).not.toHaveBeenCalled();
   });
 });

@@ -59,7 +59,7 @@ from pixlstash.hub.workflow_card_reads import (
     instance_documents,
     variant_documents,
 )
-from pixlstash.hub.workflow_card_reads import manual_document
+from pixlstash.hub.workflow_card_reads import _manual_workflow_type, manual_document
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
@@ -2786,6 +2786,18 @@ def test_an_imported_wan_video_workflow_is_a_video_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
     )
     assert _by_key(_cards(workflow_env.owner))[editor]["type"] is None
+
+
+def test_a_manual_workflow_whose_links_are_malformed_has_no_type():
+    """A link slot that is not a number raised TypeError out of the reduction
+    and took the whole grid with it; it is a card with no type instead."""
+    graph = {
+        "nodes": [
+            {"id": 1, "type": "KSampler", "inputs": [], "outputs": []},
+        ],
+        "links": [[1, 1, {"slot": 0}, 2, 0, "MODEL"]],
+    }
+    assert _manual_workflow_type("manual:" + "0" * 32, json.dumps(graph)) is None
 
 
 def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(

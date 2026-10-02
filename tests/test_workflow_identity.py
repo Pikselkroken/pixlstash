@@ -37,6 +37,7 @@ from pixlstash.services.workflow_identity import (
     workflow_key,
     workflow_type,
 )
+from pixlstash.services.workflow_identity import _SINK_CLASS_RE
 
 
 def _node(class_type: str, **inputs) -> dict:
@@ -521,6 +522,15 @@ def test_a_graph_with_no_sampler_keeps_what_it_does_as_its_core():
     assert core_hash(_doc(_graph(face_detailer=True, upscale=True))) == core_hash(
         _doc(_graph())
     )
+
+
+def test_the_sink_rule_keeps_named_outputs_and_savers_but_not_conditioning():
+    """Anchored (#1696): `ConditioningCombine` is not a sink, but a node named
+    as an output or a saver still is, so its workflow keeps its last node."""
+    for sink in ("SaveImage", "ImageSaver", "ImageOutput", "VHS_VideoCombine"):
+        assert _SINK_CLASS_RE.search(sink), sink
+    for middle in ("ConditioningCombine", "ImageCompositeMasked", "OutputSwitch"):
+        assert not _SINK_CLASS_RE.search(middle), middle
 
 
 def test_sampler_less_filter_workflows_keep_their_filter_as_their_core():

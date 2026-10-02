@@ -236,7 +236,13 @@ def _manual_workflow_type(workflow_id: str, document: str) -> Optional[str]:
         return reduced_workflow_type(
             reduce_api_graph(graph) if graph is not None else reduce_ui_graph(parsed)
         )
-    except (ValueError, WorkflowGraphError, RecursionError, AttributeError) as exc:
+    except (
+        ValueError,
+        TypeError,
+        WorkflowGraphError,
+        RecursionError,
+        AttributeError,
+    ) as exc:
         logger.warning(
             "Manual workflow %s: its graph will not reduce, so it shows no type: %s",
             workflow_id,

@@ -1425,6 +1425,23 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(useFilterStore().comfyuiModelFilter).toEqual(["SDXL/juggernautXL_v9.safetensors"]);
   });
 
+  it("marks the Checkpoints row Yours when only the second file was set", async () => {
+    const shown = withRecipe();
+    shown.card.default_recipe.models = [
+      ["core:a/unet_name", "wan2.2_high.safetensors", "best"],
+      ["core:b/unet_name", "wan2.2_low.safetensors", "edited"],
+    ].map(([address, filename, provenance]) => ({
+      address,
+      kind: "checkpoint",
+      filename,
+      provenance,
+    }));
+    getWorkflowCard.mockResolvedValue(shown);
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find("[data-testid='wftab-row-checkpoint']");
+    expect(row.find(".wftab-yours").exists()).toBe(true);
+  });
+
   it("lists neither of a two-loader pair as another checkpoint, and shows each", async () => {
     // A Wan 2.2 high + low pair: the low file is the workflow's own, not an
     // alternative its pictures used.

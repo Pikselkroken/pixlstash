@@ -185,8 +185,11 @@ _POST_PROCESS_CLASSES = frozenset(
 # What a node with no consumer may still be for: it writes, shows or sends.
 # Anchored on purpose: a bare `Combine` or `Output` also matched
 # `ConditioningCombine` and friends, so orphan conditioning was never pruned.
+# `Output$` keeps a node NAMED as an output (`ImageOutput`); `Save` covers
+# every `*Saver`.
 _SINK_CLASS_RE = re.compile(
-    r"Save|Preview|VideoCombine|Export|Upload|WebSocket|^Send|Send(Image|Video|To)",
+    r"Save|Preview|VideoCombine|Export|Upload|WebSocket|^Send|Send(Image|Video|To)"
+    r"|Output$",
     re.IGNORECASE,
 )
 # A loader's GGUF / multi-GPU spelling loads the same thing as the stock one.

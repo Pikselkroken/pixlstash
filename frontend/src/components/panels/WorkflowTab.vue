@@ -155,7 +155,7 @@
             <span class="wftab-label">{{
               checkpointCount > 1 ? "Checkpoints" : "Checkpoint"
             }}</span>
-            <span v-if="recipeCheckpoint?.provenance === 'edited'" class="wftab-yours"
+            <span v-if="checkpointEdited" class="wftab-yours"
               >Yours</span
             >
           </span>
@@ -1593,8 +1593,10 @@ const recipeCheckpoints = computed(() =>
   ),
 );
 
-/** The first of them, or null (`kind` is the model-fix kind). */
-const recipeCheckpoint = computed(() => recipeCheckpoints.value[0] ?? null);
+/** Whether the owner set any of them: overrides are per address. */
+const checkpointEdited = computed(() =>
+  recipeCheckpoints.value.some((model) => model.provenance === "edited"),
+);
 
 /** The checkpoint row's *Show N*, one per recipe checkpoint that has one. */
 const checkpointShows = computed(() =>
