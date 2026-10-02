@@ -733,7 +733,7 @@ def _wired_names(
     A variant a model fix swapped a loader into (#1605) is carded under the
     topology it was swapped from, so it is read with the original loader put
     back, as :func:`_variant_reads` reads it, or its labels would not be the
-    card's. Loaders Weisfeiler-Leman cannot separate share a label and take
+    card's; that loader is named by the model fix's replacement. Loaders Weisfeiler-Leman cannot separate share a label and take
     its files in ``slots``' order; such twins are interchangeable by
     construction. A document that is missing or will not reduce names no
     model on the repeated loaders rather than falling back to a guess.
@@ -776,6 +776,18 @@ def _wired_names(
                 _, document = unswapped(
                     document, loader_swaps_of(hub.fetchall, swapped)
                 )
+                # The loader put back holds the fix's replacement by reference,
+                # and this variant filed only the digest the swapped-in loader
+                # took; the fix row is where the replacement's name lives, and
+                # forgetting either name deletes it.
+                known.update(
+                    (asset_reference(now_norm), now_norm)
+                    for (now_norm,) in hub.fetchall(
+                        "SELECT now_norm FROM workflow_model_fix "
+                        "WHERE topology_hash = ?",
+                        (topology_hash,),
+                    )
+                )
             document_slots = slots(document)
         except WorkflowGraphError as exc:
             logger.error(
@@ -800,8 +812,10 @@ def _describe_slots(
 ) -> None:
     """Fill in each workflow's models and LoRA slots from its base card's slots.
 
-    No document reduced: the slot list is what B2 cached per topology
-    precisely so a read does not have to re-derive it. ``names`` is :func:`read_grid`'s one
+    The slot list is what B2 cached per topology precisely so a read does not
+    have to re-derive it. The one exception is a card naming one model widget
+    on two loaders: its first variant's document is reduced to say which file
+    sat on which (:func:`_wired_names`, #1691), and no other card's is. ``names`` is :func:`read_grid`'s one
     :func:`~pixlstash.hub.workflow_card_reads.asset_names` read, the table that
     holds the readable filenames, shared with :func:`_describe_ghosts`.
 

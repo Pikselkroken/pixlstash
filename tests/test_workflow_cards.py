@@ -1800,6 +1800,58 @@ def test_two_loaders_of_one_widget_are_named_by_their_wiring(hub):
         assert sorted(models.values()) == ["test aa", "test zz"]
 
 
+def test_a_swapped_in_loader_of_a_repeated_widget_is_named_by_its_fix(hub):
+    """#1605 + #1691: the loader a fix swapped is named by the replacement.
+
+    The swapped-in loader filed only the digest it took, so the restored
+    loader's reference resolves through the fix, never to the other loader.
+    """
+    missing, now = "test-vae-fp8.safetensors", "test-vae-bf16.safetensors"
+    other = "test-vae-other.safetensors"
+
+    def with_vaes(first):
+        return _graph(
+            extra={
+                "8": first,
+                "9": _node("VAELoader", vae_name=other),
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+                "62": _node("VAEDecode", samples=["5", 0], vae=["9", 0]),
+                "63": _node("PreviewImage", images=["62", 0]),
+            }
+        )
+
+    original = with_vaes(_node("VAELoader", vae_name=missing))
+    old = record_api_graph(hub, original)
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        model_fix_labels(hub, old.topology_hash, missing, "vae"),
+        missing,
+        now,
+        {},
+        kind="vae",
+    )
+    swapped = with_vaes(_node("PixlStashVAELoader", vae_sha256="ab" * 32))
+    swapped_topology, swaps = loader_swaps(
+        original, swapped, {"8": {"vae_sha256": ("vae_name", now)}}
+    )
+    record_loader_swaps(hub, swapped_topology, swaps)
+    ran = record_api_graph(hub, swapped)
+    card = next(c for c in card_index(hub) if ran.structural_hash in c.variants)
+    assert card.topology_hash == old.topology_hash
+    card = replace(card, variants=[ran.structural_hash])
+    figure = workflow_card_service.WorkflowFigures(
+        card=card, workflow=Workflow(card.workflow_key)
+    )
+    workflow_card_service._describe_slots(
+        hub, [figure], asset_names(hub, card.variants)
+    )
+    names = {m.label: m.name for m in figure.models if m.kind == "vae"}
+    fixed = model_fix_labels(hub, old.topology_hash, missing, "vae")
+    assert [names[label] for label in fixed] == ["test vae"]
+    assert sorted(names.values()) == ["test vae", "test vae other"]
+
+
 def test_a_family_is_frozen_when_first_derived(hub):
     """A later shelf identification never moves a variant to another workflow.
 
