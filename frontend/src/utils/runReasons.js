@@ -249,12 +249,14 @@ export function readReason(reason) {
       // Blocking, never a full run instead: the owner asked for this run
       // without the stage (#1621). The server's sentence already says which
       // stage and which node, so it is the whole notice when there is one.
-      const stage = (
-        STAGE_LABELS[reason.stage] ?? STAGE_LABELS.upscale
-      ).toLowerCase();
+      // A stage this client has no name for is not guessed at.
+      const stage = STAGE_LABELS[reason.stage]?.toLowerCase();
       const said = String(reason.message || "").trim();
       return read(
-        said || `The ${stage} pass cannot be switched off for this run.`,
+        said ||
+          (stage
+            ? `The ${stage} pass cannot be switched off for this run.`
+            : "One of this workflow's passes cannot be switched off for this run."),
       );
     }
     case LORAS_UNPLACED: {

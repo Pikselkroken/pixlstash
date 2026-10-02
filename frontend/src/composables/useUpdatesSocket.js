@@ -730,6 +730,7 @@ export function useUpdatesSocket({
       clearTimeout(workflowsChangedTimer);
       workflowsChangedTimer = null;
     }
+    pendingWorkflowsChange = null;
     if (externalMovesPendingTimer) {
       clearTimeout(externalMovesPendingTimer);
       externalMovesPendingTimer = null;
