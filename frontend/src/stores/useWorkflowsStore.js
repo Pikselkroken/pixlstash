@@ -350,16 +350,18 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * Serial, not `Promise.all`: each write runs a whole `read_grid()` on the
    * server, and the hub is single-writer.
    *
-   * @returns {Promise<{done: number, refused: number}>}
+   * @returns {Promise<{done: number, refused: number, written: string[]}>}
    */
   async function writeEach(verb, keys, write) {
     verbBusy.value = verb;
     let refused = 0;
     let firstError = null;
+    const written = [];
     try {
       for (const key of keys) {
         try {
           await write(key);
+          written.push(key);
         } catch (err) {
           refused += 1;
           firstError = firstError ?? err;
@@ -373,7 +375,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       // on this screen disabled for the rest of the session.
       verbBusy.value = "";
     }
-    return { done: keys.length - refused, refused };
+    return { done: keys.length - refused, refused, written };
+  }
+
+  /** Drop *keys* from the selection: the cards a partial write took away. */
+  function deselect(keys) {
+    selectedKeys.value = selectedKeys.value.filter((key) => !keys.includes(key));
   }
 
   /**
@@ -391,6 +398,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       patchWorkflowCard(key, { hidden }),
     );
     if (hidden && !result.refused) clearSelection();
+    else if (hidden) deselect(result.written);
     return result;
   }
 
@@ -482,6 +490,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     if (result.done) notedRecipesChanged();
     // The deleted cards left the grid, and the selection goes with them.
     if (!result.refused) clearSelection();
+    else deselect(result.written);
     return result;
   }
 

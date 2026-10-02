@@ -257,7 +257,7 @@ describe("deleteSelected", () => {
 
     const result = await store.deleteSelected();
 
-    expect(result).toEqual({ done: 2, refused: 0 });
+    expect(result).toMatchObject({ done: 2, refused: 0 });
     expect(deleteWorkflow.mock.calls.map(([id]) => id)).toEqual([
       "workhorse",
       "the-stack",
@@ -276,8 +276,22 @@ describe("deleteSelected", () => {
     deleteWorkflow.mockRejectedValue(new Error("409"));
     const epoch = store.recipesEpoch;
 
-    expect(await store.deleteSelected()).toEqual({ done: 0, refused: 1 });
+    expect(await store.deleteSelected()).toMatchObject({ done: 0, refused: 1 });
     expect(store.selectedKeys).toEqual(["workhorse"]);
     expect(store.recipesEpoch).toBe(epoch);
+  });
+
+  it("drops only the deleted workflows from the selection when some are refused", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.selectRange(["workhorse", "the-stack"]);
+    deleteWorkflow.mockReset();
+    deleteWorkflow.mockImplementation((id) =>
+      id === "workhorse" ? Promise.resolve({ deleted: "x" }) : Promise.reject(new Error("409")),
+    );
+
+    expect(await store.deleteSelected()).toMatchObject({ done: 1, refused: 1 });
+    // The pill counts what is still there, not the deleted card.
+    expect(store.selectedKeys).toEqual(["the-stack"]);
   });
 });

@@ -2374,7 +2374,9 @@ def create_router(server) -> APIRouter:
             if matched:
                 set_manual_api_document(hub, matched, output)
                 workflow_id = matched[0]
-                name = find_workflow(hub, workflow_id).name or name
+                # Deleted since it matched: keep the derived name.
+                found = find_workflow(hub, workflow_id)
+                name = (found.name if found else None) or name
             else:
                 workflow_id = store_manual_workflow(
                     hub, name, workflow, "import", api_document=output
