@@ -28,6 +28,7 @@ from pixlstash.hub.workflow_card_reads import (
     Card,
     card_index,
     manual_document,
+    manual_documents_holding,
     model_fix_labels,
     model_fixes,
     Workflow,
@@ -1521,6 +1522,22 @@ def test_a_manual_workflow_is_its_own_record_and_never_an_automatic_ones(hub):
             (manual,),
         )
     assert manual_document(hub, manual) is None
+
+    # Valid JSON that is not an object: skipped or ignored, never a crash.
+    editor = {"nodes": [], "links": []}
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_document SET document = ?, api_document = '[1]' "
+            "WHERE workflow_id = ?",
+            (json.dumps(editor), manual),
+        )
+    assert manual_document(hub, manual) == editor
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_document SET document = '[1]' WHERE workflow_id = ?",
+            (manual,),
+        )
+    assert manual_documents_holding(hub, "{}") == []
 
 
 def test_a_pulled_manual_workflow_is_not_hand_imported(hub):
