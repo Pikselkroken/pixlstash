@@ -3,6 +3,7 @@ and the watched workflows folder (#1304)."""
 
 import copy
 import json
+import sqlite3
 import os
 import pathlib
 import shutil
@@ -998,6 +999,35 @@ def test_deleting_an_adopted_workflow_trashes_its_file_and_never_a_built_in(
     assert [_load(p) for p in call.trash.iterdir()] == [graph]
     call.delete_workflow(builtin_id)
     assert _load(built_in / "Shipped.json") == shipped
+    assert _manual(hub) == {}
+
+
+def test_a_built_in_made_a_workflow_is_matched_by_the_inbox(import_route):
+    """Its origin row carries the content hash, so the same content dropped in
+    the watched folder is that workflow, not a second one."""
+    call, _user_dir, built_in, hub = import_route
+    shipped = _t2i_graph()
+    shipped["2"]["inputs"]["text"] = "shipped"
+    (built_in / "Shipped.json").write_text(json.dumps(shipped), encoding="utf-8")
+    builtin_id = call.card("Shipped.json")["workflow_id"]
+    call.inbox.mkdir()
+    (call.inbox / "copy.json").write_text(json.dumps(shipped), encoding="utf-8")
+    workflow_inbox.reconcile(str(call.inbox), call.store)
+    assert list(_manual(hub)) == [builtin_id]
+
+
+def test_a_built_in_is_stored_with_its_origin_or_not_at_all(import_route, monkeypatch):
+    """One transaction: a failed origin write leaves no workflow behind for
+    the next ask to store a second time."""
+    call, _user_dir, built_in, hub = import_route
+    (built_in / "Shipped.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
+
+    def refuse(*_args, **_kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(workflow_origin, "upsert", refuse)
+    with pytest.raises(sqlite3.OperationalError):
+        call.card("Shipped.json")
     assert _manual(hub) == {}
 
 

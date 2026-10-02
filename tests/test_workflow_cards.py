@@ -1532,6 +1532,13 @@ def test_a_manual_workflow_is_its_own_record_and_never_an_automatic_ones(hub):
             (json.dumps(editor), manual),
         )
     assert manual_document(hub, manual) == editor
+    # A conversion that will not parse at all: the stored document still runs.
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_document SET api_document = '{' WHERE workflow_id = ?",
+            (manual,),
+        )
+    assert manual_document(hub, manual) == editor
     with hub.transaction() as conn:
         conn.execute(
             "UPDATE workflow_document SET document = '[1]' WHERE workflow_id = ?",
