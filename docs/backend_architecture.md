@@ -2566,6 +2566,14 @@ writes nothing. Files and `workflow_file` rows are left in place; nothing
 writes a `workflow_file` row any more, and a legacy row on an automatic card
 still names it.
 
+**Data step 9** (`workflow_group_convert.hash_builtin_origins`, at hub open):
+a built-in made a manual workflow before its `builtin` origin row was written
+with a content hash has that hash filled from its stored document
+(`workflow_inbox.content_hash`), so `workflow_origin.stored_as` matches it and
+an inbox drop of the same content does not store a second copy (a pull of it
+now matches that workflow rather than reporting a built-in). A row whose
+workflow is gone is left as it is.
+
 #### The core rule and data step 8
 
 `core_hash` and `core_node_labels` share one strip, `_core_graph`, stamped
