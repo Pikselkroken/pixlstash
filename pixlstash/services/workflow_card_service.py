@@ -719,58 +719,74 @@ def _wired_names(
     hub: HubDatabase,
     figures: list[WorkflowFigures],
     names: dict[str, list[tuple]],
-) -> dict[str, dict[str, list[Optional[str]]]]:
-    """``{workflow_key: {slot label: [filename]}}`` for cards with a twin widget.
+) -> dict[str, tuple[set[str], dict[str, list[Optional[str]]]]]:
+    """``{workflow_key: (repeated widgets, {slot label: [filename]})}``.
 
     ``asset_names`` keys a filename by widget, never by loader, so a card
     naming one model widget on two loaders (a Wan 2.2 high/low UNET pair)
     cannot tell from it which file sat where (#1691). Only those cards pay for
     a reduction of their first variant's document, which pairs each slot label
-    with the reference wired into it; on every other card a model widget holds
-    one file, so its pairing is already exact and costs nothing. LoRA slots do
-    not count: the card shows no filename on one.
+    with the reference wired into it, and only their repeated widgets are
+    named from it: a widget on one loader holds one file, so its pairing is
+    already exact. LoRA slots do not count: the card shows no filename on one.
 
-    A label shared by loaders Weisfeiler-Leman cannot separate lists its files
-    in ``slots``' order, the same order the cached slot list uses: such twins
-    are interchangeable by construction. A card whose document cannot be read
-    names no model on those loaders rather than falling back to a guess.
+    A variant a model fix swapped a loader into (#1605) is carded under the
+    topology it was swapped from, so it is read with the original loader put
+    back, as :func:`_variant_reads` reads it, or its labels would not be the
+    card's. Loaders Weisfeiler-Leman cannot separate share a label and take
+    its files in ``slots``' order; such twins are interchangeable by
+    construction. A document that is missing or will not reduce names no
+    model on the repeated loaders rather than falling back to a guess.
     """
-    ambiguous = {
-        figure.card.variants[0]: figure.card.workflow_key
-        for figure in figures
-        if figure.card.variants
-        and max(
-            Counter(
-                str(slot.get("widget") or "")
-                for slot in figure.card.slots
-                if not slot.get("is_lora")
-            ).values(),
-            default=0,
+    ambiguous: dict[str, tuple[str, str, set[str]]] = {}
+    for figure in figures:
+        card = figure.card
+        counts = Counter(
+            str(slot.get("widget") or "")
+            for slot in card.slots
+            if not slot.get("is_lora")
         )
-        > 1
-    }
-    # Every such card starts with no names, so one whose document is missing
-    # or unreadable shows none rather than the order-paired guess.
-    wired: dict[str, dict[str, list[Optional[str]]]] = {
-        key: {} for key in ambiguous.values()
-    }
+        repeated = {widget for widget, count in counts.items() if count > 1}
+        if card.variants and repeated:
+            ambiguous[card.variants[0]] = (
+                card.workflow_key,
+                card.topology_hash,
+                repeated,
+            )
+    wired = {key: (repeated, {}) for key, _, repeated in ambiguous.values()}
+    filed_as: dict[str, str] = {}
+    for batch in chunked(sorted(ambiguous)):
+        placeholders = ",".join("?" * len(batch))
+        filed_as.update(
+            hub.fetchall(
+                "SELECT structural_hash, topology_hash FROM workflow_recipe "
+                f"WHERE structural_hash IN ({placeholders})",
+                tuple(batch),
+            )
+        )
     for variant, document in variant_documents(hub, list(ambiguous)).items():
+        key, topology_hash, _ = ambiguous[variant]
         known = {
             asset_reference(filename): filename
             for _, filename in names.get(variant, ())
         }
         try:
+            swapped = filed_as.get(variant)
+            if swapped and swapped != topology_hash:
+                _, document = unswapped(
+                    document, loader_swaps_of(hub.fetchall, swapped)
+                )
             document_slots = slots(document)
         except WorkflowGraphError as exc:
             logger.error(
                 "Stored document for variant %s will not reduce, so card %s "
                 "names no model on its repeated loaders: %s",
                 variant,
-                ambiguous[variant],
+                key,
                 exc,
             )
             document_slots = []
-        by_label = wired[ambiguous[variant]]
+        by_label = wired[key][1]
         for slot in document_slots:
             by_label.setdefault(slot.label, []).append(known.get(slot.asset))
     return wired
@@ -822,15 +838,16 @@ def _describe_slots(
         ):
             by_widget.setdefault(widget, []).append(filename)
         taken: Counter = Counter()
-        by_label = wired.get(card.workflow_key)
+        repeated, by_label = wired.get(card.workflow_key, (set(), {}))
 
         def next_name(slot: dict) -> Optional[str]:
-            # Wired where the card has a widget on two loaders, else the one
-            # filename its widget has, which is exact.
+            # By wiring where the widget sits on two loaders, else the one
+            # filename the widget has, which is exact.
+            widget = str(slot.get("widget") or "")
             key, found = (
                 (str(slot.get("label") or ""), by_label)
-                if by_label is not None
-                else (str(slot.get("widget") or ""), by_widget)
+                if widget in repeated
+                else (widget, by_widget)
             )
             listed = found.get(key, ())
             index = taken[key]

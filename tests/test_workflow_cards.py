@@ -15,7 +15,11 @@ from types import SimpleNamespace
 import pytest
 
 from pixlstash.hub import workflow_cards
-from pixlstash.services.workflow_hash import structural_document, topology_hash
+from pixlstash.services.workflow_hash import (
+    asset_reference,
+    structural_document,
+    topology_hash,
+)
 from pixlstash.hub.workflow_cards import record_identity
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
@@ -27,6 +31,7 @@ from pixlstash.hub.workflows import (
 from pixlstash.hub.workflow_card_reads import (
     Card,
     asset_names,
+    variant_documents,
     card_index,
     manual_document,
     manual_documents_holding,
@@ -56,6 +61,7 @@ from pixlstash.services.workflow_identity import (
     WORKFLOW_KEY_VERSION,
     core_node_labels,
     loader_swaps,
+    topology_node_labels,
     unswapped,
 )
 from pixlstash.task_runner import TaskCancelledError
@@ -1756,10 +1762,12 @@ def test_a_workflow_of_two_checkpoints_combines_only_with_the_same_family_set(hu
 
 
 def test_two_loaders_of_one_widget_are_named_by_their_wiring(hub):
-    """Swapping the files between two checkpoint loaders swaps the names (#1691).
+    """Each checkpoint loader names the file wired into it (#1691).
 
     ``asset_names`` keys by widget, so pairing its sorted filenames to slots
-    would name both cards' loaders in the same order whichever file each held.
+    named both orderings of the same two files identically. The refine
+    loader's label is found in the stored document by the reference it holds,
+    so a pairing that swapped the two would fail here too.
     """
 
     def named(generate, refine):
@@ -1772,13 +1780,24 @@ def test_two_loaders_of_one_widget_are_named_by_their_wiring(hub):
         workflow_card_service._describe_slots(
             hub, [figure], asset_names(hub, card.variants)
         )
-        return [(m.label, m.name) for m in figure.models]
+        document = variant_documents(hub, [keys.structural_hash])[keys.structural_hash]
+        (refine_node,) = [
+            node_id
+            for node_id, node in document.items()
+            if node["inputs"].get("ckpt_name") == asset_reference(refine)
+        ]
+        refine_label = topology_node_labels(document)[refine_node] + "/ckpt_name"
+        return {m.label: m.name for m in figure.models}, refine_label
 
-    forward = named("test-aa.safetensors", "test-zz.safetensors")
-    swapped = named("test-zz.safetensors", "test-aa.safetensors")
-    assert [label for label, _ in forward] == [label for label, _ in swapped]
-    assert sorted(name for _, name in forward) == ["test aa", "test zz"]
-    assert [name for _, name in swapped] == [name for _, name in forward][::-1]
+    for generate, refine in (
+        ("test-aa.safetensors", "test-zz.safetensors"),
+        ("test-zz.safetensors", "test-aa.safetensors"),
+    ):
+        models, refine_label = named(generate, refine)
+        assert models[refine_label] == refine.removesuffix(".safetensors").replace(
+            "-", " "
+        )
+        assert sorted(models.values()) == ["test aa", "test zz"]
 
 
 def test_a_family_is_frozen_when_first_derived(hub):

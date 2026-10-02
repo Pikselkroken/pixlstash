@@ -2162,7 +2162,8 @@ def _base_model_slots(models) -> list:
 
     A Wan 2.2 graph loads two UNETs (high and low noise) and is both of them,
     so every one is named, never the first, each by the file wired into its
-    loader (#1691). Empty if the graph loads no base model.
+    loader where the stored graph says (``_wired_names``, #1691). Empty if the
+    graph loads no base model.
     """
     for kind in BASE_MODEL_KINDS:
         found = [slot for slot in models if slot.kind == kind and slot.name]
