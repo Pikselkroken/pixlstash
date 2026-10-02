@@ -236,9 +236,10 @@ class SavedRecipeConvertTask(BaseTask):
 def _core_successor_map(hub, was):
     """``{v1 core label: v2 label or None}`` when *was* was retired by data step 8.
 
-    Every topology of the retired workflow shares its v1 core, so their maps
-    agree; read in topology order, so a recipe on a card the hub no longer
-    holds still maps.
+    Every topology of the retired workflow shares its v1 core, but v2 may prune
+    a node in one and keep it in another, so a kept label wins over ``None``;
+    read in topology order, so a recipe on a card the hub no longer holds
+    still maps.
     """
     if was is None:
         return None
@@ -252,7 +253,9 @@ def _core_successor_map(hub, was):
     labels: dict = {}
     for row in rows:
         for old, new in json.loads(row["label_map"]).items():
-            labels.setdefault(old, new)
+            # As data step 8 merges them: a label kept anywhere beats a prune.
+            if labels.get(old) is None:
+                labels[old] = new
     return labels
 
 

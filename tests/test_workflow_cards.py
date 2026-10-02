@@ -58,7 +58,10 @@ from pixlstash.services.workflow_identity import (
 )
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.workflow_card_backfill_finder import WorkflowCardBackfillFinder
-from pixlstash.tasks.workflow_card_backfill_task import WorkflowCardBackfillTask
+from pixlstash.tasks.workflow_card_backfill_task import (
+    FamilyReidentifyTask,
+    WorkflowCardBackfillTask,
+)
 from tests.test_workflow_identity import _graph, _node
 
 CARD_TABLES = (
@@ -90,6 +93,15 @@ def hub(tmp_path):
         yield database
     finally:
         database.close()
+
+
+def _drained(finder) -> bool:
+    """Nothing handed out, past the one start-up family pass (which moves nothing)."""
+    task = finder.find_task()
+    if isinstance(task, FamilyReidentifyTask):
+        assert task._run_task() == {"moved": 0}
+        task = finder.find_task()
+    return task is None
 
 
 def card_of(hub, structural_hash):
@@ -309,7 +321,7 @@ def test_the_backfill_keys_what_was_filed_before_it_and_runs_twice_the_same(hub)
     assert finder.progress() == (3, 0)
 
     # Nothing is outstanding, so the finder hands nothing out ...
-    assert finder.find_task() is None
+    assert _drained(finder)
     # ... and a derivation forced over the same documents writes the same rows.
     with hub.transaction() as conn:
         for statement in wipe:
@@ -441,7 +453,7 @@ def test_a_topology_cached_before_the_specials_column_is_re_derived(hub):
     )
     assert card_of(hub, keys.structural_hash) is not None
     assert finder.progress() == (1, 0)
-    assert finder.find_task() is None
+    assert _drained(finder)
 
 
 def test_filling_specials_alone_does_not_rerun_the_refinement(hub, monkeypatch):
@@ -629,7 +641,7 @@ def test_only_an_error_that_will_not_pass_retires_a_batch(hub):
     assert finder.find_task() is not None
 
     finder.on_task_complete(task, RuntimeError("the worker died"))
-    assert finder.find_task() is None
+    assert _drained(finder)
 
 
 def test_a_legacy_ui_file_row_is_no_card(hub):

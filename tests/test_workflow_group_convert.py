@@ -54,6 +54,7 @@ from pixlstash.services.workflow_identity import (
 from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
     MissingSavedRecipeWorkflowFinder,
 )
+from pixlstash.tasks.saved_recipe_convert_task import _core_successor_map
 from pixlstash.tasks.workflow_card_backfill_finder import WorkflowCardBackfillFinder
 from pixlstash.tasks.workflow_card_backfill_task import FamilyReidentifyTask
 from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY
@@ -963,6 +964,51 @@ def test_step_8_re_derives_the_type_so_a_wan_video_reads_video(tmp_path):
         hub.close()
 
 
+def test_a_label_one_topology_pruned_still_carries_from_another(step_8, monkeypatch):
+    """The plain workflow's sampler default survives one topology mapping it to None."""
+    w = step_8
+    # Pruned on whichever of the two topologies is merged first.
+    first = min((w.plain, w.qwen, w.lora), key=lambda keys: keys.topology_hash)
+    pruned = [
+        get_document(w.hub, keys.structural_hash)
+        for keys in (w.plain, w.qwen, w.lora)
+        if keys.topology_hash == first.topology_hash
+    ]
+    real = convert.core_label_maps
+
+    def pruned_first(document):
+        labels, stages = real(document)
+        if document in pruned:
+            labels = dict.fromkeys(labels)
+        return labels, stages
+
+    monkeypatch.setattr(convert, "core_label_maps", pruned_first)
+    with w.hub.transaction() as conn:
+        rederive_cores(conn)
+    flux = workflow_of_variant(w.hub, w.plain.structural_hash)
+    assert (flux, f"core:{w.new_sampler}/steps", "8") in _step_8_rows(w.hub)[
+        "workflow_group_default"
+    ]
+
+
+def test_a_recipes_label_map_prefers_a_kept_label_over_a_prune(tmp_path):
+    """The vault's conversion merges topology maps as data step 8 does."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_core_successor (topology_hash, "
+                "old_workflow_id, new_workflow_id, label_map) VALUES (?, ?, ?, ?)",
+                [
+                    ("t1", "auto:old", "auto:new", json.dumps({"s": None})),
+                    ("t2", "auto:old", "auto:new", json.dumps({"s": "kept"})),
+                ],
+            )
+        assert _core_successor_map(hub, "auto:old") == {"s": "kept"}
+    finally:
+        hub.close()
+
+
 def test_the_hub_open_runs_step_8_once(step_8):
     w = step_8
     path = w.hub.path
@@ -1602,6 +1648,11 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
 
     recipe_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
     backfill = WorkflowCardBackfillFinder(hub=hub)
+    # One pass at start-up, for a shelf change a previous session never passed
+    # over; here there is none, so it moves nothing.
+    started = backfill.find_task()
+    assert isinstance(started, FamilyReidentifyTask)
+    assert started._run_task() == {"moved": 0}
     assert backfill.find_task() is None, "nothing on the shelf changed yet"
     with hub.transaction() as conn:
         conn.execute(

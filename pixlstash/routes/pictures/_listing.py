@@ -42,6 +42,7 @@ from pixlstash.utils.service.filter_helpers import (
 )
 from pixlstash.utils.query.predicate_filter import (
     NOT_MADE_BY,
+    ONLY_MADE_BY,
     PredicateFilter,
     is_truthy_flag,
 )
@@ -410,7 +411,9 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     Returns:
         The keys to match (``predicate_filter.workflow_keys_predicate``: a
         manual workflow's own id, or variants with the live manual ids whose
-        runs they leave out), or ``None`` when neither param is set.
+        runs they leave out, or - a manual workflow narrowed by a LoRA - its
+        runs' variants that load it, held to its runs), or ``None`` when
+        neither param is set.
     """
     # Presence, not truthiness: `?workflow=` names no workflow, and dropping
     # the filter for it would answer a request for one workflow with the whole
@@ -450,6 +453,11 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
             # and this route is open to scoped tokens.
             if matched and _ASSET_RE.match(lora):
                 among = sorted(set.intersection(*matched))
+                if workflow_id in live:
+                    # A manual workflow's key is its id, not a variant: narrow
+                    # the variants its own runs made, and keep it to them.
+                    among = _variants_run_by(server, workflow_id)
+                    matched = [set(among)]
                 matched.append(set(workflow_cards.variants_loading(hub, lora, among)))
             else:
                 matched.append(set())
@@ -467,9 +475,25 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
         )
         return []
     keys = sorted(set.intersection(*matched))
-    if keys and workflow_id not in live:
+    if keys and workflow_id in live and lora is not None:
+        keys += [ONLY_MADE_BY + workflow_id]
+    elif keys and workflow_id not in live:
         keys += [NOT_MADE_BY + manual for manual in live]
     return keys
+
+
+def _variants_run_by(server, manual_id: str) -> list[str]:
+    """The variants a manual workflow's own runs made, sorted."""
+    return server.vault.db.run_immediate_read_task(
+        lambda session: sorted(
+            session.exec(
+                select(Picture.workflow_structural_hash)
+                .where(Picture.run_workflow_id == manual_id)
+                .where(Picture.workflow_structural_hash.is_not(None))
+                .distinct()
+            ).all()
+        )
+    )
 
 
 def select_pictures_for_listing(

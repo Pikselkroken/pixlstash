@@ -1684,6 +1684,25 @@ describe("Add… and Unfiled recipes", () => {
     });
     expect(store.selectedKeys).toEqual(["d"]);
     expect(cursorKey(wrapper)).toBe("d");
+    expect(wrapper.find('[role="status"]').text()).toBe("Added flow");
+  });
+
+  it("announces how many workflows a multi-file add brought in", async () => {
+    const wrapper = await grid();
+    importWorkflow.mockReset();
+    importWorkflow.mockResolvedValue({ name: "flow", workflow_id: "d" });
+    const input = wrapper.find(".wfv-file-input");
+    const files = ["a.json", "b.json"].map(
+      (name) => new File(['{"nodes": []}'], name, { type: "application/json" }),
+    );
+    Object.defineProperty(input.element, "files", {
+      value: files,
+      configurable: true,
+    });
+    await input.trigger("change");
+    await flush();
+    await flush();
+    expect(wrapper.find('[role="status"]').text()).toBe("Added 2 workflows");
   });
 
   it("lists the unfiled recipes below the grid, and nothing while there are none", async () => {

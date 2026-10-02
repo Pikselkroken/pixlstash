@@ -50,6 +50,9 @@ from pixlstash.utils.service.person_tags import (
 # NOT the filtered workflow's (``!manual:<uuid>``). See
 # :func:`workflow_keys_predicate`.
 NOT_MADE_BY = "!"
+# The manual workflow the listed variants must ALSO have been run by
+# (``=manual:<uuid>``): one manual workflow's pictures, narrowed by a LoRA.
+ONLY_MADE_BY = "="
 
 
 def made_by_live_manual(live: Sequence[str]) -> ColumnElement:
@@ -75,8 +78,15 @@ def workflow_keys_predicate(keys: Sequence[str]) -> ColumnElement:
     """
     manual = [key for key in keys if key.startswith("manual:")]
     excluded = [key[1:] for key in keys if key.startswith(NOT_MADE_BY)]
-    variants = [key for key in keys if key not in manual and key[:1] != NOT_MADE_BY]
+    only = [key[1:] for key in keys if key.startswith(ONLY_MADE_BY)]
+    variants = [
+        key
+        for key in keys
+        if key not in manual and key[:1] not in (NOT_MADE_BY, ONLY_MADE_BY)
+    ]
     auto = Picture.workflow_structural_hash.in_(variants)
+    if only:
+        auto = and_(auto, Picture.run_workflow_id.in_(only))
     if excluded:
         auto = and_(
             auto,
