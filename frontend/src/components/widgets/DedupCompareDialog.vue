@@ -2690,7 +2690,9 @@ function onZoomContextMenu() {
    a `StackLayer`, which the overlay stack orders over it; no z-index. */
 .dc-zv {
   position: fixed;
-  inset: 0;
+  /* Under the desktop title bar (0px in a browser): the overlay stack is above
+     it, so only the inset keeps the drag region and window controls usable. */
+  inset: var(--titlebar-h) 0 0 0;
   display: flex;
   flex-direction: column;
   background: #0a0a0a;

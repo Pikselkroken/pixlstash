@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
 import { nextTick } from "vue";
@@ -60,6 +61,16 @@ describe("StackLayer", () => {
 
     expect(content.classList.contains("v-overlay__content")).toBe(true);
     expect(content.classList.contains("stack-layer")).toBe(true);
+    // jsdom applies no SFC styles, so the declaration is read from the source.
+    const source = readFileSync(
+      `${process.cwd()}/src/components/widgets/StackLayer.vue`,
+      "utf8",
+    );
+    const start = source.indexOf(".v-overlay__content.stack-layer {");
+    expect(start).toBeGreaterThan(-1);
+    expect(source.slice(start, source.indexOf("}", start))).toMatch(
+      /\bcontain:\s*none\s*;/,
+    );
   });
 
   // Its owner handles its own keys (a completion list's first Escape closes
