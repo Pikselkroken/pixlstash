@@ -26,6 +26,7 @@ from pixlstash.hub.workflows import (
 )
 from pixlstash.hub.workflow_card_reads import (
     Card,
+    asset_names,
     card_index,
     manual_document,
     manual_documents_holding,
@@ -1752,6 +1753,32 @@ def test_a_workflow_of_two_checkpoints_combines_only_with_the_same_family_set(hu
     assert _workflow(hub, same_set) == pair
     other_set = _two_checkpoints("sdxl_a.safetensors", "sdxl_b.safetensors")
     assert _workflow(hub, other_set) != pair
+
+
+def test_two_loaders_of_one_widget_are_named_by_their_wiring(hub):
+    """Swapping the files between two checkpoint loaders swaps the names (#1691).
+
+    ``asset_names`` keys by widget, so pairing its sorted filenames to slots
+    would name both cards' loaders in the same order whichever file each held.
+    """
+
+    def named(generate, refine):
+        keys = record_api_graph(hub, _two_checkpoints(generate, refine))
+        card = next(c for c in card_index(hub) if keys.structural_hash in c.variants)
+        card = replace(card, variants=[keys.structural_hash])
+        figure = workflow_card_service.WorkflowFigures(
+            card=card, workflow=Workflow(card.workflow_key)
+        )
+        workflow_card_service._describe_slots(
+            hub, [figure], asset_names(hub, card.variants)
+        )
+        return [(m.label, m.name) for m in figure.models]
+
+    forward = named("test-aa.safetensors", "test-zz.safetensors")
+    swapped = named("test-zz.safetensors", "test-aa.safetensors")
+    assert [label for label, _ in forward] == [label for label, _ in swapped]
+    assert sorted(name for _, name in forward) == ["test aa", "test zz"]
+    assert [name for _, name in swapped] == [name for _, name in forward][::-1]
 
 
 def test_a_family_is_frozen_when_first_derived(hub):

@@ -419,15 +419,14 @@ def asset_names(
     readable name: ``workflow_recipe_asset`` names the widget a file was given
     to, never the node. A topology naming the same widget on two loaders (two
     ``LoraLoader`` nodes, two ``lora_name`` values) therefore hands back two
-    names for one widget and cannot say which loader each sat on; the caller
-    pairs them in this sorted order, so the answer is deterministic and, where
-    a widget appears once, exact.
-
-    Resolving that properly means reducing the stored document per card, which
-    is a Weisfeiler-Leman refinement apiece and would roughly double the grid's
-    cost. Nothing pairs a *recipe* LoRA to its slot: the card summarises every
-    variant's recipe LoRAs as one list, and reduces one document only for a
-    card that also has structural LoRA slots to subtract.
+    names for one widget and cannot say which loader each sat on. A caller
+    that needs the loader matches by reference instead: the stored document
+    carries each file as ``asset_reference(filename)`` in the node it was wired
+    into. The grid does so only for a card with a model widget on two loaders
+    (``workflow_card_service._wired_names``, #1691), since reducing every
+    card's document would roughly double its cost. Nothing pairs a *recipe*
+    LoRA to its slot: the card summarises every variant's recipe LoRAs as one
+    list.
     """
     names: dict[str, list[tuple[str, str]]] = {}
     for batch in chunked(sorted(set(structural_hashes))):

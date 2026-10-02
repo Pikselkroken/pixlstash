@@ -715,6 +715,67 @@ def _recovered_slots(figures: list[WorkflowFigures], manual_models) -> dict[str,
     return found
 
 
+def _wired_names(
+    hub: HubDatabase,
+    figures: list[WorkflowFigures],
+    names: dict[str, list[tuple]],
+) -> dict[str, dict[str, list[Optional[str]]]]:
+    """``{workflow_key: {slot label: [filename]}}`` for cards with a twin widget.
+
+    ``asset_names`` keys a filename by widget, never by loader, so a card
+    naming one model widget on two loaders (a Wan 2.2 high/low UNET pair)
+    cannot tell from it which file sat where (#1691). Only those cards pay for
+    a reduction of their first variant's document, which pairs each slot label
+    with the reference wired into it; on every other card a model widget holds
+    one file, so its pairing is already exact and costs nothing. LoRA slots do
+    not count: the card shows no filename on one.
+
+    A label shared by loaders Weisfeiler-Leman cannot separate lists its files
+    in ``slots``' order, the same order the cached slot list uses: such twins
+    are interchangeable by construction. A card whose document cannot be read
+    names no model on those loaders rather than falling back to a guess.
+    """
+    ambiguous = {
+        figure.card.variants[0]: figure.card.workflow_key
+        for figure in figures
+        if figure.card.variants
+        and max(
+            Counter(
+                str(slot.get("widget") or "")
+                for slot in figure.card.slots
+                if not slot.get("is_lora")
+            ).values(),
+            default=0,
+        )
+        > 1
+    }
+    # Every such card starts with no names, so one whose document is missing
+    # or unreadable shows none rather than the order-paired guess.
+    wired: dict[str, dict[str, list[Optional[str]]]] = {
+        key: {} for key in ambiguous.values()
+    }
+    for variant, document in variant_documents(hub, list(ambiguous)).items():
+        known = {
+            asset_reference(filename): filename
+            for _, filename in names.get(variant, ())
+        }
+        try:
+            document_slots = slots(document)
+        except WorkflowGraphError as exc:
+            logger.error(
+                "Stored document for variant %s will not reduce, so card %s "
+                "names no model on its repeated loaders: %s",
+                variant,
+                ambiguous[variant],
+                exc,
+            )
+            document_slots = []
+        by_label = wired[ambiguous[variant]]
+        for slot in document_slots:
+            by_label.setdefault(slot.label, []).append(known.get(slot.asset))
+    return wired
+
+
 def _describe_slots(
     hub: HubDatabase,
     figures: list[WorkflowFigures],
@@ -752,6 +813,7 @@ def _describe_slots(
         [filename for pairs in names.values() for _, filename in pairs]
         + [filename for pairs in recovered.values() for _, filename in pairs],
     )
+    wired = _wired_names(hub, figures, names)
     for figure in figures:
         card = figure.card
         by_widget: dict[str, list[str]] = {}
@@ -760,19 +822,27 @@ def _describe_slots(
         ):
             by_widget.setdefault(widget, []).append(filename)
         taken: Counter = Counter()
+        by_label = wired.get(card.workflow_key)
 
-        def next_name(widget: str) -> Optional[str]:
-            found = by_widget.get(widget, ())
-            index = taken[widget]
-            taken[widget] += 1
-            return found[index] if index < len(found) else None
+        def next_name(slot: dict) -> Optional[str]:
+            # Wired where the card has a widget on two loaders, else the one
+            # filename its widget has, which is exact.
+            key, found = (
+                (str(slot.get("label") or ""), by_label)
+                if by_label is not None
+                else (str(slot.get("widget") or ""), by_widget)
+            )
+            listed = found.get(key, ())
+            index = taken[key]
+            taken[key] += 1
+            return listed[index] if index < len(listed) else None
 
         for slot in card.slots:
             widget = str(slot.get("widget") or "")
             if slot.get("is_lora"):
                 # Consumed all the same, so the next LoRA slot does not claim
                 # this one's file.
-                next_name(widget)
+                next_name(slot)
                 figure.loras.append(
                     SlotModel(
                         name=None,
@@ -781,7 +851,7 @@ def _describe_slots(
                     )
                 )
             else:
-                name = next_name(widget)
+                name = next_name(slot)
                 figure.models.append(
                     SlotModel(
                         name=_derived(name),
