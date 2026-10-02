@@ -2324,7 +2324,7 @@ nothing in the vault moves; a manual workflow's own runs are the one exception
 
 | Table | Holds |
 |---|---|
-| `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and a topology placed in one by hand (one workflow per topology: the member row's primary key). Merge and split move **topologies**, never cards: what told two cards of one topology apart is a checkpoint or a LoRA, which are recipe values now |
+| `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and (legacy) a topology placed in a hand-made group by the dropped merge and split, one workflow per topology. Hub data step 6 dissolves every such group and nothing writes a member row any more |
 | `workflow_group_attr`, `workflow_group_default`, `workflow_group_pins`, `workflow_group_picture_input` | The owner's name, notes and hidden flag; edits to the default recipe; pins; picture inputs (library-keyed, pictures by `pixel_sha`). All keyed by `workflow_id` and addressed by **address**, never slot label |
 | `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
 
@@ -2381,7 +2381,7 @@ variant is in (`RunGroup.workflow_id`); `workflow_key` is no longer a source.
 **The API since the cut-over (#1623)** (`routes/workflows.py`):
 
 - `GET /workflows` is one entry per workflow, `id` where a card had `key`:
-  `base_topology`, `topologies` (what a split takes), and `recipe_values` (the
+  `base_topology`, `topologies` (every graph shape it holds), and `recipe_values` (the
   checkpoint and LoRA values its kept pictures used, with counts, spelled as
   the picture filters' `comfyui_model` / `comfyui_lora` take them, so a value
   filters to the pictures it counted). `default_recipe` is null on the grid
@@ -2403,25 +2403,13 @@ variant is in (`RunGroup.workflow_id`); `workflow_key` is no longer a source.
   never touched), `PUT …/pins` (stored as addresses) and `PUT …/inputs`
   (library-keyed). A run reads the picture inputs back by workflow, and puts a
   `core:` address on the run graph's own slot label before filling it.
-- `POST /workflows/merge {ids}` puts every topology of the named workflows in
-  one manual group: the first is the cover, whose name, notes, hidden flag,
-  defaults, pins and inputs are kept; every other workflow's notes follow,
-  headed by its name, and every other distinct name is appended as `Also
-  named: …` (#1620 D4). A manual cover keeps its id, an automatic one gives way
-  to a new group. The folded-away workflows lose their rows, their saved
-  recipes move to the merge (`saved_recipe_service.rehome_recipes`), and so do
-  their `workflow_key_successor` rows, so a recipe the vault has not converted
-  yet follows too. The cover's `core:` addresses name nodes of its own core
-  graph: merged with a workflow of another core, they apply only where the
-  base topology shares that core, and an address that matches nothing is
-  logged by the run, not applied. `POST /workflows/{id}/split
-  {topology}` takes one topology into a new manual group; 400 for a workflow
-  of one topology or one it does not hold.
+- **Merge and split are removed.** Workflows are automatic; a wrong grouping
+  is fixed in the core rule, never by moving a topology by hand.
 - **Removed:** `PUT /workflows/{key}/slots`, `PUT /workflows/{key}/lora-promotion`,
   `POST /workflows/{key}/unstack`, `POST /workflows/stacks`,
   `PUT /workflows/stacks/{id}/order` and `POST /workflows/stacks/{id}/unstack`.
   A mark and a promotion keyed a LoRA into the card, which is the layer the
-  cut-over takes away; merge and split replace the stacks.
+  cut-over takes away; the core rule replaces the stacks.
 - **The export** is the base graph with the default recipe applied: its values
   and models written, every LoRA loader outside it bypassed and every stage it
   runs without switched off (`run_service.skip_requested_loras` /
@@ -2907,9 +2895,7 @@ saved recipe has to travel with a snapshot or a library move.
 recipe saved on a card), and `GET /recipes?workflow_id=…` lists that
 workflow's recipes; the `workflow_key` column stays as internal storage (a new
 recipe is filed under the workflow's base card) and no request or answer names
-it. A merge moves the folded-away workflows' recipes onto the merged one
-(`saved_recipe_service.rehome_recipes`); a split leaves them where they were.
-There is no stack to resolve any more, and `whole_stack` went with it.
+it. There is no stack to resolve any more, and `whole_stack` went with it.
 
 **A re-keying is the one thing a saved recipe's card column does not
 survive.** A `WORKFLOW_KEY_VERSION` bump or a model fix re-keys the card and
