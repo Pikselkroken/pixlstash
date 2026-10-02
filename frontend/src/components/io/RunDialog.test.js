@@ -1029,6 +1029,52 @@ describe("the body it sends", () => {
     expect(sentValue(body, "ckpt_name")).toBeUndefined();
   });
 
+  it("lists two different checkpoints read-only and runs them as stored", async () => {
+    // A Wan 2.2 high + low pair: which loader holds which file is not known
+    // for sure, so no box offers to swap one, and no `models` override goes.
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        default_recipe: {
+          models: [
+            { address: "core:a/unet_name", kind: "checkpoint", filename: "wan_high.safetensors" },
+            { address: "core:b/unet_name", kind: "checkpoint", filename: "wan_low.safetensors" },
+          ],
+          loras: [],
+          values: [],
+          stages: {},
+        },
+      }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(wrapper.find("[data-testid='rund-checkpoints']").text()).toBe(
+      "wan_high.safetensors + wan_low.safetensors",
+    );
+    expect(wrapper.find("input[aria-label='Checkpoint']").exists()).toBe(false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body.models ?? []).toEqual([]);
+    expect(sentValue(body, "unet_name")).toBeUndefined();
+  });
+
+  it("swaps one file on every loader that loads it", async () => {
+    const models = ["core:a/unet_name", "core:b/unet_name"].map((address) => ({
+      address,
+      kind: "checkpoint",
+      filename: "wan_low.safetensors",
+    }));
+    getWorkflowCard.mockResolvedValue({
+      card: card({ default_recipe: { models, loras: [], values: [], stages: {} } }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    wrapper.vm.setCheckpoint("other.safetensors");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].models).toEqual(
+      models.map(({ address }) => ({ address, filename: "other.safetensors" })),
+    );
+  });
+
   it("sends the stages the owner turned off as skip_stages (#1623)", async () => {
     getWorkflowCard.mockResolvedValue({
       card: card({

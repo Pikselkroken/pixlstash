@@ -720,7 +720,10 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
         labels: dict[str, Optional[str]] = {}
         for topology_hash in sorted(topologies_of[old_id]):
             for old, new in labels_of[topology_hash].items():
-                labels.setdefault(old, new)
+                # A label one topology pruned (None) yields to one another
+                # topology of the same workflow keeps, or its state is dropped.
+                if labels.get(old) is None:
+                    labels[old] = new
         base = bases.get(primary)
         # ponytail: one stage-slot resolution, the primary's base; a split
         # successor on another base topology gets the same slot labels.

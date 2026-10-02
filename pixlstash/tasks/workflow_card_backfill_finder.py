@@ -53,10 +53,17 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
         # before it tells the finder how the task went, so without this the
         # identical batch can be issued twice (see MissingCheckpointHashFinder).
         self._handed_out: set[str] = set()
-        # The shelf's base models as of the last family pass (data step 8
-        # derived every family the shelf knew at hub open): only a change can
-        # identify an unknown family.
-        self._family_signature: Optional[str] = shelf_family_signature(hub)
+        # The shelf's base models as of the last family pass: only a change can
+        # identify an unknown family. None while an unknown family is filed, so
+        # the first drained sweep after a start runs one pass: a shelf change
+        # the last session never passed over is not lost with the process.
+        unknown = hub.fetchone(
+            "SELECT 1 FROM workflow_variant_family WHERE families LIKE '%asset:%' "
+            "OR families LIKE '%unresolved%' LIMIT 1"
+        )
+        self._family_signature: Optional[str] = (
+            None if unknown else shelf_family_signature(hub)
+        )
 
     def finder_name(self) -> str:
         return "WorkflowCardBackfillFinder"

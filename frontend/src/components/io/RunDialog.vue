@@ -480,7 +480,13 @@
 
         <!-- The checkpoint is a MODEL of the default recipe, sent as
              `models: [{address, filename}]` (#1623), not a parameter value. -->
-        <div v-if="checkpointModel" class="rund-f rund-f--4">
+        <div v-if="checkpointFiles" class="rund-f rund-f--4">
+          <span class="rund-l">Checkpoints</span>
+          <span class="rund-mono" data-testid="rund-checkpoints">{{
+            checkpointFiles
+          }}</span>
+        </div>
+        <div v-else-if="checkpointModel" class="rund-f rund-f--4">
           <span class="rund-l">
             Checkpoint
             <RunResetChip
@@ -1009,12 +1015,24 @@ async function switchCard(key, keepEdits) {
  * detail read fills `default_recipe`, and its `address` is what a run's
  * `models` pin names.
  */
-const checkpointModel = computed(
-  () =>
-    (card.value?.default_recipe?.models || []).find(
-      (model) => model.kind === "checkpoint" && model.address,
-    ) || null,
+const checkpointModels = computed(() =>
+  (card.value?.default_recipe?.models || []).filter(
+    (model) => model.kind === "checkpoint" && model.address,
+  ),
 );
+const checkpointModel = computed(() => checkpointModels.value[0] || null);
+/**
+ * The files of a workflow that loads two or more DIFFERENT base models (a Wan
+ * 2.2 high + low pair), or null. Such a row is read-only and lists them all:
+ * which loader holds which file is not known for sure (the server pairs
+ * same-widget slots with filenames in sorted order), so one editable box
+ * would swap a file onto a loader it may not belong to. The run sends no
+ * `models` for it, and the default recipe loads every one as stored.
+ */
+const checkpointFiles = computed(() => {
+  const files = [...new Set(checkpointModels.value.map((m) => m.filename))];
+  return files.length > 1 ? files.join(" + ") : null;
+});
 /** The owner's checkpoint, or null while the row is untouched. */
 const checkpointEdit = ref(null);
 
@@ -1173,8 +1191,12 @@ function setCheckpoint(raw) {
  * `runBody` sends every value: the form is what runs.
  */
 const runModels = computed(() =>
-  checkpointModel.value && checkpointValue.value
-    ? [{ address: checkpointModel.value.address, filename: checkpointValue.value }]
+  checkpointModel.value && checkpointValue.value && !checkpointFiles.value
+    ? // Every loader of the one file: two loaders of it read as one row.
+      checkpointModels.value.map((model) => ({
+        address: model.address,
+        filename: checkpointValue.value,
+      }))
     : [],
 );
 

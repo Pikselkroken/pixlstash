@@ -1427,6 +1427,7 @@ async function filesChosen(event) {
   const files = Array.from(event.target?.files ?? []);
   event.target.value = "";
   let last = null;
+  let added = 0;
   for (const file of files) {
     if (file.size > MAX_WORKFLOW_BYTES) {
       store.error = `${file.name} is too large to be a workflow.`;
@@ -1438,6 +1439,7 @@ async function filesChosen(event) {
         name: file.name.replace(/\.json$/i, ""),
         workflow: JSON.parse(await file.text()),
       });
+      added += 1;
     } catch (err) {
       store.error = errorMessage(
         err,
@@ -1449,7 +1451,8 @@ async function filesChosen(event) {
   if (!last) return;
   await store.refetch();
   landOn(last.workflow_id);
-  announcement.value = `Added ${last.name}`;
+  // Opened on the last, but the live region says how many arrived.
+  announcement.value = added > 1 ? `Added ${added} workflows` : `Added ${last.name}`;
 }
 </script>
 

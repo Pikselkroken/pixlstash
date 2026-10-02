@@ -6,6 +6,7 @@ they share a card (``workflow_key``) and a stack (``core_hash``).
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -745,6 +746,37 @@ def test_workflow_type():
     }
     assert workflow_type(_doc(upscale)) == "upscale"
     assert workflow_type(_doc({"1": _node("SaveImage")})) is None
+
+
+PAIRED_API = Path(__file__).parent / "comfyui_workflows" / "paired" / "multigpu" / "api"
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        # Saved as a video: VHS_VideoCombine, SaveAnimatedWEBP, SaveWEBM.
+        ("ComfyUI-WanVideoWrapper wanvideo2_2 I2V A14B GGUF", "video"),
+        ("ComfyUI-WanVideoWrapper wanvideo_T2V", "video"),
+        ("ltxvideo checkpointloadersimple distorch2", "video"),
+        ("mochi checkpointloaderadvanced distorch2", "video"),
+        # Wan 2.2 text to video: its `EmptyHunyuanLatentVideo` used to make it
+        # `txt2img` by the `^Empty.*Latent` rule.
+        ("wan2_2 distorch2 double_unet no_cpu", "video"),
+        ("wan2_2 t2v lightx2v lora distorch2", "video"),
+        # The same video latent saving ONE picture is text to image.
+        ("wan2_2 t2i lightx2v lora distorch2", "txt2img"),
+        ("sdxl checkpoint loader advanced", "txt2img"),
+    ],
+)
+def test_a_graph_that_saves_a_video_is_a_video_workflow(name, expected):
+    graph = json.loads((PAIRED_API / f"{name}.json").read_text("utf-8"))
+    assert workflow_type(_doc(graph)) == expected
+
+
+def test_a_video_from_a_start_frame_is_video_not_img2img():
+    graph = _graph(img2img=True)
+    graph["7"] = _node("SaveVideo", video=["6", 0], filename_prefix="out")
+    assert workflow_type(_doc(graph)) == "video"
 
 
 def test_plumbing_only_is_never_claimed_when_the_wiring_differs():

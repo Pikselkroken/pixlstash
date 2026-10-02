@@ -442,6 +442,32 @@ describe("WorkflowCard", () => {
     expect(row.find(".wf-card__lora-count").text()).toBe("1 LoRA");
   });
 
+  it("names both base models of a two-loader workflow, once each", () => {
+    // A Wan 2.2 high + low pair: a mark each, then the hairline, and row 3
+    // reads them joined. Two loaders of one file are one model.
+    const wrapper = mountCard({
+      ...BARE,
+      models: [
+        { name: "wan2.2_high", title: "Wan 2.2 High", kind: "unet", quant: "fp8_e4m3" },
+        { name: "wan2.2_low", title: "Wan 2.2 Low", kind: "unet", quant: "fp8_e4m3" },
+        { name: "wan2.2_low", title: "Wan 2.2 Low", kind: "unet", quant: "fp8_e4m3" },
+      ],
+      loras: [{ name: "detail" }],
+    });
+    const items = wrapper.findAll(".wf-card__strip li");
+    expect(items.map((li) => li.classes()[0])).toEqual([
+      "wf-card__mark",
+      "wf-card__mark",
+      "wf-card__rule",
+      "wf-card__mark",
+    ]);
+    expect(wrapper.find(".wf-card__base").text()).toBe(
+      "Wan 2.2 High + Wan 2.2 Low",
+    );
+    // One precision, shared, printed once.
+    expect(wrapper.find(".wf-card__quant").text()).toBe("FP8");
+  });
+
   it("says No LoRAs rather than leaving the row blank", () => {
     expect(mountCard(BARE).find(".wf-card__lora-count").text()).toBe(
       "No LoRAs",

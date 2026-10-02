@@ -295,3 +295,22 @@ describe("deleteSelected", () => {
     expect(store.selectedKeys).toEqual(["the-stack"]);
   });
 });
+
+describe("the Checkpoint filter", () => {
+  it("lists and finds a two-loader workflow under each of its base models", async () => {
+    const wan = (id, ...names) => ({
+      id,
+      name: id,
+      models: names.map((name) => ({ name, kind: "unet" })),
+    });
+    listWorkflowCards.mockResolvedValue({
+      cards: [wan("pair", "wan_high", "wan_low"), wan("low-only", "wan_low")],
+    });
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    const counts = store.filterOptions.checkpoints.map((c) => [c.id, c.count]);
+    expect(Object.fromEntries(counts)).toEqual({ wan_low: 2, wan_high: 1 });
+    store.setFilters({ checkpoint: "wan_low" });
+    expect(store.filteredCards.map((card) => card.id)).toEqual(["pair", "low-only"]);
+  });
+});

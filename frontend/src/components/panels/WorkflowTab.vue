@@ -152,7 +152,9 @@
         <template v-if="detail">
         <div class="wftab-field wftab-field--top" data-testid="wftab-row-checkpoint">
           <span class="wftab-labelcol">
-            <span class="wftab-label">Checkpoint</span>
+            <span class="wftab-label">{{
+              checkpointLabels.length > 1 ? "Checkpoints" : "Checkpoint"
+            }}</span>
             <span v-if="recipeCheckpoint?.provenance === 'edited'" class="wftab-yours"
               >Yours</span
             >
@@ -260,8 +262,8 @@
           <!-- The card has no name for it, but the graph a run submits does:
                that is the file, installed as far as anybody knows. -->
           <span v-else-if="graphBaseModel" class="wftab-value"
-            ><Tooltip :text="graphBaseModel" activator="parent" />{{
-              fileName(graphBaseModel)
+            ><Tooltip :text="graphBaseModels" activator="parent" />{{
+              detail.graph_base_models.map(fileName).join(" + ")
             }}</span
           >
           <!-- The graph a run would submit was read and loads no base model:
@@ -285,8 +287,8 @@
               size="sm"
               variant="ghost"
               data-testid="wftab-show-checkpoint"
-              :aria-label="showLabel(checkpointShow.pictures, checkpointLabel)"
-              @click="showValue('model', checkpointShow.name, checkpointLabel)"
+              :aria-label="showLabel(checkpointShow.pictures, checkpointLabels[0])"
+              @click="showValue('model', checkpointShow.name, checkpointLabels[0])"
             >
               Show {{ checkpointShow.pictures }}
             </AppButton>
@@ -807,7 +809,7 @@ import { quantBadge } from "../../utils/modelShelf";
 import { PIXLSTASH_PACK_URL } from "../../utils/runReasons";
 import {
   checkpointMissing,
-  checkpointModel,
+  baseModels,
   checkpointUnread,
   modelDisplayName,
 } from "../../utils/workflowCard";
@@ -1053,18 +1055,23 @@ function recipeModelLabel(model) {
     : fileName(model.filename);
 }
 
-// The base model, as the card's own row picks it: a Flux or SD3 graph has a
-// `unet` and no `checkpoint`, and reading "checkpoint" alone called that
-// missing. The default recipe's pick wins once it has been read.
-const checkpointLabel = computed(() => {
-  const recipe = (recipeModels.value ?? []).find(
-    (model) => model.kind === "checkpoint" && model.filename,
-  );
-  if (recipe) return recipeModelLabel(recipe);
-  const found = card.value ? checkpointModel(card.value) : null;
-  const name = modelDisplayName(found);
-  return name ? withQuant(name, found) : "";
+// The base models, as the card's own row picks them: a Flux or SD3 graph has
+// a `unet` and no `checkpoint`, and reading "checkpoint" alone called that
+// missing. The default recipe's picks win once it has been read. Every one,
+// once each: a Wan 2.2 graph's high + low pair reads `A + B`, and which loader
+// holds which is not claimed (`baseModels`).
+const checkpointLabels = computed(() => {
+  const recipe = (recipeModels.value ?? [])
+    .filter((model) => model.kind === "checkpoint" && model.filename)
+    .map(recipeModelLabel);
+  const found = recipe.length
+    ? recipe
+    : baseModels(card.value ?? {}).map((model) =>
+        withQuant(modelDisplayName(model), model),
+      );
+  return [...new Set(found)];
 });
+const checkpointLabel = computed(() => checkpointLabels.value.join(" + "));
 
 const checkpointIsUnread = computed(() =>
   card.value ? checkpointUnread(card.value) : false,
@@ -1132,6 +1139,10 @@ onBeforeUnmount(() => {
  */
 const graphBaseModel = computed(
   () => detail.value?.graph_base_models?.[0] || "",
+);
+/** Every one of them, as the row prints them: `A + B`. */
+const graphBaseModels = computed(() =>
+  (detail.value?.graph_base_models ?? []).join(" + "),
 );
 
 /** The graph was read and names no base model (`[]`, not `null`). */
