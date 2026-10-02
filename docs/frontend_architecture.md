@@ -2023,7 +2023,13 @@ empty list. The footer is the Workflow tab's alone: Recipes runs a recipe from
 its own row, and Tasks replaces the body, so Run… would act on a card the reader
 can no longer see.
 
-- **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
+- **A line under Run… names where the graph came from** ("Graph from picture
+  N / the workflow file / a stored recipe", `wftab-graph-origin`), read off the
+  `source` of the pre-flight the tab already runs per card. A workflow has
+  exactly one graph and Run, Open, Export and Duplicate all use it (backend
+  §13), so which one is never a guess; the line is empty until the pre-flight
+  has answered.
+- **Open a copy in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
   logomark (`widgets/ComfyuiIcon.vue`, `currentColor` on the AiToolkitIcon
   pattern), shown while `comfyuiUrl` is set. It opens what Run… runs
   (`runTarget`: the one selected workflow) and is refused with a reason, not
