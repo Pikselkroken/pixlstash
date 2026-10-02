@@ -1115,7 +1115,8 @@ def _set_run_workflow_id(server, workflow_id: str, picture_ids: list[int]) -> No
     def update(session):
         for pid in picture_ids:
             pic = session.get(Picture, pid)
-            if pic is not None:
+            # Written once: a saver can report a picture filed by another run.
+            if pic is not None and pic.run_workflow_id is None:
                 pic.run_workflow_id = workflow_id
                 session.add(pic)
         session.commit()

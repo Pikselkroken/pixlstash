@@ -4617,7 +4617,13 @@ def create_router(server) -> APIRouter:
             and recipe_key is not None
             and find_card(hub, recipe_key) is not None
         )
-        if body.saved_recipe_id is not None and recipe_key and not own_card:
+        if (
+            body.saved_recipe_id is not None
+            and recipe_key
+            and not body.target
+            and not own_card
+        ):
+            # A target run leaves the card on purpose; only a missing card warns.
             logger.warning(
                 "[workflows] Saved recipe %s names card %s, which this hub no "
                 "longer holds; it runs on its workflow's base card.",
@@ -7203,7 +7209,14 @@ def create_router(server) -> APIRouter:
                         sweep=sweep,
                     )
                     delete_manual_workflow(hub, workflow_id)
-        except (OSError, ValueError, RecursionError, TrashPermissionError) as exc:
+        except (
+            OSError,
+            ValueError,
+            RecursionError,
+            TrashPermissionError,
+            sqlite3.Error,
+        ) as exc:
+            # sqlite3.Error: the trash copy may be made and the rows kept.
             logger.warning("Failed to delete workflow %s: %s", workflow_id, exc)
             raise HTTPException(
                 status_code=500, detail="Failed to delete the workflow."

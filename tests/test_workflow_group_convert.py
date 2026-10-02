@@ -662,6 +662,27 @@ def test_step_six_puts_every_hand_made_group_back_in_its_automatic_workflow(worl
         assert dissolve_manual_groups(conn) == 0
 
 
+def test_a_group_with_no_automatic_heir_keeps_its_successor_rows(world):
+    """No heir and no topology of its own: the NOT NULL row is left, not nulled."""
+    hub = world.hub
+    _convert(hub)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group (workflow_id, kind) VALUES ('orphan', 'manual')"
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES ('no-such-topology', 'orphan')"
+        )
+        conn.execute(
+            "INSERT INTO workflow_key_successor (workflow_key, workflow_id) "
+            "VALUES ('no-such-card', 'orphan')"
+        )
+    with hub.transaction() as conn:
+        dissolve_manual_groups(conn)
+    assert _successor(hub, "no-such-card") == "orphan"
+
+
 def test_the_hub_open_runs_the_conversion_once(world, tmp_path):
     """Data steps 5 and 6: a hub on data version 4 is converted, then the
     hand-made groups the conversion made are put back in automatic ones."""

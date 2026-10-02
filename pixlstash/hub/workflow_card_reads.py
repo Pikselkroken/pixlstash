@@ -247,7 +247,8 @@ def manual_documents_holding(hub: HubDatabase, canonical: str) -> list[str]:
         try:
             if workflow_bindings.canonical(json.loads(row["document"])) == canonical:
                 found.append(row["workflow_id"])
-        except (ValueError, RecursionError) as exc:
+        except (ValueError, RecursionError, AttributeError) as exc:
+            # AttributeError: valid JSON that is not an object.
             logger.warning(
                 "Manual workflow %s will not read to compare: %s",
                 row["workflow_id"],
@@ -284,6 +285,13 @@ def manual_document(hub: HubDatabase, workflow_id: str) -> Optional[dict]:
     if not isinstance(document, dict):
         logger.error("Manual workflow %s holds a non-object document.", workflow_id)
         return None
+    if converted is not None and not isinstance(converted, dict):
+        logger.error(
+            "Manual workflow %s holds a non-object API document; its stored "
+            "document runs instead.",
+            workflow_id,
+        )
+        converted = None
     return with_converted_graph(document, converted)
 
 

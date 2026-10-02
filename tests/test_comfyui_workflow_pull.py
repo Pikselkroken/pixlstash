@@ -542,6 +542,18 @@ def test_an_unreadable_workflow_is_counted_failed_and_the_rest_still_pull(
     assert "Broken" not in _stored(hub)
 
 
+def test_a_pulled_workflow_past_the_row_cap_is_failed_not_stored(
+    comfy, folders, hub, monkeypatch
+):
+    """The listing may give no size; the stored row's cap still holds."""
+    monkeypatch.setattr(
+        comfyui_module, "MAX_WORKFLOW_FILE_BYTES", len(json.dumps(PLAIN)) + 1
+    )
+    result = _pull(hub)
+    assert (result["failed"], result["pulled"]) == (1, 1)
+    assert _stored(hub) == ["Plain"]
+
+
 # ── the routes ──────────────────────────────────────────────────────────────
 
 
