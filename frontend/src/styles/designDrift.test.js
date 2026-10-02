@@ -132,13 +132,15 @@ describe("design drift", () => {
     expect(hits(/z-index:[^;}]*\d[^;}]*/g)).toEqual([
       "components/panels/FilterStrip.vue: z-index: calc(var(--z-sticky) - 1)",
     ]);
-    // Inline styles: a `zIndex` bound in a template or set from script.
+    // Inline styles set from a template or script: `zIndex`, a quoted
+    // `"z-index"` key, or `setProperty("z-index", ...)`. Quoted only, so a
+    // `.vue` file's own CSS (covered above) is not read twice.
     const scripts = sources(SRC, /\.(vue|js)$/)
       .filter((path) => !/\.test\.js$/.test(path))
       .flatMap((path) =>
         [
           ...withoutComments(readFileSync(path, "utf8")).matchAll(
-            /zIndex\s*[:=][^,;}\n]*\d[^,;}\n]*/g,
+            /(?:zIndex|["']z-index["']?)\s*[:=,][^,;}\n]*\d[^,;}\n]*/g,
           ),
         ].map((m) => `${relative(SRC, path)}: ${m[0].trim()}`),
       );
