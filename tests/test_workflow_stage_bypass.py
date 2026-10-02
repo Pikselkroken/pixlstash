@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from pixlstash.services.comfyui_recipe_service import bypass_stage
-from pixlstash.services.workflow_identity import FACE_DETAILER, UPSCALE
+from pixlstash.services.workflow_identity import FACE_DETAILER, SEED_VARIANCE, UPSCALE
 from pixlstash.services.workflow_run_service import (
     STAGE_NOT_SKIPPABLE,
     skip_requested_stages,
@@ -103,6 +103,27 @@ def test_model_upscale_prunes_its_loader():
     changes = bypass_stage(graph, UPSCALE, OBJECT_INFO)
 
     assert _actions(changes) == {"21": "bypassed", "20": "pruned"}
+    assert graph == _base()
+
+
+def test_seed_variance_comes_off_the_conditioning_it_feeds_the_sampler():
+    """A pre-sampler stage: feeding the sampler is what it does, not a refusal."""
+    graph = _base()
+    graph["30"] = {
+        "class_type": "SeedVarianceEnhancer",
+        "inputs": {"conditioning": ["6", 0], "strength": 0.5, "seed": 1},
+    }
+    graph["3"]["inputs"]["positive"] = ["30", 0]
+    info = dict(
+        OBJECT_INFO,
+        SeedVarianceEnhancer={
+            "input": {"required": {"conditioning": ["CONDITIONING"]}},
+            "output": ["CONDITIONING"],
+            "output_node": False,
+        },
+    )
+
+    assert _actions(bypass_stage(graph, SEED_VARIANCE, info)) == {"30": "bypassed"}
     assert graph == _base()
 
 

@@ -55,7 +55,9 @@ from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, F
 # Stack overrides are keyed on workflow keys, not on core hashes, so a
 # CORE_VERSION bump regroups automatic stacks without losing a user's choice.
 WORKFLOW_KEY_VERSION = "v1"
-CORE_VERSION = "v1"
+# v2: the v1 strip, then the second pass of :func:`_core_v2` (dead nodes,
+# string primitives, film grain, seed variance, loader variants).
+CORE_VERSION = "v2"
 
 ASSET_REFERENCE_PREFIX = "asset:"
 
@@ -146,6 +148,8 @@ def model_fix_kind(class_type: str, widget: str) -> Optional[str]:
 PLUMBING = "plumbing"
 UPSCALE = "upscale"
 FACE_DETAILER = "face_detailer"
+SEED_VARIANCE = "seed_variance"
+POST_PROCESS = "post_process"
 LORA = "lora"
 
 # Only these reach a stored document: API graphs have no Reroute or Note, and
@@ -160,6 +164,32 @@ _FACE_DETAILER_CLASS_RE = re.compile(
     r"|BboxDetector|SegmDetector|ONNXDetector)"
 )
 _SAMPLER_CLASS_RE = re.compile(r"Sampler")
+# Noise on the conditioning before sampling: a variation knob, not a different
+# workflow, so it is a stage (on or off in the default recipe), not core.
+_SEED_VARIANCE_CLASSES = frozenset({"SeedVarianceEnhancer"})
+
+# Core rule v2's second pass (:func:`_core_v2`), which only the core strip
+# applies. A text box feeding a prompt is where the prompt was typed, not a
+# step; a filter of one picture in, one picture out after the decode is a look.
+_STRING_PRIMITIVE_CLASSES = frozenset(
+    {"Textbox", "Text Multiline", "JWString", "\u270f\ufe0f Literal String"}
+)
+_POST_PROCESS_CLASSES = frozenset(
+    {"PhotoFilmGrain", "Image Levels Adjustment", "ImageSharpen", "ImageBlur"}
+)
+# What a node with no consumer may still be for: it writes, shows or sends.
+_SINK_CLASS_RE = re.compile(
+    r"Save|Preview|Output|Combine|Export|Upload|Saver|Send", re.IGNORECASE
+)
+# A loader's GGUF / multi-GPU spelling loads the same thing as the stock one.
+_LOADER_VARIANT_RE = re.compile(r"GGUF(?:Advanced)?|DisTorch2?|MultiGPU")
+_CANONICAL_LOADERS = {
+    "UnetLoader": "UNETLoader",
+    "CheckpointLoaderAdvanced": "CheckpointLoaderSimple",
+    "PixlStashCheckpointLoader": "CheckpointLoaderSimple",
+    "PixlStashCLIPLoader": "CLIPLoader",
+    "PixlStashVAELoader": "VAELoader",
+}
 
 # What a removed node's output stands for when an edge is re-wired through it:
 # the input carrying the same stream. A LoRA loader passes MODEL on slot 0 and
@@ -498,7 +528,7 @@ def unswapped(
 # The post-processing groups a card says it has, in the order a name lists
 # them. A tuple and not the set itself: the cached value is a string, and two
 # derivations of one topology have to compare equal byte for byte.
-SPECIAL_GROUPS = (UPSCALE, FACE_DETAILER)
+SPECIAL_GROUPS = (UPSCALE, FACE_DETAILER, SEED_VARIANCE)
 
 # A class that only LOADS the thing, and so is not on its own evidence the
 # graph does it. `node_groups` groups these with the work they feed because it
@@ -550,6 +580,8 @@ def node_groups(nodes: dict[str, ReducedNode]) -> dict[str, Optional[str]]:
             groups[node_id] = UPSCALE
         elif _FACE_DETAILER_CLASS_RE.match(cls):
             groups[node_id] = FACE_DETAILER
+        elif cls in _SEED_VARIANCE_CLASSES:
+            groups[node_id] = SEED_VARIANCE
         elif any(is_lora_widget(name) for name, _ in node.widgets) or (
             "lora" in cls.lower() and "loader" in cls.lower()
         ):
@@ -593,7 +625,7 @@ def core_hash(document: dict, *, strip_loras: bool = True) -> str:
     Raises:
         WorkflowGraphError: Nothing is left once the strip groups are removed.
     """
-    return _stripped_key(_reduce(document), _core_strip(strip_loras))
+    return graph_key(_core_graph(document, strip_loras))
 
 
 def core_node_labels(document: dict, *, strip_loras: bool = True) -> dict[str, str]:
@@ -608,16 +640,118 @@ def core_node_labels(document: dict, *, strip_loras: bool = True) -> dict[str, s
 
     The same strip as :func:`core_hash`, so the hash and the address cannot
     disagree about what the core is. Nodes the strip removes (plumbing, stages,
-    LoRA loaders) have no core label and are left out.
+    LoRA loaders, dead nodes) have no core label and are left out.
 
     Raises:
         WorkflowGraphError: The document is a raw graph, or nothing survives.
     """
-    return node_labels(_strip(_reduce(document), _core_strip(strip_loras)), rounds=None)
+    return node_labels(_core_graph(document, strip_loras), rounds=None)
+
+
+def _core_graph(document: dict, strip_loras: bool) -> dict[str, ReducedNode]:
+    return _core_pass(document, strip_loras)[0]
+
+
+def _core_pass(
+    document: dict, strip_loras: bool
+) -> tuple[dict[str, ReducedNode], Counter, bool]:
+    """:func:`_core_v2`'s answer for a whole document: the live core rule."""
+    nodes = _reduce(document)
+    strip = _core_strip(strip_loras)
+    if not has_sampler(nodes):
+        # Every stage is an optional addition to a graph that samples. With no
+        # sampler, a face detailer is what the graph does: kept as its core,
+        # an upscale after it still optional. With no detailer either, the
+        # upscale is the core. Kept, so the model chain is not made dead.
+        groups = node_groups(nodes)
+        detailer = any(
+            group == FACE_DETAILER
+            and not _LOADER_CLASS_RE.search(nodes[node_id].class_type)
+            for node_id, group in groups.items()
+        )
+        strip -= {FACE_DETAILER} if detailer else {UPSCALE, FACE_DETAILER}
+    return _core_v2(_strip(nodes, strip))
+
+
+def has_sampler(nodes: dict[str, ReducedNode]) -> bool:
+    """Whether a reduced graph has a sampler-class node of its own."""
+    return any(_SAMPLER_CLASS_RE.search(n.class_type) for n in nodes.values())
 
 
 def _core_strip(strip_loras: bool) -> set[str]:
     return {PLUMBING, UPSCALE, FACE_DETAILER} | ({LORA} if strip_loras else set())
+
+
+def _core_v2(
+    nodes: dict[str, ReducedNode],
+) -> tuple[dict[str, ReducedNode], Counter, bool]:
+    """Core rule v2's second pass over an already v1-stripped graph.
+
+    ``(core graph, pruned classes, whether the prune was refused)``. Applied to
+    the stripped graph and never to the document, so two graphs with one v1
+    core have one v2 core unless the graph has no sampler (whose stages
+    :func:`_core_graph` keeps): workflows only split by that and by base-model
+    family (data step 8). In order:
+
+    * string primitives (plumbing), picture filters (``POST_PROCESS``) and
+      seed variance are stripped, edges re-wired through them;
+    * **dead nodes are pruned**: every node nothing reads, unless it writes,
+      shows or sends (:data:`_SINK_CLASS_RE`), repeatedly. An orphan prompt
+      encoder is left-over editing, not a different workflow. **Refused** when
+      it would remove every sampler the graph had (a graph whose only output
+      was a stripped preview), or everything: the graph is kept whole;
+    * loader variants read as the stock loader (:data:`_CANONICAL_LOADERS`).
+    """
+    groups = node_groups(nodes)
+    for node_id, node in nodes.items():
+        if node.class_type in _STRING_PRIMITIVE_CLASSES:
+            groups[node_id] = PLUMBING
+        elif node.class_type in _POST_PROCESS_CLASSES:
+            groups[node_id] = POST_PROCESS
+    kept, pruned, refused = _prune(
+        _strip(nodes, {PLUMBING, POST_PROCESS, SEED_VARIANCE}, groups=groups)
+    )
+    return (
+        {
+            node_id: ReducedNode(_canonical_class(n.class_type), n.widgets, n.inputs)
+            for node_id, n in kept.items()
+        },
+        pruned,
+        refused,
+    )
+
+
+def _prune(
+    nodes: dict[str, ReducedNode],
+) -> tuple[dict[str, ReducedNode], Counter, bool]:
+    """*nodes* without their dead nodes, as :func:`_core_v2` describes."""
+    kept = dict(nodes)
+    while True:
+        read = {source for node in kept.values() for _, source, _ in node.inputs}
+        dead = [
+            node_id
+            for node_id, node in kept.items()
+            if node_id not in read and not _SINK_CLASS_RE.search(node.class_type)
+        ]
+        if not dead:
+            break
+        for node_id in dead:
+            del kept[node_id]
+    samplers = {i for i, n in nodes.items() if _SAMPLER_CLASS_RE.search(n.class_type)}
+    refused = not kept or bool(samplers and not samplers & kept.keys())
+    if refused:
+        kept = nodes
+    return (
+        kept,
+        Counter(nodes[i].class_type for i in nodes.keys() - kept.keys()),
+        refused,
+    )
+
+
+def _canonical_class(class_type: str) -> str:
+    if "Loader" in class_type:
+        class_type = _LOADER_VARIANT_RE.sub("", class_type)
+    return _CANONICAL_LOADERS.get(class_type, class_type)
 
 
 def _stripped_key(
@@ -634,9 +768,13 @@ def _strip(
     strip: Collection[str],
     *,
     keep_widgets: bool = False,
+    groups: Optional[dict[str, Optional[str]]] = None,
 ) -> dict[str, ReducedNode]:
-    """*nodes* without the *strip* groups, edges re-wired through them."""
-    groups = node_groups(nodes)
+    """*nodes* without the *strip* groups, edges re-wired through them.
+
+    *groups* overrides :func:`node_groups`, for a strip that classifies more.
+    """
+    groups = groups if groups is not None else node_groups(nodes)
     removed = {node_id for node_id, group in groups.items() if group in strip}
 
     def resolve(source: str, slot: int) -> Optional[tuple[str, int]]:
@@ -826,7 +964,11 @@ def differences_reduced(
     # A step one side lacks brings its own models (an upscaler, a detector);
     # they are that step's chip, not "other models".
     chipped: set[str] = set()
-    for group, label in ((FACE_DETAILER, "face detailer"), (UPSCALE, "upscale")):
+    for group, label in (
+        (FACE_DETAILER, "face detailer"),
+        (UPSCALE, "upscale"),
+        (SEED_VARIANCE, "seed variance"),
+    ):
         plus, minus = count(added, group), count(removed, group)
         if plus or minus:
             chipped.add(group)

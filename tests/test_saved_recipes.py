@@ -44,7 +44,7 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, SavedRecipe
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, auto_workflow_id
 from pixlstash.hub.workflow_group_writes import create_manual_workflow
 from pixlstash.server import Server
 from pixlstash.services import saved_recipe_service
@@ -86,8 +86,9 @@ VARIANT_A, VARIANT_B, VARIANT_C = _h("variant-a"), _h("variant-b"), _h("variant-
 # A and B differ only in what the core rule strips, so they group; C does not.
 CORE_SHARED = _h("core-shared")
 CORE_OTHER = _h("core-other")
-WF_AB = f"auto:{CORE_SHARED}"
-WF_C = f"auto:{CORE_OTHER}"
+# No base-model loader in these hand-written cards: the empty family set.
+WF_AB = auto_workflow_id(CORE_SHARED, "")
+WF_C = auto_workflow_id(CORE_OTHER, "")
 # A manual group's id: 32 hex, a uuid's.
 
 PROMPT = "a cold portrait, rim light"
@@ -129,6 +130,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_stack")
         conn.execute("DELETE FROM workflow_unstacked")
         conn.execute("DELETE FROM workflow_variant")
+        conn.execute("DELETE FROM workflow_variant_family")
         conn.execute("DELETE FROM workflow_recipe_graph")
         conn.execute("DELETE FROM workflow_recipe_asset")
         conn.execute("DELETE FROM workflow_recipe")
@@ -152,6 +154,11 @@ def _seed_hub(server) -> None:
                 "(structural_hash, topology_hash, workflow_key, key_version) "
                 "VALUES (?, ?, ?, 'v1')",
                 (structural, topology, key),
+            )
+            conn.execute(
+                "INSERT INTO workflow_variant_family (structural_hash, families) "
+                "VALUES (?, '')",
+                (structural,),
             )
             conn.execute(
                 # `specials` empty rather than NULL: NULL is "not derived

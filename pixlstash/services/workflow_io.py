@@ -100,7 +100,8 @@ def with_converted_graph(workflow: dict, graph: dict | None) -> dict:
         for k, v in workflow.items()
         if str(k).startswith("pixlstash_") and k != "pixlstash_bindings"
     }
-    return {**own, **graph}
+    # The workflow's own keys last: they win over anything the conversion carried.
+    return {**graph, **own}
 
 
 @dataclass(frozen=True)

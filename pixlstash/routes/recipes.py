@@ -67,7 +67,7 @@ MAX_REORDER_IDS = 500
 MAX_UNION_KEYS = 100
 # The models one recipe may pin: one per loader, and no real graph has more.
 MAX_MODELS = 64
-# ``auto:<core hash>`` or ``manual:<uuid hex>``. Declared on the ITEM:
+# ``auto:<core and families digest>`` or ``manual:<uuid hex>``. Declared on the ITEM:
 # `max_length` on a `list[str]` bounds the list, not each id.
 WorkflowId = Annotated[str, StringConstraints(pattern=WORKFLOW_ID_PATTERN)]
 

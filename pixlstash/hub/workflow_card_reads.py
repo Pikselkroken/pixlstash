@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, auto_workflow_id
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import asset_reference, normalized_filename
 from pixlstash.services.workflow_identity import (
@@ -86,6 +86,9 @@ class Card:
     hand_imported: bool = False
     file_name: Optional[str] = None
     variants: list[str] = field(default_factory=list)
+    # Each variant's base-model families (``workflow_variant_family``), None
+    # while the backfill has not derived them: part of its workflow's id.
+    families: dict[str, Optional[str]] = field(default_factory=dict)
     slots: list[dict] = field(default_factory=list)
     # A manual workflow's card (``workflow_document``): its own record, with
     # the id as both key and topology, and the workflow it was made from.
@@ -136,10 +139,12 @@ def card_index(hub: HubDatabase) -> list[Card]:
         "a.name AS name, a.notes AS notes, "
         "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported, "
         "COALESCE(f.hand_imported, 0) AS hand_imported, "
-        "f.workflow_name AS file_name "
+        "f.workflow_name AS file_name, vf.families AS families "
         "FROM workflow_variant v "
         "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
         "AND c.core_version = ? "
+        "LEFT JOIN workflow_variant_family vf "
+        "ON vf.structural_hash = v.structural_hash "
         "LEFT JOIN workflow_attr a ON a.workflow_key = v.workflow_key "
         "LEFT JOIN (SELECT workflow_key, MIN(workflow_name) AS workflow_name, "
         f"MAX({_HAND_IMPORTED}) AS hand_imported "
@@ -167,6 +172,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 file_name=row["file_name"],
             )
         card.variants.append(row["structural_hash"])
+        card.families[row["structural_hash"]] = row["families"]
     return list(cards.values()) + _manual_cards(hub)
 
 
@@ -557,10 +563,12 @@ def key_pins(hub: HubDatabase, workflow_key: str) -> Optional[list[tuple[str, st
 # Workflows as the owner sees them (#1622): variant -> topology -> workflow.
 #
 # What every route reads since the cut-over (#1623). An AUTOMATIC workflow is
-# a group of TOPOLOGIES, ``auto:<core_hash>`` under the rule this build applies
-# (a ``workflow_group_member`` placement first, which data step 6 emptied). A
-# topology with no core hash - the backfill has not reached it, or it was
-# cached under a superseded rule - is in no workflow yet, for the reason
+# a group of VARIANTS sharing a core hash under the rule this build applies
+# and a set of base-model families (``workflow_cards.auto_workflow_id``), so
+# one topology can be in several (a ``workflow_group_member`` placement first,
+# which data step 6 emptied). A variant with no core hash or no families - the
+# backfill has not reached it, or it was cached under a superseded rule - is
+# in no workflow yet, for the reason
 # ``Card.core_hash`` gives: a NULL bucket would read as one enormous workflow.
 # A MANUAL workflow is its own ``workflow_document`` row, ``manual:<uuid>``,
 # on no topology: it never joins an automatic one and none absorbs it.
@@ -597,30 +605,43 @@ class Workflow:
     hidden: bool = False
 
 
-def workflow_of_topology(hub: HubDatabase, topology_hash: str) -> Optional[str]:
-    """The workflow one topology is in, or ``None`` while it is in none."""
+# Every current variant with its automatic workflow: the topology's core under
+# this build's rule and the variant's own base-model families.
+_AUTO_VARIANTS = (
+    "SELECT v.structural_hash AS structural_hash, v.topology_hash AS topology_hash, "
+    "c.core_hash AS core_hash, vf.families AS families "
+    "FROM workflow_variant v "
+    "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+    "AND c.core_version = ? "
+    "JOIN workflow_variant_family vf ON vf.structural_hash = v.structural_hash "
+    "WHERE v.key_version = ? AND NOT EXISTS (SELECT 1 FROM workflow_group_member m "
+    "WHERE m.topology_hash = v.topology_hash)"
+)
+
+
+def workflow_of_variant(hub: HubDatabase, structural_hash: str) -> Optional[str]:
+    """The workflow one variant is in, or ``None`` while it is in none.
+
+    Per variant and not per topology: one topology holds workflows of
+    several base-model families.
+    """
     row = hub.fetchone(
-        "SELECT workflow_id FROM workflow_group_member WHERE topology_hash = ?",
-        (topology_hash,),
+        "SELECT m.workflow_id FROM workflow_group_member m "
+        "JOIN workflow_variant v ON v.topology_hash = m.topology_hash "
+        "WHERE v.structural_hash = ?",
+        (structural_hash,),
     )
     if row is not None:
         return row["workflow_id"]
     row = hub.fetchone(
-        "SELECT core_hash FROM workflow_topology_core "
-        "WHERE topology_hash = ? AND core_version = ?",
-        (topology_hash, CORE_RULE_VERSION),
+        f"{_AUTO_VARIANTS} AND v.structural_hash = ?",
+        (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, structural_hash),
     )
-    if row is not None:
-        return f"{AUTO_STACK_PREFIX}{row['core_hash']}"
-    return None
+    return auto_workflow_id(row["core_hash"], row["families"]) if row else None
 
 
 def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
-    """Every topology one workflow holds, sorted; empty for an unknown id.
-
-    An automatic workflow subtracts the topologies placed elsewhere by hand,
-    so a topology is only ever in one workflow. A manual workflow has none.
-    """
+    """Every topology one workflow holds, sorted; empty for an unknown id."""
     if not workflow_id.startswith(AUTO_STACK_PREFIX):
         return [
             topology_hash
@@ -630,22 +651,13 @@ def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
                 (workflow_id,),
             )
         ]
-    digest = workflow_id[len(AUTO_STACK_PREFIX) :]
-    return [
-        topology_hash
-        for (topology_hash,) in hub.fetchall(
-            "SELECT c.topology_hash FROM workflow_topology_core c "
-            "WHERE c.core_version = ? AND c.core_hash = ? AND NOT EXISTS ("
-            "SELECT 1 FROM workflow_group_member m "
-            "WHERE m.topology_hash = c.topology_hash) "
-            "ORDER BY c.topology_hash",
-            (CORE_RULE_VERSION, digest),
-        )
-    ]
+    return sorted({t for _, t in _auto_variants_of(hub, workflow_id)})
 
 
 def variants_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
-    """Every variant filed under one workflow's topologies, sorted."""
+    """Every variant filed under one workflow, sorted."""
+    if workflow_id.startswith(AUTO_STACK_PREFIX):
+        return sorted(s for s, _ in _auto_variants_of(hub, workflow_id))
     found: list[str] = []
     for batch in chunked(topologies_in_workflow(hub, workflow_id)):
         placeholders = ",".join("?" * len(batch))
@@ -658,6 +670,22 @@ def variants_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
             )
         ]
     return sorted(found)
+
+
+def _auto_variants_of(hub: HubDatabase, workflow_id: str) -> list[tuple[str, str]]:
+    """``[(structural_hash, topology_hash)]`` of one automatic workflow.
+
+    The id is a digest, so this reads every current variant and keeps the
+    ones whose id it is. # ponytail: a scan per call, an id column if a
+    library's variant count makes it slow.
+    """
+    return [
+        (row["structural_hash"], row["topology_hash"])
+        for row in hub.fetchall(
+            _AUTO_VARIANTS, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION)
+        )
+        if auto_workflow_id(row["core_hash"], row["families"]) == workflow_id
+    ]
 
 
 def workflow_index(
@@ -702,26 +730,30 @@ def workflow_index(
             )
             continue
         core = core_of.get(card.topology_hash)
-        workflow_id = placed.get(card.topology_hash) or (
-            f"{AUTO_STACK_PREFIX}{core}" if core else None
-        )
-        if workflow_id is None:
-            continue
-        entry = workflows.setdefault(workflow_id, Workflow(workflow_id))
-        entry.cards.append(card.workflow_key)
-        topology_of[card.workflow_key] = card.topology_hash
-        if card.topology_hash not in entry.topologies:
-            entry.topologies.append(card.topology_hash)
-        # Per topology, so every card on it agrees. The fullest answer wins,
-        # never the last card read.
-        known = entry.specials.get(card.topology_hash)
-        if known is None or len(card.specials or ()) > len(known):
-            entry.specials[card.topology_hash] = card.specials
-        loras[card.topology_hash] = max(
-            loras.get(card.topology_hash, 0),
-            sum(1 for s in card.slots if s.get("is_lora")),
-        )
         for structural_hash in card.variants:
+            families = card.families.get(structural_hash)
+            workflow_id = placed.get(card.topology_hash) or (
+                auto_workflow_id(core, families)
+                if core and families is not None
+                else None
+            )
+            if workflow_id is None:
+                continue
+            entry = workflows.setdefault(workflow_id, Workflow(workflow_id))
+            if card.workflow_key not in entry.cards:
+                entry.cards.append(card.workflow_key)
+            topology_of[card.workflow_key] = card.topology_hash
+            if card.topology_hash not in entry.topologies:
+                entry.topologies.append(card.topology_hash)
+            # Per topology, so every card on it agrees. The fullest answer
+            # wins, never the last card read.
+            known = entry.specials.get(card.topology_hash)
+            if known is None or len(card.specials or ()) > len(known):
+                entry.specials[card.topology_hash] = card.specials
+            loras[card.topology_hash] = max(
+                loras.get(card.topology_hash, 0),
+                sum(1 for s in card.slots if s.get("is_lora")),
+            )
             entry.variants.append(structural_hash)
             entry.variant_topology[structural_hash] = card.topology_hash
             entry.variant_card[structural_hash] = card.workflow_key

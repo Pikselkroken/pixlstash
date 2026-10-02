@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 7
+CURRENT_DATA_VERSION = 8
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -1174,8 +1174,8 @@ CREATE TABLE IF NOT EXISTS workflow_loader_swap (
 # tables, which stay the source of truth until the cut-over (#1623) converts
 # them; nothing here is read by a card route.
 #
-# A workflow id is ``auto:<core_hash>`` for an automatic group, the same
-# spelling an automatic stack already has, or a uuid hex for one the owner
+# A workflow id is ``auto:<digest of core and families>`` for an automatic
+# group (``workflow_cards.auto_workflow_id``), or a uuid hex for one the owner
 # split or merged. **Merge and split move topologies, never cards**: what told
 # two cards of one topology apart is a checkpoint or a LoRA, and those are
 # recipe values now.
@@ -1190,7 +1190,8 @@ CREATE TABLE IF NOT EXISTS workflow_loader_swap (
 
 # One row per workflow somebody has decided about. ``auto`` rows exist only
 # once something is stored against the group, so an automatic workflow nobody
-# has touched is not a row: it IS the topologies sharing ``core_hash``.
+# has touched is not a row. On an ``auto`` row ``core_hash`` holds the id's
+# digest, not a core hash (the id hashes core and families); nothing reads it.
 _V2_WORKFLOW_GROUP = """
 CREATE TABLE IF NOT EXISTS workflow_group (
     workflow_id  TEXT PRIMARY KEY,
@@ -1294,6 +1295,37 @@ CREATE TABLE IF NOT EXISTS workflow_id_successor (
 )
 """
 
+# What core rule v2 (data step 8) made of each topology's automatic workflow:
+# `auto:<v1 core>` -> `auto:<v2 core>`, and `label_map`, JSON
+# `{v1 core label: v2 core label or null}` (null: v2 took the node off the
+# core). Read by the vault's saved-recipe conversion, which rewrites a
+# recipe's `core:` addresses through it.
+#
+# One row per (topology, new workflow): workflows of different base-model
+# families never combine, so one topology's v1 workflow can become several.
+_V2_WORKFLOW_CORE_SUCCESSOR = """
+CREATE TABLE IF NOT EXISTS workflow_core_successor (
+    topology_hash    TEXT NOT NULL,
+    old_workflow_id  TEXT NOT NULL,
+    new_workflow_id  TEXT NOT NULL,
+    label_map        TEXT NOT NULL,
+    PRIMARY KEY (topology_hash, new_workflow_id)
+)
+"""
+
+# The base-model families a variant loads (`workflow_cards.variant_families`),
+# sorted and comma-joined, frozen on first derivation as a slot mark is: part
+# of its automatic workflow's id, so a later shelf scan must not move it. A
+# family nothing identifies is spelled by its asset reference, never a name;
+# the one exception is that unknown spelling, which ``reidentify_families``
+# rewrites once the shelf identifies it (its workflow's state carried along).
+_V2_WORKFLOW_VARIANT_FAMILY = """
+CREATE TABLE IF NOT EXISTS workflow_variant_family (
+    structural_hash  TEXT PRIMARY KEY,
+    families         TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1366,6 +1398,8 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_KEY_SUCCESSOR,
     _V2_WORKFLOW_DOCUMENT,
     _V2_WORKFLOW_ID_SUCCESSOR,
+    _V2_WORKFLOW_CORE_SUCCESSOR,
+    _V2_WORKFLOW_VARIANT_FAMILY,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -1864,6 +1898,23 @@ def _backfill_base_model_canonical(conn: sqlite3.Connection) -> int:
     return len(updates)
 
 
+def _has_v1_cores(conn: sqlite3.Connection) -> bool:
+    """Whether a filed topology's core is cached under core rule v1.
+
+    Data step 8's trigger beyond the version: an older build sharing this hub
+    writes them. Spelled out rather than imported (`hub.workflow_cards`
+    imports this module through `hub.db`).
+    """
+    return (
+        conn.execute(
+            "SELECT 1 FROM workflow_topology_core c WHERE c.core_version LIKE "
+            "'v1-loras-%' AND EXISTS (SELECT 1 FROM workflow_variant v "
+            "WHERE v.topology_hash = c.topology_hash) LIMIT 1"
+        ).fetchone()
+        is not None
+    )
+
+
 def apply_migrations(conn: sqlite3.Connection) -> int:
     """Bring *conn* up to :data:`CURRENT_SCHEMA_VERSION` and return that version.
 
@@ -1941,10 +1992,13 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
     # reason the schema steps do: an interrupted backfill must leave the counter
     # where it was, so the next open retries it rather than skipping it.
     data_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    if data_version < CURRENT_DATA_VERSION:
+    if data_version < CURRENT_DATA_VERSION or _has_v1_cores(conn):
         try:
             with conn:
                 conn.execute("BEGIN IMMEDIATE")
+                # Again, under the write lock: a second process may have run
+                # the steps between the read above and here.
+                data_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
                 if data_version < 1:
                     _backfill_component_roles(conn)
                 if data_version < 2:
@@ -1987,9 +2041,19 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     from pixlstash.services.workflow_inbox import workflow_user_dir
 
                     adopt_workflow_files(conn, workflow_user_dir())
-                # No placeholder: PRAGMA takes no parameters, and the value is
-                # this module's own constant rather than anything from outside.
-                conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")
+                if data_version < 8 or _has_v1_cores(conn):
+                    # Core rule v2: every topology re-derived here, so no
+                    # card is pending, and its workflow's state carried. Not
+                    # only once: an older build opening this shared hub (a
+                    # second checkout) writes v1 rows again, and state its
+                    # owner edits there lands on their v1 ids.
+                    from pixlstash.hub.workflow_group_convert import rederive_cores
+
+                    rederive_cores(conn, include_uncached=data_version < 8)
+                if data_version < CURRENT_DATA_VERSION:
+                    # No placeholder: PRAGMA takes no parameters, and the value
+                    # is this module's own constant, nothing from outside.
+                    conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")
         except sqlite3.Error as exc:
             logger.error(
                 "Hub data backfill to version %d failed, hub stays on data "

@@ -29,13 +29,12 @@ from pixlstash.hub.workflow_card_reads import (
     find_workflow,
     manual_documents_holding,
     manual_workflow_ids,
-    workflow_of_topology,
+    workflow_of_variant,
 )
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     set_manual_api_document,
 )
-from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
 from pixlstash.hub.workflows import (
     forget_input_modes,
     input_modes_by_workflow,
@@ -1127,8 +1126,7 @@ def _picture_workflow_key(server, pic_id: int) -> str | None:
 def _picture_workflow_id(server, pic_id: int) -> str | None:
     """The workflow this picture's variant is in, or ``None``; never raises.
 
-    The variant's topology as the hub files it, then the workflow that
-    topology is in (``workflow_of_topology``): the same resolution
+    The workflow the hub files the variant in (``workflow_of_variant``): the same resolution
     ``GET /pictures?workflow=`` makes the other way, so a link built from this
     id lists this picture. ``None`` for a variant not filed at the current key
     version, or a topology in no workflow yet.
@@ -1151,12 +1149,7 @@ def _picture_workflow_id(server, pic_id: int) -> str | None:
         )
         if not structural_hash:
             return None
-        row = hub.fetchone(
-            "SELECT topology_hash FROM workflow_variant "
-            "WHERE structural_hash = ? AND key_version = ?",
-            (structural_hash, WORKFLOW_KEY_VERSION),
-        )
-        return workflow_of_topology(hub, row["topology_hash"]) if row else None
+        return workflow_of_variant(hub, structural_hash)
     except Exception as exc:
         logger.warning(
             "[comfyui] Could not read the workflow for picture id=%s: %s; "
@@ -1829,7 +1822,7 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     model_slots: list[ComfyUIRecipeModelSlot] = []
     inputs: list[ComfyUIRecipeInput] = []
     # The workflow this picture's variant is in, None when the hub has not
-    # filed or grouped it. `auto:<core hash>` or a manual group's uuid; what it
+    # filed or grouped it. `auto:<core and families digest>` or a manual group's uuid; what it
     # GROUPS is an owner-only question, asked elsewhere.
     workflow_id: Optional[str] = None
     models: list[str] = []
@@ -2744,10 +2737,10 @@ def create_router(server) -> APIRouter:
             "negative_prompt": extras["negative_prompt"],
             "settings": extras["settings"],
             # The workflow this picture's variant is in, in a form the
-            # owner-only workflow routes can be asked about: `auto:<core
-            # hash>` or a manual group's uuid. No filename, no prompt, no
-            # pixels. The core hash is a digest of this graph's own shape,
-            # which this same token can already read whole from the
+            # owner-only workflow routes can be asked about: `auto:<digest>`
+            # or a manual group's uuid. No filename, no prompt, no pixels.
+            # The digest is of this graph's own shape and its base models'
+            # families, which this same token can already read whole from the
             # `/workflow` sibling; a manual id is a random uuid and says only
             # that the owner grouped it with others.
             "workflow_id": _picture_workflow_id(server, pic_id),

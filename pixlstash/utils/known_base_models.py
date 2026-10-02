@@ -195,7 +195,9 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
     "Z-Image Turbo": {
         "family": "zimage",
         "modality": "image",
-        "aliases": ["zimageturbo", "Tongyi-MAI/Z-Image-Turbo"],
+        # `zit`: the community's short name, matched only as a whole filename
+        # token (shorter than `_MIN_CONTAINED_ALIAS`), as in `clementine-zit`.
+        "aliases": ["zimageturbo", "zit", "Tongyi-MAI/Z-Image-Turbo"],
     },
     # Bare "zimage" resolves here, not to Turbo: the unqualified string most
     # often means the family, and Base is the fine-tuning target. Turbo has to
@@ -203,7 +205,7 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
     "Z-Image Base": {
         "family": "zimage",
         "modality": "image",
-        "aliases": ["zimagebase", "zimage", "Tongyi-MAI/Z-Image-Base"],
+        "aliases": ["zimagebase", "zimage", "zib", "Tongyi-MAI/Z-Image-Base"],
     },
     "Z-Image Edit": {
         "family": "zimage",

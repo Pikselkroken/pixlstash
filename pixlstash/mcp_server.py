@@ -181,7 +181,7 @@ _PROJECT_ID = {
 }
 # `GET /pictures` and `/pictures/count` take it; `/pictures/search` does not,
 # so search_pictures leaves it out rather than drop it without a word.
-# A workflow id: `auto:<core hash>` or `manual:<uuid hex>`. The pattern is
+# A workflow id: `auto:<core and families digest>` or `manual:<uuid hex>`. The pattern is
 # also the JSON-schema one, where `$` is the end; Python checks it with
 # `fullmatch`, since there `$` also matches before a trailing newline.
 _WORKFLOW_ID_RE = re.compile(WORKFLOW_ID_PATTERN)

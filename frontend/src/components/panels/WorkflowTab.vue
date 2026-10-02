@@ -1722,7 +1722,11 @@ const loraNote = computed(() => {
 });
 
 /** What the default recipe's optional stages are called on the row. */
-const STAGE_LABELS = { upscale: "Upscale", face_detailer: "Face detailer" };
+const STAGE_LABELS = {
+  upscale: "Upscale",
+  face_detailer: "Face detailer",
+  seed_variance: "Seed variance",
+};
 
 /** The base graph's optional stages and whether the default runs each. */
 const stageRows = computed(() =>

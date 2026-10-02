@@ -63,7 +63,7 @@ from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
 )
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, auto_workflow_id
 from pixlstash.hub.workflows import (
     PictureGhost,
     get_document,
@@ -238,10 +238,10 @@ HIDDEN_CORE = _h("hiddencore")
 # The workflows (#1623): one per core hash here, so each card above is the one
 # card of its own workflow and the base card every one-graph route acts on.
 # The tests that need a workflow of several topologies put one together.
-BUSY_WF = AUTO_STACK_PREFIX + SHARED_CORE
-FORGOTTEN_WF = AUTO_STACK_PREFIX + FORGOTTEN_CORE
-BINNED_WF = AUTO_STACK_PREFIX + LONE_CORE
-HIDDEN_WF = AUTO_STACK_PREFIX + HIDDEN_CORE
+BUSY_WF = auto_workflow_id(SHARED_CORE, "")
+FORGOTTEN_WF = auto_workflow_id(FORGOTTEN_CORE, "")
+BINNED_WF = auto_workflow_id(LONE_CORE, "")
+HIDDEN_WF = auto_workflow_id(HIDDEN_CORE, "")
 
 # (structural_hash, topology_hash, workflow_key)
 _SEED_VARIANTS = (
@@ -676,6 +676,11 @@ def _seed_hub(server) -> None:
             "(structural_hash, topology_hash, workflow_key, key_version) "
             "VALUES (?, ?, ?, ?)",
             [(*row, WORKFLOW_KEY_VERSION) for row in _SEED_VARIANTS],
+        )
+        # Hand-written cards name no base model: the empty family set.
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_variant_family (structural_hash, families) "
+            "SELECT structural_hash, '' FROM workflow_variant"
         )
         conn.executemany(
             "INSERT INTO workflow_topology_core "
@@ -3576,7 +3581,7 @@ FLIP_TOPOLOGY = _h("fliptopology")
 FLIP_RECIPE_A = _h("fliprecipea")
 FLIP_RECIPE_B = _h("fliprecipeb")
 FLIP_CORE = _h("flipcore")
-FLIP_WF = AUTO_STACK_PREFIX + FLIP_CORE
+FLIP_WF = auto_workflow_id(FLIP_CORE, "")
 
 # Two variants of ONE graph that differ in nothing but which character LoRA
 # sits in the slot. That is the whole point of the fixture: with the slot
@@ -3692,6 +3697,11 @@ def _seed_flip_fixture(server) -> str:
                 (FLIP_RECIPE_A, FLIP_TOPOLOGY, merged, WORKFLOW_KEY_VERSION),
                 (FLIP_RECIPE_B, FLIP_TOPOLOGY, merged, WORKFLOW_KEY_VERSION),
             ],
+        )
+        # Hand-written cards name no base model: the empty family set.
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_variant_family (structural_hash, families) "
+            "SELECT structural_hash, '' FROM workflow_variant"
         )
         conn.execute(
             "INSERT INTO workflow_topology_core (topology_hash, core_hash, "
@@ -4937,7 +4947,7 @@ def test_the_card_routes_the_cut_over_removed_are_gone(workflow_env):
     table no reader looks at any more.
     """
     owner = workflow_env.owner
-    stack_id = f"{AUTO_STACK_PREFIX}{SHARED_CORE}"
+    stack_id = BUSY_WF
     for method, path, body in (
         ("PUT", f"{API}/workflows/{BUSY_WF}/slots", {"marks": {}}),
         ("POST", f"{API}/workflows/{BUSY_WF}/unstack", None),
@@ -5106,7 +5116,7 @@ RUN_TOPOLOGY = _h("runtopology")
 RUN_RECIPE = _h("runrecipe")
 RUN_CARD = _h("runcard")
 RUN_CORE = _h("runcore")
-RUN_WF = AUTO_STACK_PREFIX + RUN_CORE
+RUN_WF = auto_workflow_id(RUN_CORE, "")
 RUN_INSTANCE = _h("runinstance")
 
 RUN_DOCUMENT = {
@@ -5256,6 +5266,11 @@ def _seed_runnable_card(server) -> int:
             "VALUES (?, ?, ?, ?)",
             (RUN_RECIPE, RUN_TOPOLOGY, RUN_CARD, WORKFLOW_KEY_VERSION),
         )
+        # Hand-written cards name no base model: the empty family set.
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_variant_family (structural_hash, families) "
+            "SELECT structural_hash, '' FROM workflow_variant"
+        )
         instance = json.loads(json.dumps(RUN_DOCUMENT))
         instance["3"]["inputs"].update({"steps": 24, "cfg": 6.5})
         conn.execute(
@@ -5332,6 +5347,11 @@ def _seed_second_runnable_card(server) -> int:
             "(structural_hash, topology_hash, workflow_key, key_version) "
             "VALUES (?, ?, ?, ?)",
             (RUN_RECIPE_TWO, RUN_TOPOLOGY, RUN_CARD_TWO, WORKFLOW_KEY_VERSION),
+        )
+        # Hand-written cards name no base model: the empty family set.
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_variant_family (structural_hash, families) "
+            "SELECT structural_hash, '' FROM workflow_variant"
         )
         instance = json.loads(json.dumps(RUN_DOCUMENT))
         instance["3"]["inputs"].update({"steps": 24, "cfg": 6.5})
@@ -7877,7 +7897,7 @@ def test_values_are_applied_at_run_time_and_never_written_back(runnable):
     assert get_document(runnable.server.hub, RUN_RECIPE) == stored
 
 
-RUN_WORKFLOW = f"{AUTO_STACK_PREFIX}{RUN_CORE}"
+RUN_WORKFLOW = auto_workflow_id(RUN_CORE, "")
 
 
 def _core_address(node_id: str, input_name: str) -> str:

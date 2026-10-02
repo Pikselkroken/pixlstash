@@ -1863,7 +1863,7 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
 
     Args:
         prompt_graph: The API-format graph, mutated in place.
-        group: ``workflow_identity.UPSCALE`` or ``workflow_identity.FACE_DETAILER``.
+        group: A ``workflow_identity.SPECIAL_GROUPS`` entry.
         object_info: The map from :func:`fetch_object_info`.
 
     Returns:
@@ -1877,7 +1877,7 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
             same type can stand in for, or this ComfyUI does not know the class.
     """
     # Local: workflow_identity imports this module.
-    from pixlstash.services.workflow_identity import node_groups
+    from pixlstash.services.workflow_identity import SEED_VARIANCE, node_groups
 
     graph = deepcopy(prompt_graph)
     live_before = _live_ids(graph, object_info)
@@ -1929,7 +1929,11 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
     # input (img2img's resize) and stays; with one, it is a hires fix in pixel
     # space whose re-encode and second sampler `node_groups` does not claim,
     # so taking only the upscale out would leave a pass nobody asked for.
-    for node_id in sorted(in_stage, key=_node_order_key):
+    # Seed variance works on the conditioning, so it feeds its sampler by
+    # definition and the rule does not apply.
+    for node_id in sorted(
+        in_stage if group != SEED_VARIANCE else (), key=_node_order_key
+    ):
         feeds = samplers(reach(node_id, read_by))
         if not feeds:
             continue

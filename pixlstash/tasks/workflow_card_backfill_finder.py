@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import (
     card_grouping,
+    shelf_family_signature,
     unidentified_variants,
     variant_counts,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
-from pixlstash.tasks.workflow_card_backfill_task import WorkflowCardBackfillTask
+from pixlstash.tasks.workflow_card_backfill_task import (
+    FamilyReidentifyTask,
+    WorkflowCardBackfillTask,
+)
 
 logger = get_logger(__name__)
 
@@ -48,6 +53,10 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
         # before it tells the finder how the task went, so without this the
         # identical batch can be issued twice (see MissingCheckpointHashFinder).
         self._handed_out: set[str] = set()
+        # The shelf's base models as of the last family pass (data step 8
+        # derived every family the shelf knew at hub open): only a change can
+        # identify an unknown family.
+        self._family_signature: Optional[str] = shelf_family_signature(hub)
 
     def finder_name(self) -> str:
         return "WorkflowCardBackfillFinder"
@@ -70,9 +79,22 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
             if structural_hash not in skip
         ][: WorkflowCardBackfillTask.BATCH_SIZE]
         if not batch:
-            return None
+            return self._reidentify_task()
         self._handed_out.update(batch)
         return WorkflowCardBackfillTask(hub=self._hub, structural_hashes=batch)
+
+    def _reidentify_task(self):
+        """A pass moving unknown base-model families the shelf has since learned.
+
+        Asked only once the backfill is drained, and only when the shelf's
+        base models changed since the last pass: a scan or the owner setting a
+        base model is what identifies one.
+        """
+        signature = shelf_family_signature(self._hub)
+        if signature == self._family_signature:
+            return None
+        self._family_signature = signature
+        return FamilyReidentifyTask(hub=self._hub)
 
     def on_all_tasks_complete(self) -> None:
         """Report the grouping once the hub is drained: the owner gate reads it.
@@ -100,6 +122,22 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
 
     def on_task_complete(self, task, error) -> None:
         """Record which variants must not be handed out again this session."""
+        if isinstance(task, FamilyReidentifyTask) and error is not None:
+            if isinstance(error, (TaskCancelledError, sqlite3.OperationalError)):
+                # Never ran, or a busy hub: nothing was learned, so the next
+                # sweep asks again.
+                logger.warning("Base-model family pass did not run: %s", error)
+                self._family_signature = None
+                return
+            # A real failure keeps the signature `_reidentify_task` set, so
+            # the pass is asked again only once the shelf changes: handing it
+            # out every sweep would keep the planner awake forever.
+            logger.warning(
+                "Base-model family pass failed: %s. It runs again when the "
+                "shelf's base models change.",
+                error,
+            )
+            return
         hashes = (getattr(task, "params", None) or {}).get("structural_hashes") or []
         self._handed_out.difference_update(hashes)
         if isinstance(error, TaskCancelledError):

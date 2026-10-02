@@ -322,6 +322,16 @@ describe("WorkflowRecipesTab", () => {
     expect(wrapper.find(".wfrt-sub").text()).toBe("");
   });
 
+  it("drops a superseded read's loading note when the selection empties", async () => {
+    listSavedRecipes.mockImplementation(() => new Promise(() => {}));
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.text()).toContain("Reading your recipes");
+    await wrapper.setProps({ workflowIds: [] });
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Reading your recipes");
+  });
+
   it("keeps an unsaved look from its cover picture's own recipe", async () => {
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);

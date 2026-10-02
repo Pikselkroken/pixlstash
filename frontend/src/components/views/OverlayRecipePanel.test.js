@@ -307,6 +307,20 @@ describe("OverlayRecipePanel", () => {
     });
   });
 
+  it("opens the workflow by its id, which a topology cannot name alone", async () => {
+    // One topology can hold workflows of several base-model families, so a
+    // picture the hub has keyed goes to its own workflow, never the topology's.
+    const wrapper = render({ recipe: { ...RECIPE, workflowId: "auto:" + "e".repeat(64) } });
+    const open = wrapper
+      .findAll(".recipe-sec-act")
+      .find((b) => b.text().includes("Open"));
+    await open.trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: { workflow: "auto:" + "e".repeat(64) },
+    });
+  });
+
   it("writes the settings the way the design draws them", () => {
     // Sampler in the design's order, Size built from width and height, and
     // Seed and Negative as rows of the same grid rather than sections.
@@ -874,27 +888,12 @@ describe("OverlayRecipePanel", () => {
     const link = wrapper.find(".recipe-match-name");
     expect(link.element.tagName).toBe("BUTTON");
     await link.trigger("click");
-    // The card by its topology, as *Open* does, and the rail on the Recipes
+    // The card by its workflow, as *Open* does, and the rail on the Recipes
     // tab: "Saved" with nowhere to go was the dead end this closes.
     expect(nav.push).toHaveBeenCalledWith({
       name: "workflows",
-      query: { topology: "f00d", tab: "recipes" },
+      query: { workflow: "c".repeat(64), tab: "recipes" },
     });
-  });
-
-  it("leaves the name inert when there is no workflow to open", async () => {
-    // Exactly where *Open* is not offered either: no topology, nowhere to go.
-    listSavedRecipes.mockResolvedValue(MATCHING);
-    const wrapper = render({
-      recipe: { ...ON_A_CARD, loraNames: [], topologyHash: null },
-    });
-    await flushPromises();
-
-    const name = wrapper.find(".recipe-match-name");
-    expect(name.text()).toContain("Rainy tram platform");
-    expect(name.element.tagName).toBe("B");
-    await name.trigger("click");
-    expect(nav.push).not.toHaveBeenCalled();
   });
 
   it("replaces a row the dialog replaced, rather than listing it twice", async () => {
