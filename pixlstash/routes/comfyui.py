@@ -294,7 +294,7 @@ def store_manual_workflow(
     from_workflow_id: str | None = None,
     from_name: str | None = None,
     api_document: dict | None = None,
-    record: tuple[str, str, str | None] | None = None,
+    record: tuple[str, str, int | None, str | None] | None = None,
 ) -> str:
     """Store *workflow* as a new manual workflow called *name*; return its id.
 
@@ -362,7 +362,12 @@ def _topology_of(workflow: dict, name: str = "workflow") -> str | None:
         return None
 
 
-def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
+def store_pulled_workflow(
+    hub,
+    name: str,
+    workflow: dict,
+    record: tuple[str, str, int | None, str | None],
+) -> dict:
     """File one document pulled from ComfyUI as a manual workflow (#1440).
 
     **The caller holds ``workflow_inbox.INBOX_LOCK``.** Deduplicated on
@@ -370,12 +375,21 @@ def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
     some origin already stored as a live workflow is ``matched``. A copy of a
     workflow PixlStash ships is not stored: ``builtin`` says so, and the pull
     reports it apart.
+
+    *record* is ``(origin, remote_path, remote_modified, content_hash)`` of
+    the ``workflow_origin`` row, written whatever the outcome; for a new
+    workflow in the same transaction as the row (#1694), since one stored
+    without it would come back after a delete.
     """
+    origin, remote_path, remote_modified, content_hash = record
     check_comfy_workflow(workflow)
     migrated, _ = workflow_bindings.migrate_placeholders(workflow)
     topology_hash = _topology_of(migrated, name)
     stored = workflow_origin.stored_as(hub, workflow_inbox.content_hash(workflow))
     if stored is not None:
+        workflow_origin.record_pulled(
+            hub, origin, remote_path, stored, remote_modified, content_hash
+        )
         return {
             "name": _stem(name),
             "matched": True,
@@ -384,6 +398,9 @@ def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
             "topology_hash": topology_hash,
         }
     if _builtin_copy(workflow_bindings.canonical(migrated)):
+        workflow_origin.record_pulled(
+            hub, origin, remote_path, None, remote_modified, content_hash
+        )
         return {
             "name": _stem(name),
             "matched": True,
@@ -397,7 +414,9 @@ def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
         "name": _stem(name),
         "matched": False,
         "builtin": False,
-        "workflow_id": create_manual_workflow(hub, _stem(name), migrated, "pull"),
+        "workflow_id": create_manual_workflow(
+            hub, _stem(name), migrated, "pull", record=record
+        ),
         "topology_hash": topology_hash,
     }
 
@@ -422,7 +441,7 @@ def store_inbox_workflow(hub, name: str, workflow: dict) -> dict:
         _stem(name),
         workflow,
         "inbox",
-        record=(workflow_origin.INBOX_ORIGIN, digest, digest),
+        record=(workflow_origin.INBOX_ORIGIN, digest, None, digest),
     )
     return {"name": _stem(name), "matched": False, "workflow_id": workflow_id}
 
@@ -2240,6 +2259,7 @@ def create_router(server) -> APIRouter:
                         record=(
                             workflow_origin.BUILTIN_ORIGIN,
                             name,
+                            None,
                             workflow_inbox.content_hash(stored),
                         ),
                     )
