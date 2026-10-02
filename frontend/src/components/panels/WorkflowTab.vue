@@ -670,11 +670,13 @@
              ComfyUI opens on whatever it had last. It opens what Run… runs
              (`runTarget`), and is refused rather than hidden otherwise, for
              Run…'s reason or a ComfyUI without the node. The tooltip is its
-             accessible name. -->
+             accessible name. "A copy", because that is what it is: what
+             ComfyUI saves comes back as a workflow of its own on the next
+             pull, and this one keeps its graph. -->
         <AppButton
           v-if="canOpenComfyui"
           icon-only
-          tooltip="Open in ComfyUI"
+          tooltip="Open a copy in ComfyUI"
           data-testid="wftab-open-comfyui"
           :aria-disabled="runTarget && !comfyuiLacksNode ? undefined : 'true'"
           :aria-describedby="openDescribedBy"
@@ -734,6 +736,15 @@
         </p>
         <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
           Run one workflow at a time
+        </p>
+        <!-- Where the one graph Run and Open act on came from: a workflow has
+             exactly one, and this says which, so it is never a guess. -->
+        <p
+          v-if="graphOrigin"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-graph-origin"
+        >
+          {{ graphOrigin }}
         </p>
       </div>
     </template>
@@ -1104,6 +1115,11 @@ const missingBaseFiles = ref([]);
 /** The same for each support kind (`SUPPORT_KINDS`), by `slot_kind`. */
 const missingFiles = ref({});
 const preflightAnswered = ref(false);
+/**
+ * Where the graph Run and Open use came from, as the pre-flight resolved it
+ * (`source`: file, picture or instance). "" until it has answered.
+ */
+const graphOrigin = ref("");
 let installedCheck = 0;
 // A rail that has closed asks nothing: an ask still settling is superseded.
 onBeforeUnmount(() => {
@@ -1340,6 +1356,22 @@ function replaceModel(kind, was, now) {
 /** A recorded model value as a person looks for it: the file, no folders. */
 function fileName(value) {
   return String(value).split(/[\\/]/).pop();
+}
+
+/** The sentence under Run for one pre-flight group's `source`, or "". */
+function describeOrigin(group) {
+  switch (group?.source) {
+    case "file":
+      return "Graph stored with this workflow";
+    case "picture":
+      return group.source_picture_id != null
+        ? `Graph from picture ${group.source_picture_id}`
+        : "Graph from a picture";
+    case "instance":
+      return "Graph from a stored recipe";
+    default:
+      return "";
+  }
 }
 
 // ── The LoRA chain (#1478) ─────────────────────────────────────────────────
@@ -2239,7 +2271,7 @@ const runDescribedBy = computed(() =>
   multiple.value ? "wftab-run-reason" : undefined,
 );
 
-/** Why Open in ComfyUI refuses, when it does. */
+/** Why Open a copy in ComfyUI refuses, when it does. */
 const openDescribedBy = computed(() => {
   if (multiple.value) return "wftab-open-reason";
   return comfyuiLacksNode.value ? "wftab-open-node-reason" : undefined;
@@ -2357,6 +2389,7 @@ async function checkInstalled(key) {
   missingBaseFiles.value = [];
   missingFiles.value = {};
   preflightAnswered.value = false;
+  graphOrigin.value = "";
   replacementsByFile.value = {};
   if (!key) return;
   await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
@@ -2368,6 +2401,7 @@ async function checkInstalled(key) {
     });
     if (check !== installedCheck || !stillOn(key)) return;
     preflightAnswered.value = true;
+    graphOrigin.value = describeOrigin(answer?.groups?.[0]);
     const missing = (answer?.groups ?? [])
       .flatMap((group) => group.reasons ?? [])
       .filter((reason) => reason.code === "missing_models")
