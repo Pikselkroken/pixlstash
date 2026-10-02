@@ -12,7 +12,7 @@ import {
   WORKFLOW_SOURCE_LABELS,
   workflowFilterChips,
 } from "../utils/filterChips";
-import { baseModels } from "../utils/workflowCard";
+import { baseModels, modelDisplayName } from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
 
@@ -20,9 +20,10 @@ import { errorMessage } from "../utils/apiError";
  * The Workflows grid (v1.12 F1a) — the cards, the sort and the selection.
  *
  * **One card per workflow, keyed by its `id`** (#1623): `auto:<core and families digest>` or
- * a manual group's uuid. There are no stacks to open any more; a workflow that
- * holds several topologies is still one card, and Merge / Split are the two
- * writes that change which topologies a workflow holds.
+ * a manual workflow's id. There are no stacks to open any more; a workflow that
+ * holds several topologies is still one card. Which topologies an automatic
+ * workflow holds is the core rule's, never the owner's: there is no merge or
+ * split.
  */
 
 export const SORT_KEYS = ["rating", "used", "pictures", "name"];
@@ -220,6 +221,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    */
   const filterOptions = computed(() => {
     const types = new Map();
+    // file name → { count, label }: filtered by file, shown by shelf name.
     const checkpoints = new Map();
     let imported = 0;
     let ghosts = 0;
@@ -235,8 +237,13 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         types.set(card.type, seen);
       }
       // Every base model: a Wan 2.2 workflow is listed under both its UNETs.
-      for (const { name } of baseModels(card)) {
-        checkpoints.set(name, (checkpoints.get(name) ?? 0) + 1);
+      for (const model of baseModels(card)) {
+        const seen = checkpoints.get(model.name) ?? {
+          count: 0,
+          label: modelDisplayName(model),
+        };
+        seen.count += 1;
+        checkpoints.set(model.name, seen);
       }
       if (card.imported) imported += 1;
       if (keepsGhost(card)) ghosts += 1;
@@ -248,7 +255,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       ghosts,
       types: [...types.values()].sort((a, b) => b.count - a.count),
       checkpoints: [...checkpoints.entries()]
-        .map(([id, count]) => ({ id, label: id, count }))
+        .map(([id, { count, label }]) => ({ id, label, count }))
         .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
       sources: [
         {
@@ -531,7 +538,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     // **The selection goes with what left the screen.** The selection bar and
     // the rail's bulk verbs act on `selectedKeys`, so a filter that takes a
     // card away would otherwise leave "3 workflows selected" over a grid
-    // drawing one — and Hide or Merge would act on cards the reader cannot see.
+    // drawing one — and Hide or Delete would act on cards the reader cannot see.
     if (selectedKeys.value.length) {
       const onScreen = new Set(filteredCards.value.map((card) => card.id));
       selectedKeys.value = selectedKeys.value.filter((key) =>
@@ -575,14 +582,34 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * from the Run popup opened *from that tab* changes the list behind a dialog
    * the selection never moved off, so the tab stayed stale until the owner
    * clicked away and back. The backend announces this as `workflows_changed`
-   * with reason "recipes"; nothing in the client listens to that stream yet,
-   * and this is the in-process half of the same signal until something does.
+   * with reason "recipes" (`onWorkflowsChanged`); this is the in-process half
+   * of the same signal, for the tab that made the change.
    */
   const recipesEpoch = ref(0);
 
   /** Say a recipe was saved, renamed or deleted. */
   function notedRecipesChanged() {
     recipesEpoch.value += 1;
+  }
+
+  /**
+   * React to the backend's `workflows_changed` (any tab, or a background pass).
+   *
+   * `renamed` maps a retired workflow id to the one that took its pictures
+   * (reason "regrouped": the shelf identified an unknown base model). The
+   * selection follows the rename, so the rail's open card does not 404; an id
+   * the grid then does not list drops out of `selectedCards` on its own. The
+   * grid is re-read only if it has been read (`invalidate`).
+   */
+  function onWorkflowsChanged({ reason, renamed } = {}) {
+    const map = renamed && typeof renamed === "object" ? renamed : {};
+    if (Object.keys(map).length && selectedKeys.value.length) {
+      selectedKeys.value = [
+        ...new Set(selectedKeys.value.map((id) => map[id] ?? id)),
+      ];
+    }
+    if (reason === "recipes") notedRecipesChanged();
+    invalidate();
   }
 
   /**
@@ -616,6 +643,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   return {
     recipesEpoch,
     notedRecipesChanged,
+    onWorkflowsChanged,
     pictureToOpen,
     requestOpenPicture,
     cloneOntoSetKey,

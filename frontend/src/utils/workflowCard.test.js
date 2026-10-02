@@ -10,6 +10,7 @@ import {
   fitChipCount,
   ratingLabel,
   baseModels,
+  baseModelText,
   checkpointModel,
   checkpointUnread,
   lorasUnread,
@@ -309,6 +310,20 @@ describe("baseModels", () => {
     expect(baseModels(both).map((m) => m.name)).toEqual(["juggernautXL"]);
   });
 
+  it("keeps two files the shelf gives one title, and prints the title once", () => {
+    // The Checkpoint filter matches by file, so dropping the second file
+    // here left a filter option that matched no card.
+    const twins = {
+      models: [
+        { name: "wan_high", title: "Wan 2.2", kind: "unet" },
+        { name: "wan_low", title: "Wan 2.2", kind: "unet" },
+      ],
+    };
+    expect(baseModels(twins).map((m) => m.name)).toEqual(["wan_high", "wan_low"]);
+    expect(baseModelText(baseModels(twins))).toBe("Wan 2.2");
+    expect(cardAccessibleName(twins)).toContain("unet Wan 2.2,");
+  });
+
   it("speaks both in the accessible name, with no high or low claimed", () => {
     expect(cardAccessibleName(wan)).toContain(
       "unet Wan 2.2 High FP8 E4M3 and wan2.2_low",
@@ -384,7 +399,10 @@ describe("the type chip", () => {
     expect(short({ type: "inpaint", type_label: "Inpaint" })).toContain(
       "Inpaint",
     );
-    expect(short({ type: "video", type_label: "Video" })).toContain("Video");
+    // Exactly the served label: `toContain("Video")` held for any type whose
+    // label said so, abbreviated or not.
+    expect(short({ type: "video", type_label: "Video" })).toEqual(["Video"]);
+    expect(short({ type: "video" })).toEqual(["video"]);
     // The accessible name reads the served label in full.
     expect(cardAccessibleName(card)).toContain("Text to Image");
     expect(cardAccessibleName(card)).not.toContain("T2I");

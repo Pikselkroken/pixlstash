@@ -331,12 +331,31 @@ describe("arriving on ?workflow=", () => {
     expect(document.activeElement?.dataset?.key).toBe("f");
   });
 
-  it("moves nothing for an id the grid does not list", async () => {
+  it("moves nothing for an id the grid does not list, and says so", async () => {
     route.query = { workflow: "nothing" };
     const wrapper = await grid();
     await flush();
 
     expect(cursorKey(wrapper)).toBe("a");
+    expect(wrapper.find(".wfv-note").text()).toContain(
+      "That workflow is not in this grid",
+    );
+  });
+
+  it("says a filter is hiding it, as ?topology= does", async () => {
+    const wrapper = await grid();
+    useWorkflowsStore().setFilters({ minRating: 5 });
+    await flush();
+
+    route.query = { workflow: "d" };
+    await flush();
+
+    const note = wrapper.find('[data-testid="wfv-link-filtered"]');
+    expect(note.text()).toContain("in this grid, but a filter is hiding it");
+    await note.find(".wfv-note-clear").trigger("click");
+    await flush();
+    expect(wrapper.find('[data-testid="wfv-link-filtered"]').exists()).toBe(false);
+    expect(cursorKey(wrapper)).toBe("d");
   });
 });
 

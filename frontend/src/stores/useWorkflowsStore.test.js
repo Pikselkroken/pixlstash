@@ -1,4 +1,4 @@
-// The Workflows grid's sort keys, the selection, and the Merge / Split writes.
+// The Workflows grid's sort keys, the selection, its filters and the deletes.
 //
 // Every card here is deliberately inconsistent across the numeric axes — the
 // best-rated card has the fewest pictures and the oldest use — so a sort that
@@ -312,5 +312,56 @@ describe("the Checkpoint filter", () => {
     expect(Object.fromEntries(counts)).toEqual({ wan_low: 2, wan_high: 1 });
     store.setFilters({ checkpoint: "wan_low" });
     expect(store.filteredCards.map((card) => card.id)).toEqual(["pair", "low-only"]);
+  });
+});
+
+describe("the Checkpoint filter's labels", () => {
+  it("filters by file and names the option as the shelf does", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        {
+          id: "titled",
+          name: "titled",
+          models: [{ name: "juggernautXL_v9", title: "Juggernaut XL", kind: "checkpoint" }],
+        },
+      ],
+    });
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    expect(store.filterOptions.checkpoints).toEqual([
+      { id: "juggernautXL_v9", label: "Juggernaut XL", count: 1 },
+    ]);
+  });
+});
+
+// ── workflows_changed from the socket ──────────────────────────────────
+describe("onWorkflowsChanged", () => {
+  it("follows a retired id to its heir and re-reads the grid", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.selectRange(["workhorse", "the-stack"]);
+    listWorkflowCards.mockClear();
+
+    store.onWorkflowsChanged({
+      reason: "regrouped",
+      renamed: { workhorse: "auto:heir", "the-stack": "auto:heir" },
+    });
+    await Promise.resolve();
+
+    // Both retired into one heir: selected once, not twice.
+    expect(store.selectedKeys).toEqual(["auto:heir"]);
+    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the selection alone without a rename, and says recipes moved", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.selectRange(["workhorse"]);
+    const epoch = store.recipesEpoch;
+
+    store.onWorkflowsChanged({ reason: "recipes", renamed: {} });
+
+    expect(store.selectedKeys).toEqual(["workhorse"]);
+    expect(store.recipesEpoch).toBe(epoch + 1);
   });
 });

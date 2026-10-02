@@ -25,14 +25,15 @@ import App from "../App.vue";
 //   /models?model=<id>                      → …opened on that model (a Recipe chip's link)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
 //   /workflows                              → the Workflows grid (one card per workflow)
-//   /workflows?topology=<hash>              → …opened on the workflow holding that topology
-//                                            (the Recipe section's Open)
-//   /workflows?topology=<hash>&tab=recipes  → …with the rail open on its Recipes tab
+//   /workflows?topology=<hash>              → …opened on the first workflow holding that
+//                                            topology (the Recipe section's Open, for a
+//                                            picture the hub has not keyed yet)
+//   /workflows?workflow=<id>                → …selected by workflow ID, rail open on its
+//                                            Workflow tab (the Recipe section's and the Run
+//                                            popup's Open; the MCP recipe's workflow_link)
+//   /workflows?workflow=<id>&tab=recipes    → …with the rail open on its Recipes tab
 //                                            (the Recipe tab's "Matches your saved recipe X"
 //                                            banner, #1480; honoured by WorkflowTab)
-//   /workflows?workflow=<id>                → …selected by workflow ID, rail open on its
-//                                            Workflow tab (the Run popup's "Open in
-//                                            Workflows"; the MCP recipe's workflow_link)
 //   /workflows?workflow=<id>&edit=loras     → …with Edit LoRAs… open on it (#1478)
 //   /workflows?workflow=<id>&edit=loras&drop_lora=<filename>
 //                                          → …and that LoRA's loader already deleted

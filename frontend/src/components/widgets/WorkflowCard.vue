@@ -192,6 +192,7 @@ import { quantBadge } from "../../utils/modelShelf";
 import {
   cardAccessibleName,
   baseModels,
+  baseModelText,
   coverCellStyle,
   factChips,
   checkpointMissing,
@@ -329,8 +330,8 @@ const base = computed(() => {
   const quants = new Set(models.map((model) => quantBadge(model.quant)?.label));
   return {
     models,
-    text: models.map(modelDisplayName).join(" + "),
-    label: models.map(markLabel).join(" + "),
+    text: baseModelText(models),
+    label: baseModelText(models, markLabel),
     quant: quants.size === 1 ? ([...quants][0] ?? null) : null,
   };
 });

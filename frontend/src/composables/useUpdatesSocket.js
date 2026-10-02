@@ -18,6 +18,7 @@ import { useDedupStore } from "../stores/useDedupStore";
 import { useMovesStore } from "../stores/useMovesStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useTasksStore } from "../stores/useTasksStore";
+import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import {
   isFullRestoreRequestInFlight,
   prepareForFullRestoreTransition,
@@ -145,6 +146,7 @@ export function useUpdatesSocket({
   const dedupStore = useDedupStore();
   const movesStore = useMovesStore();
   const noticeStore = useNoticeStore();
+  const workflowsStore = useWorkflowsStore();
 
   let updatesSocket = null;
   let updatesReconnectTimer = null;
@@ -477,6 +479,16 @@ export function useUpdatesSocket({
           externalMovesPendingTimer = null;
           movesStore.fetchPending();
         }, EXTERNAL_MOVES_PENDING_DEBOUNCE_MS);
+      } else if (payload?.type === "workflows_changed") {
+        // The echo of this tab's own write is skipped: the write re-read the
+        // grid itself. Everything else - another tab, the watched inbox, a
+        // background regrouping that retired ids - is the store's to follow.
+        const isOwn = !!(
+          payload.origin_client_id &&
+          wsStore.clientId &&
+          payload.origin_client_id === wsStore.clientId
+        );
+        if (!isOwn) workflowsStore.onWorkflowsChanged(payload);
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {
