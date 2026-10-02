@@ -5701,10 +5701,12 @@ def create_router(server) -> APIRouter:
             "models), the owner's model fixes and the model-name swaps applied. "
             "The seed is a parameter like the rest: the default recipe's, else "
             "the graph's own; only a stored recipe's nulled seeds get a fresh "
-            "one, so `seedless` is always false. Four "
+            "one, so `seedless` is always false. Five "
             "differences from Run: a ComfyUI-PixlStash saver stays one, so a "
             "picture queued by hand still comes back; the batch size is not "
-            "pinned to 1, since there is no count here; Run's repairs (a "
+            "pinned to 1, since there is no count here; the picture inputs "
+            "keep the graph's own values, since filling them uploads pictures "
+            "into ComfyUI and a read must not; Run's repairs (a "
             "missing LoRA's loader bypassed, a missing seed node replaced) are "
             "not made, so ComfyUI shows what is missing; and a graph Run would "
             "refuse is answered anyway (its 409 names the reason only when no "
@@ -5760,6 +5762,9 @@ def create_router(server) -> APIRouter:
                     f"({codes[0] if codes else run_service.NO_RUNNABLE_SOURCE})."
                 ),
             )
+        # One entry: a body naming a `workflow_id` resolves to exactly one
+        # group (`_groups_for`), the workflow's base card, so there is no
+        # second graph for Run to have preferred.
         graph, source, card, swapped = plan.built[0]
         if swapped:
             # What ComfyUI opens is what it runs: its pictures card here too.

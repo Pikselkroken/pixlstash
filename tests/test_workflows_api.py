@@ -9587,6 +9587,23 @@ def test_a_runnable_graph_from_a_stored_recipe_gets_a_seed(runnable, monkeypatch
     assert payload["workflow"]["3"]["inputs"]["seed"] != 0
 
 
+def test_a_runnable_graph_from_a_stored_recipe_gets_a_seed_without_comfyui(
+    runnable, monkeypatch
+):
+    """`run_seed_targets` falls back to the graph's own seed inputs offline."""
+
+    def gone(server, picture_id, object_info=None):
+        raise HTTPException(status_code=404, detail="Picture file missing")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    payload = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
+    assert payload["source"] == "instance", payload
+    assert payload["workflow"]["3"]["inputs"]["seed"] != 0
+
+
 def test_a_runnable_graph_takes_the_default_recipe_seed_over_a_fresh_one(
     runnable, monkeypatch
 ):
