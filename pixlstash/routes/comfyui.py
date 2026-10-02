@@ -345,7 +345,7 @@ def _within_the_cap(document: dict) -> None:
         )
 
 
-def _topology_of(workflow: dict) -> str | None:
+def _topology_of(workflow: dict, name: str = "workflow") -> str | None:
     """*workflow*'s topology hash, or ``None`` when it will not reduce. No write."""
     try:
         graph = api_graph(workflow)
@@ -354,7 +354,12 @@ def _topology_of(workflow: dict) -> str | None:
         # The reducers index into whatever the document holds; the hash is
         # only the pull's has-pictures count, so a document without one is
         # counted as having none.
-        logger.info("A pulled workflow's topology could not be read: %s", exc)
+        logger.info(
+            "Pulled workflow %s: its topology could not be read (%s): %s",
+            name,
+            type(exc).__name__,
+            exc,
+        )
         return None
 
 
@@ -369,7 +374,7 @@ def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
     """
     check_comfy_workflow(workflow)
     migrated, _ = workflow_bindings.migrate_placeholders(workflow)
-    topology_hash = _topology_of(migrated)
+    topology_hash = _topology_of(migrated, name)
     stored = workflow_origin.stored_as(hub, workflow_inbox.content_hash(workflow))
     if stored is not None:
         return {
