@@ -5485,6 +5485,30 @@ def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
     assert [kwargs["run_workflow_id"] for kwargs in importing] == [manual, None]
 
 
+def test_a_manual_workflow_opens_and_exports_the_document_run_submits(runnable):
+    """One graph per workflow (#1682): for a manual one, its stored document."""
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"].update({"steps": 13, "cfg": 1.5})
+    document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    document["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    manual = create_manual_workflow(runnable.server.hub, "Mine", document, "import")
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": manual})
+    assert r.status_code == 200, r.text
+    ran = runnable.submitted[0]["graph"]
+    r = runnable.owner.get(f"{API}/workflows/{manual}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "file"
+    opened = r.json()["workflow"]
+    assert opened["3"]["inputs"]["steps"] == 13
+    for graph in (ran, opened):
+        graph["3"]["inputs"].pop("seed")
+    assert opened == ran
+    r = runnable.owner.get(f"{API}/workflows/{manual}/export")
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "file"
+    assert r.json()["workflow"]["3"]["inputs"]["steps"] == 13
+
+
 def _saved_on_run_card(runnable, **fields) -> int:
     body = {"workflow_id": RUN_WF, "name": "A look to keep", **fields}
     r = runnable.owner.post(f"{API}/recipes", json=body)
@@ -9453,15 +9477,61 @@ def test_exporting_an_unknown_card_is_a_404(workflow_env):
 
 
 def test_the_runnable_graph_is_the_run_unscrubbed(exportable):
-    """Open in ComfyUI hands the owner's own ComfyUI what ran, not the export."""
+    """Open in ComfyUI hands the owner's own ComfyUI what ran, not the export.
+
+    And it answers although Run would refuse this graph: ComfyUI is where the
+    missing nodes are fixed.
+    """
+    assert not _preflight(exportable.owner, workflow_id=RUN_WF)["ok"]
     r = exportable.owner.get(f"{API}/workflows/{RUN_WF}/graph")
     assert r.status_code == 200, r.text
     payload = r.json()
     assert payload["source"] == "picture"
     assert payload["name"]
     assert payload["workflow"]["5"]["inputs"]["text"] == EXPORT_PROMPT
-    assert payload["workflow"]["2"]["inputs"]["lora_name"] == FORGOTTEN_LORA
     assert payload["workflow"]["3"]["inputs"]["seed"] == 4242
+
+
+def test_the_runnable_graph_is_the_graph_run_submits(runnable):
+    """Open in ComfyUI opens what Run runs, default recipe and all (#1623).
+
+    The default recipe's steps are the value only Run's plan puts there. The
+    seed is left out: Run rolls a new one per submission.
+    """
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '31')",
+            (RUN_WORKFLOW, _core_address("3", "steps")),
+        )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    ran = runnable.submitted[0]["graph"]
+    opened = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    assert opened["3"]["inputs"]["steps"] == 31
+    for graph in (ran, opened):
+        graph["3"]["inputs"].pop("seed")
+    assert opened == ran
+
+
+def test_the_runnable_graph_keeps_a_pixlstash_saver(exportable):
+    """Run swaps it for SaveImage and imports itself; ComfyUI by hand has no import."""
+    exportable.graph["4"]["class_type"] = "PixlStashPictureSaver"
+    graph = exportable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    assert graph["4"]["class_type"] == "PixlStashPictureSaver"
+
+
+def test_the_runnable_graph_keeps_a_loader_whose_lora_comfyui_lacks(runnable):
+    """Run bypasses it; opened, it stays for the owner to fix in ComfyUI."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoraLoader"]["input"]["required"]["lora_name"] = [["other.safetensors"], {}]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    ran = _preflight(runnable.owner, workflow_id=RUN_WF)["groups"][0]
+    assert [b["node_id"] for b in ran["bypassed_loras"]] == ["2"]
+    graph = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    assert graph["2"]["class_type"] == "LoraLoader"
 
 
 def test_the_runnable_graph_of_a_card_without_one_is_a_409_and_unknown_a_404(
@@ -9470,15 +9540,38 @@ def test_the_runnable_graph_of_a_card_without_one_is_a_409_and_unknown_a_404(
     monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (None, "refused")
     )
-    assert (
-        workflow_env.owner.get(f"{API}/workflows/{BINNED_WF}/graph").status_code == 409
-    )
+    r = workflow_env.owner.get(f"{API}/workflows/{BINNED_WF}/graph")
+    assert r.status_code == 409
+    # The reason code, as Export's 409 names it.
+    assert "no graph" in r.json()["detail"].lower()
+    assert f"({run_service.NO_RUNNABLE_SOURCE})" in r.json()["detail"]
     assert (
         workflow_env.owner.get(
             f"{API}/workflows/{AUTO_STACK_PREFIX}{_h('nope')}/graph"
         ).status_code
         == 404
     )
+
+
+def test_a_runnable_graph_nested_too_deeply_is_a_409_like_export(runnable, monkeypatch):
+    def too_deep(server, picture_id, object_info=None):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", too_deep)
+    for route in ("graph", "export"):
+        r = runnable.owner.get(f"{API}/workflows/{RUN_WF}/{route}")
+        assert r.status_code == 409, (route, r.text)
+        assert "nested too deeply" in r.json()["detail"]
+
+
+def test_the_runnable_graph_keeps_the_batch_size(exportable):
+    """Run pins the batch to 1 for its count; opened, the owner's 4 stays."""
+    exportable.graph["9"] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 512, "height": 512, "batch_size": 4},
+    }
+    graph = exportable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    assert graph["9"]["inputs"]["batch_size"] == 4
 
 
 def test_the_runnable_graph_blanks_a_credential_widget(exportable):
@@ -9506,10 +9599,8 @@ def test_the_runnable_graph_loads_the_copy_run_would(runnable, merged_checkpoint
     assert graph["1"]["inputs"]["ckpt_name"] == "kept.safetensors"
 
 
-def test_a_runnable_graph_from_a_stored_recipe_says_it_has_no_seed(
-    runnable, monkeypatch
-):
-    """The instance tier nulls seeds by design; the node has to be told."""
+def test_a_runnable_graph_from_a_stored_recipe_gets_a_seed(runnable, monkeypatch):
+    """The instance tier nulls seeds by design, so Open writes a fresh one."""
 
     def gone(server, picture_id, object_info=None):
         raise HTTPException(status_code=404, detail="Picture file missing")
@@ -9517,7 +9608,47 @@ def test_a_runnable_graph_from_a_stored_recipe_says_it_has_no_seed(
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
     payload = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
     assert payload["source"] == "instance", payload
-    assert payload["seedless"] is True
+    assert payload["seedless"] is False
+    # Not the input's declared default of 0, which is what a nulled seed reads
+    # as without the seed pass: every queue of it would make the same picture.
+    assert payload["workflow"]["3"]["inputs"]["seed"] != 0
+
+
+def test_a_runnable_graph_from_a_stored_recipe_gets_a_seed_without_comfyui(
+    runnable, monkeypatch
+):
+    """`run_seed_targets` falls back to the graph's own seed inputs offline."""
+
+    def gone(server, picture_id, object_info=None):
+        raise HTTPException(status_code=404, detail="Picture file missing")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    payload = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
+    assert payload["source"] == "instance", payload
+    assert payload["workflow"]["3"]["inputs"]["seed"] != 0
+
+
+def test_a_runnable_graph_takes_the_default_recipe_seed_over_a_fresh_one(
+    runnable, monkeypatch
+):
+    """The seed is a parameter: the inspector's default is what opens."""
+
+    def gone(server, picture_id, object_info=None):
+        raise HTTPException(status_code=404, detail="Picture file missing")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '777')",
+            (RUN_WORKFLOW, _core_address("3", "seed")),
+        )
+    payload = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
+    assert payload["source"] == "instance", payload
+    assert payload["workflow"]["3"]["inputs"]["seed"] == 777
 
 
 def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(
