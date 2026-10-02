@@ -1181,8 +1181,11 @@ def _carry_group_state(
             heading = attr[0] or "From a merged workflow"
             carried = f"{heading}:\n{attr[1]}" if attr[1] else f"Also named: {heading}"
             # A second carry to the same heir (a re-run, or a split's copy
-            # meeting its primary) must not say the same thing twice.
-            if carried not in (mine[1] or ""):
+            # meeting its primary) must not say the same thing twice. Matched
+            # as whole paragraphs, so "Also named: Foo" is not taken for a
+            # repeat of "Also named: Foo bar"; a carry may itself hold blank
+            # lines, so this is a bounded substring rather than a split.
+            if f"\n\n{carried}\n\n" not in f"\n\n{mine[1] or ''}\n\n":
                 conn.execute(
                     "UPDATE workflow_group_attr SET notes = ? WHERE workflow_id = ?",
                     ("\n\n".join(filter(None, [mine[1], carried])), heir),

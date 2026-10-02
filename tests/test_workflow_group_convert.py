@@ -1253,6 +1253,28 @@ def test_carrying_one_workflow_twice_onto_an_heir_writes_its_notes_once(tmp_path
         hub.close()
 
 
+def test_a_carry_contained_in_longer_notes_is_still_written(tmp_path):
+    """Only an exact repeat is dropped: "Also named: Foo" is not "...: Foo bar"."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+                "VALUES (?, ?, ?, 0)",
+                [
+                    ("auto:old", "Foo", None),
+                    ("auto:heir", "Heir", "Also named: Foo bar"),
+                ],
+            )
+            _carry_group_state(conn, "auto:old", "auto:heir", keep=True)
+        notes = hub.fetchone(
+            "SELECT notes FROM workflow_group_attr WHERE workflow_id = 'auto:heir'"
+        )[0]
+        assert notes == "Also named: Foo bar\n\nAlso named: Foo"
+    finally:
+        hub.close()
+
+
 # ── the vault half: a saved recipe keeps its checkpoint ────────────────────
 
 
