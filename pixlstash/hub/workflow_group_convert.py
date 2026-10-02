@@ -207,6 +207,159 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
     return len(workflow_of)
 
 
+def dissolve_manual_groups(conn: sqlite3.Connection) -> int:
+    """Put every hand-made group's topologies back in their automatic workflows.
+
+    Hub data step 6: workflows are automatic, and nothing moves a topology
+    between them any more, so the groups merge, split and the cut-over's
+    stacks made are undone. Returns how many groups were dissolved.
+
+    **Merge, never drop**, as the cut-over: a group's name, notes, defaults,
+    pins and picture inputs go to the **heir**, the automatic workflow holding
+    most of its variants. Where the heir already has its own, the heir's win
+    address by address, and the group's name and notes are appended to the
+    heir's notes rather than lost. A card's successor row follows its own
+    topology, so the vault's saved-recipe conversion re-files each recipe on
+    the workflow its card is in.
+
+    Args:
+        conn: An open hub connection, inside the caller's transaction.
+    """
+    hub = _Reader(conn)
+    groups = [
+        row[0]
+        for row in conn.execute(
+            "SELECT workflow_id FROM workflow_group WHERE kind = 'manual' "
+            "ORDER BY workflow_id"
+        )
+    ]
+    if not groups:
+        return 0
+    cards = card_index(hub)
+    core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
+    auto_of: dict[str, str] = {}
+    weight: Counter = Counter()
+    for card in cards:
+        auto_id = _auto_id(hub, card, core_of.get(card.topology_hash))
+        if auto_id is not None:
+            auto_of.setdefault(card.topology_hash, auto_id)
+        weight[card.topology_hash] += max(1, len(card.variants))
+    topology_of_key = {card.workflow_key: card.topology_hash for card in cards}
+
+    for group in groups:
+        topologies = [
+            row[0]
+            for row in conn.execute(
+                "SELECT topology_hash FROM workflow_group_member "
+                "WHERE workflow_id = ? ORDER BY topology_hash",
+                (group,),
+            )
+        ]
+        votes: Counter = Counter()
+        for topology_hash in topologies:
+            if topology_hash in auto_of:
+                votes[auto_of[topology_hash]] += weight[topology_hash]
+        heir = min(votes, key=lambda a: (-votes[a], a)) if votes else None
+        conn.execute(
+            "DELETE FROM workflow_group_member WHERE workflow_id = ?", (group,)
+        )
+        if heir is None:
+            logger.warning(
+                "Hand-made workflow %s holds no topology with an automatic "
+                "workflow (%s); its name, notes and settings have nowhere to go "
+                "and stay in the hub under its old id.",
+                group,
+                topologies,
+            )
+        else:
+            _carry_group_state(conn, group, heir)
+        for (workflow_key,) in conn.execute(
+            "SELECT workflow_key FROM workflow_key_successor WHERE workflow_id = ?",
+            (group,),
+        ).fetchall():
+            target = auto_of.get(topology_of_key.get(workflow_key), heir)
+            if target is None:
+                # The column is NOT NULL; the row keeps naming the old id.
+                logger.warning(
+                    "Card %s of hand-made workflow %s has no automatic workflow "
+                    "to follow; its successor row keeps the old id.",
+                    workflow_key,
+                    group,
+                )
+                continue
+            conn.execute(
+                "UPDATE workflow_key_successor SET workflow_id = ? "
+                "WHERE workflow_key = ?",
+                (target, workflow_key),
+            )
+        conn.execute(
+            "DELETE FROM workflow_group WHERE workflow_id = ? AND NOT EXISTS "
+            "(SELECT 1 FROM workflow_group_attr WHERE workflow_id = ?)",
+            (group, group),
+        )
+        logger.info(
+            "Dissolved hand-made workflow %s: %d topologies back in their "
+            "automatic workflows, its state carried to %s.",
+            group,
+            len(topologies),
+            heir,
+        )
+    return len(groups)
+
+
+def _carry_group_state(conn: sqlite3.Connection, group: str, heir: str) -> None:
+    """Move *group*'s owner rows onto *heir*, the heir's own winning."""
+    attr = conn.execute(
+        "SELECT name, notes, hidden FROM workflow_group_attr WHERE workflow_id = ?",
+        (group,),
+    ).fetchone()
+    if attr is not None:
+        mine = conn.execute(
+            "SELECT name, notes FROM workflow_group_attr WHERE workflow_id = ?",
+            (heir,),
+        ).fetchone()
+        if mine is None:
+            conn.execute(
+                "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+                "VALUES (?, ?, ?, ?)",
+                (heir, *attr),
+            )
+        elif (attr[0] and attr[0] != mine[0]) or attr[1]:
+            heading = attr[0] or "From a merged workflow"
+            carried = f"{heading}:\n{attr[1]}" if attr[1] else f"Also named: {heading}"
+            conn.execute(
+                "UPDATE workflow_group_attr SET notes = ? WHERE workflow_id = ?",
+                ("\n\n".join(filter(None, [mine[1], carried])), heir),
+            )
+    for table, key in (
+        ("workflow_group_default", "address"),
+        ("workflow_group_pins", None),
+        ("workflow_group_picture_input", "address"),
+    ):
+        columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+        selected = ", ".join("?" if c == "workflow_id" else c for c in columns)
+        moved = conn.execute(
+            f"INSERT OR IGNORE INTO {table} ({', '.join(columns)}) "
+            f"SELECT {selected} FROM {table} WHERE workflow_id = ?",
+            (heir, group),
+        ).rowcount
+        left = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE workflow_id = ?", (group,)
+        ).fetchone()[0]
+        if left > moved:
+            logger.warning(
+                "Hand-made workflow %s: %d %s row(s) not carried to %s, which "
+                "has its own for the same %s.",
+                group,
+                left - moved,
+                table,
+                heir,
+                key or "workflow",
+            )
+        conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (group,))
+    conn.execute("DELETE FROM workflow_group_attr WHERE workflow_id = ?", (group,))
+
+
 def _run_strength(run, node_id: str):
     """A stored run's ``strength_model`` on *node_id*, or ``None``."""
     node = run.get(node_id) if isinstance(run, dict) else None

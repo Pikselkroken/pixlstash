@@ -27,8 +27,7 @@ reads that name the same model files.
 
 **The writes are the owner editing their own library**: a workflow's name,
 notes and hidden flag, its default-recipe parameters, pins and picture inputs
-(``hub/workflow_group_writes``), and merging workflows or splitting a topology
-out of one. Each says "look again" on the way out
+(``hub/workflow_group_writes``). Each says "look again" on the way out
 (``EventType.CHANGED_WORKFLOWS``, naming workflow ids).
 """
 
@@ -65,7 +64,6 @@ from pixlstash.hub.workflow_card_reads import (
     instance_documents,
     model_fix_labels,
     model_fixes,
-    workflow_index,
     workflow_of_topology,
 )
 from pixlstash.hub.workflow_card_writes import (
@@ -75,13 +73,11 @@ from pixlstash.hub.workflow_card_writes import (
 from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS
 from pixlstash.hub.workflow_group_writes import (
     is_parameter_address,
-    merge_workflows,
     replace_group_picture_inputs,
     replace_group_pins,
     replace_parameter_defaults,
     set_default_lora,
     set_group_attributes,
-    split_topology,
 )
 from pixlstash.hub.workflows import (
     assets_for_topology_recipes,
@@ -550,7 +546,7 @@ class WorkflowCard(BaseModel):
     """
 
     id: str = Field(
-        description="The workflow: `auto:<core hash>` or a merged/split group's id."
+        description="The workflow: `auto:<core hash>`, or a hand-made group's id."
     )
     name: str | None = Field(
         None,
@@ -610,7 +606,7 @@ class WorkflowCard(BaseModel):
     )
     topologies: list[str] = Field(
         default_factory=list,
-        description="Every topology of the workflow, sorted: what `split` takes.",
+        description="Every topology of the workflow, sorted.",
     )
     specials: list[str] | None = Field(
         None,
@@ -743,12 +739,10 @@ MAX_NAME_LENGTH = 200
 MAX_NOTES_LENGTH = 4000
 MAX_LABEL_LENGTH = 200
 MAX_VALUE_LENGTH = 2000
-# A pin list and a parameter form are small; a merge is a handful of
-# workflows somebody selected.
+# A pin list and a parameter form are small.
 MAX_DEFAULTS = 200
 MAX_PINS = 200
 MAX_INPUTS = 200
-MAX_MERGE_IDS = 200
 
 # A run request's own ceilings. The picture list is capped at the same place
 # the shipped run route caps a selection, because it is the same gesture.
@@ -780,7 +774,7 @@ BEST_PICTURE_DEPTH = 5
 OVERRIDE_ADDRESS_SEPARATOR = "/"
 
 # A workflow is named either by ``auto:`` and the core hash that IS the
-# automatic group, or by the uuid hex a merge or split minted. Checked rather
+# automatic group, or by the uuid hex of a hand-made one. Checked rather
 # than trusted, so a malformed id is a 422 naming the parameter instead of a
 # write against a workflow nothing will ever read. Checked with `fullmatch`:
 # `$` also matches before a trailing newline, so `.match` let `<id>\n` through.
@@ -967,31 +961,6 @@ class CardPictureInputs(BaseModel):
                 raise ValueError("A fixed input must name a picture.")
         _one_row_per_address(value)
         return value
-
-
-class WorkflowMerge(BaseModel):
-    """``POST /workflows/merge``: the workflows to fold into one, cover first."""
-
-    ids: list[str] = Field(min_length=2, max_length=MAX_MERGE_IDS)
-
-
-class WorkflowMerged(BaseModel):
-    """The workflow a merge made, and the ones it folded in."""
-
-    id: str
-    ids: list[str]
-
-
-class WorkflowSplit(BaseModel):
-    """``POST /workflows/{workflow_id}/split``: the topology to take out."""
-
-    topology: str = Field(pattern=r"^[0-9a-f]{64}$")
-
-
-class WorkflowSplitResult(BaseModel):
-    """The new workflow holding just the topology that was split out."""
-
-    id: str
 
 
 class WorkflowLoraUse(BaseModel):
@@ -2914,10 +2883,6 @@ def create_router(server) -> APIRouter:
         return read_card_picture_ids(server.vault, workflow.variants, limit)
 
     # ── The writes (#1623) ──────────────────────────────────────────────────
-    # `merge` is declared BEFORE the templated routes below: FastAPI matches
-    # in declaration order, and a `/workflows/{workflow_id}/...` route added
-    # later must not shadow it.
-    #
     # Every one of these emits `CHANGED_WORKFLOWS` naming workflow ids, which
     # is a "look again" signal and not a workflow: the counts and covers are
     # computed per request over the whole vault, so the client re-reads
@@ -2931,94 +2896,6 @@ def create_router(server) -> APIRouter:
             reason,
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
-
-    @router.post(
-        "/workflows/merge",
-        summary="Merge workflows",
-        description=(
-            "Put every topology of the named workflows in one. The first id "
-            "is the cover: its name, notes, defaults, pins and picture inputs "
-            "are the merged workflow's; every other workflow's notes follow, "
-            "headed by its name, then every other distinct name as `Also "
-            "named: …`. A manual cover keeps "
-            "its id; otherwise the merge is a new workflow. Saved recipes of "
-            "the merged workflows move with them."
-        ),
-        response_model=WorkflowMerged,
-        status_code=201,
-        responses={
-            400: {"description": "Fewer than two workflows, or one named twice."},
-            404: {"description": "One of the workflows does not exist."},
-        },
-    )
-    def merge(request: Request, payload: WorkflowMerge = Body(...)):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        ids = [_workflow_id(workflow_id) for workflow_id in payload.ids]
-        if len(set(ids)) != len(ids):
-            raise HTTPException(status_code=400, detail="ids must be unique.")
-        known = {w.workflow_id: w for w in workflow_index(hub)}
-        missing = [workflow_id for workflow_id in ids if workflow_id not in known]
-        if missing:
-            raise HTTPException(
-                status_code=404, detail=f"Unknown workflow {missing[0]}."
-            )
-        merged = merge_workflows(
-            hub,
-            ids,
-            {workflow_id: known[workflow_id].topologies for workflow_id in ids},
-        )
-        if _library_uuid() is not None:
-            try:
-                saved_recipe_service.rehome_recipes(server.vault, ids, merged)
-            except Exception:
-                # The hub has already merged; this is the only record of
-                # which recipes still name a workflow that is gone.
-                logger.exception(
-                    "Merged workflows %s into %s, but could not move their "
-                    "saved recipes; they still name the old ids.",
-                    ids,
-                    merged,
-                )
-                raise
-        _announce(request, sorted({*ids, merged}), "changed")
-        return WorkflowMerged(id=merged, ids=ids)
-
-    @router.post(
-        "/workflows/{workflow_id}/split",
-        summary="Split a topology out of a workflow",
-        description=(
-            "Take one topology of this workflow out into a workflow of its "
-            "own, for a graph the automatic grouping put with others by "
-            "mistake. The workflow it leaves keeps its name and settings."
-        ),
-        response_model=WorkflowSplitResult,
-        status_code=201,
-        responses={
-            400: {
-                "description": (
-                    "The workflow has one topology, or does not hold that one."
-                )
-            },
-            404: {"description": "This machine has no such workflow."},
-        },
-    )
-    def split(request: Request, workflow_id: str, payload: WorkflowSplit = Body(...)):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        workflow = _require_workflow(hub, workflow_id)
-        if payload.topology not in workflow.topologies:
-            raise HTTPException(
-                status_code=400, detail="This workflow does not hold that topology."
-            )
-        if len(workflow.topologies) < 2:
-            raise HTTPException(
-                status_code=400,
-                detail="This workflow has one topology; there is nothing to split.",
-            )
-        new_id = split_topology(hub, workflow_id, payload.topology)
-        _announce(request, [workflow_id, new_id], "changed")
-        return WorkflowSplitResult(id=new_id)
 
     @router.patch(
         "/workflows/{workflow_id}",
@@ -4684,10 +4561,35 @@ def create_router(server) -> APIRouter:
                     "selection: name a picture_id for it."
                 ),
             )
+        # A saved recipe runs on the card it was saved from, not on its
+        # workflow's base card: its overrides and stages are that graph's, and a
+        # stage-node override means nothing on another topology. Only a card
+        # the hub no longer holds falls back to the base card.
+        own_card = (
+            body.saved_recipe_id is not None
+            and not body.target
+            and recipe_key is not None
+            and find_card(hub, recipe_key) is not None
+        )
+        if (
+            body.saved_recipe_id is not None
+            and recipe_key
+            and not body.target
+            and not own_card
+        ):
+            # A target run leaves the card on purpose; only a missing card warns.
+            logger.warning(
+                "[workflows] Saved recipe %s names card %s, which this hub no "
+                "longer holds; it runs on its workflow's base card.",
+                body.saved_recipe_id,
+                recipe_key,
+            )
         groups = _groups_for(
             body,
             recipe_key,
-            recipe.base_card if recipe is not None and not body.target else None,
+            recipe.base_card
+            if recipe is not None and not body.target and not own_card
+            else None,
         )
         if body.target:
             # One target replaces every group's graph, keeping the pictures
@@ -4973,9 +4875,13 @@ def create_router(server) -> APIRouter:
             found += run_service.skip_requested_stages(
                 graph, body.skip_stages, object_info
             )
+            # Not on a saved recipe's own card: that graph already has exactly
+            # the stages the recipe ran with.
             off = [
                 stage
-                for stage, on in sorted(recipe.stages.items() if recipe else ())
+                for stage, on in sorted(
+                    recipe.stages.items() if recipe and not own_card else ()
+                )
                 if not on and stage not in body.skip_stages
             ]
             if off:

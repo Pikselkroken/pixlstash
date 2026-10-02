@@ -1351,6 +1351,40 @@ def test_0124_adds_workflow_id_and_models_on_a_fresh_and_a_populated_vault():
             ).fetchall() == [("a look", "a-key", None, None)]
 
 
+def test_0125_resets_only_recipes_on_a_hand_made_workflow():
+    """A hand-made group id goes back to NULL for re-filing; an automatic id
+    and an already-NULL one are left as they are."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        assert (
+            _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR).returncode == 0
+        )
+        down = _run_alembic(
+            ["downgrade", "0124_saved_recipe_models_and_workflow_id"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert down.returncode == 0, down.stderr
+        automatic = "auto:" + "a" * 64
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            conn.executemany(
+                "INSERT INTO saved_recipe (name, position, workflow_key, prompt, "
+                "loras, overrides, keep_seed, workflow_id) "
+                "VALUES (?, ?, 'k', '', '[]', '{}', 0, ?)",
+                [("auto", 0, automatic), ("group", 1, "b" * 32), ("none", 2, None)],
+            )
+            conn.commit()
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert dict(conn.execute("SELECT name, workflow_id FROM saved_recipe")) == {
+                "auto": automatic,
+                "group": None,
+                "none": None,
+            }
+
+
 def test_the_migration_chain_has_exactly_one_head():
     """The v1.8.1 merge left two 0086 revisions; only one may be a head.
 

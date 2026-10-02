@@ -316,8 +316,6 @@
         @menu-closed="focusCursorRow"
         @open-cover="openCoverPicture"
         @run="runSelected"
-        @merge="mergeSelected"
-        @split="splitSelected"
         @rename="startRename"
         @hide="hideSelected"
         @export="exportSelected"
@@ -1027,22 +1025,6 @@ function runCard(card) {
 
 function runSelected() {
   runCard(store.runnableCard);
-}
-
-async function mergeSelected() {
-  const count = store.selectedKeys.length;
-  if (await store.mergeSelected()) {
-    announcement.value = `${count} workflows merged`;
-  }
-}
-
-/** Split one topology of the selected workflow out into a workflow of its own. */
-async function splitSelected(topology) {
-  const card = onlyCard.value;
-  if (!card) return;
-  if (await store.splitOut(card.id, topology)) {
-    announcement.value = "Split into a workflow of its own";
-  }
 }
 
 /**

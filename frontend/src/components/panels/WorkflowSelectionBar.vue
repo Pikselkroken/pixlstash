@@ -85,17 +85,6 @@
       @click="emit('run')"
     />
 
-    <AppBarButton
-      shape="round"
-      icon="call-merge"
-      data-verb="merge"
-      aria-label="Merge into one workflow"
-      :disabled="!mergeable || busy"
-      :loading="running('merge')"
-      :tooltip="mergeTitle"
-      @click="emit('merge')"
-    />
-
     <!-- Rename rides along DISABLED rather than disappearing, which is the
          shelf's rule and this screen's now: a row of buttons that reflows as
          the selection grows is a row you have to re-read, and a disabled
@@ -208,8 +197,6 @@ const emit = defineEmits([
   "menu-closed",
   "open-cover",
   "run",
-  "merge",
-  "split",
   "rename",
   "hide",
   "export",
@@ -395,28 +382,6 @@ const renameTitle = computed(() =>
 );
 
 /**
- * Merge (#1623): two or more workflows become one, the first selected its
- * cover. One gate, one refusal sentence.
- */
-const mergeable = computed(() => store.selectedKeys.length >= 2);
-const mergeTitle = computed(() =>
-  mergeable.value
-    ? `Merge these ${store.selectedKeys.length.toLocaleString()} workflows into one. The first selected keeps its name and settings`
-    : "Select two or more workflows to merge them",
-);
-
-/**
- * Split (#1623): the topologies one selected workflow could hand out, each
- * a menu row of its own. Empty unless exactly one workflow holding two or
- * more is selected: a workflow of one topology has nothing to split.
- */
-const splitTopologies = computed(() => {
-  if (!single.value) return [];
-  const topologies = cards.value[0]?.topologies ?? [];
-  return topologies.length > 1 ? topologies : [];
-});
-
-/**
  * Is every selected card already hidden?
  *
  * `every`, not `some`: a mixed selection is hidden, because the gesture a
@@ -511,9 +476,6 @@ const verbHandlers = computed(() => ({
   coverOpenTitle: openTarget.value.title,
   runnable: runnable.value,
   runTitle: runTitle.value,
-  mergeable: mergeable.value,
-  mergeTitle: mergeTitle.value,
-  splitTopologies: splitTopologies.value,
   renameTitle: renameTitle.value,
   hideLabel: allHidden.value ? "Unhide" : "Hide",
   hideTitle: hideTitle.value,
@@ -539,8 +501,7 @@ const verbHandlers = computed(() => ({
  * not in the view: every tooltip here is a refusal sentence, and a second copy
  * of them would drift.
  *
- * The order is the design's: what running the card does, then merging and
- * splitting, then what naming does, then the three that make a file, then the one
+ * The order is the design's: what running the card does, then what naming does, then the three that make a file, then the one
  * that destroys one.
  */
 const VerbMenu = (props) => {
@@ -630,27 +591,6 @@ const VerbMenu = (props) => {
         title: props.runTitle,
       }),
       sep(),
-      item("mdi-call-merge", "Merge", {
-        verb: "merge",
-        on: () => props.onVerb("merge"),
-        disabled: !props.mergeable,
-        title: props.mergeTitle,
-      }),
-      // One row per topology, only on a workflow holding more than one: a
-      // topology is a graph shape and has no name of its own, so the row
-      // counts it and the tooltip names its hash.
-      ...props.splitTopologies.map((topology, i, all) =>
-        item(
-          "mdi-call-split",
-          `Split out graph ${i + 1} of ${all.length}`,
-          {
-            verb: "split",
-            on: () => props.onVerb("split", topology),
-            title: `Make graph ${topology.slice(0, 12)}… a workflow of its own`,
-          },
-        ),
-      ),
-      sep(),
       item("mdi-pencil-outline", "Rename", {
         verb: "rename",
         on: () => props.onVerb("rename"),
@@ -715,8 +655,6 @@ defineExpose({
   openTarget,
   coverOpenable,
   runnable,
-  mergeable,
-  splitTopologies,
   allHidden,
   deletable,
 });

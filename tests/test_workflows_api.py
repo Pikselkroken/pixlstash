@@ -173,8 +173,6 @@ _WORKFLOW_ROUTES = (
 # describe one.
 _WORKFLOW_WRITE_ROUTES = (
     ("PATCH", "/api/v1/workflows/{workflow_id}"),
-    ("POST", "/api/v1/workflows/merge"),
-    ("POST", "/api/v1/workflows/{workflow_id}/split"),
     ("PUT", "/api/v1/workflows/{workflow_id}/model-fix"),
     ("PUT", "/api/v1/workflows/{workflow_id}/defaults"),
     ("PUT", "/api/v1/workflows/{workflow_id}/default-lora"),
@@ -1625,7 +1623,7 @@ _CONTRACT_FIELDS = {
     "covers",
     "saved_recipe_count",
     "defaults",
-    # #1623: what `split` takes, and the graph a run starts from.
+    # #1623: every topology, and the graph a run starts from.
     "base_topology",
     "topologies",
     "recipe_values",
@@ -3787,8 +3785,6 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
     )
     for method, path, body in (
         ("PATCH", f"{API}/workflows/{BUSY_WF}", {"name": "nope"}),
-        ("POST", f"{API}/workflows/merge", {"ids": [BUSY_WF, FORGOTTEN_WF]}),
-        ("POST", f"{API}/workflows/{BUSY_WF}/split", {"topology": BUSY_TOPOLOGY}),
         (
             "PUT",
             f"{API}/workflows/{BUSY_WF}/model-fix",
@@ -3942,25 +3938,12 @@ _EVERY_WORKFLOW_ROUTE = (
     ),
     (
         "POST",
-        "/workflows/{workflow_id}/split",
-        f"/workflows/{BUSY_WF}/split",
-        {"topology": BUSY_TOPOLOGY},
-    ),
-    (
-        "POST",
         "/workflows/run/preflight",
         "/workflows/run/preflight",
         {"workflow_id": BUSY_WF},
     ),
     ("POST", "/workflows/run", "/workflows/run", {"workflow_id": BUSY_WF}),
     ("DELETE", "/workflows/{workflow_id}", f"/workflows/{BUSY_WF}", None),
-    # Last: it folds BUSY away, and every row above is about BUSY.
-    (
-        "POST",
-        "/workflows/merge",
-        "/workflows/merge",
-        {"ids": [BUSY_WF, FORGOTTEN_WF]},
-    ),
 )
 
 
@@ -4276,157 +4259,6 @@ def test_a_workflows_defaults_pins_and_inputs_are_written_whole(workflow_env):
         ).status_code
         == 422
     )
-
-
-def test_merging_workflows_keeps_the_covers_state_and_names_the_rest(workflow_env):
-    """#1620 D4: the cover's name wins and every other name goes to the notes.
-
-    The cover is automatic, so the merge is a new manual group holding every
-    topology of both, with the cover's name, notes, defaults, pins and inputs
-    and nothing else of the other's. The other's recipes move with it.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    hub = server.hub
-    owner.patch(
-        f"{API}/workflows/{BUSY_WF}", json={"name": "Portraits", "notes": "cfg 7"}
-    )
-    owner.patch(
-        f"{API}/workflows/{FORGOTTEN_WF}",
-        json={"name": "Old portraits", "notes": "loose light", "hidden": True},
-    )
-    # A card the vault has not converted yet names the folded-away workflow.
-    with hub.transaction() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO workflow_key_successor (workflow_key, workflow_id) "
-            "VALUES (?, ?)",
-            ("f" * 64, FORGOTTEN_WF),
-        )
-    owner.put(
-        f"{API}/workflows/{BUSY_WF}/defaults",
-        json={"defaults": [{"slot_label": "s", "input_name": "steps", "value": 9}]},
-    )
-    owner.put(
-        f"{API}/workflows/{FORGOTTEN_WF}/defaults",
-        json={"defaults": [{"slot_label": "s", "input_name": "cfg", "value": 3}]},
-    )
-    owner.put(
-        f"{API}/workflows/{BUSY_WF}/pins",
-        json={"pins": [{"slot_label": "s", "input_name": "steps"}]},
-    )
-    _save_recipe(server, FORGOTTEN_WF, name="Kept on the other one")
-
-    seen, stop = _events(server)
-    try:
-        r = owner.post(f"{API}/workflows/merge", json={"ids": [BUSY_WF, FORGOTTEN_WF]})
-    finally:
-        stop()
-    assert r.status_code == 201, r.text
-    merged = r.json()["id"]
-    assert r.json()["ids"] == [BUSY_WF, FORGOTTEN_WF]
-    assert len(merged) == 32 and not merged.startswith(AUTO_STACK_PREFIX)
-    assert set(seen[0]["keys"]) == {BUSY_WF, FORGOTTEN_WF, merged}
-
-    assert sorted(
-        row[0]
-        for row in hub.fetchall(
-            "SELECT topology_hash FROM workflow_group_member WHERE workflow_id = ?",
-            (merged,),
-        )
-    ) == sorted([BUSY_TOPOLOGY, FORGOTTEN_TOPOLOGY])
-    row = _attr_row(server, merged)
-    assert row["name"] == "Portraits"
-    # The other's notes are kept too, headed by its name.
-    assert row["notes"] == (
-        "cfg 7\n\nOld portraits:\nloose light\n\nAlso named: Old portraits"
-    )
-    assert (
-        hub.fetchone(
-            "SELECT workflow_id FROM workflow_key_successor WHERE workflow_key = ?",
-            ("f" * 64,),
-        )[0]
-        == merged
-    )
-    # The cover's hidden flag, not the other's.
-    assert row["hidden"] == 0
-    assert _group_defaults(hub, merged) == {"s/steps": "9"}
-    assert _group_pins(hub, merged) == ["s/steps"]
-    # The folded-away workflows keep nothing a later topology could inherit.
-    for gone in (BUSY_WF, FORGOTTEN_WF):
-        assert _attr_row(server, gone) is None
-        assert _group_defaults(hub, gone) == {}
-        assert owner.get(f"{API}/workflows/{gone}").status_code == 404
-
-    cards = _by_key(_cards(owner))
-    assert cards[merged]["name"] == "Portraits"
-    assert cards[merged]["picture_count"] == 9
-    assert cards[merged]["saved_recipe_count"] == 1
-    listed = owner.get(f"{API}/recipes", params={"workflow_id": merged}).json()
-    assert [recipe["name"] for recipe in listed] == ["Kept on the other one"]
-
-    # A manual cover keeps its id, and another merge folds into it.
-    r = owner.post(f"{API}/workflows/merge", json={"ids": [merged, BINNED_WF]})
-    assert r.status_code == 201, r.text
-    assert r.json()["id"] == merged
-    assert (
-        BINNED_TOPOLOGY
-        in _by_key(_cards(owner, "?include_one_offs=true"))[merged]["topologies"]
-    )
-
-
-def test_a_merge_is_refused_whole_rather_than_half_applied(workflow_env):
-    owner = workflow_env.owner
-    unknown = AUTO_STACK_PREFIX + _h("nosuchcore")
-    for body, status in (
-        ({"ids": [BUSY_WF]}, 422),
-        ({"ids": [BUSY_WF, BUSY_WF]}, 400),
-        ({"ids": [BUSY_WF, unknown]}, 404),
-        ({"ids": [BUSY_WF, BUSY_CARD]}, 422),
-    ):
-        r = owner.post(f"{API}/workflows/merge", json=body)
-        assert r.status_code == status, (body, r.text)
-    # Nothing was written by any of them.
-    assert workflow_env.server.hub.fetchone("SELECT 1 FROM workflow_group") is None
-    assert set(_by_key(_cards(owner))) == {BUSY_WF, FORGOTTEN_WF}
-
-
-def test_splitting_a_topology_out_makes_a_workflow_of_it(workflow_env):
-    """The one owner correction left: a graph the core rule put with others.
-
-    BUSY and FORGOTTEN share a core hash here, so they are one workflow; the
-    split takes FORGOTTEN's topology into a manual group of its own, and the
-    workflow it leaves keeps its name.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    _share_busy_core(server)
-    owner.patch(f"{API}/workflows/{BUSY_WF}", json={"name": "Both"})
-    route = f"{API}/workflows/{BUSY_WF}/split"
-    # A topology the workflow does not hold is refused.
-    assert owner.post(route, json={"topology": BINNED_TOPOLOGY}).status_code == 400
-    assert owner.post(route, json={"topology": "not-a-digest"}).status_code == 422
-
-    seen, stop = _events(server)
-    try:
-        r = owner.post(route, json={"topology": FORGOTTEN_TOPOLOGY})
-    finally:
-        stop()
-    assert r.status_code == 201, r.text
-    split = r.json()["id"]
-    assert set(seen[0]["keys"]) == {BUSY_WF, split}
-    cards = _by_key(_cards(owner))
-    assert set(cards) == {BUSY_WF, split}
-    assert cards[BUSY_WF]["topologies"] == [BUSY_TOPOLOGY]
-    assert cards[BUSY_WF]["name"] == "Both"
-    assert cards[split]["topologies"] == [FORGOTTEN_TOPOLOGY]
-    assert cards[split]["picture_count"] == 4
-    # A workflow of one topology has nothing to split.
-    r = owner.post(
-        f"{API}/workflows/{split}/split", json={"topology": FORGOTTEN_TOPOLOGY}
-    )
-    assert r.status_code == 400, r.text
-    # And the unknown one is a 404.
-    unknown = AUTO_STACK_PREFIX + _h("nosuchcore")
-    r = owner.post(f"{API}/workflows/{unknown}/split", json={"topology": BUSY_TOPOLOGY})
-    assert r.status_code == 404, r.text
 
 
 _ADA = asset_reference("character_ada.safetensors")
@@ -5039,7 +4871,6 @@ def test_an_unknown_workflow_cannot_be_written_to(workflow_env):
             f"{API}/workflows/{unknown}/model-fix",
             {"was": _SHELF_FILENAME, "now": None},
         ),
-        ("POST", f"{API}/workflows/{unknown}/split", {"topology": BUSY_TOPOLOGY}),
     ):
         assert_real_route(workflow_env.server.api, method, path)
         r = owner.request(method, path, json=body)

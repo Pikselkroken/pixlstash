@@ -1775,14 +1775,6 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Name, notes and hidden on one workflow; PATCH blocked for READ tokens; owner only",
     ),
-    ("POST", "/api/v1/workflows/merge"): RoutePolicy(
-        _OWNER,
-        justification="Fold workflows into one, moving their topologies and saved recipes; POST blocked for READ tokens; owner only",
-    ),
-    ("POST", "/api/v1/workflows/{workflow_id}/split"): RoutePolicy(
-        _OWNER,
-        justification="Take one topology out of a workflow into one of its own; POST blocked for READ tokens; owner only",
-    ),
     # The workflow's LoRAs counted over the whole vault.
     ("GET", "/api/v1/workflows/{workflow_id}/lora-summary"): RoutePolicy(
         _OWNER,

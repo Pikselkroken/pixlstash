@@ -28,6 +28,7 @@ import pixlstash.hub.workflow_group_convert as convert
 from pixlstash.hub.workflow_group_convert import (
     _GROUP_NAMESPACE,
     convert_card_state,
+    dissolve_manual_groups,
 )
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflows import get_document, record_api_graph, record_ui_graph
@@ -403,15 +404,109 @@ def test_a_file_only_card_keeps_what_the_owner_typed(tmp_path):
     ]
 
 
+def _auto_of(hub, keys) -> str:
+    return (
+        "auto:"
+        + hub.fetchone(
+            "SELECT core_hash FROM workflow_topology_core WHERE topology_hash = ?",
+            (keys.topology_hash,),
+        )["core_hash"]
+    )
+
+
+def _successor(hub, key) -> str:
+    return hub.fetchone(
+        "SELECT workflow_id FROM workflow_key_successor WHERE workflow_key = ?",
+        (key,),
+    )["workflow_id"]
+
+
+def test_step_six_puts_every_hand_made_group_back_in_its_automatic_workflow(world):
+    """Workflows are automatic: the cut-over's groups go, their state carried.
+
+    MANUAL (IU and I, one img2img core) hands its name, notes and picture
+    input to that core's automatic workflow, which has none of its own. The
+    split-out P hands its name to its automatic workflow, which keeps its own
+    and gains P's as a note.
+    """
+    hub = world.hub
+    _convert(hub)
+    img2img = _auto_of(hub, world.i)
+    with hub.transaction() as conn:
+        assert dissolve_manual_groups(conn) == 3
+    assert hub.fetchone("SELECT 1 FROM workflow_group_member") is None
+    assert hub.fetchone("SELECT 1 FROM workflow_group WHERE kind = 'manual'") is None
+    for name in ("s", "a1", "b1", "d", "p", "iu", "i", "ic", "x"):
+        assert _successor(hub, getattr(world, f"{name}_key")) == _auto_of(
+            hub, getattr(world, name)
+        ), name
+    for gone in (MANUAL, MANUAL_TWO, world.split):
+        for table in GROUP_TABLES[2:6]:
+            assert (
+                hub.fetchone(f"SELECT 1 FROM {table} WHERE workflow_id = ?", (gone,))
+                is None
+            ), (gone, table)
+    row = hub.fetchone(
+        "SELECT name, notes, hidden FROM workflow_group_attr WHERE workflow_id = ?",
+        (img2img,),
+    )
+    assert tuple(row) == (
+        "Img2img cover",
+        "Img2img:\nCharacter runs.\n\nAlso named: Img2img",
+        0,
+    )
+    assert [
+        tuple(r)
+        for r in hub.fetchall(
+            "SELECT address, pixel_sha FROM workflow_group_picture_input "
+            "WHERE workflow_id = ?",
+            (img2img,),
+        )
+    ] == [(f"core:{world.core_loader}/image", "sha-iu")]
+    # P's workflow is S's: its own name stands, P's is kept as a note.
+    assert _auto_of(hub, world.p) == world.auto
+    row = hub.fetchone(
+        "SELECT name, notes FROM workflow_group_attr WHERE workflow_id = ?",
+        (world.auto,),
+    )
+    assert row["name"] == "Fast portrait"
+    assert row["notes"].endswith("\n\nAlso named: Preview")
+    with hub.transaction() as conn:
+        assert dissolve_manual_groups(conn) == 0
+
+
+def test_a_group_with_no_automatic_heir_keeps_its_successor_rows(world):
+    """No heir and no topology of its own: the NOT NULL row is left, not nulled."""
+    hub = world.hub
+    _convert(hub)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group (workflow_id, kind) VALUES ('orphan', 'manual')"
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES ('no-such-topology', 'orphan')"
+        )
+        conn.execute(
+            "INSERT INTO workflow_key_successor (workflow_key, workflow_id) "
+            "VALUES ('no-such-card', 'orphan')"
+        )
+    with hub.transaction() as conn:
+        dissolve_manual_groups(conn)
+    assert _successor(hub, "no-such-card") == "orphan"
+
+
 def test_the_hub_open_runs_the_conversion_once(world, tmp_path):
-    """Data step 5: a hub still on data version 4 is converted when it opens."""
+    """Data steps 5 and 6: a hub on data version 4 is converted, then the
+    hand-made groups the conversion made are put back in automatic ones."""
     path = world.hub.path
     with world.hub.transaction() as conn:
         conn.execute("PRAGMA user_version = 4")
     world.hub.close()
     reopened = HubDatabase(path)
     try:
-        assert reopened.fetchone("PRAGMA user_version")[0] == 5
+        assert reopened.fetchone("PRAGMA user_version")[0] == 6
+        assert reopened.fetchone("SELECT 1 FROM workflow_group_member") is None
         assert (
             reopened.fetchone(
                 "SELECT workflow_id FROM workflow_key_successor WHERE workflow_key = ?",
@@ -581,6 +676,91 @@ def test_a_recipe_saved_on_a_checkpoint_b_card_still_runs_on_b(run_env, monkeypa
     (graph,) = submitted
     assert graph["1"]["inputs"]["ckpt_name"] == "b.safetensors"
     assert graph["5"]["inputs"]["steps"] == 12
+
+
+def test_a_saved_recipe_runs_the_graph_it_was_saved_on(run_env, monkeypatch):
+    """Not its workflow's base graph: the one with the face detailer is the
+    base (most stages), and a recipe saved on the plain one runs plain.
+
+    The plain card has no successor row, as a card filed after the cut-over
+    has none, so the conversion files its recipe by the card's own topology.
+    """
+    server = run_env.server
+    library = server.vault.library_uuid
+    detailed = record_api_graph(
+        server.hub, _graph(ckpt="a.safetensors", face_detailer=True), library
+    )
+    with server.hub.transaction() as conn:
+        convert_card_state(conn)
+    plain = record_api_graph(server.hub, _graph(ckpt="a.safetensors"), library)
+    plain_key = _card(server.hub, plain)
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_key_successor WHERE workflow_key = ?", (plain_key,)
+        )
+    sampler, _core = _labels(server.hub, plain, "5")
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        session.exec(delete(Picture))
+        for index, keys in enumerate([detailed, detailed, plain]):
+            session.add(
+                Picture(
+                    file_path=f"own_{index}.png",
+                    deleted=False,
+                    created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                    score=5,
+                    workflow_topology_hash=keys.topology_hash,
+                    workflow_structural_hash=keys.structural_hash,
+                    workflow_instance_hash=keys.instance_hash,
+                    workflow_hash_version="v1",
+                )
+            )
+        recipe = SavedRecipe(
+            name="plain",
+            workflow_key=plain_key,
+            prompt="a cat",
+            overrides=json.dumps({f"{sampler}/steps": 13}),
+        )
+        session.add(recipe)
+        session.commit()
+        return recipe.id
+
+    recipe_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+    task = finder.find_task()
+    task.result = task._run_task()
+    finder.on_task_complete(task, None)
+    assert task.result["deferred"] == []
+    stored = server.vault.db.run_immediate_read_task(
+        lambda session: session.exec(
+            select(SavedRecipe).where(SavedRecipe.id == recipe_id)
+        ).one()
+    )
+    assert stored.workflow_id == _auto_of(server.hub, plain)
+    assert _auto_of(server.hub, plain) == _auto_of(server.hub, detailed)
+
+    submitted = []
+    monkeypatch.setattr(
+        workflows_routes,
+        "_submit_comfyui_prompt",
+        lambda base_url, graph, client_id=None: (
+            submitted.append(graph) or {"prompt_id": "p1"}
+        ),
+    )
+    monkeypatch.setattr(
+        workflows_routes, "_process_comfyui_outputs", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: (json.loads(json.dumps(_OBJECT_INFO)), None),
+    )
+    r = run_env.owner.post(f"{API}/workflows/run", json={"saved_recipe_id": recipe_id})
+    assert r.status_code == 200, r.text
+    (graph,) = submitted
+    assert "31" not in graph, "the recipe ran on the base graph's face detailer"
+    assert graph["5"]["inputs"]["steps"] == 13
 
 
 def test_a_recipe_whose_card_became_no_workflow_is_left_and_deferred(run_env):
