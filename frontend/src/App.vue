@@ -696,6 +696,20 @@ defineExpose({
             <v-icon size="18">mdi-chevron-right</v-icon>
           </span>
         </div>
+        <!-- Click-outside scrim for the auto-hide sidebar. Purely a dimming
+             surface and a tap target, so it is hidden from assistive tech; the
+             keyboard/AT equivalent of clicking it is Escape (handleGlobalKeydown).
+             BEFORE the shell on purpose: both sit on --z-floating, and the
+             later sibling paints on top, so this order keeps the panel over
+             the scrim that dismisses it. -->
+        <Transition name="backdrop-fade">
+          <div
+            v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarOverlay"
+            class="sidebar-backdrop"
+            aria-hidden="true"
+            @click="sidebarStore.hideAutoSidebar()"
+          ></div>
+        </Transition>
         <div
           class="sidebar-shell"
           :class="{
@@ -730,17 +744,6 @@ defineExpose({
             @update:check-for-updates="handleUpdateCheckForUpdates"
           />
         </div>
-        <!-- Click-outside scrim for the auto-hide sidebar. Purely a dimming
-             surface and a tap target, so it is hidden from assistive tech; the
-             keyboard/AT equivalent of clicking it is Escape (handleGlobalKeydown). -->
-        <Transition name="backdrop-fade">
-          <div
-            v-if="sidebarStore.sidebarVisible && sidebarStore.sidebarOverlay"
-            class="sidebar-backdrop"
-            aria-hidden="true"
-            @click="sidebarStore.hideAutoSidebar()"
-          ></div>
-        </Transition>
 
         <TelemetryConsentDialog
           :open="telemetryConsentVisible"

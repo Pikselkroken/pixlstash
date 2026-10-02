@@ -203,7 +203,7 @@ export class NoticeHost {
   }
 
   /**
-   * Effective colours of a card, with the `rgba(status, .08)` ::before tint
+   * Effective colours of a card, with the `rgba(status, .08)` tint layer
    * composited over the opaque base — which is what the eye actually sees and
    * what the spec's §8 contrast table is measured against. `backgroundColor`
    * alone would report the untinted base and quietly pass a broken variant.
@@ -291,7 +291,7 @@ export function composite(fg, bg) {
 /**
  * WCAG relative-luminance contrast ratio between two opaque {r,g,b} colours.
  * Used instead of an axe-core rule because the notice card's real background is
- * a composited ::before tint that axe's colour-contrast rule does not model.
+ * a composited tint layer that axe's colour-contrast rule does not model.
  */
 export function contrastRatio(a, b) {
   const lum = (c) => {

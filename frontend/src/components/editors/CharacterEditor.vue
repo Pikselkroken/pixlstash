@@ -180,7 +180,7 @@
     </template>
   </AppDialog>
 
-  <Teleport to="body">
+  <StackLayer :open="!!previewPic">
     <div
       v-if="previewPic"
       class="ref-preview-overlay"
@@ -197,7 +197,7 @@
         @click="previewPic = null"
       />
     </div>
-  </Teleport>
+  </StackLayer>
 </template>
 
 <script setup>
@@ -219,6 +219,7 @@ import AppTextarea from "../widgets/AppTextarea.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import StarRatingOverlay from "../widgets/StarRatingOverlay.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import StackLayer from "../widgets/StackLayer.vue";
 import AdapterTray from "../widgets/AdapterTray.vue";
 import { errorDetail } from "../../utils/apiError";
 
@@ -377,8 +378,8 @@ watch(
   () => [props.open, props.character?.id],
   ([isOpen, charId]) => {
     // The preview is the one exception to "change nothing on the way out", and
-    // it is an exception because it is not part of the dialog: it is teleported
-    // to <body> at z-index 9999 and covers the whole app. Left up, it outlives
+    // it is an exception because it is not part of the dialog: it is a layer of
+    // its own on the overlay stack, above the dialog, and covers the whole app. Left up, it outlives
     // the dialog that owned it - Ctrl+Enter saves and closes from underneath an
     // open preview, and the Escape that would dismiss it goes with the dialog's
     // own listener, so the scrim strands with only a mouse click to clear it.
@@ -757,7 +758,6 @@ onUnmounted(() => document.removeEventListener("keydown", handleKeydown));
   /* Below the desktop title bar (0px in a browser) so the window controls stay
      usable; the preview image centres within the reduced box. */
   inset: var(--titlebar-h) 0 0 0;
-  z-index: 9999;
   background: rgba(var(--v-theme-scrim), 0.82);
   display: flex;
   align-items: center;

@@ -307,8 +307,9 @@
     </div>
   </div>
 
-  <!-- Autocomplete dropdown (teleported to body) -->
-  <Teleport to="body">
+  <!-- Autocomplete dropdown, on the overlay stack so it clears the dialog or
+       lightbox the panel sits in. -->
+  <StackLayer :open="suggestionsVisible">
     <div
       v-if="suggestionsVisible"
       id="tb-tag-suggestions"
@@ -341,7 +342,7 @@
         <span v-if="i === 0" class="sb-tag-autocomplete-tab-hint">TAB</span>
       </div>
     </div>
-  </Teleport>
+  </StackLayer>
 </template>
 
 <script setup>
@@ -365,6 +366,7 @@ import { errorDetail } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppButton from "../widgets/AppButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import StackLayer from "../widgets/StackLayer.vue";
 
 const MAX_TAG_FETCH = 100;
 const MAX_PREVIEW_IMAGES = 16;
@@ -1389,7 +1391,6 @@ defineExpose({ focus: () => tagInputRef.value?.focus() });
 
 .sb-tag-autocomplete-dropdown {
   position: fixed;
-  z-index: 9999;
   background: color-mix(in srgb, rgb(var(--v-theme-surface)) 92%, transparent);
   backdrop-filter: blur(6px);
   border: 1px solid rgba(var(--v-theme-primary), 0.3);

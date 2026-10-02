@@ -182,15 +182,15 @@ defineExpose({
    button's readout, but the lane still hosts the swipe/chrome hints, so the
    placement stands.
 
-   z-index 6 is the overlay's own trapped local scale (visual-language.md §14
-   sanctions it): the same rung as `.overlay-progress`, which is the same class
-   of object. */
+   `--z-floating`, the floating-status-pill rung, and the same one as
+   `.overlay-progress`, which is the same class of object. Inside the lightbox's
+   own stacking context, so it orders the lightbox's chrome and nothing else. */
 .overlay-receipt-slot {
   position: absolute;
   bottom: calc(var(--space-5) + var(--space-8));
   left: var(--filmstrip-rail-width, 0px);
   right: var(--sidebar-width, 0px);
-  z-index: 6;
+  z-index: var(--z-floating);
   display: flex;
   justify-content: center;
   pointer-events: none;

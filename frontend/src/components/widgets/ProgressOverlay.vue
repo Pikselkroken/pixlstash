@@ -154,7 +154,7 @@ const announcement = computed(() => {
   --v-theme-accent: var(--v-theme-dark-surface-accent);
   position: absolute;
   right: 12px;
-  z-index: 120;
+  z-index: var(--z-floating);
   background: rgba(var(--v-theme-dark-surface), 0.85);
   color: rgb(var(--v-theme-on-dark-surface));
   padding: var(--space-3) var(--space-4);

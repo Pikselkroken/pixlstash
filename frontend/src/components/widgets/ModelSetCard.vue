@@ -431,7 +431,7 @@ const accessibleName = computed(() => {
   left: var(--space-3);
   right: var(--space-3);
   bottom: calc(var(--msc-meta-h) + var(--space-3));
-  z-index: 1;
+  z-index: var(--z-raised);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -486,7 +486,7 @@ const accessibleName = computed(() => {
 
 .msc__badge--start {
   left: var(--space-3);
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 
 .msc__badge--end {

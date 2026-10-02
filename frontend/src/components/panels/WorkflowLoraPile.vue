@@ -20,8 +20,9 @@
         :aria-label="`${count} ${count === 1 ? 'LoRA' : 'LoRAs'} also used, not in the default recipe. On top: ${label(top)}`"
         data-testid="wftab-pile"
       >
-        <span class="wfpile-back" aria-hidden="true"></span>
+        <!-- Back to front: the cards stack by DOM order, not z-index. -->
         <span class="wfpile-back wfpile-back--far" aria-hidden="true"></span>
+        <span class="wfpile-back" aria-hidden="true"></span>
         <span class="wfpile-top">
           <span class="wfpile-name">{{ label(top) }}</span>
           <span v-if="rest" class="wfpile-more">+{{ rest }}</span>
@@ -228,7 +229,6 @@ watch(rows, async (now) => {
 
 .wfpile-top {
   position: relative;
-  z-index: 2;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -257,7 +257,6 @@ watch(rows, async (now) => {
 
 .wfpile-back {
   position: absolute;
-  z-index: 1;
   left: var(--space-2);
   right: var(--space-2);
   bottom: var(--space-1);
@@ -268,7 +267,6 @@ watch(rows, async (now) => {
 }
 
 .wfpile-back--far {
-  z-index: 0;
   left: var(--space-3);
   right: var(--space-3);
   bottom: 0;

@@ -1022,7 +1022,7 @@ number.**
 | `--z-base` | 0 | in-flow content; the grid itself |
 | `--z-raised` | 10 | lifted over an immediate sibling: a tile badge, a hover scrim |
 | `--z-sticky` | 100 | sticky headers/toolbars inside a scroll container |
-| `--z-floating` | 200 | chrome anchored to the content area: selection pill, breadcrumb, range pill |
+| `--z-floating` | 200 | chrome anchored to the content area: selection pill, action receipt, progress pill |
 | `--z-dropdown` | 300 | menus, popovers, tooltips anchored to a control |
 | `--z-drawer` | 1000 | full-panel overlays inside the shell: the lightbox |
 | `--z-overlay` | 2000 | app-level overlays and context menus |
@@ -1049,9 +1049,8 @@ sub-scrims would win that tie on DOM order. A notice then needs one rung above t
 
 **The ladder lives inside one stacking context.** `.app-viewport` is
 `position: fixed; z-index: 0`, so every value here competes only with its siblings
-inside the app shell, and a raw `9999` nested inside the lightbox or the review
-overlay is trapped at its parent's rung — which is why four such values survive
-harmlessly. Only two squatters were ever in `.app-viewport`'s own context
+inside the app shell, and a value nested inside the lightbox or the review overlay
+is trapped at its parent's rung. Only two squatters were ever in `.app-viewport`'s own context
 (`TitleBar.vue` at 100000 and `ImageImporter.vue`'s `.dlg-scrim` at 99999); both are
 migrated. `.import-fly-chip` is appended to `<body>`, so it lives in the ROOT context
 where any positive value already clears the shell.
@@ -1068,6 +1067,17 @@ climbed to. A hand-written number above 1000 is betting against a number that mo
 **If it must clear a modal, it must *be* an overlay** (teleported, ordered by the
 stack), not a positioned element with a bigger number. The rungs above `--z-drawer`
 stay only for the surfaces that remain in the document, and no fourth one is added.
+`StackLayer` (`components/widgets/StackLayer.vue`) is the way to be one: it puts a
+hand-positioned layer (a completion list under a field, a full-window preview) on
+Vuetify's stack with no scrim, focus handling or transition, so it orders above the
+dialog it was opened from without a number of its own.
+
+**Inside a component's own stacking context the rungs order its parts.** A picture
+tile (`.image-card`, `--z-base`) and the lightbox are stacking contexts, so a badge
+on `--z-sticky` inside a tile is not competing with the grid's toolbar: it is above
+that tile's overlays and nothing else. Where a context has more layers than rungs,
+equal rungs are ordered by DOM order, and the comment beside the rule says which
+sibling has to stay later in the template.
 
 **There is no "just above my own layer".** A `1001` over `1000`, a `301` over `300`:
 two elements that need a plus-one belong in one stacking context, ordered by DOM

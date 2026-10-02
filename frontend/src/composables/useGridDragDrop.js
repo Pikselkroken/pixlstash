@@ -238,7 +238,6 @@ export function useGridDragDrop(
     ghost.style.left = "-9999px";
     ghost.style.top = "-9999px";
     ghost.style.pointerEvents = "none";
-    ghost.style.zIndex = "9999";
 
     if (element instanceof HTMLImageElement) {
       const clone = element.cloneNode(true);

@@ -50,7 +50,11 @@ const TooltipStub = {
 
 const globalOpts = {
   global: {
-    stubs: { Tooltip: TooltipStub, "v-icon": true, AppDialog: AppDialogStub },
+    stubs: {
+      Tooltip: TooltipStub,
+      "v-icon": true,
+      AppDialog: AppDialogStub,
+    },
   },
 };
 

@@ -1423,7 +1423,7 @@ defineExpose({
 /* Floating mode (opt-in, see the `floatMenu` prop): the node has been teleported
    to <body>, so it is positioned against the viewport by sizeMenu() and needs
    its own stacking level. `--z-overlay` is the same token the grid context menu
-   uses, and it clears the lightbox (z-index 1000) and its sidebar (4).
+   uses, and it clears the lightbox (`--z-drawer`) and everything inside it.
    Declared after `.ate-menu` so it wins at equal specificity. */
 .ate-menu--floating {
   position: fixed;
@@ -1601,10 +1601,9 @@ defineExpose({
   box-shadow: var(--elevation-3);
   font-size: var(--text-xs);
   line-height: 1.2;
-  /* Above the menu it belongs to, which just moved to `--z-dropdown`. Kept as
-     a relative expression rather than a second bare number so the two cannot
-     drift apart again. */
-  z-index: calc(var(--z-dropdown) + 1);
+  /* Above the menu it belongs to: the same rung, and after the menu in the
+     template, so it wins on DOM order (visual-language.md §14). Keep it there. */
+  z-index: var(--z-dropdown);
   pointer-events: none;
 }
 
@@ -1627,7 +1626,12 @@ defineExpose({
   min-width: 185px;
   max-width: 185px;
   transform: translateX(-4px);
-  z-index: 2500;
+  /* The submenu rung `styles/context-menu.css` gives a menu's own submenus.
+     The flyout is never teleported: it lives inside the host menu's stacking
+     context, so it only has to clear that menu's rows. A rung higher would also
+     put it over the tips its own rows open, which the grid context menu renders
+     inside itself (`data-tooltip-layer`). */
+  z-index: var(--z-dropdown);
 }
 
 /* Flip flyout menu leftward when near the right screen edge */

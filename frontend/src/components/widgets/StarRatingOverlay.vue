@@ -105,7 +105,7 @@ function cycleRating() {
 }
 
 .star-overlay--compact {
-  z-index: 120;
+  z-index: var(--z-raised);
   font-size: 0.6em;
   gap: 0;
 }

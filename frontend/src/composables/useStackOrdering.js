@@ -856,8 +856,8 @@ export function useStackOrdering(
     return {
       // Semi-transparent, on the same 0.6 the expanded card's background uses:
       // one alpha per stack colour, no second value to keep in sync. The ribbon
-      // is the one stack mark that sits ON the picture (z-index 2, above
-      // `.thumbnail-img`) rather than on the canvas, so at full opacity it
+      // is the one stack mark that sits ON the picture (after `.thumbnail-img`
+      // on the same rung) rather than on the canvas, so at full opacity it
       // blanks an 8px strip of the very photo it exists to group.
       borderBottom: `8px solid ${applyStackBackgroundAlpha(color)}`,
     };

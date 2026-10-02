@@ -5,7 +5,7 @@
   width: 100%;
   height: 100%;
   background: var(--active-wash);
-  z-index: 20;
+  z-index: var(--z-raised);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -35,7 +35,7 @@
   box-shadow: 0 2px 6px rgba(var(--v-theme-shadow), 0.3);
   font-size: var(--badge-font-size, 0.8em);
   padding: var(--badge-padding, 2px 4px);
-  z-index: 30;
+  z-index: var(--z-sticky);
   max-width: 90%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -75,7 +75,7 @@
   position: absolute;
   left: var(--space-1);
   bottom: var(--space-1);
-  z-index: 30;
+  z-index: var(--z-sticky);
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -239,7 +239,12 @@
   box-shadow: var(--elevation-2);
   pointer-events: none;
   user-select: none;
-  z-index: 50;
+  /* `--z-sticky`, not the `--z-floating` the ladder's note lists it under: the
+     pending-imports pill sits on `--z-sticky` at the same top-centre spot, and
+     its Load button must stay over this transient readout. The two tie and the
+     pending pill wins by coming later in the template. The breadcrumb follows
+     for the same reason, and both stay over a hovered tile (`--z-raised`). */
+  z-index: var(--z-sticky);
 }
 
 /* Breadcrumb: translucent "you are here" path, bottom-left of the grid. */
@@ -264,7 +269,7 @@
   backdrop-filter: blur(6px);
   box-shadow: var(--elevation-2);
   user-select: none;
-  z-index: 50;
+  z-index: var(--z-sticky);
   transition: bottom 0.15s;
 }
 /* Lift above the 36px multi-select (union/overlap) bar so the breadcrumb
@@ -449,7 +454,7 @@
 
 /* A tile sits flush against its neighbours (a 2px seam, or none in compact
    mode), so the gapped global outline would land on them. The ring is the inset
-   form, on the container's overlay layer (the hover glow's `::after`, z 22),
+   form, on the container's overlay layer (the hover glow's `::after`),
    because in justified and compact modes the image covers the whole card. */
 .image-card:focus-visible {
   outline: none;
@@ -476,7 +481,7 @@
 }
 
 .image-card:hover {
-  z-index: 20;
+  z-index: var(--z-raised);
 }
 
 .image-card-stack-reorder-left::after,
@@ -490,7 +495,7 @@
   background: var(--active-bar);
   box-shadow: var(--elevation-2);
   pointer-events: none;
-  z-index: 6;
+  z-index: var(--z-raised);
 }
 
 .image-card-stack-reorder-left::after {
@@ -507,7 +512,7 @@
   background: var(--active-wash);
   box-shadow: var(--selection-edge);
   pointer-events: none;
-  z-index: 25;
+  z-index: var(--z-raised);
   border-radius: var(--radius-md);
   transition: none;
 }
@@ -563,7 +568,7 @@
   background: var(--scrim-photo);
   box-shadow: var(--elevation-2);
   pointer-events: none;
-  z-index: 26;
+  z-index: var(--z-raised);
 }
 .touch-select-mode .image-card:has(.selection-overlay)::after {
   display: none;
@@ -633,7 +638,7 @@
   box-shadow: inset 0 0 12px 4px var(--hover-wash);
   opacity: 0;
   transition: opacity 0.15s ease;
-  z-index: 22;
+  z-index: var(--z-raised);
   pointer-events: none;
 }
 .image-card:hover .thumbnail-container::after,
@@ -735,7 +740,7 @@
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 1;
+  z-index: var(--z-base);
   box-shadow: 1px 2px 3px 3px rgba(var(--v-theme-shadow), 0.3);
   transition: box-shadow 0.18s;
 }
@@ -849,7 +854,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 30;
+  z-index: var(--z-sticky);
   pointer-events: auto;
   padding: 0;
 }
@@ -875,22 +880,24 @@
 /* The ribbon that groups an expanded stack. It has one required position in the
    tile's local stacking order and both neighbours matter:
 
-     .thumbnail-img            1   the picture, which the ribbon must cover
-     .stack-band-overlay       2   here
-     .stack-cover-flag        10   --z-raised
-     .thumbnail-badge         30   resolution, format
+     .thumbnail-img           --z-base     the picture, which the ribbon must cover
+     .stack-band-overlay      --z-base     here, AFTER the picture in the DOM
+     .stack-cover-flag        --z-raised
+     .thumbnail-badge         --z-sticky   resolution, format
 
    Above the picture, because a ribbon the picture paints over is not a grouping
    mark. Below the labels, because they name individual pictures and the ribbon
    is about the group; a colour band across a "Cover" chip would obscure the one
-   answer an expanded stack exists to give. A raw 2 rather than a token: this is
-   ordering INSIDE one tile between siblings that ship together, which is what
-   the ladder's own note reserves local numbers for. */
+   answer an expanded stack exists to give. The ribbon shares the picture's rung
+   and wins on DOM order (visual-language.md §14: no "just above my own
+   layer"), so it must stay after the <img> in the template. The tile is its own
+   stacking context (`.image-card`), so these rungs order the tile's own parts
+   and nothing outside it. */
 .stack-band-overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 2;
+  z-index: var(--z-base);
   border-radius: inherit;
 }
 
@@ -903,7 +910,7 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  z-index: 30;
+  z-index: var(--z-sticky);
   pointer-events: auto;
 }
 
@@ -916,7 +923,9 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
-  z-index: 120;
+  /* Above a selected face box (`getFaceBboxStyle`), which takes the same rung:
+     this column is later in the template, so it wins the tie. */
+  z-index: var(--z-dropdown);
   pointer-events: none;
 }
 

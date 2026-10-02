@@ -80,6 +80,7 @@ import DedupConfidencePill from "./DedupConfidencePill.vue";
 import DedupWhyPills from "./DedupWhyPills.vue";
 import StackExpansionStrip from "./StackExpansionStrip.vue";
 import Tooltip from "./Tooltip.vue";
+import StackLayer from "./StackLayer.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { listStackMembers, MAX_STACK_MEMBER_PAGE } from "../../api/dedup";
 import { API_BASE_URL } from "../../utils/apiClient";
@@ -2208,7 +2209,7 @@ function onZoomContextMenu() {
        this surface has when a group named only one member of a stack.
        Deliberately near-black chrome at fixed colors: this is a
        photo-judgement surface, same rationale as the lightbox. -->
-  <Teleport to="body">
+  <StackLayer :open="zoomOpen">
     <div v-if="zoomOpen" class="dc-zv" data-testid="dedup-zoom">
       <div class="dc-zv-top">
         <div class="dc-zv-flip" role="tablist" aria-label="Picture">
@@ -2317,7 +2318,7 @@ function onZoomContextMenu() {
         <span><kbd>Esc</kbd> back</span>
       </div>
     </div>
-  </Teleport>
+  </StackLayer>
 </template>
 
 <style scoped>
@@ -2685,11 +2686,13 @@ function onZoomContextMenu() {
 
 /* ── The blink compare ─────────────────────────────────────────────────────
    Fixed colors on purpose: like the lightbox, a photo-judgement surface gets
-   near-black chrome in both themes. Sits above the modal dialog. */
+   near-black chrome in both themes. Sits above the modal dialog because it is
+   a `StackLayer`, which the overlay stack orders over it; no z-index. */
 .dc-zv {
   position: fixed;
-  inset: 0;
-  z-index: calc(var(--z-modal) + 100);
+  /* Under the desktop title bar (0px in a browser): the overlay stack is above
+     it, so only the inset keeps the drag region and window controls usable. */
+  inset: var(--titlebar-h) 0 0 0;
   display: flex;
   flex-direction: column;
   background: #0a0a0a;

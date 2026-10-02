@@ -763,8 +763,8 @@ moves pixels somewhere; the list is the record of where to look.
   declarations point at it; their siblings `.rs-tally-kept` / `.rs-archived-kept` already
   read `dark-surface-success`. Full rationale in `visual-language.md` §4.
 - **The 40+ raw z-index call sites.** The ladder is shipped (`--z-base` … `--z-modal`,
-  visual-language §14) so new code has a target; retrofitting the existing ones is
-  opportunistic, because each move is pixel-visible on a different screen.
+  visual-language §14) and every call site is on it (#1671), bar the filter strip's
+  `calc(var(--z-sticky) - 1)`, kept so the toolbar's divider shows over it.
 
 The original findings, kept for the evidence:
 
@@ -834,9 +834,8 @@ DOM, and its full-viewport sub-scrim would paint over the window drag region and
 **Stacking no longer depends on DOM order**, which was the actual defect: `--z-notice`
 previously *tied* the maximum and `NoticeHost` won only by being a later sibling of
 `.app-viewport`. Proven by moving the host to first child and re-checking — before the
-change the title bar won, after it the notice does, in both orders. Retrofitting the
-remaining raw z-indexes stays opportunistic per finding 10.11; four survive harmlessly,
-each verified to be inside a nested stacking context where it cannot compete.
+change the title bar won, after it the notice does, in both orders. The remaining raw
+z-indexes have since been moved onto the ladder (#1671).
 
 **`--notice-max-w: 420px`** — in `design-tokens.css`, next to `--badge-size` and
 `--bar-height`, which is the existing home for fixed component dimensions that are

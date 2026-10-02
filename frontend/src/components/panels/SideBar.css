@@ -47,7 +47,7 @@
   min-width: 0;
   padding: 0;
   position: relative;
-  z-index: 1;
+  z-index: var(--z-raised);
   gap: 0;
   background: transparent;
   border-bottom: none;
@@ -627,7 +627,7 @@
   right: 0;
   bottom: 0;
   width: 6px;
-  z-index: 6;
+  z-index: var(--z-raised);
   cursor: ew-resize;
   background: transparent;
   touch-action: none;
@@ -834,7 +834,7 @@
   background: var(--active-bar);
   transition: transform 0.18s ease;
   pointer-events: none;
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 
 .sidebar-collapsed-row.active::before {
@@ -928,7 +928,7 @@
 
 .sidebar-collapsed-item--add-plus {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-raised);
   font-size: calc(var(--sidebar-thumb-size) * 0.42) !important;
   width: calc(var(--sidebar-thumb-size) * 0.42) !important;
   height: calc(var(--sidebar-thumb-size) * 0.42) !important;
@@ -1339,7 +1339,7 @@
   top: 72px;
   left: 20px;
   transform: translateY(-50%);
-  z-index: 1200;
+  z-index: var(--z-dropdown);
   color: rgb(var(--v-theme-on-error));
   /* Solid, not 80%: `on-error` is authored against the SOLID fill (4.86:1 light,
      4.68:1 dark). Blending the fill toward the surface lightens it and drops
@@ -1485,7 +1485,7 @@
   color: rgba(var(--v-theme-on-surface), 0.85);
   /* Keep pointer events so the lock-reason title shows on hover. */
   pointer-events: auto;
-  z-index: 2;
+  z-index: var(--z-raised);
 }
 
 .add-character-inline {
