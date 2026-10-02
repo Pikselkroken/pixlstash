@@ -1862,7 +1862,7 @@ watcher the model shelf uses. See §13.2 for the destination itself. **One card
 per workflow** (#1623), keyed by the workflow's `id`; there are no stacks, no
 member rows and no panel. `StackPanel.vue`, the rail that listed a stack's
 member cards and their slot marks, was deleted with `useWorkflowPrefsStore`;
-merge and split on the selection pill (below) replace it, and a checkpoint or
+the core rule groups workflows instead (there is no merge or split), and a checkpoint or
 LoRA that used to be a member is a recipe value the workflow's pictures are
 filtered by.
 

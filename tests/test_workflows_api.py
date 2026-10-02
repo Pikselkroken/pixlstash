@@ -4642,6 +4642,20 @@ def test_the_picture_grid_narrows_a_workflow_to_one_lora(workflow_env):
         == FLIP_WF
     )
 
+    # A manual workflow's own runs narrow the same way, and only its own.
+    manual = create_manual_workflow(
+        server.hub, "Mine", {"1": {"class_type": "SaveImage", "inputs": {}}}, "import"
+    )
+    mine_a, mine_b = min(a_ids), min(b_ids)
+    try:
+        comfyui_service._set_run_workflow_id(server, manual, [mine_a, mine_b])
+        assert ids(workflow=manual) == {mine_a, mine_b}
+        assert ids(workflow=manual, workflow_lora=_ADA) == {mine_a}
+        assert ids(workflow=manual, workflow_lora=_BO) == {mine_b}
+        assert ids(workflow=FLIP_WF, workflow_lora=_ADA) == a_ids - {mine_a}
+    finally:
+        delete_manual_workflow(server.hub, manual)
+
 
 def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     workflow_env, monkeypatch

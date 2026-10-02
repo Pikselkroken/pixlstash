@@ -107,27 +107,31 @@ def record_pulled(
     built-in, which is not stored). An upsert that keeps ``first_pulled_at``
     and never clears ``dismissed``.
     """
-    now = _now()
     with hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
-            "remote_modified, first_pulled_at, last_seen_at, content_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (origin, remote_path) DO UPDATE SET "
-            "workflow_name = excluded.workflow_name, "
-            "remote_modified = excluded.remote_modified, "
-            "last_seen_at = excluded.last_seen_at, "
-            "content_hash = excluded.content_hash",
-            (
-                origin,
-                remote_path,
-                workflow_name,
-                remote_modified,
-                now,
-                now,
-                content_hash,
-            ),
-        )
+        upsert(conn, origin, remote_path, workflow_name, remote_modified, content_hash)
+
+
+def upsert(
+    conn,
+    origin: str,
+    remote_path: str,
+    workflow_name: Optional[str],
+    remote_modified: Optional[int],
+    content_hash: Optional[str],
+) -> None:
+    """:func:`record_pulled`'s write, inside the caller's transaction."""
+    now = _now()
+    conn.execute(
+        "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
+        "remote_modified, first_pulled_at, last_seen_at, content_hash) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT (origin, remote_path) DO UPDATE SET "
+        "workflow_name = excluded.workflow_name, "
+        "remote_modified = excluded.remote_modified, "
+        "last_seen_at = excluded.last_seen_at, "
+        "content_hash = excluded.content_hash",
+        (origin, remote_path, workflow_name, remote_modified, now, now, content_hash),
+    )
 
 
 def prune_gone(hub: HubDatabase, origin: str, listed: Iterable[str]) -> int:
