@@ -2052,8 +2052,8 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     rederive_cores(conn, include_uncached=data_version < 8)
                 if data_version < 9:
                     # Built-ins made workflows before their origin row carried
-                    # the content hash: without it the inbox and a pull store
-                    # the same content a second time.
+                    # the content hash: without it an inbox drop stores the
+                    # same content a second time.
                     from pixlstash.hub.workflow_group_convert import (
                         hash_builtin_origins,
                     )

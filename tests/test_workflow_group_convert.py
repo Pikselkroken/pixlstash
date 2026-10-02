@@ -618,6 +618,15 @@ def test_the_hub_open_hashes_built_in_origin_rows_stored_without_one(tmp_path):
         "builtin",
         record=(workflow_origin.BUILTIN_ORIGIN, "flow.json", None),
     )
+    # Left alone: another origin's hashless row, and a built-in whose
+    # workflow is gone.
+    create_manual_workflow(
+        hub, "other", _EDITOR, "import", record=("file", "other.json", None)
+    )
+    with hub.transaction() as conn:
+        workflow_origin.upsert(
+            conn, workflow_origin.BUILTIN_ORIGIN, "gone.json", "manual:0", None, None
+        )
     digest = workflow_inbox.content_hash(_EDITOR)
     assert workflow_origin.stored_as(hub, digest) is None
     with hub.transaction() as conn:
@@ -628,6 +637,13 @@ def test_the_hub_open_hashes_built_in_origin_rows_stored_without_one(tmp_path):
     try:
         assert reopened.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
         assert workflow_origin.stored_as(reopened, digest) == builtin
+        assert {
+            (row["origin"], row["remote_path"])
+            for row in reopened.fetchall(
+                "SELECT origin, remote_path FROM workflow_origin "
+                "WHERE content_hash IS NULL"
+            )
+        } == {("file", "other.json"), (workflow_origin.BUILTIN_ORIGIN, "gone.json")}
         with reopened.transaction() as conn:
             assert convert.hash_builtin_origins(conn) == 0
     finally:

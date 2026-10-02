@@ -2570,8 +2570,9 @@ still names it.
 a built-in made a manual workflow before its `builtin` origin row was written
 with a content hash has that hash filled from its stored document
 (`workflow_inbox.content_hash`), so `workflow_origin.stored_as` matches it and
-the inbox or a pull of the same content does not store a second copy. A row
-whose workflow is gone is left as it is.
+an inbox drop of the same content does not store a second copy (a pull of it
+now matches that workflow rather than reporting a built-in). A row whose
+workflow is gone is left as it is.
 
 #### The core rule and data step 8
 

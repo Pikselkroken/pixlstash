@@ -48,7 +48,6 @@ from pixlstash.hub.workflow_card_reads import (
     variant_documents,
     workflow_index,
 )
-from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN
 from pixlstash.hub.workflow_cards import (
     CORE_RULE_VERSION,
     STRIP_LORAS_FOR_STACKS,
@@ -59,6 +58,7 @@ from pixlstash.hub.workflow_cards import (
     loader_swaps_of,
     topology_only_key,
 )
+from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
 from pixlstash.services.model_shelf_service import adapter_digest_index
@@ -527,8 +527,8 @@ def hash_builtin_origins(conn: sqlite3.Connection) -> int:
 
     Hub data step 9. A built-in made a manual workflow before the hash was
     written with it has a ``builtin`` row with ``content_hash`` NULL, which
-    ``workflow_origin.stored_as`` cannot match, so the inbox or a pull of the
-    same content stored a second copy. The hash is the stored document's
+    ``workflow_origin.stored_as`` cannot match, so an inbox drop of the same
+    content stored a second copy (a pull matched it as a built-in instead). The hash is the stored document's
     (``workflow_inbox.content_hash`` ignores the workflow's own tag). A row
     whose workflow is gone is left: there is nothing to hash. A document that
     will not hash is logged and left.
