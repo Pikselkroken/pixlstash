@@ -53,6 +53,7 @@ from pixlstash.services.workflow_identity import (
     STRUCTURAL,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
+    core_node_labels,
     loader_swaps,
     unswapped,
 )
@@ -99,7 +100,7 @@ def _drained(finder) -> bool:
     """Nothing handed out, past the one start-up family pass (which moves nothing)."""
     task = finder.find_task()
     if isinstance(task, FamilyReidentifyTask):
-        assert task._run_task() == {"moved": 0}
+        assert task._run_task()["moved"] == 0
         task = finder.find_task()
     return task is None
 
@@ -1899,3 +1900,111 @@ def test_a_retired_workflow_a_new_variant_lands_in_is_live_again(hub):
         )
         is None
     )
+
+
+def _family_pass(finder):
+    """Run the finder's next family pass and report it; ``None`` if none is due."""
+    task = finder.find_task()
+    while task is not None and not isinstance(task, FamilyReidentifyTask):
+        task.result = task._run_task()
+        finder.on_task_complete(task, None)
+        task = finder.find_task()
+    if task is not None:
+        task.result = task._run_task()
+        finder.on_task_complete(task, None)
+    return task
+
+
+def test_a_family_pass_that_retires_ids_tells_the_clients_where_they_went(hub):
+    """`workflows_changed`, reason `regrouped`, with `renamed` {old: new} (#1696)."""
+    from pixlstash.event_types import EventType
+
+    events = []
+    vault = SimpleNamespace(notify=lambda kind, data: events.append((kind, data)))
+    known = _workflow(hub, _graph(ckpt="qwen_image_fp8.safetensors"))
+    unknown = _workflow(hub, _graph(ckpt="house-finetune-v8.safetensors"))
+    finder = WorkflowCardBackfillFinder(hub=hub, vault=vault)
+    assert _family_pass(finder).result["moved"] == 0
+    assert events == [], "a pass that moved nothing says nothing"
+    _shelf_model(hub, "house-finetune-v8.safetensors", "Qwen-Image", "9" * 64)
+    assert _family_pass(finder).result["moved"] == 1
+    assert events == [
+        (
+            EventType.CHANGED_WORKFLOWS,
+            {
+                "source": "external",
+                "origin_client_id": None,
+                "keys": sorted([known, unknown]),
+                "reason": "regrouped",
+                "renamed": {unknown: known},
+            },
+        )
+    ]
+
+
+def test_a_start_with_an_unchanged_shelf_runs_no_family_pass(hub):
+    """The last pass's shelf signature is kept in the hub, not the process."""
+    _workflow(hub, _graph(ckpt="house-finetune-v9.safetensors"))
+    assert isinstance(
+        _family_pass(WorkflowCardBackfillFinder(hub=hub)), FamilyReidentifyTask
+    )
+    assert hub.fetchone(
+        "SELECT 1 FROM workflow_variant_family WHERE families LIKE '%asset:%'"
+    ), "the unknown family is still filed, so only the stored signature stops it"
+    assert _family_pass(WorkflowCardBackfillFinder(hub=hub)) is None
+    _shelf_model(hub, "unrelated.safetensors", "SDXL", "8" * 64)
+    assert isinstance(
+        _family_pass(WorkflowCardBackfillFinder(hub=hub)), FamilyReidentifyTask
+    ), "a shelf changed since the last pass arms one at start"
+
+
+def test_a_default_on_a_node_the_core_does_not_have_is_left_out(hub, monkeypatch):
+    """A split heir is copied its old workflow's whole label map (#1696), so a
+    `core:` default can name a node its own core pruned: never shown or run,
+    even with no sampled picture to read the core labels off."""
+    keys = _file_run(hub)
+    workflow_id = workflow_of_variant(hub, keys.structural_hash)
+    document = json.loads(
+        hub.fetchone(
+            "SELECT document FROM workflow_recipe_graph WHERE structural_hash = ?",
+            (keys.structural_hash,),
+        )[0]
+    )
+    sampler = f"core:{core_node_labels(document)['5']}"
+    pruned = "core:" + "0" * 64
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, ?)",
+            [
+                (workflow_id, f"{sampler}/steps", "7"),
+                (workflow_id, f"{pruned}/cfg", "9"),
+            ],
+        )
+    monkeypatch.setattr(workflow_card_service, "read_instance_hashes", lambda *args: [])
+    monkeypatch.setattr(
+        workflow_card_service, "read_variant_picture_counts", lambda vault: {}
+    )
+    recipe = workflow_card_service.workflow_defaults(
+        hub, SimpleNamespace(library_uuid="test-library"), workflow_id
+    )
+    assert [(d.slot_label, d.input_name, d.value) for d in recipe.values] == [
+        (sampler, "steps", 7)
+    ]
+
+
+def test_an_orphan_loader_the_core_pruned_adds_no_family(hub):
+    """Families are read off the core, not the whole document (#1696)."""
+    keys = record_api_graph(
+        hub,
+        _graph(
+            ckpt="flux1-krea-dev.safetensors",
+            extra={
+                "98": _node(
+                    "CheckpointLoaderSimple", ckpt_name="qwen_image_fp8.safetensors"
+                )
+            },
+        ),
+        library_uuid="test-library",
+    )
+    assert _families(hub, keys) == "flux1"

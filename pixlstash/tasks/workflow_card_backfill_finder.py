@@ -13,6 +13,7 @@ from pixlstash.hub.workflow_cards import (
     variant_counts,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.workflow_events import announce_to_vault
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
 from pixlstash.tasks.workflow_card_backfill_task import (
@@ -40,29 +41,36 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
     so without that a single unkeyable graph keeps the planner awake forever.
     """
 
-    def __init__(self, hub: HubDatabase) -> None:
+    def __init__(self, hub: HubDatabase, vault=None) -> None:
         """Initialise the finder.
 
         Args:
             hub: The hub database holding the workflow tables.
+            vault: Where a family pass that retired workflow ids announces
+                them (``workflows_changed``, reason ``regrouped``). ``None``
+                announces nothing.
         """
         super().__init__()
         self._hub = hub
+        self._vault = vault
         self._deferred: set[str] = set()
         # Handed out and not yet reported. The planner frees the inflight slot
         # before it tells the finder how the task went, so without this the
         # identical batch can be issued twice (see MissingCheckpointHashFinder).
         self._handed_out: set[str] = set()
         # The shelf's base models as of the last family pass: only a change can
-        # identify an unknown family. None while an unknown family is filed, so
-        # the first drained sweep after a start runs one pass: a shelf change
-        # the last session never passed over is not lost with the process.
+        # identify an unknown family. Persisted in the hub, so a start (or a
+        # library switch) with an unchanged shelf runs nothing; None while an
+        # unknown family is filed and the shelf moved since the last pass, so
+        # a change the last session never passed over is not lost with it.
+        current = shelf_family_signature(hub)
         unknown = hub.fetchone(
             "SELECT 1 FROM workflow_variant_family WHERE families LIKE '%asset:%' "
             "OR families LIKE '%unresolved%' LIMIT 1"
         )
+        passed = hub.fetchone("SELECT signature FROM workflow_family_pass")
         self._family_signature: Optional[str] = (
-            None if unknown else shelf_family_signature(hub)
+            None if unknown and (passed is None or passed[0] != current) else current
         )
 
     def finder_name(self) -> str:
@@ -101,7 +109,7 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
         if signature == self._family_signature:
             return None
         self._family_signature = signature
-        return FamilyReidentifyTask(hub=self._hub)
+        return FamilyReidentifyTask(hub=self._hub, signature=signature)
 
     def on_all_tasks_complete(self) -> None:
         """Report the grouping once the hub is drained: the owner gate reads it.
@@ -129,7 +137,10 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
 
     def on_task_complete(self, task, error) -> None:
         """Record which variants must not be handed out again this session."""
-        if isinstance(task, FamilyReidentifyTask) and error is not None:
+        if isinstance(task, FamilyReidentifyTask) and error is None:
+            self._family_pass_done(task)
+            return
+        if isinstance(task, FamilyReidentifyTask):
             if isinstance(error, (TaskCancelledError, sqlite3.OperationalError)):
                 # Never ran, or a busy hub: nothing was learned, so the next
                 # sweep asks again.
@@ -179,3 +190,25 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
             self._deferred.update(hashes)
             return
         self._deferred.update((getattr(task, "result", None) or {}).get("deferred", []))
+
+    def _family_pass_done(self, task: FamilyReidentifyTask) -> None:
+        """Remember the shelf the pass ran against, and announce what it moved."""
+        signature = task.params.get("signature")
+        if signature is not None:
+            with self._hub.transaction() as conn:
+                conn.execute("DELETE FROM workflow_family_pass")
+                conn.execute(
+                    "INSERT INTO workflow_family_pass (signature) VALUES (?)",
+                    (signature,),
+                )
+        result = getattr(task, "result", None) or {}
+        if not result.get("moved") or self._vault is None:
+            return
+        # Retired ids are gone from GET /workflows, so a tab holding one (a
+        # selection, an open inspector) needs to be told where it went.
+        announce_to_vault(
+            self._vault,
+            result.get("keys") or [],
+            "regrouped",
+            renamed=result.get("renamed") or {},
+        )

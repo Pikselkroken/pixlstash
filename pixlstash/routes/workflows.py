@@ -2274,6 +2274,11 @@ def _manual_model_widgets(hub, workflow_id: str) -> tuple:
 
     Cached, so the grid parses each document once rather than once per
     request, and a document that will not read is logged once.
+
+    In the automatic path's order (``asset_names``: widget, then lowercased
+    filename), and a model two loaders spell in two cases read once, so a
+    pair reads the same on a manual card as on an automatic one. LoRAs keep
+    every loader: two holding one file are two slots here.
     """
     row = hub.fetchone(
         "SELECT document FROM workflow_document WHERE workflow_id = ?",
@@ -2282,7 +2287,7 @@ def _manual_model_widgets(hub, workflow_id: str) -> tuple:
     if row is None:
         return ()
     try:
-        return tuple(loaded_model_widgets(json.loads(row["document"])))
+        loaded = loaded_model_widgets(json.loads(row["document"]))
     except Exception as exc:
         # The reader indexes into whatever the document holds, so a malformed
         # one raises something other than a ValueError. A workflow described
@@ -2295,6 +2300,13 @@ def _manual_model_widgets(hub, workflow_id: str) -> tuple:
             exc,
         )
         return ()
+    found: dict[tuple, tuple[str, str]] = {}
+    for index, (widget, filename) in enumerate(
+        sorted(loaded, key=lambda pair: (pair[0], str(pair[1]).lower()))
+    ):
+        repeat = index if widget == "lora_name" else None
+        found.setdefault((widget, str(filename).lower(), repeat), (widget, filename))
+    return tuple(found.values())
 
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:

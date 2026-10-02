@@ -740,6 +740,28 @@ def test_a_workflow_change_goes_out_as_its_own_frame(server):
     assert "picture_ids" not in payload
 
 
+def test_a_regrouped_workflow_change_carries_where_each_retired_id_went(server):
+    """`renamed` is `{old id: new id}`, strings only, and `{}` for every reason
+    that did not set it, so a client can read it unconditionally (#1696)."""
+    payload = _broadcast_capture(
+        server,
+        EventType.CHANGED_WORKFLOWS,
+        {
+            "keys": ["auto:old", "auto:new"],
+            "reason": "regrouped",
+            "renamed": {"auto:old": "auto:new"},
+        },
+    )
+    assert payload["reason"] == "regrouped"
+    assert payload["renamed"] == {"auto:old": "auto:new"}
+    assert payload["source"] == "external" and payload["origin_client_id"] is None
+    for data in ({"keys": ["k"], "reason": "changed"}, {"renamed": ["not", "a map"]}):
+        assert (
+            _broadcast_capture(server, EventType.CHANGED_WORKFLOWS, data)["renamed"]
+            == {}
+        )
+
+
 def test_an_unknown_workflow_change_reason_degrades_rather_than_vanishes(server):
     """§8's allowlist rule, in both directions.
 

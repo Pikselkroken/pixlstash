@@ -81,8 +81,12 @@ from pixlstash.db_models import (
     Tag,
     UserToken,
 )
+from pixlstash.hub.workflow_group_writes import create_manual_workflow
+from pixlstash.hub.workflows import record_api_graph
 from pixlstash.server import Server
+from pixlstash.services.workflow_hash import asset_reference, normalized_filename
 from pixlstash.utils.rate_limiter import RateLimitMiddleware
+from tests.test_workflow_identity import _graph as _workflow_graph
 from tests.utils import upload_pictures_and_wait
 
 # ---------------------------------------------------------------------------
@@ -1221,6 +1225,46 @@ class TestResourceScopedReadTokenIsolation:
         assert r.status_code == 200, (
             f"Token for set A was wrongly blocked from its own picture: {r.text}"
         )
+
+    def test_a_manual_workflow_lora_filter_stays_inside_the_set(self, env):
+        """``?workflow=<manual id>&workflow_lora=<asset>`` is narrowed by the
+        set scope like any other filter (#1696): both pictures are runs of the
+        workflow loading the LoRA, and the set-A token still sees only pic_a."""
+        hub = env.server.hub
+        graph = _workflow_graph(loras=("test-share-lora.safetensors",))
+        keys = record_api_graph(hub, graph, library_uuid=env.server.vault.library_uuid)
+        manual = create_manual_workflow(hub, "Shared run", graph, "import")
+        lora = asset_reference(normalized_filename("test-share-lora.safetensors"))
+        both = (env.pic_a, env.pic_b)
+
+        def stamp(structural_hash, workflow_id):
+            def write(session):
+                session.exec(
+                    update(Picture)
+                    .where(Picture.id.in_(both))
+                    .values(
+                        workflow_structural_hash=structural_hash,
+                        run_workflow_id=workflow_id,
+                    )
+                )
+                session.commit()
+
+            env.server.vault.db.run_task(write)
+
+        params = {"workflow": manual, "workflow_lora": lora}
+        stamp(keys.structural_hash, manual)
+        try:
+            r = env.owner_client.get(f"{API}/pictures", params=params)
+            assert r.status_code == 200, r.text
+            assert {p["id"] for p in r.json()} == set(both), (
+                "the filter does not match both runs, so the scoped check "
+                "below would prove nothing"
+            )
+            assert _prove_token_reads(
+                env.server, env.token_a, "/pictures", **params
+            ) == {env.pic_a}, "set-A token saw past its set, or lost its picture"
+        finally:
+            stamp(None, None)
 
     def test_stats_cannot_leak_out_of_scope_pictures(self, env):
         """GET /pictures/stats must be limited to the token's authorised set."""

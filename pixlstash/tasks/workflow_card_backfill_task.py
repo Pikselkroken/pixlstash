@@ -18,6 +18,8 @@ variants for a figure that is only true once the drain is over.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import record_identity
 from pixlstash.hub.workflow_group_convert import reidentify_families
@@ -83,13 +85,17 @@ class WorkflowCardBackfillTask(BaseTask):
 class FamilyReidentifyTask(BaseTask):
     """Move variants whose unknown base model the shelf has since identified."""
 
-    def __init__(self, hub: HubDatabase):
+    def __init__(self, hub: HubDatabase, signature: Optional[str] = None):
         """Initialise the task.
 
         Args:
             hub: The hub database holding the workflow tables.
+            signature: The shelf signature the pass runs against, stored by
+                the finder once it succeeds.
         """
-        super().__init__(task_type="FamilyReidentifyTask", params={})
+        super().__init__(
+            task_type="FamilyReidentifyTask", params={"signature": signature}
+        )
         self._hub = hub
 
     @property
@@ -98,4 +104,5 @@ class FamilyReidentifyTask(BaseTask):
         return TaskPriority.LOW
 
     def _run_task(self):
-        return {"moved": reidentify_families(self._hub)}
+        # ``{"moved", "keys", "renamed"}``: the finder announces the ids.
+        return reidentify_families(self._hub)

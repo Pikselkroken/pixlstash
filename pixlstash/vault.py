@@ -353,7 +353,7 @@ class Vault:
             )
 
             self._planner_work_finders[TaskType.WORKFLOW_CARD_BACKFILL] = (
-                WorkflowCardBackfillFinder(hub=registered_hub)
+                WorkflowCardBackfillFinder(hub=registered_hub, vault=self)
             )
             # The cut-over (#1623): saved recipes naming a card are put on the
             # workflow it became. Needs the hub's `workflow_key_successor`.
