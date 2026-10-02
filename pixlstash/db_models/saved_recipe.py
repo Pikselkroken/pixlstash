@@ -81,7 +81,7 @@ class SavedRecipe(SQLModel, table=True):
             in this library. Nulled rather than cascaded when that picture
             goes: deleting the picture does not unmake the look it taught.
         created_at: When it was saved.
-        workflow_id: The workflow it runs on (#1622): ``auto:<core hash>`` or an
+        workflow_id: The workflow it runs on (#1622): ``auto:<core and families digest>`` or an
             owner's group. NULL until the cut-over (#1623) fills it in from
             ``workflow_key_successor``; a run with it applies that
             workflow's default recipe under this one.

@@ -1174,8 +1174,8 @@ CREATE TABLE IF NOT EXISTS workflow_loader_swap (
 # tables, which stay the source of truth until the cut-over (#1623) converts
 # them; nothing here is read by a card route.
 #
-# A workflow id is ``auto:<core_hash>`` for an automatic group, the same
-# spelling an automatic stack already has, or a uuid hex for one the owner
+# A workflow id is ``auto:<digest of core and families>`` for an automatic
+# group (``workflow_cards.auto_workflow_id``), or a uuid hex for one the owner
 # split or merged. **Merge and split move topologies, never cards**: what told
 # two cards of one topology apart is a checkpoint or a LoRA, and those are
 # recipe values now.
@@ -1190,7 +1190,8 @@ CREATE TABLE IF NOT EXISTS workflow_loader_swap (
 
 # One row per workflow somebody has decided about. ``auto`` rows exist only
 # once something is stored against the group, so an automatic workflow nobody
-# has touched is not a row: it IS the topologies sharing ``core_hash``.
+# has touched is not a row. On an ``auto`` row ``core_hash`` holds the id's
+# digest, not a core hash (the id hashes core and families); nothing reads it.
 _V2_WORKFLOW_GROUP = """
 CREATE TABLE IF NOT EXISTS workflow_group (
     workflow_id  TEXT PRIMARY KEY,
@@ -1315,7 +1316,9 @@ CREATE TABLE IF NOT EXISTS workflow_core_successor (
 # The base-model families a variant loads (`workflow_cards.variant_families`),
 # sorted and comma-joined, frozen on first derivation as a slot mark is: part
 # of its automatic workflow's id, so a later shelf scan must not move it. A
-# family nothing identifies is spelled by its asset reference, never a name.
+# family nothing identifies is spelled by its asset reference, never a name;
+# the one exception is that unknown spelling, which ``reidentify_families``
+# rewrites once the shelf identifies it (its workflow's state carried along).
 _V2_WORKFLOW_VARIANT_FAMILY = """
 CREATE TABLE IF NOT EXISTS workflow_variant_family (
     structural_hash  TEXT PRIMARY KEY,

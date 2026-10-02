@@ -384,6 +384,8 @@ def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
             "workflow_id": None,
             "topology_hash": topology_hash,
         }
+    # The listing's size can be missing, so the stored row's cap is held here.
+    _within_the_cap(migrated)
     return {
         "name": _stem(name),
         "matched": False,
@@ -2365,7 +2367,9 @@ def create_router(server) -> APIRouter:
             if matched:
                 set_manual_api_document(hub, matched, output)
                 workflow_id = matched[0]
-                name = find_workflow(hub, workflow_id).name or name
+                # Deleted since it matched: keep the derived name.
+                found = find_workflow(hub, workflow_id)
+                name = (found.name if found else None) or name
             else:
                 workflow_id = store_manual_workflow(
                     hub, name, workflow, "import", api_document=output

@@ -3,7 +3,7 @@
 The workflow-level twin of :mod:`pixlstash.hub.workflow_card_writes`: the
 owner's name, notes and hidden flag, the edits to a workflow's default recipe,
 and its pins and picture inputs. Every table here is keyed by ``workflow_id``
-(``auto:<core hash>`` or a manual group's uuid hex) and addresses a parameter
+(``auto:<core and families digest>`` or a manual group's uuid hex) and addresses a parameter
 by its **address** (``<slot label>/<input name>``, the slot label a
 ``core:<label>`` or a base-topology label), never by node id.
 
