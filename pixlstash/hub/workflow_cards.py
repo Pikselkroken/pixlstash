@@ -35,7 +35,7 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
+from pixlstash.services.workflow_hash import asset_reference
 from pixlstash.services.workflow_identity import (
     CORE_VERSION,
     RECIPE,
@@ -388,47 +388,6 @@ def _cache_topology(
             ",".join(special_groups(document)),
         ),
     )
-
-
-def record_file(
-    hub: HubDatabase,
-    name: str,
-    topology_hash: str,
-    structural_hash: Optional[str] = None,
-) -> Optional[str]:
-    """Put a stored workflow file on its card; return the card's key.
-
-    Called where a file is filed - the import route, and so the watched inbox
-    too - so a file lands on the card its pictures already made rather than
-    starting one of its own.
-
-    REPLACE, because a file name is the owner's and can be overwritten with a
-    different workflow; the row describes what is in the file now.
-    """
-    key = None
-    if structural_hash is not None:
-        try:
-            key = record_identity(hub, structural_hash)
-        except WorkflowGraphError as exc:
-            logger.info(
-                "Workflow file %s gets a card with no assets, its stored graph "
-                "cannot be keyed: %s",
-                name,
-                exc,
-            )
-    if key is None:
-        # Either a UI-format file, or a document that would not reduce. Both are
-        # a card with no assets rather than no card: a file the owner can see in
-        # the folder and not on the Workflows view is the worse answer.
-        key = topology_only_key(topology_hash)
-    with hub.transaction() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO workflow_file "
-            "(workflow_name, topology_hash, structural_hash, workflow_key) "
-            "VALUES (?, ?, ?, ?)",
-            (name, topology_hash, structural_hash, key),
-        )
-    return key
 
 
 def forget_file(hub: HubDatabase, name: str) -> int:

@@ -4,7 +4,7 @@
 // confirm either.
 //
 // **The gates**, because each one is a refusal the SERVER also enforces: Run
-// takes one workflow, Rename one, and Delete needs a file — so a gate that disagrees with the route
+// takes one workflow, Rename one, and Delete a manual one — so a gate that disagrees with the route
 // is a button that can only come back refused.
 //
 // **The parity**, because `menu-parity.spec.js` exists: the picture grid's
@@ -79,10 +79,11 @@ const card = (id, extra = {}) => ({
 
 const CARDS = [
   card("a"),
-  card("b", { imported: true }),
+  card("b", { imported: true, manual: true }),
   // A workflow holding three topologies, which Split can hand out.
   card("c", {
     imported: true,
+    manual: true,
     topologies: ["a".repeat(64), "b".repeat(64), "c".repeat(64)],
   }),
   card("d", { hidden: true }),
@@ -156,18 +157,35 @@ describe("the pill's gates", () => {
     expect(tooltip(many, "rename")).toContain("Select one workflow");
   });
 
-  it("Delete needs EVERY selected card to have a file, not merely one", () => {
-    const imported = bar(["b", "c"]).wrapper;
-    expect(enabled(imported, "delete")).toBe(true);
+  it("Delete needs EVERY selected workflow to be manual, not merely one", () => {
+    const manual = bar(["b", "c"]).wrapper;
+    expect(enabled(manual, "delete")).toBe(true);
+    expect(tooltip(manual, "delete")).toContain("pictures stay");
+    // The verb's name is stable; the refusal is the tooltip's.
+    expect(verb(manual, "delete").attributes("aria-label")).toBe(
+      "Delete workflow",
+    );
 
-    // `a` came in with its pictures and has no file. A press that deleted the
-    // one file it could and left the rest would be a partial destruction
-    // nobody asked for, so the whole selection is refused.
+    // `a` is automatic: the library groups it from its pictures and the route
+    // 409s. A press that deleted the one it could and left the rest would be
+    // a partial destruction nobody asked for, so the whole selection is
+    // refused, and the reason names the way out.
     const mixed = bar(["a", "b"]).wrapper;
     expect(enabled(mixed, "delete")).toBe(false);
-    expect(tooltip(mixed, "delete")).toContain(
-      "came from a file on this machine",
-    );
+    expect(tooltip(mixed, "delete")).toContain("hidden instead");
+  });
+
+  it("Delete is refused on an imported workflow that is not manual", () => {
+    // `imported` was the old gate; `manual` is what the route tests now.
+    const store = useWorkflowsStore();
+    store.cards = [card("x", { imported: true, manual: false })];
+    store.selectRange(["x"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    expect(enabled(wrapper, "delete")).toBe(false);
+    const row = verbMenus(wrapper)[0]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === "delete");
+    expect(row.attributes("aria-disabled")).toBe("true");
   });
 
   it("Hide reads as Unhide only when there is nothing left to hide", () => {
@@ -230,7 +248,7 @@ describe("the two menus cannot diverge", () => {
         "Run…",
         "Rename",
         "Hide",
-        "Delete file…",
+        "Delete…",
       ]),
     );
   });

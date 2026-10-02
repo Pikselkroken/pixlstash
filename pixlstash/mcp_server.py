@@ -46,6 +46,7 @@ from typing import Callable
 from platformdirs import user_cache_dir, user_config_dir
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.workflow_ids import WORKFLOW_ID_PATTERN
 
 logger = get_logger(__name__)
 
@@ -180,10 +181,9 @@ _PROJECT_ID = {
 }
 # `GET /pictures` and `/pictures/count` take it; `/pictures/search` does not,
 # so search_pictures leaves it out rather than drop it without a word.
-# A workflow id: `auto:<core hash>` or a manual group's uuid. The pattern is
+# A workflow id: `auto:<core hash>` or `manual:<uuid hex>`. The pattern is
 # also the JSON-schema one, where `$` is the end; Python checks it with
 # `fullmatch`, since there `$` also matches before a trailing newline.
-WORKFLOW_ID_PATTERN = r"^(auto:[0-9a-f]{64}|[0-9a-f]{32})$"
 _WORKFLOW_ID_RE = re.compile(WORKFLOW_ID_PATTERN)
 _WORKFLOW_FILTER = {
     "type": "string",
@@ -405,17 +405,15 @@ WORKFLOW_TOOLS = [
         "name": "import_workflow_graph",
         "description": "Store a ComfyUI workflow (API or UI format) in "
         "PixlStash, from a file path or an inline object. Validate it first "
-        "if a ComfyUI MCP server is connected. The answer carries the "
-        "workflow_id of the workflow the graph is in. An unchanged "
-        "graph matches the stored copy (matched: true) and adds nothing. "
-        "overwrite replaces the file of that name, it does not change a "
-        "workflow.",
+        "if a ComfyUI MCP server is connected. Every call stores a new "
+        "manual workflow named after `name`, identical copies included, and "
+        "the answer carries its workflow_id.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "File name to store it under, e.g. 'Portrait "
+                    "description": "What to call the workflow, e.g. 'Portrait "
                     "+ upscale.json'.",
                 },
                 "path": {
@@ -426,15 +424,13 @@ WORKFLOW_TOOLS = [
                     "type": "object",
                     "description": "The graph itself. Give this or path.",
                 },
-                "overwrite": {"type": "boolean"},
-                "keep_both": {"type": "boolean"},
             },
             "required": ["name"],
         },
-        # overwrite replaces a stored workflow file.
+        # Adds a workflow and never replaces one.
         "annotations": {
             "readOnlyHint": False,
-            "destructiveHint": True,
+            "destructiveHint": False,
             "openWorldHint": False,
         },
     },
@@ -828,12 +824,7 @@ def _call_workflow_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict] 
             if not isinstance(path, str) or not path:
                 raise ToolError("path must be a non-empty string")
             workflow = _read_graph(path)
-        body = {
-            "name": arguments.get("name"),
-            "workflow": workflow,
-            "overwrite": bool(arguments.get("overwrite")),
-            "keep_both": bool(arguments.get("keep_both")),
-        }
+        body = {"name": arguments.get("name"), "workflow": workflow}
         return _json_content(_send(fetch, "POST", "/comfyui/workflows/import", body))
     if name == "preflight_workflow":
         return _json_content(

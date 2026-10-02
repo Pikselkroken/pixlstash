@@ -105,9 +105,8 @@ from pixlstash.routes.pictures import (
     create_router as create_pictures_router,
 )
 from pixlstash.routes.comfyui import (
-    _store_workflow,
-    claim_stored_workflow,
     create_router as create_comfyui_router,
+    store_inbox_workflow,
     workflow_user_dir,
 )
 from pixlstash.routes.tag_predictions import (
@@ -978,18 +977,15 @@ class Server(
         gc.collect()
 
     def _store_inbox_workflow(self, name: str, workflow: dict) -> dict:
-        """Store one inbox file the way a drag and drop does: keep both.
+        """Store one inbox file as a manual workflow, once per content.
 
-        The workflow it lands in is announced, so a file dropped in the folder
+        The workflow it becomes is announced, so a file dropped in the folder
         appears on an open Workflows view rather than at the next reload. No
         origin client id: nobody's tab did this, so every tab reloads. The
         start-up reconcile runs before the vault is open and announces
         nothing, which is right - the first read of the view draws it anyway.
         """
-        result = _store_workflow(self.hub, name, workflow, keep_both=True)
-        # The other hand-over path besides the import route: a file the owner
-        # put in the watched folder is theirs even if a pull wrote it first.
-        claim_stored_workflow(self.hub, result["name"])
+        result = store_inbox_workflow(self.hub, name, workflow)
         announce_changed_workflows(
             self,
             [key for key in (result.get("workflow_id"),) if key],

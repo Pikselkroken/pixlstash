@@ -27,10 +27,12 @@ The same address translation serves the vault's saved-recipe conversion
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import uuid
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Optional
 
 from pixlstash.hub.workflow_card_reads import (
@@ -46,7 +48,11 @@ from pixlstash.hub.workflow_card_reads import (
     variant_documents,
     workflow_index,
 )
-from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, loader_swaps_of
+from pixlstash.hub.workflow_cards import (
+    STRIP_LORAS_FOR_STACKS,
+    loader_swaps_of,
+    topology_only_key,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
 from pixlstash.services.model_shelf_service import adapter_digest_index
@@ -62,10 +68,15 @@ from pixlstash.services.workflow_identity import (
     core_hash,
     core_node_labels,
     model_fix_kind,
+    WORKFLOW_KEY_VERSION,
     slots,
     topology_node_labels,
     unswapped,
 )
+from pixlstash.services.workflow_bindings import migrate_placeholders
+from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 logger = get_logger(__name__)
 
@@ -107,6 +118,63 @@ class _Reader:
         return self._cursor(sql, params).fetchall()
 
 
+def _cards_as_filed(hub) -> list[Card]:
+    """The cards as data steps 5 and 6 were written against: files included.
+
+    Until manual workflows (data step 7) a workflow FILE with no recipe was a
+    card of its own (#1466, ``auto:<topology hash>``), and these steps carry
+    the owner's state onto that id; step 7 then carries it on to the file's
+    manual workflow. Frozen here, so a hub upgraded from before step 5 still
+    converts what its owner typed on such a card. No manual card: none
+    exists before step 7.
+    """
+    cards = [card for card in card_index(hub) if not card.manual]
+    return cards + _file_only_cards(hub, {card.workflow_key for card in cards})
+
+
+def _file_only_cards(hub, keyed: set[str]) -> list[Card]:
+    """The cards whose whole content is a stored workflow file (#1466).
+
+    The key is derived (``topology_only_key``) rather than read, since a
+    stored ``workflow_file.workflow_key`` can be stale. NOT EXISTS rather
+    than NOT IN, which one NULL would make NULL for every row.
+    """
+    found = {}
+    for row in hub.fetchall(
+        "SELECT f.topology_hash AS topology_hash, "
+        "MIN(f.workflow_name) AS workflow_name "
+        "FROM workflow_file f "
+        "WHERE NOT EXISTS (SELECT 1 FROM workflow_variant v "
+        "WHERE v.structural_hash = f.structural_hash AND v.key_version = ?) "
+        "GROUP BY f.topology_hash ORDER BY f.topology_hash",
+        (WORKFLOW_KEY_VERSION,),
+    ):
+        key = topology_only_key(row["topology_hash"])
+        if key not in keyed:
+            found[key] = (row["topology_hash"], row["workflow_name"])
+    attrs = {}
+    for batch in chunked(sorted(found)):
+        placeholders = ",".join("?" * len(batch))
+        for row in hub.fetchall(
+            "SELECT workflow_key, name, notes, hidden FROM workflow_attr "
+            f"WHERE workflow_key IN ({placeholders})",
+            tuple(batch),
+        ):
+            attrs[row["workflow_key"]] = row
+    return [
+        Card(
+            workflow_key=key,
+            topology_hash=topology_hash,
+            name=attrs[key]["name"] if key in attrs else None,
+            notes=attrs[key]["notes"] if key in attrs else None,
+            hidden=bool(attrs[key]["hidden"]) if key in attrs else False,
+            imported=True,
+            file_name=file_name,
+        )
+        for key, (topology_hash, file_name) in sorted(found.items())
+    ]
+
+
 def convert_card_state(conn: sqlite3.Connection) -> int:
     """Write every card's state onto its workflow; return how many cards moved.
 
@@ -114,7 +182,7 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
         conn: An open hub connection, inside the caller's transaction.
     """
     hub = _Reader(conn)
-    cards = card_index(hub)
+    cards = _cards_as_filed(hub)
     if not cards:
         return 0
     stacks = stack_rows(hub)
@@ -235,7 +303,7 @@ def dissolve_manual_groups(conn: sqlite3.Connection) -> int:
     ]
     if not groups:
         return 0
-    cards = card_index(hub)
+    cards = _cards_as_filed(hub)
     core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
     auto_of: dict[str, str] = {}
     weight: Counter = Counter()
@@ -305,6 +373,124 @@ def dissolve_manual_groups(conn: sqlite3.Connection) -> int:
             heir,
         )
     return len(groups)
+
+
+# The namespace a stored file's manual workflow id is derived in (data step
+# 7), so a second run lands on the same id and writes nothing new.
+_FILE_NAMESPACE = uuid.UUID("2a9e3c1d-7b64-4f0e-8d25-91c4b3a6e0f7")
+
+
+def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
+    """Make every stored workflow file a manual workflow; return how many.
+
+    Hub data step 7. Every ``workflow_file`` row whose file is in the user
+    folder *folder* becomes a ``workflow_document`` row holding the file (and
+    the API graph a conversion stored beside it), named after its stem, with
+    origin ``pull`` where a pull wrote it and ``import`` otherwise; the pull
+    rows naming the file then name the workflow. **Idempotent**: the id is
+    derived from the file name and every write is an insert that keeps what
+    is there, so a second run writes nothing. Files and ``workflow_file`` rows
+    are left as they are.
+
+    A file that was a card of its own (#1466, no variant) had its owner state
+    carried to ``auto:<topology hash>`` by steps 5 and 6; it is carried on
+    here, so nothing its owner typed is lost. A file that will not read is
+    logged and skipped: it could not run either.
+
+    Args:
+        conn: An open hub connection, inside the caller's transaction.
+        folder: The user workflow folder (``workflow_inbox.workflow_user_dir``).
+    """
+    files = conn.execute(
+        "SELECT workflow_name, topology_hash FROM workflow_file ORDER BY workflow_name"
+    ).fetchall()
+    if not files:
+        return 0
+    # Here, not at the top: the route module is heavy and this runs once per hub.
+    from pixlstash.routes.comfyui import _load_workflow_json, converted_graph
+
+    pulled = {
+        row[0] for row in conn.execute("SELECT workflow_name FROM workflow_pulled_file")
+    }
+    keyed = {
+        row[0]
+        for row in conn.execute(
+            "SELECT DISTINCT topology_hash FROM workflow_variant WHERE key_version = ?",
+            (WORKFLOW_KEY_VERSION,),
+        )
+    }
+    adopted = 0
+    for name, topology_hash in files:
+        try:
+            path = resolve_path_within(folder, name)
+            if not os.path.isfile(path):
+                logger.info(
+                    "Workflow file %s is not in the user folder (a built-in, or "
+                    "gone), so it is not made a manual workflow.",
+                    name,
+                )
+                continue
+            stored = _load_workflow_json(path)
+            if not isinstance(stored, dict):
+                raise ValueError("not a JSON object")
+            converted = converted_graph(path, stored)
+            document, _migrated = migrate_placeholders(stored)
+            created = datetime.fromtimestamp(
+                os.path.getmtime(path), timezone.utc
+            ).isoformat()
+        except (OSError, ValueError, RecursionError) as exc:
+            logger.warning(
+                "Workflow file %s will not read, so it is not made a manual "
+                "workflow: %s",
+                name,
+                exc,
+            )
+            continue
+        workflow_id = f"{MANUAL_PREFIX}{uuid.uuid5(_FILE_NAMESPACE, name).hex}"
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_document (workflow_id, document, "
+            "api_document, origin, from_workflow_id, from_name, created_at) "
+            "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
+            (
+                workflow_id,
+                json.dumps(document),
+                json.dumps(converted) if converted is not None else None,
+                "pull" if name in pulled else "import",
+                created,
+            ),
+        )
+        if topology_hash not in keyed:
+            # Once: the carry moves the rows, so a second file of the same
+            # topology, or a second run, finds nothing left to carry.
+            _carry_group_state(conn, f"{AUTO_STACK_PREFIX}{topology_hash}", workflow_id)
+            # And its saved recipes: the vault's conversion re-files a recipe
+            # naming the retired id on this workflow.
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_id_successor "
+                "(workflow_id, successor_id) VALUES (?, ?)",
+                (f"{AUTO_STACK_PREFIX}{topology_hash}", workflow_id),
+            )
+        stem = name[: -len(".json")] if name.lower().endswith(".json") else name
+        conn.execute(
+            "INSERT INTO workflow_group_attr (workflow_id, name) VALUES (?, ?) "
+            "ON CONFLICT(workflow_id) DO UPDATE SET "
+            "name = COALESCE(workflow_group_attr.name, excluded.name)",
+            (workflow_id, stem),
+        )
+        conn.execute(
+            "UPDATE workflow_origin SET workflow_name = ? WHERE workflow_name = ?",
+            (workflow_id, name),
+        )
+        # Which file it was, so deleting the workflow trashes the file too
+        # (`DELETE /workflows/{id}`); a file left behind would still list.
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_origin (origin, remote_path, "
+            "workflow_name, first_pulled_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+            ("file", name, workflow_id, created, created),
+        )
+        adopted += 1
+    logger.info("Made %d stored workflow file(s) manual workflows.", adopted)
+    return adopted
 
 
 def _carry_group_state(conn: sqlite3.Connection, group: str, heir: str) -> None:

@@ -1362,7 +1362,7 @@ function fileName(value) {
 function describeOrigin(group) {
   switch (group?.source) {
     case "file":
-      return "Graph from the workflow file";
+      return "Graph stored with this workflow";
     case "picture":
       return group.source_picture_id != null
         ? `Graph from picture ${group.source_picture_id}`

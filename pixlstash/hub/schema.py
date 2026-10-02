@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 6
+CURRENT_DATA_VERSION = 7
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -1263,6 +1263,37 @@ CREATE TABLE IF NOT EXISTS workflow_key_successor (
 )
 """
 
+# A MANUAL workflow: its own document, not a topology and not a file. What the
+# owner imported, pulled, duplicated or extracted, verbatim (placeholders
+# migrated, `pixlstash_bindings` kept), editor or API format. `api_document` is
+# the API graph ComfyUI converted an editor document into
+# (`POST /comfyui/workflows/convert`). Name, notes, defaults, pins and picture
+# inputs are the `workflow_group_*` rows keyed by the same id.
+_V2_WORKFLOW_DOCUMENT = """
+CREATE TABLE IF NOT EXISTS workflow_document (
+    workflow_id       TEXT PRIMARY KEY,
+    document          TEXT NOT NULL,
+    api_document      TEXT,
+    origin            TEXT NOT NULL CHECK (origin IN ('import', 'inbox', 'pull',
+                          'builtin', 'duplicate', 'fixed', 'clone', 'chain',
+                          'recipe')),
+    from_workflow_id  TEXT,
+    from_name         TEXT,
+    created_at        TEXT NOT NULL
+)
+"""
+
+# A workflow id that is gone, and the workflow that took its place: data step
+# 7 retires `auto:<topology hash>` of a file-only card (#1466) for the manual
+# workflow it made of that file. Read by the vault's saved-recipe conversion,
+# which re-files a recipe still naming the retired id.
+_V2_WORKFLOW_ID_SUCCESSOR = """
+CREATE TABLE IF NOT EXISTS workflow_id_successor (
+    workflow_id   TEXT PRIMARY KEY,
+    successor_id  TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1333,6 +1364,8 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_GROUP_PINS,
     _V2_WORKFLOW_GROUP_PICTURE_INPUT,
     _V2_WORKFLOW_KEY_SUCCESSOR,
+    _V2_WORKFLOW_DOCUMENT,
+    _V2_WORKFLOW_ID_SUCCESSOR,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -1945,6 +1978,15 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     )
 
                     dissolve_manual_groups(conn)
+                if data_version < 7:
+                    # Manual workflows: every stored workflow file becomes one,
+                    # read once here, never again at runtime.
+                    from pixlstash.hub.workflow_group_convert import (
+                        adopt_workflow_files,
+                    )
+                    from pixlstash.services.workflow_inbox import workflow_user_dir
+
+                    adopt_workflow_files(conn, workflow_user_dir())
                 # No placeholder: PRAGMA takes no parameters, and the value is
                 # this module's own constant rather than anything from outside.
                 conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")

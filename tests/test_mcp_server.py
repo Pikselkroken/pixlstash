@@ -459,7 +459,7 @@ def test_a_workflow_id_filters_the_listing_and_the_count_but_not_search():
         seen.append((path, dict(params)))
         return 200, "application/json", b"[]"
 
-    manual = "b" * 32
+    manual = "manual:" + "b" * 32
     _call(fetch, "list_pictures", workflow_id=WORKFLOW_ID)
     _call(fetch, "count_pictures", workflow_id=manual)
     assert [path for path, _ in seen] == ["/pictures", "/pictures/count"]
@@ -470,7 +470,8 @@ def test_a_workflow_id_filters_the_listing_and_the_count_but_not_search():
     # The search route has no such filter; ignoring it would widen the answer.
     result = _call(fetch, "search_pictures", query="cat", workflow_id=WORKFLOW_ID)
     assert result["isError"] is True
-    for bad in (7, "k" * 64, "auto:xyz", "auto:" + "a" * 64 + "/x"):
+    # A bare 32-hex id was a hand-made group's, gone since data step 6.
+    for bad in (7, "k" * 64, "auto:xyz", "auto:" + "a" * 64 + "/x", "b" * 32):
         assert _call(fetch, "list_pictures", workflow_id=bad)["isError"] is True
     assert len(seen) == 2
 
@@ -813,7 +814,7 @@ def test_the_workflow_tools_exist_only_with_allow_write():
     full = _list(True)
     assert set(full) == set(read_only) | WRITE_TOOL_NAMES
     # A client auto-approves a read-only tool, so each hint is pinned: the
-    # file writer and the stored-file overwriter are not reads.
+    # file writer and the workflow importer are not reads.
     hints = {
         name: (
             tool["annotations"]["readOnlyHint"],
@@ -826,7 +827,8 @@ def test_the_workflow_tools_exist_only_with_allow_write():
         "list_workflows": (True, None),
         "get_workflow": (True, None),
         "export_workflow_graph": (False, True),
-        "import_workflow_graph": (False, True),
+        # Adds a workflow and never replaces one.
+        "import_workflow_graph": (False, False),
         "preflight_workflow": (True, None),
         "run_workflow": (False, True),
     }
@@ -869,12 +871,7 @@ def test_import_posts_json_through_http_fetch(monkeypatch):
     assert request.full_url == "http://127.0.0.1:9537/api/v1/comfyui/workflows/import"
     assert request.headers["Content-type"] == "application/json"
     assert request.headers["Authorization"] == "Bearer example-token"
-    assert json.loads(request.data) == {
-        "name": "x.json",
-        "workflow": graph,
-        "overwrite": False,
-        "keep_both": False,
-    }
+    assert json.loads(request.data) == {"name": "x.json", "workflow": graph}
 
 
 def test_a_created_answer_is_success_and_a_refusal_carries_its_detail():
@@ -914,7 +911,8 @@ def test_a_workflow_id_cannot_reshape_the_request_path():
         "x/../../users/me/tokens",
         "auto:" + "a" * 64 + "/..",
         "auto:" + "a" * 64 + "\n",
-        "c" * 32 + "\n",
+        "manual:" + "c" * 32 + "\n",
+        "c" * 32,
         ["abc"],
     ):
         assert _write(fetch, "get_workflow", workflow_id=bad)["isError"] is True
@@ -922,8 +920,8 @@ def test_a_workflow_id_cannot_reshape_the_request_path():
     # Positive control: a well-formed id is sent, its colon encoded.
     _write(fetch, "get_workflow", workflow_id=WORKFLOW_ID)
     assert requested == ["/workflows/auto%3A" + "a" * 64]
-    _write(fetch, "get_workflow", workflow_id="c" * 32)
-    assert requested[-1] == "/workflows/" + "c" * 32
+    _write(fetch, "get_workflow", workflow_id="manual:" + "c" * 32)
+    assert requested[-1] == "/workflows/manual%3A" + "c" * 32
 
 
 def test_the_graph_goes_through_a_file_in_both_directions(tmp_path):

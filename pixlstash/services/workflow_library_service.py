@@ -17,7 +17,9 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import inf
-from typing import Optional
+from typing import Optional, Sequence
+
+import json
 
 from sqlalchemy import and_, case, func, nullslast, or_, text
 from sqlmodel import Session, select
@@ -25,6 +27,7 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Character, Picture, PictureSet, Project
 from pixlstash.services.saved_recipe_service import counts_by_workflow_id
 from pixlstash.stacking import get_or_create_stack_for_picture
+from pixlstash.utils.query.predicate_filter import made_by_live_manual
 
 
 @dataclass(frozen=True)
@@ -215,6 +218,27 @@ def read_variant_picture_counts(vault) -> dict[str, int]:
 _IS_RATED = and_(Picture.score.is_not(None), Picture.score > 0)
 
 
+# ---------------------------------------------------------------------------
+# Manual workflows. A picture a manual workflow's run made carries its id
+# (`Picture.run_workflow_id`) and counts on THAT workflow, not on the automatic
+# one its variant is in - while the manual workflow lives: the hub hands every
+# read here its list of live ids, so deleting one needs no vault write and its
+# pictures fall back to their variant. The grid reads group by `_filed_as`,
+# which is the manual id for such a picture and the variant otherwise, so a
+# manual workflow is one more key beside the variants.
+# ---------------------------------------------------------------------------
+
+
+def _filed_as(live: list[str]):
+    """The key a kept picture counts under: its live manual workflow, else its variant."""
+    if not live:
+        return Picture.workflow_structural_hash
+    return case(
+        (made_by_live_manual(live), Picture.run_workflow_id),
+        else_=Picture.workflow_structural_hash,
+    )
+
+
 @dataclass(frozen=True)
 class VariantActivity:
     """What a vault knows about one variant, as the card rank is made of it.
@@ -294,16 +318,18 @@ def cover_order(candidate: CoverCandidate) -> tuple:
     )
 
 
-def variant_activity(session: Session) -> dict[str, VariantActivity]:
-    """One ``GROUP BY workflow_structural_hash`` over every kept picture.
+def variant_activity(
+    session: Session, live: Sequence[str] = ()
+) -> dict[str, VariantActivity]:
+    """One ``GROUP BY`` variant (or live manual workflow) over every kept picture.
 
     Served by ``ix_picture_workflow_structural_hash``. **Unscoped, like
     :func:`topology_activity`**, and served only to owner routes for the same
     reason: it reads every non-deleted picture in the vault, so a scoped token
     holding the result would learn the size of the whole library one workflow
-    at a time.
+    at a time. *live* is the hub's manual workflow ids (:func:`_filed_as`).
     """
-    column = Picture.workflow_structural_hash
+    column = _filed_as(list(live))
     rows = session.exec(
         select(
             column,
@@ -328,7 +354,7 @@ def variant_activity(session: Session) -> dict[str, VariantActivity]:
 
 
 def variant_cover_candidates(
-    session: Session, per_variant: int
+    session: Session, per_variant: int, live: Sequence[str] = ()
 ) -> list[CoverCandidate]:
     """The best few kept pictures of every variant, from one window pass.
 
@@ -343,9 +369,10 @@ def variant_cover_candidates(
         nullslast(_USED_AT.desc()),
         Picture.id.desc(),
     )
+    filed = _filed_as(list(live))
     ranked = (
         select(
-            Picture.workflow_structural_hash.label("structural_hash"),
+            filed.label("structural_hash"),
             Picture.id.label("picture_id"),
             Picture.score.label("score"),
             Picture.smart_score.label("smart_score"),
@@ -356,11 +383,9 @@ def variant_cover_candidates(
             Picture.square_crop_x.label("square_crop_x"),
             Picture.square_crop_y.label("square_crop_y"),
             Picture.square_crop_side.label("square_crop_side"),
-            func.row_number()
-            .over(partition_by=Picture.workflow_structural_hash, order_by=ordering)
-            .label("rank"),
+            func.row_number().over(partition_by=filed, order_by=ordering).label("rank"),
         )
-        .where(Picture.workflow_structural_hash.is_not(None))
+        .where(filed.is_not(None))
         .where(Picture.deleted.is_(False))
         .subquery()
     )
@@ -383,20 +408,24 @@ def variant_cover_candidates(
 
 
 def variant_picture_ids(
-    session: Session, structural_hashes: list[str], limit: int
+    session: Session,
+    structural_hashes: list[str],
+    limit: int,
+    live: Sequence[str] = (),
 ) -> list[int]:
-    """The newest kept pictures of one card, newest first.
+    """The newest kept pictures filed under these keys, newest first.
 
-    Narrowed by the card's variants rather than grouped vault-wide, for the
-    reason :func:`recipe_activity` is: the caller already knows which variants
-    it is opening.
+    A key is a variant or a live manual workflow's id (:func:`_filed_as`), so
+    a manual workflow's pictures are its runs' and an automatic one's leave
+    those out. Narrowed rather than grouped vault-wide, for the reason
+    :func:`recipe_activity` is: the caller already knows what it is opening.
     """
     if not structural_hashes:
         return []
     return list(
         session.exec(
             select(Picture.id)
-            .where(Picture.workflow_structural_hash.in_(structural_hashes))
+            .where(_filed_as(list(live)).in_(structural_hashes))
             .where(Picture.deleted.is_(False))
             .order_by(nullslast(_USED_AT.desc()), Picture.id.desc())
             .limit(limit)
@@ -444,7 +473,9 @@ def instance_hashes_for_variants(
     return [instance_hash for instance_hash, _ in session.exec(query).all()]
 
 
-def variant_model_values(session: Session) -> dict[str, dict[str, Counter]]:
+def variant_model_values(
+    session: Session, live: Sequence[str] = ()
+) -> dict[str, dict[str, Counter]]:
     """``{structural_hash: {"checkpoints"|"loras": Counter(value -> pictures)}}``.
 
     The checkpoint and LoRA values every kept picture used, as the picture
@@ -455,21 +486,28 @@ def variant_model_values(session: Session) -> dict[str, dict[str, Counter]]:
     owner routes, like :func:`variant_activity`.
     """
     found: dict[str, dict[str, Counter]] = {}
+    # The key `_filed_as` spells, in SQL: a live manual workflow's id, else
+    # the variant.
+    filed = (
+        "CASE WHEN p.run_workflow_id IN (SELECT value FROM json_each(:live)) "
+        "THEN p.run_workflow_id ELSE p.workflow_structural_hash END"
+    )
     for kind, column in (
         ("checkpoints", "comfyui_models"),
         ("loras", "comfyui_loras"),
     ):
         rows = session.execute(
             text(
-                "SELECT p.workflow_structural_hash, j.value, COUNT(*) "
+                f"SELECT {filed} AS filed, j.value, COUNT(*) "
                 # json_each reads its argument before any WHERE can guard it,
                 # so a malformed value is swapped for an empty array in place:
                 # one bad row must not fail the whole grid.
                 f"FROM picture p, json_each(CASE WHEN json_valid(p.{column}) "
                 f"THEN p.{column} ELSE '[]' END) j "
-                "WHERE p.deleted = 0 AND p.workflow_structural_hash IS NOT NULL "
-                "GROUP BY p.workflow_structural_hash, j.value"
-            )
+                f"WHERE p.deleted = 0 AND {filed} IS NOT NULL "
+                "GROUP BY filed, j.value"
+            ),
+            {"live": json.dumps(sorted(live))},
         ).all()
         for structural_hash, value, pictures in rows:
             if isinstance(value, str) and value:
@@ -480,7 +518,7 @@ def variant_model_values(session: Session) -> dict[str, dict[str, Counter]]:
 
 
 def read_card_grid(
-    vault, cover_depth: int
+    vault, cover_depth: int, live: Sequence[str] = ()
 ) -> tuple[
     dict[str, VariantActivity],
     list[CoverCandidate],
@@ -497,19 +535,21 @@ def read_card_grid(
 
     def _read(session: Session):
         return (
-            variant_activity(session),
-            variant_cover_candidates(session, cover_depth),
+            variant_activity(session, live),
+            variant_cover_candidates(session, cover_depth, live),
             counts_by_workflow_id(session),
-            variant_model_values(session),
+            variant_model_values(session, live),
         )
 
     return vault.db.run_immediate_read_task(_read)
 
 
-def read_card_picture_ids(vault, structural_hashes: list[str], limit: int) -> list[int]:
-    """The card's newest kept pictures."""
+def read_card_picture_ids(
+    vault, structural_hashes: list[str], limit: int, live: Sequence[str] = ()
+) -> list[int]:
+    """A workflow's newest kept pictures (:func:`variant_picture_ids`)."""
     return vault.db.run_immediate_read_task(
-        variant_picture_ids, structural_hashes, limit
+        variant_picture_ids, structural_hashes, limit, list(live)
     )
 
 

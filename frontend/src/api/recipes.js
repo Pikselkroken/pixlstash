@@ -58,6 +58,31 @@ export async function listSavedRecipes(workflowId) {
 }
 
 /**
+ * The saved recipes on no workflow this machine holds (theirs was deleted, or
+ * never filed): the Workflows view's "Unfiled recipes". `pictures` is 0.
+ *
+ * @returns {Promise<Array<Object>>}
+ */
+export async function listUnfiledRecipes() {
+  const body = await unwrap(
+    apiClient.get("/recipes", { params: { unfiled: true } }),
+  );
+  return Array.isArray(body) ? body : [];
+}
+
+/**
+ * Make a saved recipe a manual workflow of its own: the graph Run would build
+ * for it. Works with ComfyUI down, and for a recipe whose workflow is gone.
+ * 404 no such recipe, 409 no graph left to build on.
+ *
+ * @param {number} recipeId
+ * @returns {Promise<{workflow_id: string, name: string}>}
+ */
+export async function extractRecipeWorkflow(recipeId) {
+  return unwrap(apiClient.post(`/recipes/${recipeId}/extract-workflow`));
+}
+
+/**
  * Every look this workflow's own pictures were made with, saved or not.
  *
  * **A saved recipe is a look somebody kept; this is every look they ran.** A

@@ -24,6 +24,10 @@ from sqlmodel import delete, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.schema import CURRENT_DATA_VERSION
+from pixlstash.hub.workflow_card_reads import card_index, manual_document
+from pixlstash.hub.workflow_group_writes import delete_manual_workflow
+import pixlstash.routes.comfyui as comfyui_routes
 import pixlstash.hub.workflow_group_convert as convert
 from pixlstash.hub.workflow_group_convert import (
     _GROUP_NAMESPACE,
@@ -387,8 +391,13 @@ def test_a_file_only_card_keeps_what_the_owner_typed(tmp_path):
         "links": [[1, 1, 0, 2, 0, "*"]],
     }
     topology = record_ui_graph(hub, ui)
-    key = workflow_cards.record_file(hub, "ui.json", topology)
+    key = workflow_cards.topology_only_key(topology)
     with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_file (workflow_name, topology_hash, "
+            "structural_hash, workflow_key) VALUES ('ui.json', ?, NULL, ?)",
+            (topology, key),
+        )
         conn.execute(
             "INSERT INTO workflow_attr (workflow_key, name, notes, hidden) "
             "VALUES (?, ?, ?, 1)",
@@ -402,6 +411,173 @@ def test_a_file_only_card_keeps_what_the_owner_typed(tmp_path):
     assert _rows(hub)["workflow_group_attr"] == [
         (workflow_id, "Upscale only", "Run at night.", 1)
     ]
+
+
+_EDITOR = {
+    "nodes": [
+        {
+            "id": 1,
+            "type": "LoadImage",
+            "inputs": [],
+            "outputs": [{"name": "IMAGE", "links": [1]}],
+            "widgets_values": ["in.png", "image"],
+        },
+        {
+            "id": 2,
+            "type": "SaveImage",
+            "inputs": [{"name": "images", "link": 1}],
+            "outputs": [],
+            "widgets_values": ["out"],
+        },
+    ],
+    "links": [[1, 1, 0, 2, 0, "*"]],
+}
+_EDITOR_AS_API = {
+    "1": {"class_type": "LoadImage", "inputs": {"image": "in.png"}},
+    "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+}
+
+
+def _step_7_world(tmp_path):
+    """A hub as data step 6 left it, and the user folder its file rows name.
+
+    ``api.json`` is a file of a card its pictures made; ``editor.json`` a
+    file-only card (#1466) whose owner state steps 5 and 6 carried to
+    ``auto:<topology>``, converted by ComfyUI (#1530); ``pulled.json`` one a
+    pull wrote; ``gone.json`` a row whose file is no longer there.
+    """
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    folder = tmp_path / "user"
+    folder.mkdir()
+    api = record_api_graph(hub, _graph(), library_uuid=LIB)
+    topology = record_ui_graph(hub, _EDITOR)
+    for name, document in (
+        ("api.json", _graph()),
+        ("editor.json", _EDITOR),
+        ("pulled.json", _graph(ckpt="pulled.safetensors")),
+    ):
+        (folder / name).write_text(json.dumps(document), encoding="utf-8")
+    (folder / "editor.json.api").write_text(
+        json.dumps(
+            {
+                "converted_from": comfyui_routes._editor_digest(_EDITOR),
+                "prompt": _EDITOR_AS_API,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_file (workflow_name, topology_hash, "
+            "structural_hash, workflow_key) VALUES (?, ?, ?, ?)",
+            [
+                ("api.json", api.topology_hash, api.structural_hash, "k1"),
+                ("editor.json", topology, None, "k2"),
+                ("pulled.json", api.topology_hash, api.structural_hash, "k3"),
+                ("gone.json", api.topology_hash, api.structural_hash, "k4"),
+            ],
+        )
+        conn.execute("INSERT INTO workflow_pulled_file VALUES ('pulled.json')")
+        conn.execute(
+            "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
+            "first_pulled_at, last_seen_at, content_hash) VALUES "
+            "('http://comfy.test', 'a/pulled.json', 'pulled.json', 't', 't', 'h')"
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+            "VALUES (?, 'Upscale only', 'Run at night.', 1)",
+            (f"auto:{topology}",),
+        )
+    return hub, folder, topology
+
+
+def test_step_7_makes_every_stored_file_a_manual_workflow_once(tmp_path):
+    """Nothing the owner imported disappears across the upgrade, and a second
+    run writes identical rows."""
+    hub, folder, topology = _step_7_world(tmp_path)
+    tables = ("workflow_document", "workflow_group_attr", "workflow_origin")
+
+    def snapshot():
+        return {
+            table: sorted(tuple(row) for row in hub.fetchall(f"SELECT * FROM {table}"))
+            for table in tables
+        }
+
+    with hub.transaction() as conn:
+        assert convert.adopt_workflow_files(conn, str(folder)) == 3
+    rows = {
+        row["name"]: row
+        for row in hub.fetchall(
+            "SELECT d.workflow_id, d.origin, d.api_document, a.name, a.notes, "
+            "a.hidden FROM workflow_document d JOIN workflow_group_attr a "
+            "ON a.workflow_id = d.workflow_id"
+        )
+    }
+    assert set(rows) == {"api", "Upscale only", "pulled"}
+    assert {name: row["origin"] for name, row in rows.items()} == {
+        "api": "import",
+        "Upscale only": "import",
+        "pulled": "pull",
+    }
+    editor = rows["Upscale only"]
+    # The file-only card's owner state came with it, off `auto:<topology>`.
+    assert (editor["notes"], editor["hidden"]) == ("Run at night.", 1)
+    assert (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_group_attr WHERE workflow_id = ?",
+            (f"auto:{topology}",),
+        )
+        is None
+    )
+    # Runs from the conversion stored with it, and the file is never read again.
+    (folder / "editor.json.api").unlink()
+    assert manual_document(hub, editor["workflow_id"]) == _EDITOR_AS_API
+    # The pull that wrote a file now names its workflow.
+    assert (
+        hub.fetchone(
+            "SELECT workflow_name FROM workflow_origin WHERE origin != 'file'"
+        )[0]
+        == (rows["pulled"]["workflow_id"])
+    )
+    # Each adopted file is on record, so deleting its workflow trashes it.
+    adopted = {
+        row[0]: row[1]
+        for row in hub.fetchall(
+            "SELECT remote_path, workflow_name FROM workflow_origin "
+            "WHERE origin = 'file'"
+        )
+    }
+    assert adopted == {
+        "api.json": rows["api"]["workflow_id"],
+        "editor.json": editor["workflow_id"],
+        "pulled.json": rows["pulled"]["workflow_id"],
+    }
+    assert {c.workflow_key for c in card_index(hub) if c.manual} == {
+        row["workflow_id"] for row in rows.values()
+    }
+    first = snapshot()
+
+    with hub.transaction() as conn:
+        convert.adopt_workflow_files(conn, str(folder))
+    assert snapshot() == first
+    hub.close()
+
+
+def test_the_hub_open_runs_step_7_on_the_user_folder(tmp_path, monkeypatch):
+    hub, folder, _topology = _step_7_world(tmp_path)
+    monkeypatch.setattr(
+        "pixlstash.services.workflow_inbox.workflow_user_dir", lambda: str(folder)
+    )
+    with hub.transaction() as conn:
+        conn.execute("PRAGMA user_version = 6")
+    path = hub.path
+    hub.close()
+    reopened = HubDatabase(path)
+    try:
+        assert reopened.fetchone("PRAGMA user_version")[0] == 7
+        assert reopened.fetchone("SELECT COUNT(*) FROM workflow_document")[0] == 3
+    finally:
+        reopened.close()
 
 
 def _auto_of(hub, keys) -> str:
@@ -505,7 +681,7 @@ def test_the_hub_open_runs_the_conversion_once(world, tmp_path):
     world.hub.close()
     reopened = HubDatabase(path)
     try:
-        assert reopened.fetchone("PRAGMA user_version")[0] == 6
+        assert reopened.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
         assert reopened.fetchone("SELECT 1 FROM workflow_group_member") is None
         assert (
             reopened.fetchone(
@@ -818,3 +994,91 @@ def test_a_busy_vault_leaves_its_recipes_eligible(run_env):
     )
     again = finder.find_task()
     assert again is not None and again.params["recipe_ids"] == [recipe_id]
+
+
+def test_a_recipe_on_a_file_only_card_follows_its_file_into_step_7(
+    run_env, tmp_path, monkeypatch
+):
+    """Nothing the owner saved changes where it lists across the upgrade.
+
+    A recipe on a file-only card (#1466) named `auto:<topology hash>` once
+    step 5 converted it, or still names only the card; step 7 makes the file a
+    manual workflow and retires that id, and the conversion re-files both
+    recipes there: they list on the manual workflow and run its document.
+    """
+    server = run_env.server
+    hub = server.hub
+    folder = tmp_path / "user"
+    folder.mkdir()
+    (folder / "editor.json").write_text(json.dumps(_EDITOR), encoding="utf-8")
+    (folder / "editor.json.api").write_text(
+        json.dumps(
+            {
+                "converted_from": comfyui_routes._editor_digest(_EDITOR),
+                "prompt": _EDITOR_AS_API,
+            }
+        ),
+        encoding="utf-8",
+    )
+    topology = record_ui_graph(hub, _EDITOR)
+    key = workflow_cards.topology_only_key(topology)
+    retired = f"auto:{topology}"
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file (workflow_name, topology_hash, "
+            "structural_hash, workflow_key) VALUES ('editor.json', ?, NULL, ?)",
+            (topology, key),
+        )
+        convert_card_state(conn)
+        assert convert.adopt_workflow_files(conn, str(folder)) == 1
+    manual = hub.fetchone(
+        "SELECT successor_id FROM workflow_id_successor WHERE workflow_id = ?",
+        (retired,),
+    )[0]
+    assert manual.startswith("manual:")
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        converted = SavedRecipe(
+            name="converted", workflow_key=key, workflow_id=retired, prompt="x"
+        )
+        pending = SavedRecipe(name="pending", workflow_key=key, prompt="x")
+        session.add(converted)
+        session.add(pending)
+        session.commit()
+        return converted.id, pending.id
+
+    ids = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+    task = finder.find_task()
+    assert sorted(task.params["recipe_ids"]) == sorted(ids)
+    task.result = task._run_task()
+    finder.on_task_complete(task, None)
+    assert finder.find_task() is None, "a re-filed recipe was handed out again"
+    stored = server.vault.db.run_immediate_read_task(
+        lambda session: session.exec(select(SavedRecipe)).all()
+    )
+    # A manual workflow is its own card, as `POST /recipes` stores one.
+    assert {(row.workflow_id, row.workflow_key) for row in stored} == {(manual, manual)}
+
+    listed = run_env.owner.get(f"{API}/recipes", params={"workflow_id": manual})
+    assert sorted(row["id"] for row in listed.json()) == sorted(ids)
+    unfiled = run_env.owner.get(f"{API}/recipes", params={"unfiled": "true"})
+    assert not set(ids) & {row["id"] for row in unfiled.json()}
+
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    for recipe_id in ids:
+        r = run_env.owner.post(
+            f"{API}/workflows/run/preflight", json={"saved_recipe_id": recipe_id}
+        )
+        assert r.status_code == 200, r.text
+        (group,) = r.json()["groups"]
+        assert (group["workflow_id"], group["source"]) == (manual, "file"), group
+
+    delete_manual_workflow(hub, manual)
+    server.vault.db.run_task(
+        lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
+        priority=DBPriority.IMMEDIATE,
+    )

@@ -20,7 +20,8 @@ import requests
 from fastapi import HTTPException
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_card_reads import workflow_of_topology
+from pixlstash.hub.workflow_card_reads import card_index, manual_document
+from pixlstash.hub.workflow_group_writes import delete_manual_workflow
 from pixlstash.routes import comfyui as comfyui_module
 from pixlstash.server import Server
 from pixlstash.services import comfyui_userdata, workflow_inbox
@@ -192,8 +193,21 @@ def _pull(hub, announced=None) -> dict:
     return result
 
 
-def _stored(user: Path) -> list[str]:
-    return sorted(p.name for p in user.iterdir() if p.suffix == ".json")
+def _stored(hub) -> list[str]:
+    """The names of the manual workflows a pull stored."""
+    return sorted(
+        row[0]
+        for row in hub.fetchall(
+            "SELECT a.name FROM workflow_document d JOIN workflow_group_attr a "
+            "ON a.workflow_id = d.workflow_id WHERE d.origin = 'pull'"
+        )
+    )
+
+
+def _manual_id(hub, name: str) -> str:
+    return hub.fetchone(
+        "SELECT workflow_id FROM workflow_group_attr WHERE name = ?", (name,)
+    )[0]
 
 
 # ── the userdata client ─────────────────────────────────────────────────────
@@ -341,18 +355,18 @@ def test_a_pull_stores_every_workflow_and_a_second_matches_them(comfy, folders, 
     announced: list[str] = []
     first = _pull(hub, announced)
     assert (first["pulled"], first["matched"], first["failed"]) == (2, 0, 0)
-    assert _stored(user) == ["Plain.json", "Sub - Needs pack.json"]
-    # Stored byte-for-byte what ComfyUI holds.
-    assert json.loads((user / "Plain.json").read_text("utf-8")) == PLAIN
-    # Both are editor-format files with no recipe: each is its own workflow,
-    # named by its topology (#1623), and both are announced.
+    assert _stored(hub) == ["Plain", "Sub - Needs pack"]
+    # Stored as ComfyUI holds it, as a manual workflow: no file is written.
+    assert manual_document(hub, _manual_id(hub, "Plain")) == PLAIN
+    assert list(user.iterdir()) == []
     assert announced == first["workflow_ids"]
     assert len(set(announced)) == 2
-    assert all(workflow_id.startswith("auto:") for workflow_id in announced)
+    assert all(workflow_id.startswith("manual:") for workflow_id in announced)
 
+    # A restart's pull re-imports nothing: the origin rows say what is stored.
     second = _pull(hub)
     assert (second["pulled"], second["matched"]) == (0, 2)
-    assert _stored(user) == ["Plain.json", "Sub - Needs pack.json"]
+    assert _stored(hub) == ["Plain", "Sub - Needs pack"]
 
 
 def test_the_triage_names_the_workflow_this_comfyui_cannot_run(comfy, folders, hub):
@@ -433,14 +447,9 @@ def test_a_pulled_api_graph_does_not_count_itself_as_known(comfy, folders, hub):
     announced: list[str] = []
     result = _pull(hub, announced)
     assert result["pulled"] == 1
-    # The graph is filed with a core hash, so the pull names its workflow.
-    (topology,) = [
-        row[0] for row in hub.fetchall("SELECT topology_hash FROM workflow_recipe")
-    ]
-    assert announced == result["workflow_ids"] == [workflow_of_topology(hub, topology)]
-    assert announced[0].startswith("auto:")
-    # It filed a recipe row of its own; that is not a picture.
-    assert hub.fetchone("SELECT 1 FROM workflow_recipe") is not None
+    assert announced == result["workflow_ids"] == [_manual_id(hub, "Api")]
+    # A manual workflow files nothing in the picture tables.
+    assert hub.fetchone("SELECT 1 FROM workflow_recipe") is None
     assert result["known_from_pictures"] == 0
 
 
@@ -458,9 +467,8 @@ def test_without_object_info_every_workflow_is_unchecked_never_fine(
 
 
 def test_a_workflow_deleted_here_is_not_pulled_back(comfy, folders, hub):
-    user, _builtin = folders
-    # A second path holding the same document: content matching files both
-    # as one file, and the delete has to dismiss both paths or the twin
+    # A second path holding the same document: content matching stores both
+    # as one workflow, and the delete has to dismiss both paths or the twin
     # restores it.
     comfy.workflows["Copy of plain.json"] = copy.deepcopy(PLAIN)
     first = _pull(hub)
@@ -473,41 +481,42 @@ def test_a_workflow_deleted_here_is_not_pulled_back(comfy, folders, hub):
     }
     assert stored_as["Copy of plain.json"] == stored_as["Plain.json"]
 
-    comfyui_module.trash_user_workflow(hub, stored_as["Plain.json"])
-    assert not (user / stored_as["Plain.json"]).exists()
+    delete_manual_workflow(hub, stored_as["Plain.json"])
 
     again = _pull(hub)
     assert again["skipped_dismissed"] == 2
     assert (again["pulled"], again["matched"]) == (0, 1)
-    assert not (user / stored_as["Plain.json"]).exists()
+    assert _stored(hub) == ["Sub - Needs pack"]
 
 
-def test_a_workflow_gone_from_comfyui_keeps_its_local_file(comfy, folders, hub):
-    user, _builtin = folders
+def test_a_workflow_gone_from_comfyui_keeps_its_workflow(comfy, folders, hub):
     _pull(hub)
     del comfy.workflows["Plain.json"]
     result = _pull(hub)
     assert result["gone"] == 1
-    assert (user / "Plain.json").exists()
+    assert _stored(hub) == ["Plain", "Sub - Needs pack"]
     paths = [r["remote_path"] for r in hub.fetchall("SELECT * FROM workflow_origin")]
     assert paths == ["Sub/Needs pack.json"]
 
 
 def test_a_workflow_pixlstash_ships_is_reported_apart(comfy, folders, hub):
-    user, builtin = folders
+    _user, builtin = folders
     (builtin / "Shipped.json").write_text(json.dumps(PLAIN), encoding="utf-8")
     result = _pull(hub)
     assert (result["already_shipped"], result["pulled"]) == (1, 1)
-    assert _stored(user) == ["Sub - Needs pack.json"]
+    assert _stored(hub) == ["Sub - Needs pack"]
 
 
-def test_a_different_workflow_under_a_taken_name_is_kept_beside_it(comfy, folders, hub):
+def test_a_different_workflow_under_a_taken_name_is_a_workflow_of_its_own(
+    comfy, folders, hub
+):
     user, _builtin = folders
-    (user / "Plain.json").write_text(json.dumps(NEEDS_PACK), encoding="utf-8")
+    # A legacy user file of that name is never compared: no folder is read.
+    (user / "Plain.json").write_text(json.dumps(PLAIN), encoding="utf-8")
     del comfy.workflows["Sub/Needs pack.json"]
     result = _pull(hub)
     assert result["pulled"] == 1
-    assert _stored(user) == ["Plain (2).json", "Plain.json"]
+    assert _stored(hub) == ["Plain"]
 
 
 def test_a_multi_user_comfyui_is_refused_before_anything_is_stored(comfy, folders, hub):
@@ -515,7 +524,7 @@ def test_a_multi_user_comfyui_is_refused_before_anything_is_stored(comfy, folder
     comfy.multi_user = True
     with pytest.raises(MultiUserComfyUIError):
         _pull(hub)
-    assert _stored(user) == []
+    assert _stored(hub) == []
 
 
 def test_an_unreadable_workflow_is_counted_failed_and_the_rest_still_pull(
@@ -525,7 +534,19 @@ def test_an_unreadable_workflow_is_counted_failed_and_the_rest_still_pull(
     comfy.workflows["Broken.json"] = {"not": "a workflow"}
     result = _pull(hub)
     assert (result["failed"], result["pulled"]) == (1, 2)
-    assert "Broken.json" not in _stored(user)
+    assert "Broken" not in _stored(hub)
+
+
+def test_a_pulled_workflow_past_the_row_cap_is_failed_not_stored(
+    comfy, folders, hub, monkeypatch
+):
+    """The listing may give no size; the stored row's cap still holds."""
+    monkeypatch.setattr(
+        comfyui_module, "MAX_WORKFLOW_FILE_BYTES", len(json.dumps(PLAIN)) + 1
+    )
+    result = _pull(hub)
+    assert (result["failed"], result["pulled"]) == (1, 1)
+    assert _stored(hub) == ["Plain"]
 
 
 # ── the routes ──────────────────────────────────────────────────────────────
@@ -632,27 +653,14 @@ def test_a_model_named_with_a_folder_comfyui_lists_flat_is_present():
     assert model_triage(moved, {"UNETLoader": {}}, advertised) == ([], 0)
 
 
-def _pulled_files(hub) -> set[str]:
-    return {
-        row["workflow_name"]
-        for row in hub.fetchall("SELECT workflow_name FROM workflow_pulled_file")
+def test_a_pulled_manual_workflow_is_the_one_off_kind(comfy, folders, hub):
+    """``origin = 'pull'`` is what the one-off count reads (#1440): a pull is
+    not a statement, so its workflows fold away until they have pictures."""
+    _pull(hub)
+    hand = {
+        card.name or card.workflow_key: card.hand_imported for card in card_index(hub)
     }
-
-
-def test_a_file_the_owner_already_had_stays_theirs_after_a_pull(comfy, folders, hub):
-    """``workflow_pulled_file`` is what the one-off count reads (#1440).
-
-    Written by the pull: pull-written, and a later pull matching its own file
-    keeps it so. Matched to a file the owner had imported: not pull-written,
-    so their file does not turn into a hideable one-off because ComfyUI
-    happens to hold it too.
-    """
-    user, _builtin = folders
-    (user / "Mine.json").write_text(json.dumps(PLAIN), encoding="utf-8")
-    _pull(hub)
-    assert _pulled_files(hub) == {"Sub - Needs pack.json"}
-    _pull(hub)
-    assert _pulled_files(hub) == {"Sub - Needs pack.json"}
+    assert set(hand.values()) == {False}
 
 
 def test_a_hub_made_before_content_hash_gains_the_column(tmp_path):
@@ -674,28 +682,19 @@ def test_a_hub_made_before_content_hash_gains_the_column(tmp_path):
         reopened.close()
 
 
-def test_importing_a_pulled_workflow_by_hand_makes_it_the_owners(comfy, folders, hub):
-    """Dropping in the same document a pull wrote is the owner keeping it."""
-    _pull(hub)
-    router = comfyui_module.create_router(MagicMock(hub=hub))
-    endpoint = next(
-        route.endpoint
-        for route in router.routes
-        if getattr(route, "path", None) == "/comfyui/workflows/import"
-    )
-    endpoint(
-        SimpleNamespace(state=SimpleNamespace(origin_client_id=None)),
-        {"name": "dropped", "workflow": NEEDS_PACK},
-    )
-    assert _pulled_files(hub) == {"Plain.json"}
-
-
-def test_a_file_dropped_in_the_watched_folder_is_the_owners_too(comfy, folders, hub):
-    """The inbox is the other hand-over path, and claims the same way."""
+def test_a_file_dropped_in_the_watched_folder_matches_a_pulled_workflow(
+    comfy, folders, hub
+):
+    """The inbox dedupes on the origin rows too: content a pull stored is
+    not stored twice."""
     _pull(hub)
     server = SimpleNamespace(hub=hub, vault=None)
-    Server._store_inbox_workflow(server, "dropped", NEEDS_PACK)
-    assert _pulled_files(hub) == {"Plain.json"}
+    result = Server._store_inbox_workflow(server, "dropped", NEEDS_PACK)
+    assert (result["matched"], result["workflow_id"]) == (
+        True,
+        _manual_id(hub, "Sub - Needs pack"),
+    )
+    assert hub.fetchone("SELECT COUNT(*) FROM workflow_document")[0] == 2
 
 
 # ── what the independent review of #1502 reproduced ─────────────────────────
@@ -713,16 +712,15 @@ def _pull_with(hub, store=None, origin=BASE) -> dict:
 
 
 def _delete_pulled(hub, remote_path: str) -> str:
-    name = hub.fetchone(
+    workflow_id = hub.fetchone(
         "SELECT workflow_name FROM workflow_origin WHERE remote_path = ?",
         (remote_path,),
     )["workflow_name"]
-    comfyui_module.trash_user_workflow(hub, name)
-    return name
+    delete_manual_workflow(hub, workflow_id)
+    return workflow_id
 
 
 def test_a_delete_made_while_a_pull_runs_is_not_undone_by_it(comfy, folders, hub):
-    user, _builtin = folders
     _pull(hub)
     # The owner deletes Plain.json between the pull's start and its entry.
     # The delete takes INBOX_LOCK like the pull does, so it runs from the
@@ -754,11 +752,10 @@ def test_a_delete_made_while_a_pull_runs_is_not_undone_by_it(comfy, folders, hub
     result = _pull_with(hub, store=store_then_delete)
     assert deleted
     assert result["skipped_dismissed"] == 1
-    assert not (user / "Plain.json").exists()
+    assert "Plain" not in _stored(hub)
 
 
 def test_an_empty_listing_forgets_no_dismissal(comfy, folders, hub):
-    user, _builtin = folders
     _pull(hub)
     _delete_pulled(hub, "Plain.json")
     listing = comfy.workflows
@@ -767,13 +764,12 @@ def test_an_empty_listing_forgets_no_dismissal(comfy, folders, hub):
     comfy.workflows = listing
     again = _pull(hub)
     assert (again["pulled"], again["skipped_dismissed"]) == (0, 1)
-    assert not (user / "Plain.json").exists()
+    assert "Plain" not in _stored(hub)
 
 
 def test_the_same_comfyui_under_another_spelling_is_still_dismissed(
     comfy, folders, hub, monkeypatch
 ):
-    user, _builtin = folders
     _pull(hub)
     _delete_pulled(hub, "Plain.json")
     alias = "http://127.0.0.1:8188"
@@ -784,23 +780,21 @@ def test_the_same_comfyui_under_another_spelling_is_still_dismissed(
     monkeypatch.setattr(requests, "get", via_alias)
     result = _pull_with(hub, origin=alias)
     assert result["skipped_dismissed"] == 1
-    assert not (user / "Plain.json").exists()
+    assert "Plain" not in _stored(hub)
 
 
 def test_a_deleted_workflow_renamed_in_comfyui_stays_out(comfy, folders, hub):
-    user, _builtin = folders
     _pull(hub)
     _delete_pulled(hub, "Plain.json")
     comfy.workflows["Renamed.json"] = comfy.workflows.pop("Plain.json")
     result = _pull(hub)
     assert result["skipped_dismissed"] == 1
-    assert not (user / "Renamed.json").exists()
+    assert _stored(hub) == ["Sub - Needs pack"]
 
 
 def test_a_workflow_edited_in_comfyui_is_changed_and_both_copies_stay_pulled(
     comfy, folders, hub
 ):
-    user, _builtin = folders
     _pull(hub)
     edited = copy.deepcopy(PLAIN)
     edited["nodes"][0]["pos"] = [123, 456]
@@ -808,15 +802,8 @@ def test_a_workflow_edited_in_comfyui_is_changed_and_both_copies_stay_pulled(
     comfy.workflows["Plain.json"] = edited
     result = _pull(hub)
     assert (result["changed"], result["pulled"]) == (1, 0)
-    # The copy the first pull wrote is still pull-written, not an owner's file.
-    assert {"Plain.json", "Plain (2).json"} <= _pulled_files(hub)
-
-
-def test_a_workflow_gone_from_comfyui_stays_pull_written(comfy, folders, hub):
-    _pull(hub)
-    del comfy.workflows["Plain.json"]
-    assert _pull(hub)["gone"] == 1
-    assert "Plain.json" in _pulled_files(hub)
+    # The copy the first pull stored stays, as a pulled workflow of its own.
+    assert _stored(hub) == ["Plain", "Plain", "Sub - Needs pack"]
 
 
 def test_a_document_no_reader_can_read_is_unchecked_never_fine(

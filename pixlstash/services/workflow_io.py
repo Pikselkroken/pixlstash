@@ -83,6 +83,26 @@ def api_graph(document: dict) -> dict | None:
     return document if is_api_format(document) else None
 
 
+def with_converted_graph(workflow: dict, graph: dict | None) -> dict:
+    """*workflow*, or the API *graph* ComfyUI converted it into (#1530).
+
+    What every reader that runs or parameterises a stored workflow goes
+    through, whether the conversion sits beside a file or in a hub row, so a
+    converted editor workflow reads as the API graph it now has. PixlStash's
+    own keys (output choice) are the workflow's and carry over; not the
+    bindings, which are paths into the editor structure and would suppress
+    detection on the API graph and fill nothing.
+    """
+    if api_graph(workflow) is not None or graph is None:
+        return workflow
+    own = {
+        k: v
+        for k, v in workflow.items()
+        if str(k).startswith("pixlstash_") and k != "pixlstash_bindings"
+    }
+    return {**own, **graph}
+
+
 @dataclass(frozen=True)
 class WorkflowIO:
     """The detected inputs and outputs of one workflow, as node ids.

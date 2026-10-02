@@ -25,9 +25,9 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from pixlstash.hub.workflow_card_reads import (
-    AUTO_STACK_PREFIX,
     find_workflow,
     variants_in_workflow,
+    workflow_index,
 )
 from pixlstash.hub.workflows import shelf_model_names
 from pixlstash.routes.comfyui import _picture_workflow_key
@@ -38,6 +38,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import normalized_filename
 from pixlstash.services import saved_recipe_service
 from pixlstash.services.workflow_events import announce_changed_workflows
+from pixlstash.utils.workflow_ids import WORKFLOW_ID_PATTERN
 
 logger = get_logger(__name__)
 
@@ -66,9 +67,8 @@ MAX_REORDER_IDS = 500
 MAX_UNION_KEYS = 100
 # The models one recipe may pin: one per loader, and no real graph has more.
 MAX_MODELS = 64
-# ``auto:<core hash>`` or a manual group's uuid. Declared on the ITEM:
+# ``auto:<core hash>`` or ``manual:<uuid hex>``. Declared on the ITEM:
 # `max_length` on a `list[str]` bounds the list, not each id.
-WORKFLOW_ID_PATTERN = rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$"
 WorkflowId = Annotated[str, StringConstraints(pattern=WORKFLOW_ID_PATTERN)]
 
 
@@ -319,9 +319,12 @@ def create_router(server) -> APIRouter:
         description=(
             "The owner's saved recipes, each with how many kept pictures it "
             "accounts for. Given a workflow id, that workflow's recipes; "
-            "given none, every recipe in the library."
+            "given none, every recipe in the library. `unfiled` lists instead "
+            "the recipes whose workflow is gone or not decided yet, with no "
+            "credit: what the Workflows view offers to extract or delete."
         ),
         response_model=list[SavedRecipeOut],
+        responses={400: {"description": "`unfiled` together with a workflow id."}},
     )
     def list_recipes(
         request: Request,
@@ -333,9 +336,28 @@ def create_router(server) -> APIRouter:
                 "of several; the answer is the union."
             ),
         ),
+        unfiled: bool = Query(
+            False,
+            description=(
+                "Only the recipes on no workflow this machine holds: a NULL "
+                "workflow, or one deleted or moved since. No credit."
+            ),
+        ),
     ):
         server.auth.ensure_secure_when_required(request)
         workflow_ids = list(dict.fromkeys(workflow_id))
+        if unfiled:
+            if workflow_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="unfiled lists recipes on no workflow; name none.",
+                )
+            known = {entry.workflow_id for entry in workflow_index(_hub())}
+            return [
+                recipe
+                for recipe in saved_recipe_service.read_recipes(server.vault)
+                if recipe["workflow_id"] not in known
+            ]
         if not workflow_ids:
             # Every recipe in the library, with no credit: crediting them would
             # mean resolving every workflow, a query per workflow for a number

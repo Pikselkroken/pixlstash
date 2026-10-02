@@ -25,13 +25,20 @@ from pixlstash.db_models import (
     User,
 )
 from pixlstash.hub import workflow_cards, workflow_origin
-from pixlstash.hub.workflow_card_reads import workflow_of_topology
+from pixlstash.hub.workflow_card_reads import (
+    find_workflow,
+    manual_documents_holding,
+    manual_workflow_ids,
+    workflow_of_topology,
+)
+from pixlstash.hub.workflow_group_writes import (
+    create_manual_workflow,
+    set_manual_api_document,
+)
 from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
 from pixlstash.hub.workflows import (
     forget_input_modes,
     input_modes_by_workflow,
-    record_api_graph,
-    record_ui_graph,
     replace_parameter_pins,
 )
 from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_UNKNOWN
@@ -81,18 +88,21 @@ from pixlstash.services import (
     workflow_parameters,
 )
 from pixlstash.services.workflow_events import announce_changed_workflows
+from pixlstash.services.workflow_inbox import workflow_user_dir
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     topology_hash as api_topology_hash,
     ui_topology_hash,
 )
-from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.services.workflow_io import (
+    api_graph,
+    detect_workflow_io,
+    with_converted_graph,
+)
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.comfyui_workflow_pull_task import ComfyUIWorkflowPullTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_utils import resolve_path_within
-from platformdirs import user_data_dir
 
 # ComfyUI workflow-execution orchestration and the output-import pipeline live in
 # the service layer (backend refactor Phase 2 §4.5); the route handlers below
@@ -140,10 +150,6 @@ def _workflow_builtin_dir() -> str:
             os.path.dirname(__file__), "..", "data", "comfyui-workflows", "built-in"
         )
     )
-
-
-def workflow_user_dir() -> str:
-    return os.path.join(user_data_dir("pixlstash"), "comfyui-workflows", "user")
 
 
 def _workflow_dirs() -> list[tuple[str, str]]:
@@ -204,11 +210,6 @@ def _load_workflow_json(path: str) -> dict:
         return json.load(handle)
 
 
-def _save_workflow_json(path: str, payload: dict) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=True)
-
-
 # The API graph ComfyUI converted an editor-format file into (#1530), kept
 # BESIDE the file rather than over it: the file stays byte-identical to what
 # ComfyUI holds, so it still re-opens there and still deduplicates against a
@@ -266,18 +267,7 @@ def runnable_document(path: str, workflow: dict) -> dict:
     """
     if api_graph(workflow) is not None:
         return workflow
-    graph = converted_graph(path, workflow)
-    if graph is None:
-        return workflow
-    # Not the bindings: theirs are paths into the editor structure (or the
-    # start-up migration's empty list), and either would suppress detection
-    # on the API graph and fill nothing.
-    own = {
-        k: v
-        for k, v in workflow.items()
-        if str(k).startswith("pixlstash_") and k != workflow_bindings.BINDINGS_KEY
-    }
-    return {**own, **graph}
+    return with_converted_graph(workflow, converted_graph(path, workflow))
 
 
 def _converted_mtime_ns(path: str) -> int:
@@ -291,183 +281,149 @@ def _converted_mtime_ns(path: str) -> int:
         return 0
 
 
-def store_converted_graph(path: str, workflow: dict, graph: dict) -> None:
-    """Write *graph* beside the editor file at *path*, which holds *workflow*.
-
-    Atomic, so a listing racing the write never reads (and caches) half of it.
-    """
-    write_json_atomic(
-        f"{path}{CONVERTED_SUFFIX}",
-        {"converted_from": _editor_digest(workflow), "prompt": graph},
-    )
+def _stem(name: str) -> str:
+    """What a workflow called *name* (``flow.json``) is called: ``flow``."""
+    return os.path.splitext(_normalize_workflow_name(name))[0] or "workflow"
 
 
-def _store_workflow(
-    hub, name: str, workflow: dict, *, overwrite: bool = False, keep_both: bool = False
-) -> dict:
-    """Store *workflow* as *name* in the user folder, or match a stored copy.
+def store_manual_workflow(
+    hub,
+    name: str,
+    workflow: dict,
+    origin: str,
+    *,
+    from_workflow_id: str | None = None,
+    from_name: str | None = None,
+    api_document: dict | None = None,
+    record: tuple[str, str, str | None] | None = None,
+) -> str:
+    """Store *workflow* as a new manual workflow called *name*; return its id.
 
-    Shared by the import route and the watched inbox, so a dropped file and a
-    file put in the folder are stored the same way.
+    What every way a workflow arrives goes through - an import, the watched
+    inbox, a pull, a built-in, a duplicate, a fixed copy, a clone, a LoRA
+    edit, an extract - so each stores the same kind of record. Always a new
+    record: identical copies are allowed. No file is written.
+
+    **The shape check and the placeholder migration are not skipped**: a
+    workflow stored with placeholder tokens is one that will not run.
 
     Raises:
-        FileExistsError: *name* holds a different workflow and neither
-            *overwrite* nor *keep_both* is set.
         NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
-        RecursionError: The document nests too deeply to compare.
-        ValueError: *name* escapes the user folder.
+        RecursionError: The document nests too deeply to read.
+        WorkflowFileTooLarge: It is past :data:`MAX_WORKFLOW_FILE_BYTES`.
     """
     check_comfy_workflow(workflow)
-    # A file exported while workflows carried placeholder tokens is stored
-    # the way the start-up migration left its siblings, so it can run and
-    # so a copy of a migrated workflow matches it.
     workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
-    wanted = workflow_bindings.canonical(workflow)
-
-    workflow_dir = workflow_user_dir()
-    os.makedirs(workflow_dir, exist_ok=True)
-    path = resolve_path_within(workflow_dir, name)
-
-    # A copy is the same workflow whatever it is called, so it matches
-    # before the name is looked at, and keep_both has nothing to keep.
-    found = _find_stored_copy(wanted)
-    if found is not None:
-        source, existing = found
-        topology_hash, card_key = _file_in_hub(hub, existing, workflow)
-        return {
-            "status": "success",
-            "name": existing,
-            # Which folder matched; the pull reads it to name a workflow
-            # PixlStash ships.
-            "source": source,
-            "workflow_dir": workflow_dir,
-            "matched": True,
-            "topology_hash": topology_hash,
-            # The workflow the file is in, so the caller can name it in its
-            # ``CHANGED_WORKFLOWS`` event without filing the graph twice. The
-            # card key stays internal (#1623).
-            "workflow_id": _workflow_of(hub, topology_hash) if card_key else None,
-        }
-    if os.path.exists(path) and not overwrite:
-        if not keep_both:
-            raise FileExistsError(path)
-        stem = os.path.splitext(name)[0]
-        counter = 2
-        while os.path.exists(path):
-            name = f"{stem} ({counter}).json"
-            path = resolve_path_within(workflow_dir, name)
-            counter += 1
-
-    _save_workflow_json(path, workflow)
-    topology_hash, card_key = _file_in_hub(hub, name, workflow)
-    return {
-        "status": "success",
-        "name": name,
-        "workflow_dir": workflow_dir,
-        "matched": False,
-        "topology_hash": topology_hash,
-        "workflow_id": _workflow_of(hub, topology_hash) if card_key else None,
-    }
-
-
-def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
-    """File one document pulled from ComfyUI the way an import files it (#1440).
-
-    :func:`_store_workflow` with ``keep_both``, so a copy of a stored workflow
-    is matched rather than stored twice and a name taken by a different
-    workflow gets the ``(2)`` suffix rather than a refusal. **The caller holds
-    ``workflow_inbox.INBOX_LOCK``** (the pull task does, around its dismissal
-    check and its origin row as well). Adds ``builtin``: a match in the
-    built-in folder is a workflow PixlStash ships, which has no user file to
-    delete, so the pull reports it apart.
-    """
-    result = _store_workflow(hub, name, workflow, keep_both=True)
-    result["builtin"] = bool(
-        result.get("matched") and result.get("source") == "built-in"
+    _within_the_cap(workflow)
+    if api_document is not None:
+        _within_the_cap(api_document)
+    return create_manual_workflow(
+        hub,
+        name,
+        workflow,
+        origin,
+        from_workflow_id=from_workflow_id,
+        from_name=from_name,
+        api_document=api_document,
+        record=record,
     )
-    return result
 
 
-def claim_stored_workflow(hub, name: str) -> None:
-    """The owner handed *name* over: it is theirs, not pull-written (#1440).
+def _within_the_cap(document: dict) -> None:
+    """Refuse a document past :data:`MAX_WORKFLOW_FILE_BYTES` serialised.
 
-    Shared by both hand-over paths - the import route and the watched inbox -
-    so a file the owner gives PixlStash is never folded into the one-offs a
-    pull's files may be, whichever way it arrived. Logged, never raised: the
-    file is stored either way.
+    The file loader's cap, held for a stored row too: a hub row is read on the
+    grid and every run as a file was.
+
+    Raises:
+        WorkflowFileTooLarge: It is.
     """
-    if hub is None:
-        return
-    try:
-        workflow_origin.claim_file(hub, name)
-    except sqlite3.Error as exc:
-        logger.warning(
-            "Stored workflow %s, but could not record it as the owner's; if a "
-            "pull wrote it first it can still be counted as a one-off: %s",
-            name,
-            exc,
+    size = len(json.dumps(document))
+    if size > MAX_WORKFLOW_FILE_BYTES:
+        raise WorkflowFileTooLarge(
+            f"{size} bytes, past the {MAX_WORKFLOW_FILE_BYTES} a workflow may be"
         )
 
 
-def store_workflow_copy(hub, name: str, workflow: dict) -> tuple[str, str | None]:
-    """Write *workflow* into the user folder beside whatever is already there.
+def _topology_of(workflow: dict) -> str | None:
+    """*workflow*'s topology hash, or ``None`` when it will not reduce. No write."""
+    try:
+        graph = api_graph(workflow)
+        return api_topology_hash(graph) if graph else ui_topology_hash(workflow)
+    except Exception as exc:
+        # The reducers index into whatever the document holds; the hash is
+        # only the pull's has-pictures count, so a document without one is
+        # counted as having none.
+        logger.info("A pulled workflow's topology could not be read: %s", exc)
+        return None
 
-    What ``POST /workflows/{key}/duplicate`` and
-    ``POST /workflows/{key}/insert-lora-loader`` write with, and deliberately
-    **not** :func:`_store_workflow`: that one matches an identical stored copy
-    and hands its name back, which is right for an import (a file the library
-    already has is not a second workflow) and is exactly wrong here, where a
-    second copy of the same workflow is the whole request.
 
-    The name is made free by the same ``(2)`` counter the import uses, so a
-    duplicate of a duplicate lands beside its sibling rather than over it.
+def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
+    """File one document pulled from ComfyUI as a manual workflow (#1440).
 
-    **The shape check and the placeholder migration are NOT skipped**, only the
-    match: a file written here has to be as loadable as an imported one, and
-    ``_store_workflow``'s own comment says why the migration matters - a
-    workflow stored with placeholder tokens beside migrated siblings is one
-    that will not run.
-
-    Args:
-        hub: The hub, or ``None``; filing is secondary to storing.
-        name: The name asked for, with or without its ``.json``.
-        workflow: The document to write.
-
-    Returns:
-        ``(stored name, card key)`` - the key being ``None`` when the graph
-        could not be filed, which does not stop the file being written.
-
-    Raises:
-        NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
-        OSError: The file could not be written.
+    **The caller holds ``workflow_inbox.INBOX_LOCK``.** Deduplicated on
+    ``workflow_origin`` alone (:func:`workflow_origin.stored_as`): a content
+    some origin already stored as a live workflow is ``matched``. A copy of a
+    workflow PixlStash ships is not stored: ``builtin`` says so, and the pull
+    reports it apart.
     """
     check_comfy_workflow(workflow)
-    workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
-    stored = _normalize_workflow_name(name) or "workflow.json"
-    workflow_dir = workflow_user_dir()
-    os.makedirs(workflow_dir, exist_ok=True)
-    # Under the lock the import and the delete take. Finding a free name and
-    # then writing it is a check-then-act, and these handlers are sync, so
-    # FastAPI runs two of them on the thread pool at once: without this, two
-    # duplicates both see `… (copy).json` absent, both write it, and one 201
-    # hands back a key pointing at the other's bytes. It also stops a delete
-    # landing between the write and the filing and leaving a hub row naming a
-    # file already in the trash.
-    with workflow_inbox.INBOX_LOCK:
-        path = resolve_path_within(workflow_dir, stored)
-        stem = os.path.splitext(stored)[0]
-        counter = 2
-        while os.path.exists(path):
-            stored = f"{stem} ({counter}).json"
-            path = resolve_path_within(workflow_dir, stored)
-            counter += 1
-        _save_workflow_json(path, workflow)
-        _topology_hash, card_key = _file_in_hub(hub, stored, workflow)
-    logger.info("Stored a copy of a workflow as %s.", stored)
-    return stored, card_key
+    migrated, _ = workflow_bindings.migrate_placeholders(workflow)
+    topology_hash = _topology_of(migrated)
+    stored = workflow_origin.stored_as(hub, workflow_inbox.content_hash(workflow))
+    if stored is not None:
+        return {
+            "name": _stem(name),
+            "matched": True,
+            "builtin": False,
+            "workflow_id": stored,
+            "topology_hash": topology_hash,
+        }
+    if _builtin_copy(workflow_bindings.canonical(migrated)):
+        return {
+            "name": _stem(name),
+            "matched": True,
+            "builtin": True,
+            "workflow_id": None,
+            "topology_hash": topology_hash,
+        }
+    # The listing's size can be missing, so the stored row's cap is held here.
+    _within_the_cap(migrated)
+    return {
+        "name": _stem(name),
+        "matched": False,
+        "builtin": False,
+        "workflow_id": create_manual_workflow(hub, _stem(name), migrated, "pull"),
+        "topology_hash": topology_hash,
+    }
 
 
-def _trash_stored_workflow(path: str, name: str) -> None:
+def store_inbox_workflow(hub, name: str, workflow: dict) -> dict:
+    """Store one inbox file as a manual workflow, once per content.
+
+    **The caller holds ``workflow_inbox.INBOX_LOCK``** (the reconcile does).
+    Deduplicated on ``workflow_origin`` alone: a content the inbox, a pull or
+    a built-in already stored as a live workflow is matched, so a restart,
+    which reads every inbox file again, re-imports nothing. A new one is
+    recorded under the ``inbox`` origin keyed by its content hash; deleting
+    the workflow removes that row, so restoring the file from the trash
+    imports it again.
+    """
+    digest = workflow_inbox.content_hash(workflow)
+    stored = workflow_origin.stored_as(hub, digest)
+    if stored is not None:
+        return {"name": _stem(name), "matched": True, "workflow_id": stored}
+    workflow_id = store_manual_workflow(
+        hub,
+        _stem(name),
+        workflow,
+        "inbox",
+        record=(workflow_origin.INBOX_ORIGIN, digest, digest),
+    )
+    return {"name": _stem(name), "matched": False, "workflow_id": workflow_id}
+
+
+def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
     """Move a stored workflow to the system trash by way of the inbox.
 
     The trash copy comes first and the stored file goes only once it is there,
@@ -487,11 +443,25 @@ def _trash_stored_workflow(path: str, name: str) -> None:
         )
         send2trash(path)
         return
-    workflow_inbox.trash_workflow(workflow_inbox.workflow_inbox_dir(), name, workflow)
+    workflow_inbox.trash_workflow(
+        workflow_inbox.workflow_inbox_dir(), name, workflow, sweep=sweep
+    )
     os.remove(path)
 
 
-def trash_user_workflow(hub, workflow_name: str) -> str:
+def user_workflow_exists(workflow_name: str) -> bool:
+    """Whether the user folder still holds a workflow file called *workflow_name*."""
+    try:
+        path = resolve_path_within(
+            workflow_user_dir(), _normalize_workflow_name(workflow_name)
+        )
+    except ValueError:
+        logger.warning("Workflow file %r is not inside the user folder.", workflow_name)
+        return False
+    return os.path.isfile(path)
+
+
+def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
     """Send one stored workflow to the trash and forget its rows.
 
     Shared with ``DELETE /workflows/{key}``, so the card route and the file
@@ -503,8 +473,8 @@ def trash_user_workflow(hub, workflow_name: str) -> str:
     Args:
         hub: The hub, or ``None``. The file goes either way; the rows it
             leaves behind are forgotten only if there is somewhere to forget
-            them. Takes the hub rather than the whole server so it matches
-            :func:`store_workflow_copy` above and needs no server to test.
+            them. Takes the hub rather than the whole server so it needs no
+            server to test.
         workflow_name: The stored file to delete.
 
     Returns:
@@ -523,7 +493,7 @@ def trash_user_workflow(hub, workflow_name: str) -> str:
     stored_name = _on_disk_name(path)
     try:
         with workflow_inbox.INBOX_LOCK:
-            _trash_stored_workflow(path, normalized)
+            _trash_stored_workflow(path, normalized, sweep)
             # Inside the lock, unlike the forgets below: a pull checks for a
             # dismissal and stores under this same lock, so a delete landing
             # mid-pull is seen by the very next entry instead of being undone.
@@ -596,15 +566,29 @@ def _dismiss_from_pulls(hub, stored_name: str, normalized: str) -> None:
         )
 
 
-def _find_stored_copy(wanted: str) -> tuple[str, str] | None:
-    """``(source, name)`` of a stored workflow whose canonical content is *wanted*.
+def _builtin_path(name: str) -> str | None:
+    """The built-in workflow file called *name*, or ``None``. Never a user file."""
+    normalized = _normalize_workflow_name(name)
+    for source, folder in _workflow_dirs():
+        if source != "built-in" or not normalized:
+            continue
+        try:
+            path = resolve_path_within(folder, normalized)
+        except ValueError:
+            return None
+        if os.path.isfile(path):
+            return path
+    return None
 
-    ``source`` is the folder it was found in (``user`` or ``built-in``), so a
-    caller can tell a workflow PixlStash ships from a user file of the same
-    name without guessing from the name.
+
+def _builtin_copy(wanted: str) -> str | None:
+    """The built-in workflow file whose canonical content is *wanted*, or None.
+
+    Shipped data, not the owner's: a pulled copy of a workflow PixlStash
+    ships is reported as shipped rather than stored as a manual workflow.
     """
     for source, folder in _workflow_dirs():
-        if not os.path.isdir(folder):
+        if source != "built-in" or not os.path.isdir(folder):
             continue
         for entry in sorted(os.listdir(folder)):
             if not entry.lower().endswith(".json"):
@@ -616,116 +600,10 @@ def _find_stored_copy(wanted: str) -> tuple[str, str] | None:
                     isinstance(stored, dict)
                     and workflow_bindings.canonical(stored) == wanted
                 ):
-                    return source, entry
+                    return entry
             except (OSError, ValueError, RecursionError) as exc:
-                logger.warning(
-                    "Could not read %s workflow %s to compare an import: %s",
-                    source,
-                    path,
-                    exc,
-                )
+                logger.warning("Could not read built-in workflow %s: %s", path, exc)
     return None
-
-
-def _file_in_hub(hub, name: str, workflow: dict) -> tuple[str | None, str | None]:
-    """File the workflow in the library: ``(topology hash, card key)``.
-
-    Content-addressed and idempotent, so a workflow the library already has
-    from its pictures lands on that same row. Not being filed does not stop
-    the import: the file is what runs.
-
-    *name* is the name the file is stored under, and it is what puts the FILE on
-    the card its pictures already made (``hub/workflow_cards.py``). A UI-format
-    file has only a topology, so it lands on a card with no assets.
-    """
-    if hub is None:
-        return None, None
-    try:
-        graph = api_graph(workflow)
-        if graph is None:
-            # A converted editor file files its API graph (#1530): the card
-            # gets model slots and a structural hash instead of a topology.
-            try:
-                path = resolve_path_within(workflow_user_dir(), name)
-            except ValueError:
-                path = None
-            if path is not None:
-                graph = converted_graph(path, workflow)
-        if graph is None:
-            topology_hash = record_ui_graph(hub, workflow)
-            structural_hash = None
-        else:
-            keys = record_api_graph(hub, graph)
-            topology_hash, structural_hash = keys.topology_hash, keys.structural_hash
-        return topology_hash, _card_the_file(hub, name, topology_hash, structural_hash)
-    except WorkflowGraphError as exc:
-        logger.info(
-            "Imported workflow is not filed in the library, its graph "
-            "cannot be keyed: %s",
-            exc,
-        )
-    except sqlite3.Error as exc:
-        logger.error(
-            "Could not file an imported workflow in the library; it is "
-            "stored and runs, but the Workflows view will not list it: %s",
-            exc,
-        )
-    except Exception as exc:
-        # The graph reducers index into whatever the file holds, and a
-        # malformed file (a non-dict `definitions`, say) raises something
-        # other than WorkflowGraphError. Filing is secondary to storing, so
-        # it is logged with its type and the import still succeeds.
-        logger.error(
-            "Imported workflow is not filed in the library, reading its "
-            "graph failed with %s: %s",
-            type(exc).__name__,
-            exc,
-        )
-    return None, None
-
-
-def _card_the_file(
-    hub, name: str, topology_hash: str, structural_hash: str | None
-) -> str | None:
-    """Put the stored file on its card; return that card's key, or None.
-
-    Its own handler rather than the one around the filing above: a card is the
-    optional half, and letting it raise would make the import answer
-    ``topology_hash: null`` for a graph that *was* filed - the essential half
-    retracted by the secondary one. The backfill finder picks the card up.
-
-    The key is returned so the import can name the card in its
-    ``CHANGED_WORKFLOWS`` event. ``None`` means the card was not written, and
-    the event then says only "look again", which is all it ever promises.
-    """
-    try:
-        return workflow_cards.record_file(hub, name, topology_hash, structural_hash)
-    except Exception as exc:
-        logger.warning(
-            "Imported workflow %s is filed but not on a card yet, which failed "
-            "with %s: %s",
-            name,
-            type(exc).__name__,
-            exc,
-        )
-    return None
-
-
-def _workflow_of(hub, topology_hash: str | None) -> str | None:
-    """The workflow a filed topology is in, or ``None``; never raises.
-
-    ``None`` too for a topology the core pass has not reached (an editor file
-    filed as a topology only), which is in no workflow yet.
-    """
-    if hub is None or not topology_hash:
-        return None
-    try:
-        return workflow_of_topology(hub, topology_hash)
-    except sqlite3.Error as exc:
-        logger.warning(
-            "Could not read the workflow of topology %s: %s", topology_hash, exc
-        )
-        return None
 
 
 # ponytail: one request submits its runs one after another, uploads included;
@@ -1257,8 +1135,12 @@ def _picture_workflow_id(server, pic_id: int) -> str | None:
         pics = server.vault.db.run_immediate_read_task(
             Picture.find,
             id=pic_id,
-            select_fields=["id", "workflow_structural_hash"],
+            select_fields=["id", "workflow_structural_hash", "run_workflow_id"],
         )
+        made_by = getattr(pics[0], "run_workflow_id", None) if pics else None
+        if made_by and made_by in manual_workflow_ids(hub):
+            # Filed on the manual workflow that made it, while that lives.
+            return made_by
         structural_hash = (
             getattr(pics[0], "workflow_structural_hash", None) if pics else None
         )
@@ -1690,24 +1572,23 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str
+    # What the new manual workflow is called.
     name: str
-    workflow_dir: str
-    # True when the workflow was already stored, under ``name``.
+    # Always False: an import is a new workflow, identical copies allowed.
     matched: bool = False
-    # The Workflows view row it is filed under; None when it could not be.
-    topology_hash: Optional[str] = None
-    # The workflow it is in; None when it could not be filed or is in none.
+    # The manual workflow it is now.
     workflow_id: Optional[str] = None
 
 
 class ComfyUIWorkflowConvertResponse(BaseModel):
-    """An editor file with the API graph ComfyUI converted it into (#1530)."""
+    """An editor workflow with the API graph ComfyUI converted it into (#1530)."""
 
-    # The stored editor file the graph now sits beside.
+    # The manual workflow that holds the conversion now.
     name: str
-    # True when that file was already stored; False when this stored it.
+    # True when a manual workflow already held that editor document (every
+    # such copy took the conversion); False when this stored it.
     matched: bool
-    # The workflow the file is in now; None when it could not be filed.
+    # That manual workflow (the first, where several matched).
     workflow_id: Optional[str] = None
 
 
@@ -2310,48 +2191,76 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/comfyui/workflows/{workflow_name}/card",
-        summary="Put a stored workflow file in its workflow",
+        summary="Make a built-in workflow a manual workflow",
         description=(
-            "Files a stored workflow file, user or built-in, the way an import "
-            "files it, and returns the id of the workflow it is in so the Run "
-            "popup can open on it. A built-in is filed only when something "
-            "asks: Edit with ComfyUI asks for the built-in image edit workflow. "
-            "Idempotent: a file already filed answers its existing workflow."
+            "Stores a workflow PixlStash ships as a manual workflow "
+            "and returns its id so the Run popup can open on it. A built-in "
+            "becomes one only when something asks: Edit with ComfyUI asks for "
+            "the built-in image edit workflow. Idempotent: a file already made "
+            "a workflow answers that workflow, while it lives. A user file "
+            "is not a built-in (404): data step 7 already made it a workflow."
         ),
         response_model=ComfyUIWorkflowCardResponse,
         responses={
             404: {"description": "No stored workflow has this name."},
-            409: {"description": "The file's graph could not be put in a workflow."},
+            409: {"description": "The file is not a workflow PixlStash can store."},
+            503: {"description": "No hub is attached."},
         },
     )
     def card_for_comfyui_workflow(request: Request, workflow_name: str):
-        # Sync on purpose: filing reads the file and writes the hub. Under the
-        # inbox lock, as the import is, so a delete cannot trash the file
-        # between the read and the filing and leave a card naming it.
-        with workflow_inbox.INBOX_LOCK:
-            name, _path, document = _load_stored_workflow(workflow_name)
-            hub = getattr(server, "hub", None)
-            topology_hash, card_key = _file_in_hub(hub, name, document)
-            workflow_id = _workflow_of(hub, topology_hash) if card_key else None
-        if not workflow_id:
-            # `_file_in_hub` has logged a filing failure; a topology with no
-            # core (an editor file) is in no workflow to open.
-            logger.warning(
-                "Stored workflow %s is in no workflow (card %s, topology %s).",
-                name,
-                card_key,
-                topology_hash,
-            )
+        hub = getattr(server, "hub", None)
+        if hub is None:
             raise HTTPException(
-                status_code=409,
-                detail=f"PixlStash could not put the workflow {name} in a workflow.",
+                status_code=503, detail="The workflow library is not open."
             )
-        announce_changed_workflows(
-            server,
-            [workflow_id],
-            "imported",
-            origin_client_id=getattr(request.state, "origin_client_id", None),
-        )
+        name = _normalize_workflow_name(workflow_name)
+        path = _builtin_path(name)
+        if path is None:
+            # Built-ins only: a user file is a manual workflow already (data
+            # step 7), and one its owner deleted must not come back as one.
+            raise HTTPException(
+                status_code=404, detail="No built-in workflow has this name."
+            )
+        with workflow_inbox.INBOX_LOCK:
+            workflow_id = workflow_origin.stored_at(
+                hub, workflow_origin.BUILTIN_ORIGIN, name
+            )
+            if workflow_id is None:
+                try:
+                    # The file as stored, not its runnable reading: the
+                    # conversion rides along as the row's API document.
+                    stored = _load_workflow_json(path)
+                    converted = converted_graph(path, stored)
+                    # Its origin row in the same transaction, with the content
+                    # hash, so the inbox and a pull dedupe against it too.
+                    workflow_id = store_manual_workflow(
+                        hub,
+                        _stem(name),
+                        stored,
+                        "builtin",
+                        api_document=converted,
+                        record=(
+                            workflow_origin.BUILTIN_ORIGIN,
+                            name,
+                            workflow_inbox.content_hash(stored),
+                        ),
+                    )
+                except (NotAWorkflowError, RecursionError, ValueError) as exc:
+                    logger.warning(
+                        "Stored workflow %s cannot be a manual workflow: %s",
+                        name,
+                        exc,
+                    )
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"PixlStash could not store the workflow {name}.",
+                    ) from exc
+                announce_changed_workflows(
+                    server,
+                    [workflow_id],
+                    "imported",
+                    origin_client_id=getattr(request.state, "origin_client_id", None),
+                )
         return {"name": name, "workflow_id": workflow_id}
 
     @router.post(
@@ -2372,18 +2281,15 @@ def create_router(server) -> APIRouter:
         include_in_schema=False,
         summary="Import ComfyUI workflow",
         description=(
-            "Stores a workflow JSON, UI or API format, unchanged in the user "
-            "workflow directory (a file still carrying placeholder tokens is "
-            "stored with them migrated to bindings). A copy of a workflow already stored is matched "
-            "to it rather than stored twice. A name taken by a different "
-            "workflow is refused unless overwrite or keep_both is set. A "
-            "document not shaped like a ComfyUI workflow is refused with 400."
+            "Stores a workflow JSON, UI or API format, as a new manual "
+            "workflow named `name` (a document still carrying placeholder "
+            "tokens is stored with them migrated to bindings). Always a new "
+            "workflow: identical copies are allowed, and no file is written. "
+            "A document not shaped like a ComfyUI workflow is refused with 400."
         ),
         response_model=ComfyUIWorkflowImportResponse,
     )
     def import_comfyui_workflow(request: Request, payload: dict = Body(...)):
-        # Sync on purpose: finding a stored copy reads every workflow file, so
-        # FastAPI runs this on its thread pool rather than the event loop.
         name = _normalize_workflow_name(payload.get("name"))
         if not name:
             raise HTTPException(status_code=400, detail="name is required")
@@ -2392,33 +2298,16 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="workflow must be a JSON object"
             )
-        try:
-            resolve_path_within(workflow_user_dir(), name)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid workflow name")
-        try:
-            with workflow_inbox.INBOX_LOCK:
-                result = _store_workflow(
-                    getattr(server, "hub", None),
-                    name,
-                    workflow,
-                    overwrite=bool(payload.get("overwrite")),
-                    keep_both=bool(payload.get("keep_both")),
-                )
-            # Handed over by the owner, so theirs even if a pull wrote it
-            # first: never folded into the hidden one-offs (#1440).
-            claim_stored_workflow(getattr(server, "hub", None), result["name"])
-            # An imported file lands on a card, so the Workflows view has a
-            # new (or newly runnable) one to draw. A "look again" signal: the
-            # card's counts and covers are computed per request, so nothing
-            # about it is carried here.
-            announce_changed_workflows(
-                server,
-                [key for key in (result.get("workflow_id"),) if key],
-                "imported",
-                origin_client_id=getattr(request.state, "origin_client_id", None),
+        hub = getattr(server, "hub", None)
+        if hub is None:
+            raise HTTPException(
+                status_code=503, detail="The workflow library is not open."
             )
-            return result
+        try:
+            workflow_id = store_manual_workflow(hub, _stem(name), workflow, "import")
+        except WorkflowFileTooLarge as exc:
+            logger.warning("Refused importing %s: %s", name, exc)
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except NotAWorkflowError as exc:
             logger.warning("Refused importing %s: %s", name, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2427,10 +2316,18 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="Workflow JSON nests too deeply"
             ) from exc
-        except FileExistsError as exc:
-            raise HTTPException(
-                status_code=409, detail="Workflow already exists"
-            ) from exc
+        announce_changed_workflows(
+            server,
+            [workflow_id],
+            "imported",
+            origin_client_id=getattr(request.state, "origin_client_id", None),
+        )
+        return {
+            "status": "success",
+            "name": _stem(name),
+            "matched": False,
+            "workflow_id": workflow_id,
+        }
 
     @router.post(
         "/comfyui/workflows/convert",
@@ -2438,16 +2335,17 @@ def create_router(server) -> APIRouter:
         description=(
             "Takes what ComfyUI's own `graphToPrompt` returns for the workflow "
             "open on its canvas - `workflow` (editor format) and `output` (API "
-            "format) - and stores the API graph beside the matching stored "
-            "editor file, never over it. A workflow not stored yet is stored "
-            "first, as an import would. The file's card then runs and takes "
-            "parameters from the API graph. Sent by the ComfyUI-PixlStash "
-            "node's *Convert for PixlStash* command, one workflow at a time."
+            "format) - and stores the API graph on every manual workflow whose "
+            "document is that editor workflow. A workflow not stored yet is "
+            "stored first, as an import would. Such a workflow then runs and "
+            "takes parameters from the API graph. Sent by the "
+            "ComfyUI-PixlStash node's *Convert for PixlStash* command, one "
+            "workflow at a time."
         ),
         response_model=ComfyUIWorkflowConvertResponse,
         responses={
             400: {"description": "Not an editor workflow and its API graph."},
-            409: {"description": "A workflow PixlStash ships; nothing to convert."},
+            503: {"description": "No hub is attached."},
         },
     )
     def convert_comfyui_workflow(request: Request, payload: dict = Body(...)):
@@ -2458,71 +2356,56 @@ def create_router(server) -> APIRouter:
                 status_code=400, detail="workflow must be an editor-format workflow"
             )
         # The envelope an embedded prompt chunk comes in is unwrapped, so the
-        # sidecar's own ``prompt`` never wraps a second one.
+        # stored graph never wraps a second one.
         if isinstance(output, dict) and isinstance(output.get("prompt"), dict):
             output = output["prompt"]
         try:
             check_comfy_workflow(output)
+            check_comfy_workflow(workflow)
         except NotAWorkflowError as exc:
-            raise HTTPException(status_code=400, detail=f"output: {exc}") from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if api_graph(output) is None:
             raise HTTPException(
                 status_code=400, detail="output must be an API-format graph"
             )
-        name = _normalize_workflow_name(payload.get("name")) or "workflow.json"
-        try:
-            resolve_path_within(workflow_user_dir(), name)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid workflow name")
         hub = getattr(server, "hub", None)
+        if hub is None:
+            raise HTTPException(
+                status_code=503, detail="The workflow library is not open."
+            )
+        name = _stem(payload.get("name") or "workflow")
         try:
-            with workflow_inbox.INBOX_LOCK:
-                result = _store_workflow(hub, name, workflow, keep_both=True)
-                if result.get("source") == "built-in":
-                    raise HTTPException(
-                        status_code=409,
-                        detail="PixlStash ships this workflow; it has nothing to convert.",
-                    )
-                stored_name = result["name"]
-                path = resolve_path_within(workflow_user_dir(), stored_name)
-                # Digested from the file as stored, which is the placeholder-
-                # migrated document, so the check on read compares like with
-                # like.
-                store_converted_graph(path, _load_workflow_json(path), output)
-                # Filed again now the graph is there: the store above filed
-                # the editor file as a topology only.
-                topology_hash, card_key = _file_in_hub(
-                    hub, stored_name, _load_workflow_json(path)
+            migrated, _ = workflow_bindings.migrate_placeholders(workflow)
+            _within_the_cap(output)
+            matched = manual_documents_holding(
+                hub, workflow_bindings.canonical(migrated)
+            )
+            if matched:
+                set_manual_api_document(hub, matched, output)
+                workflow_id = matched[0]
+                # Deleted since it matched: keep the derived name.
+                found = find_workflow(hub, workflow_id)
+                name = (found.name if found else None) or name
+            else:
+                workflow_id = store_manual_workflow(
+                    hub, name, workflow, "import", api_document=output
                 )
-                workflow_id = _workflow_of(hub, topology_hash) if card_key else None
-        except NotAWorkflowError as exc:
-            logger.warning("Refused converting %s: %s", name, exc)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except WorkflowFileTooLarge as exc:
+            logger.warning("Refused a conversion of %s: %s", name, exc)
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except RecursionError as exc:
             logger.warning("Refused a conversion that nests too deeply: %s", exc)
             raise HTTPException(
                 status_code=400, detail="Workflow JSON nests too deeply"
             ) from exc
-        except OSError as exc:
-            logger.error("Could not store the converted graph of %s: %s", name, exc)
-            raise HTTPException(
-                status_code=500, detail="Could not store the converted graph"
-            ) from exc
-        # Handed over by the owner whether stored or matched, as an import is:
-        # a pulled file converted here is no longer a hidden one-off.
-        claim_stored_workflow(hub, stored_name)
-        logger.info("Stored ComfyUI's conversion of %s.", stored_name)
+        logger.info("Stored ComfyUI's conversion of %s on %s.", name, workflow_id)
         announce_changed_workflows(
             server,
-            sorted({key for key in (result.get("workflow_id"), workflow_id) if key}),
+            matched or [workflow_id],
             "imported",
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
-        return {
-            "name": stored_name,
-            "matched": bool(result.get("matched")),
-            "workflow_id": workflow_id,
-        }
+        return {"name": name, "matched": bool(matched), "workflow_id": workflow_id}
 
     @router.post(
         "/comfyui/workflows/pull",

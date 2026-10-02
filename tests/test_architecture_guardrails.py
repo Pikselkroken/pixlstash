@@ -1616,6 +1616,11 @@ _PICTURE_METADATA_FIELDS = {
     "pixel_sha",
     "project_id",
     "reference_folder_id",
+    # The manual workflow a run of which made the picture (`manual:<uuid>`):
+    # an opaque hub workflow id, the same class as the two workflow hashes
+    # below that already ride here. Every route that resolves one is
+    # OWNER_ONLY, so a scoped token learns an id it cannot open.
+    "run_workflow_id",
     "score",
     "size_bin_index",
     "size_bytes",

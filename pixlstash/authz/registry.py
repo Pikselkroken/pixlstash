@@ -1924,6 +1924,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Export a saved recipe, prompt included; owner only",
     ),
+    # Builds the recipe's graph the way a run does, out of the whole library,
+    # and stores it as a new manual workflow: a hub write of the owner's own.
+    ("POST", "/api/v1/recipes/{recipe_id}/extract-workflow"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "Store a saved recipe's run graph as a manual workflow; POST "
+            "blocked for READ tokens; owner only"
+        ),
+    ),
     # ── test_hooks.py (mounted ONLY when enable_test_hooks=True) ─────────────
     # Conditionally mounted, but ALWAYS declared: the gate resolves declarations
     # against the routes actually mounted at startup, so an undeclared

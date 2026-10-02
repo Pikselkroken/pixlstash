@@ -1105,6 +1105,25 @@ def _set_source_picture_id_on_pictures(
     server.vault.db.run_task(update)
 
 
+def _set_run_workflow_id(server, workflow_id: str, picture_ids: list[int]) -> None:
+    """File the pictures a manual workflow's run made on that workflow.
+
+    Only the ones this run imported or its saver reported: a duplicate was
+    already in the library, made by something else, and keeps its filing.
+    """
+
+    def update(session):
+        for pid in picture_ids:
+            pic = session.get(Picture, pid)
+            # Written once: a saver can report a picture filed by another run.
+            if pic is not None and pic.run_workflow_id is None:
+                pic.run_workflow_id = workflow_id
+                session.add(pic)
+        session.commit()
+
+    server.vault.db.run_task(update)
+
+
 def _process_comfyui_outputs(
     server,
     base_url: str,
@@ -1115,8 +1134,15 @@ def _process_comfyui_outputs(
     view_context: dict | None = None,
     origin_generation: int | None = None,
     origin_library_uuid: str | None = None,
+    run_workflow_id: str | None = None,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
+
+    *run_workflow_id* is the manual workflow that ran, whose pictures these
+    are (``Picture.run_workflow_id``). ponytail: an output the watch folder
+    imports before this poller sees it is not marked, so it counts on the
+    automatic workflow; tag the save node's ``filename_prefix`` as
+    ``_tag_for_stack`` does if that ever matters.
 
     This is the documented single-event import path (see
     ``docs/backend_architecture.md`` §15). It is a deliberate exception to the
@@ -1241,6 +1267,8 @@ def _process_comfyui_outputs(
             # vault would adopt ids belonging to unrelated pictures; the fix is
             # for the node to report its target URL, not a heuristic here.
             new_ids = new_ids + [pid for pid in pixlstash_ids if pid not in new_ids]
+        if run_workflow_id and new_ids:
+            _set_run_workflow_id(pinned_server, run_workflow_id, new_ids)
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(pinned_server, stack_id, new_ids)
         if new_ids:

@@ -23,9 +23,11 @@ from sqlalchemy import text
 from pixlstash.database import DBPriority
 from pixlstash.hub.workflow_card_reads import (
     card_index,
+    workflow_id_successors,
     workflow_index,
     workflow_of_topology,
 )
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 from pixlstash.hub.workflow_group_convert import (
     card_document,
     label_map,
@@ -67,13 +69,20 @@ class SavedRecipeConvertTask(BaseTask):
 
     def _run_task(self):
         hub = self._vault.hub
+        # A workflow retired for another (data step 7: a file-only card's
+        # `auto:<topology>` for the manual workflow made of its file) takes a
+        # recipe naming it along, so nothing saved changes where it lists.
+        successors = workflow_id_successors(hub)
         placeholders = ",".join(str(int(i)) for i in self._recipe_ids)
         rows = self._vault.db.run_immediate_read_task(
             lambda session: session.execute(
                 text(
-                    "SELECT id, workflow_key, overrides, models FROM saved_recipe "
-                    f"WHERE workflow_id IS NULL AND id IN ({placeholders})"
-                )
+                    "SELECT id, workflow_key, overrides, models, workflow_id "
+                    "FROM saved_recipe WHERE (workflow_id IS NULL OR workflow_id "
+                    "IN (SELECT value FROM json_each(:retired))) "
+                    f"AND id IN ({placeholders})"
+                ),
+                {"retired": json.dumps(sorted(successors))},
             ).all()
         )
         cards = card_index(hub)
@@ -82,7 +91,7 @@ class SavedRecipeConvertTask(BaseTask):
             w.workflow_id: w.base_topology for w in workflow_index(hub, cards=cards)
         }
         updates, deferred = [], []
-        for recipe_id, workflow_key, raw_overrides, raw_models in rows:
+        for recipe_id, workflow_key, raw_overrides, raw_models, was in rows:
             successor = hub.fetchone(
                 "SELECT workflow_id FROM workflow_key_successor WHERE workflow_key = ?",
                 (workflow_key,),
@@ -91,12 +100,15 @@ class SavedRecipeConvertTask(BaseTask):
             # A card saved on after the cut-over has no successor row: it is
             # in the workflow its own topology is in.
             workflow_id = (
-                successor["workflow_id"]
+                was
+                if was is not None
+                else successor["workflow_id"]
                 if successor is not None
                 else workflow_of_topology(hub, card.topology_hash)
                 if card is not None
                 else None
             )
+            workflow_id = successors.get(workflow_id, workflow_id)
             if workflow_id is None:
                 logger.warning(
                     "Saved recipe %s names card %s, which became no workflow; it "
@@ -137,6 +149,12 @@ class SavedRecipeConvertTask(BaseTask):
             updates.append(
                 {
                     "id": recipe_id,
+                    "was": was,
+                    # A manual workflow is its own card: the recipe runs its
+                    # document (`routes/workflows._plan`'s own-card branch).
+                    "workflow_key": workflow_id
+                    if workflow_id.startswith(MANUAL_PREFIX)
+                    else workflow_key,
                     "workflow_id": workflow_id,
                     "overrides": json.dumps(converted)
                     if overrides is not None
@@ -161,8 +179,9 @@ class SavedRecipeConvertTask(BaseTask):
                 session.execute(
                     text(
                         "UPDATE saved_recipe SET workflow_id = :workflow_id, "
-                        "overrides = :overrides, models = :models "
-                        "WHERE id = :id AND workflow_id IS NULL"
+                        "workflow_key = :workflow_key, overrides = :overrides, "
+                        "models = :models WHERE id = :id AND "
+                        "(workflow_id IS NULL OR workflow_id = :was)"
                     ),
                     update,
                 )

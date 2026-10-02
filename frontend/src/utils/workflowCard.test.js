@@ -278,6 +278,49 @@ describe("checkpointModel", () => {
   });
 });
 
+// ── Manual workflows ─────────────────────────────────────────────────────
+describe("a manual workflow's facts", () => {
+  const MANUAL = {
+    type: "txt2img",
+    imported: true,
+    manual: true,
+    from_name: "Portrait pass",
+  };
+
+  it("leads with the Manual badge and says what it was made from", () => {
+    const chips = factChips(MANUAL);
+    expect(chips.map((chip) => chip.label)).toEqual([
+      "Manual",
+      "txt2img",
+      "from Portrait pass",
+    ]);
+    // Only "Manual" is the badge; the rest are plain facts.
+    expect(chips.map((chip) => Boolean(chip.badge))).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    // Every manual workflow is imported, so saying both is one fact twice.
+    expect(chips.map((chip) => chip.label)).not.toContain("imported");
+    expect(cardAccessibleName(MANUAL)).toContain(
+      "facts: Manual, txt2img, from Portrait pass",
+    );
+  });
+
+  it("names no source for an import or a pull", () => {
+    const labels = factChips({ ...MANUAL, from_name: null }).map(
+      (chip) => chip.label,
+    );
+    expect(labels).toEqual(["Manual", "txt2img"]);
+  });
+
+  it("marks an automatic workflow as nothing of the sort", () => {
+    const chips = factChips({ type: "txt2img", manual: false, from_name: "x" });
+    expect(chips.map((chip) => chip.label)).toEqual(["txt2img"]);
+    expect(chips.some((chip) => chip.badge)).toBe(false);
+  });
+});
+
 // ── One fact, one voice ──────────────────────────────────────────────────
 describe("the type chip", () => {
   it("reads the served label, so it matches a generated name", () => {

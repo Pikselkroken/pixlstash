@@ -8,8 +8,8 @@
        that REPLACE the picture grid now dock the same pill, so a reader who
        learned the chord on one has learned it on the other.
 
-       The last verb is the only one that touches a file on disk, which is why
-       it is the only one in the error colour. -->
+       The last verb is the only one that destroys anything, which is why it
+       is the only one in the error colour. -->
   <div
     v-if="store.selectedKeys.length"
     class="selbar"
@@ -113,8 +113,8 @@
 
     <span class="selbar-sep"></span>
 
-    <!-- The one verb that touches a file on disk, so the one verb in the error
-         colour, and always in the same last place before `⋯`: a destructive
+    <!-- The one destructive verb, so the one verb in the error colour, and
+         always in the same last place before `⋯`: a destructive
          button that moves with the selection is how a reader presses the wrong
          one. -->
     <AppBarButton
@@ -122,7 +122,7 @@
       danger
       icon="delete-outline"
       data-verb="delete"
-      aria-label="Delete the workflow file"
+      aria-label="Delete workflow"
       :disabled="!deletable || busy"
       :loading="running('delete')"
       :tooltip="deleteTitle"
@@ -414,37 +414,30 @@ const hideTitle = computed(() => {
 });
 
 /**
- * Only a card that came from a FILE on this machine has one to delete.
+ * Only a MANUAL workflow can be deleted: it is a record of its own.
  *
- * All of them, not the subset that can: the route is the one verb here that
- * touches bytes, and a press that silently deleted four of six files would be
- * a partial destruction nobody asked for.
- *
- * `imported` is "the hub holds a file ROW for this card"
- * (`workflow_card_reads.py`), which is the fact the route's 409 branch tests,
- * so the button is not offered where it could only come back refused for
- * THAT reason. It is not a promise the delete will succeed: `trash_user_workflow`
- * resolves inside the user's workflow folder and 404s when the file is no
- * longer on disk, which the row survives — somebody deleting it outside
- * PixlStash leaves an `imported` card whose delete refuses. That is why the
- * caller counts refusals and names them rather than assuming the gate was
- * enough.
+ * `manual` is exactly the fact `DELETE /workflows/{id}` tests: an automatic
+ * workflow is what the library's pictures group into, not a record, and the
+ * route 409s on one ("hide it instead"). All of them, not the subset that
+ * can: a press that deleted four of six would be a partial destruction nobody
+ * asked for. The caller still counts refusals, because the gate is not a
+ * promise the write succeeds.
  */
 const deletable = computed(
-  () => cards.value.length > 0 && cards.value.every((card) => card.imported),
+  () => cards.value.length > 0 && cards.value.every((card) => card.manual),
 );
 
 const deleteTitle = computed(() => {
   if (!deletable.value) {
     return (
-      "Only a workflow that came from a file on this machine has a file to " +
-      "delete. One the library knows from its pictures is hidden instead"
+      "Only a manual workflow can be deleted. One PixlStash groups from " +
+      "your pictures is hidden instead"
     );
   }
   const n = store.selectedKeys.length;
   return n === 1
-    ? "Send this workflow's file to the trash. The card and its pictures stay"
-    : `Send these ${n.toLocaleString()} workflow files to the trash. The cards and their pictures stay`;
+    ? "Delete this workflow. Its pictures stay, on their automatic workflow"
+    : `Delete these ${n.toLocaleString()} workflows. Their pictures stay, on their automatic workflows`;
 });
 
 const exportTitle = computed(() =>
@@ -454,9 +447,7 @@ const exportTitle = computed(() =>
 );
 
 const duplicateTitle = computed(() =>
-  single.value
-    ? "Write a copy into your workflow folder, to change in ComfyUI"
-    : oneOnly("copy"),
+  single.value ? "Make a manual copy of this workflow" : oneOnly("copy"),
 );
 
 const cloneTitle = computed(() =>
@@ -501,8 +492,8 @@ const verbHandlers = computed(() => ({
  * not in the view: every tooltip here is a refusal sentence, and a second copy
  * of them would drift.
  *
- * The order is the design's: what running the card does, then what naming does, then the three that make a file, then the one
- * that destroys one.
+ * The order is the design's: what running the card does, then what naming
+ * does, then the three that make a copy, then the one that destroys.
  */
 const VerbMenu = (props) => {
   /**
@@ -610,7 +601,7 @@ const VerbMenu = (props) => {
         },
       ),
       sep(),
-      // The three that write a file rather than changing a card. All single-only:
+      // The three that make something rather than changing a card. All single-only:
       // an export is one save dialog and a duplicate or a clone is one new card,
       // and doing any of them forty times is a queue feature wearing a menu
       // row's clothes.
@@ -634,7 +625,7 @@ const VerbMenu = (props) => {
         title: props.cloneTitle,
       }),
       sep(),
-      item("mdi-delete-outline", "Delete file…", {
+      item("mdi-delete-outline", "Delete…", {
         verb: "delete",
         on: () => props.onVerb("delete"),
         disabled: !props.deletable,

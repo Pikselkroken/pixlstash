@@ -45,7 +45,7 @@ const listWorkflowCards = vi.fn();
 const getWorkflowCard = vi.fn();
 const patchWorkflowCard = vi.fn();
 const duplicateWorkflow = vi.fn();
-const deleteWorkflowFile = vi.fn();
+const deleteWorkflow = vi.fn();
 const exportWorkflow = vi.fn();
 const readModelSwap = vi.fn();
 const cloneWorkflowWithModels = vi.fn();
@@ -63,7 +63,7 @@ vi.mock("../../api/workflows", () => ({
   // imports and this factory omits is `undefined` at the call - which fails
   // as "not a function" inside a handler rather than as a missing mock.
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
-  deleteWorkflowFile: (...args) => deleteWorkflowFile(...args),
+  deleteWorkflow: (...args) => deleteWorkflow(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
   readModelSwap: (...args) => readModelSwap(...args),
   cloneWorkflowWithModels: (...args) => cloneWorkflowWithModels(...args),
@@ -80,10 +80,24 @@ const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
   listImportFolders: (...args) => listImportFolders(...args),
 }));
+const listUnfiledRecipes = vi.fn();
+// The Unfiled recipes section is the Recipes tab in its `unfiled` mode, so it
+// reads through this module the moment the view mounts.
+vi.mock("../../api/recipes", () => ({
+  listUnfiledRecipes: (...args) => listUnfiledRecipes(...args),
+  listSavedRecipes: vi.fn(async () => []),
+  listUsedLooks: vi.fn(async () => []),
+  deleteSavedRecipe: vi.fn(),
+  editSavedRecipe: vi.fn(),
+  reorderSavedRecipes: vi.fn(),
+  extractRecipeWorkflow: vi.fn(),
+  exportSavedRecipe: vi.fn(),
+}));
 const startWorkflowPull = vi.fn();
 const getWorkflowPull = vi.fn();
+const importWorkflow = vi.fn();
 vi.mock("../../api/comfyui", () => ({
-  importWorkflow: vi.fn(),
+  importWorkflow: (...args) => importWorkflow(...args),
   startWorkflowPull: (...args) => startWorkflowPull(...args),
   getWorkflowPull: (...args) => getWorkflowPull(...args),
 }));
@@ -189,10 +203,12 @@ beforeEach(() => {
         observers.push(callback);
       }
       observe() {}
+      unobserve() {}
       disconnect() {}
     },
   );
   listImportFolders.mockResolvedValue({ folders: [] });
+  listUnfiledRecipes.mockResolvedValue([]);
   patchWorkflowCard.mockReset();
   patchWorkflowCard.mockResolvedValue({ card: card("b") });
   // A FRESH array per call, as a real response is: the store assigns it to
@@ -1018,23 +1034,43 @@ describe("the verbs the bar fires", () => {
   it("Delete asks first, and deletes nothing when the answer is no", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
-    store.cards = [card("a", { imported: true })];
+    store.cards = [card("a", { imported: true, manual: true })];
     store.selectRange(["a"]);
 
     const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
     await bar(wrapper).vm.$emit("delete");
     await flush();
     expect(ask).toHaveBeenCalled();
-    expect(deleteWorkflowFile).not.toHaveBeenCalled();
+    expect(deleteWorkflow).not.toHaveBeenCalled();
 
     // And with a yes it goes through, so the refusal above is the ANSWER
     // being no rather than the verb being unwired.
     ask.mockReturnValue(true);
-    deleteWorkflowFile.mockResolvedValue({ deleted: "a.json" });
+    deleteWorkflow.mockResolvedValue({ deleted: "a" });
     await bar(wrapper).vm.$emit("delete");
     await flush();
-    expect(deleteWorkflowFile).toHaveBeenCalledWith("a");
+    expect(deleteWorkflow).toHaveBeenCalledWith("a");
+    // It says the pictures stay, where they go, and what becomes of recipes.
+    const asked = ask.mock.calls.at(-1)[0];
+    expect(asked).toContain("pictures stay");
+    expect(asked).toContain("automatic workflow");
+    expect(asked).toContain("Unfiled recipes");
+    expect(wrapper.find('[role="status"]').text()).toBe("Workflow deleted");
     ask.mockRestore();
+  });
+
+  it("Duplicate selects the copy and puts the cursor on it", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("a");
+    duplicateWorkflow.mockResolvedValue({ name: "a (copy)", workflow_id: "e" });
+
+    await bar(wrapper).vm.$emit("duplicate");
+    await flush();
+    await flush();
+    expect(duplicateWorkflow).toHaveBeenCalledWith("a");
+    expect(store.selectedKeys).toEqual(["e"]);
+    expect(cursorKey(wrapper)).toBe("e");
   });
 
   it("Rename with an empty field clears the stored name rather than setting one", async () => {
@@ -1615,5 +1651,52 @@ describe("pulling from ComfyUI (#1440)", () => {
       .find((b) => b.text() === "Try again");
     await retry.trigger("click");
     expect(startWorkflowPull).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Add… and Unfiled recipes", () => {
+  it("imports each file as a new workflow and opens the last one", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow.mockResolvedValue({
+      status: "imported",
+      name: "flow",
+      matched: false,
+      workflow_id: "d",
+    });
+    const input = wrapper.find(".wfv-file-input");
+    const file = new File(['{"nodes": []}'], "flow.json", {
+      type: "application/json",
+    });
+    Object.defineProperty(input.element, "files", {
+      value: [file],
+      configurable: true,
+    });
+    await input.trigger("change");
+    await flush();
+    await flush();
+
+    // Only the name and the file: there is no overwrite or keep-both any more.
+    expect(importWorkflow).toHaveBeenCalledWith({
+      name: "flow",
+      workflow: { nodes: [] },
+    });
+    expect(store.selectedKeys).toEqual(["d"]);
+    expect(cursorKey(wrapper)).toBe("d");
+  });
+
+  it("lists the unfiled recipes below the grid, and nothing while there are none", async () => {
+    const empty = await grid();
+    expect(empty.find(".wfv-unfiled .wfrt-head").exists()).toBe(false);
+
+    listUnfiledRecipes.mockResolvedValue([
+      { id: 9, name: "Orphan", workflow_id: null, loras: [], overrides: {} },
+    ]);
+    const wrapper = await grid();
+    expect(wrapper.find(".wfv-unfiled .wfrt-title").text()).toBe(
+      "Unfiled recipes",
+    );
+    expect(wrapper.find(".wfv-unfiled .wfrt-name").text()).toBe("Orphan");
   });
 });

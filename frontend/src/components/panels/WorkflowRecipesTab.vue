@@ -1,26 +1,34 @@
 <template>
   <div class="wfrt">
-    <div class="inspector-section wfrt-head">
+    <!-- Unfiled, the whole tab is hidden while there is nothing to list: no
+         header, no "reading", no empty note. Only the live region stays, so
+         the last Delete is still said. -->
+    <div
+      v-if="!unfiled || recipes.length"
+      class="inspector-section wfrt-head"
+    >
       <p class="wfrt-title">{{ workflowName }}</p>
       <p class="wfrt-sub">{{ subtitle }}</p>
     </div>
 
-    <p v-if="loading" class="wfrt-note wfrt-quiet">Reading your recipes…</p>
-    <p
-      v-else-if="!loadError && !recipes.length && !looks.length"
-      class="wfrt-note wfrt-quiet"
-    >
-      No recipes here yet. A picture shows up once PixlStash has read how it was
-      made, so a fresh import takes a moment to arrive.
-    </p>
-    <p v-else-if="loadError" class="wfrt-note wfrt-bad" role="alert">
-      {{ loadError }}
-    </p>
+    <template v-if="!unfiled">
+      <p v-if="loading" class="wfrt-note wfrt-quiet">Reading your recipes…</p>
+      <p
+        v-else-if="!loadError && !recipes.length && !looks.length"
+        class="wfrt-note wfrt-quiet"
+      >
+        No recipes here yet. A picture shows up once PixlStash has read how it
+        was made, so a fresh import takes a moment to arrive.
+      </p>
+      <p v-else-if="loadError" class="wfrt-note wfrt-bad" role="alert">
+        {{ loadError }}
+      </p>
+    </template>
 
     <!-- Saved first: they are few, in the owner's order, and the reason to
          come back to this tab. The list below them can run to hundreds. -->
     <div
-      v-if="!loading && !loadError && recipes.length"
+      v-if="!unfiled && !loading && !loadError && recipes.length"
       class="section-label wfrt-section"
     >
       Saved
@@ -52,7 +60,9 @@
                the start of a drag. The keyboard path is on the same control,
                and it is in the accessible NAME rather than a tooltip, because
                a tooltip needs a hover a keyboard user does not have. -->
+          <!-- No order to keep on a list of recipes whose workflow is gone. -->
           <button
+            v-if="!unfiled"
             class="wfrt-handle"
             type="button"
             draggable="true"
@@ -153,6 +163,16 @@
                 Export…
               </button>
               <button
+                class="ctx-item"
+                type="button"
+                role="menuitem"
+                data-testid="wfrt-extract"
+                @click="extractWorkflow(recipe)"
+              >
+                <v-icon size="16">mdi-sitemap-outline</v-icon>
+                Extract workflow
+              </button>
+              <button
                 class="ctx-item ctx-item--danger"
                 type="button"
                 role="menuitem"
@@ -212,7 +232,14 @@
           >
             Make defaults…
           </AppButton>
-          <AppButton size="sm" icon-left="play" @click="run(recipe)">
+          <!-- Run needs the workflow an unfiled recipe no longer has:
+               Extract workflow is its way back to running. -->
+          <AppButton
+            v-if="!unfiled"
+            size="sm"
+            icon-left="play"
+            @click="run(recipe)"
+          >
             Run…
           </AppButton>
         </div>
@@ -375,6 +402,7 @@
  * half an order behind.
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
@@ -382,7 +410,9 @@ import { listAdapters } from "../../api/modelShelf";
 import {
   deleteSavedRecipe,
   editSavedRecipe,
+  extractRecipeWorkflow,
   listSavedRecipes,
+  listUnfiledRecipes,
   listUsedLooks,
   reorderSavedRecipes,
 } from "../../api/recipes";
@@ -413,6 +443,12 @@ const props = defineProps({
   workflowIds: { type: Array, default: () => [] },
   /** What the header names. */
   workflowName: { type: String, default: "" },
+  /**
+   * List the recipes on no workflow (`GET /recipes?unfiled=true`) instead of
+   * the selection's: the Workflows view's "Unfiled recipes". No looks, no
+   * order, no Run; hidden entirely while empty.
+   */
+  unfiled: { type: Boolean, default: false },
 });
 
 /**
@@ -426,6 +462,7 @@ const { confirm } = useConfirm();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
 const workflows = useWorkflowsStore();
+const router = useRouter();
 
 const recipes = ref([]);
 const loading = ref(false);
@@ -462,6 +499,9 @@ let loadToken = 0;
 const MAX_UNION_KEYS = 100;
 
 const subtitle = computed(() => {
+  if (props.unfiled) {
+    return "Their workflow is gone. Extract workflow makes each one a workflow of its own.";
+  }
   const found = looks.value.length;
   const kept = recipes.value.length;
   // One count per section, in the sections' order, so each reads as the size
@@ -537,7 +577,7 @@ function defaultOf(workflowId) {
 const recipeDiffs = computed(() => {
   const out = {};
   for (const recipe of recipes.value) {
-    if (!recipe.workflow_id) {
+    if (props.unfiled || !recipe.workflow_id) {
       out[recipe.id] = finish([quiet("Not compared: not filed on a workflow")]);
       continue;
     }
@@ -659,6 +699,19 @@ async function load() {
   loadError.value = "";
   const keys = props.workflowIds.filter(Boolean);
   details.value = {};
+  if (props.unfiled) {
+    looks.value = [];
+    try {
+      const rows = await listUnfiledRecipes();
+      if (mine()) recipes.value = rows;
+    } catch (err) {
+      // Hidden when empty, so a failed read is quiet: the section stays away
+      // rather than showing an error about a list nobody asked for.
+      console.warn("Could not read the unfiled recipes:", err);
+      if (mine()) recipes.value = [];
+    }
+    return;
+  }
   if (!keys.length) {
     recipes.value = [];
     looks.value = [];
@@ -1009,6 +1062,39 @@ async function removeRecipe(recipe) {
       text: errorMessage(err, "Could not delete that recipe."),
     });
   }
+}
+
+/**
+ * Make this recipe a manual workflow of its own, then open it.
+ *
+ * `?workflow=<id>` is the app's one "open this workflow" link: the Workflow
+ * tab selects it and shows it, and the grid puts its cursor on the card. The
+ * grid is re-read FIRST, so the card is there for the link to land on. The
+ * notice is the announcement (notices are their own live region).
+ */
+async function extractWorkflow(recipe) {
+  menuId.value = null;
+  let body;
+  try {
+    body = await extractRecipeWorkflow(recipe.id);
+  } catch (err) {
+    console.warn(`Could not extract a workflow from recipe ${recipe.id}:`, err);
+    focusMenuButton(recipe.id);
+    notices.push({
+      level: "error",
+      text: errorMessage(err, "Could not make a workflow from that recipe."),
+    });
+    return;
+  }
+  await workflows.refetch();
+  notices.push({
+    level: "success",
+    text: `Extracted “${body.name}” as a workflow of its own.`,
+  });
+  // Back on its row first: the grid takes focus onto the new card only when
+  // it lists it, and a menu item that unmounted leaves focus on the body.
+  focusMenuButton(recipe.id);
+  void router?.push?.({ name: "workflows", query: { workflow: body.workflow_id } });
 }
 
 /**

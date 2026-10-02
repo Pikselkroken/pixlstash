@@ -64,30 +64,17 @@ export async function getLoraInsertion(name) {
 /**
  * Import a workflow file as it is, UI or API format.
  *
- * A copy of a workflow already stored comes back `matched` under the stored
- * name. A name taken by a different workflow is refused (409) unless
- * `overwrite` replaces it or `keepBoth` stores this one as "name (2)".
+ * Every import is a NEW manual workflow (identical copies are allowed), and
+ * the answer names it: open it by `workflow_id`.
  *
  * @param {Object} body
  * @param {string} body.name
  * @param {Object} body.workflow - the parsed file, unchanged.
- * @param {boolean} [body.overwrite=false]
- * @param {boolean} [body.keepBoth=false]
- * @returns {Promise<{name: string, matched: boolean, topology_hash: ?string}>}
+ * @returns {Promise<{status: string, name: string, matched: boolean, workflow_id: string}>}
  */
-export async function importWorkflow({
-  name,
-  workflow,
-  overwrite = false,
-  keepBoth = false,
-}) {
+export async function importWorkflow({ name, workflow }) {
   return unwrap(
-    apiClient.post(comfyUrl("/workflows/import"), {
-      name,
-      workflow,
-      overwrite,
-      keep_both: keepBoth,
-    }),
+    apiClient.post(comfyUrl("/workflows/import"), { name, workflow }),
   );
 }
 

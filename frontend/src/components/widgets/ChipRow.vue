@@ -24,7 +24,7 @@
       <span
         v-for="(item, i) in items"
         :key="item.key ?? i"
-        class="chip-row__chip"
+        :class="chipClass(item)"
       >
         <v-icon v-if="item.icon" size="12" class="chip-row__icon">{{
           `mdi-${item.icon}`
@@ -89,13 +89,17 @@ import { VIcon } from "vuetify/components";
 import { fitChipCount } from "../../utils/workflowCard";
 
 const props = defineProps({
-  /** `{ key?, label, icon?, dashed?, fact?, title? }`; `title` is a hover. */
+  /** `{ key?, label, icon?, dashed?, fact?, badge?, title? }`; `title` is a hover. */
   items: { type: Array, default: () => [] },
 });
 
 const chipClass = (item) => [
   "chip-row__chip",
-  { "chip-row__chip--dashed": item.dashed, "chip-row__chip--fact": item.fact },
+  {
+    "chip-row__chip--dashed": item.dashed,
+    "chip-row__chip--fact": item.fact,
+    "chip-row__chip--badge": item.badge,
+  },
 ];
 
 const emit = defineEmits(["overflow"]);
@@ -213,6 +217,15 @@ defineExpose({ measure });
 /* A fact is not a model, so it keeps the outline and loses the fill. */
 .chip-row__chip--fact {
   background: transparent;
+}
+
+/* The design system's Badge on a fact: a pill, semibold, in the fact's own
+   neutral ink. A label of kind ("Manual"), not a status, so no hue: amber is
+   the action colour and olive is selection. The probe carries the class too,
+   so the semibold width is what the fit measures. */
+.chip-row__chip--badge {
+  border-radius: var(--radius-pill);
+  font-weight: var(--weight-semibold);
 }
 
 /* An overflow count, not a thing: a fact chip with the count muted. */

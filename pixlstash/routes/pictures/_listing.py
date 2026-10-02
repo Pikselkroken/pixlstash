@@ -17,7 +17,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.hub import workflow_cards
-from pixlstash.hub.workflow_card_reads import variants_in_workflow
+from pixlstash.hub.workflow_card_reads import manual_workflow_ids, variants_in_workflow
 from pixlstash.db_models import (
     Face,
     Picture,
@@ -40,7 +40,11 @@ from pixlstash.utils.service.filter_helpers import (
     project_membership_exists_clause,
     project_unassigned_clause,
 )
-from pixlstash.utils.query.predicate_filter import PredicateFilter, is_truthy_flag
+from pixlstash.utils.query.predicate_filter import (
+    NOT_MADE_BY,
+    PredicateFilter,
+    is_truthy_flag,
+)
 
 from ._helpers import (
     _enrich_scrapheap_retention,
@@ -404,7 +408,9 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
             unresolved one cannot reach ``Picture.find(**query_params)``.
 
     Returns:
-        The structural hashes to match, or ``None`` when neither param is set.
+        The keys to match (``predicate_filter.workflow_keys_predicate``: a
+        manual workflow's own id, or variants with the live manual ids whose
+        runs they leave out), or ``None`` when neither param is set.
     """
     # Presence, not truthiness: `?workflow=` names no workflow, and dropping
     # the filter for it would answer a request for one workflow with the whole
@@ -425,11 +431,19 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
         return None
     hub = getattr(server, "hub", None)
     matched: list[set[str]] = []
+    live: list[str] = []
     try:
         if hub is None:
             raise LookupError("no hub is attached to this server")
         if workflow_id is not None:
-            matched.append(set(variants_in_workflow(hub, workflow_id)))
+            live = manual_workflow_ids(hub)
+            # A manual workflow's pictures are its runs'; an automatic one's
+            # are its variants', less every live manual workflow's runs.
+            matched.append(
+                {workflow_id}
+                if workflow_id in live
+                else set(variants_in_workflow(hub, workflow_id))
+            )
         if lora is not None:
             # Only ever a narrowing, and only of a well-formed reference:
             # alone it would parse every stored graph on the hub per request,
@@ -452,7 +466,10 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
             exc,
         )
         return []
-    return sorted(set.intersection(*matched))
+    keys = sorted(set.intersection(*matched))
+    if keys and workflow_id not in live:
+        keys += [NOT_MADE_BY + manual for manual in live]
+    return keys
 
 
 def select_pictures_for_listing(

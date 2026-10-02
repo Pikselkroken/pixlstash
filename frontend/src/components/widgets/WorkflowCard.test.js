@@ -893,6 +893,16 @@ describe("WorkflowCard", () => {
     expect(text).toContain("vae");
   });
 
+  it("names a manual workflow and its source whole in the ⓘ popover", () => {
+    // The facts row clips "from <name>" first, so ⓘ is where it reads whole.
+    const manual = mountCard({ ...BARE, manual: true, from_name: "Portrait pass" })
+      .find('[data-testid="info-manual"]');
+    expect(manual.text()).toBe("Manual workflow, made from Portrait pass");
+    expect(
+      mountCard({ ...BARE, manual: false }).find('[data-testid="info-manual"]').exists(),
+    ).toBe(false);
+  });
+
   it("lists models and defaults in the ⓘ popover", () => {
     const popover = mountCard({
       ...CROWDED,

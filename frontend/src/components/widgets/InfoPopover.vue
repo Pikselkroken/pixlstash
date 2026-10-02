@@ -42,6 +42,10 @@
           {{ picturesLabel }}</button
         ><template v-else>{{ picturesLabel }}</template>
       </p>
+      <!-- The card's facts row clips "from <name>" first; here it is whole. -->
+      <p v-if="card.manual" class="info-popover__sub" data-testid="info-manual">
+        Manual workflow{{ card.from_name ? `, made from ${card.from_name}` : "" }}
+      </p>
 
       <section class="info-popover__group">
         <span class="tbm-label">Models</span>
