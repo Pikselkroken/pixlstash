@@ -4571,7 +4571,13 @@ def create_router(server) -> APIRouter:
             and recipe_key is not None
             and find_card(hub, recipe_key) is not None
         )
-        if body.saved_recipe_id is not None and recipe_key and not own_card:
+        if (
+            body.saved_recipe_id is not None
+            and recipe_key
+            and not body.target
+            and not own_card
+        ):
+            # A target run leaves the card on purpose; only a missing card warns.
             logger.warning(
                 "[workflows] Saved recipe %s names card %s, which this hub no "
                 "longer holds; it runs on its workflow's base card.",
