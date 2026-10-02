@@ -25,7 +25,6 @@ label mean the same thing for every variant of it.
 
 from __future__ import annotations
 
-import functools
 import json
 from dataclasses import dataclass, field
 from typing import Optional
@@ -198,7 +197,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
         Card(
             workflow_key=row["workflow_id"],
             topology_hash=row["workflow_id"],
-            workflow_type=_manual_workflow_type(row["workflow_id"], row["document"]),
+            workflow_type=_manual_workflow_type_of(row["workflow_id"], row["document"]),
             imported=True,
             hand_imported=row["origin"] != "pull",
             manual=True,
@@ -211,9 +210,19 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     ]
 
 
-# ponytail: keyed on the document text, so it is never stale; one parse and
-# reduction per manual workflow per process rather than per grid read.
-@functools.lru_cache(maxsize=512)
+# ponytail: one entry per manual workflow, keyed on its id alone because a
+# row's `document` is never rewritten (as `_manual_model_widgets`); unbounded,
+# but there are as many entries as manual workflows.
+_MANUAL_TYPES: dict[str, Optional[str]] = {}
+
+
+def _manual_workflow_type_of(workflow_id: str, document: str) -> Optional[str]:
+    """``_manual_workflow_type``, parsed once per manual workflow per process."""
+    if workflow_id not in _MANUAL_TYPES:
+        _MANUAL_TYPES[workflow_id] = _manual_workflow_type(workflow_id, document)
+    return _MANUAL_TYPES[workflow_id]
+
+
 def _manual_workflow_type(workflow_id: str, document: str) -> Optional[str]:
     """What a manual workflow makes (``workflow_type``), read off its own graph.
 

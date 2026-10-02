@@ -365,3 +365,16 @@ describe("onWorkflowsChanged", () => {
     expect(store.recipesEpoch).toBe(epoch + 1);
   });
 });
+
+describe("onWorkflowsChanged across a burst", () => {
+  it("follows a chain of renames to its end", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.selectRange(["workhorse"]);
+    store.onWorkflowsChanged({
+      reason: "regrouped",
+      renamed: { workhorse: "auto:b", "auto:b": "auto:c" },
+    });
+    expect(store.selectedKeys).toEqual(["auto:c"]);
+  });
+});

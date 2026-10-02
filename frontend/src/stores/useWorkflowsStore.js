@@ -592,6 +592,16 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     recipesEpoch.value += 1;
   }
 
+  /** Where `id` ended up: a debounced burst can rename a → b, then b → c. */
+  function followRenames(map, id) {
+    const seen = new Set();
+    while (map[id] && !seen.has(id)) {
+      seen.add(id);
+      id = map[id];
+    }
+    return id;
+  }
+
   /**
    * React to the backend's `workflows_changed` (any tab, or a background pass).
    *
@@ -605,7 +615,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     const map = renamed && typeof renamed === "object" ? renamed : {};
     if (Object.keys(map).length && selectedKeys.value.length) {
       selectedKeys.value = [
-        ...new Set(selectedKeys.value.map((id) => map[id] ?? id)),
+        ...new Set(selectedKeys.value.map((id) => followRenames(map, id))),
       ];
     }
     if (reason === "recipes") notedRecipesChanged();

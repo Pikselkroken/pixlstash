@@ -697,6 +697,10 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
                 shelf,
             )
             conn.execute("RELEASE rederive_topology")
+        except sqlite3.Error:
+            # The hub itself (disk full, I/O): the whole step rolls back and
+            # retries on the next open, rather than restamping the topology.
+            raise
         except Exception as exc:
             conn.execute("ROLLBACK TO rederive_topology")
             conn.execute("RELEASE rederive_topology")
@@ -761,6 +765,8 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
                 stage_slots_of[base] if base in topologies_of[old_id] else {},
             )
             conn.execute("RELEASE retire_workflow")
+        except sqlite3.Error:
+            raise
         except Exception as exc:
             conn.execute("ROLLBACK TO retire_workflow")
             conn.execute("RELEASE retire_workflow")

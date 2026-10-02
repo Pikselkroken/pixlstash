@@ -232,10 +232,13 @@ def shelf_family_signature(hub) -> str:
     """A digest of the shelf's base models: what a family pass can learn from.
 
     A variant derived after the shelf last changed already has every family
-    the shelf knows, so only a change here can identify an unknown one.
+    the shelf knows, so only a change here can identify an unknown one. The
+    rule version is in it too, so a build that derives families differently
+    passes again over an unchanged shelf.
     """
     return _digest(
-        [
+        [CORE_RULE_VERSION]
+        + [
             list(row)
             for row in hub.fetchall(
                 "SELECT id, base_model, base_model_canonical FROM model ORDER BY id"
