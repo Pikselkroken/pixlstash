@@ -616,12 +616,12 @@ def test_the_hub_open_hashes_built_in_origin_rows_stored_without_one(tmp_path):
         "flow",
         _EDITOR,
         "builtin",
-        record=(workflow_origin.BUILTIN_ORIGIN, "flow.json", None),
+        record=(workflow_origin.BUILTIN_ORIGIN, "flow.json", None, None),
     )
     # Left alone: another origin's hashless row, a built-in whose workflow
     # is gone, and one whose stored document will not parse.
     create_manual_workflow(
-        hub, "other", _EDITOR, "import", record=("file", "other.json", None)
+        hub, "other", _EDITOR, "import", record=("file", "other.json", None, None)
     )
     with hub.transaction() as conn:
         workflow_origin.upsert(
@@ -1784,6 +1784,11 @@ def test_a_failed_family_pass_waits_for_the_shelf_to_change(run_env):
     """
     hub = run_env.server.hub
     backfill = WorkflowCardBackfillFinder(hub=hub)
+    # The start-up pass, handed out while an earlier test in this module left
+    # an unknown family behind: completed, so the finder starts quiet.
+    startup = backfill.find_task()
+    if startup is not None:
+        backfill.on_task_complete(startup, None)
     assert backfill.find_task() is None
     with hub.transaction() as conn:
         conn.execute(
