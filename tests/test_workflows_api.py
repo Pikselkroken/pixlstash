@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 import logging
 import os
 import sqlite3
@@ -58,7 +59,7 @@ from pixlstash.hub.workflow_card_reads import (
     instance_documents,
     variant_documents,
 )
-from pixlstash.hub.workflow_card_reads import manual_document
+from pixlstash.hub.workflow_card_reads import _manual_workflow_type, manual_document
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
@@ -2765,6 +2766,65 @@ def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
         )
     workflows_routes._manual_model_widgets.cache_clear()
     assert _by_key(_cards(workflow_env.owner))[key]["models"] == []
+
+
+def test_an_imported_wan_video_workflow_is_a_video_workflow(
+    workflow_env, tmp_path, monkeypatch
+):
+    """A manual workflow's type is read off its own graph (#1696), as an
+    automatic card's is off its topology: a Wan 2.2 video import says Video."""
+    wan = json.loads(
+        (
+            Path(__file__).parent
+            / "comfyui_workflows/paired/multigpu/api/wan2_2 distorch2 double_unet no_cpu.json"
+        ).read_text("utf-8")
+    )
+    key = _file_a_workflow(workflow_env.server, tmp_path, monkeypatch, "wan.json", wan)
+    card = _by_key(_cards(workflow_env.owner))[key]
+    assert (card["type"], card["type_label"]) == ("video", "Video")
+    editor = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
+    )
+    assert _by_key(_cards(workflow_env.owner))[editor]["type"] is None
+
+
+def test_a_manual_workflow_whose_links_are_malformed_has_no_type():
+    """A link slot that is not a number raised TypeError out of the reduction
+    and took the whole grid with it; it is a card with no type instead."""
+    graph = {
+        "nodes": [
+            {"id": 1, "type": "KSampler", "inputs": [], "outputs": []},
+        ],
+        "links": [[1, 1, {"slot": 0}, 2, 0, "MODEL"]],
+    }
+    assert _manual_workflow_type("manual:" + "0" * 32, json.dumps(graph)) is None
+
+
+def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Sorted on the lowercased name and a case variant read once (#1696), so a
+    Wan pair is "High + Low" on both kinds of card, never "Low + High"."""
+    graph = {
+        "1": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "wan_t2v_low.safetensors"},
+        },
+        "2": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "Wan_T2V_High.safetensors"},
+        },
+        "3": {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "WAN_T2V_LOW.safetensors"},
+        },
+        "4": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+    }
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "pair.json", graph
+    )
+    models = _by_key(_cards(workflow_env.owner))[key]["models"]
+    assert [m["name"].lower() for m in models] == ["wan t2v high", "wan t2v low"]
 
 
 def test_the_shelfs_picture_needs_one_candidate_where_its_name_needs_agreement(

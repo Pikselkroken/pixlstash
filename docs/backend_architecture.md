@@ -2342,6 +2342,7 @@ nothing in the vault moves; a manual workflow's own runs are the one exception
 | `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
 | `workflow_core_successor` | Per (topology, new workflow), the automatic workflow core rule v1 put the topology in, each one v2 puts its variants in, and the v1 -> v2 core label map (data step 8, below) |
 | `workflow_variant_family` | Per variant, its base-model families (`variant_families`), frozen on first derivation: part of its workflow's id, so a later shelf scan never moves it |
+| `workflow_family_pass` | The shelf signature the last successful family pass (`reidentify_families`) ran against; at most one row |
 
 Reads (`hub/workflow_card_reads.py`): `workflow_of_variant` (its topology's
 member row, else the id of its core under this build's `CORE_RULE_VERSION` and
@@ -2585,14 +2586,19 @@ hires-fix sampler, face detailer and its detectors) and LoRA loaders. **v2**
 * string primitives (`Textbox`, `Text Multiline`, `JWString`, the Literal
   String node) are plumbing: where a prompt was typed is not a step;
 * picture filters of one image in, one out (`PhotoFilmGrain`, `Image Levels
-  Adjustment`, `ImageSharpen`, `ImageBlur`) are `POST_PROCESS`, a look;
+  Adjustment`, `ImageSharpen`, `ImageBlur`) are `POST_PROCESS`, a look -
+  stripped, with seed variance, only in a graph that samples: without a
+  sampler the filter is what the graph does, so `LoadImage -> ImageSharpen ->
+  SaveImage` and its `ImageBlur` twin are two workflows;
 * `SeedVarianceEnhancer` is `SEED_VARIANCE`, a new **stage**: in
   `SPECIAL_GROUPS` and `specials`, on or off in the default recipe as upscale
   is, and skippable per run (`bypass_stage` exempts it from the "feeds a
   sampler" refusal, since feeding its sampler is what it does). It is never
   printed in a generated name;
 * **dead nodes are pruned**: every node nothing reads whose class does not
-  write, show or send (`Save|Preview|Output|Combine|Export|Upload|Saver|Send`),
+  write, show or send (`_SINK_CLASS_RE`: `Save`, `Preview`, `VideoCombine`,
+  `Export`, `Upload`, `WebSocket`, a leading `Send` or `Send(Image|Video|To)`;
+  a bare `Combine` or `Output` also matched `ConditioningCombine`),
   repeatedly - an orphan prompt encoder is left-over editing. **Refused
   whole** when it would remove every sampler the graph had (a graph whose only
   output was a preview v1 stripped) or everything;
@@ -2622,13 +2628,19 @@ from an unidentified row's own base-model text and filename, else
 spelled by its asset reference (no filename lands in a card row); a loader
 naming no model anywhere is `unresolved`; both are logged. The empty set means
 a graph with no base-model loader, never an unresolved value. A workflow
-loading two checkpoints combines only with one of the identical set. Stored in
-`workflow_variant_family`, frozen as a slot mark is.
+loading two checkpoints combines only with one of the identical set. Only
+loaders the core keeps count (`core_node_ids`): an orphan loader the prune
+removed adds no family. Stored in `workflow_variant_family`, frozen as a slot
+mark is.
 
 **An unknown family is not a dead end.** Once the backfill is drained,
 `WorkflowCardBackfillFinder` hands out a `FamilyReidentifyTask` whenever the
 shelf's base models changed (`shelf_family_signature`: a scan, or the owner
-setting a base model). `reidentify_families` re-derives every variant whose
+setting a base model). The signature a pass succeeded against is kept in the
+hub (`workflow_family_pass`, one row), so a start or library switch with an
+unchanged shelf runs no pass. A pass that moved anything emits
+`workflows_changed` with reason `regrouped` and `renamed: {retired id: heir}`
+(integration §8) through `workflow_events.announce_to_vault`. `reidentify_families` re-derives every variant whose
 set carries an unknown and moves those that now derive fewer: the family row
 is rewritten and the retiring workflow handed on with `_retire_workflow`, the
 same carry data step 8 uses (owner state merged, never dropped; successor,
@@ -2667,7 +2679,16 @@ topology is the new workflow's base, else the row is dropped and logged with
 its value), then copied (`_carry_group_state(keep=True)`) to every successor of a split
 but the **primary** (the one holding most of its variants), and merged onto the
 primary, olds in sorted order: the heir's own win, the losers are logged with
-their values, pins are unioned, a second name lands in the notes. A card's
+their values, pins are unioned, a second name lands in the notes (once: a
+repeated carry onto the same heir does not append it again). A split heir is
+copied the old workflow's whole merged label map, so it can hold a `core:`
+default naming a node its own core pruned: `workflow_defaults` leaves such an
+address out of the default recipe (logged) and a run already skips an address
+no node answers to. **Each topology runs in its own SAVEPOINT**, and each
+retirement in another: an error rolls that one back and is logged rather than
+escaping the hub open, and a topology that raised or will not reduce is
+restamped `unmoved-v1`, neither v1 (so the step does not re-run on every open)
+nor current (so the card backfill still tries it). A card's
 `workflow_key_successor` row follows its own variants;
 `workflow_id_successor` (retired id -> primary) and
 `workflow_document.from_workflow_id` follow the primary. A second run finds no v1 row. The

@@ -37,6 +37,7 @@ from pixlstash.services.workflow_identity import (
     workflow_key,
     workflow_type,
 )
+from pixlstash.services.workflow_identity import _SINK_CLASS_RE
 
 
 def _node(class_type: str, **inputs) -> dict:
@@ -372,6 +373,15 @@ CORE_V2_TWINS = {
             "2": _node("CLIPTextEncode", text=["96", 0], clip=["1", 1]),
         },
     ),
+    # Not a sink by name: `Combine` matched it before #1696.
+    "orphan-combine": (
+        None,
+        {
+            "97": _node(
+                "ConditioningCombine", conditioning_1=["2", 0], conditioning_2=["2", 0]
+            )
+        },
+    ),
     "film-grain": (
         None,
         {
@@ -512,6 +522,32 @@ def test_a_graph_with_no_sampler_keeps_what_it_does_as_its_core():
     assert core_hash(_doc(_graph(face_detailer=True, upscale=True))) == core_hash(
         _doc(_graph())
     )
+
+
+def test_the_sink_rule_keeps_named_outputs_and_savers_but_not_conditioning():
+    """Anchored (#1696): `ConditioningCombine` is not a sink, but a node named
+    as an output or a saver still is, so its workflow keeps its last node."""
+    for sink in ("SaveImage", "ImageSaver", "ImageOutput", "VHS_VideoCombine"):
+        assert _SINK_CLASS_RE.search(sink), sink
+    for middle in ("ConditioningCombine", "ImageCompositeMasked", "OutputSwitch"):
+        assert not _SINK_CLASS_RE.search(middle), middle
+
+
+def test_sampler_less_filter_workflows_keep_their_filter_as_their_core():
+    """Without a sampler the filter is the workflow (#1696): a sharpen and a
+    blur over an input picture are two workflows, never one."""
+
+    def filtered(cls: str) -> dict:
+        return {
+            "6": _node("LoadImage", image="in.png"),
+            "8": _node(cls, image=["6", 0]),
+            "7": _node("SaveImage", images=["8", 0], filename_prefix="out"),
+        }
+
+    assert core_hash(_doc(filtered("ImageSharpen"))) != core_hash(
+        _doc(filtered("ImageBlur"))
+    )
+    assert "8" in core_node_labels(_doc(filtered("ImageSharpen")))
 
 
 def test_seed_variance_is_a_stage_the_card_has_and_chips():

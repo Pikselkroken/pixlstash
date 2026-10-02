@@ -1125,8 +1125,23 @@ def workflow_defaults(
                     vault, workflow.variants, None, DEFAULT_SAMPLE
                 )
             documents = instance_documents(hub, library_uuid, hashes)
+        # Plus one variant of the base topology, sampled or not: its core
+        # labels are what an owner's `core:` default must name to mean
+        # anything (a split's copied label map can name a node an heir's core
+        # pruned).
+        base_variant = next(
+            (
+                variant
+                for variant in workflow.variants
+                if workflow.variant_topology.get(variant) == workflow.base_topology
+            ),
+            None,
+        )
         reads = _variant_reads(
-            hub, workflow, {structural_hash for structural_hash, _ in documents}
+            hub,
+            workflow,
+            {structural_hash for structural_hash, _ in documents}
+            | ({base_variant} if base_variant else set()),
         )
 
     values: dict[tuple[str, str], Counter] = {}
@@ -1212,13 +1227,32 @@ def workflow_defaults(
         stages={stage: without[stage] * 2 <= staged for stage in base_stages},
     )
 
+    core_labels = {
+        CORE_ADDRESS_PREFIX + label
+        for read in reads.values()
+        for label in read.core.values()
+    }
     value_overrides, model_overrides, lora_overrides = {}, {}, {}
     for address, value in overrides.items():
         if address.startswith(LORA_ADDRESS_PREFIX):
             lora_overrides[address[len(LORA_ADDRESS_PREFIX) :].lower()] = value
             continue
         slot_label, _, input_name = address.rpartition("/")
-        if not slot_label or not input_name:
+        if (
+            core_labels
+            and slot_label.startswith(CORE_ADDRESS_PREFIX)
+            and slot_label not in core_labels
+        ):
+            # Kept in the hub, never shown or run: a node this workflow's core
+            # does not have would be a parameter row that sets nothing.
+            logger.info(
+                "Workflow %s holds default %r = %r on a node its core does not "
+                "have; it is left out of the default recipe.",
+                workflow_id,
+                address,
+                value,
+            )
+        elif not slot_label or not input_name:
             logger.warning(
                 "Workflow %s holds default address %r, which names no input, so "
                 "it is not part of the default recipe.",

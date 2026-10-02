@@ -81,7 +81,7 @@
 //     default_recipe: null | { sampled, models: [{ address, kind, filename,
 //                      provenance }], loras: [{ filename, sha256, strength,
 //                      provenance }], values: [default], stages: { upscale,
-//                      face_detailer } },
+//                      face_detailer, seed_variance } },
 //                                       // NULL ON THE GRID; filled on the
 //                                       // detail read and on write answers.
 //                                       // `models[].address` is what a run's
@@ -311,7 +311,9 @@ export function checkpointModel(card) {
 
 /**
  * Every base model the card is about: each named slot of its first base kind,
- * one per name. A Wan 2.2 graph loads a high- and a low-noise UNET and is both,
+ * one per FILE. Two files the shelf gives one title are still two models, and
+ * the Checkpoint filter matches by file, so the dedup is on `name`; a surface
+ * printing them dedups the joined text instead (`baseModelText`). A Wan 2.2 graph loads a high- and a low-noise UNET and is both,
  * so a surface that names "the" model lists these, never only the first. Which
  * loader holds which file is not claimed: the server pairs same-widget slots
  * with filenames in sorted order, so the set is right and the order is not.
@@ -323,10 +325,9 @@ export function baseModels(card) {
     const named = models.filter((model) => model.kind === kind && model.name);
     if (named.length) {
       const seen = new Set();
-      return named.filter((model) => {
-        const name = modelDisplayName(model);
-        return !seen.has(name) && seen.add(name);
-      });
+      return named.filter(
+        (model) => !seen.has(model.name) && seen.add(model.name),
+      );
     }
   }
   return [];
@@ -351,6 +352,15 @@ export function baseModels(card) {
  */
 export function modelDisplayName(model) {
   return model?.title || model?.name || null;
+}
+
+/**
+ * The base models as a row prints them, `A + B`, each spelling once: two
+ * files under one shelf title read as that title, not `T + T`. `label` maps a
+ * model to its text and defaults to `modelDisplayName`.
+ */
+export function baseModelText(models, label = modelDisplayName) {
+  return [...new Set(models.map(label))].join(" + ");
 }
 
 /**
@@ -423,13 +433,15 @@ export function cardAccessibleName(card) {
     checkpoint
       ? [
           checkpoint.kind,
-          bases
-            .map((model) =>
-              [modelDisplayName(model), quantBadge(model.quant)?.title]
-                .filter(Boolean)
-                .join(" "),
-            )
-            .join(" and "),
+          [
+            ...new Set(
+              bases.map((model) =>
+                [modelDisplayName(model), quantBadge(model.quant)?.title]
+                  .filter(Boolean)
+                  .join(" "),
+              ),
+            ),
+          ].join(" and "),
         ].join(" ")
       : null,
     // "not read" rather than "no LoRAs" where nothing was read at all: such a

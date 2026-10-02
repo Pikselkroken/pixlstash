@@ -153,9 +153,9 @@
         <div class="wftab-field wftab-field--top" data-testid="wftab-row-checkpoint">
           <span class="wftab-labelcol">
             <span class="wftab-label">{{
-              checkpointLabels.length > 1 ? "Checkpoints" : "Checkpoint"
+              checkpointCount > 1 ? "Checkpoints" : "Checkpoint"
             }}</span>
-            <span v-if="recipeCheckpoint?.provenance === 'edited'" class="wftab-yours"
+            <span v-if="checkpointEdited" class="wftab-yours"
               >Yours</span
             >
           </span>
@@ -281,16 +281,22 @@
           <span v-else class="wftab-value wftab-quiet">Not recorded</span>
           <!-- Show N (§1.5): only below the workflow's own count, which the
                head's link already shows. -->
-          <div v-if="checkpointShow" class="wftab-meta">
-            <span></span>
+          <div
+            v-for="shown in checkpointShows"
+            :key="shown.name"
+            class="wftab-meta"
+          >
+            <span class="wftab-coverage wftab-quiet">{{
+              checkpointShows.length > 1 ? shown.label : ""
+            }}</span>
             <AppButton
               size="sm"
               variant="ghost"
               data-testid="wftab-show-checkpoint"
-              :aria-label="showLabel(checkpointShow.pictures, checkpointLabels[0])"
-              @click="showValue('model', checkpointShow.name, checkpointLabels[0])"
+              :aria-label="showLabel(shown.pictures, shown.label)"
+              @click="showValue('model', shown.name, shown.label)"
             >
-              Show {{ checkpointShow.pictures }}
+              Show {{ shown.pictures }}
             </AppButton>
           </div>
           <!-- The other checkpoints its pictures used: a disclosure, not a
@@ -806,7 +812,7 @@ import { errorMessage } from "../../utils/apiError";
 import { modelLabel } from "../../utils/filterChips";
 import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
-import { PIXLSTASH_PACK_URL } from "../../utils/runReasons";
+import { PIXLSTASH_PACK_URL, STAGE_LABELS } from "../../utils/runReasons";
 import {
   checkpointMissing,
   baseModels,
@@ -892,7 +898,7 @@ watch(
 );
 
 // `?tab=recipes`, from the lightbox banner naming the recipe a picture matches
-// (#1480). The workflow itself is selected by `?topology=`, which `WorkflowsView`
+// (#1480). The workflow itself is selected by `?workflow=`, which `WorkflowsView`
 // honours; this is the other half, and **it opens the rail too** - landing on
 // a selected card with the rail shut is the same dead end the link was for.
 //
@@ -1072,6 +1078,12 @@ const checkpointLabels = computed(() => {
   return [...new Set(found)];
 });
 const checkpointLabel = computed(() => checkpointLabels.value.join(" + "));
+/** How many base models the row prints, whichever source it prints from. */
+const checkpointCount = computed(
+  () =>
+    checkpointLabels.value.length ||
+    new Set(detail.value?.graph_base_models ?? []).size,
+);
 
 const checkpointIsUnread = computed(() =>
   card.value ? checkpointUnread(card.value) : false,
@@ -1574,19 +1586,28 @@ const provenanceNote = computed(() => {
   return "";
 });
 
-/** The default recipe's checkpoint, or null (`kind` is the model-fix kind). */
-const recipeCheckpoint = computed(
-  () =>
-    (recipeModels.value ?? []).find(
-      (model) => model.kind === "checkpoint" && model.filename,
-    ) ?? null,
+/** The default recipe's checkpoints: a Wan 2.2 pair is two. */
+const recipeCheckpoints = computed(() =>
+  (recipeModels.value ?? []).filter(
+    (model) => model.kind === "checkpoint" && model.filename,
+  ),
 );
 
-/** The checkpoint row's *Show N*, or null. */
-const checkpointShow = computed(() =>
-  showable(
-    valueFor(recipeValues.value?.checkpoints, recipeCheckpoint.value?.filename),
-  ),
+/** Whether the owner set any of them: overrides are per address. */
+const checkpointEdited = computed(() =>
+  recipeCheckpoints.value.some((model) => model.provenance === "edited"),
+);
+
+/** The checkpoint row's *Show N*, one per recipe checkpoint that has one. */
+const checkpointShows = computed(() =>
+  recipeCheckpoints.value
+    .map((model) => {
+      const value = showable(
+        valueFor(recipeValues.value?.checkpoints, model.filename),
+      );
+      return value && { ...value, label: recipeModelLabel(model) };
+    })
+    .filter(Boolean),
 );
 
 /** Whether the Checkpoint row's "+K others" is open. */
@@ -1594,10 +1615,13 @@ const othersOpen = ref(false);
 
 /** The other checkpoints its pictures used, each with its own *Show N*. */
 const otherCheckpoints = computed(() => {
-  const file = recipeCheckpoint.value?.filename;
-  if (!file) return [];
+  const files = recipeCheckpoints.value.map((model) => model.filename);
+  if (!files.length) return [];
   return (recipeValues.value?.checkpoints ?? [])
-    .filter((value) => !sameFile(value.name, file) && showable(value))
+    .filter(
+      (value) =>
+        !files.some((file) => sameFile(value.name, file)) && showable(value),
+    )
     .map((value) => ({
       name: value.name,
       pictures: value.pictures,
@@ -1732,13 +1756,6 @@ const loraNote = computed(() => {
   return `${names} ${missing.length === 1 ? "is" : "are"} not on your shelf.`;
 });
 
-/** What the default recipe's optional stages are called on the row. */
-const STAGE_LABELS = {
-  upscale: "Upscale",
-  face_detailer: "Face detailer",
-  seed_variance: "Seed variance",
-};
-
 /** The base graph's optional stages and whether the default runs each. */
 const stageRows = computed(() =>
   Object.entries(defaultRecipe.value?.stages ?? {}).map(([key, on]) => ({
@@ -1865,8 +1882,9 @@ watch(card, (next) => {
 //
 // `edit` and `drop_lora` are one-shot: they are taken back off the URL once
 // honoured, so a reload or a Back does not reopen a dialog the owner has since
-// cancelled. `workflow` stays, as `topology` does, and is honoured once per
-// value.
+// cancelled. `workflow` stays and is honoured once per value. It lands on the
+// Workflow tab unless `?tab=recipes` asks for Recipes (a saved recipe's link):
+// this runs after the `?tab=` watcher above and would otherwise undo it.
 let honouredCard = null;
 
 watch(
@@ -1879,7 +1897,7 @@ watch(
     if (honouredCard !== wanted || edit) {
       honouredCard = wanted;
       store.select(wanted);
-      tab.value = "workflow";
+      tab.value = route.query?.tab === "recipes" && !edit ? "recipes" : "workflow";
       sidebarStore.openWorkflowInspector();
     }
     if (edit === EDIT_LORAS) {

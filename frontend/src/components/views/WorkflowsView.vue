@@ -148,7 +148,7 @@
       >
     </p>
 
-    <!-- A `?topology=` link whose card the payload holds and a filter hides.
+    <!-- A deep link whose card the payload holds and a filter hides.
          Not the note above: that one is about what the SERVER left out and
          offers no way in, and this one is one control away from fixed. -->
     <p v-if="linkFiltered" class="wfv-note" data-testid="wfv-link-filtered">
@@ -487,7 +487,7 @@ const columns = ref(1);
 // outside a screen they cannot get back into.
 const cursorId = ref("");
 const announcement = ref("");
-// A `?topology=` link that named a workflow the grid does not list.
+// A `?topology=` or `?workflow=` link that named a workflow the grid does not list.
 const linkMissed = ref(false);
 // The same link, but the card IS in the payload and a filter is hiding it.
 const linkFiltered = ref(false);
@@ -692,15 +692,57 @@ const watchedPath = computed(
 // here" verdict is left open to fresher data.
 let honouredTopology = null;
 
+/**
+ * Say why a deep link's card is not drawn, or clear the notes when it is.
+ * Returns the drawn card, or null.
+ *
+ * **The verdict is read off the payload, not off what is drawn.** With a
+ * client-side filter on, `sortedCards` can be missing a card the answer
+ * plainly contains, and saying "not in this grid" about it sends the reader
+ * looking for a workflow that is one × away. The two are different states with
+ * different ways out, so they are said differently.
+ */
+function linkVerdict(matches) {
+  const card = store.sortedCards.find(matches);
+  if (card) {
+    linkMissed.value = false;
+    linkFiltered.value = false;
+    return card;
+  }
+  if (store.cards.some(matches)) {
+    announcement.value =
+      "That workflow is in this grid, but a filter is hiding it.";
+    linkFiltered.value = true;
+    linkMissed.value = false;
+    return null;
+  }
+  const plural = withheld.value === 1 ? "is" : "are";
+  announcement.value = withheld.value
+    ? `That workflow is not in the grid. ${withheld.value} ${plural} being left out: ${withheldHidden.value} hidden and ${withheldOneOffs.value} counted as one-offs.`
+    : "That workflow is not in the grid.";
+  linkMissed.value = true;
+  linkFiltered.value = false;
+  return null;
+}
+
+/**
+ * The query can go without a remount - the sidebar's Workflows entry pushes
+ * this same route with no query - and the notes belong to the link, not to
+ * the screen. Only once neither link is left: either watcher may be the one
+ * whose query went.
+ */
+function clearLinkNotes() {
+  if (route.query?.topology || route.query?.workflow) return;
+  linkMissed.value = false;
+  linkFiltered.value = false;
+}
+
 watch(
   [() => route.query?.topology, () => store.sortedCards],
   ([wanted]) => {
     if (!wanted) {
       honouredTopology = null;
-      // The query can go without a remount - the sidebar's Workflows entry
-      // pushes this same route with no query - and the note belongs to the
-      // link, not to the screen.
-      linkMissed.value = false;
+      clearLinkNotes();
       return;
     }
     // A repeated `?topology=` makes this an array, which matches no card. It
@@ -709,36 +751,15 @@ watch(
     // Nothing to say until the grid has been read: "not here" is false while
     // the answer is still on the wire.
     if (!store.loaded) return;
-    const card = store.sortedCards.find((entry) =>
+    // ponytail: one topology can sit in several workflows (one per base-model
+    // family), and this lands on the first that draws it. Only a picture the
+    // hub has not keyed yet links by topology; give the link the family too if
+    // landing on the wrong one ever matters.
+    const card = linkVerdict((entry) =>
       (entry.topologies ?? []).includes(wanted),
     );
-    // **The verdict is read off the payload, not off what is drawn.** With a
-    // client-side filter on, `sortedCards` can be missing a card the answer
-    // plainly contains, and saying "not in this grid" about it sends the
-    // reader looking for a workflow that is one × away. The two are different
-    // states with different ways out, so they are said differently.
-    if (!card) {
-      const filtered = store.cards.some((entry) =>
-        (entry.topologies ?? []).includes(wanted),
-      );
-      if (filtered) {
-        announcement.value =
-          "That workflow is in this grid, but a filter is hiding it.";
-        linkFiltered.value = true;
-        linkMissed.value = false;
-        return;
-      }
-      const plural = withheld.value === 1 ? "is" : "are";
-      announcement.value = withheld.value
-        ? `That workflow is not in the grid. ${withheld.value} ${plural} being left out: ${withheldHidden.value} hidden and ${withheldOneOffs.value} counted as one-offs.`
-        : "That workflow is not in the grid.";
-      linkMissed.value = true;
-      linkFiltered.value = false;
-      return;
-    }
+    if (!card) return;
     honouredTopology = wanted;
-    linkMissed.value = false;
-    linkFiltered.value = false;
     store.select(card.id);
     // The one deep link that lands on a selection: it opens the inspector,
     // without persisting it, as `?workflow=` and `?tab=recipes` do.
@@ -770,8 +791,8 @@ watch(
 // `WorkflowTab` selects the card and opens the rail; this half puts the grid's
 // cursor on it, which focuses the row and so scrolls it into view, as
 // `?topology=` does. An id the grid does not list (hidden, a one-off, filtered
-// out) moves nothing: the rail still shows the card, which is the link's
-// answer.
+// out) moves nothing - the rail still shows the card - but says why, with the
+// same notes `?topology=` gives.
 //
 // Honoured once per value and only on a hit, for the reasons given above.
 let honouredWorkflowId = null;
@@ -781,10 +802,11 @@ watch(
   ([wanted]) => {
     if (typeof wanted !== "string" || !wanted) {
       honouredWorkflowId = null;
+      clearLinkNotes();
       return;
     }
     if (honouredWorkflowId === wanted || !store.loaded) return;
-    if (!store.sortedCards.some((entry) => entry.id === wanted)) return;
+    if (!linkVerdict((entry) => entry.id === wanted)) return;
     honouredWorkflowId = wanted;
     if (sortMenuOpen.value) return;
     nextTick(() =>

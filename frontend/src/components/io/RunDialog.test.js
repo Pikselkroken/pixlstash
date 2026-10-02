@@ -299,6 +299,35 @@ describe("the ↺ chip", () => {
 });
 
 describe("switching to another workflow", () => {
+  it("says a kept checkpoint fell back on a two-file workflow", async () => {
+    // The first loader's address survives the switch, but the new row is
+    // read-only and sends no pick: dropping the edit in silence is the bug.
+    const recipe = (...files) => ({
+      models: files.map((filename, i) => ({
+        address: `core:${"ab"[i]}/unet_name`,
+        kind: "checkpoint",
+        filename,
+      })),
+      loras: [],
+      values: [],
+      stages: {},
+    });
+    getWorkflowCard.mockImplementation(async (key) => ({
+      card:
+        key === OTHER
+          ? card({ id: OTHER, default_recipe: recipe("wan_high.safetensors", "wan_low.safetensors") })
+          : card({ default_recipe: recipe("wan_high.safetensors") }),
+    }));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    wrapper.vm.setCheckpoint("other.safetensors");
+
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+
+    expect(wrapper.vm.fellBack).toContain("Checkpoint");
+    expect(wrapper.vm.checkpointEdit).toBeNull();
+  });
+
   it("keeps the edits the new workflow has an address for", async () => {
     const wrapper = await mountRun();
     const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
@@ -1057,6 +1086,26 @@ describe("the body it sends", () => {
     expect(sentValue(body, "unet_name")).toBeUndefined();
   });
 
+  it("keeps the checkpoint editable when one slot names no file", async () => {
+    // A null filename is not a second file: the row stays one editable box.
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        default_recipe: {
+          models: [
+            { address: "core:a/unet_name", kind: "checkpoint", filename: "wan_low.safetensors" },
+            { address: "core:b/unet_name", kind: "checkpoint", filename: null },
+          ],
+          loras: [],
+          values: [],
+          stages: {},
+        },
+      }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(wrapper.find("[data-testid='rund-checkpoints']").exists()).toBe(false);
+    expect(wrapper.vm.checkpointFiles).toBeNull();
+  });
+
   it("swaps one file on every loader that loads it", async () => {
     const models = ["core:a/unet_name", "core:b/unet_name"].map((address) => ({
       address,
@@ -1073,6 +1122,23 @@ describe("the body it sends", () => {
     expect(runWorkflowCard.mock.calls[0][0].models).toEqual(
       models.map(({ address }) => ({ address, filename: "other.safetensors" })),
     );
+  });
+
+  it("offers seed variance as a stage, named as the rail names it", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        specials: ["seed_variance"],
+        default_recipe: { models: [], loras: [], values: [], stages: { seed_variance: true } },
+      }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(wrapper.find("fieldset").findAll("label").map((l) => l.text())).toEqual([
+      "Seed variance",
+    ]);
+    await wrapper.vm.setStage("seed_variance", false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].skip_stages).toEqual(["seed_variance"]);
   });
 
   it("sends the stages the owner turned off as skip_stages (#1623)", async () => {

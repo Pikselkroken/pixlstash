@@ -251,6 +251,23 @@ describe("a LoRA the owner skipped, and one that cannot be skipped", () => {
     expect(said).toContain("The upscale pass cannot be switched off for this run.");
   });
 
+  it("names no stage it does not know, rather than calling it the upscale", () => {
+    const said = mountNotice({ code: "stage_not_skippable", stage: "frame_interp" })
+      .text()
+      .replace(/\s+/g, " ");
+    expect(said).toContain(
+      "One of this workflow's passes cannot be switched off for this run.",
+    );
+    expect(said).not.toContain("upscale");
+  });
+
+  it("names seed variance when the server gave no sentence", () => {
+    const said = mountNotice({ code: "stage_not_skippable", stage: "seed_variance" })
+      .text()
+      .replace(/\s+/g, " ");
+    expect(said).toContain("The seed variance pass cannot be switched off for this run.");
+  });
+
   it("refuses a stage that cannot be switched off, in the server's words", () => {
     const wrapper = mountNotice({
       code: "stage_not_skippable",

@@ -183,8 +183,14 @@ _POST_PROCESS_CLASSES = frozenset(
     {"PhotoFilmGrain", "Image Levels Adjustment", "ImageSharpen", "ImageBlur"}
 )
 # What a node with no consumer may still be for: it writes, shows or sends.
+# Anchored on purpose: a bare `Combine` or `Output` also matched
+# `ConditioningCombine` and friends, so orphan conditioning was never pruned.
+# `Output$` keeps a node NAMED as an output (`ImageOutput`); `Save` covers
+# every `*Saver`.
 _SINK_CLASS_RE = re.compile(
-    r"Save|Preview|Output|Combine|Export|Upload|Saver|Send", re.IGNORECASE
+    r"Save|Preview|VideoCombine|Export|Upload|WebSocket|^Send|Send(Image|Video|To)"
+    r"|Output$",
+    re.IGNORECASE,
 )
 # A loader's GGUF / multi-GPU spelling loads the same thing as the stock one.
 _LOADER_VARIANT_RE = re.compile(r"GGUF(?:Advanced)?|DisTorch2?|MultiGPU")
@@ -653,6 +659,15 @@ def core_node_labels(document: dict, *, strip_loras: bool = True) -> dict[str, s
     return node_labels(_core_graph(document, strip_loras), rounds=None)
 
 
+def core_node_ids(document: dict, *, strip_loras: bool = True) -> set[str]:
+    """The node ids :func:`core_node_labels` labels, without the refinement.
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph, or nothing survives.
+    """
+    return set(_core_graph(document, strip_loras))
+
+
 def _core_graph(document: dict, strip_loras: bool) -> dict[str, ReducedNode]:
     return _core_pass(document, strip_loras)[0]
 
@@ -699,7 +714,10 @@ def _core_v2(
     family (data step 8). In order:
 
     * string primitives (plumbing), picture filters (``POST_PROCESS``) and
-      seed variance are stripped, edges re-wired through them;
+      seed variance are stripped, edges re-wired through them. The filters
+      and seed variance only where the graph samples: without a sampler a
+      filter is what the graph does (``LoadImage -> ImageSharpen -> SaveImage``
+      is not ``... ImageBlur ...``), as :func:`_core_pass` keeps a detailer;
     * **dead nodes are pruned**: every node nothing reads, unless it writes,
       shows or sends (:data:`_SINK_CLASS_RE`), repeatedly. An orphan prompt
       encoder is left-over editing, not a different workflow. **Refused** when
@@ -713,9 +731,10 @@ def _core_v2(
             groups[node_id] = PLUMBING
         elif node.class_type in _POST_PROCESS_CLASSES:
             groups[node_id] = POST_PROCESS
-    kept, pruned, refused = _prune(
-        _strip(nodes, {PLUMBING, POST_PROCESS, SEED_VARIANCE}, groups=groups)
+    strip = (
+        {PLUMBING, POST_PROCESS, SEED_VARIANCE} if has_sampler(nodes) else {PLUMBING}
     )
+    kept, pruned, refused = _prune(_strip(nodes, strip, groups=groups))
     return (
         {
             node_id: ReducedNode(_canonical_class(n.class_type), n.widgets, n.inputs)
@@ -826,7 +845,16 @@ def workflow_type(document: dict) -> Optional[str]:
     ``None`` when none applies. A picture source is whatever ``workflow_io``
     calls a picture loader, the PixlStash one included.
     """
-    nodes = _reduce(document)
+    return reduced_workflow_type(_reduce(document))
+
+
+def reduced_workflow_type(nodes: dict[str, ReducedNode]) -> Optional[str]:
+    """:func:`workflow_type` of an already reduced graph, raw or stored.
+
+    It reads class types and edges only, so a manual workflow's raw graph
+    (``reduce_api_graph`` / ``reduce_ui_graph``) answers as its stored
+    document would.
+    """
     classes = {node.class_type for node in nodes.values()}
     if any(_VIDEO_OUTPUT_RE.search(cls) for cls in classes):
         return "video"

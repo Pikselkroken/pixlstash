@@ -51,6 +51,27 @@ def announce_changed_workflows(
     vault = getattr(server, "vault", None)
     if vault is None:
         return
+    announce_to_vault(vault, keys, reason, origin_client_id)
+
+
+def announce_to_vault(
+    vault,
+    keys: Iterable[str],
+    reason: str,
+    origin_client_id: Optional[str] = None,
+    renamed: Optional[dict[str, str]] = None,
+) -> None:
+    """:func:`announce_changed_workflows` for a caller holding the vault itself.
+
+    The background passes (a task finder) have a vault and no server.
+
+    Args:
+        vault: The vault whose listeners carry the event to the tabs.
+        keys: As :func:`announce_changed_workflows`.
+        reason: As :func:`announce_changed_workflows`.
+        origin_client_id: As :func:`announce_changed_workflows`.
+        renamed: ``{retired id: id it went to}``, for a pass that retired ids.
+    """
     if reason not in WORKFLOW_CHANGE_REASONS:
         logger.warning(
             "A workflow change was announced with the unknown reason %r; the "
@@ -67,5 +88,6 @@ def announce_changed_workflows(
             "origin_client_id": origin_client_id,
             "keys": list(keys),
             "reason": reason,
+            "renamed": dict(renamed or {}),
         },
     )

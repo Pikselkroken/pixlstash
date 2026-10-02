@@ -32,14 +32,21 @@ from typing import Optional
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, auto_workflow_id
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_hash import asset_reference, normalized_filename
+from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
+    asset_reference,
+    normalized_filename,
+    reduce_api_graph,
+    reduce_ui_graph,
+)
 from pixlstash.services.workflow_identity import (
     WORKFLOW_KEY_VERSION,
     model_fix_kind,
+    reduced_workflow_type,
     slots,
 )
 from pixlstash.services import workflow_bindings
-from pixlstash.services.workflow_io import with_converted_graph
+from pixlstash.services.workflow_io import api_graph, with_converted_graph
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.workflow_ids import AUTO_PREFIX
 
@@ -190,16 +197,58 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
         Card(
             workflow_key=row["workflow_id"],
             topology_hash=row["workflow_id"],
+            workflow_type=_manual_workflow_type_of(row["workflow_id"], row["document"]),
             imported=True,
             hand_imported=row["origin"] != "pull",
             manual=True,
             from_name=row["from_name"],
         )
         for row in hub.fetchall(
-            "SELECT workflow_id, origin, from_name FROM workflow_document "
+            "SELECT workflow_id, origin, from_name, document FROM workflow_document "
             "ORDER BY workflow_id"
         )
     ]
+
+
+# ponytail: one entry per manual workflow, keyed on its id alone because a
+# row's `document` is never rewritten (as `_manual_model_widgets`); unbounded,
+# but there are as many entries as manual workflows.
+_MANUAL_TYPES: dict[str, Optional[str]] = {}
+
+
+def _manual_workflow_type_of(workflow_id: str, document: str) -> Optional[str]:
+    """``_manual_workflow_type``, parsed once per manual workflow per process."""
+    if workflow_id not in _MANUAL_TYPES:
+        _MANUAL_TYPES[workflow_id] = _manual_workflow_type(workflow_id, document)
+    return _MANUAL_TYPES[workflow_id]
+
+
+def _manual_workflow_type(workflow_id: str, document: str) -> Optional[str]:
+    """What a manual workflow makes (``workflow_type``), read off its own graph.
+
+    Either serialisation: an editor file reduces as the UI graph it is. A
+    document that will not reduce has no type, logged, as an automatic card
+    the backfill has not reached has none.
+    """
+    try:
+        parsed = json.loads(document)
+        graph = api_graph(parsed)
+        return reduced_workflow_type(
+            reduce_api_graph(graph) if graph is not None else reduce_ui_graph(parsed)
+        )
+    except (
+        ValueError,
+        TypeError,
+        WorkflowGraphError,
+        RecursionError,
+        AttributeError,
+    ) as exc:
+        logger.warning(
+            "Manual workflow %s: its graph will not reduce, so it shows no type: %s",
+            workflow_id,
+            exc,
+        )
+        return None
 
 
 def workflow_id_successors(hub: HubDatabase) -> dict[str, str]:

@@ -56,6 +56,7 @@ from pixlstash.services.workflow_identity import (
     Slot,
     base_model_kind,
     core_hash,
+    core_node_ids,
     guess_mark,
     lora_assets,
     slots,
@@ -156,7 +157,9 @@ def variant_families(
     own, spelled by its asset reference so no filename lands here; a loader
     naming no model at all is :data:`UNRESOLVED_FAMILY`. Both split rather
     than combine, logged. "No base model" (the empty string) is a graph with
-    no base-model loader. Frozen by the caller on first sight, as a slot mark
+    no base-model loader. Only loaders the core keeps count: an orphan loader
+    the core rule pruned loads nothing into the workflow. Frozen by the caller
+    on first sight, as a slot mark
     is; :func:`~pixlstash.hub.workflow_group_convert.reidentify_families`
     moves an unknown one once the shelf learns it. *shelf* is a cache of the
     shelf index a caller deriving many variants passes to every call.
@@ -177,7 +180,10 @@ def variant_families(
     shelf = shelf if shelf is not None else []
     runs: Optional[list[dict]] = None
     families = set()
+    kept = core_node_ids(document, strip_loras=STRIP_LORAS_FOR_STACKS)
     for node_id, node in sorted(document.items()):
+        if str(node_id) not in kept:
+            continue
         inputs = node.get("inputs") if isinstance(node, dict) else None
         widgets = [
             widget
@@ -226,10 +232,13 @@ def shelf_family_signature(hub) -> str:
     """A digest of the shelf's base models: what a family pass can learn from.
 
     A variant derived after the shelf last changed already has every family
-    the shelf knows, so only a change here can identify an unknown one.
+    the shelf knows, so only a change here can identify an unknown one. The
+    rule version is in it too, so a build that derives families differently
+    passes again over an unchanged shelf.
     """
     return _digest(
-        [
+        [CORE_RULE_VERSION]
+        + [
             list(row)
             for row in hub.fetchall(
                 "SELECT id, base_model, base_model_canonical FROM model ORDER BY id"

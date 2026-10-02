@@ -1326,6 +1326,15 @@ CREATE TABLE IF NOT EXISTS workflow_variant_family (
 )
 """
 
+# The shelf signature (`workflow_cards.shelf_family_signature`) the last
+# successful family pass (`reidentify_families`) ran against: one row at most.
+# A start with the same shelf has nothing new to identify, so it runs no pass.
+_V2_WORKFLOW_FAMILY_PASS = """
+CREATE TABLE IF NOT EXISTS workflow_family_pass (
+    signature  TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1400,6 +1409,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_ID_SUCCESSOR,
     _V2_WORKFLOW_CORE_SUCCESSOR,
     _V2_WORKFLOW_VARIANT_FAMILY,
+    _V2_WORKFLOW_FAMILY_PASS,
     *_V2_WORKFLOW_INDEXES,
 )
 

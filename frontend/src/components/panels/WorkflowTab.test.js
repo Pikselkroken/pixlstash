@@ -642,6 +642,23 @@ describe("a checkpoint that will not load", () => {
     expect(textOf(wrapper)).not.toContain("SDXL/");
   });
 
+  it("says Checkpoints for two files named only by the graph", async () => {
+    preflightWorkflowRun.mockResolvedValue({ groups: [] });
+    getWorkflowCard.mockResolvedValue(
+      detail({
+        card: unnamed,
+        graph_base_models: ["wan2.2_high.safetensors", "wan2.2_low.safetensors"],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    await settle(wrapper);
+    const row = wrapper.find("[data-testid='wftab-row-checkpoint']");
+    expect(row.find(".wftab-label").text()).toBe("Checkpoints");
+    expect(textOf(wrapper)).toContain(
+      "wan2.2_high.safetensors + wan2.2_low.safetensors",
+    );
+  });
+
   it("warns from the card alone while ComfyUI cannot be asked", async () => {
     preflightWorkflowRun.mockRejectedValue(new Error("ComfyUI is down"));
     getWorkflowCard.mockResolvedValue(
@@ -1408,6 +1425,59 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(useFilterStore().comfyuiModelFilter).toEqual(["SDXL/juggernautXL_v9.safetensors"]);
   });
 
+  it("marks the Checkpoints row Yours when only the second file was set", async () => {
+    const shown = withRecipe();
+    shown.card.default_recipe.models = [
+      ["core:a/unet_name", "wan2.2_high.safetensors", "best"],
+      ["core:b/unet_name", "wan2.2_low.safetensors", "edited"],
+    ].map(([address, filename, provenance]) => ({
+      address,
+      kind: "checkpoint",
+      filename,
+      provenance,
+    }));
+    getWorkflowCard.mockResolvedValue(shown);
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find("[data-testid='wftab-row-checkpoint']");
+    expect(row.find(".wftab-yours").exists()).toBe(true);
+  });
+
+  it("lists neither of a two-loader pair as another checkpoint, and shows each", async () => {
+    // A Wan 2.2 high + low pair: the low file is the workflow's own, not an
+    // alternative its pictures used.
+    const shown = withRecipe();
+    shown.card.default_recipe.models = [
+      ["core:a/unet_name", "wan2.2_high.safetensors"],
+      ["core:b/unet_name", "wan2.2_low.safetensors"],
+    ].map(([address, filename]) => ({ address, kind: "checkpoint", filename }));
+    getWorkflowCard.mockResolvedValue(shown);
+    const { wrapper } = await mountWith(
+      [KEY],
+      [
+        card({
+          recipe_values: {
+            checkpoints: [
+              { name: "wan/wan2.2_high.safetensors", pictures: 170 },
+              { name: "wan/wan2.2_low.safetensors", pictures: 160 },
+              { name: "wan/wan2.1.safetensors", pictures: 6 },
+            ],
+            loras: [],
+          },
+        }),
+      ],
+    );
+    const toggle = wrapper.find("[data-testid='wftab-other-checkpoints']");
+    expect(toggle.text()).toContain("+1 other");
+    await toggle.trigger("click");
+    expect(
+      wrapper.findAll("#wftab-other-checkpoints li").map((li) => li.text().replace(/\s+/g, " ")),
+    ).toEqual(["wan2.1 Show 6"]);
+    const shows = wrapper.findAll("[data-testid='wftab-show-checkpoint']");
+    expect(shows.map((button) => button.text())).toEqual(["Show 170", "Show 160"]);
+    await shows[1].trigger("click");
+    expect(useFilterStore().comfyuiModelFilter).toEqual(["wan/wan2.2_low.safetensors"]);
+  });
+
   it("offers Show N on a default LoRA from recipe_values, matched by file", async () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({
@@ -1653,10 +1723,12 @@ describe("the LoRA pile", () => {
 });
 
 describe("the Recipes tab (v1.12 F6)", () => {
-  // The other half of the lightbox banner's link (#1480): `?topology=` selects
-  // the card in `WorkflowsView`, and this opens the rail on its recipes.
+  // The other half of the lightbox banner's link (#1480): `?workflow=`
+  // selects the card, and `?tab=recipes` opens the rail on its recipes. The
+  // `?workflow=` watcher runs after the `?tab=` one and used to put the tab
+  // back on Workflow.
   it("lands on the recipes, with the rail open, from ?tab=recipes", async () => {
-    route.query = { topology: "f00d", tab: "recipes" };
+    route.query = { workflow: KEY, tab: "recipes" };
     const sidebar = useSidebarStore();
     // Shut, which is the state that made the link a dead end of its own: the
     // card would be selected behind a rail nobody opened.

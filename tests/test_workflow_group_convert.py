@@ -25,7 +25,7 @@ from sqlmodel import delete, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.schema import CURRENT_DATA_VERSION
+from pixlstash.hub.schema import CURRENT_DATA_VERSION, _has_v1_cores
 from pixlstash.hub.workflow_card_reads import (
     card_index,
     manual_document,
@@ -41,6 +41,7 @@ import pixlstash.hub.workflow_group_convert as convert
 from pixlstash.hub.workflow_group_convert import (
     _CORE_RULE_V1,
     _GROUP_NAMESPACE,
+    _carry_group_state,
     _core_strip_v1,
     convert_card_state,
     dissolve_manual_groups,
@@ -1184,6 +1185,96 @@ def test_a_card_none_of_whose_variants_reduces_gets_no_family(step_8, caplog):
     assert f"Card {w.qwen_key}: no variant of it reduces" in caplog.text
 
 
+def _core_version(hub, keys) -> str:
+    return hub.fetchone(
+        "SELECT core_version FROM workflow_topology_core WHERE topology_hash = ?",
+        (keys.topology_hash,),
+    )[0]
+
+
+def test_a_topology_whose_move_raises_is_rolled_back_and_the_rest_move(
+    step_8, monkeypatch, caplog
+):
+    """#1696: a non-sqlite error must not escape step 8 and refuse the hub."""
+    w = step_8
+    real = convert.variant_families
+
+    def raising(hub, structural_hash, document, shelf=None):
+        # After the topology's v2 row is written: the savepoint must undo it.
+        if structural_hash == w.sve.structural_hash:
+            raise KeyError("a malformed node")
+        return real(hub, structural_hash, document, shelf)
+
+    monkeypatch.setattr(convert, "variant_families", raising)
+    with w.hub.transaction() as conn:
+        assert rederive_cores(conn) == 3
+        assert not _has_v1_cores(conn), "the step would re-run on every open"
+    assert _core_version(w.hub, w.sve) == convert._CORE_RULE_V1_UNMOVED
+    assert _core_version(w.hub, w.orphan) == workflow_cards.CORE_RULE_VERSION
+    assert f"Topology {w.sve.topology_hash} failed to move" in caplog.text
+    # Its own rows were rolled back, not half-written.
+    assert not w.hub.fetchone(
+        "SELECT 1 FROM workflow_core_successor WHERE topology_hash = ?",
+        (w.sve.topology_hash,),
+    )
+
+
+def test_a_v1_topology_that_will_not_reduce_is_tried_once(step_8):
+    """#1696: left on the v1 stamp, `_has_v1_cores` re-ran step 8 forever."""
+    w = step_8
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_graph SET document = '{\"1\": 7}' "
+            "WHERE structural_hash = ?",
+            (w.orphan.structural_hash,),
+        )
+        rederive_cores(conn)
+        assert not _has_v1_cores(conn)
+    assert _core_version(w.hub, w.orphan) == convert._CORE_RULE_V1_UNMOVED
+
+
+def test_carrying_one_workflow_twice_onto_an_heir_writes_its_notes_once(tmp_path):
+    """#1696: a repeated carry (`keep=True`) appended the same notes again."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+                "VALUES (?, ?, ?, 0)",
+                [("auto:old", "Old", "Old notes."), ("auto:heir", "Heir", None)],
+            )
+            for _ in range(2):
+                _carry_group_state(conn, "auto:old", "auto:heir", keep=True)
+        notes = hub.fetchone(
+            "SELECT notes FROM workflow_group_attr WHERE workflow_id = 'auto:heir'"
+        )[0]
+        assert notes == "Old:\nOld notes."
+    finally:
+        hub.close()
+
+
+def test_a_carry_contained_in_longer_notes_is_still_written(tmp_path):
+    """Only an exact repeat is dropped: "Also named: Foo" is not "...: Foo bar"."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+                "VALUES (?, ?, ?, 0)",
+                [
+                    ("auto:old", "Foo", None),
+                    ("auto:heir", "Heir", "Also named: Foo bar"),
+                ],
+            )
+            _carry_group_state(conn, "auto:old", "auto:heir", keep=True)
+        notes = hub.fetchone(
+            "SELECT notes FROM workflow_group_attr WHERE workflow_id = 'auto:heir'"
+        )[0]
+        assert notes == "Also named: Foo bar\n\nAlso named: Foo"
+    finally:
+        hub.close()
+
+
 # ── the vault half: a saved recipe keeps its checkpoint ────────────────────
 
 
@@ -1714,7 +1805,7 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
     # over; here there is none, so it moves nothing.
     started = backfill.find_task()
     assert isinstance(started, FamilyReidentifyTask)
-    assert started._run_task() == {"moved": 0}
+    assert started._run_task()["moved"] == 0
     assert backfill.find_task() is None, "nothing on the shelf changed yet"
     with hub.transaction() as conn:
         conn.execute(
@@ -1726,7 +1817,8 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
         )
     task = backfill.find_task()
     assert isinstance(task, FamilyReidentifyTask)
-    assert task._run_task() == {"moved": 1}
+    task.result = task._run_task()
+    assert task.result["moved"] == 1
     assert backfill.find_task() is None
 
     assert workflow_of_variant(hub, unknown.structural_hash) == qwen_id
@@ -1784,11 +1876,12 @@ def test_a_failed_family_pass_waits_for_the_shelf_to_change(run_env):
     """
     hub = run_env.server.hub
     backfill = WorkflowCardBackfillFinder(hub=hub)
-    # The start-up pass, handed out while an earlier test in this module left
-    # an unknown family behind: completed, so the finder starts quiet.
-    startup = backfill.find_task()
-    if startup is not None:
-        backfill.on_task_complete(startup, None)
+    # The module's earlier tests leave unknown families filed, so a start-up
+    # pass may be due; it runs and is reported first.
+    started = backfill.find_task()
+    if started is not None:
+        started.result = started._run_task()
+        backfill.on_task_complete(started, None)
     assert backfill.find_task() is None
     with hub.transaction() as conn:
         conn.execute(

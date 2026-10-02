@@ -896,6 +896,25 @@ describe("OverlayRecipePanel", () => {
     });
   });
 
+  it("leaves the name inert when there is no workflow to open", async () => {
+    // No workflow id and no topology: nowhere to go, so neither *Open* nor
+    // the banner's name is a link.
+    listSavedRecipes.mockResolvedValue(MATCHING);
+    const wrapper = render({
+      recipe: { ...RECIPE, workflowId: null, topologyHash: null, loraNames: [] },
+    });
+    await flushPromises();
+
+    expect(wrapper.find(".recipe-match-name--linked").exists()).toBe(false);
+    const open = wrapper
+      .findAll(".recipe-sec-act")
+      .find((b) => b.text().includes("Open"));
+    expect(open).toBeUndefined();
+    // With no workflow there is no list to match against, so no banner at all.
+    expect(wrapper.find(".recipe-match").exists()).toBe(false);
+    expect(listSavedRecipes).not.toHaveBeenCalled();
+  });
+
   it("replaces a row the dialog replaced, rather than listing it twice", async () => {
     listSavedRecipes.mockResolvedValue([
       { id: 4, name: "Rainy tram platform", prompt: "an older look", loras: [] },

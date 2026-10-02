@@ -18,6 +18,7 @@ import { useDedupStore } from "../stores/useDedupStore";
 import { useMovesStore } from "../stores/useMovesStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useTasksStore } from "../stores/useTasksStore";
+import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import {
   isFullRestoreRequestInFlight,
   prepareForFullRestoreTransition,
@@ -145,6 +146,7 @@ export function useUpdatesSocket({
   const dedupStore = useDedupStore();
   const movesStore = useMovesStore();
   const noticeStore = useNoticeStore();
+  const workflowsStore = useWorkflowsStore();
 
   let updatesSocket = null;
   let updatesReconnectTimer = null;
@@ -158,6 +160,9 @@ export function useUpdatesSocket({
   // settling around the same time) from re-fetching the queue once per event.
   let externalMovesPendingTimer = null;
   const EXTERNAL_MOVES_PENDING_DEBOUNCE_MS = 3000;
+  let workflowsChangedTimer = null;
+  let pendingWorkflowsChange = null;
+  const WORKFLOWS_CHANGED_DEBOUNCE_MS = 1000;
   let fullRestoreTransitioning = false;
 
   // --- WebSocket ---
@@ -477,6 +482,37 @@ export function useUpdatesSocket({
           externalMovesPendingTimer = null;
           movesStore.fetchPending();
         }, EXTERNAL_MOVES_PENDING_DEBOUNCE_MS);
+      } else if (payload?.type === "workflows_changed") {
+        // The echo of this tab's own write is skipped: the write re-read the
+        // grid itself. Everything else - another tab, the watched inbox, a
+        // background regrouping that retired ids - is the store's to follow.
+        const isOwn = !!(
+          payload.origin_client_id &&
+          wsStore.clientId &&
+          payload.origin_client_id === wsStore.clientId
+        );
+        // Debounced as `external_moves_pending` is: the inbox announces one
+        // event per file, and each is a whole-vault grid read. The renames
+        // and the recipes bump are gathered across the burst, not dropped.
+        if (!isOwn) {
+          pendingWorkflowsChange = {
+            reason:
+              pendingWorkflowsChange?.reason === "recipes"
+                ? "recipes"
+                : payload.reason,
+            renamed: {
+              ...(pendingWorkflowsChange?.renamed || {}),
+              ...(payload.renamed || {}),
+            },
+          };
+          if (workflowsChangedTimer) clearTimeout(workflowsChangedTimer);
+          workflowsChangedTimer = setTimeout(() => {
+            workflowsChangedTimer = null;
+            const change = pendingWorkflowsChange;
+            pendingWorkflowsChange = null;
+            workflowsStore.onWorkflowsChanged(change);
+          }, WORKFLOWS_CHANGED_DEBOUNCE_MS);
+        }
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {
@@ -690,6 +726,11 @@ export function useUpdatesSocket({
     releaseHeldSortChangedIds();
     disconnectUpdatesSocket();
     gridWsScheduler.cancel();
+    if (workflowsChangedTimer) {
+      clearTimeout(workflowsChangedTimer);
+      workflowsChangedTimer = null;
+    }
+    pendingWorkflowsChange = null;
     if (externalMovesPendingTimer) {
       clearTimeout(externalMovesPendingTimer);
       externalMovesPendingTimer = null;

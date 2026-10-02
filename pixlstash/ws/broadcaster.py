@@ -41,7 +41,9 @@ _WS_SNAPSHOT_EVENT_TYPES = {
 # degraded rather than rejected, exactly like ``CHANGE_KINDS`` below: an emit
 # site naming something else still says "look again", which is the whole of the
 # contract, and the reason is a hint about what to look at first.
-WORKFLOW_CHANGE_REASONS = ("imported", "changed", "stacks", "recipes")
+# "regrouped" is the background family pass retiring ids; its frame's
+# ``renamed`` says where each retired id went.
+WORKFLOW_CHANGE_REASONS = ("imported", "changed", "stacks", "recipes", "regrouped")
 DEFAULT_REASON = "changed"
 
 
@@ -308,6 +310,17 @@ class WsBroadcasterMixin:
                 "reason": (
                     reason if reason in WORKFLOW_CHANGE_REASONS else DEFAULT_REASON
                 ),
+                # {retired id: the id that took most of its variants}, so a tab
+                # holding a retired id (a selection, an open inspector) can
+                # follow it. Always present, ``{}`` when nothing was retired.
+                "renamed": {
+                    str(old): str(new)
+                    for old, new in (
+                        info.get("renamed")
+                        if isinstance(info.get("renamed"), dict)
+                        else {}
+                    ).items()
+                },
             }
         elif event_type in _WS_SNAPSHOT_EVENT_TYPES:
             info = data if isinstance(data, dict) else {}

@@ -713,6 +713,7 @@ import {
   PICTURE_INPUT_UNFILLED,
   LORAS_BYPASSED,
   reasonsBlock,
+  STAGE_LABELS,
   repairNotices,
   unplacedNotice,
 } from "../../utils/runReasons";
@@ -757,12 +758,6 @@ const MAX_VALUES = 200;
 const SCALAR_PINNED = ["steps", "cfg", "cfg_scale", "guidance"];
 const SIZE_INPUTS = ["width", "height"];
 const CHECKPOINT_INPUT = "ckpt_name";
-/** The stages `skip_stages` takes, as a row names them. */
-const STAGE_LABELS = {
-  upscale: "Upscale",
-  face_detailer: "Face detailer",
-  seed_variance: "Seed variance",
-};
 /**
  * Said in the Save dialog when the form is set to keep the source's seed.
  *
@@ -1030,9 +1025,21 @@ const checkpointModel = computed(() => checkpointModels.value[0] || null);
  * `models` for it, and the default recipe loads every one as stored.
  */
 const checkpointFiles = computed(() => {
-  const files = [...new Set(checkpointModels.value.map((m) => m.filename))];
+  const files = baseModelFiles(card.value);
   return files.length > 1 ? files.join(" + ") : null;
 });
+
+/** A card's distinct checkpoint files; a slot with no file names none. */
+function baseModelFiles(detailCard) {
+  return [
+    ...new Set(
+      (detailCard?.default_recipe?.models || [])
+        .filter((model) => model.kind === "checkpoint" && model.address)
+        .map((model) => model.filename)
+        .filter(Boolean),
+    ),
+  ];
+}
 /** The owner's checkpoint, or null while the row is untouched. */
 const checkpointEdit = ref(null);
 
@@ -2368,13 +2375,15 @@ async function loadCard(key, { keepEdits = false } = {}) {
     delete edits[key2];
     delete editedLabels[key2];
   }
-  // A chosen checkpoint survives only onto a loader of the same address.
+  // A chosen checkpoint survives only onto a loader of the same address, and
+  // never onto a two-file card, whose row is read-only and sends no pick.
   const nextCheckpoint = (next?.default_recipe?.models || []).find(
     (model) => model.kind === "checkpoint",
   );
   if (
     checkpointEdit.value !== null &&
-    nextCheckpoint?.address !== checkpointModel.value?.address
+    (nextCheckpoint?.address !== checkpointModel.value?.address ||
+      baseModelFiles(next).length > 1)
   ) {
     fellBack.value = [...fellBack.value, "Checkpoint"];
     checkpointEdit.value = null;
@@ -2717,6 +2726,7 @@ watch(
 .rund-mono {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+  overflow-wrap: anywhere;
 }
 
 .rund-form {
