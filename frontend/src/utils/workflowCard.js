@@ -83,8 +83,7 @@
 //                                       // `models` pin names
 //     base_topology, topologies: [string],
 //                                       // every graph shape the workflow
-//                                       // holds, sorted; one of them is what
-//                                       // `POST /workflows/{id}/split` takes
+//                                       // holds, sorted
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
 //     covers: [{ url, picture_id, thumbnail_width, thumbnail_height,
 //                square_crop_x, square_crop_y, square_crop_side }],
