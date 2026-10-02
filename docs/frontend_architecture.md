@@ -2040,7 +2040,7 @@ can no longer see.
   exactly one graph and Run, Open, Export and Duplicate all use it (backend
   §13), so which one is never a guess; the line is empty until the pre-flight
   has answered.
-- **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
+- **Open a copy in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
   logomark (`widgets/ComfyuiIcon.vue`, `currentColor` on the AiToolkitIcon
   pattern), shown while `comfyuiUrl` is set. It opens what Run… runs
   (`runTarget`: the one selected workflow) and is refused with a reason, not

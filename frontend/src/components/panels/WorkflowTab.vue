@@ -670,11 +670,13 @@
              ComfyUI opens on whatever it had last. It opens what Run… runs
              (`runTarget`), and is refused rather than hidden otherwise, for
              Run…'s reason or a ComfyUI without the node. The tooltip is its
-             accessible name. -->
+             accessible name. "A copy", because that is what it is: what
+             ComfyUI saves comes back as a workflow of its own on the next
+             pull, and this one keeps its graph. -->
         <AppButton
           v-if="canOpenComfyui"
           icon-only
-          tooltip="Open in ComfyUI"
+          tooltip="Open a copy in ComfyUI"
           data-testid="wftab-open-comfyui"
           :aria-disabled="runTarget && !comfyuiLacksNode ? undefined : 'true'"
           :aria-describedby="openDescribedBy"
@@ -2269,7 +2271,7 @@ const runDescribedBy = computed(() =>
   multiple.value ? "wftab-run-reason" : undefined,
 );
 
-/** Why Open in ComfyUI refuses, when it does. */
+/** Why Open a copy in ComfyUI refuses, when it does. */
 const openDescribedBy = computed(() => {
   if (multiple.value) return "wftab-open-reason";
   return comfyuiLacksNode.value ? "wftab-open-node-reason" : undefined;

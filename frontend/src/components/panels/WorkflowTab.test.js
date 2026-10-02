@@ -1878,7 +1878,9 @@ describe("Open in ComfyUI", () => {
   it("is named for a screen reader, since it is only the ComfyUI mark", async () => {
     configure();
     const { wrapper } = await mountWith([ID], [card({ id: ID })]);
-    expect(openButton(wrapper).attributes("aria-label")).toBe("Open in ComfyUI");
+    expect(openButton(wrapper).attributes("aria-label")).toBe(
+      "Open a copy in ComfyUI",
+    );
   });
 
   it("goes through the desktop shell's bridge, which window.open cannot", async () => {
