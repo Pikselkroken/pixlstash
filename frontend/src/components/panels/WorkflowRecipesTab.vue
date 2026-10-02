@@ -699,6 +699,9 @@ async function load() {
   loadError.value = "";
   const keys = props.workflowIds.filter(Boolean);
   details.value = {};
+  // A superseded read never clears its own flag (`mine()` in its finally), so
+  // every early return below would otherwise keep "Reading…" up for good.
+  loading.value = false;
   if (props.unfiled) {
     looks.value = [];
     try {

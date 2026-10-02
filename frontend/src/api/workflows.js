@@ -9,7 +9,7 @@
 // `duplicateWorkflow` and `deleteWorkflow` at the foot of the file for the
 // grid's own verb menu (#1455), and the LoRA chain editor's `getLoraChain` /
 // `saveLoraChain` after them (#1478). Since #1623 every route is addressed by
-// a workflow `id` (opaque: `auto:<core hash>` or `manual:<uuid hex>`), never by a
+// a workflow `id` (opaque: `auto:<core and families digest>` or `manual:<uuid hex>`), never by a
 // card key. `GET /workflows/{id}/pictures` is served and has no caller in the
 // app - the picture grid reaches a workflow's pictures through
 // `GET /pictures?workflow=`, which filters like every other facet - so there

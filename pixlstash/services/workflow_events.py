@@ -11,7 +11,7 @@ shows - its counts, its cover strip, its rank - is computed per request across
 the whole vault, so anything carried on the wire would be something the client
 has to re-read anyway. The event says which workflows changed and why;
 ``GET /workflows`` says what they are now. The payload field is still called
-``keys``, and holds workflow ids (``auto:<core hash>`` or a group id).
+``keys``, and holds workflow ids (``auto:<core and families digest>`` or a group id).
 """
 
 from __future__ import annotations

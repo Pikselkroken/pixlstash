@@ -474,7 +474,7 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
             )
             continue
         workflow_id = f"{MANUAL_PREFIX}{uuid.uuid5(_FILE_NAMESPACE, name).hex}"
-        conn.execute(
+        wrote = conn.execute(
             "INSERT OR IGNORE INTO workflow_document (workflow_id, document, "
             "api_document, origin, from_workflow_id, from_name, created_at) "
             "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
@@ -485,7 +485,7 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
                 "pull" if name in pulled else "import",
                 created,
             ),
-        )
+        ).rowcount
         if topology_hash not in keyed:
             # Once: the carry moves the rows, so a second file of the same
             # topology, or a second run, finds nothing left to carry.
@@ -515,7 +515,7 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
             "workflow_name, first_pulled_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
             ("file", name, workflow_id, created, created),
         )
-        adopted += 1
+        adopted += wrote
     logger.info("Made %d stored workflow file(s) manual workflows.", adopted)
     return adopted
 

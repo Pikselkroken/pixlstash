@@ -355,7 +355,7 @@ class PictureListFilters:
             None,
             description=(
                 "Only pictures made by this workflow, named by its id "
-                "(`auto:<core hash>` or a manual group's id). Resolved to the "
+                "(`auto:<core and families digest>` or a manual group's id). Resolved to the "
                 "workflow's variants; an unknown id matches nothing."
             ),
         ),

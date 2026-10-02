@@ -164,10 +164,12 @@ def main() -> int:
         if row["topology_hash"] not in keyed
         and os.path.isfile(os.path.join(folder, row["workflow_name"]))
     }
-    stranded = stranded_workflow_ids(hub, set(olds_of), set(heirs) | adopted)
+    # An unreadable topology keeps its v1 workflow: live on both sides.
+    stayed = {f"auto:{v1_rows[t]['core_hash']}" for t in unreadable if t in v1_rows}
+    stranded = stranded_workflow_ids(hub, set(olds_of) | stayed, set(heirs) | adopted)
 
-    print(f"Automatic workflows before: {len(heirs)}")
-    print(f"Automatic workflows after:  {len(olds_of)}")
+    print(f"Automatic workflows before: {len(set(heirs) | stayed)}")
+    print(f"Automatic workflows after:  {len(set(olds_of) | stayed)}")
     print(f"Groups that combine: {len(combined)}")
     print(
         "Largest combine: "

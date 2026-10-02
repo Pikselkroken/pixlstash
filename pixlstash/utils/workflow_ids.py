@@ -1,7 +1,8 @@
 """What a workflow id looks like, in one place and stdlib only.
 
-``auto:<core hash>`` names an automatic workflow (the topologies sharing that
-core hash); ``manual:<uuid4 hex>`` names a manual one, a hub row holding its
+``auto:<digest>`` names an automatic workflow (the topologies sharing a core
+and a set of base-model families; the digest is opaque, not a core address,
+``hub.workflow_cards.auto_workflow_id``); ``manual:<uuid4 hex>`` names a manual one, a hub row holding its
 own document (``workflow_document``). Stdlib only, so the MCP server, which is
 a light separate process, can check an id without importing the hub.
 

@@ -6,8 +6,8 @@
 // this app reads**:
 //
 //   {
-//     id,                               // the workflow, OPAQUE: `auto:<core
-//                                       // hash>` or `manual:<uuid hex>`. Every
+//     id,                               // the workflow, OPAQUE: `auto:<digest>`
+//                                       // or `manual:<uuid hex>`. Every
 //                                       // `/workflows/{id}/…` route, the Run
 //                                       // body's `workflow_id` and the picture
 //                                       // grid's `workflow=` filter take it

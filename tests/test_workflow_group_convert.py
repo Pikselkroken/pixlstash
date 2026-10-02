@@ -575,7 +575,7 @@ def test_step_7_makes_every_stored_file_a_manual_workflow_once(tmp_path):
     first = snapshot()
 
     with hub.transaction() as conn:
-        convert.adopt_workflow_files(conn, str(folder))
+        assert convert.adopt_workflow_files(conn, str(folder)) == 0
     assert snapshot() == first
     hub.close()
 

@@ -19,7 +19,7 @@ import { errorMessage } from "../utils/apiError";
 /**
  * The Workflows grid (v1.12 F1a) — the cards, the sort and the selection.
  *
- * **One card per workflow, keyed by its `id`** (#1623): `auto:<core hash>` or
+ * **One card per workflow, keyed by its `id`** (#1623): `auto:<core and families digest>` or
  * a manual group's uuid. There are no stacks to open any more; a workflow that
  * holds several topologies is still one card, and Merge / Split are the two
  * writes that change which topologies a workflow holds.

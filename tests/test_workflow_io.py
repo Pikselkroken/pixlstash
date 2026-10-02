@@ -37,7 +37,11 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
 )
 from pixlstash.services.workflow_bindings import run_targets
-from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.services.workflow_io import (
+    api_graph,
+    detect_workflow_io,
+    with_converted_graph,
+)
 from pixlstash.utils.comfyui_utilities import (
     NotAWorkflowError,
     check_comfy_workflow,
@@ -1450,3 +1454,13 @@ def test_a_selection_routed_on_one_card_does_not_move_another_cards():
     this_card = other_card + [_card_input("elsewhere")]
     fills = resolve_fills(this_card, requested, {}, has_selection=True)
     assert [fill.how for fill in fills] == [None, None, "selection"]
+
+
+def test_a_converted_graph_keeps_the_workflows_own_keys():
+    """The editor workflow's output choice wins over one the conversion carried."""
+    editor = {"nodes": [], "links": [], "pixlstash_output": "mine"}
+    graph = {
+        "1": {"class_type": "SaveImage", "inputs": {}},
+        "pixlstash_output": "theirs",
+    }
+    assert with_converted_graph(editor, graph)["pixlstash_output"] == "mine"
