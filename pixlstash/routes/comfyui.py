@@ -385,6 +385,8 @@ def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
             "workflow_id": None,
             "topology_hash": topology_hash,
         }
+    # The listing's size can be missing, so the stored row's cap is held here.
+    _within_the_cap(migrated)
     return {
         "name": _stem(name),
         "matched": False,

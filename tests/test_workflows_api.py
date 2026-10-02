@@ -3505,6 +3505,9 @@ def test_a_manual_runs_pictures_count_on_it_and_fall_back_when_it_goes(
 
     # No vault write: the picture still names the workflow that made it.
     assert server.vault.db.run_task(run_workflow_id) == manual
+    # And it is written once: a later run reporting it does not re-file it.
+    comfyui_service._set_run_workflow_id(server, "manual:" + "b" * 32, [pid])
+    assert server.vault.db.run_task(run_workflow_id) == manual
 
 
 def test_an_unknown_workflow_is_a_404_and_a_malformed_id_a_422(workflow_env):

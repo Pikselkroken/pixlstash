@@ -7206,7 +7206,14 @@ def create_router(server) -> APIRouter:
                         sweep=sweep,
                     )
                     delete_manual_workflow(hub, workflow_id)
-        except (OSError, ValueError, RecursionError, TrashPermissionError) as exc:
+        except (
+            OSError,
+            ValueError,
+            RecursionError,
+            TrashPermissionError,
+            sqlite3.Error,
+        ) as exc:
+            # sqlite3.Error: the trash copy may be made and the rows kept.
             logger.warning("Failed to delete workflow %s: %s", workflow_id, exc)
             raise HTTPException(
                 status_code=500, detail="Failed to delete the workflow."

@@ -345,10 +345,20 @@ def dissolve_manual_groups(conn: sqlite3.Connection) -> int:
             "SELECT workflow_key FROM workflow_key_successor WHERE workflow_id = ?",
             (group,),
         ).fetchall():
+            target = auto_of.get(topology_of_key.get(workflow_key), heir)
+            if target is None:
+                # The column is NOT NULL; the row keeps naming the old id.
+                logger.warning(
+                    "Card %s of hand-made workflow %s has no automatic workflow "
+                    "to follow; its successor row keeps the old id.",
+                    workflow_key,
+                    group,
+                )
+                continue
             conn.execute(
                 "UPDATE workflow_key_successor SET workflow_id = ? "
                 "WHERE workflow_key = ?",
-                (auto_of.get(topology_of_key.get(workflow_key), heir), workflow_key),
+                (target, workflow_key),
             )
         conn.execute(
             "DELETE FROM workflow_group WHERE workflow_id = ? AND NOT EXISTS "
