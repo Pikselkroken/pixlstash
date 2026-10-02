@@ -31,7 +31,11 @@ from pixlstash.hub.workflow_card_reads import (
     manual_document,
     workflow_of_variant,
 )
-from pixlstash.hub.workflow_group_writes import delete_manual_workflow
+from pixlstash.hub import workflow_origin
+from pixlstash.hub.workflow_group_writes import (
+    create_manual_workflow,
+    delete_manual_workflow,
+)
 import pixlstash.routes.comfyui as comfyui_routes
 import pixlstash.hub.workflow_group_convert as convert
 from pixlstash.hub.workflow_group_convert import (
@@ -46,6 +50,7 @@ from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflows import get_document, record_api_graph, record_ui_graph
 from pixlstash.server import Server
 import pixlstash.routes.workflows as workflows_routes
+from pixlstash.services import workflow_inbox
 from pixlstash.services.workflow_hash import graph_key, node_labels
 from pixlstash.services.workflow_identity import (
     core_node_labels,
@@ -595,6 +600,36 @@ def test_the_hub_open_runs_step_7_on_the_user_folder(tmp_path, monkeypatch):
     try:
         assert reopened.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
         assert reopened.fetchone("SELECT COUNT(*) FROM workflow_document")[0] == 3
+    finally:
+        reopened.close()
+
+
+def test_the_hub_open_hashes_built_in_origin_rows_stored_without_one(tmp_path):
+    """Data step 9: a built-in adopted before its row carried the hash.
+
+    The inbox then stores the same content a second time; after the step it
+    matches the built-in's workflow. Once only: a second run hashes nothing.
+    """
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    builtin = create_manual_workflow(
+        hub,
+        "flow",
+        _EDITOR,
+        "builtin",
+        record=(workflow_origin.BUILTIN_ORIGIN, "flow.json", None),
+    )
+    digest = workflow_inbox.content_hash(_EDITOR)
+    assert workflow_origin.stored_as(hub, digest) is None
+    with hub.transaction() as conn:
+        conn.execute("PRAGMA user_version = 8")
+    path = hub.path
+    hub.close()
+    reopened = HubDatabase(path)
+    try:
+        assert reopened.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
+        assert workflow_origin.stored_as(reopened, digest) == builtin
+        with reopened.transaction() as conn:
+            assert convert.hash_builtin_origins(conn) == 0
     finally:
         reopened.close()
 

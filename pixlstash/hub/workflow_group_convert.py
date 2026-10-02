@@ -48,6 +48,7 @@ from pixlstash.hub.workflow_card_reads import (
     variant_documents,
     workflow_index,
 )
+from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN
 from pixlstash.hub.workflow_cards import (
     CORE_RULE_VERSION,
     STRIP_LORAS_FOR_STACKS,
@@ -85,6 +86,7 @@ from pixlstash.services.workflow_identity import (
     unswapped,
 )
 from pixlstash.services.workflow_bindings import migrate_placeholders
+from pixlstash.services.workflow_inbox import content_hash
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX, stamp_workflow_id
@@ -518,6 +520,45 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
         adopted += wrote
     logger.info("Made %d stored workflow file(s) manual workflows.", adopted)
     return adopted
+
+
+def hash_builtin_origins(conn: sqlite3.Connection) -> int:
+    """Give each hashless built-in origin row its content hash; return how many.
+
+    Hub data step 9. A built-in made a manual workflow before the hash was
+    written with it has a ``builtin`` row with ``content_hash`` NULL, which
+    ``workflow_origin.stored_as`` cannot match, so the inbox or a pull of the
+    same content stored a second copy. The hash is the stored document's
+    (``workflow_inbox.content_hash`` ignores the workflow's own tag). A row
+    whose workflow is gone is left: there is nothing to hash. A document that
+    will not hash is logged and left.
+    """
+    rows = conn.execute(
+        "SELECT o.remote_path, d.document FROM workflow_origin o "
+        "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
+        "WHERE o.origin = ? AND o.content_hash IS NULL",
+        (BUILTIN_ORIGIN,),
+    ).fetchall()
+    hashed = 0
+    for remote_path, document in rows:
+        try:
+            digest = content_hash(json.loads(document))
+        except (ValueError, TypeError, AttributeError, RecursionError) as exc:
+            logger.warning(
+                "Built-in %s's stored workflow will not hash, so its origin "
+                "row stays without one: %s",
+                remote_path,
+                exc,
+            )
+            continue
+        conn.execute(
+            "UPDATE workflow_origin SET content_hash = ? "
+            "WHERE origin = ? AND remote_path = ?",
+            (digest, BUILTIN_ORIGIN, remote_path),
+        )
+        hashed += 1
+    logger.info("Hashed %d built-in workflow origin row(s).", hashed)
+    return hashed
 
 
 # The stamp core rule v1 wrote, which data step 8 re-derives from.
