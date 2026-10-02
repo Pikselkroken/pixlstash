@@ -375,8 +375,9 @@ WORKFLOW_TOOLS = [
     {
         "name": "export_workflow_graph",
         "description": "Write a workflow's runnable graph (ComfyUI API "
-        "format, prompt and seed kept, credentials blanked) to a JSON file on "
-        "this machine and return the path, not the graph. Changes nothing in "
+        "format, as Open in ComfyUI opens it: the graph Run would submit, "
+        "with the workflow's default recipe applied and every seed input "
+        "filled, credentials blanked) to a JSON file on this machine and return the path, not the graph. Changes nothing in "
         "PixlStash, but it does write a file: to out_path if given, "
         "overwriting what is there, else to PixlStash's cache folder, where "
         "exporting the same workflow again replaces the last export. Hand "
@@ -807,8 +808,10 @@ def _call_workflow_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict] 
             "nodes": len(workflow),
             "name": graph.get("name"),
             "source": graph.get("source"),
-            # Both mean the graph will not run as written, so say so here
-            # rather than leave the agent to find out from a validator.
+            # Forgotten models mean the graph will not run as written, so say
+            # so here rather than leave the agent to find out from a validator.
+            # `seedless` is always false since the route fills every seed; it
+            # is kept so an older server's answer still reads the same.
             "seedless": graph.get("seedless", False),
             "forgotten_models": graph.get("forgotten", 0),
         }

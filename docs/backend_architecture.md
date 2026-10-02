@@ -2311,6 +2311,18 @@ ingest and the file's import do not depend on a card, and the backfill retries.
 
 #### Workflows: identity, core addresses and the default recipe (#1622)
 
+**The invariant (owner decision, 2026-10-02).** A workflow has exactly one
+graph. Run, Open in ComfyUI, Export and Duplicate all use it. Which pictures
+belong to a workflow is decided by the core rule (core and base-model
+families), never by hand; a wrong grouping is fixed in the rule or by
+Duplicate into a workflow of its own.
+Every other topology a workflow's pictures reduce to is not a member to list,
+regroup or open: it is a picture filed on the workflow because it reduces to
+the same core. Nothing below that reads as a hand-placed topology (merge,
+split, member rows) is being retired under this; the stack level of v1.11,
+and the merge/split verbs of #1623 that listed a workflow's graphs, both broke
+it, which is why the model moved three times in as many days.
+
 The owner-facing **workflow** is a group of variants, and since the cut-over
 (#1623) it is what every route reads: the card is internal storage.
 `variant (structural_hash) -> workflow (workflow_id)`, where the id is
