@@ -257,7 +257,6 @@ def manual_document(hub: HubDatabase, workflow_id: str) -> Optional[dict]:
         return None
     try:
         document = json.loads(row["document"])
-        converted = json.loads(row["api_document"]) if row["api_document"] else None
     except json.JSONDecodeError as exc:
         logger.error(
             "Stored document of manual workflow %s is not valid JSON, so it has "
@@ -266,6 +265,18 @@ def manual_document(hub: HubDatabase, workflow_id: str) -> Optional[dict]:
             exc,
         )
         return None
+    converted = None
+    if row["api_document"]:
+        try:
+            converted = json.loads(row["api_document"])
+        except json.JSONDecodeError as exc:
+            # The conversion only; the stored document still runs.
+            logger.error(
+                "Stored API document of manual workflow %s is not valid JSON; its "
+                "stored document runs instead: %s",
+                workflow_id,
+                exc,
+            )
     if not isinstance(document, dict):
         logger.error("Manual workflow %s holds a non-object document.", workflow_id)
         return None

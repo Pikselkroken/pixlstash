@@ -295,6 +295,7 @@ def store_manual_workflow(
     from_workflow_id: str | None = None,
     from_name: str | None = None,
     api_document: dict | None = None,
+    record: tuple[str, str, str | None] | None = None,
 ) -> str:
     """Store *workflow* as a new manual workflow called *name*; return its id.
 
@@ -324,6 +325,7 @@ def store_manual_workflow(
         from_workflow_id=from_workflow_id,
         from_name=from_name,
         api_document=api_document,
+        record=record,
     )
 
 
@@ -411,9 +413,12 @@ def store_inbox_workflow(hub, name: str, workflow: dict) -> dict:
     stored = workflow_origin.stored_as(hub, digest)
     if stored is not None:
         return {"name": _stem(name), "matched": True, "workflow_id": stored}
-    workflow_id = store_manual_workflow(hub, _stem(name), workflow, "inbox")
-    workflow_origin.record_pulled(
-        hub, workflow_origin.INBOX_ORIGIN, digest, workflow_id, None, digest
+    workflow_id = store_manual_workflow(
+        hub,
+        _stem(name),
+        workflow,
+        "inbox",
+        record=(workflow_origin.INBOX_ORIGIN, digest, digest),
     )
     return {"name": _stem(name), "matched": False, "workflow_id": workflow_id}
 
@@ -2226,12 +2231,19 @@ def create_router(server) -> APIRouter:
                     # conversion rides along as the row's API document.
                     stored = _load_workflow_json(path)
                     converted = converted_graph(path, stored)
+                    # Its origin row in the same transaction, with the content
+                    # hash, so the inbox and a pull dedupe against it too.
                     workflow_id = store_manual_workflow(
                         hub,
                         _stem(name),
                         stored,
                         "builtin",
                         api_document=converted,
+                        record=(
+                            workflow_origin.BUILTIN_ORIGIN,
+                            name,
+                            workflow_inbox.content_hash(stored),
+                        ),
                     )
                 except (NotAWorkflowError, RecursionError, ValueError) as exc:
                     logger.warning(
@@ -2243,9 +2255,6 @@ def create_router(server) -> APIRouter:
                         status_code=409,
                         detail=f"PixlStash could not store the workflow {name}.",
                     ) from exc
-                workflow_origin.record_pulled(
-                    hub, workflow_origin.BUILTIN_ORIGIN, name, workflow_id, None, None
-                )
                 announce_changed_workflows(
                     server,
                     [workflow_id],
@@ -2374,7 +2383,9 @@ def create_router(server) -> APIRouter:
             if matched:
                 set_manual_api_document(hub, matched, output)
                 workflow_id = matched[0]
-                name = find_workflow(hub, workflow_id).name or name
+                # Deleted since it matched: keep the derived name.
+                found = find_workflow(hub, workflow_id)
+                name = (found.name if found else None) or name
             else:
                 workflow_id = store_manual_workflow(
                     hub, name, workflow, "import", api_document=output
