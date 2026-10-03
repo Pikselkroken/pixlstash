@@ -1,5 +1,6 @@
 """Finder for saved recipes that name a card and no workflow yet (#1623), or a
-workflow that has since been retired (``workflow_id_successor``)."""
+workflow that has since been retired (``workflow_id_successor``), or a card
+moved out of a workflow that lives on (``workflow_card_move``)."""
 
 from __future__ import annotations
 
@@ -10,7 +11,10 @@ from typing import TYPE_CHECKING
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 
-from pixlstash.hub.workflow_card_reads import workflow_id_successors
+from pixlstash.hub.workflow_card_reads import (
+    moved_card_workflows,
+    workflow_id_successors,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
@@ -52,6 +56,7 @@ class MissingSavedRecipeWorkflowFinder(BaseTaskFinder):
         skip = self._deferred | self._handed_out
         limit = SavedRecipeConvertTask.BATCH_SIZE + len(skip)
         retired = json.dumps(sorted(workflow_id_successors(self._vault.hub)))
+        moved = json.dumps(sorted(moved_card_workflows(self._vault.hub)))
         ids = self._vault.db.run_immediate_read_task(
             lambda session: [
                 row[0]
@@ -59,9 +64,11 @@ class MissingSavedRecipeWorkflowFinder(BaseTaskFinder):
                     text(
                         "SELECT id FROM saved_recipe WHERE workflow_id IS NULL "
                         "OR workflow_id IN (SELECT value FROM json_each(:retired)) "
+                        "OR workflow_key || ' ' || workflow_id IN "
+                        "(SELECT value FROM json_each(:moved)) "
                         "ORDER BY id LIMIT :limit"
                     ),
-                    {"limit": limit, "retired": retired},
+                    {"limit": limit, "retired": retired, "moved": moved},
                 )
             ]
         )

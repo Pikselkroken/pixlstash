@@ -3138,8 +3138,10 @@ def test_a_mark_flip_carries_every_table_a_card_key_appears_in():
     )
     # A record of which workflow each card became at the cut-over (#1622,
     # written by #1623): keyed by the card key AS IT WAS, so a later flip must
-    # leave it naming the old key rather than copy it onto the new ones.
-    historical = {"workflow_key_successor"}
+    # leave it naming the old key rather than copy it onto the new ones. A
+    # family pass's moved card (#1689) keeps its old key too; `_rekey_variants`
+    # adds the new keys alongside it, from every merged card.
+    historical = {"workflow_key_successor", "workflow_card_move"}
     assert set(_KEYED_TABLES).isdisjoint(historical)
     assert _hub_tables_keyed_on_a_workflow_key() == (
         set(_KEYED_TABLES) | derived | historical

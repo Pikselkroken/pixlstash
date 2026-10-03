@@ -2342,6 +2342,7 @@ nothing in the vault moves; a manual workflow's own runs are the one exception
 | `workflow_core_successor` | Per (topology, new workflow), the automatic workflow core rule v1 put the topology in, each one v2 puts its variants in, and the v1 -> v2 core label map (data step 8, below) |
 | `workflow_variant_family` | Per variant, its base-model families (`variant_families`), frozen on first derivation: part of its workflow's id, so a later shelf scan never moves it |
 | `workflow_family_pass` | The shelf signature the last successful family pass (`reidentify_families`) ran against; at most one row |
+| `workflow_card_move` | Per card a family pass moved out of a workflow that lives on (some variants still unknown): its key, the old workflow id and the workflow it moved to, for the vault conversion to re-file a recipe naming the first two onto the third |
 
 Reads (`hub/workflow_card_reads.py`): `workflow_of_variant` (its topology's
 member row, else the id of its core under this build's `CORE_RULE_VERSION` and
@@ -2563,7 +2564,8 @@ carried on to it (`_carry_group_state`), which is also why those steps keep a
 frozen copy of the file-only card reader (`_cards_as_filed`). The retired
 `auto:<topology hash>` is recorded in `workflow_id_successor` (retired id →
 the manual id), and `MissingSavedRecipeWorkflowFinder` hands out every saved
-recipe naming a retired id as well as the NULL ones, so
+recipe naming a retired id as well as the NULL ones (and, since #1689, one
+on a card a family pass moved out of a workflow that lives on), so
 `SavedRecipeConvertTask` re-files a recipe of that file-only card - converted
 or not - onto the manual workflow, with the manual id as its card: nothing the
 owner saved changes where it lists. The id is a
@@ -2652,8 +2654,13 @@ same carry data step 8 uses (owner state merged, never dropped; successor,
 retired-id and `from` rows; `workflow_core_successor` with an empty label map,
 so the vault conversion re-files a recipe on its card's workflow and rewrites
 nothing). A workflow some of whose variants stay unknown keeps living; its
-state is copied to where the others went. `identify` reads the Z-Image
-community abbreviations `zib` / `zit` as whole filename tokens; a name that
+state is copied to where the others went, and each card none of whose
+variants stayed is recorded in `workflow_card_move` with the workflow it
+moved to, so the vault conversion re-files a recipe on it onto that recorded
+workflow, never one inferred from a variant (#1689); a recipe on a card that
+stayed, wholly or in part, is left where it is. A model fix carries move rows
+onto a new key only when every card merging into it moved out of that
+workflow (`_carry_card_moves`), since recipes from all of them land there. `identify` reads the Z-Image community abbreviations `zib` / `zit` as whole filename tokens; a name that
 glues them to a version (`zitv6`) is left to the shelf.
 
 The prune runs after the v1 strip rather than on the document on purpose: that
@@ -3050,7 +3057,9 @@ map at error level before it raises. The workflow's id does not move.
 card, and it is derived rather than remembered**: it is exactly the hub tables
 carrying a `workflow_key` column, less `workflow_variant` and `workflow_file`,
 which hold a *derived* key and are moved by their own `UPDATE` because a split
-must not duplicate a variant onto both halves.
+must not duplicate a variant onto both halves, and less the historical
+`workflow_key_successor` and `workflow_card_move` (the latter carried onto a
+merged key only when every merged card holds the same move).
 `test_a_mark_flip_carries_every_table_a_card_key_appears_in` reads that from
 `hub/schema.py`, so a new card table that nobody adds to the tuple fails the
 build instead of being dropped silently by the next re-key.

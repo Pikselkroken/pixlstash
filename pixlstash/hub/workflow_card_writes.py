@@ -283,6 +283,8 @@ def _rekey_variants(
             conn.execute(f"DELETE FROM {table} WHERE workflow_key = ?", (new_key,))
             _copy_rows(conn, table, winner, new_key)
 
+    _carry_card_moves(conn, contributors)
+
     # Only now, and only for keys no variant is on any more: a split copies
     # one card's attributes to several, so deleting as it went would empty the
     # source before the second copy read it.
@@ -335,6 +337,46 @@ def _rekey_variants(
     _renumber_stacks(conn)
     _drop_thin_stacks(conn)
     return moved
+
+
+def _carry_card_moves(
+    conn: sqlite3.Connection, contributors: dict[str, set[str]]
+) -> None:
+    """Put a family pass's move rows (#1689) on the keys recipes move to.
+
+    A move row is matched against the key a saved recipe stores, and
+    ``saved_recipe_service.rekey_in_session`` moves the recipes of EVERY old
+    key onto the new one, merged loser or not. So a new key holds a move out
+    of a workflow only when **every** card merging into it moved out of it:
+    one card that stayed means its recipes would be re-filed by a row that
+    was never about them, so the new key gets none, and every recipe there
+    stays where it is (still running). The old keys' rows stay.
+    """
+    rows = conn.execute(
+        "SELECT workflow_key, old_workflow_id, new_workflow_id FROM workflow_card_move"
+    ).fetchall()
+    for new_key, olds in sorted(contributors.items()):
+        moves: dict[str, dict[str, str]] = {}
+        for key, old_workflow_id, new_workflow_id in rows:
+            if key in olds:
+                moves.setdefault(old_workflow_id, {})[key] = new_workflow_id
+        for old_workflow_id, by_key in sorted(moves.items()):
+            if set(by_key) == olds:
+                conn.execute(
+                    "INSERT OR IGNORE INTO workflow_card_move (workflow_key, "
+                    "old_workflow_id, new_workflow_id) VALUES (?, ?, ?)",
+                    (
+                        new_key,
+                        old_workflow_id,
+                        by_key.get(new_key, by_key[min(by_key)]),
+                    ),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM workflow_card_move WHERE workflow_key = ? "
+                    "AND old_workflow_id = ?",
+                    (new_key, old_workflow_id),
+                )
 
 
 def _pictures_per_key(

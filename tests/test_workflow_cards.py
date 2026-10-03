@@ -842,6 +842,71 @@ def test_a_replaced_model_keeps_the_card_and_its_pictures(hub):
     assert model_fixes(hub, old.topology_hash) == []
 
 
+@pytest.mark.parametrize("winner_moved", [True, False])
+def test_a_merge_carries_a_family_move_only_when_every_card_moved(hub, winner_moved):
+    """#1689: a model fix moves every merged card's recipes onto the new key.
+
+    Both cards moved out of the workflow: the merged key holds the move, with
+    its target. Only the losing one moved: a recipe from the card that stayed
+    lands on the same key, so the key holds no move and nothing is re-filed.
+    """
+    old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
+    early = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
+    card = card_of(hub, old.structural_hash)
+    apart = card_of(hub, early.structural_hash)
+    left, went = "auto:" + "a" * 64, "auto:" + "b" * 64
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_card_move (workflow_key, old_workflow_id, "
+            "new_workflow_id) VALUES (?, ?, ?)",
+            [(apart, left, went)] + ([(card, left, went)] if winner_moved else []),
+        )
+
+    moved = set_model_fix(
+        hub,
+        old.topology_hash,
+        [_base_slot_label(hub, old.topology_hash)],
+        "sdxl/test-model-FP8.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+
+    assert moved == {apart: [card]}, "apart must be the merged loser"
+    rows = {
+        tuple(row)
+        for row in hub.fetchall(
+            "SELECT workflow_key, old_workflow_id, new_workflow_id "
+            "FROM workflow_card_move"
+        )
+    }
+    assert rows == {(apart, left, went)} | (
+        {(card, left, went)} if winner_moved else set()
+    )
+    if not winner_moved:
+        return
+    # Undone, the fix splits `apart` back out onto a key no move row is on:
+    # the move is carried there from the card it leaves.
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_card_move WHERE workflow_key = ?", (apart,))
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        [_base_slot_label(hub, old.topology_hash)],
+        "sdxl/test-model-FP8.safetensors",
+        None,
+        {},
+    )
+    assert card_of(hub, early.structural_hash) == apart
+    assert tuple(
+        hub.fetchone(
+            "SELECT new_workflow_id FROM workflow_card_move "
+            "WHERE workflow_key = ? AND old_workflow_id = ?",
+            (apart, left),
+        )
+        or ()
+    ) == (went,)
+
+
 def test_a_fix_targets_checkpoint_slots_across_the_whole_topology(hub):
     """Every card of the graph, and never a VAE slot naming the same file.
 

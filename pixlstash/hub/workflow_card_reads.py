@@ -261,6 +261,19 @@ def workflow_id_successors(hub: HubDatabase) -> dict[str, str]:
     }
 
 
+def moved_card_workflows(hub: HubDatabase) -> dict[str, str]:
+    """``{"<workflow key> <old workflow id>": new workflow id}`` per card a
+    family pass moved out of a workflow that lives on (``workflow_card_move``).
+    """
+    return {
+        f"{row[0]} {row[1]}": row[2]
+        for row in hub.fetchall(
+            "SELECT workflow_key, old_workflow_id, new_workflow_id "
+            "FROM workflow_card_move"
+        )
+    }
+
+
 def manual_workflow_ids(hub: HubDatabase) -> list[str]:
     """Every live manual workflow's id, sorted: what the vault reads file under."""
     return [
