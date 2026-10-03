@@ -813,7 +813,7 @@ async function chooseLibraryFolder() {
   // Read after the refresh: `pendingForThisLibrary` matches the entry against
   // the active library's path, and with no list yet a good entry looks absent.
   const entry = pendingForThisLibrary.value;
-  if (entry?.mode === "local_import") {
+  if (entry?.mode === "local_import" && (await pendingEntryIsLive(entry))) {
     openFolderMappingWizard(entry);
     return;
   }
@@ -882,42 +882,59 @@ async function folderMappingWizardCommitted() {
 // Watched rather than checked once on mount: the library list that says
 // which root is active loads after this component does.
 let autoOpenedPendingMapping = false;
+// commit task id -> Promise<completed?>; see `pendingEntryIsLive`. Above the
+// watch, which runs immediately.
+const commitChecks = new Map();
 watch(
   () => pendingForThisLibrary.value,
   async (entry) => {
-    if (autoOpenedPendingMapping || isReadOnly.value) return;
-    if (entry?.mode !== "local_import") return;
+    if (!entry || isReadOnly.value) return;
+    // Every entry is settled on sight, not only one this would open: the
+    // "Finish organising…" row renders from the same entry.
+    if (!(await pendingEntryIsLive(entry))) return;
+    if (autoOpenedPendingMapping || entry.mode !== "local_import") return;
     autoOpenedPendingMapping = true;
-    if (await commitAlreadyCompleted(entry)) {
-      mappingStore.clear();
-      return;
-    }
     openFolderMappingWizard(entry);
   },
   { immediate: true },
 );
 
+/** The "Finish organising…" row: the same check as every other way in. */
+async function openPendingMapping() {
+  const entry = pendingForThisLibrary.value;
+  if (entry && (await pendingEntryIsLive(entry))) openFolderMappingWizard(entry);
+}
+
 /**
- * Whether the entry's commit finished before this page load.
+ * Whether a saved entry still has anything to finish, clearing it when not.
  *
  * Promoting a first import closes the library's websockets, and the client
  * reloads on that close - usually before the wizard's poll sees `completed`
- * and clears the entry. Reopened, it would offer to set up the library the
- * import just finished. Anything short of a definite `completed` (a running,
- * failed or forgotten commit) still opens the wizard, as before.
+ * and clears the entry. Opened from it, the wizard would offer to set up the
+ * library the import just finished. Every way of opening a saved entry asks
+ * here; anything short of a definite `completed` (running, failed, forgotten)
+ * is still live, as before. One request per commit, however many ask.
  */
-async function commitAlreadyCompleted(entry) {
-  if (!entry.commitTaskId) return false;
-  try {
-    const body = await getFolderStructureCommitStatus(entry.commitTaskId);
-    return body?.status === "completed";
-  } catch (error) {
-    console.warn("Could not check whether the saved import finished", {
-      commitTaskId: entry.commitTaskId,
-      error,
-    });
-    return false;
+async function pendingEntryIsLive(entry) {
+  const id = entry.commitTaskId;
+  if (!id) return true;
+  if (!commitChecks.has(id)) {
+    commitChecks.set(
+      id,
+      getFolderStructureCommitStatus(id)
+        .then((body) => body?.status === "completed")
+        .catch((error) => {
+          console.warn("Could not check whether the saved import finished", {
+            commitTaskId: id,
+            error,
+          });
+          return false;
+        }),
+    );
   }
+  if (!(await commitChecks.get(id))) return true;
+  if (mappingStore.pending?.commitTaskId === id) mappingStore.clear();
+  return false;
 }
 
 // The empty library, when its own folder is not empty. The desktop's first
@@ -6161,7 +6178,7 @@ defineExpose({
             <div
               v-if="pendingForThisLibrary"
               class="sidebar-folder-row sidebar-mapping-resume-row"
-              @click="openFolderMappingWizard(pendingForThisLibrary)"
+              @click="openPendingMapping"
             >
               <Tooltip
                 :text="
