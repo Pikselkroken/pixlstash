@@ -1241,7 +1241,7 @@ read/write one.
 
 | Route | Tier | Shape |
 |---|---|---|
-| `GET /libraries` | `owner_only` | `{ libraries[], can_manage, in_docker, cli_hint }` |
+| `GET /libraries` | `owner_only` | `{ libraries[], can_manage, in_docker, cli_hint, importing_uuid, importing_name, importing_path }` |
 | `GET /libraries/inspect?path=` | `local_owner_only` | one verdict (below) |
 | `POST /libraries` | `local_owner_only` | `{ path, name? }` → the library, `201` |
 | `PATCH /libraries/{library_uuid}` | `local_owner_only` | `{ name }` → the library |

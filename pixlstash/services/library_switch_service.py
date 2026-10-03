@@ -458,8 +458,8 @@ class LibrarySwitchService:
 
         The library keeps its identity, its folder and every row it indexed;
         only the file's name changes, and with it the fact that this folder now
-        holds a library at all. Called when an import finishes, and when the
-        owner answers "start an empty library here" instead of importing.
+        holds a library at all. Called when a first import's commit finishes
+        (``routes/folder_structure.py``), and from nowhere else.
 
         **This inverts the ordering the rest of this module is built on.** A
         switch opens the incoming vault before retiring the outgoing one, so a

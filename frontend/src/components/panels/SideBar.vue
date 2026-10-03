@@ -49,6 +49,7 @@ import {
   addPictureToSet,
 } from "../../api/pictureSets";
 import { inspectLibraryPath } from "../../api/libraries";
+import { getFolderStructureCommitStatus } from "../../api/folderStructure";
 import { deleteProject } from "../../api/projects";
 import {
   listReferenceFolders,
@@ -754,6 +755,13 @@ function routeSubfolderUnder(root) {
   };
 }
 
+// The folder this session is on. A library on its first import is left out
+// of the listing, so `activeLibrary` is undefined until the import finishes -
+// and the import is exactly what the wizard reopened against this path runs.
+const activeRoot = computed(
+  () => librariesStore.activeLibrary?.path || librariesStore.importingPath,
+);
+
 // The pending mapping this library can act on. A `local_import` entry names
 // the library root it was saved for; shown or auto-opened against any OTHER
 // library it would offer to "set up" a library that is already set up - which
@@ -764,7 +772,7 @@ const pendingForThisLibrary = computed(() => {
   const entry = mappingStore.pending;
   if (!entry) return null;
   if (entry.mode !== "local_import") return entry;
-  return _samePath(entry.path, librariesStore.activeLibrary?.path)
+  return _samePath(entry.path, activeRoot.value)
     ? entry
     : null;
 });
@@ -805,11 +813,11 @@ async function chooseLibraryFolder() {
   // Read after the refresh: `pendingForThisLibrary` matches the entry against
   // the active library's path, and with no list yet a good entry looks absent.
   const entry = pendingForThisLibrary.value;
-  if (entry?.mode === "local_import") {
+  if (entry?.mode === "local_import" && (await pendingEntryIsLive(entry))) {
     openFolderMappingWizard(entry);
     return;
   }
-  const path = librariesStore.activeLibrary?.path;
+  const path = activeRoot.value;
   if (path && librariesStore.canManage) {
     // Re-inspected on every click: a root that was empty when the count was
     // cached may hold pictures now. A failed inspect leaves the count alone.
@@ -874,16 +882,66 @@ async function folderMappingWizardCommitted() {
 // Watched rather than checked once on mount: the library list that says
 // which root is active loads after this component does.
 let autoOpenedPendingMapping = false;
+// commit task id -> in-flight Promise<completed?>; see `pendingEntryIsLive`.
+// Above the watch, which runs immediately.
+const commitChecks = new Map();
 watch(
   () => pendingForThisLibrary.value,
-  (entry) => {
-    if (autoOpenedPendingMapping || isReadOnly.value) return;
-    if (entry?.mode !== "local_import") return;
+  async (entry) => {
+    if (!entry || isReadOnly.value) return;
+    // Every entry is settled on sight, not only one this would open: the
+    // "Finish organising…" row renders from the same entry.
+    if (!(await pendingEntryIsLive(entry))) return;
+    if (autoOpenedPendingMapping || entry.mode !== "local_import") return;
     autoOpenedPendingMapping = true;
     openFolderMappingWizard(entry);
   },
   { immediate: true },
 );
+
+/** The "Finish organising…" row: the same check as every other way in. */
+async function openPendingMapping() {
+  const entry = pendingForThisLibrary.value;
+  if (entry && (await pendingEntryIsLive(entry))) openFolderMappingWizard(entry);
+}
+
+/**
+ * Whether a saved entry still has anything to finish, clearing it when not.
+ *
+ * Promoting a first import closes the library's websockets, and the client
+ * reloads on that close - usually before the wizard's poll sees `completed`
+ * and clears the entry. Opened from it, the wizard would offer to set up the
+ * library the import just finished. Every way of opening a saved entry asks
+ * here; anything short of a definite `completed` (running, failed, forgotten)
+ * is still live, as before. Concurrent askers share one request.
+ */
+async function pendingEntryIsLive(entry) {
+  const id = entry.commitTaskId;
+  if (!id) return true;
+  if (!commitChecks.has(id)) {
+    commitChecks.set(
+      id,
+      getFolderStructureCommitStatus(id)
+        .then((body) => body?.status === "completed")
+        .catch((error) => {
+          console.warn("Could not check whether the saved import finished", {
+            commitTaskId: id,
+            error,
+          });
+          return false;
+        }),
+    );
+  }
+  const completed = await commitChecks.get(id);
+  // Only a finished commit is final. One still running (or unreachable) may
+  // finish later in this session, so the next opener asks again.
+  if (!completed) {
+    commitChecks.delete(id);
+    return true;
+  }
+  if (mappingStore.pending?.commitTaskId === id) mappingStore.clear();
+  return false;
+}
 
 // The empty library, when its own folder is not empty. The desktop's first
 // run creates the vault in whatever folder was chosen, and the web flow's
@@ -944,7 +1002,7 @@ async function takeParkedFolderRead() {
 
 async function _offerLoosePictures() {
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
-  const path = librariesStore.activeLibrary?.path;
+  const path = activeRoot.value;
   if (!path || !librariesStore.canManage) return;
   // On desktop the startup screen may have read this very folder already,
   // alongside the runtime download. Resuming that read is the whole point of
@@ -6126,7 +6184,7 @@ defineExpose({
             <div
               v-if="pendingForThisLibrary"
               class="sidebar-folder-row sidebar-mapping-resume-row"
-              @click="openFolderMappingWizard(pendingForThisLibrary)"
+              @click="openPendingMapping"
             >
               <Tooltip
                 :text="

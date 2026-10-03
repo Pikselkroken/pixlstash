@@ -254,6 +254,11 @@ class TestListing:
             body = _owner(server).get(f"{API}/libraries").json()
 
             assert body["importing_name"] == pending.name
+            assert body["importing_path"] == pending.path, (
+                "the client finds its saved first import by this folder"
+            )
+            remote = _owner(server, REMOTE_IP).get(f"{API}/libraries").json()
+            assert remote["importing_path"] is None
             assert pending.uuid not in [entry["uuid"] for entry in body["libraries"]], (
                 "a library that does not exist yet must not be offered"
             )

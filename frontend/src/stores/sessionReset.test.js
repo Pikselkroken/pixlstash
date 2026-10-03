@@ -313,12 +313,14 @@ const STORES = [
       s.libraries = [{ uuid: "a", name: "Main", is_active: true }];
       s.canManage = true;
       s.cliHint = "pixlstash --library /srv/main";
+      s.importingPath = "/srv/importing";
       s.hasLoadedSuccessfully = true;
     },
     isEmpty: (s) =>
       s.libraries.length === 0 &&
       s.canManage === false &&
       s.cliHint === "" &&
+      s.importingPath === "" &&
       s.hasLoadedSuccessfully === false,
   },
   {

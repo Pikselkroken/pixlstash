@@ -150,6 +150,15 @@ class LibraryListResponse(BaseModel):
             "own basename."
         ),
     )
+    importing_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Folder of the library being imported for the first time. Same "
+            "visibility as a listed library's `path`: omitted for a remote "
+            "session. The client matches its saved first-import entry against "
+            "it to run the commit after the switch reloads the page."
+        ),
+    )
 
 
 LibraryVerdict = Literal["attached", "overlaps", "vault", "pictures", "empty"]
@@ -333,6 +342,7 @@ def create_router(server) -> APIRouter:
             cli_hint=cli_hint(hub_path=server.hub.path) if local else None,
             importing_name=importing.name if importing else None,
             importing_uuid=importing.uuid if importing else None,
+            importing_path=importing.path if importing and local else None,
         )
 
     def _safe_folder(path: str) -> str:

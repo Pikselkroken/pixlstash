@@ -30,14 +30,19 @@ const INSPECT_LIBRARY_URL = "/libraries/inspect";
 /**
  * List the registered libraries.
  *
- * `path` and `cli_hint` are present only when the caller is on the server's
+ * `path`, `cli_hint` and `importing_path` are present only when the caller is on the server's
  * machine, its LAN, or Tailscale. A remote session gets the names and which one
  * is active, and `can_manage: false`, so the UI can disable switching rather
  * than letting the call fail. Every library entry includes
  * `active_share_links`, owner metadata used to warn before its resource-scoped
  * links become inactive.
  *
- * @returns {Promise<Object>} `{ libraries, can_manage, in_docker, cli_hint }`.
+ * A library still on its first import is left out of `libraries`; the
+ * `importing_*` fields name it instead (the sidebar finds its saved import by
+ * `importing_path`).
+ *
+ * @returns {Promise<Object>} `{ libraries, can_manage, in_docker, cli_hint,
+ *   importing_uuid, importing_name, importing_path }`.
  */
 export async function listLibraries() {
   return unwrap(apiClient.get(LIBRARIES_URL));
@@ -116,25 +121,6 @@ export async function renameLibrary(uuid, name) {
  */
 export async function detachLibrary(uuid) {
   return unwrap(apiClient.delete(`${LIBRARIES_URL}/${uuid}`));
-}
-
-/**
- * Finish a library whose first import has not run, without importing.
- *
- * "Start an empty library here": the temporary database is renamed onto
- * `vault.db` and the folder becomes a library holding no pictures. This answer
- * has to stay available whatever a folder contains - closing the question
- * discards, so without it a folder of pictures the owner does not want indexed
- * would be asked about forever.
- *
- * The library is closed and reopened under its new name, so every client is
- * told to reload. A library that already exists is refused (409).
- *
- * @param {string} uuid
- * @returns {Promise<Object>} the finished library, in the listing's shape.
- */
-export async function promoteLibrary(uuid) {
-  return unwrap(apiClient.post(`${LIBRARIES_URL}/${uuid}/promote`));
 }
 
 /**

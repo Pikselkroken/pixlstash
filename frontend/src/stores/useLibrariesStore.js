@@ -27,6 +27,7 @@ export const useLibrariesStore = defineStore("libraries", () => {
   const inDocker = ref(false);
   const importingName = ref("");
   const importingUuid = ref("");
+  const importingPath = ref("");
   const loading = ref(false);
   const loadError = ref("");
   const hasLoadedSuccessfully = ref(false);
@@ -53,6 +54,7 @@ export const useLibrariesStore = defineStore("libraries", () => {
       inDocker.value = Boolean(body?.in_docker);
       importingName.value = body?.importing_name ?? "";
       importingUuid.value = body?.importing_uuid ?? "";
+      importingPath.value = body?.importing_path ?? "";
       hasLoadedSuccessfully.value = true;
     } catch (error) {
       if (startedAt !== epoch) return;
@@ -79,6 +81,7 @@ export const useLibrariesStore = defineStore("libraries", () => {
     inDocker.value = false;
     importingName.value = "";
     importingUuid.value = "";
+    importingPath.value = "";
     loading.value = false;
     loadError.value = "";
     hasLoadedSuccessfully.value = false;
@@ -103,6 +106,7 @@ export const useLibrariesStore = defineStore("libraries", () => {
     activeLibrary,
     importingName,
     importingUuid,
+    importingPath,
     refresh,
   };
 });

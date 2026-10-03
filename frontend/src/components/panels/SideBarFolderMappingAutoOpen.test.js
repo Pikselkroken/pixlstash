@@ -136,6 +136,81 @@ describe("a pending local_import entry", () => {
     wrapper.unmount();
   });
 
+  it("auto-opens on a library still on its first import", async () => {
+    // The real shape after "Yes, build this library": the server leaves a
+    // pending library out of `libraries` and names its folder separately.
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        url === "/libraries"
+          ? {
+              data: {
+                libraries: [
+                  { uuid: "o", name: "old", path: "/home/me/old", is_active: false },
+                ],
+                can_manage: true,
+                importing_uuid: "i",
+                importing_path: entry.path,
+              },
+            }
+          : respond(),
+      ),
+    );
+    // Through the store's own refresh, so the response field is what is tested.
+    await useLibrariesStore().refresh();
+    const wrapper = await mountSidebar();
+
+    const wizard = wrapper.findComponent(FolderMappingWizard);
+    expect(wizard.props("open")).toBe(true);
+    expect(wizard.props("resume")).toEqual(entry);
+
+    wrapper.unmount();
+  });
+
+  it("clears instead of reopening when its commit already completed", async () => {
+    // Promotion reloads the page before the wizard's poll sees `completed`.
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...entry, commitTaskId: "commit-1" }),
+    );
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("commit/status")
+          ? { data: { status: "completed" } }
+          : respond(),
+      ),
+    );
+    activeLibraryAt(entry.path);
+    const wrapper = await mountSidebar();
+
+    expect(wrapper.findComponent(FolderMappingWizard).props("open")).toBe(
+      false,
+    );
+    expect(useFolderMappingStore().pending).toBe(null);
+
+    wrapper.unmount();
+  });
+
+  it("still reopens when its commit is still running", async () => {
+    const saved = { ...entry, commitTaskId: "commit-1" };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("commit/status")
+          ? { data: { status: "running" } }
+          : respond(),
+      ),
+    );
+    activeLibraryAt(entry.path);
+    const wrapper = await mountSidebar();
+
+    const wizard = wrapper.findComponent(FolderMappingWizard);
+    expect(wizard.props("open")).toBe(true);
+    expect(wizard.props("resume")).toEqual(saved);
+
+    wrapper.unmount();
+  });
+
   it("does not auto-open against a different library", async () => {
     // A stale entry from a folder added and cancelled earlier met a
     // re-attached vault and offered to "set up" a library already set up.
@@ -194,6 +269,80 @@ describe("a pending local_import entry", () => {
 });
 
 describe("an ordinary reference-folder pending entry", () => {
+  const reference = {
+    taskId: "task-99",
+    path: "/home/me/Pictures/External",
+    label: "External",
+    mode: "reference",
+    commitTaskId: "commit-7",
+  };
+  function commitStatus(status) {
+    apiGet.mockImplementation((url) => {
+      if (String(url).includes("commit/status")) {
+        return Promise.resolve({ data: { status } });
+      }
+      // The row only renders beside at least one configured folder.
+      if (url === "/reference-folders") {
+        return Promise.resolve({
+          data: { folders: [{ id: 1, folder: "/home/me/ref" }], in_docker: true },
+        });
+      }
+      return Promise.resolve(respond());
+    });
+  }
+
+  it("drops the resume row once its commit has completed", async () => {
+    // The row renders from the same entry the auto-open settles, so a finished
+    // commit must not leave a "Finish organising…" that reopens the wizard.
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reference));
+    commitStatus("completed");
+    const wrapper = await mountSidebar();
+    wrapper.vm.selectFoldersTab();
+    await flushPromises();
+
+    expect(useFolderMappingStore().pending).toBe(null);
+    expect(wrapper.find(".sidebar-mapping-resume-row").exists()).toBe(false);
+
+    wrapper.unmount();
+  });
+
+  it("asks again when a commit that was running has since completed", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reference));
+    commitStatus("running");
+    const wrapper = await mountSidebar();
+    wrapper.vm.selectFoldersTab();
+    await flushPromises();
+    expect(useFolderMappingStore().pending).toEqual(reference);
+
+    commitStatus("completed");
+    await wrapper.find(".sidebar-mapping-resume-row").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.findComponent(FolderMappingWizard).props("open")).toBe(
+      false,
+    );
+    expect(useFolderMappingStore().pending).toBe(null);
+
+    wrapper.unmount();
+  });
+
+  it("keeps the resume row while its commit is unfinished", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reference));
+    commitStatus("running");
+    const wrapper = await mountSidebar();
+    wrapper.vm.selectFoldersTab();
+    await flushPromises();
+
+    expect(useFolderMappingStore().pending).toEqual(reference);
+    await wrapper.find(".sidebar-mapping-resume-row").trigger("click");
+    await flushPromises();
+    expect(wrapper.findComponent(FolderMappingWizard).props("resume")).toEqual(
+      reference,
+    );
+
+    wrapper.unmount();
+  });
+
   it("does not auto-open - only the resume row offers it", async () => {
     window.localStorage.setItem(
       STORAGE_KEY,

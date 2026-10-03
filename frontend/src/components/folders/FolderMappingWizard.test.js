@@ -33,7 +33,6 @@ import {
   discardLibrary,
   inspectLibraryPath,
   listLibraries,
-  promoteLibrary,
   setActiveLibrary,
 } from "../../api/libraries";
 import {
@@ -52,7 +51,6 @@ vi.mock("../../api/libraries", () => ({
   addLibrary: vi.fn(),
   setActiveLibrary: vi.fn(),
   listLibraries: vi.fn(),
-  promoteLibrary: vi.fn(),
   discardLibrary: vi.fn(),
 }));
 
@@ -411,8 +409,10 @@ describe("resuming after the switch", () => {
     expect(addLibrary).not.toHaveBeenCalled();
     expect(startFolderStructureRead).not.toHaveBeenCalled();
     // From here a reopen reattaches to the read; it must never commit twice.
+    // The commit's id rides along so a reload can ask whether it finished.
     expect(useFolderMappingStore().pending).toEqual({
       taskId: "read-1",
+      commitTaskId: "commit-1",
       path: PATH,
       label: "Generations",
       mode: "local_import",
@@ -696,6 +696,33 @@ describe("the branches nobody walks on purpose", () => {
     wrapper.unmount();
   });
 
+  it("records the commit on a plain entry the wizard's own read saved", async () => {
+    // A first run with no GPU step reads nothing at start-up, so the wizard
+    // reads the folder itself and saves a plain entry. The promotion then
+    // reloads before `completed` is seen; without the commit's id the reload
+    // reopened the wizard over the finished library.
+    const plain = { taskId: "read-1", path: PATH, label: "", mode: "local_import" };
+    useFolderMappingStore().save(plain);
+    const wrapper = mountWizard({
+      resume: { path: PATH, result: READ_RESULT, mode: "local_import" },
+    });
+    await settle();
+
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+    wrapper
+      .findComponent(FolderMappingPreviewStep)
+      .vm.$emit("commit-started", "commit-9");
+    await settle();
+
+    expect(useFolderMappingStore().pending).toEqual({
+      ...plain,
+      commitTaskId: "commit-9",
+    });
+
+    wrapper.unmount();
+  });
+
   it("commits a parked read by its result, because its task no longer exists", async () => {
     // The failure this replaces: the desktop's first run read the folder on
     // one server process and restarted onto the GPU runtime before the owner
@@ -813,35 +840,5 @@ describe("a folder still waiting on the question", () => {
     await settle();
 
     expect(discardLibrary).not.toHaveBeenCalled();
-  });
-
-  it("offers starting an empty library there instead, on every step", async () => {
-    pending();
-    promoteLibrary.mockResolvedValue({
-      uuid: "pending-uuid",
-      name: "Generations",
-    });
-    const wrapper = mountWizard();
-
-    const start = button(wrapper, "Start an empty library here");
-    expect(start, "the answer that must always be available").toBeTruthy();
-    await start.trigger("click");
-    await settle();
-
-    expect(promoteLibrary).toHaveBeenCalledWith("pending-uuid");
-    expect(discardLibrary).not.toHaveBeenCalled();
-    expect(reloadPage).toHaveBeenCalled();
-  });
-
-  it("says so rather than reloading when the folder cannot be finished", async () => {
-    pending();
-    promoteLibrary.mockRejectedValue(new Error("disk full"));
-    const wrapper = mountWizard();
-
-    await button(wrapper, "Start an empty library here").trigger("click");
-    await settle();
-
-    expect(wrapper.find(".mapping-wizard__error").exists()).toBe(true);
-    expect(reloadPage).not.toHaveBeenCalled();
   });
 });
