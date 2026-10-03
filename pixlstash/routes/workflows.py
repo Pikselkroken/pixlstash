@@ -3466,9 +3466,10 @@ def create_router(server) -> APIRouter:
         "/workflows/{workflow_id}/pins",
         summary="Set a workflow's pinned parameters",
         description=(
-            "Which parameters this workflow's form shows before 'All N'. An "
-            "empty list is everything unpinned; null forgets the choice, so "
-            "the default pins apply again."
+            "Which parameters the Run form asks for each run; every other "
+            "parameter is fixed at the workflow's value (a saved recipe or an "
+            "API override still sets it). An empty list fixes everything; "
+            "null forgets the choice, so the default pins apply again."
         ),
         response_model=CardPins,
         responses={404: {"description": "This machine has no such workflow."}},

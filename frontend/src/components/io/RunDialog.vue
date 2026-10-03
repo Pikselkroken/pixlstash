@@ -554,7 +554,7 @@
             class="rund-disc"
             data-testid="rund-fixed-params"
           >
-            <summary>
+            <summary ref="fixedSummary">
               Fixed for this workflow
               <span class="rund-quiet">· {{ fixedFields.length }}</span>
             </summary>
@@ -563,7 +563,17 @@
               :key="address(field)"
               class="rund-fixed-row"
             >
-              <span class="rund-l">{{ field.label }}</span>
+              <!-- A value kept from another workflow or a saved recipe still
+                   overrides a fixed one for this run, so it keeps its ↺. -->
+              <span class="rund-l">
+                {{ field.label }}
+                <RunResetChip
+                  v-if="isEdited(field)"
+                  :value="baseOf(field)"
+                  :label="field.label"
+                  @reset="resetValue(field)"
+                />
+              </span>
               <span class="rund-fixed-value">{{ currentValue(field) }}</span>
               <AppButton
                 size="sm"
@@ -833,6 +843,7 @@ const card = ref(null);
 const pins = ref(null);
 /** The address "Set each run" is writing, and what went wrong if it failed. */
 const freeing = ref("");
+const fixedSummary = ref(null);
 const freeError = ref("");
 const recipe = ref(null);
 const cards = ref([]);
@@ -1416,9 +1427,21 @@ async function freeField(field) {
   freeError.value = "";
   try {
     const body = await setWorkflowPins(key, next);
+    const written = body?.pins ?? next;
+    // Told even when the picker has moved on: the write landed on `key`, and
+    // the Workflow tab writes whole lists from its own copy.
+    runDialog.pinsWritten = { workflowId: key, pins: written };
     if (key !== activeKey.value) return;
-    pins.value = body?.pins ?? next;
-    runDialog.pinsWritten = { workflowId: key, pins: pins.value };
+    pins.value = written;
+    // Its row is gone from under the pointer: keep focus on the list, or on
+    // the field it became when the list went with it.
+    await nextTick();
+    const target =
+      fixedSummary.value ??
+      [...document.querySelectorAll("input[aria-label]")].find(
+        (input) => input.getAttribute("aria-label") === field.label,
+      );
+    target?.focus();
   } catch (err) {
     freeError.value = errorMessage(err, `Could not set ${field.label} each run.`);
   } finally {

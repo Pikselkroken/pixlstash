@@ -3,7 +3,14 @@
        pictures' star ratings, 1★ to 5★, with the bars the defaults are read
        from at full ink. One accessible name carries every count and the
        source, and the tooltip says the same. -->
-  <span class="wfstars" role="img" :aria-label="summary" data-testid="wftab-stars">
+  <!-- Focusable so the tooltip opens from the keyboard too. -->
+  <span
+    class="wfstars"
+    role="img"
+    tabindex="0"
+    :aria-label="summary"
+    data-testid="wftab-stars"
+  >
     <Tooltip :text="summary" activator="parent" />
     <svg
       :width="WIDTH"
@@ -38,6 +45,12 @@ import Tooltip from "../widgets/Tooltip.vue";
 const props = defineProps({
   /** Pictures per star, 1★ first: the card's `rating_counts`. */
   counts: { type: Array, required: true },
+  /**
+   * Whether the default recipe was sampled from the pictures at all. A manual
+   * workflow's is its document's own values, so the chart then claims no
+   * source and inks every bar alike.
+   */
+  sampled: { type: Boolean, default: false },
 });
 
 const BAR = 6;
@@ -45,7 +58,7 @@ const GAP = 2;
 const HEIGHT = 16;
 const WIDTH = 5 * BAR + 4 * GAP;
 
-/** The defaults come from the 4★+ pictures, or from all when none is. */
+/** How many are rated 4★+: the defaults come from those, or from all when none is. */
 const best = computed(() => (props.counts[3] || 0) + (props.counts[4] || 0));
 
 const bars = computed(() => {
@@ -57,7 +70,7 @@ const bars = computed(() => {
       x: index * (BAR + GAP),
       // A rating with no pictures keeps a 1px stub, so five slots read as five.
       h: count ? Math.max(1, Math.round((HEIGHT * count) / tallest)) : 1,
-      source: best.value ? star >= 4 : true,
+      source: props.sampled && best.value ? star >= 4 : true,
     };
   });
 });
@@ -66,8 +79,9 @@ const summary = computed(() => {
   const each = [1, 2, 3, 4, 5]
     .map((star, index) => `${star} ${star === 1 ? "star" : "stars"} ${props.counts[index] || 0}`)
     .join(", ");
+  if (!props.sampled) return `Ratings: ${each}.`;
   const source = best.value
-    ? `The defaults come from the ${best.value} rated 4 stars or more.`
+    ? `The defaults come from its pictures rated 4 stars or more.`
     : "None is rated 4 stars yet, so the defaults come from all its pictures.";
   return `Ratings: ${each}. ${source}`;
 });

@@ -78,7 +78,11 @@
           <!-- Where the defaults come from is the whole workflow's, so it sits
                here and not inside any one panel. Absent when nothing is
                rated. -->
-          <WorkflowStarChart v-if="ratingCounts" :counts="ratingCounts" />
+          <WorkflowStarChart
+            v-if="ratingCounts"
+            :counts="ratingCounts"
+            :sampled="Boolean(defaultRecipe?.sampled)"
+          />
         </p>
       </div>
 
@@ -2040,7 +2044,7 @@ function sameLora(lora, use) {
   );
 }
 
-/** The Default recipe heading: where focus goes when the last pile row leaves. */
+/** The LoRAs heading: where focus goes when the last pile row leaves. */
 const defaultHeading = ref(null);
 
 /**
@@ -2215,17 +2219,25 @@ function togglePin(row) {
     const rows = defaultsFor(key);
     if (!rows) return;
     try {
-      const pins = rows
-        .filter((entry) =>
-          entry.slot_label === row.slot_label &&
-          entry.input_name === row.input_name
-            ? !entry.pinned
-            : entry.pinned,
-        )
-        .map((entry) => ({
-          slot_label: entry.slot_label,
-          input_name: entry.input_name,
-        }));
+      // From the stored list when there is one, so a pin whose parameter is
+      // not among today's defaults survives: it decides a Run field now.
+      const stored = detail.value?.pins;
+      const base = Array.isArray(stored)
+        ? stored
+        : rows.filter((entry) => entry.pinned);
+      const same = (entry) =>
+        entry.slot_label === row.slot_label &&
+        entry.input_name === row.input_name;
+      // Read now, not at click time: a write queued ahead may have moved it.
+      const pinned = rows.find(same)?.pinned ?? row.pinned;
+      const pins = (
+        pinned
+          ? base.filter((entry) => !same(entry))
+          : [...base.filter((entry) => !same(entry)), row]
+      ).map((entry) => ({
+        slot_label: entry.slot_label,
+        input_name: entry.input_name,
+      }));
       const body = await setWorkflowPins(key, pins);
       if (stillOn(key)) {
         detail.value = { ...detail.value, pins: body.pins ?? pins };

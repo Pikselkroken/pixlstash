@@ -819,8 +819,8 @@ CREATE TABLE IF NOT EXISTS workflow_picture_input (
 )
 """
 
-# Which of a workflow file's parameters its form shows before "All N
-# parameters" (#1306), in order. One row per FILE, not per library: a pin is a
+# Which of a workflow file's parameters the Run form asks for each run
+# (#1306), in order; the rest are fixed at the workflow's value. One row per FILE, not per library: a pin is a
 # choice about the workflow, and it names node ids and input names, never a
 # picture. No row means "never pinned" and the defaults apply; a row holding
 # ``[]`` is somebody who unpinned everything, which is not the same thing.

@@ -1269,7 +1269,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     const chart = wrapper.find(".wftab-head [data-testid='wftab-stars']");
     expect(chart.attributes("aria-label")).toBe(
       "Ratings: 1 star 0, 2 stars 2, 3 stars 5, 4 stars 8, 5 stars 4. " +
-        "The defaults come from the 12 rated 4 stars or more.",
+        "The defaults come from its pictures rated 4 stars or more.",
     );
     const bars = chart.findAll("rect");
     expect(bars.map((bar) => bar.classes()[0])).toEqual([
@@ -1287,6 +1287,18 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
       "16",
       "8",
     ]);
+  });
+
+  it("claims no source for a default recipe nobody sampled", async () => {
+    const own = detail();
+    own.card.default_recipe.sampled = 0;
+    getWorkflowCard.mockResolvedValue(own);
+    const { wrapper } = await mountWith([KEY], [card({ rating_counts: [0, 0, 1, 2, 0] })]);
+    const chart = wrapper.find("[data-testid='wftab-stars']");
+    expect(chart.attributes("aria-label")).toBe(
+      "Ratings: 1 star 0, 2 stars 0, 3 stars 1, 4 stars 2, 5 stars 0.",
+    );
+    expect(chart.findAll("rect.wfstars-lo")).toHaveLength(0);
   });
 
   it("inks every bar when none is rated 4★ yet, and draws no chart when nothing is rated", async () => {
@@ -1806,6 +1818,20 @@ describe("a default's provenance and reset", () => {
     expect(group.find("summary").text().replace(/\s+/g, " ")).toBe("Fixed · 4");
     expect(rowNamed(wrapper, "seed").element.closest("details")).toBe(group.element);
     expect(rowNamed(wrapper, "steps").element.closest("details")).toBeNull();
+  });
+
+  it("keeps a stored pin whose parameter is not among today's defaults", async () => {
+    const gone = { slot_label: "slot-b", input_name: "denoise" };
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, SAMPLER] }, pins: [gone] }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    await lockOf(wrapper, "sampler_name").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowPins).toHaveBeenCalledWith(KEY, [
+      gone,
+      { slot_label: "slot-a", input_name: "sampler_name" },
+    ]);
   });
 
   it("keeps a toggled row where it is until the workflow is opened again", async () => {

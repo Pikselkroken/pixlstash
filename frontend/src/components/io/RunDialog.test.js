@@ -1005,6 +1005,36 @@ describe("a workflow's fixed parameters", () => {
     });
   });
 
+  it("tells the Workflow tab even when the picker moved on while the write was out", async () => {
+    const denoise = { slot_label: "KSampler", input_name: "denoise" };
+    withPins([]);
+    let answer;
+    setWorkflowPins.mockImplementation(
+      (_key, pins) => new Promise((resolve) => (answer = () => resolve({ pins }))),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const field = wrapper.vm.fixedFields.find((f) => f.input_name === "denoise");
+    const freeing = wrapper.vm.freeField(field);
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    answer();
+    await freeing;
+    expect(useRunDialogStore().pinsWritten).toEqual({ workflowId: KEY, pins: [denoise] });
+  });
+
+  it("keeps a reset on a fixed row that carries a value kept from another workflow", async () => {
+    withPins([]);
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const steps = wrapper.vm.fixedFields.find((f) => f.input_name === "steps");
+    wrapper.vm.setValue(steps, 30);
+    await flushPromises();
+    const row = wrapper
+      .findAll(".rund-fixed-row")
+      .find((r) => r.text().startsWith("Steps"));
+    expect(row.findComponent({ name: "RunResetChip" }).exists()).toBe(true);
+    expect(row.find(".rund-fixed-value").text()).toBe("30");
+  });
+
   it("keeps it fixed, and says so, when the write fails", async () => {
     withPins([]);
     setWorkflowPins.mockRejectedValue(new Error("offline"));
