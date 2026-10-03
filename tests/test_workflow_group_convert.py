@@ -1391,6 +1391,47 @@ def test_step_10_composes_a_v1_recipes_map_onto_v3(step_10):
     }
 
 
+def test_step_10_a_card_split_by_family_follows_each_old_workflow(step_10):
+    """Copilot on #1728: a card's successor row went to its last variant's heir."""
+    w = step_10
+    runs = [
+        record_api_graph(
+            w.hub,
+            _graph(ckpt=FLUX, loras=(lora,), extra=CORE_V3_TWINS["seed"][1]),
+            library_uuid=LIB,
+        )
+        for lora in ("a.safetensors", "b.safetensors")
+    ]
+    card = _card(w.hub, runs[0])
+    assert _card(w.hub, runs[1]) == card, "a character LoRA does not fork the card"
+    first, last = sorted(keys.structural_hash for keys in runs)
+    core = graph_key(_core_strip_v2(get_document(w.hub, first)))
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+            "WHERE topology_hash = ?",
+            (_CORE_RULE_V2, core, runs[0].topology_hash),
+        )
+        # The last variant is of another family: in another workflow.
+        conn.execute(
+            "UPDATE workflow_variant_family SET families = 'qwen' "
+            "WHERE structural_hash = ?",
+            (last,),
+        )
+        families = conn.execute(
+            "SELECT families FROM workflow_variant_family WHERE structural_hash = ?",
+            (first,),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO workflow_key_successor (workflow_key, workflow_id) "
+            "VALUES (?, ?)",
+            (card, auto_workflow_id(core, families)),
+        )
+        rederive_cores_v3(conn)
+    assert workflow_of_variant(w.hub, first) != workflow_of_variant(w.hub, last)
+    assert _successor(w.hub, card) == workflow_of_variant(w.hub, first)
+
+
 def test_a_v2_row_an_older_build_writes_is_moved_on_the_next_open(step_10):
     w = step_10
     path = w.hub.path

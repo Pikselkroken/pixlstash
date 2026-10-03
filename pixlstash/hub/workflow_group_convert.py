@@ -708,7 +708,7 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
         return 0
     heirs_of: dict[str, Counter] = {}  # old id -> {new id: variants}
     topologies_of: dict[str, set[str]] = {}
-    new_of_card: dict[str, str] = {}
+    new_of_card: dict[str, dict[str, str]] = {}  # old id -> {card: new id}
     core_of_heir: dict[str, str] = {}
     stage_slots_of: dict[str, dict[str, str]] = {}
     labels_of: dict[str, dict[str, Optional[str]]] = {}
@@ -760,7 +760,7 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
         topologies_of.setdefault(old_id, set()).add(topology_hash)
         heirs = heirs_of.setdefault(old_id, Counter())
         for workflow_key, new_id, variants in card_heirs:
-            new_of_card[workflow_key] = new_id
+            new_of_card.setdefault(old_id, {})[workflow_key] = new_id
             core_of_heir[new_id] = new_core
             heirs[new_id] += variants
 
@@ -820,7 +820,7 @@ def rederive_cores_v3(conn: sqlite3.Connection) -> int:
             cards_of.setdefault(card.topology_hash, []).append(card)
     heirs_of: dict[str, Counter] = {}  # old id -> {new id: variants}
     topologies_of: dict[str, set[str]] = {}
-    new_of_card: dict[str, str] = {}
+    new_of_card: dict[str, dict[str, str]] = {}  # old id -> {card: new id}
     core_of_heir: dict[str, str] = {}
     stage_slots_of: dict[str, dict[str, str]] = {}
     labels_of: dict[str, dict[str, Optional[str]]] = {}
@@ -862,7 +862,10 @@ def rederive_cores_v3(conn: sqlite3.Connection) -> int:
         for workflow_key, old_id, new_id in moves:
             topologies_of.setdefault(old_id, set()).add(topology_hash)
             heirs_of.setdefault(old_id, Counter())[new_id] += 1
-            new_of_card[workflow_key] = new_id
+            # Per old id: a card's variants of other families are in other
+            # workflows and go to other heirs. One old id is one family set
+            # on one core, so one heir per card.
+            new_of_card.setdefault(old_id, {})[workflow_key] = new_id
             core_of_heir[new_id] = new_core
 
     live = {w.workflow_id for w in workflow_index(hub)}
@@ -969,7 +972,7 @@ def _retire_all(
     topologies_of: dict[str, set[str]],
     labels_of: dict[str, dict[str, Optional[str]]],
     stage_slots_of: dict[str, dict[str, str]],
-    new_of_card: dict[str, str],
+    new_of_card: dict[str, dict[str, str]],
     core_of_heir: dict[str, str],
     *,
     own_slots: bool = False,
@@ -1018,7 +1021,7 @@ def _retire_all(
                 conn,
                 old_id,
                 heirs,
-                new_of_card,
+                new_of_card.get(old_id, {}),
                 core_of_heir,
                 labels,
                 stage_slots,
@@ -1283,7 +1286,6 @@ def reidentify_families(hub) -> dict:
         heirs_of: dict[str, Counter] = {}
         # Per old workflow, per card: where its moved variants went.
         cards_of: dict[str, dict[str, Counter]] = {}
-        new_of_card: dict[str, str] = {}
         parts: dict[str, tuple[str, str]] = {}
         for row, families in moves:
             old_id = auto_workflow_id(row["core_hash"], row["families"])
@@ -1303,7 +1305,6 @@ def reidentify_families(hub) -> dict:
             cards_of.setdefault(old_id, {}).setdefault(row["workflow_key"], Counter())[
                 new_id
             ] += 1
-            new_of_card[row["workflow_key"]] = new_id
         # A variant still in the old workflow, for the workflow or one card.
         still_in = (
             "SELECT 1 FROM workflow_variant v JOIN workflow_variant_family vf "
@@ -1317,6 +1318,9 @@ def reidentify_families(hub) -> dict:
                 still_in, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, *parts[old_id])
             ):
                 core = {heir: parts[old_id][1] for heir in heirs}
+                new_of_card = {
+                    key: _primary(went) for key, went in cards_of[old_id].items()
+                }
                 _retire_workflow(conn, old_id, heirs, new_of_card, core, {}, {})
                 renamed[old_id] = _primary(heirs)
             else:

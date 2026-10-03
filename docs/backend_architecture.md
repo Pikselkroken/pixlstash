@@ -2700,12 +2700,14 @@ filed topology: an older build sharing this hub writes them, and owner edits
 made there land on their v1 ids): each `workflow_topology_core` row at the v1
 stamp, and at the upgrade each card topology with no cache row at all (steps 5
 and 6 filed it on its document's v1 core),
-is re-derived from its card's stored document (`card_document`) and the v2 row
-written **there**, with every variant's family row (one family set per card),
-so `_VARIANT_PENDING` finds nothing and the grid never blanks.
+is re-derived from its card's stored document (`card_document`) and the
+live rule's row (v2 when the step was written, v3 since #1719) written
+**there**, with every variant's family row (one family set per card), so
+`_VARIANT_PENDING` finds nothing and the grid never blanks.
 `workflow_core_successor` records per (topology, new workflow) `auto:<v1>` ->
-`auto:<v2>` and `label_map`, `{v1 core label: v2 core label | null}` by node
-id (the v1 strip survives only as `_core_strip_v1` there). Each retired id's
+the live id and `label_map`, `{v1 core label: live core label | null}` by node
+id (the v1 strip survives only as `_core_strip_v1` there). A hub upgraded
+before v3 holds v1 -> v2 maps, which step 10 composes onto v3. Each retired id's
 `workflow_group_default` / `_pins` / `_picture_input` addresses are rewritten
 through it (`rewritten_address`: null goes to the node's slot label when its
 topology is the new workflow's base, else the row is dropped and logged with
@@ -2722,7 +2724,9 @@ retirement in another: an error rolls that one back and is logged rather than
 escaping the hub open, and a topology that raised or will not reduce is
 restamped `unmoved-v1`, neither v1 (so the step does not re-run on every open)
 nor current (so the card backfill still tries it). A card's
-`workflow_key_successor` row follows its own variants;
+`workflow_key_successor` row follows its own variants of that old
+workflow (keyed per old id: a card's variants of other families are in other
+workflows);
 `workflow_id_successor` (retired id -> primary) and
 `workflow_document.from_workflow_id` follow the primary. Step 8 moves v1 rows
 to the live rule, so a hub upgrading past it holds v2 rows only where an older
