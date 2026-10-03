@@ -589,10 +589,10 @@ def _sampler_fed(input_name: str, node_id: str, node: dict, sampler=None) -> dic
 
 
 def _advanced_sampler(**inputs) -> dict:
-    sampler = _graph()["5"]
-    return _node(
-        "KSamplerAdvanced", **dict(sampler["inputs"], add_noise="enable", **inputs)
-    )
+    """KSamplerAdvanced with its own widget names, wired as the KSampler is."""
+    wired = {k: v for k, v in _graph()["5"]["inputs"].items() if isinstance(v, list)}
+    widgets = dict(add_noise="enable", noise_seed=1, steps=20, start_at_step=0)
+    return _node("KSamplerAdvanced", **{**wired, **widgets, **inputs})
 
 
 _SAVER = _node("PixlStashPictureSaver", images=["6", 0])

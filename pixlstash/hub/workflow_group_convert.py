@@ -650,7 +650,7 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
     """Put every v1 topology on the live core rule, its workflow's state with it.
 
     Hub data step 8. For each ``workflow_topology_core`` row at the v1 stamp,
-    the v2 row is written here, in the hub-open transaction, with every
+    the live rule's row is written here, in the hub-open transaction, with every
     variant's base-model families (``workflow_variant_family``), so no card is
     ever pending and the grid never blanks. A v2 workflow is
     ``auto_workflow_id(v2 core, families)``, so a v1 workflow mostly combines
@@ -678,7 +678,7 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
     neither live nor retired is logged afterwards (:func:`stranded_workflow_ids`).
 
     Returns:
-        How many topologies moved to v2.
+        How many topologies moved off v1.
     """
     hub = _Reader(conn)
     v1_rows = dict(
@@ -736,7 +736,7 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
             conn.execute("ROLLBACK TO rederive_topology")
             conn.execute("RELEASE rederive_topology")
             logger.error(
-                "Topology %s failed to move to core rule v2 (%s: %s); it stays on "
+                "Topology %s failed to move off core rule v1 (%s: %s); it stays on "
                 "v1 until the card backfill re-derives it, and owner state on its "
                 "v1 workflow is not carried from it.",
                 topology_hash,
@@ -884,6 +884,7 @@ def rederive_cores_v3(conn: sqlite3.Connection) -> int:
         stage_slots_of,
         new_of_card,
         core_of_heir,
+        own_slots=True,
     )
     logger.info(
         "Core rule v3: %d topologies re-derived; %d workflows merge into %d.",
@@ -925,6 +926,22 @@ def _rederive_topology_v3(
     new_core = core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
     labels, stage_slots = core_label_maps(document, _core_strip_v2)
     _cache_topology(conn, topology_hash, document, slots(document), new_core)
+    # A recipe still on a v1 id reads step 8's map, whose values are v2
+    # labels: composed onto v3 here, or its overrides name nothing.
+    for old_id, new_id, label_map in conn.execute(
+        "SELECT old_workflow_id, new_workflow_id, label_map "
+        "FROM workflow_core_successor WHERE topology_hash = ?",
+        (topology_hash,),
+    ).fetchall():
+        composed = {
+            old: labels.get(new, new) if new else None
+            for old, new in json.loads(label_map).items()
+        }
+        conn.execute(
+            "UPDATE workflow_core_successor SET label_map = ? WHERE "
+            "topology_hash = ? AND old_workflow_id = ? AND new_workflow_id = ?",
+            (json.dumps(composed, sort_keys=True), topology_hash, old_id, new_id),
+        )
     moves = []
     for card in cards:
         for variant in card.variants:
@@ -954,12 +971,17 @@ def _retire_all(
     stage_slots_of: dict[str, dict[str, str]],
     new_of_card: dict[str, str],
     core_of_heir: dict[str, str],
+    *,
+    own_slots: bool = False,
 ) -> None:
     """Retire every old id in *heirs_of* onto its heirs, then report strays.
 
     Shared by data steps 8 and 10, which both move to the live core rule.
     Each old id's label maps merge over its topologies, and its retirement
-    runs in a savepoint of its own.
+    runs in a savepoint of its own. *own_slots* (step 10): an heir whose base
+    is none of the old id's topologies (a merge into a workflow that lives on)
+    still gets the old topologies' slot labels, so an address on a node the
+    rule stripped is kept, inert on that base, rather than dropped.
     """
     bases = {w.workflow_id: w.base_topology for w in workflow_index(hub)}
     for old_id, heirs in sorted(heirs_of.items()):
@@ -984,6 +1006,12 @@ def _retire_all(
         base = bases.get(primary)
         # ponytail: one stage-slot resolution, the primary's base; a split
         # successor on another base topology gets the same slot labels.
+        stage_slots: dict[str, str] = {}
+        if base in topologies_of[old_id]:
+            stage_slots = stage_slots_of[base]
+        elif own_slots:
+            for topology_hash in sorted(topologies_of[old_id], reverse=True):
+                stage_slots.update(stage_slots_of[topology_hash])
         conn.execute("SAVEPOINT retire_workflow")
         try:
             _retire_workflow(
@@ -993,7 +1021,7 @@ def _retire_all(
                 new_of_card,
                 core_of_heir,
                 labels,
-                stage_slots_of[base] if base in topologies_of[old_id] else {},
+                stage_slots,
             )
             conn.execute("RELEASE retire_workflow")
         except sqlite3.Error:
@@ -1369,7 +1397,7 @@ def _rewrite_addresses(
             address = rewritten_address(row[at], labels, stage_slots)
             if address is None:
                 logger.warning(
-                    "Workflow %s: %s row %s names a node core rule v2 removed and "
+                    "Workflow %s: %s row %s names a node the new core rule removed and "
                     "no stage of the new base holds, so it is dropped.",
                     workflow_id,
                     table,
@@ -1400,7 +1428,7 @@ def _rewrite_addresses(
         address = rewritten_address(pin, labels, stage_slots)
         if address is None:
             logger.warning(
-                "Workflow %s: pin %s names a node core rule v2 removed; it is dropped.",
+                "Workflow %s: pin %s names a node the new core rule removed; it is dropped.",
                 workflow_id,
                 pin,
             )

@@ -2628,7 +2628,10 @@ label maps (`_core_strip_v2`):
   does an edit graph with one reference latent against two.
 
 v3 is a function of the v2 core, as v2 is of v1
-(`test_core_v3_is_a_function_of_the_v2_core`), so it only merges.
+(`test_core_v3_is_a_function_of_the_v2_core`), so it merges and does not
+split, a refused prune aside. Carried defaults keep their input names, so a
+`KSamplerAdvanced` default (`noise_seed`, `start_at_step`) merged onto a
+`KSampler` base addresses an input that base lacks, and a run skips it.
 
 **A graph with no sampler of its own keeps what it does.** With a sampler,
 every stage (upscale, face detailer, seed variance) is an optional addition
@@ -2722,7 +2725,8 @@ nor current (so the card backfill still tries it). A card's
 `workflow_key_successor` row follows its own variants;
 `workflow_id_successor` (retired id -> primary) and
 `workflow_document.from_workflow_id` follow the primary. Step 8 moves v1 rows
-to the live rule, so a hub upgrading past it never holds v2 rows. A second run finds no v1 row. The
+to the live rule, so a hub upgrading past it holds v2 rows only where an older
+build sharing it writes them. A second run finds no v1 row. The
 vault needs no migration: the retired ids in `workflow_id_successor` put every
 recipe naming one in front of `MissingSavedRecipeWorkflowFinder`, and
 A card none of whose own variants reduces gets no family row (it stays
@@ -2747,8 +2751,14 @@ core, is retired onto it with a v2-to-v3 label map
 (`core_label_maps(document, _core_strip_v2)`). The families are read, never
 re-derived, so nothing splits. A variant v3 leaves alone keeps its id, so the
 workflow it is in lives on and is the heir the merged ones carry into; an old
-id some of whose variants stay is left with its state (logged). A failure
-restamps `unmoved-v2`.
+id some of whose variants stay is left with its state (logged). Merging into
+a workflow that lives on, the heir's base is none of the old id's topologies,
+so an address on a node v3 strips (a Seed value, an AuraFlow shift) is
+rewritten to the old topology's slot label and **kept**, inert on that base,
+rather than dropped as step 8 drops it (`_retire_all(own_slots=True)`). Each
+moved topology's earlier `workflow_core_successor` maps (step 8's v1 -> v2) are
+composed through v2 -> v3, so a recipe still filed on a v1 id lands on v3
+labels. A failure restamps `unmoved-v2`.
 
 #### Converting cards to workflows (#1623)
 

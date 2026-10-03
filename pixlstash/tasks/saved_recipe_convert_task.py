@@ -304,7 +304,7 @@ def _onto_core_v2(
         new = rewritten_address(address, labels, stage_slots)
         if new is None:
             logger.warning(
-                "Saved recipe %s: %s %s = %r names a node core rule v2 removed; "
+                "Saved recipe %s: %s %s = %r names a node the new core rule removed; "
                 "it is kept as it was and a run applies nothing for it.",
                 recipe_id,
                 what,

@@ -1283,7 +1283,7 @@ def step_10(tmp_path):
         library_uuid=LIB,
     )
     filed = (w.plain, w.seed, w.aura, w.two_pass)
-    w.v2_id, w.v2_sampler = {}, {}
+    w.v2_id, w.v2_sampler, w.v2_labels = {}, {}, {}
     with hub.transaction() as conn:
         for keys in filed:
             v2 = _core_strip_v2(get_document(hub, keys.structural_hash))
@@ -1292,7 +1292,8 @@ def step_10(tmp_path):
                 (keys.structural_hash,),
             )[0]
             w.v2_id[keys] = auto_workflow_id(graph_key(v2), families)
-            w.v2_sampler[keys] = node_labels(v2, rounds=None)["5"]
+            w.v2_labels[keys] = node_labels(v2, rounds=None)
+            w.v2_sampler[keys] = w.v2_labels[keys]["5"]
             conn.execute(
                 "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
                 "WHERE topology_hash = ?",
@@ -1314,10 +1315,13 @@ def step_10(tmp_path):
             [
                 (w.v2_id[w.seed], f"core:{w.v2_sampler[w.seed]}/steps", "8"),
                 (w.v2_id[w.aura], f"core:{w.v2_sampler[w.aura]}/cfg", "3"),
+                # On the patch v3 strips: kept, though the heir's base lacks it.
+                (w.v2_id[w.aura], f"core:{w.v2_labels[w.aura]['90']}/shift", "5.0"),
             ],
         )
     assert len({w.v2_id[keys] for keys in filed}) == 4
     w.v3_sampler = core_node_labels(get_document(hub, w.plain.structural_hash))["5"]
+    w.aura_slot = topology_node_labels(get_document(hub, w.aura.structural_hash))["90"]
     try:
         yield w
     finally:
@@ -1343,10 +1347,13 @@ def test_step_10_merges_v2_workflows_and_carries_their_state(step_10):
     assert attrs[merged][1] == "Plain"
     for carried in ("Seeded", "Seed notes.", "Aura"):
         assert carried in attrs[merged][2]
-    assert sorted(r[1:] for r in rows["workflow_group_default"]) == [
-        (f"core:{w.v3_sampler}/cfg", "3"),
-        (f"core:{w.v3_sampler}/steps", "8"),
-    ]
+    assert sorted(r[1:] for r in rows["workflow_group_default"]) == sorted(
+        [
+            (f"core:{w.v3_sampler}/cfg", "3"),
+            (f"core:{w.v3_sampler}/steps", "8"),
+            (f"{w.aura_slot}/shift", "5.0"),
+        ]
+    )
     assert {r[0] for r in rows["workflow_group_default"]} == {merged}
     assert dict(rows["workflow_id_successor"]) == {
         w.v2_id[w.seed]: merged,
@@ -1360,6 +1367,51 @@ def test_step_10_merges_v2_workflows_and_carries_their_state(step_10):
     with w.hub.transaction() as conn:
         assert rederive_cores_v3(conn) == 0
     assert _step_8_rows(w.hub) == rows
+
+
+def test_step_10_composes_a_v1_recipes_map_onto_v3(step_10):
+    """A recipe still on a v1 id reads step 8's v1 -> v2 map: made v1 -> v3."""
+    w = step_10
+    v2 = w.v2_labels[w.aura]
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_core_successor (topology_hash, old_workflow_id, "
+            "new_workflow_id, label_map) VALUES (?, 'auto:v1', ?, ?)",
+            (
+                w.aura.topology_hash,
+                w.v2_id[w.aura],
+                json.dumps({"s1": v2["5"], "p1": v2["90"], "x": None}),
+            ),
+        )
+        rederive_cores_v3(conn)
+    assert _core_successor_map(w.hub, "auto:v1") == {
+        "s1": w.v3_sampler,
+        "p1": None,  # stripped: the recipe falls back to its stage slot
+        "x": None,
+    }
+
+
+def test_a_v2_row_an_older_build_writes_is_moved_on_the_next_open(step_10):
+    w = step_10
+    path = w.hub.path
+    with w.hub.transaction() as conn:
+        rederive_cores_v3(conn)
+        # The older build re-caches the Seed topology on v2.
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+            "WHERE topology_hash = ?",
+            (
+                _CORE_RULE_V2,
+                graph_key(_core_strip_v2(get_document(w.hub, w.seed.structural_hash))),
+                w.seed.topology_hash,
+            ),
+        )
+        assert _has_old_cores(conn, "v2")
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert workflow_of_variant(w.hub, w.seed.structural_hash) == w.v2_id[w.plain]
+    with w.hub.transaction() as conn:
+        assert not _has_old_cores(conn, "v2")
 
 
 def test_the_hub_open_runs_step_10_once(step_10):
