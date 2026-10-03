@@ -10211,7 +10211,8 @@ def test_a_gguf_set_on_a_whole_checkpoint_loader_names_the_loader_it_needs(
 def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
     """#1690: a Wan 2.2 high/low graph cloned onto a set holding a pair swaps
     each expert for its own, whatever order the set lists them in; a set
-    holding one expert replaces that one and leaves the other."""
+    holding one expert replaces that one and leaves the other, and a graph
+    loading one expert takes the set's matching one."""
     graph = _embedded_export_graph()
     graph["1"] = {
         "class_type": "UNETLoader",
@@ -10252,6 +10253,17 @@ def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
                 ]
             },
         )
+        # A graph loading one expert takes the set's matching one, not the
+        # first the set lists.
+        graph.pop("10")
+        one = cloneable.owner.post(
+            f"{API}/workflows/{RUN_WF}/set-clone-plans",
+            json={
+                "sets": [
+                    {"key": "pair", "checkpoint_ids": [low, high], "model_ids": []}
+                ]
+            },
+        )
     finally:
         with hub.transaction() as conn:
             conn.executemany("DELETE FROM model WHERE id = ?", [(low,), (high,)])
@@ -10263,6 +10275,10 @@ def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
     }
     assert plans["low"]["swaps"] == {
         "wan_low_noise.safetensors": "wan_v2_low_noise.safetensors"
+    }
+    assert one.status_code == 200, one.text
+    assert one.json()["plans"][0]["swaps"] == {
+        "wan_high_noise.safetensors": "wan_v2_high_noise.safetensors"
     }
 
 

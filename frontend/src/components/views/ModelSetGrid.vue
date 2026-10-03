@@ -982,7 +982,11 @@ const chooserHeading = computed(() => {
   if (mode === "pictures") {
     return {
       title: "Fill from pictures",
-      sub: `${into}, from pictures of ${checkpoint?.name ?? "its checkpoint"}`,
+      sub: `${into}, from pictures of ${
+        setCheckpoints(set).length > 1
+          ? "its checkpoints"
+          : (checkpoint?.name ?? "its checkpoint")
+      }`,
     };
   }
   return {

@@ -6784,15 +6784,13 @@ def create_router(server) -> APIRouter:
     ) -> list[tuple[SwapSlot, SwapModel]]:
         """Each base slot of *found* with the set checkpoint it takes, in graph order.
 
-        One base slot takes the set's first checkpoint. Two or more (Wan 2.2's
-        high and low experts, a refiner) are paired with the checkpoints by
-        filename, closest pair first, so a high-noise file is replaced by the
-        high-noise one, and a set holding only the low-noise expert replaces
-        the low-noise file. A slot left over keeps its file.
+        Paired by filename, closest pair first, so a high-noise file is
+        replaced by the high-noise one of a Wan 2.2 pair, a set holding only
+        the low-noise expert replaces the low-noise file, and a graph loading
+        one expert takes the set's matching one. A slot left over keeps its
+        file.
         """
         bases = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
-        if len(bases) == 1:
-            return [(bases[0], checkpoints[0])] if checkpoints else []
         # ponytail: name similarity, the only thing telling two experts of one
         # base model apart; a shelf role per expert would replace it.
         ranked = sorted(
@@ -6966,9 +6964,12 @@ def create_router(server) -> APIRouter:
                     and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
                 ],
             )
-            # The one the graph's first paired base slot takes: what its LoRAs
-            # feed.
-            checkpoint = bases[0][1] if bases else None
+            # The one the graph's first base slot takes, which `old_base` is
+            # read from; else whichever slot was paired.
+            checkpoint = next(
+                (new for slot, new in bases if slot is base),
+                bases[0][1] if bases else None,
+            )
             swaps = _set_swaps(found, bases, members)
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
