@@ -16,6 +16,7 @@ from pixlstash.stacking import (
     assign_picture_to_stack,
     get_or_create_stack_for_picture,
     parse_stack_tags_from_filename,
+    parse_workflow_tag_from_filename,
 )
 from pixlstash.services.layout_move_service import resolve_placement
 from pixlstash.tasks.base_task import BaseTask
@@ -127,6 +128,9 @@ class WatchFolderImportTask(BaseTask):
                 attach_sidecars(pic, file_path)
 
                 new_pictures.append(pic)
+
+                # A manual workflow's run tags its output's name (#1688).
+                pic.run_workflow_id = parse_workflow_tag_from_filename(file_path)
 
                 stack_id, source_id = parse_stack_tags_from_filename(file_path)
                 if stack_id or source_id:

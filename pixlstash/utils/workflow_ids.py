@@ -10,7 +10,6 @@ The pattern is also a JSON-schema one, where ``$`` is the end; Python checks
 it with ``fullmatch``, since there ``$`` also matches before a trailing newline.
 """
 
-import json
 import re
 
 AUTO_PREFIX = "auto:"
@@ -22,9 +21,7 @@ WORKFLOW_ID_PATTERN = r"^(?:auto:[0-9a-f]{64}|manual:[0-9a-f]{32})$"
 # ``extra`` is outside the nodes, ComfyUI keeps it across edit and save, and
 # SaveImage embeds the whole editor workflow as a picture's ``workflow`` chunk,
 # so a run started in ComfyUI carries the id into the library. An API-format
-# document has no such place (every top-level key is a node) and goes unstamped;
-# a run PixlStash submits carries the id as a PNG chunk of this name instead
-# (``submitted_run_tag``).
+# document has no such place (every top-level key is a node) and goes unstamped.
 WORKFLOW_TAG_KEY = "pixlstash_workflow_id"
 
 
@@ -50,29 +47,6 @@ def tagged_workflow_id(document) -> str | None:
     """
     extra = document.get("extra") if isinstance(document, dict) else None
     tag = extra.get(WORKFLOW_TAG_KEY) if isinstance(extra, dict) else None
-    return _manual_id(tag)
-
-
-def submitted_run_tag(metadata) -> str | None:
-    """The manual workflow id a PixlStash run embedded as a chunk of its own.
-
-    The run submits it under ``extra_pnginfo`` keyed :data:`WORKFLOW_TAG_KEY`,
-    and SaveImage writes every such key as a text chunk holding its value as
-    JSON. *metadata* is ``ImageUtils.extract_embedded_metadata``'s, where PNG
-    chunks sit under ``png``. ``None`` for no chunk, and for anything that is
-    not a manual id.
-    """
-    png = metadata.get("png") if isinstance(metadata, dict) else None
-    raw = png.get(WORKFLOW_TAG_KEY) if isinstance(png, dict) else None
-    if not isinstance(raw, str):
-        return None
-    try:
-        return _manual_id(json.loads(raw))
-    except ValueError:
-        return None
-
-
-def _manual_id(tag) -> str | None:
     if not isinstance(tag, str) or not tag.startswith(MANUAL_PREFIX):
         return None
     return tag if re.fullmatch(WORKFLOW_ID_PATTERN, tag) else None

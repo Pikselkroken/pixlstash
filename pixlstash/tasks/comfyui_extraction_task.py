@@ -23,7 +23,7 @@ from pixlstash.utils.comfyui_utilities import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
-from pixlstash.utils.workflow_ids import submitted_run_tag, tagged_workflow_id
+from pixlstash.utils.workflow_ids import tagged_workflow_id
 
 
 logger = get_logger(__name__)
@@ -376,22 +376,17 @@ class ComfyUIExtractionTask(BaseTask):
     def _run_workflow_tag(self, picture_id: int, embedded_metadata) -> str | None:
         """The manual workflow the picture's ComfyUI run was tagged with, if held.
 
-        Read first off the chunk of its own that PixlStash's run submits
-        (``_submit_comfyui_prompt``), which an API-format workflow has no other
-        place for, then off the editor workflow ComfyUI embeds (its
-        ``workflow`` chunk), where every document PixlStash stores as a manual
-        workflow carries its id. A tag this hub holds no workflow for (deleted
-        since, or another machine's) files nothing: the picture falls to its
-        automatic workflow.
+        Read off the editor workflow ComfyUI embeds (its ``workflow`` chunk),
+        where every document PixlStash stores as a manual workflow carries its
+        id. A tag this hub holds no workflow for (deleted since, or another
+        machine's) files nothing: the picture falls to its automatic workflow.
         """
         if not embedded_metadata:
             return None
-        tag = submitted_run_tag(embedded_metadata)
-        if tag is None:
-            workflow = find_comfy_workflow(embedded_metadata)
-            if workflow is None or is_api_format(workflow):
-                return None
-            tag = tagged_workflow_id(workflow)
+        workflow = find_comfy_workflow(embedded_metadata)
+        if workflow is None or is_api_format(workflow):
+            return None
+        tag = tagged_workflow_id(workflow)
         if tag is None:
             return None
         if not is_manual_workflow(self._hub, tag):

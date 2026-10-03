@@ -129,6 +129,7 @@ from pixlstash.services import (
     workflow_inbox,
 )
 from pixlstash.server import Server
+from pixlstash.stacking import parse_workflow_tag_from_filename
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK
@@ -5477,14 +5478,9 @@ def runnable(workflow_env, monkeypatch):
     picture_id = _seed_runnable_card(workflow_env.server)
     submitted: list[dict] = []
 
-    def fake_submit(base_url, workflow_instance, client_id=None, run_workflow_id=None):
+    def fake_submit(base_url, workflow_instance, client_id=None):
         submitted.append(
-            {
-                "graph": workflow_instance,
-                "client_id": client_id,
-                "url": base_url,
-                "run_workflow_id": run_workflow_id,
-            }
+            {"graph": workflow_instance, "client_id": client_id, "url": base_url}
         )
         return {"prompt_id": f"prompt-{len(submitted)}"}
 
@@ -5599,8 +5595,16 @@ def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
     while len(importing) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)  # the import runs on a thread of its own
     assert [kwargs["run_workflow_id"] for kwargs in importing] == [manual, None]
-    # The same id rides the submit, so a watch-folder import still files it.
-    assert [s["run_workflow_id"] for s in runnable.submitted[-2:]] == [manual, None]
+    # Its save node's name carries it too, so a watch-folder import that beats
+    # the poll still files it (#1688); ComfyUI appends its counter after it.
+    manual_run, auto_run = (
+        s["graph"]["4"]["inputs"]["filename_prefix"] for s in runnable.submitted[-2:]
+    )
+    assert parse_workflow_tag_from_filename(f"/out/{manual_run}_00001_.png") == manual
+    assert parse_workflow_tag_from_filename(f"{manual_run}__stack_3__src_9.png") == (
+        manual
+    )
+    assert parse_workflow_tag_from_filename(f"{auto_run}_00001_.png") is None
 
 
 def test_a_manual_workflow_opens_and_exports_the_document_run_submits(runnable):
@@ -5618,8 +5622,11 @@ def test_a_manual_workflow_opens_and_exports_the_document_run_submits(runnable):
     assert r.json()["source"] == "file"
     opened = r.json()["workflow"]
     assert opened["3"]["inputs"]["steps"] == 13
+    # The run's own adjustments: its seed, and the save node's tag (#1688).
+    assert ran["4"]["inputs"]["filename_prefix"].startswith("wf_")
     for graph in (ran, opened):
         graph["3"]["inputs"].pop("seed")
+        graph["4"]["inputs"].pop("filename_prefix")
     assert opened == ran
     r = runnable.owner.get(f"{API}/workflows/{manual}/export")
     assert r.status_code == 200, r.text
@@ -9222,7 +9229,7 @@ def test_a_failure_part_way_through_still_reports_what_was_queued(runnable):
     """
     calls = {"n": 0}
 
-    def flaky(base_url, workflow_instance, client_id=None, run_workflow_id=None):
+    def flaky(base_url, workflow_instance, client_id=None):
         calls["n"] += 1
         if calls["n"] == 3:
             raise HTTPException(status_code=502, detail="ComfyUI prompt request failed")

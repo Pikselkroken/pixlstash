@@ -113,8 +113,13 @@ def test_watch_folder_delete_after_import():
 
         watch_dir = os.path.join(temp_dir, "watch")
         os.makedirs(watch_dir, exist_ok=True)
-        for src_path in image_files:
+        # One file named as a manual workflow's run saves it (#1688).
+        manual = "manual:" + "a" * 32
+        for index, src_path in enumerate(image_files):
             rel = os.path.relpath(src_path, source_dir)
+            if index == 0:
+                stem, ext = os.path.splitext(rel)
+                rel = f"{stem}__wf_{'a' * 32}_00001_{ext}"
             dst = os.path.join(watch_dir, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src_path, dst)
@@ -157,6 +162,9 @@ def test_watch_folder_delete_after_import():
                     f"Expected {expected_count} pictures, got {len(pictures)}"
                 )
                 assert all(pic.import_source_folder == watch_dir for pic in pictures)
+                assert sorted(pic.run_workflow_id or "" for pic in pictures) == (
+                    [""] * (expected_count - 1) + [manual]
+                )
                 remaining_files = [
                     os.path.join(dp, f)
                     for dp, _, fnames in os.walk(watch_dir)

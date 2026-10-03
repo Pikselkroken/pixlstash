@@ -209,7 +209,10 @@ from pixlstash.utils.comfyui_utilities import (
     iter_model_fields_api,
     loaded_model_widgets,
 )
-from pixlstash.stacking import build_stack_filename_prefix
+from pixlstash.stacking import (
+    build_stack_filename_prefix,
+    build_workflow_filename_prefix,
+)
 from pixlstash.utils.adapter_header import (
     FILE_CHECKPOINT,
     FILE_ENGINE,
@@ -5402,6 +5405,8 @@ def create_router(server) -> APIRouter:
                 filled = deepcopy(graph)
                 if stack_id:
                     _tag_for_stack(filled, stack_id, source_id)
+                if run_workflow_id:
+                    _tag_for_workflow(filled, run_workflow_id)
                 for feed in feeds:
                     picture_id = (
                         feed.picture_id if feed.picture_id is not None else selected
@@ -5420,10 +5425,7 @@ def create_router(server) -> APIRouter:
                     elif body.seed_mode == "new":
                         apply_seeds(instance, seed_targets, None)
                     submitted = _submit_comfyui_prompt(
-                        comfyui_url,
-                        instance,
-                        body.client_id,
-                        run_workflow_id=run_workflow_id,
+                        comfyui_url, instance, body.client_id
                     )
                     prompt_id = submitted.get("prompt_id") or submitted.get("id")
                     if prompt_id:
@@ -5463,6 +5465,40 @@ def create_router(server) -> APIRouter:
         `out` and `preview` still saves two sets of files. A prefix that is
         wired from another node is left alone: overwriting it drops the link.
         """
+        if not _tag_save_nodes(
+            graph, lambda own: build_stack_filename_prefix(own, stack_id, source_id)
+        ):
+            logger.warning(
+                "[workflows] No SaveImage node to tag for stack %s (source %s); "
+                "its outputs join the stack only if this run imports them.",
+                stack_id,
+                source_id,
+            )
+
+    def _tag_for_workflow(graph: dict, workflow_id: str) -> None:
+        """Tag the save node so its outputs are filed on the manual workflow
+        that ran however they arrive (#1688), as ``_tag_for_stack`` places them.
+
+        Not ``extra_pnginfo``: a run that sets it without a ``workflow`` key
+        breaks custom nodes that read ``extra_pnginfo["workflow"]`` whenever it
+        is present, and that key must stay empty (#628).
+        """
+        if not _tag_save_nodes(
+            graph, lambda own: build_workflow_filename_prefix(own, workflow_id)
+        ):
+            logger.warning(
+                "[workflows] No SaveImage node to tag for workflow %s; its "
+                "outputs are filed on it only if this run imports them.",
+                workflow_id,
+            )
+
+    def _tag_save_nodes(graph: dict, tagged_prefix) -> bool:
+        """Rewrite each SaveImage's ``filename_prefix`` to ``tagged_prefix(own)``.
+
+        Each save node keeps its OWN prefix under the tag; one wired from
+        another node is left alone, since overwriting it drops the link.
+        Whether any node was tagged.
+        """
         tagged = False
         for node in graph.values():
             if not isinstance(node, dict) or node.get("class_type") != "SaveImage":
@@ -5471,17 +5507,9 @@ def create_router(server) -> APIRouter:
             own = inputs.get("filename_prefix")
             if isinstance(own, list):
                 continue
-            inputs["filename_prefix"] = build_stack_filename_prefix(
-                str(own or ""), stack_id, source_id
-            )
+            inputs["filename_prefix"] = tagged_prefix(str(own or ""))
             tagged = True
-        if not tagged:
-            logger.warning(
-                "[workflows] No SaveImage node to tag for stack %s (source %s); "
-                "its outputs join the stack only if this run imports them.",
-                stack_id,
-                source_id,
-            )
+        return tagged
 
     # ── The file gestures (v1.12 B8) ──────────────────────────────────────
     #
