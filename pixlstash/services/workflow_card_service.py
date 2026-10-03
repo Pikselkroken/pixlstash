@@ -216,6 +216,10 @@ class SlotModel:
     # file.
     sha256: Optional[str] = None
     base_model_family: Optional[str] = None
+    # The value the recipe recorded, as ``default_recipe.models[].filename``
+    # spells it (a shelf loader's id included), so a client can tell which
+    # slot a recipe model is by identity rather than by a derived name.
+    filename: Optional[str] = None
 
 
 @dataclass
@@ -914,6 +918,7 @@ def _describe_slots(
                         name=_derived(filename),
                         kind=slot_kind(widget) if widget else "model",
                         label=str(slot.get("label") or "") or None,
+                        filename=name,
                         **_mark_fields(
                             marks_by_name.get((name or "").lower()), filename
                         ),
@@ -930,12 +935,15 @@ def _describe_slots(
             fields = _mark_fields(marks_by_name.get(filename.lower()), shown)
             name = _derived(shown)
             if widget == "lora_name":
-                figure.loras.append(SlotModel(name=name, kind="lora", **fields))
+                figure.loras.append(
+                    SlotModel(name=name, kind="lora", filename=filename, **fields)
+                )
             else:
                 figure.models.append(
                     SlotModel(
                         name=name,
                         kind=slot_kind(widget) if widget else "model",
+                        filename=filename,
                         **fields,
                     )
                 )

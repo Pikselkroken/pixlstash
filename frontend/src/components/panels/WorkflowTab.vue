@@ -811,7 +811,7 @@ import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { modelLabel } from "../../utils/filterChips";
 import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
-import { deriveModelName, quantBadge } from "../../utils/modelShelf";
+import { quantBadge } from "../../utils/modelShelf";
 import { PIXLSTASH_PACK_URL, STAGE_LABELS } from "../../utils/runReasons";
 import {
   checkpointMissing,
@@ -1033,9 +1033,8 @@ const recipeModels = computed(
  * same file where there is one, for its shelf name and precision, else the
  * file without its folders.
  *
- * ponytail: matched by the exact name the server derives, or by stem prefix,
- * because the card's `name` has its folder, extension and quant postfix
- * stripped; a shared address on both would make this exact.
+ * Matched by the file the slot recorded, never by a derived name: two quant
+ * builds derive to one name, and a prefix can name an unrelated slot.
  */
 /**
  * A default-recipe model's `kind` is the model-fix kind (`checkpoint`, `vae`,
@@ -1050,15 +1049,13 @@ const RECIPE_KIND_SLOTS = {
 function recipeModelLabel(model) {
   // A shelf loader's `filename` is a row id; `shelf_filename` is its file.
   const file = model.shelf_filename ?? model.filename;
-  const stem = fileName(file).toLowerCase();
-  const derived = deriveModelName(file).toLowerCase();
   const kinds = RECIPE_KIND_SLOTS[model.kind] ?? [model.kind];
   const slot = (card.value?.models ?? []).find(
     (entry) =>
       kinds.includes(entry.kind) &&
       entry.name &&
-      (derived === String(entry.name).toLowerCase() ||
-        stem.startsWith(String(entry.name).toLowerCase())),
+      entry.filename &&
+      sameFile(entry.filename, model.filename),
   );
   return slot
     ? withQuant(modelDisplayName(slot), slot)

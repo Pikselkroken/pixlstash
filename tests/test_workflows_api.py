@@ -1754,6 +1754,7 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
             # precision off either - and nothing is what it serves.
             "quant": None,
             "slot_label": lora_label,
+            "filename": None,
         }
     ]
 
@@ -2077,6 +2078,9 @@ def test_a_shelf_loader_slot_is_named_by_its_file_not_its_id(workflow_env):
         _SHELF_DERIVED,
         _SHELF_TITLE,
     )
+    # The slot keeps the value its recipe recorded, which is what the default
+    # recipe's `filename` matches it by.
+    assert checkpoint["filename"] == str(model_id)
     # The variant keeps the id it recorded, and says which file it names.
     assets = [
         asset
@@ -2422,6 +2426,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             # No label: a slot label is an address inside a stored topology,
             # and this card has none to address.
             "slot_label": None,
+            "filename": _SHELF_FILENAME,
         }
     ]
     # The family is the one the model shelf serves for the same file: a client
@@ -2450,6 +2455,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "kind": "lora",
             "quant": None,
             "slot_label": None,
+            "filename": "add_detail.safetensors",
         }
     ]
 

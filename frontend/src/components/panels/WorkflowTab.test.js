@@ -84,7 +84,7 @@ const globalOpts = {
 };
 
 function card(overrides = {}) {
-  return {
+  const shown = {
     id: KEY,
     name: "Cinematic portrait",
     type: "txt2img",
@@ -115,6 +115,14 @@ function card(overrides = {}) {
     rank: 4.5,
     ...overrides,
   };
+  // Each named slot records the file its recipe model names, as the server
+  // serves it: that is what a recipe model is matched to its slot by.
+  shown.models = (shown.models ?? []).map((model) =>
+    model.name && model.filename === undefined
+      ? { ...model, filename: `${model.name}.safetensors` }
+      : model,
+  );
+  return shown;
 }
 
 const ADA = `asset:${"1".repeat(64)}`;
@@ -350,8 +358,8 @@ describe("the models the panel names", () => {
   });
 
   it("names a shelf loader's checkpoint by the file its id names", async () => {
-    // A `checkpoint_id` recipe model's `filename` is a shelf row id (#1721):
-    // the slot is matched through `shelf_filename`, never the number.
+    // A `checkpoint_id` recipe model's `filename` is a shelf row id (#1721),
+    // which the slot recorded too; neither reads as the number.
     const named = card({
       models: [
         {
@@ -359,6 +367,7 @@ describe("the models the panel names", () => {
           title: "FLUX.2 Klein 9B",
           kind: "checkpoint",
           slot_label: "m1",
+          filename: "75",
         },
       ],
     });
@@ -377,6 +386,66 @@ describe("the models the panel names", () => {
     const text = textOf(wrapper);
     expect(text).toContain("FLUX.2 Klein 9B");
     expect(text).not.toMatch(/\b75\b/);
+  });
+
+  /** The panel for one card and a default recipe of one checkpoint *file*. */
+  async function checkpointRowFor(models, file) {
+    const named = card({ models });
+    const shown = detail({ card: named });
+    shown.card.default_recipe.models = [
+      {
+        address: "core:m1/ckpt_name",
+        kind: "checkpoint",
+        filename: file,
+        provenance: "best",
+      },
+    ];
+    getWorkflowCard.mockResolvedValue(shown);
+    const { wrapper } = await mountWith([KEY], [named]);
+    return textOf(wrapper);
+  }
+
+  it("does not lend one quant build's slot to another", async () => {
+    // Both derive to `flux 2 klein 9b`; only the recorded file tells them apart.
+    const text = await checkpointRowFor(
+      [
+        {
+          name: "flux 2 klein 9b",
+          title: "FLUX.2 Klein 9B",
+          kind: "checkpoint",
+          quant: "fp8_e4m3",
+          slot_label: "m1",
+          filename: "flux-2-klein-9b-fp8.safetensors",
+        },
+      ],
+      "flux-2-klein-9b-bf16.safetensors",
+    );
+    expect(text).toContain("flux-2-klein-9b-bf16.safetensors");
+    expect(text).not.toContain("FLUX.2 Klein 9B");
+  });
+
+  it("does not match a slot whose name only prefixes the file", async () => {
+    const text = await checkpointRowFor(
+      [
+        {
+          name: "flux",
+          title: "Flux Prefix",
+          kind: "checkpoint",
+          slot_label: "m0",
+          filename: "flux.safetensors",
+        },
+        {
+          name: "flux 2 klein 9b",
+          title: "FLUX.2 Klein 9B",
+          kind: "checkpoint",
+          slot_label: "m1",
+          filename: "flux-2-klein-9b.safetensors",
+        },
+      ],
+      "flux-2-klein-9b.safetensors",
+    );
+    expect(text).toContain("FLUX.2 Klein 9B");
+    expect(text).not.toContain("Flux Prefix");
   });
 
   it("says the precision the server took out of the name", async () => {

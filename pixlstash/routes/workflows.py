@@ -417,6 +417,15 @@ class WorkflowSlotModel(BaseModel):
             "document rather than a stored topology."
         ),
     )
+    filename: str | None = Field(
+        None,
+        description=(
+            "The value the recipe recorded for the slot, spelled as "
+            "`default_recipe.models[].filename` spells it (a shelf loader's "
+            "row id included), so a client matches a recipe model to its slot "
+            "by identity. Null where `name` is."
+        ),
+    )
 
 
 class WorkflowDefault(BaseModel):
@@ -2363,6 +2372,7 @@ def _slot_models(slots) -> list[WorkflowSlotModel]:
             base_model_family=slot.base_model_family,
             kind=slot.kind,
             slot_label=slot.label,
+            filename=slot.filename,
         )
         for slot in slots
     ]
