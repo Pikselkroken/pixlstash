@@ -162,13 +162,24 @@
                 <v-icon size="16">mdi-export</v-icon>
                 Export…
               </button>
+              <!-- Refused, not hidden, on a recipe whose saved-from graph
+                   went with its deleted workflow (#1687): `aria-disabled`
+                   rather than `disabled`, so the reason stays one hover
+                   away (the WorkflowSelectionBar pattern). -->
               <button
                 class="ctx-item"
+                :class="{ 'ctx-item--disabled': recipe.extractable === false }"
                 type="button"
                 role="menuitem"
                 data-testid="wfrt-extract"
-                @click="extractWorkflow(recipe)"
+                :aria-disabled="recipe.extractable === false ? 'true' : undefined"
+                @click="recipe.extractable === false || extractWorkflow(recipe)"
               >
+                <Tooltip
+                  v-if="recipe.extractable === false"
+                  :text="NOT_EXTRACTABLE"
+                  activator="parent"
+                />
                 <v-icon size="16">mdi-sitemap-outline</v-icon>
                 Extract workflow
               </button>
@@ -498,9 +509,15 @@ let loadToken = 0;
  */
 const MAX_UNION_KEYS = 100;
 
+/** Why Extract workflow is refused on a row the server marks unextractable. */
+const NOT_EXTRACTABLE =
+  "The graph it was saved from is gone, as happens when its workflow is deleted.";
+
 const subtitle = computed(() => {
   if (props.unfiled) {
-    return "Their workflow is gone. Extract workflow makes each one a workflow of its own.";
+    return recipes.value.some((recipe) => recipe.extractable === false)
+      ? "Their workflow is gone. Extract workflow makes one a workflow of its own where the graph it was saved from is still known."
+      : "Their workflow is gone. Extract workflow makes each one a workflow of its own.";
   }
   const found = looks.value.length;
   const kept = recipes.value.length;

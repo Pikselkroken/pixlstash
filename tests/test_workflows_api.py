@@ -5699,6 +5699,11 @@ def test_a_recipe_on_a_gone_workflow_is_unfiled_and_still_extracts(runnable):
     assert set(unfiled) == {kept, stranded}
     assert filed not in unfiled
     assert {row["pictures"] for row in unfiled.values()} == {0}
+    # The listing says which rows the Extract below can succeed on (#1687).
+    assert unfiled[kept]["extractable"] is True
+    assert unfiled[stranded]["extractable"] is False
+    r = runnable.owner.get(f"{API}/recipes", params={"workflow_id": RUN_WF})
+    assert {row["extractable"] for row in r.json()} == {None}
     both = runnable.owner.get(
         f"{API}/recipes", params={"unfiled": "true", "workflow_id": RUN_WF}
     )

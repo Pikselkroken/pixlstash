@@ -2454,7 +2454,9 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   below its grid, on the grid's `--wf-columns`: `GET /recipes?unfiled=true`
   (`listUnfiledRecipes`), the recipes whose workflow is gone. No looks, no
   reorder handle, no Run… (there is no workflow to run on; Extract workflow is
-  the way back), and **nothing drawn at all while the list is empty** — only
+  the way back, refused with its reason on a row the server marks
+  `extractable: false`, whose saved-from graph went with a deleted workflow),
+  and **nothing drawn at all while the list is empty** — only
   the tab's live region stays mounted, so the last Delete is still said. A
   failed read is quiet for the same reason. It re-reads on `recipesEpoch`.
 
