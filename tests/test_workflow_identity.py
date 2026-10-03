@@ -858,6 +858,26 @@ def test_traits_say_what_the_core_does_that_the_type_cannot():
     )
     assert graph_traits(_doc(_graph(extra={**zeroed, **one_ref}))) == ("references:1",)
     assert graph_traits(_doc(_graph(extra={**zeroed, **two_refs}))) == ("references:2",)
+    # A reference nothing samples from is not counted: an unused one, and one
+    # feeding only a stage, are dead once the core strip has run, and pruned.
+    unused = {**one_ref, "R9": _node("ReferenceLatent", conditioning=["2", 0])}
+    assert graph_traits(_doc(_graph(extra={**zeroed, **unused}))) == ("references:1",)
+    into_stage = {
+        **unused,
+        "31": _node(
+            "FaceDetailer",
+            image=["6", 0],
+            model=["1", 0],
+            clip=["1", 1],
+            vae=["1", 2],
+            positive=["R9", 0],
+            negative=["3", 0],
+            bbox_detector=["30", 0],
+        ),
+    }
+    assert graph_traits(
+        _doc(_graph(face_detailer=True, extra={**zeroed, **into_stage}))
+    ) == ("references:1",)
 
 
 def test_a_loader_on_its_own_is_not_the_graph_doing_the_thing():
