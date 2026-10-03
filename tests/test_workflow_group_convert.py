@@ -29,6 +29,7 @@ from pixlstash.hub.schema import CURRENT_DATA_VERSION, _has_old_cores
 from pixlstash.hub.workflow_card_reads import (
     card_index,
     manual_document,
+    workflow_index,
     workflow_of_variant,
 )
 from pixlstash.hub import workflow_origin
@@ -2024,6 +2025,84 @@ def test_a_recipe_on_a_v1_workflow_is_refiled_onto_v2_with_its_addresses(run_env
         ]
     server.vault.db.run_task(
         lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
+        priority=DBPriority.IMMEDIATE,
+    )
+
+
+def test_a_refiled_recipe_keeps_a_stage_address_on_this_librarys_base(run_env):
+    """#1738: the conversion reads the base this library runs, not the hub's.
+
+    The twin with a LoRA loader is the base without counts; it
+    has no picture here, so with them the orphan-encoder graph is. Only on
+    that base does an address on the node v2 took off the core survive as a
+    stage slot rather than being kept as the dead `core:` address it was.
+    """
+    server = run_env.server
+    hub = server.hub
+    library = server.vault.library_uuid
+    extra = CORE_V2_TWINS["orphan-encoder"][1]
+    pictured = record_api_graph(hub, _graph(hires=True, extra=extra), library)
+    richer = record_api_graph(
+        hub, _graph(hires=True, loras=("x.safetensors",), extra=extra), library
+    )
+    v1 = _back_to_v1(hub, pictured, richer)
+    old_id, old_labels = v1[pictured.topology_hash]
+    with hub.transaction() as conn:
+        rederive_cores(conn)
+    workflow_id = workflow_of_variant(hub, pictured.structural_hash)
+    assert workflow_of_variant(hub, richer.structural_hash) == workflow_id
+    hub_base = next(
+        w.base_topology for w in workflow_index(hub) if w.workflow_id == workflow_id
+    )
+    assert hub_base == richer.topology_hash
+    old_text = f"core:{old_labels['97']}/text"
+    stage_slot, core_label = _labels(hub, pictured, "97")
+    assert core_label is None, "v2 kept the orphan encoder on the core"
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        session.exec(delete(Picture))
+        session.add(
+            Picture(
+                file_path="pictured.png",
+                deleted=False,
+                created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                score=5,
+                workflow_topology_hash=pictured.topology_hash,
+                workflow_structural_hash=pictured.structural_hash,
+                workflow_instance_hash=pictured.instance_hash,
+                workflow_hash_version="v1",
+            )
+        )
+        recipe = SavedRecipe(
+            name="v1 stage",
+            workflow_key=_card(hub, pictured),
+            workflow_id=old_id,
+            prompt="x",
+            overrides=json.dumps({old_text: "right"}),
+        )
+        session.add(recipe)
+        session.commit()
+        return recipe.id
+
+    recipe_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+    task = finder.find_task()
+    task.result = task._run_task()
+    finder.on_task_complete(task, None)
+    stored = server.vault.db.run_immediate_read_task(
+        lambda session: session.exec(
+            select(SavedRecipe).where(SavedRecipe.id == recipe_id)
+        ).one()
+    )
+    assert stored.workflow_id == workflow_id
+    assert json.loads(stored.overrides) == {f"{stage_slot}/text": "right"}
+    server.vault.db.run_task(
+        lambda session: (
+            session.exec(delete(SavedRecipe)),
+            session.exec(delete(Picture)),
+            session.commit(),
+        ),
         priority=DBPriority.IMMEDIATE,
     )
 

@@ -708,11 +708,13 @@ def key_pins(hub: HubDatabase, workflow_key: str) -> Optional[list[tuple[str, st
 class Workflow:
     """One workflow as the hub knows it, before any picture has been counted.
 
-    ``base_topology`` is the graph a run starts from and an export writes: the
-    topology with the most stage groups, then the most LoRA loaders, then the
-    most kept pictures (#1620 D3). Automatic, with no owner control. Picture
-    counts belong to the vault, so without them the third tie-break is skipped
-    and the topology hash decides, which keeps the answer stable.
+    ``base_topology`` is the graph a run starts from and an export writes: a
+    topology with kept pictures in this library before one without (#1738),
+    then the most stage groups, then the most LoRA loaders, then the most kept
+    pictures (#1620 D3). Automatic, with no owner control. Picture counts
+    belong to the vault, so the base is per library, and without them both
+    picture keys are skipped and the topology hash decides, which keeps a
+    hub-only answer stable.
 
     ``base_card`` is the card on the base topology with the most kept pictures,
     whose source a run resolves (``workflow_run_service.resolve_source`` takes a
@@ -830,7 +832,8 @@ def workflow_index(
     Args:
         hub: The hub.
         picture_counts: ``{structural_hash: kept pictures}`` from the vault,
-            for the base topology's last tie-break. ``None`` skips it.
+            for the base topology's first key and its last tie-break. ``None``
+            skips both.
         cards: :func:`card_index`'s answer when the caller already read it.
     """
     placed = {
@@ -910,11 +913,15 @@ def workflow_index(
             pictures[topology_hash] = pictures.get(topology_hash, 0) + counts.get(
                 structural_hash, 0
             )
-        # Most of each, and on a full tie the smallest hash, so two reads of an
-        # unchanged hub name the same base.
+        # A topology this library has kept pictures of first, so a workflow
+        # with any picture here has a graph to run (#1738); then most of each,
+        # and on a full tie the smallest hash, so two reads of an unchanged hub
+        # name the same base. A workflow file is no key: it may be UI-format,
+        # which does not run, and the hub-only base must not move.
         entry.base_topology = min(
             entry.topologies,
             key=lambda t: (
+                not pictures.get(t),
                 -len(entry.specials.get(t) or ()),
                 -loras.get(t, 0),
                 -pictures.get(t, 0),

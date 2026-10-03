@@ -39,6 +39,7 @@ from pixlstash.hub.workflow_group_convert import (
     translate,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.workflow_library_service import read_variant_picture_counts
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 
 if TYPE_CHECKING:
@@ -99,8 +100,17 @@ class SavedRecipeConvertTask(BaseTask):
         )
         cards = card_index(hub)
         by_key = {card.workflow_key: card for card in cards}
+        # This library's base, the one a run of the recipe starts from, so a
+        # stage-node address is kept on the graph it will be applied to.
         bases = {
-            w.workflow_id: w.base_topology for w in workflow_index(hub, cards=cards)
+            w.workflow_id: w.base_topology
+            for w in workflow_index(
+                hub,
+                read_variant_picture_counts(self._vault)
+                if getattr(self._vault, "library_uuid", None)
+                else None,
+                cards,
+            )
         }
         updates, deferred = [], []
         for recipe_id, workflow_key, raw_overrides, raw_models, was in rows:

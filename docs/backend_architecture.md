@@ -2349,9 +2349,23 @@ member row, else the id of its core under this build's `CORE_RULE_VERSION` and
 its family row, else none), `variants_in_workflow` and `topologies_in_workflow`
 (an automatic id is a digest, so these scan the current variants and keep the
 ones whose id it is), and `workflow_index`, one `Workflow` per group built
-from `card_index`, variant by variant. The **base topology** is the one with the most
-stage groups, then the most LoRA loaders, then the most kept pictures (#1620
-D3, automatic); its busiest card is `base_card`, whose source a run resolves.
+from `card_index`, variant by variant. The **base topology** is one this
+library has kept pictures of before one it has none of (#1738), then the one
+with the most stage groups, then the most LoRA loaders, then the most kept
+pictures (#1620 D3, automatic); its busiest card is `base_card`, whose source a
+run resolves. A workflow file is not a key: it may be UI-format, which does not
+run, and it would move the hub-only base. A workflow with a kept picture is therefore
+never based on a graph nobody here ran, and Run, Export and the Workflow tab
+name the same graph; a picture whose file is gone can still leave it with no
+source. The base can move when the first or last picture of a topology comes
+or goes, and what is keyed on the base topology (model fixes, stage-node
+addresses) stays on the old one: an accepted cost of a runnable base. The
+hub is shared across libraries, so the base is **per library**: every read
+that serves this library (grid, detail, Run, Export, saved recipes and their
+conversion) passes the vault's counts. A read without counts (the hub's data
+steps at hub open) skips both picture keys and may pick a richer graph no
+library here ran; the stage-node addresses those steps write are the accepted
+limit below.
 
 **Addresses.** A slot label is refined over the whole topology, so it means
 nothing in a workflow spanning several. `workflow_identity.core_node_labels`
@@ -2833,7 +2847,9 @@ topology: `topology_node_labels` → node → `core_node_labels`, the same
 `STRIP_LORAS_FOR_STACKS` strip as the core hash). A core node becomes
 `core:<label>/<input>`; a stage node keeps its slot label only when the card's
 topology **is** the workflow's base topology (chosen by `workflow_index`, with
-no picture counts at hub open), the one graph that label means anything on.
+no picture counts at hub open; the vault half below passes its library's
+counts, so it keeps a label on the base a run of the recipe starts from), the
+one graph that label means anything on.
 
 **The vault half** is `MissingSavedRecipeWorkflowFinder` /
 `SavedRecipeConvertTask`, over `saved_recipe.workflow_id IS NULL`, registered
