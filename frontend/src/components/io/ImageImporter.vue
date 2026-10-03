@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { VIcon } from "vuetify/components";
 import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
 import { sleep } from "../../utils/utils";
+import { cssDurationMs } from "../../utils/dom.js";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import {
@@ -414,7 +415,7 @@ function flyChipToTaskRow(runId) {
     const dy = to.top + to.height / 2 - (from.top + from.height / 2);
     const lift = Math.max(40, Math.abs(dx) * 0.12); // a slight arc
     const css = getComputedStyle(document.documentElement);
-    const dur = parseFloat(css.getPropertyValue("--dur-4")) || 420;
+    const dur = cssDurationMs(css, "--dur-4", 420);
     const ease = (
       css.getPropertyValue("--ease-standard") || "cubic-bezier(0.4,0,0.2,1)"
     ).trim();

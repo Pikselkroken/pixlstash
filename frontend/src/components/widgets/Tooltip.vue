@@ -23,6 +23,8 @@
 </template>
 
 <script>
+import { cssDurationMs } from "../../utils/dom.js";
+
 // Read from the tokens so each value has one home, and once per page: a
 // computed-style read per instance is most of what a tip costs to mount, and
 // a grid tile carries several. Unset (tests, a stylesheet that failed to load)
@@ -31,8 +33,7 @@ let delays;
 function tooltipDelays() {
   if (!delays) {
     const style = getComputedStyle(document.documentElement);
-    const ms = (name) => parseFloat(style.getPropertyValue(name)) || 0;
-    delays = { openDelay: ms("--tooltip-delay") };
+    delays = { openDelay: cssDurationMs(style, "--tooltip-delay") };
   }
   return delays;
 }
