@@ -59,6 +59,7 @@ from pixlstash.hub.workflow_card_reads import (
     instance_documents,
     variant_documents,
 )
+from pixlstash.hub import workflow_card_reads
 from pixlstash.hub.workflow_card_reads import _manual_facts_of, manual_document
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
@@ -2913,6 +2914,18 @@ def test_a_manual_workflow_whose_links_are_malformed_has_no_type():
         "links": [[1, 1, {"slot": 0}, 2, 0, "MODEL"]],
     }
     assert _manual_facts_of("manual:" + "0" * 32, json.dumps(graph)) == (None, None)
+
+
+def test_a_manual_graph_whose_type_read_fails_is_a_card_with_no_type(monkeypatch):
+    """A graph that reduces but trips the type read is logged and typeless, not
+    an exception out of the grid read (#1729 review)."""
+
+    def explode(nodes):
+        raise TypeError("degenerate graph")
+
+    monkeypatch.setattr(workflow_card_reads, "reduced_workflow_type", explode)
+    graph = {"1": {"class_type": "SaveImage", "inputs": {}}}
+    assert _manual_facts_of("manual:" + "1" * 32, json.dumps(graph)) == (None, None)
 
 
 def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(

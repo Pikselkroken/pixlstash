@@ -30,7 +30,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, auto_workflow_id
+from pixlstash.hub.workflow_cards import (
+    CORE_RULE_VERSION,
+    STRIP_LORAS_FOR_STACKS,
+    auto_workflow_id,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
@@ -234,25 +238,30 @@ def _manual_facts_of(
     if workflow_id not in _MANUAL_FACTS:
         nodes = _manual_reduction(workflow_id, document)
         _MANUAL_FACTS[workflow_id] = (
-            (None, None)
-            if nodes is None
-            else (reduced_workflow_type(nodes), _manual_traits(workflow_id, nodes))
+            (None, None) if nodes is None else _manual_facts(workflow_id, nodes)
         )
     return _MANUAL_FACTS[workflow_id]
 
 
-def _manual_traits(workflow_id: str, nodes: dict) -> Optional[tuple[str, ...]]:
-    """``reduced_traits`` of a manual workflow, ``None`` (logged) if the core
-    strip leaves nothing, so its name claims nothing it cannot back."""
+def _manual_facts(
+    workflow_id: str, nodes: dict
+) -> tuple[Optional[str], Optional[tuple[str, ...]]]:
+    """Type and traits of a reduced manual graph; ``(None, None)``, logged, if
+    a degenerate graph trips either, so one bad document never takes the grid
+    down with it."""
     try:
-        return reduced_traits(nodes)
+        return (
+            reduced_workflow_type(nodes),
+            reduced_traits(nodes, strip_loras=STRIP_LORAS_FOR_STACKS),
+        )
     except (WorkflowGraphError, ValueError, TypeError, KeyError) as exc:
         logger.warning(
-            "Manual workflow %s: its core strip failed, so its name says no traits: %s",
+            "Manual workflow %s: its graph could not be read for its type and "
+            "traits, so it shows neither: %s",
             workflow_id,
             exc,
         )
-        return None
+        return None, None
 
 
 def _manual_reduction(workflow_id: str, document: str) -> Optional[dict]:

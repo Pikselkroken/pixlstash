@@ -625,17 +625,22 @@ _SAVER_CLASS_RE = re.compile(r"Save", re.IGNORECASE)
 _TEXT_ENCODER_CLASS_RE = re.compile(r"TextEncode")
 
 
-def graph_traits(document: dict) -> tuple[str, ...]:
+def graph_traits(document: dict, *, strip_loras: bool = True) -> tuple[str, ...]:
     """What this stored document's core does beyond its type and its stages.
+
+    *strip_loras* is :func:`core_hash`'s, and a caller passes the value its
+    grouping uses, so the traits are read off the core that grouped them.
 
     Raises:
         WorkflowGraphError: The document is a raw graph, or nothing survives
             the core strip.
     """
-    return reduced_traits(_reduce(document))
+    return reduced_traits(_reduce(document), strip_loras=strip_loras)
 
 
-def reduced_traits(nodes: dict[str, ReducedNode]) -> tuple[str, ...]:
+def reduced_traits(
+    nodes: dict[str, ReducedNode], *, strip_loras: bool = True
+) -> tuple[str, ...]:
     """:func:`graph_traits` of an already reduced graph, raw or stored.
 
     **Read off the core graph, never the whole one**: the same strip as
@@ -648,7 +653,7 @@ def reduced_traits(nodes: dict[str, ReducedNode]) -> tuple[str, ...]:
     Class types and edges only, so a manual workflow's raw graph answers as
     its stored document would.
     """
-    core = _core_of(nodes, True)[0]
+    core = _core_of(nodes, strip_loras)[0]
     samplers = {
         node_id
         for node_id, node in core.items()

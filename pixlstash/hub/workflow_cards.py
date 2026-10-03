@@ -396,7 +396,10 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     cached = (
         None
         if core is not None or not specials_missing
-        else (",".join(special_groups(document)), ",".join(graph_traits(document)))
+        else (
+            ",".join(special_groups(document)),
+            ",".join(graph_traits(document, strip_loras=STRIP_LORAS_FOR_STACKS)),
+        )
     )
     with hub.transaction() as conn:
         marks = _freeze_marks(conn, topology_hash, structural_hash, document_slots)
@@ -636,7 +639,7 @@ def _cache_topology(
                 separators=(",", ":"),
             ),
             ",".join(special_groups(document)),
-            ",".join(graph_traits(document)),
+            ",".join(graph_traits(document, strip_loras=STRIP_LORAS_FOR_STACKS)),
         ),
     )
 
