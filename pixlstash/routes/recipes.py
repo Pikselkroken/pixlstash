@@ -25,6 +25,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from pixlstash.hub.workflow_card_reads import (
+    card_index,
     find_workflow,
     variants_in_workflow,
     workflow_index,
@@ -167,6 +168,14 @@ class SavedRecipeOut(BaseModel):
         description=(
             "Kept pictures of this recipe's workflow whose prompt and LoRA names "
             "are the recipe's. Computed on read; 0 on a write's own response."
+        ),
+    )
+    extractable: Optional[bool] = Field(
+        None,
+        description=(
+            "The unfiled listing only: whether Extract workflow has a graph to "
+            "build on. False when the card it was saved from is gone too, as "
+            "with a deleted manual workflow. Null in every other listing."
         ),
     )
 
@@ -321,7 +330,8 @@ def create_router(server) -> APIRouter:
             "accounts for. Given a workflow id, that workflow's recipes; "
             "given none, every recipe in the library. `unfiled` lists instead "
             "the recipes whose workflow is gone or not decided yet, with no "
-            "credit: what the Workflows view offers to extract or delete."
+            "credit: what the Workflows view offers to extract or delete, "
+            "each saying whether it can be extracted (`extractable`)."
         ),
         response_model=list[SavedRecipeOut],
         responses={400: {"description": "`unfiled` together with a workflow id."}},
@@ -352,12 +362,24 @@ def create_router(server) -> APIRouter:
                     status_code=400,
                     detail="unfiled lists recipes on no workflow; name none.",
                 )
-            known = {entry.workflow_id for entry in workflow_index(_hub())}
-            return [
+            hub = _hub()
+            known = {entry.workflow_id for entry in workflow_index(hub)}
+            unfiled_recipes = [
                 recipe
                 for recipe in saved_recipe_service.read_recipes(server.vault)
                 if recipe["workflow_id"] not in known
             ]
+            if not unfiled_recipes:
+                return []
+            # Extraction builds on the card the recipe was saved from (the
+            # run planner's fallback once the workflow is gone), so a recipe
+            # whose card is gone as well - a deleted manual workflow's, whose
+            # only document went with it - has nothing to extract (#1687).
+            cards = {card.workflow_key for card in card_index(hub)}
+            keys = saved_recipe_service.read_workflow_keys(server.vault)
+            for recipe in unfiled_recipes:
+                recipe["extractable"] = keys.get(recipe["id"]) in cards
+            return unfiled_recipes
         if not workflow_ids:
             # Every recipe in the library, with no credit: crediting them would
             # mean resolving every workflow, a query per workflow for a number

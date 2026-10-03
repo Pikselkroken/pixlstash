@@ -62,6 +62,7 @@ vi.mock("vuetify/components", async () => {
 
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowRecipesTab from "./WorkflowRecipesTab.vue";
 
 const KEY = `auto:${"a".repeat(64)}`;
@@ -1057,6 +1058,32 @@ describe("WorkflowRecipesTab", () => {
     expect(wrapper.find(".wfrt-card").text()).not.toContain("Run…");
     expect(menuRow(wrapper, "Extract workflow")).toBeDefined();
     expect(menuRow(wrapper, "Delete")).toBeDefined();
+  });
+
+  it("refuses Extract, with its reason, on a recipe whose workflow was deleted", async () => {
+    listUnfiledRecipes.mockResolvedValue([
+      recipe(9, "Stranded", { workflow_id: "manual:gone", extractable: false }),
+      recipe(10, "Kept", { workflow_id: "auto:gone", extractable: true }),
+    ]);
+    const wrapper = render({ unfiled: true, workflowIds: [], workflowName: "Unfiled recipes" });
+    await flushPromises();
+
+    const refused = menuRow(wrapper, "Extract workflow");
+    expect(refused.attributes("aria-disabled")).toBe("true");
+    expect(refused.classes()).toContain("ctx-item--disabled");
+    expect(refused.findComponent(Tooltip).props("text")).toContain("deleted");
+    await refused.trigger("click");
+    await flushPromises();
+    expect(extractRecipeWorkflow).not.toHaveBeenCalled();
+    expect(wrapper.find(".wfrt-sub").text()).toContain("unless its workflow was deleted");
+
+    const offered = wrapper
+      .findAll(".wfrt-card")[1]
+      .findAll(".ctx-item")
+      .find((el) => el.text().endsWith("Extract workflow"));
+    expect(offered.attributes("aria-disabled")).toBeUndefined();
+    await offered.trigger("click");
+    expect(extractRecipeWorkflow).toHaveBeenCalledWith(10);
   });
 
   it("draws nothing at all while no recipe is unfiled", async () => {

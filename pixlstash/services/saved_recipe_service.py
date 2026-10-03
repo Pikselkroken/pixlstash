@@ -265,6 +265,13 @@ def rekey_in_session(session: Session, moved: dict[str, list[str]]) -> int:
     return moved_count
 
 
+def workflow_keys_in_session(session: Session) -> dict[int, str]:
+    """Each recipe's card key by recipe id: internal, for the routes to judge
+    what a recipe can still be built on, never to return (#1623)."""
+    rows = session.exec(select(SavedRecipe.id, SavedRecipe.workflow_key)).all()
+    return {recipe_id: workflow_key for recipe_id, workflow_key in rows}
+
+
 def counts_by_workflow_key(session: Session) -> dict[str, int]:
     """How many saved recipes each card holds, for the whole library at once.
 
@@ -634,6 +641,11 @@ def used_looks(
 def read_recipes(vault, workflow_ids: Optional[list[str]] = None) -> list[dict]:
     """Every saved recipe of these workflows, ordered for the tab."""
     return vault.db.run_immediate_read_task(list_in_session, workflow_ids)
+
+
+def read_workflow_keys(vault) -> dict[int, str]:
+    """Every recipe's card key by recipe id; see :func:`workflow_keys_in_session`."""
+    return vault.db.run_immediate_read_task(workflow_keys_in_session)
 
 
 def read_credit_groups(
