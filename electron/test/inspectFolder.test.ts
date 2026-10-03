@@ -49,6 +49,27 @@ describe('the startup screen’s verdict on a folder', () => {
     assert.equal(result.pictureCount, 0);
   });
 
+  it('counts what the import will index, not PixlStash’s own files', async () => {
+    // A folder that was a library once: thumbnails beside the originals, and
+    // the root folders a library makes. The import's read skips all of them.
+    const dir = tempDir();
+    mkdirSync(join(dir, '2014'));
+    writeFileSync(join(dir, '2014', 'beach.jpg'), Buffer.alloc(10));
+    writeFileSync(join(dir, '2014', 'beach_thumb.webp'), Buffer.alloc(10));
+    writeFileSync(join(dir, '2014', 'sunset.webp'), Buffer.alloc(10));
+    mkdirSync(join(dir, 'tmp', 'face_thumbnails'), { recursive: true });
+    writeFileSync(join(dir, 'tmp', 'face_thumbnails', 'character_1.png'), Buffer.alloc(10));
+    mkdirSync(join(dir, 'snapshots'));
+    writeFileSync(join(dir, 'snapshots', 'x.png'), Buffer.alloc(10));
+    // Only the root's: a `tmp` deeper down is the owner's own folder.
+    mkdirSync(join(dir, '2014', 'tmp'));
+    writeFileSync(join(dir, '2014', 'tmp', 'kept.jpg'), Buffer.alloc(10));
+
+    const result = await inspectFolder(dir);
+
+    assert.equal(result.pictureCount, 3, 'beach.jpg, sunset.webp and 2014/tmp/kept.jpg');
+  });
+
   it('asks the library what it holds, because a vault proves only that one exists', async () => {
     const dir = tempDir();
     writeFileSync(join(dir, 'vault.db'), Buffer.alloc(64));

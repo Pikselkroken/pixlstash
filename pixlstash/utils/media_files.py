@@ -8,6 +8,7 @@ folder the scanner is about to index.
 
 import os
 
+from pixlstash.hub.registry import LIBRARY_MADE_ENTRIES
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.image_processing.image_utils import THUMBNAIL_EXTENSION
 from pixlstash.utils.image_processing.video_utils import VIDEO_EXTENSIONS
@@ -43,6 +44,23 @@ DEFAULT_ENTRY_CAP = 200_000
 
 #: The suffix every thumbnail PixlStash writes carries.
 THUMBNAIL_SUFFIX = f"_thumb{THUMBNAIL_EXTENSION}"
+
+
+#: Top-level folders under a library's own root that hold PixlStash's files,
+#: not the owner's pictures: the snapshot tree, and the ``tmp/`` cache the
+#: set and character thumbnail routes write into. Every walk of a library's
+#: root skips these; the dot-folder rule covers the rest
+#: (``.pixlstash-thumbnails``, the older ``.ref_thumbs``, ``.staging``). Found
+#: the hard way: an import of a library's
+#: own root indexed 24 set and face thumbnails as pictures.
+#: The entries in :data:`~pixlstash.hub.registry.LIBRARY_MADE_ENTRIES` a walk
+#: has to prune by name. The hidden ones are already pruned by the dot rule
+#: every walk here applies, so this is the same list minus those - derived
+#: rather than repeated, because a folder missing from one of the two lists
+#: is either indexed as if it were the owner's or left behind on a discard.
+LIBRARY_OWN_FOLDERS = tuple(
+    name for name in LIBRARY_MADE_ENTRIES if not name.startswith(".")
+)
 
 
 def is_pixlstash_thumbnail(name_or_path: str) -> bool:
@@ -115,6 +133,16 @@ def is_supported_media_file(name_or_path: str) -> bool:
     return os.path.splitext(name_or_path)[1].lower() in SUPPORTED_MEDIA_EXTS
 
 
+def _walkable(dirpath: str, root: str, dirnames: list[str]) -> list[str]:
+    """The subfolders a count descends into: not hidden, not the root's own."""
+    at_root = dirpath == root
+    return [
+        name
+        for name in dirnames
+        if not name.startswith(".") and not (at_root and name in LIBRARY_OWN_FOLDERS)
+    ]
+
+
 def has_media_files(root: str, *, entry_cap: int = DEFAULT_ENTRY_CAP) -> bool:
     """True as soon as one indexable file is found under *root*.
 
@@ -139,8 +167,8 @@ def has_media_files(root: str, *, entry_cap: int = DEFAULT_ENTRY_CAP) -> bool:
             error,
         )
 
-    for _, dirnames, filenames in os.walk(root, onerror=_note):
-        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_note):
+        dirnames[:] = _walkable(dirpath, root, dirnames)
         visited += len(dirnames)
         for name in filenames:
             if is_supported_media_file(name):
@@ -182,8 +210,8 @@ def count_media_files(
             "Skipping %s while counting under %s: %s", error.filename, root, error
         )
 
-    for _, dirnames, filenames in os.walk(root, onerror=_note):
-        dirnames[:] = [name for name in dirnames if not name.startswith(".")]
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_note):
+        dirnames[:] = _walkable(dirpath, root, dirnames)
         visited += len(dirnames)
         for name in filenames:
             # Counted per entry, not per directory: a flat folder of half a

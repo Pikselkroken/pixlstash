@@ -60,7 +60,6 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
-from pixlstash.hub.registry import LIBRARY_MADE_ENTRIES
 from pixlstash.db_models.character import Character
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.folder_mapping_commit import (
@@ -94,7 +93,11 @@ from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.library_layout import Facet
-from pixlstash.utils.media_files import is_hidden_entry, is_supported_media_file
+from pixlstash.utils.media_files import (
+    LIBRARY_OWN_FOLDERS,
+    is_hidden_entry,
+    is_supported_media_file,
+)
 from pixlstash.utils.library_roots import (
     holding_folder_overlap_lock,
     refuse_overlapping_folder,
@@ -680,23 +683,6 @@ def register_reference_folder(
     if rf.status == ReferenceFolderStatus.ACTIVE:
         server.vault.watch_reference_folder(rf.id, rf.folder)
     return rf
-
-
-#: Top-level folders under a library's own root that hold PixlStash's files,
-#: not the owner's pictures: the snapshot tree, and the ``tmp/`` cache the
-#: set and character thumbnail routes write into. Every walk of a library's
-#: root skips these; the dot-folder rule covers the rest
-#: (``.pixlstash-thumbnails``, the older ``.ref_thumbs``, ``.staging``). Found
-#: the hard way: an import of a library's
-#: own root indexed 24 set and face thumbnails as pictures.
-#: The entries in :data:`~pixlstash.hub.registry.LIBRARY_MADE_ENTRIES` a walk
-#: has to prune by name. The hidden ones are already pruned by the dot rule
-#: every walk here applies, so this is the same list minus those - derived
-#: rather than repeated, because a folder missing from one of the two lists
-#: is either indexed as if it were the owner's or left behind on a discard.
-LIBRARY_OWN_FOLDERS = tuple(
-    name for name in LIBRARY_MADE_ENTRIES if not name.startswith(".")
-)
 
 
 def library_own_folders(image_root: str) -> set[str]:
