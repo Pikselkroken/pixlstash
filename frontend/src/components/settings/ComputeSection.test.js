@@ -150,6 +150,22 @@ describe("ComputeSection unified runtime list", () => {
     expect(desktop.useAccelerator).toHaveBeenCalledWith("cuda");
   });
 
+  it("offers nothing to install or switch on a development run", async () => {
+    // Dev runs on its own Python environment; the overlays on disk belong to
+    // the installed app, so an Install here could only fail or touch them.
+    const { wrapper } = await mountCompute({
+      dev: true,
+      bundled: { accel: null, label: "Development environment", active: true },
+      items: [],
+    });
+
+    expect(rows(wrapper).map(rowLabel)).toEqual(["Development environment"]);
+    expect(rowSub(rows(wrapper)[0])).toContain("Python environment");
+    expect(wrapper.findAll("button")).toHaveLength(0);
+    expect(wrapper.text()).toContain("Development run");
+    expect(wrapper.text()).not.toContain("No discrete GPU detected");
+  });
+
   it("offers Install (recommended) for an uninstalled recommended overlay", async () => {
     const { wrapper, desktop } = await mountCompute({
       bundled: { accel: "cpu", label: "Built-in (CPU)", active: true },

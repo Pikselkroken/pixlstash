@@ -71,6 +71,22 @@ export type SetupDeps<Accel> = {
 };
 
 /**
+ * The GPU-overlay state setup may touch: the real one, or none at all in dev.
+ *
+ * A dev run never launches an overlay, and it shares userData with packaged
+ * runs on the same machine. Letting its setup take the no-GPU branch for real
+ * would clear the saved accelerator, and the next packaged launch would start
+ * on the CPU.
+ */
+export function overlayStateFor<Accel>(
+  dev: boolean,
+  real: Pick<SetupDeps<Accel>, 'setActiveAccel' | 'activeOverlayAccel'>,
+): Pick<SetupDeps<Accel>, 'setActiveAccel' | 'activeOverlayAccel'> {
+  if (!dev) return real;
+  return { setActiveAccel: async () => undefined, activeOverlayAccel: async () => null };
+}
+
+/**
  * Run a first-run setup to the point where the window becomes the library.
  *
  * Throws when setup cannot proceed (no library folder, a refused identity

@@ -72,7 +72,7 @@ import {
 } from './config';
 import { inspectFolder } from './setup/InspectFolder';
 import { readLibraryFolder } from './setup/ReadLibraryFolder';
-import { runFirstRunSetup } from './setup/RunSetup';
+import { overlayStateFor, runFirstRunSetup } from './setup/RunSetup';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
 import {
   cliCommandHint,
@@ -1121,6 +1121,12 @@ async function boot(): Promise<void> {
     hardware = await detectHardware(forcedBackend);
 
     if (isDevBackend()) {
+      // Dev skips the bundled runtime and GPU overlays, not first-run setup:
+      // with no config there is still a library folder and privacy to ask.
+      if (!existsSync(serverConfigPath())) {
+        await mainWindow?.loadFile(join(__dirname, 'renderer', 'setup.html'));
+        return;
+      }
       await startAndLoad(null);
       return;
     }
@@ -1199,7 +1205,7 @@ async function retryLaunch(recovery: StartupRecovery): Promise<void> {
 async function standaloneConfigPath(): Promise<string | null> {
   try {
     const { stdout } = await execFileP(
-      bundledInterpreter(),
+      backendInterpreter(),
       [
         '-c',
         "from platformdirs import user_config_dir; import os; " +
@@ -1224,11 +1230,43 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 
 /** The discrete-GPU overlay (if any) we'd offer to install on this machine. */
 function gpuUpgrade(): Accel | undefined {
+  // A dev run uses the developer's own env, which overlays never apply to.
+  if (isDevBackend()) return undefined;
   return hardware ? gpuUpgrades(hardware, bundledAccel())[0] : undefined;
+}
+
+/**
+ * Install, switch and remove act on GPU overlays a dev run never launches and
+ * the packaged app on this machine does: switching would change its saved
+ * choice and removing would delete its download.
+ */
+function refuseAccelChangeInDev(): void {
+  if (isDevBackend()) {
+    throw new Error(
+      'This is a development run: it uses the Python environment it was started from, and GPU add-ons belong to the installed app.',
+    );
+  }
+}
+
+/** The interpreter the backend runs on: the bundled one, or the dev checkout's. */
+function backendInterpreter(): string {
+  return isDevBackend() ? devInterpreter() : bundledInterpreter();
+}
+
+/** Environment for running `pixlstash` on {@link backendInterpreter}. */
+function backendEnv(): NodeJS.ProcessEnv {
+  if (!isDevBackend()) return process.env;
+  return { ...process.env, PYTHONPATH: devPythonPath(devRepoRoot(), process.env.PYTHONPATH) };
 }
 
 /** Describe the bundled accelerator + each installable/installed GPU overlay. */
 async function acceleratorState() {
+  // Dev runs on the checkout's interpreter and never on an overlay, so there is
+  // nothing to install or switch here - and the overlays on disk belong to the
+  // packaged app that shares this userData.
+  if (isDevBackend()) {
+    return { dev: true, bundled: { accel: null, label: 'Development environment', active: true }, items: [] };
+  }
   const active = await manager.getActiveAccel();
   const upgrades = hardware ? gpuUpgrades(hardware, bundledAccel()) : [];
   const installed = await manager.listInstalled();
@@ -1451,7 +1489,7 @@ function registerIpc(): void {
   // that renders content PixlStash did not author.
   ipcMain.handle('setup:inspect', async (event, path?: string) => {
     requireSetupRenderer(event, 'setup:inspect');
-    return inspectFolder(path || '', bundledInterpreter());
+    return inspectFolder(path || '', backendInterpreter());
   });
 
   ipcMain.handle('setup:pickFolder', async (event, current?: string) => {
@@ -1501,7 +1539,7 @@ function registerIpc(): void {
           : undefined,
       };
 
-      if (!runtime) throw new Error('No bundled runtime available');
+      if (!runtime && !isDevBackend()) throw new Error('No bundled runtime available');
 
       const configDir = dirname(serverConfigPath());
       // New credential directories are private even under umask 0002. Existing
@@ -1517,7 +1555,10 @@ function registerIpc(): void {
         setBackendsRoot: (location) =>
           setBackendsRoot(normalizeBackendsRoot(location, defaultBackendsRoot())),
         prepareLegacyIdentity: (source) =>
-          prepareLegacyIdentity(bundledInterpreter(), hubPath(), source),
+          prepareLegacyIdentity(backendInterpreter(), hubPath(), source, (file, args, options) =>
+            // pixlstash is not installed into the dev env; import it from the checkout.
+            execFileP(file, args, { ...options, env: backendEnv() }),
+          ),
         // Loopback HTTP; the active runtime drives the device (default_device
         // left as auto).
         writeConfig: (imageRoot) =>
@@ -1537,8 +1578,10 @@ function registerIpc(): void {
         clearConfig: () => rmSync(serverConfigPath(), { force: true }),
         parkTelemetry: writePendingTelemetry,
         parkMapping: writePendingMapping,
-        setActiveAccel: (accel) => manager.setActiveAccel(accel),
-        activeOverlayAccel,
+        ...overlayStateFor<Accel>(isDevBackend(), {
+          setActiveAccel: (accel) => manager.setActiveAccel(accel),
+          activeOverlayAccel,
+        }),
         startBackend: startFromSetup,
         installOverlay: (accel) =>
           manager.installOverlay(
@@ -1792,6 +1835,7 @@ function registerIpc(): void {
   // an `Accel` is a path segment (see requireAccel). Validate at the boundary,
   // before the value can reach a directory join.
   ipcMain.handle('accel:install', async (_e, raw: unknown) => {
+    refuseAccelChangeInDev();
     const accel = requireAccel(raw);
     if (!runtime) throw new Error('No bundled runtime available');
     // installOverlay wipes the target directory first, and a backend running on
@@ -1819,6 +1863,7 @@ function registerIpc(): void {
     // means "back to the bundled env". Anything else must be a known Accel.
     // Deactivating is the safe reading of a missing argument: it is the one
     // outcome that puts no renderer-supplied segment on a path or a PYTHONPATH.
+    refuseAccelChangeInDev();
     const accel = raw === null || raw === undefined ? null : requireAccel(raw);
     // setActiveAccel BEFORE the start is fine only because the fallback wrapper
     // guarantees a failed overlay start ends with the active state cleared
@@ -1831,6 +1876,7 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('accel:remove', async (_e, raw: unknown) => {
+    refuseAccelChangeInDev();
     await manager.remove(requireAccel(raw));
     // Relaunch on whatever remains active (another overlay or null). A remaining
     // overlay that fails to start falls back to CPU; a null start failure
@@ -1868,11 +1914,10 @@ function runCli(args: string[]): void {
   const declared = declaredCliCommand();
   // Same interpreter and import path the backend gets, so a dev run drives this
   // checkout's code and the CLI branch is exercisable without the bundled env.
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (isDevBackend()) env.PYTHONPATH = devPythonPath(devRepoRoot(), process.env.PYTHONPATH);
+  const env: NodeJS.ProcessEnv = { ...backendEnv() };
   if (declared) env.PIXLSTASH_CLI_COMMAND = declared;
   const child = spawn(
-    isDevBackend() ? devInterpreter() : bundledInterpreter(),
+    backendInterpreter(),
     ['-m', 'pixlstash.cli', '--hub', hubPath(), ...args],
     {
       stdio: 'inherit',
@@ -1909,10 +1954,9 @@ function runCli(args: string[]): void {
 function runMcp(args: string[]): void {
   app.disableHardwareAcceleration();
   app.dock?.hide();
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (isDevBackend()) env.PYTHONPATH = devPythonPath(devRepoRoot(), process.env.PYTHONPATH);
+  const env: NodeJS.ProcessEnv = { ...backendEnv() };
   const child = spawn(
-    isDevBackend() ? devInterpreter() : bundledInterpreter(),
+    backendInterpreter(),
     ['-m', 'pixlstash.mcp_server', ...args],
     { stdio: 'inherit', env },
   );

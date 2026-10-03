@@ -190,7 +190,10 @@ two ephemeral signals come from the launcher:
   GPU overlay), so the config's `default_device` can't request a device this runtime
   lacks. (The earlier shared-config + force-SSL-off approach is dropped.)
 
-Dev (`PIXLSTASH_DESKTOP_DEV=1`) keeps using the developer's default config/library.
+Dev (`PIXLSTASH_DESKTOP_DEV=1`) runs the checkout's interpreter against the same
+userData config as a packaged run. With no `server-config.json` it shows first-run
+setup, minus the compute step; it never reads or writes the GPU overlay state, which
+packaged runs on the same machine share.
 
 ## The startup framework (UX)
 `renderer/setup.html` is not only the first-run wizard: it is **the screen

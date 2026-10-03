@@ -37,7 +37,7 @@ const checkForUpdatesModel = computed({
 
 const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 
-const state = ref(null); // { bundled: {accel,label,active}, items: [...] }
+const state = ref(null); // { dev?, bundled: {accel,label,active}, items: [...] }
 const busy = ref(false);
 const error = ref("");
 const progress = ref(null); // { message, fraction } while installing
@@ -618,9 +618,11 @@ watch(
         <SettingsRow
           :label="state.bundled.label"
           :sub="
-            state.bundled.active
-              ? 'Built-in runtime · active'
-              : 'Built-in runtime'
+            state.dev
+              ? 'The Python environment this run started from · active'
+              : state.bundled.active
+                ? 'Built-in runtime · active'
+                : 'Built-in runtime'
           "
         >
           <AppButton
@@ -674,7 +676,11 @@ watch(
           </template>
         </SettingsRow>
 
-        <div v-if="!state.items.length" class="compute-note">
+        <div v-if="state.dev" class="compute-note">
+          Development run: GPU support comes from that Python environment. GPU
+          add-ons are installed and switched from the installed app.
+        </div>
+        <div v-else-if="!state.items.length" class="compute-note">
           No discrete GPU detected - the built-in runtime is the best fit for
           this machine.
         </div>

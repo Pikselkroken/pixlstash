@@ -46,6 +46,9 @@ the repo's `../.venv` interpreter (override with `PIXLSTASH_DEV_BACKEND=/path/to
 and skips the bundled runtime entirely. The checkout the app was built from goes
 first on the backend's `PYTHONPATH`, so an interpreter shared between checkouts
 runs this checkout's code, not whichever branch its venv has pixlstash installed from.
+First-run setup still shows when `server-config.json` is missing from the app's
+userData folder (`~/.config/pixlstash-desktop` on Linux), minus the GPU step;
+delete it to walk through setup again.
 
 From a git worktree (no `.venv`, no `node_modules`, nothing built), use
 `scripts/desktop-dev.sh build` then `scripts/desktop-dev.sh run` from the repo
