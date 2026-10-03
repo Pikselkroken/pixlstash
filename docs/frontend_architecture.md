@@ -1988,7 +1988,9 @@ filtered by.
   `<body>`, where Ctrl+A did nothing until a card had been clicked. From there
   it takes only Ctrl+A and Escape (`onBackgroundKeyDown`): the cursor is not
   visible, so Space, Enter, F2, the arrows and the menu keys would act on a card
-  the reader cannot see. No focus ring is drawn on it.
+  the reader cannot see. Its focus ring is `--focus-ring-inset`, inside the
+  pane's edge, as visual-language.md §11 prescribes where an outset ring has
+  no room.
 - **The cursor is an entry id, never an index.** `flatRows` is rebuilt by a
   resort and by a refetch; an index held across either names a different card,
   and when the list shrinks past it, no card at all — which takes the grid's

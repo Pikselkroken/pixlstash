@@ -1634,10 +1634,12 @@ async function filesChosen(event) {
   padding: var(--space-3);
 }
 
-/* Focused only by a background click, as the target for Ctrl+A; a ring
-   around the whole pane would read as one giant control. */
+/* Focused by a background click, as the target for Ctrl+A. The ring is the
+   inset form (visual-language.md §11): the outset one would sit outside the
+   pane, under the toolbar and the inspector edge. */
 .wfv-scroll:focus-visible {
   outline: none;
+  box-shadow: var(--focus-ring-inset);
 }
 
 /* The closed inspector's edge tab (34px) floats over this edge: the cards
