@@ -331,8 +331,9 @@
 /**
  * One open hand-made workflow set (#1520): a MENU of models, slot by slot.
  *
- * Every set has the same five slots - Checkpoint (exactly one), Text encoders,
- * VAE, LoRAs, Other - and each ends in a dashed ＋ tile that opens the chooser.
+ * Every set has the same five slots - Checkpoint (two for a two-model
+ * workflow), Text encoders, VAE, LoRAs, Other - and each ends in a dashed ＋
+ * tile that opens the chooser.
  * A member whose file has left the shelf stays, struck through and marked "Not
  * on shelf": it is kept by hash and comes back to life when the file does.
  *

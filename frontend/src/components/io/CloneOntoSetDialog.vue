@@ -135,8 +135,8 @@
           <p v-if="baseKept" class="cos-note cos-warn" data-testid="cos-base-kept">
             <v-icon size="14" aria-hidden="true">mdi-alert-outline</v-icon>
             <span
-              >Only the first base model changes. {{ baseKept }} stays as the
-              workflow has it.</span
+              >This set has no checkpoint for {{ baseKept }}, which stays as
+              the workflow has it.</span
             >
           </p>
           <p
@@ -319,7 +319,7 @@ const KIND_LABELS = {
 
 const loading = ref(false);
 const loadError = ref("");
-/** Every set, each `{key, name, files, cover, pictures, handMade, loraIds, checkpointId, plan}`. */
+/** Every set, each `{key, name, files, cover, pictures, handMade, loraIds, checkpointIds, plan}`. */
 const sets = ref([]);
 /** `set-clone-plans`' `base_filename` and `base_model`. */
 const base = ref({ filename: null, model: null });
@@ -412,16 +412,16 @@ const packs = computed(() => {
 });
 
 /**
- * A second base loader the set leaves alone (a refiner, Wan 2.2's other
- * expert): the plan swaps the first one only, and says so rather than letting
- * a mixed graph pass as a clone onto the set.
+ * A base loader the set leaves alone (a refiner, Wan 2.2's other expert, when
+ * the set holds fewer checkpoints than the graph loads): said rather than
+ * letting a mixed graph pass as a clone onto the set.
  */
 const baseKept = computed(() => {
   const bases = (chosen.value?.plan.loaders ?? []).filter(
     (row) => row.kind === "checkpoint" || row.kind === "unet",
   );
+  if ((chosen.value?.checkpointIds.length ?? 0) >= bases.length) return "";
   return bases
-    .slice(1)
     .filter((row) => !changed(row))
     .map((row) => fileNames(row.was))
     .join(", ");
@@ -498,7 +498,7 @@ const pendingEdit = computed(() => {
     rows: edited.value?.key === set.key ? edited.value.rows : null,
     baseModel: set.plan.keeps_loras ? base.value.model : set.plan.base_model,
     setLoraIds: set.loraIds,
-    ranWith: ranWith(set.checkpointId),
+    ranWith: ranWith(set.checkpointIds[0]),
     checkpointName: set.checkpointName,
   };
 });
@@ -593,7 +593,10 @@ function candidates(payload) {
         .filter((m) => m.slot !== "checkpoint" && m.slot !== "lora")
         .map((m) => m.id),
       loraIds: members.filter((m) => m.slot === "lora").map((m) => m.id),
-      checkpointId: checkpoint?.on_shelf ? checkpoint.id : null,
+      // Every one: a two-model graph takes one per base loader (#1690).
+      checkpointIds: members
+        .filter((m) => m.slot === "checkpoint")
+        .map((m) => m.id),
       checkpointName: checkpoint?.name || "",
     };
   });
@@ -610,7 +613,13 @@ function candidates(payload) {
         .filter((m) => m.id !== group.head.id && m.kind !== "adapter")
         .map((m) => m.id),
       loraIds: models.filter((m) => m.kind === "adapter").map((m) => m.id),
-      checkpointId: group.head.id,
+      // The head, then any other checkpoint the pictures ran beside it.
+      checkpointIds: [
+        group.head.id,
+        ...models
+          .filter((m) => m.id !== group.head.id && m.kind === "checkpoint")
+          .map((m) => m.id),
+      ],
       checkpointName: group.head?.name || "",
     };
   });
@@ -649,7 +658,7 @@ async function load() {
       props.workflowId,
       found.map((set) => ({
         key: set.key,
-        checkpoint_id: set.checkpointId,
+        checkpoint_ids: set.checkpointIds,
         model_ids: set.modelIds,
       })),
     );

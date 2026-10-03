@@ -304,6 +304,7 @@ import {
   rowMatches,
   SET_SLOTS,
   setCheckpoint,
+  setCheckpoints,
   setSlots,
   slotSuggestions,
   witnessCount,
@@ -1001,7 +1002,7 @@ const chooserNote = computed(() => {
   if (
     mode === "slot" &&
     chooser.value.slotId !== "checkpoint" &&
-    !setCheckpoint(set)?.on_shelf
+    !setCheckpoints(set).some((m) => m.on_shelf)
   ) {
     return "Add a checkpoint first to rank these by what works with it.";
   }
@@ -1085,10 +1086,9 @@ const baseOffer = computed(() => {
   const added = store.checkpointAdded;
   const set = openHand.value?.set;
   if (!added || !set || added.setId !== set.id) return null;
-  const checkpoint = setCheckpoint(set);
-  if (!checkpoint || checkpoint.id !== added.modelId || checkpoint.base_model) {
-    return null;
-  }
+  // Whichever checkpoint went in: a two-model set's second one too.
+  const checkpoint = setCheckpoints(set).find((m) => m.id === added.modelId);
+  if (!checkpoint || checkpoint.base_model) return null;
   const row = store.rows.find((candidate) => candidate.id === checkpoint.id);
   const fuzzy = String(row?.base_model_source ?? "").endsWith("_fuzzy");
   return {
@@ -1205,8 +1205,7 @@ function closeChooser() {
   pickNote.value = "";
   // A Fill button still on screen takes its focus back directly. A ＋ tile
   // goes through the cursor, which also keeps the grid's roving tab stop on
-  // it - and a tile that vanished (the Checkpoint ＋, once filled) is handled
-  // by whoever filled it.
+  // it.
   if (trigger?.isConnected && !triggerIsTile) {
     trigger.focus?.();
     return;

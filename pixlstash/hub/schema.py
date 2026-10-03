@@ -547,10 +547,6 @@ _V2_MODEL_SHELF_INDEXES = (
     # vault: the queue is a handful of rows in a table of thousands, so a full
     # index on sha256 would be almost entirely rows the finder never wants.
     "CREATE INDEX IF NOT EXISTS ix_model_hash_queue ON model(id) WHERE sha256 IS NULL",
-    # At most one checkpoint per hand-made set, held by the database so two
-    # concurrent adds cannot both land one.
-    "CREATE UNIQUE INDEX IF NOT EXISTS ux_model_workflow_set_checkpoint "
-    "ON model_workflow_set_member(set_id) WHERE slot = 'checkpoint'",
     # "Which sets hold this file" - the clone dialog's grouped proposals.
     "CREATE INDEX IF NOT EXISTS ix_model_workflow_set_member_sha "
     "ON model_workflow_set_member(sha256)",
@@ -1623,6 +1619,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
 
     for statement in _V2_MODEL_SHELF_TABLES:
         conn.execute(statement)
+    # A hand-made set held one checkpoint at most until two-model workflows
+    # (a Wan 2.2 high/low pair, #1690); a hub that ran an earlier build still
+    # carries the index that enforced it.
+    conn.execute("DROP INDEX IF EXISTS ux_model_workflow_set_checkpoint")
 
     # The workflow library (v1.11), amended into v2 for the same reason the
     # model shelf was: a build shipped before this change has

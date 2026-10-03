@@ -884,8 +884,12 @@ class HandMadeSet(BaseModel):
     created_at: str
     updated_at: str
     incomplete: bool = Field(description="The set has no checkpoint member.")
-    checkpoint_id: Optional[int] = Field(
-        default=None, description="The on-shelf `model.id` of its checkpoint."
+    checkpoint_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "The on-shelf `model.id`s of its checkpoints, in member order; "
+            "two for a two-model workflow such as a Wan 2.2 high/low pair."
+        ),
     )
     picture_count: int = Field(
         description="Kept pictures of the combinations this set covers."

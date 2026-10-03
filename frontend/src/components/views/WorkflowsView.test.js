@@ -1223,8 +1223,8 @@ describe("Clone onto a workflow set", () => {
     const wrapper = await grid();
     await openOn(wrapper);
     expect(planSetClones).toHaveBeenCalledWith("a", [
-      { key: "hand:7", checkpoint_id: 11, model_ids: [] },
-      { key: "hand:8", checkpoint_id: 21, model_ids: [] },
+      { key: "hand:7", checkpoint_ids: [11], model_ids: [] },
+      { key: "hand:8", checkpoint_ids: [21], model_ids: [] },
     ]);
     // "Fits this graph" hides the set of another base model.
     expect(wrapper.find('[data-testid="cos-set-hand:8"]').exists()).toBe(false);

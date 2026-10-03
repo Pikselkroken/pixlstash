@@ -957,16 +957,24 @@ class TestHandMadeWorkflowSets:
         assert "AUTOINCREMENT" in ddl_for(hub, "model_workflow_set")
         assert read_schema_version(hub) == 2
 
-    def test_a_set_holds_one_checkpoint_at_most(self, hub):
+    def test_a_set_holds_two_checkpoints_on_a_hub_that_had_the_one_rule(self, hub):
+        """#1690: a two-model workflow's pair. An earlier build's hub carries
+        the unique index that held a set to one checkpoint; reopening drops it."""
+        apply_migrations(hub)
+        hub.execute(
+            "CREATE UNIQUE INDEX ux_model_workflow_set_checkpoint "
+            "ON model_workflow_set_member(set_id) WHERE slot = 'checkpoint'"
+        )
+        hub.commit()
         apply_migrations(hub)
         set_id = self._set(hub)
         self._member(hub, set_id, "a", "checkpoint")
-        self._member(hub, set_id, "b", "vae")
-        self._member(hub, set_id, "c", "vae")
-        with pytest.raises(sqlite3.IntegrityError):
-            self._member(hub, set_id, "d", "checkpoint")
-        # Another set's checkpoint is its own.
-        self._member(hub, self._set(hub), "d", "checkpoint")
+        self._member(hub, set_id, "b", "checkpoint")
+        assert hub.execute(
+            "SELECT COUNT(*) FROM model_workflow_set_member "
+            "WHERE set_id = ? AND slot = 'checkpoint'",
+            (set_id,),
+        ).fetchone() == (2,)
 
     def test_a_slot_outside_the_five_is_refused(self, hub):
         apply_migrations(hub)
