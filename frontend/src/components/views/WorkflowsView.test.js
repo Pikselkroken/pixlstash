@@ -1109,6 +1109,67 @@ describe("the verbs the bar fires", () => {
     ask.mockRestore();
   });
 
+  it("the Delete key asks the same question, and only of a manual workflow", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.cards = [card("a"), card("b", { imported: true, manual: true })];
+    await flush();
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+    deleteWorkflow.mockResolvedValue({ deleted: "b" });
+
+    // Nothing selected: the key acts on the selection, so it does nothing,
+    // not even select the cursor card.
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "Delete" });
+    await flush();
+    expect(ask).not.toHaveBeenCalled();
+    expect(store.selectedKeys).toEqual([]);
+
+    // An automatic card: the menu row is disabled, so the key does nothing.
+    store.select("a");
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "Delete" });
+    await flush();
+    expect(ask).not.toHaveBeenCalled();
+
+    // A held key repeats; one press, one dialog.
+    store.select("b");
+    await wrapper
+      .find(".wfv-grid")
+      .trigger("keydown", { key: "Delete", repeat: true });
+    await flush();
+    expect(ask).not.toHaveBeenCalled();
+
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "Delete" });
+    await flush();
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(deleteWorkflow).toHaveBeenCalledWith("b");
+    ask.mockRestore();
+  });
+
+  it("the Delete key works from the background too, after Ctrl+A", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.cards = [card("b", { imported: true, manual: true })];
+    await flush();
+    const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const scroller = wrapper.find(".wfv-scroll");
+
+    await scroller.trigger("keydown", { key: "a", ctrlKey: true });
+    await scroller.trigger("keydown", { key: "Delete" });
+    await flush();
+    expect(ask).toHaveBeenCalledTimes(1);
+    ask.mockRestore();
+  });
+
+  it("the menu's Delete… row teaches the key", async () => {
+    const wrapper = await grid();
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "ContextMenu" });
+    await flush();
+    const row = wrapper
+      .findAll(".wf-menu .ctx-item")
+      .find((el) => el.find(".ctx-label-text").text() === "Delete…");
+    expect(row.find(".ctx-shortcut").text()).toBe("Del");
+  });
+
   it("Duplicate selects the copy and puts the cursor on it", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();

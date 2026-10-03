@@ -1979,7 +1979,8 @@ filtered by.
   `useGridKeyboardNav.js` but its own handler — that composable is bound to the
   picture grid's stores and its justified layout. Left/Right step one card,
   Up/Down step by `columns`, clamped to the first and last card so the last row
-  stays reachable from every column. Space toggles, Enter opens ⓘ, F2 renames.
+  stays reachable from every column. Space toggles, Enter opens ⓘ, F2 renames,
+  Delete asks to delete the selection (manual workflows only, as the menu row).
   **Shift+F10 and the Menu key open the card menu** (#1455), which is what those
   keys mean everywhere else and in every file manager. Escape clears the
   selection: the `VMenu`s consume their own Escape, so what reaches the grid is

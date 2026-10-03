@@ -974,6 +974,14 @@ function onKeyDown(event) {
         startRename();
       }
       return;
+    case "Delete":
+      // The menu's Delete…, behind the same gate and the same confirmation.
+      // The selection's verb, as on the shelf and the picture grid: nothing
+      // selected, nothing happens. One press, one ask: a held key must not
+      // stack dialogs.
+      event.preventDefault();
+      if (!event.repeat && selBarRef.value?.deletable) confirmDelete();
+      return;
     case "F10":
       if (!event.shiftKey) return;
       event.preventDefault();
@@ -998,14 +1006,17 @@ function onKeyDown(event) {
 }
 
 /**
- * Keys pressed with the background focused. Only the two that do not act on
+ * Keys pressed with the background focused. Only the ones that do not act on
  * the cursor card: from here the cursor is not visible, so Space, Enter, F2,
- * the arrows and the menu keys would hit a card the reader cannot see.
+ * the arrows and the menu keys would hit a card the reader cannot see. Delete
+ * acts on the selection, so Ctrl+A then Delete works from here too.
  */
 function onBackgroundKeyDown(event) {
   const selectAll =
     (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a";
-  if (selectAll || event.key === "Escape") onKeyDown(event);
+  if (selectAll || event.key === "Escape" || event.key === "Delete") {
+    onKeyDown(event);
+  }
 }
 
 /** One of the cursor card's own `tabindex="-1"` buttons. */
@@ -1370,6 +1381,9 @@ async function confirmDelete() {
   announcement.value = one
     ? "Workflow deleted"
     : `${cards.length} workflows deleted`;
+  // The focused row may have just gone, which drops focus to <body>, where
+  // the next key reaches nothing.
+  focusCursorRow();
 }
 
 // ── The card menu ─────────────────────────────────────────────────────────
