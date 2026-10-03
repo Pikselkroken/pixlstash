@@ -409,11 +409,10 @@ class TestTheDeclarationContract:
             for route, policy in ROUTE_POLICIES.items()
             if policy.library_access is LibraryAccessMode.SWITCH_WRITER
         }
-        # promote and discard close and reopen the active vault, as the switch
-        # does, so they cannot wait behind a read lease either.
+        # discard closes and reopens the active vault, as the switch does, so
+        # it cannot wait behind a read lease either.
         assert writers == {
             ("POST", "/api/v1/libraries/active"),
-            ("POST", "/api/v1/libraries/{library_uuid}/promote"),
             ("POST", "/api/v1/libraries/{library_uuid}/discard"),
         }
 
