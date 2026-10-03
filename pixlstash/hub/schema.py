@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 9
+CURRENT_DATA_VERSION = 10
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -1939,18 +1939,19 @@ def _backfill_base_model_canonical(conn: sqlite3.Connection) -> int:
     return len(updates)
 
 
-def _has_v1_cores(conn: sqlite3.Connection) -> bool:
-    """Whether a filed topology's core is cached under core rule v1.
+def _has_old_cores(conn: sqlite3.Connection, rule: str = "v1") -> bool:
+    """Whether a filed topology's core is cached under core rule *rule*.
 
-    Data step 8's trigger beyond the version: an older build sharing this hub
-    writes them. Spelled out rather than imported (`hub.workflow_cards`
-    imports this module through `hub.db`).
+    Data step 8's trigger beyond the version (step 10's with ``"v2"``): an
+    older build sharing this hub writes them. Spelled out rather than imported
+    (`hub.workflow_cards` imports this module through `hub.db`).
     """
     return (
         conn.execute(
             "SELECT 1 FROM workflow_topology_core c WHERE c.core_version LIKE "
-            "'v1-loras-%' AND EXISTS (SELECT 1 FROM workflow_variant v "
-            "WHERE v.topology_hash = c.topology_hash) LIMIT 1"
+            "? AND EXISTS (SELECT 1 FROM workflow_variant v "
+            "WHERE v.topology_hash = c.topology_hash) LIMIT 1",
+            (f"{rule}-loras-%",),
         ).fetchone()
         is not None
     )
@@ -2033,7 +2034,11 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
     # reason the schema steps do: an interrupted backfill must leave the counter
     # where it was, so the next open retries it rather than skipping it.
     data_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-    if data_version < CURRENT_DATA_VERSION or _has_v1_cores(conn):
+    if (
+        data_version < CURRENT_DATA_VERSION
+        or _has_old_cores(conn)
+        or _has_old_cores(conn, "v2")
+    ):
         try:
             with conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -2082,7 +2087,7 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     from pixlstash.services.workflow_inbox import workflow_user_dir
 
                     adopt_workflow_files(conn, workflow_user_dir())
-                if data_version < 8 or _has_v1_cores(conn):
+                if data_version < 8 or _has_old_cores(conn):
                     # Core rule v2: every topology re-derived here, so no
                     # card is pending, and its workflow's state carried. Not
                     # only once: an older build opening this shared hub (a
@@ -2100,6 +2105,15 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     )
 
                     hash_builtin_origins(conn)
+                if data_version < 10 or _has_old_cores(conn, "v2"):
+                    # Core rule v3 (#1719): v2 workflows split only by
+                    # primitives, previews and model patches merge, their
+                    # state carried. Re-run for v2 rows an older build writes.
+                    from pixlstash.hub.workflow_group_convert import (
+                        rederive_cores_v3,
+                    )
+
+                    rederive_cores_v3(conn)
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.

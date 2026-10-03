@@ -2339,7 +2339,7 @@ nothing in the vault moves; a manual workflow's own runs are the one exception
 | `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and (legacy) a topology placed in a hand-made group by the dropped merge and split, one workflow per topology. Hub data step 6 dissolves every such group and nothing writes a member row any more |
 | `workflow_group_attr`, `workflow_group_default`, `workflow_group_pins`, `workflow_group_picture_input` | The owner's name, notes and hidden flag; edits to the default recipe; pins; picture inputs (library-keyed, pictures by `pixel_sha`). All keyed by `workflow_id` and addressed by **address**, never slot label |
 | `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
-| `workflow_core_successor` | Per (topology, new workflow), the automatic workflow core rule v1 put the topology in, each one v2 puts its variants in, and the v1 -> v2 core label map (data step 8, below) |
+| `workflow_core_successor` | Per (topology, new workflow), the automatic workflow the retired rule put the topology in, each one the live rule puts its variants in, and the old -> new core label map (data step 8 from v1, step 10 from v2, below) |
 | `workflow_variant_family` | Per variant, its base-model families (`variant_families`), frozen on first derivation: part of its workflow's id, so a later shelf scan never moves it |
 | `workflow_family_pass` | The shelf signature the last successful family pass (`reidentify_families`) ran against; at most one row |
 | `workflow_card_move` | Per card a family pass moved out of a workflow that lives on (some variants still unknown): its key, the old workflow id and the workflow it moved to, for the vault conversion to re-file a recipe naming the first two onto the third |
@@ -2612,6 +2612,24 @@ hires-fix sampler, face detailer and its detectors) and LoRA loaders. **v2**
 * loader variants read as the stock loader (`GGUF`, `DisTorch`, `MultiGPU`
   spellings, the PixlStash shelf loaders; `_CANONICAL_LOADERS`).
 
+**v3** (#1719, the live rule) is the same pass with two short class lists
+added, `_core_v2(v3=True)`; `v3=False` is v2, kept only for data step 10's
+label maps (`_core_strip_v2`):
+
+* more plumbing (`_V3_PLUMBING_CLASSES`): integer primitives (`Seed`,
+  `JWInteger`; `PrimitiveInt` already was, by its prefix), `PreviewAny`,
+  `LoRACharacterPromptBuilder`, `PixlStashProjectLoader`, and the model
+  patches `ModelSamplingAuraFlow` and `PathchSageAttentionKJ`, stepped through
+  on their single `model` input as a LoRA loader is. A class list because the
+  stored document has no output types to read "MODEL in, MODEL out" from;
+* `KSamplerAdvanced` reads as `KSampler` and `PixlStashPictureSaver` as
+  `SaveImage` (`_V3_CANONICAL_CLASSES`). Two chained advanced samplers split by
+  step are still two samplers, so a two-pass graph stays its own workflow, as
+  does an edit graph with one reference latent against two.
+
+v3 is a function of the v2 core, as v2 is of v1
+(`test_core_v3_is_a_function_of_the_v2_core`), so it only merges.
+
 **A graph with no sampler of its own keeps what it does.** With a sampler,
 every stage (upscale, face detailer, seed variance) is an optional addition
 and stripped. With no sampler, a face detailer is the core and an upscale
@@ -2703,7 +2721,8 @@ restamped `unmoved-v1`, neither v1 (so the step does not re-run on every open)
 nor current (so the card backfill still tries it). A card's
 `workflow_key_successor` row follows its own variants;
 `workflow_id_successor` (retired id -> primary) and
-`workflow_document.from_workflow_id` follow the primary. A second run finds no v1 row. The
+`workflow_document.from_workflow_id` follow the primary. Step 8 moves v1 rows
+to the live rule, so a hub upgrading past it never holds v2 rows. A second run finds no v1 row. The
 vault needs no migration: the retired ids in `workflow_id_successor` put every
 recipe naming one in front of `MissingSavedRecipeWorkflowFinder`, and
 A card none of whose own variants reduces gets no family row (it stays
@@ -2716,7 +2735,20 @@ conversion leaves a recipe whose target is the id it already names.
 `SavedRecipeConvertTask` files it on its own card's workflow
 (`workflow_of_variant`, the primary only when the card is gone) and rewrites
 its `core:` overrides and `models[].address` through the label map (its
-card's topology first), keeping anything it cannot place as it was.
+card's topology first), keeping anything it cannot place as it was. Its stage
+slots are keyed by both retired rules' labels, v1 for step 8 and v2 for step 10.
+
+**Data step 10** (`workflow_group_convert.rederive_cores_v3`, data version
+10, and on every open that finds a v2 row for a filed topology) is step 8 one
+rule on, through the same retirement (`_retire_all`, then `_retire_workflow`
+per old id): each v2 row is re-derived and restamped, and each variant whose
+id changes, `auto_workflow_id(v2 core, families)` to the same with the v3
+core, is retired onto it with a v2-to-v3 label map
+(`core_label_maps(document, _core_strip_v2)`). The families are read, never
+re-derived, so nothing splits. A variant v3 leaves alone keeps its id, so the
+workflow it is in lives on and is the heir the merged ones carry into; an old
+id some of whose variants stay is left with its state (logged). A failure
+restamps `unmoved-v2`.
 
 #### Converting cards to workflows (#1623)
 

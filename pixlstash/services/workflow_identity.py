@@ -57,7 +57,9 @@ from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, F
 WORKFLOW_KEY_VERSION = "v1"
 # v2: the v1 strip, then the second pass of :func:`_core_v2` (dead nodes,
 # string primitives, film grain, seed variance, loader variants).
-CORE_VERSION = "v2"
+# v3: v2 also strips integer primitives, previews, prompt builders, the project
+# loader and model patches, and reads samplers and savers as the stock ones.
+CORE_VERSION = "v3"
 
 ASSET_REFERENCE_PREFIX = "asset:"
 
@@ -179,6 +181,28 @@ _SEED_VARIANCE_CLASSES = frozenset({"SeedVarianceEnhancer"})
 _STRING_PRIMITIVE_CLASSES = frozenset(
     {"Textbox", "Text Multiline", "JWString", "\u270f\ufe0f Literal String"}
 )
+# Core rule v3's additions to that plumbing: integer primitives (`PrimitiveInt`
+# is plumbing by its prefix already, `node_groups`), a preview, a
+# prompt builder, the project a saver files into, and model patches (one MODEL
+# in, MODEL out, stepped through by `_through_input`'s single-input fallback,
+# as a LoRA loader is). # ponytail: a class list, because the stored document
+# has no output types to read "MODEL in, MODEL out" from; a rule once it does.
+_V3_PLUMBING_CLASSES = frozenset(
+    {
+        "Seed",
+        "JWInteger",
+        "PreviewAny",
+        "LoRACharacterPromptBuilder",
+        "PixlStashProjectLoader",
+        "ModelSamplingAuraFlow",
+        "PathchSageAttentionKJ",
+    }
+)
+# The same sampler and the same save, other spellings (core rule v3).
+_V3_CANONICAL_CLASSES = {
+    "KSamplerAdvanced": "KSampler",
+    "PixlStashPictureSaver": "SaveImage",
+}
 _POST_PROCESS_CLASSES = frozenset(
     {"PhotoFilmGrain", "Image Levels Adjustment", "ImageSharpen", "ImageBlur"}
 )
@@ -673,9 +697,12 @@ def _core_graph(document: dict, strip_loras: bool) -> dict[str, ReducedNode]:
 
 
 def _core_pass(
-    document: dict, strip_loras: bool
+    document: dict, strip_loras: bool, *, v3: bool = True
 ) -> tuple[dict[str, ReducedNode], Counter, bool]:
-    """:func:`_core_v2`'s answer for a whole document: the live core rule."""
+    """:func:`_core_v2`'s answer for a whole document: the live core rule.
+
+    *v3* off is core rule v2, kept only for data step 10's label maps.
+    """
     nodes = _reduce(document)
     strip = _core_strip(strip_loras)
     if not has_sampler(nodes):
@@ -690,7 +717,7 @@ def _core_pass(
             for node_id, group in groups.items()
         )
         strip -= {FACE_DETAILER} if detailer else {UPSCALE, FACE_DETAILER}
-    return _core_v2(_strip(nodes, strip))
+    return _core_v2(_strip(nodes, strip), v3=v3)
 
 
 def has_sampler(nodes: dict[str, ReducedNode]) -> bool:
@@ -703,7 +730,7 @@ def _core_strip(strip_loras: bool) -> set[str]:
 
 
 def _core_v2(
-    nodes: dict[str, ReducedNode],
+    nodes: dict[str, ReducedNode], *, v3: bool = True
 ) -> tuple[dict[str, ReducedNode], Counter, bool]:
     """Core rule v2's second pass over an already v1-stripped graph.
 
@@ -724,10 +751,14 @@ def _core_v2(
       it would remove every sampler the graph had (a graph whose only output
       was a stripped preview), or everything: the graph is kept whole;
     * loader variants read as the stock loader (:data:`_CANONICAL_LOADERS`).
+
+    *v3* (the live rule) adds :data:`_V3_PLUMBING_CLASSES` to the plumbing and
+    :data:`_V3_CANONICAL_CLASSES` to the stock spellings.
     """
+    plumbing = _STRING_PRIMITIVE_CLASSES | (_V3_PLUMBING_CLASSES if v3 else set())
     groups = node_groups(nodes)
     for node_id, node in nodes.items():
-        if node.class_type in _STRING_PRIMITIVE_CLASSES:
+        if node.class_type in plumbing:
             groups[node_id] = PLUMBING
         elif node.class_type in _POST_PROCESS_CLASSES:
             groups[node_id] = POST_PROCESS
@@ -737,7 +768,9 @@ def _core_v2(
     kept, pruned, refused = _prune(_strip(nodes, strip, groups=groups))
     return (
         {
-            node_id: ReducedNode(_canonical_class(n.class_type), n.widgets, n.inputs)
+            node_id: ReducedNode(
+                _canonical_class(n.class_type, v3), n.widgets, n.inputs
+            )
             for node_id, n in kept.items()
         },
         pruned,
@@ -772,9 +805,11 @@ def _prune(
     )
 
 
-def _canonical_class(class_type: str) -> str:
+def _canonical_class(class_type: str, v3: bool = True) -> str:
     if "Loader" in class_type:
         class_type = _LOADER_VARIANT_RE.sub("", class_type)
+    if v3 and class_type in _V3_CANONICAL_CLASSES:
+        return _V3_CANONICAL_CLASSES[class_type]
     return _CANONICAL_LOADERS.get(class_type, class_type)
 
 
