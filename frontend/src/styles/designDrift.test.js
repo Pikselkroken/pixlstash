@@ -108,9 +108,22 @@ describe("design drift", () => {
 
   // `title` survives only where it restates its own element's clipped text
   // (buttons.md, "Tooltips"): everything else goes through `Tooltip` or the
-  // `tooltip` prop. Read as "the title's expression is printed inside the
-  // element", which is what a clipped-text reveal is.
-  it("keeps a native title to restating its own element's text", () => {
+  // `tooltip` prop. A reveal is two facts, both read here: the title's
+  // expression is printed inside the element, and the element or something in
+  // it clips (`text-overflow: ellipsis` or `line-clamp` on one of its classes).
+  // Repeating text that never clips is not a reveal, it is a tooltip.
+  it("keeps a native title to revealing its own element's clipped text", () => {
+    const clipping = new Set(
+      files.flatMap(({ text }) =>
+        [...text.matchAll(/([^{}]*)\{([^}]*)\}/g)]
+          .filter((rule) => /text-overflow:\s*ellipsis|line-clamp/.test(rule[2]))
+          .flatMap((rule) => [...rule[1].matchAll(/\.([\w-]+)/g)].map((c) => c[1])),
+      ),
+    );
+    const clips = (markup) =>
+      [...markup.matchAll(/\sclass="([^"]*)"/g)]
+        .flatMap((c) => c[1].split(/\s+/))
+        .some((c) => clipping.has(c));
     const tag =
       /<([a-z][\w-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*?)\s((?:v-bind)?:?)title=("([^"]*)"|'([^']*)')(?:[^>"']|"[^"]*"|'[^']*')*>/g;
     const squash = (s) => s.replace(/\s+/g, "");
@@ -132,9 +145,10 @@ describe("design drift", () => {
           // The whole expression, not a longer name that starts with it.
           const esc = shown.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const whole = new RegExp(`(?:^|[^\\w.])${esc}(?:$|[^\\w.])`);
-          return m[3]
-            ? !printed.some((p) => whole.test(p))
-            : !squash(body).includes(shown);
+          const restates = m[3]
+            ? printed.some((p) => whole.test(p))
+            : squash(body).includes(shown);
+          return !(restates && clips(m[0] + body));
         })
         .map((m) => `${name}: ${m[3]}title=${m[5] ?? m[6]}`),
     );
