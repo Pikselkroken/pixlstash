@@ -25,7 +25,7 @@ from sqlmodel import delete, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.schema import CURRENT_DATA_VERSION, _has_v1_cores
+from pixlstash.hub.schema import CURRENT_DATA_VERSION, _has_old_cores
 from pixlstash.hub.workflow_card_reads import (
     card_index,
     manual_document,
@@ -40,14 +40,18 @@ import pixlstash.routes.comfyui as comfyui_routes
 import pixlstash.hub.workflow_group_convert as convert
 from pixlstash.hub.workflow_group_convert import (
     _CORE_RULE_V1,
+    _CORE_RULE_V2,
     _GROUP_NAMESPACE,
     _carry_group_state,
     _core_strip_v1,
+    _core_strip_v2,
     convert_card_state,
     dissolve_manual_groups,
     rederive_cores,
+    rederive_cores_v3,
 )
 from pixlstash.hub import workflow_cards
+from pixlstash.hub.workflow_cards import auto_workflow_id
 from pixlstash.hub.workflows import get_document, record_api_graph, record_ui_graph
 from pixlstash.server import Server
 import pixlstash.routes.workflows as workflows_routes
@@ -65,7 +69,7 @@ from pixlstash.tasks.saved_recipe_convert_task import _core_successor_map
 from pixlstash.tasks.workflow_card_backfill_finder import WorkflowCardBackfillFinder
 from pixlstash.tasks.workflow_card_backfill_task import FamilyReidentifyTask
 from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY
-from tests.test_workflow_identity import CORE_V2_TWINS, _graph
+from tests.test_workflow_identity import CORE_V2_TWINS, CORE_V3_TWINS, _graph
 
 API = "/api/v1"
 LIB = "test-library"
@@ -1217,7 +1221,7 @@ def test_a_topology_whose_move_raises_is_rolled_back_and_the_rest_move(
     monkeypatch.setattr(convert, "variant_families", raising)
     with w.hub.transaction() as conn:
         assert rederive_cores(conn) == 3
-        assert not _has_v1_cores(conn), "the step would re-run on every open"
+        assert not _has_old_cores(conn), "the step would re-run on every open"
     assert _core_version(w.hub, w.sve) == convert._CORE_RULE_V1_UNMOVED
     assert _core_version(w.hub, w.orphan) == workflow_cards.CORE_RULE_VERSION
     assert f"Topology {w.sve.topology_hash} failed to move" in caplog.text
@@ -1229,7 +1233,7 @@ def test_a_topology_whose_move_raises_is_rolled_back_and_the_rest_move(
 
 
 def test_a_v1_topology_that_will_not_reduce_is_tried_once(step_8):
-    """#1696: left on the v1 stamp, `_has_v1_cores` re-ran step 8 forever."""
+    """#1696: left on the v1 stamp, `_has_old_cores` re-ran step 8 forever."""
     w = step_8
     with w.hub.transaction() as conn:
         conn.execute(
@@ -1238,8 +1242,274 @@ def test_a_v1_topology_that_will_not_reduce_is_tried_once(step_8):
             (w.orphan.structural_hash,),
         )
         rederive_cores(conn)
-        assert not _has_v1_cores(conn)
+        assert not _has_old_cores(conn)
     assert _core_version(w.hub, w.orphan) == convert._CORE_RULE_V1_UNMOVED
+
+
+# ── data step 10: core rule v2 onto v3 (#1719) ────────────────────────────
+
+
+@pytest.fixture
+def step_10(tmp_path):
+    """v2 workflows v3 merges: a plain Flux run, and its Seed and AuraFlow twins.
+
+    Each twin's v2 workflow is named and carries a sampler default on its v2
+    core; the plain one's id is unchanged by v3, so it lives on and takes the
+    twins' state. A two-pass graph is a workflow of its own under both rules.
+    """
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    w = SimpleNamespace(hub=hub)
+    w.plain = record_api_graph(hub, _graph(ckpt=FLUX), library_uuid=LIB)
+    w.seed = record_api_graph(
+        hub, _graph(ckpt=FLUX, extra=CORE_V3_TWINS["seed"][1]), library_uuid=LIB
+    )
+    w.aura = record_api_graph(
+        hub, _graph(ckpt=FLUX, extra=CORE_V3_TWINS["aura-flow"][1]), library_uuid=LIB
+    )
+    second = _graph()["5"]
+    second["inputs"]["latent_image"] = ["5", 0]
+    w.two_pass = record_api_graph(
+        hub,
+        _graph(
+            ckpt=FLUX,
+            extra={
+                "8": second,
+                "6": {
+                    "class_type": "VAEDecode",
+                    "inputs": {"samples": ["8", 0], "vae": ["1", 2]},
+                },
+            },
+        ),
+        library_uuid=LIB,
+    )
+    filed = (w.plain, w.seed, w.aura, w.two_pass)
+    w.v2_id, w.v2_sampler, w.v2_labels = {}, {}, {}
+    with hub.transaction() as conn:
+        for keys in filed:
+            v2 = _core_strip_v2(get_document(hub, keys.structural_hash))
+            families = hub.fetchone(
+                "SELECT families FROM workflow_variant_family WHERE structural_hash = ?",
+                (keys.structural_hash,),
+            )[0]
+            w.v2_id[keys] = auto_workflow_id(graph_key(v2), families)
+            w.v2_labels[keys] = node_labels(v2, rounds=None)
+            w.v2_sampler[keys] = w.v2_labels[keys]["5"]
+            conn.execute(
+                "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+                "WHERE topology_hash = ?",
+                (_CORE_RULE_V2, graph_key(v2), keys.topology_hash),
+            )
+        conn.executemany(
+            "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+            "VALUES (?, ?, ?, 0)",
+            [
+                (w.v2_id[w.plain], "Plain", None),
+                (w.v2_id[w.seed], "Seeded", "Seed notes."),
+                (w.v2_id[w.aura], "Aura", None),
+                (w.v2_id[w.two_pass], "Two pass", None),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, ?)",
+            [
+                (w.v2_id[w.seed], f"core:{w.v2_sampler[w.seed]}/steps", "8"),
+                (w.v2_id[w.aura], f"core:{w.v2_sampler[w.aura]}/cfg", "3"),
+                # On the patch v3 strips: kept, though the heir's base lacks it.
+                (w.v2_id[w.aura], f"core:{w.v2_labels[w.aura]['90']}/shift", "5.0"),
+            ],
+        )
+    assert len({w.v2_id[keys] for keys in filed}) == 4
+    w.v3_sampler = core_node_labels(get_document(hub, w.plain.structural_hash))["5"]
+    w.aura_slot = topology_node_labels(get_document(hub, w.aura.structural_hash))["90"]
+    try:
+        yield w
+    finally:
+        hub.close()
+
+
+def test_step_10_merges_v2_workflows_and_carries_their_state(step_10):
+    w = step_10
+    with w.hub.transaction() as conn:
+        assert rederive_cores_v3(conn) == 4
+        assert not _has_old_cores(conn, "v2")
+    merged = workflow_of_variant(w.hub, w.plain.structural_hash)
+    assert merged == w.v2_id[w.plain], "v3 leaves the plain core alone"
+    assert {
+        workflow_of_variant(w.hub, keys.structural_hash) for keys in (w.seed, w.aura)
+    } == {merged}
+    # The negative: two passes are another workflow still.
+    assert workflow_of_variant(w.hub, w.two_pass.structural_hash) == w.v2_id[w.two_pass]
+
+    rows = _step_8_rows(w.hub)
+    attrs = {r[0]: r for r in rows["workflow_group_attr"]}
+    assert set(attrs) == {merged, w.v2_id[w.two_pass]}
+    assert attrs[merged][1] == "Plain"
+    for carried in ("Seeded", "Seed notes.", "Aura"):
+        assert carried in attrs[merged][2]
+    assert sorted(r[1:] for r in rows["workflow_group_default"]) == sorted(
+        [
+            (f"core:{w.v3_sampler}/cfg", "3"),
+            (f"core:{w.v3_sampler}/steps", "8"),
+            (f"{w.aura_slot}/shift", "5.0"),
+        ]
+    )
+    assert {r[0] for r in rows["workflow_group_default"]} == {merged}
+    assert dict(rows["workflow_id_successor"]) == {
+        w.v2_id[w.seed]: merged,
+        w.v2_id[w.aura]: merged,
+    }
+    assert {r[1:3] for r in rows["workflow_core_successor"]} == {
+        (w.v2_id[w.seed], merged),
+        (w.v2_id[w.aura], merged),
+    }
+
+    with w.hub.transaction() as conn:
+        assert rederive_cores_v3(conn) == 0
+    assert _step_8_rows(w.hub) == rows
+
+
+def test_step_10_composes_a_v1_recipes_map_onto_v3(step_10):
+    """A recipe still on a v1 id reads step 8's v1 -> v2 map: made v1 -> v3."""
+    w = step_10
+    v2 = w.v2_labels[w.aura]
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_core_successor (topology_hash, old_workflow_id, "
+            "new_workflow_id, label_map) VALUES (?, 'auto:v1', ?, ?)",
+            (
+                w.aura.topology_hash,
+                w.v2_id[w.aura],
+                json.dumps(
+                    {
+                        "s1": v2["5"],
+                        "p1": v2["90"],
+                        "x": None,
+                        "stale": "on-no-core",
+                    }
+                ),
+            ),
+        )
+        rederive_cores_v3(conn)
+    assert _core_successor_map(w.hub, "auto:v1") == {
+        "s1": w.v3_sampler,
+        "p1": None,  # stripped: the recipe falls back to its stage slot
+        "x": None,
+        "stale": None,
+    }
+
+
+def test_step_10_a_card_split_by_family_follows_each_old_workflow(step_10):
+    """Copilot on #1728: a card's successor row went to its last variant's heir."""
+    w = step_10
+    runs = [
+        record_api_graph(
+            w.hub,
+            _graph(ckpt=FLUX, loras=(lora,), extra=CORE_V3_TWINS["seed"][1]),
+            library_uuid=LIB,
+        )
+        for lora in ("a.safetensors", "b.safetensors")
+    ]
+    card = _card(w.hub, runs[0])
+    assert _card(w.hub, runs[1]) == card, "a character LoRA does not fork the card"
+    first, last = sorted(keys.structural_hash for keys in runs)
+    core = graph_key(_core_strip_v2(get_document(w.hub, first)))
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+            "WHERE topology_hash = ?",
+            (_CORE_RULE_V2, core, runs[0].topology_hash),
+        )
+        # The last variant is of another family: in another workflow.
+        conn.execute(
+            "UPDATE workflow_variant_family SET families = 'qwen' "
+            "WHERE structural_hash = ?",
+            (last,),
+        )
+        families = conn.execute(
+            "SELECT families FROM workflow_variant_family WHERE structural_hash = ?",
+            (first,),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO workflow_key_successor (workflow_key, workflow_id) "
+            "VALUES (?, ?)",
+            (card, auto_workflow_id(core, families)),
+        )
+        rederive_cores_v3(conn)
+    assert workflow_of_variant(w.hub, first) != workflow_of_variant(w.hub, last)
+    assert _successor(w.hub, card) == workflow_of_variant(w.hub, first)
+
+
+def test_step_10_keeps_a_map_an_earlier_run_already_composed(step_10):
+    """A re-run (an older build re-cached the topology) must not null v3 labels.
+
+    The advanced sampler is relabelled by v3, so its v3 label is no v2 key.
+    """
+    w = step_10
+    advanced = record_api_graph(
+        w.hub,
+        _graph(ckpt=FLUX, extra=CORE_V3_TWINS["ksampler-advanced"][1]),
+        library_uuid=LIB,
+    )
+    document = get_document(w.hub, advanced.structural_hash)
+    done = core_node_labels(document)["5"]
+    assert done not in convert.core_label_maps(document, _core_strip_v2)[0]
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+            "WHERE topology_hash = ?",
+            (
+                _CORE_RULE_V2,
+                graph_key(_core_strip_v2(document)),
+                advanced.topology_hash,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO workflow_core_successor (topology_hash, old_workflow_id, "
+            "new_workflow_id, label_map) VALUES (?, 'auto:v1', 'auto:v3', ?)",
+            (advanced.topology_hash, json.dumps({"s1": done})),
+        )
+        rederive_cores_v3(conn)
+    assert _core_successor_map(w.hub, "auto:v1") == {"s1": done}
+
+
+def test_a_v2_row_an_older_build_writes_is_moved_on_the_next_open(step_10):
+    w = step_10
+    path = w.hub.path
+    with w.hub.transaction() as conn:
+        rederive_cores_v3(conn)
+        # The older build re-caches the Seed topology on v2.
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+            "WHERE topology_hash = ?",
+            (
+                _CORE_RULE_V2,
+                graph_key(_core_strip_v2(get_document(w.hub, w.seed.structural_hash))),
+                w.seed.topology_hash,
+            ),
+        )
+        assert _has_old_cores(conn, "v2")
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert workflow_of_variant(w.hub, w.seed.structural_hash) == w.v2_id[w.plain]
+    with w.hub.transaction() as conn:
+        assert not _has_old_cores(conn, "v2")
+
+
+def test_the_hub_open_runs_step_10_once(step_10):
+    w = step_10
+    path = w.hub.path
+    with w.hub.transaction() as conn:
+        conn.execute("PRAGMA user_version = 9")
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert w.hub.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
+    merged = w.v2_id[w.plain]
+    assert workflow_of_variant(w.hub, w.seed.structural_hash) == merged
+    rows = _step_8_rows(w.hub)
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert _step_8_rows(w.hub) == rows
 
 
 def test_carrying_one_workflow_twice_onto_an_heir_writes_its_notes_once(tmp_path):

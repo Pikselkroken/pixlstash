@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pixlstash.hub.workflow_group_convert import _core_strip_v1
+from pixlstash.hub.workflow_group_convert import _core_strip_v1, _core_strip_v2
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     graph_key,
@@ -576,6 +576,123 @@ def test_core_v2_is_a_function_of_the_v1_core():
         v2_of_v1.setdefault(graph_key(_core_strip_v1(doc)), set()).add(core_hash(doc))
     assert len(v2_of_v1) > 1
     assert all(len(v2) == 1 for v2 in v2_of_v1.values())
+
+
+# ── core rule v3: primitives, previews and model patches (#1719) ──────────
+
+
+def _sampler_fed(input_name: str, node_id: str, node: dict, sampler=None) -> dict:
+    """``extra`` feeding the sampler's *input_name* from *node*."""
+    sampler = sampler or _graph()["5"]
+    sampler["inputs"][input_name] = [node_id, 0]
+    return {node_id: node, "5": sampler}
+
+
+def _advanced_sampler(**inputs) -> dict:
+    """KSamplerAdvanced with its own widget names, wired as the KSampler is."""
+    wired = {k: v for k, v in _graph()["5"]["inputs"].items() if isinstance(v, list)}
+    widgets = dict(add_noise="enable", noise_seed=1, steps=20, start_at_step=0)
+    return _node("KSamplerAdvanced", **{**wired, **widgets, **inputs})
+
+
+_SAVER = _node("PixlStashPictureSaver", images=["6", 0])
+
+# name: (the clean graph's extra, its twin's extra)
+CORE_V3_TWINS = {
+    "seed": (None, _sampler_fed("seed", "90", _node("Seed", seed=5))),
+    "jw-integer": (None, _sampler_fed("steps", "90", _node("JWInteger", value=8))),
+    "primitive-int": (
+        None,
+        _sampler_fed("steps", "90", _node("PrimitiveInt", value=8)),
+    ),
+    "preview-any": (None, {"90": _node("PreviewAny", source=["6", 0])}),
+    "prompt-builder": (
+        None,
+        {
+            "90": _node("LoRACharacterPromptBuilder", prompt="a cat"),
+            "2": _node("CLIPTextEncode", text=["90", 0], clip=["1", 1]),
+        },
+    ),
+    "project-loader": (
+        {"7": _SAVER},
+        {
+            "90": _node("PixlStashProjectLoader", pixlstash_project="p"),
+            "7": _node("PixlStashPictureSaver", images=["6", 0], project=["90", 0]),
+        },
+    ),
+    "aura-flow": (
+        None,
+        _sampler_fed(
+            "model", "90", _node("ModelSamplingAuraFlow", model=["1", 0], shift=3.0)
+        ),
+    ),
+    "sage-attention": (
+        None,
+        _sampler_fed(
+            "model",
+            "90",
+            _node("PathchSageAttentionKJ", model=["1", 0], sage_attention="auto"),
+        ),
+    ),
+    "ksampler-advanced": (None, {"5": _advanced_sampler()}),
+    "picture-saver": (None, {"7": _SAVER}),
+}
+
+
+@pytest.mark.parametrize("pair", CORE_V3_TWINS.values(), ids=CORE_V3_TWINS.keys())
+def test_core_v3_stacks_a_graph_with_its_clean_twin(pair):
+    clean, member = _graph(extra=pair[0]), _graph(extra=pair[1])
+    assert topology_hash(clean) != topology_hash(member)
+    assert core_hash(_doc(clean)) == core_hash(_doc(member))
+    for node_id in ("1", "4", "5", "6", "7"):
+        assert _core_label(clean, node_id) == _core_label(member, node_id)
+
+
+def test_core_v3_keeps_a_second_pass_apart():
+    """Two chained advanced samplers split by step are not the one-pass graph."""
+    first = _advanced_sampler(start_at_step=0, end_at_step=10)
+    second = _advanced_sampler(latent_image=["5", 0], start_at_step=10)
+    one = _graph(extra={"5": _advanced_sampler()})
+    two = _graph(
+        extra={
+            "5": first,
+            "8": second,
+            "6": _node("VAEDecode", samples=["8", 0], vae=["1", 2]),
+        }
+    )
+    assert core_hash(_doc(one)) != core_hash(_doc(two))
+
+
+def test_core_v3_keeps_one_and_two_reference_edits_apart():
+    def edit(references: int) -> dict:
+        extra, conditioning = {}, ["2", 0]
+        for i in range(references):
+            node_id = f"4{i}"
+            extra[node_id] = _node(
+                "ReferenceLatent", conditioning=conditioning, latent=["4", 0]
+            )
+            conditioning = [node_id, 0]
+        sampler = _graph()["5"]
+        sampler["inputs"]["positive"] = conditioning
+        return _graph(extra=dict(extra, **{"5": sampler}))
+
+    assert core_hash(_doc(edit(1))) != core_hash(_doc(edit(2)))
+
+
+def test_core_v3_is_a_function_of_the_v2_core():
+    """Many-to-one: graphs sharing a v2 core share a v3 core (data step 10)."""
+    twins = [*CORE_V2_TWINS.values(), *CORE_V3_TWINS.values()]
+    graphs = [
+        _graph(**variant, extra=extra)
+        for variant in ({}, {"preview": True}, {"upscale": True}, {"loras": ("a",)})
+        for extra in [None, *(twin for pair in twins for twin in pair)]
+    ]
+    v3_of_v2: dict[str, set[str]] = {}
+    for graph in graphs:
+        doc = _doc(graph)
+        v3_of_v2.setdefault(graph_key(_core_strip_v2(doc)), set()).add(core_hash(doc))
+    assert len(v3_of_v2) > 1
+    assert all(len(v3) == 1 for v3 in v3_of_v2.values())
 
 
 def test_an_extra_lora_loader_splits_when_loras_are_not_stripped():

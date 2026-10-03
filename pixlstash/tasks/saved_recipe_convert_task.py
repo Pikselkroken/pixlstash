@@ -30,6 +30,7 @@ from pixlstash.hub.workflow_card_reads import (
 )
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 from pixlstash.hub.workflow_group_convert import (
+    _core_strip_v2,
     card_document,
     core_label_maps,
     label_map,
@@ -160,8 +161,13 @@ class SavedRecipeConvertTask(BaseTask):
                     )
                     deferred.append(recipe_id)
                     continue
+                # Keyed by the retired rule's labels: v1 (step 8) or v2
+                # (step 10). A label is a digest of its graph, so the two do not meet.
                 stage_slots = (
-                    core_label_maps(found[1])[1]
+                    {
+                        **core_label_maps(found[1])[1],
+                        **core_label_maps(found[1], _core_strip_v2)[1],
+                    }
                     if found and card.topology_hash == bases.get(workflow_id)
                     else {}
                 )
@@ -298,7 +304,7 @@ def _onto_core_v2(
         new = rewritten_address(address, labels, stage_slots)
         if new is None:
             logger.warning(
-                "Saved recipe %s: %s %s = %r names a node core rule v2 removed; "
+                "Saved recipe %s: %s %s = %r names a node the new core rule removed; "
                 "it is kept as it was and a run applies nothing for it.",
                 recipe_id,
                 what,
