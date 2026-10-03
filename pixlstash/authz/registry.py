@@ -459,11 +459,6 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         library_access=LibraryAccessMode.SWITCH_WRITER,
         justification="§16.3 and the strictest reading of it: it DELETES files inside a host folder - the import's temporary database and the thumbnail cache PixlStash wrote - and closes and reopens the active vault to do it. Both halves are already on this tier (POST /libraries for write authority inside a folder, POST /libraries/active for resetting every client's session). It takes a registry uuid, never a caller-supplied path, and the registry refuses anything but a library still on its first import, so the only files it can reach are ones PixlStash created itself and the owner never kept. No picture file is touched; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
-    ("POST", "/api/v1/libraries/{library_uuid}/promote"): RoutePolicy(
-        _LOCAL,
-        library_access=LibraryAccessMode.SWITCH_WRITER,
-        justification="§16.3 for both reasons its siblings hold one each. It renames a file inside a host folder - the import's temporary database onto vault.db - which is POST /libraries' write-authority class; and it closes and reopens the active vault to do it, which resets every connected client's session exactly as POST /libraries/active does. It takes a registry uuid, never a caller-supplied path, and the file it renames is one PixlStash created itself; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
-    ),
     ("POST", "/api/v1/libraries/active"): RoutePolicy(
         _LOCAL,
         library_independent=True,
@@ -774,7 +769,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # ── folder_structure.py commit (§16.3 host-capability; v1.11 Phase 3) ───
     ("POST", "/api/v1/folder-structure/commit"): RoutePolicy(
         _LOCAL,
-        justification="§16.3: commits an accepted mapping over the same host path the read already walked - registers it for in-place indexing (the reference-folders/POST write) and creates the projects/people/sets/tags it names; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3: commits an accepted mapping over the same host path the read already walked - registers it for in-place indexing (the reference-folders/POST write) and creates the projects/people/sets/tags it names. For a library still on its first import it is also the only way that import becomes a library: when the commit finishes it renames the temporary database onto vault.db and closes and reopens the active vault, resetting every client's session - POST /libraries/active's class, which the removed /promote route used to carry; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     ("GET", "/api/v1/folder-structure/commit/status"): RoutePolicy(
         _LOCAL,

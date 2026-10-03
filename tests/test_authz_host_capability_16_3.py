@@ -169,10 +169,10 @@ def test_loopback_owner_only_is_justification_required():
     assert ok == []
 
 
-def test_host_capability_tier_split_is_50_local_7_loopback():
+def test_host_capability_tier_split_is_49_local_7_loopback():
     """The loopback tier is the 5 file-manager spawns, the process restart and
-    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 57
-    routes carry a locality tier = 50 local + 7 loopback.
+    the e2e test hook; the filesystem/folder routes stay LOCAL_OWNER_ONLY. 56
+    routes carry a locality tier = 49 local + 7 loopback.
 
     History, so a future change to this number arrives with its reason: 16 = 13 +
     3 originally; 17 = 13 + 4 after CSO Condition 1 folded in
@@ -444,6 +444,12 @@ def test_host_capability_tier_split_is_50_local_7_loopback():
     the run pre-flight already makes on the same credential. Nothing spawns, so
     the loopback count is unchanged.
 
+    56 = 49 + 7 when ``POST /libraries/{library_uuid}/promote`` was removed: its
+    only caller, "Start an empty library here", left the first-import wizard
+    because nobody wants an empty library in a folder full of pictures (an empty
+    folder gets ``vault.db`` from ``POST /libraries`` directly). A finished
+    import still promotes its vault, from the commit, not through a route.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -457,7 +463,7 @@ def test_host_capability_tier_split_is_50_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 7, sorted(loopback)
-    assert len(local) == 50, sorted(local)
+    assert len(local) == 49, sorted(local)
 
 
 # ===========================================================================
