@@ -930,14 +930,17 @@ def _rederive_topology_v3(
     labels, stage_slots = core_label_maps(document, _core_strip_v2)
     _cache_topology(conn, topology_hash, document, slots(document), new_core)
     # A recipe still on a v1 id reads step 8's map, whose values are v2
-    # labels: composed onto v3 here, or its overrides name nothing.
+    # labels: composed onto v3 here, or its overrides name nothing. A value
+    # already on the live core (a map an earlier run composed or wrote) stays;
+    # one on neither is stale and goes to None, so the stage slot can answer.
+    live = set(core_node_labels(document, strip_loras=STRIP_LORAS_FOR_STACKS).values())
     for old_id, new_id, label_map in conn.execute(
         "SELECT old_workflow_id, new_workflow_id, label_map "
         "FROM workflow_core_successor WHERE topology_hash = ?",
         (topology_hash,),
     ).fetchall():
         composed = {
-            old: labels.get(new, new) if new else None
+            old: labels[new] if new in labels else new if new in live else None
             for old, new in json.loads(label_map).items()
         }
         conn.execute(

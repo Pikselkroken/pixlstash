@@ -1380,7 +1380,14 @@ def test_step_10_composes_a_v1_recipes_map_onto_v3(step_10):
             (
                 w.aura.topology_hash,
                 w.v2_id[w.aura],
-                json.dumps({"s1": v2["5"], "p1": v2["90"], "x": None}),
+                json.dumps(
+                    {
+                        "s1": v2["5"],
+                        "p1": v2["90"],
+                        "x": None,
+                        "stale": "on-no-core",
+                    }
+                ),
             ),
         )
         rederive_cores_v3(conn)
@@ -1388,6 +1395,7 @@ def test_step_10_composes_a_v1_recipes_map_onto_v3(step_10):
         "s1": w.v3_sampler,
         "p1": None,  # stripped: the recipe falls back to its stage slot
         "x": None,
+        "stale": None,
     }
 
 
@@ -1430,6 +1438,39 @@ def test_step_10_a_card_split_by_family_follows_each_old_workflow(step_10):
         rederive_cores_v3(conn)
     assert workflow_of_variant(w.hub, first) != workflow_of_variant(w.hub, last)
     assert _successor(w.hub, card) == workflow_of_variant(w.hub, first)
+
+
+def test_step_10_keeps_a_map_an_earlier_run_already_composed(step_10):
+    """A re-run (an older build re-cached the topology) must not null v3 labels.
+
+    The advanced sampler is relabelled by v3, so its v3 label is no v2 key.
+    """
+    w = step_10
+    advanced = record_api_graph(
+        w.hub,
+        _graph(ckpt=FLUX, extra=CORE_V3_TWINS["ksampler-advanced"][1]),
+        library_uuid=LIB,
+    )
+    document = get_document(w.hub, advanced.structural_hash)
+    done = core_node_labels(document)["5"]
+    assert done not in convert.core_label_maps(document, _core_strip_v2)[0]
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+            "WHERE topology_hash = ?",
+            (
+                _CORE_RULE_V2,
+                graph_key(_core_strip_v2(document)),
+                advanced.topology_hash,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO workflow_core_successor (topology_hash, old_workflow_id, "
+            "new_workflow_id, label_map) VALUES (?, 'auto:v1', 'auto:v3', ?)",
+            (advanced.topology_hash, json.dumps({"s1": done})),
+        )
+        rederive_cores_v3(conn)
+    assert _core_successor_map(w.hub, "auto:v1") == {"s1": done}
 
 
 def test_a_v2_row_an_older_build_writes_is_moved_on_the_next_open(step_10):
