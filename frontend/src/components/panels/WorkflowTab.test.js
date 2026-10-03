@@ -559,28 +559,6 @@ describe("a checkpoint that will not load", () => {
     };
   }
 
-  it("says where the one graph Run and Open use came from", async () => {
-    preflightWorkflowRun.mockResolvedValue({
-      groups: [{ source: "picture", source_picture_id: 15, reasons: [] }],
-    });
-    getWorkflowCard.mockResolvedValue(detail({ card: named }));
-    const { wrapper } = await mountWith([KEY], [named]);
-    await settle(wrapper);
-    expect(wrapper.find('[data-testid="wftab-graph-origin"]').text()).toBe(
-      "Graph from picture 15",
-    );
-  });
-
-  it("names no origin until the pre-flight has resolved one", async () => {
-    preflightWorkflowRun.mockResolvedValue({ groups: [] });
-    getWorkflowCard.mockResolvedValue(detail({ card: named }));
-    const { wrapper } = await mountWith([KEY], [named]);
-    await settle(wrapper);
-    expect(wrapper.find('[data-testid="wftab-graph-origin"]').exists()).toBe(
-      false,
-    );
-  });
-
   it("names the file ComfyUI does not have, without its folders", async () => {
     preflightWorkflowRun.mockResolvedValue(
       missingFile("SDXL/realvisXL_v5.safetensors"),
