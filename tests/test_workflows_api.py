@@ -7809,16 +7809,19 @@ def test_each_save_node_keeps_its_own_prefix_under_the_stack_tag(i2i):
     )
 
 
-def test_an_automatic_run_drops_a_workflow_tag_its_graph_inherited(i2i):
+@pytest.mark.parametrize("stack", [False, True])
+def test_an_automatic_run_drops_a_workflow_tag_its_graph_inherited(i2i, stack):
     """A graph replayed from a manual run's output keeps that run's tagged
     prefix; a watch folder would file this run's outputs on it (#1688)."""
     i2i.graph["4"]["inputs"]["filename_prefix"] = f"out__wf_{'c' * 32}"
     picture = _add_picture(i2i.server, i2i.tmp_path, "w.png")
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_WF}
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "stack": stack},
     )
     assert r.status_code == 200, r.text
-    assert i2i.submitted[0]["graph"]["4"]["inputs"]["filename_prefix"] == "out"
+    expected = f"out__stack_{i2i.outputs[0][4]}__src_{picture}" if stack else "out"
+    assert i2i.submitted[0]["graph"]["4"]["inputs"]["filename_prefix"] == expected
 
 
 def test_the_selection_sent_to_an_input_of_a_run_without_one_is_a_400(i2i):
