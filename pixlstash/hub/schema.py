@@ -894,6 +894,11 @@ CREATE TABLE IF NOT EXISTS workflow_variant (
 # topology", the empty string is "it has, and the graph has none". A card's
 # generated name says "+ FaceDetailer" only on the second, so a topology the
 # backfill has not reached is not quietly described as plain.
+#
+# ``traits`` is the same shape of answer for what the core does
+# (``workflow_identity.graph_traits``: two-pass, refine, ...), with the same
+# NULL rule. A generated name only uses it to tell apart workflows that would
+# otherwise read the same (#1722).
 _V2_WORKFLOW_TOPOLOGY_CORE = """
 CREATE TABLE IF NOT EXISTS workflow_topology_core (
     topology_hash  TEXT PRIMARY KEY REFERENCES workflow_topology(topology_hash),
@@ -901,7 +906,8 @@ CREATE TABLE IF NOT EXISTS workflow_topology_core (
     core_version   TEXT NOT NULL,
     workflow_type  TEXT,
     slots          TEXT NOT NULL,
-    specials       TEXT
+    specials       TEXT,
+    traits         TEXT
 )
 """
 
@@ -1684,6 +1690,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "specials" not in core_columns:
         conn.execute("ALTER TABLE workflow_topology_core ADD COLUMN specials TEXT")
+    # The core's traits (#1722), the same way and for the same reason.
+    if "traits" not in core_columns:
+        conn.execute("ALTER TABLE workflow_topology_core ADD COLUMN traits TEXT")
 
     # The dismissal's content key (#1440), guarded the same way. No released
     # hub has this table; a development hub that ran an earlier commit of the

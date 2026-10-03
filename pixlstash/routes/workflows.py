@@ -176,6 +176,13 @@ from pixlstash.services.workflow_export import (
 from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     CORE_ADDRESS_PREFIX,
+    INTERMEDIATE_SAVE,
+    LIKENESS_GATE,
+    MODEL_PER_PASS,
+    NEGATIVE_PROMPT,
+    REFERENCES_PREFIX,
+    REFINE,
+    TWO_PASS,
     loader_swaps,
     core_node_labels,
     model_fix_kind,
@@ -2211,6 +2218,28 @@ _SPECIAL_LABELS = {
 }
 
 
+# What a core trait is called where a generated name needs it to tell two
+# workflows apart (:func:`_display_names`). A trait this build does not know is
+# left out, as an unknown special is.
+_TRAIT_LABELS = {
+    TWO_PASS: "Two-Pass",
+    REFINE: "Refine",
+    MODEL_PER_PASS: "Model per Pass",
+    INTERMEDIATE_SAVE: "Intermediate Save",
+    LIKENESS_GATE: "Likeness Gate",
+    NEGATIVE_PROMPT: "Negative Prompt",
+}
+
+
+def _trait_label(trait: str) -> str | None:
+    if trait.startswith(REFERENCES_PREFIX):
+        count = trait[len(REFERENCES_PREFIX) :]
+        if not count.isdigit():
+            return None
+        return f"{count} Reference" + ("" if count == "1" else "s")
+    return _TRAIT_LABELS.get(trait)
+
+
 def _base_model_slots(models) -> list:
     """The slots a card is named after: every named one of its first base kind.
 
@@ -2295,13 +2324,34 @@ def _display_name(card, models=()) -> str:
     return named + _specials_suffix(card)
 
 
+def _distinguishing_traits(cards) -> list[str]:
+    """Each card's trait suffix, saying only what not all of *cards* share.
+
+    *cards* share one generated name. A trait every one of them has tells none
+    of them apart, so it is left off: a negative prompt is not news on a grid
+    of SDXL workflows that all have one. A card whose traits are not known yet
+    (``None``) gets no suffix and does not count towards what is shared.
+    """
+    known = [set(card.traits) for card in cards if card.traits is not None]
+    shared = set.intersection(*known) if known else set()
+    suffixes = []
+    for card in cards:
+        labels = (
+            _trait_label(trait) for trait in card.traits or () if trait not in shared
+        )
+        suffixes.append("".join(f" + {label}" for label in labels if label))
+    return suffixes
+
+
 def _display_names(figures) -> dict[str, str]:
     """Every workflow's name, by id, with no generated name printed twice.
 
     A name the owner typed or a workflow file's is left alone however many
     workflows share it: renaming what somebody chose is inventing. Generated
-    names that collide are numbered ``Text to Image (2)``, ``(3)``, in id order
-    so a workflow keeps its number from one read to the next.
+    names that collide first say what the core does differently
+    (``... + Two-Pass``, :func:`_distinguishing_traits`), and whatever still
+    collides is numbered ``Text to Image (2)``, ``(3)``, in id order so a
+    workflow keeps its number from one read to the next.
     """
     # ponytail: id order is stable across reads but a new workflow can shift
     # the numbers after it; store a sequence if that ever matters.
@@ -2312,8 +2362,15 @@ def _display_names(figures) -> dict[str, str]:
         name = _display_name(card, figure.models)
         names[figure.workflow_id] = name
         if not card.name and not card.file_name:
-            generated.setdefault(name, []).append(figure.workflow_id)
-    for name, keys in generated.items():
+            generated.setdefault(name, []).append(figure)
+    renamed = {}
+    for name, members in generated.items():
+        # A lone name shares every trait it has with itself, so it gets none.
+        suffixes = _distinguishing_traits([member.card for member in members])
+        for member, suffix in zip(members, suffixes):
+            names[member.workflow_id] = name + suffix
+            renamed.setdefault(name + suffix, []).append(member.workflow_id)
+    for name, keys in renamed.items():
         for number, key in enumerate(keys[1:], start=2):
             names[key] = f"{name} ({number})"
     return names

@@ -42,6 +42,7 @@ from pixlstash.services.workflow_hash import (
 from pixlstash.services.workflow_identity import (
     WORKFLOW_KEY_VERSION,
     model_fix_kind,
+    reduced_traits,
     reduced_workflow_type,
     slots,
 )
@@ -82,6 +83,9 @@ class Card:
     core_hash: Optional[str] = None
     workflow_type: Optional[str] = None
     specials: Optional[tuple[str, ...]] = None
+    # What the core does beyond its type (``workflow_identity.graph_traits``),
+    # with the same ``None`` rule as ``specials``.
+    traits: Optional[tuple[str, ...]] = None
     name: Optional[str] = None
     notes: Optional[str] = None
     hidden: bool = False
@@ -142,7 +146,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
         "SELECT v.workflow_key AS workflow_key, v.topology_hash AS topology_hash, "
         "v.structural_hash AS structural_hash, c.core_hash AS core_hash, "
         "c.workflow_type AS workflow_type, c.slots AS slots, "
-        "c.specials AS specials, "
+        "c.specials AS specials, c.traits AS traits, "
         "a.name AS name, a.notes AS notes, "
         "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported, "
         "COALESCE(f.hand_imported, 0) AS hand_imported, "
@@ -170,6 +174,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 core_hash=row["core_hash"],
                 workflow_type=row["workflow_type"],
                 specials=_specials(row["specials"]),
+                traits=_specials(row["traits"]),
                 slots=_slots(row["slots"], row["workflow_key"]),
                 name=row["name"],
                 notes=row["notes"],
@@ -197,7 +202,8 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
         Card(
             workflow_key=row["workflow_id"],
             topology_hash=row["workflow_id"],
-            workflow_type=_manual_workflow_type_of(row["workflow_id"], row["document"]),
+            workflow_type=facts[0],
+            traits=facts[1],
             imported=True,
             hand_imported=row["origin"] != "pull",
             manual=True,
@@ -207,35 +213,57 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             "SELECT workflow_id, origin, from_name, document FROM workflow_document "
             "ORDER BY workflow_id"
         )
+        for facts in (_manual_facts_of(row["workflow_id"], row["document"]),)
     ]
 
 
 # ponytail: one entry per manual workflow, keyed on its id alone because a
 # row's `document` is never rewritten (as `_manual_model_widgets`); unbounded,
 # but there are as many entries as manual workflows.
-_MANUAL_TYPES: dict[str, Optional[str]] = {}
+_MANUAL_FACTS: dict[str, tuple[Optional[str], Optional[tuple[str, ...]]]] = {}
 
 
-def _manual_workflow_type_of(workflow_id: str, document: str) -> Optional[str]:
-    """``_manual_workflow_type``, parsed once per manual workflow per process."""
-    if workflow_id not in _MANUAL_TYPES:
-        _MANUAL_TYPES[workflow_id] = _manual_workflow_type(workflow_id, document)
-    return _MANUAL_TYPES[workflow_id]
+def _manual_facts_of(
+    workflow_id: str, document: str
+) -> tuple[Optional[str], Optional[tuple[str, ...]]]:
+    """``(workflow_type, traits)`` of a manual workflow, parsed once per process.
+
+    Both ``None`` for a graph that will not reduce, as for an automatic card
+    the backfill has not reached.
+    """
+    if workflow_id not in _MANUAL_FACTS:
+        nodes = _manual_reduction(workflow_id, document)
+        _MANUAL_FACTS[workflow_id] = (
+            (None, None)
+            if nodes is None
+            else (reduced_workflow_type(nodes), _manual_traits(workflow_id, nodes))
+        )
+    return _MANUAL_FACTS[workflow_id]
 
 
-def _manual_workflow_type(workflow_id: str, document: str) -> Optional[str]:
-    """What a manual workflow makes (``workflow_type``), read off its own graph.
+def _manual_traits(workflow_id: str, nodes: dict) -> Optional[tuple[str, ...]]:
+    """``reduced_traits`` of a manual workflow, ``None`` (logged) if the core
+    strip leaves nothing, so its name claims nothing it cannot back."""
+    try:
+        return reduced_traits(nodes)
+    except (WorkflowGraphError, ValueError, TypeError, KeyError) as exc:
+        logger.warning(
+            "Manual workflow %s: its core strip failed, so its name says no traits: %s",
+            workflow_id,
+            exc,
+        )
+        return None
 
-    Either serialisation: an editor file reduces as the UI graph it is. A
-    document that will not reduce has no type, logged, as an automatic card
-    the backfill has not reached has none.
+
+def _manual_reduction(workflow_id: str, document: str) -> Optional[dict]:
+    """A manual workflow's own graph, reduced; ``None`` (logged) if it won't.
+
+    Either serialisation: an editor file reduces as the UI graph it is.
     """
     try:
         parsed = json.loads(document)
         graph = api_graph(parsed)
-        return reduced_workflow_type(
-            reduce_api_graph(graph) if graph is not None else reduce_ui_graph(parsed)
-        )
+        return reduce_api_graph(graph) if graph is not None else reduce_ui_graph(parsed)
     except (
         ValueError,
         TypeError,

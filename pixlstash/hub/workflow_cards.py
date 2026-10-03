@@ -57,6 +57,7 @@ from pixlstash.services.workflow_identity import (
     base_model_kind,
     core_hash,
     core_node_ids,
+    graph_traits,
     guess_mark,
     lora_assets,
     slots,
@@ -118,7 +119,7 @@ _VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION)
 # has no current row, so nothing has to remember to run anything.
 _VARIANT_PENDING = (
     "(v.structural_hash IS NULL OR c.topology_hash IS NULL OR c.specials IS NULL "
-    "OR vf.structural_hash IS NULL)"
+    "OR c.traits IS NULL OR vf.structural_hash IS NULL)"
 )
 
 
@@ -326,13 +327,14 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     row = hub.fetchone(
         "SELECT r.topology_hash AS topology_hash, g.document AS document, "
         "v.workflow_key AS workflow_key, c.topology_hash AS core_cached, "
-        "c.specials AS core_specials, vf.families AS families "
+        "c.specials AS core_specials, c.traits AS core_traits, "
+        "vf.families AS families "
         f"{_VARIANT_JOIN} WHERE r.structural_hash = ?",
         (*_VARIANT_VERSIONS, structural_hash),
     )
     if row is None:
         return None
-    # The same three conditions `_VARIANT_PENDING` selects on, spelled here as
+    # The same conditions `_VARIANT_PENDING` selects on, spelled here as
     # the early return. Both halves, and on the same rule the finder selects by:
     # returning early on a current card while the topology cache is stale would
     # leave the finder handing this variant out on every sweep, for a pass that
@@ -344,7 +346,8 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     # refinement over every topology in the hub on upgrade to fill in at most
     # two words. That row is UPDATEd in place instead.
     core_missing = row["core_cached"] is None
-    specials_missing = row["core_specials"] is None
+    # `traits` (#1722) is the same kind of gap and is filled by the same UPDATE.
+    specials_missing = row["core_specials"] is None or row["core_traits"] is None
     if (
         row["workflow_key"] is not None
         and not core_missing
@@ -389,21 +392,27 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
         if core_missing
         else None
     )
+    # The specials-only path's CPU, outside the lock for the same reason.
+    cached = (
+        None
+        if core is not None or not specials_missing
+        else (",".join(special_groups(document)), ",".join(graph_traits(document)))
+    )
     with hub.transaction() as conn:
         marks = _freeze_marks(conn, topology_hash, structural_hash, document_slots)
         if core is not None:
             _cache_topology(conn, topology_hash, document, document_slots, core)
-        elif specials_missing:
-            # The whole cost of the upgrade for an already-cached topology: one
-            # reduction, no refinement, and the row's stack key, type and slots
+        elif cached is not None:
+            # The whole cost of the upgrade for an already-cached topology: a
+            # reduction and a strip, no refinement, and the row's stack key, type and slots
             # are left exactly where the grid is already reading them.
             # `core_version` is in the WHERE so a row re-stamped under another
             # rule between the read and here is not written by this branch.
             conn.execute(
-                "UPDATE workflow_topology_core SET specials = ? "
+                "UPDATE workflow_topology_core SET specials = ?, traits = ? "
                 "WHERE topology_hash = ? AND core_version = ?",
                 (
-                    ",".join(special_groups(document)),
+                    *cached,
                     topology_hash,
                     CORE_RULE_VERSION,
                 ),
@@ -607,8 +616,8 @@ def _cache_topology(
     """
     conn.execute(
         "INSERT OR REPLACE INTO workflow_topology_core "
-        "(topology_hash, core_hash, core_version, workflow_type, slots, specials) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(topology_hash, core_hash, core_version, workflow_type, slots, specials, "
+        "traits) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             topology_hash,
             core,
@@ -627,6 +636,7 @@ def _cache_topology(
                 separators=(",", ":"),
             ),
             ",".join(special_groups(document)),
+            ",".join(graph_traits(document)),
         ),
     )
 
