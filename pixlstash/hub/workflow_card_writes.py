@@ -283,6 +283,19 @@ def _rekey_variants(
             conn.execute(f"DELETE FROM {table} WHERE workflow_key = ?", (new_key,))
             _copy_rows(conn, table, winner, new_key)
 
+    # A family pass's move rows (#1689) are matched against the key a saved
+    # recipe stores, and `saved_recipe_service.rekey_in_session` moves the
+    # recipes of EVERY old key, merged loser or not: so these are copied from
+    # every contributor, never winner-takes-all, and the old rows stay.
+    for old_key, news in sorted(successors.items()):
+        for new_key in sorted(news - {old_key}):
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_card_move "
+                "(workflow_key, old_workflow_id) SELECT ?, old_workflow_id "
+                "FROM workflow_card_move WHERE workflow_key = ?",
+                (new_key, old_key),
+            )
+
     # Only now, and only for keys no variant is on any more: a split copies
     # one card's attributes to several, so deleting as it went would empty the
     # source before the second copy read it.

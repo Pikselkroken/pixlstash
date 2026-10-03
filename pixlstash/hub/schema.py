@@ -1335,6 +1335,18 @@ CREATE TABLE IF NOT EXISTS workflow_family_pass (
 )
 """
 
+# A card a family pass (`reidentify_families`) moved out of a workflow that
+# lives on, its other variants still unknown (#1689). Read by the vault's
+# saved-recipe conversion, which re-files a recipe naming both on the card's
+# workflow; the retired-id table cannot say it, the old id being live.
+_V2_WORKFLOW_CARD_MOVE = """
+CREATE TABLE IF NOT EXISTS workflow_card_move (
+    workflow_key     TEXT NOT NULL,
+    old_workflow_id  TEXT NOT NULL,
+    PRIMARY KEY (workflow_key, old_workflow_id)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1410,6 +1422,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_CORE_SUCCESSOR,
     _V2_WORKFLOW_VARIANT_FAMILY,
     _V2_WORKFLOW_FAMILY_PASS,
+    _V2_WORKFLOW_CARD_MOVE,
     *_V2_WORKFLOW_INDEXES,
 )
 

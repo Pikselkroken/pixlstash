@@ -23,6 +23,7 @@ from sqlalchemy import text
 from pixlstash.database import DBPriority
 from pixlstash.hub.workflow_card_reads import (
     card_index,
+    moved_card_workflows,
     workflow_id_successors,
     workflow_index,
     workflow_of_variant,
@@ -75,16 +76,24 @@ class SavedRecipeConvertTask(BaseTask):
         # `auto:<topology>` for the manual workflow made of its file) takes a
         # recipe naming it along, so nothing saved changes where it lists.
         successors = workflow_id_successors(hub)
+        # A card a family pass moved out of a workflow that lives on (#1689):
+        # its recipe follows it, the id it names being live.
+        moved = moved_card_workflows(hub)
         placeholders = ",".join(str(int(i)) for i in self._recipe_ids)
         rows = self._vault.db.run_immediate_read_task(
             lambda session: session.execute(
                 text(
                     "SELECT id, workflow_key, overrides, models, workflow_id "
                     "FROM saved_recipe WHERE (workflow_id IS NULL OR workflow_id "
-                    "IN (SELECT value FROM json_each(:retired))) "
+                    "IN (SELECT value FROM json_each(:retired)) "
+                    "OR workflow_key || ' ' || workflow_id IN "
+                    "(SELECT value FROM json_each(:moved))) "
                     f"AND id IN ({placeholders})"
                 ),
-                {"retired": json.dumps(sorted(successors))},
+                {
+                    "retired": json.dumps(sorted(successors)),
+                    "moved": json.dumps(moved),
+                },
             ).all()
         )
         cards = card_index(hub)
@@ -123,6 +132,10 @@ class SavedRecipeConvertTask(BaseTask):
             found = card_document(hub, card) if card is not None else None
             overrides = _overrides(recipe_id, raw_overrides)
             core_map = _core_successor_map(hub, was)
+            if core_map is None and f"{workflow_key} {was}" in moved:
+                # Same core, so nothing to rewrite: re-filed as a family
+                # pass's retired workflow is, on its own card's workflow.
+                core_map = {}
             if core_map is not None:
                 # Retired by core rule v2 (data step 8): the overrides and
                 # models are already workflow addresses, on the v1 core. A
@@ -132,11 +145,12 @@ class SavedRecipeConvertTask(BaseTask):
                         workflow_of_variant(hub, card.variants[0]) or workflow_id
                     )
                 if workflow_id == was:
-                    # Its card's workflow is the very id the list calls
-                    # retired (a family the shelf learned, then forgot):
-                    # nothing to move, and moving it would repeat every sweep.
+                    # Its card's workflow is the very id it names (a family
+                    # the shelf learned, then forgot): nothing to move, and
+                    # moving it would repeat every sweep.
                     logger.info(
-                        "Saved recipe %s: workflow %s is live again; left as it is.",
+                        "Saved recipe %s: its card is in workflow %s again; "
+                        "left as it is.",
                         recipe_id,
                         was,
                     )

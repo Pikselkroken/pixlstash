@@ -1027,6 +1027,7 @@ def reidentify_families(hub) -> dict:
     renamed: dict[str, str] = {}
     with hub.transaction() as conn:
         heirs_of: dict[str, Counter] = {}
+        keys_of: dict[str, set[str]] = {}
         new_of_card: dict[str, str] = {}
         parts: dict[str, tuple[str, str]] = {}
         for row, families in moves:
@@ -1044,20 +1045,45 @@ def reidentify_families(hub) -> dict:
                 (row["topology_hash"], old_id, new_id),
             )
             heirs_of.setdefault(old_id, Counter())[new_id] += 1
+            keys_of.setdefault(old_id, set()).add(row["workflow_key"])
             new_of_card[row["workflow_key"]] = new_id
+        # A variant still in the old workflow, for the workflow or one card.
+        still_in = (
+            "SELECT 1 FROM workflow_variant v JOIN workflow_variant_family vf "
+            "ON vf.structural_hash = v.structural_hash "
+            "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+            "AND c.core_version = ? WHERE v.key_version = ? "
+            "AND vf.families = ? AND c.core_hash = ?"
+        )
         for old_id, heirs in sorted(heirs_of.items()):
             if not hub.fetchone(
-                "SELECT 1 FROM workflow_variant v JOIN workflow_variant_family vf "
-                "ON vf.structural_hash = v.structural_hash "
-                "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
-                "AND c.core_version = ? WHERE vf.families = ? AND c.core_hash = ?",
-                (CORE_RULE_VERSION, *parts[old_id]),
+                still_in, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, *parts[old_id])
             ):
                 _retire_workflow(conn, old_id, heirs, new_of_card, {}, {})
                 renamed[old_id] = _primary(heirs)
             else:
-                # ponytail: the workflow lives on, so a recipe naming it stays
-                # there; re-filing per card here if owners hit it.
+                # The workflow lives on, so the retired-id row cannot carry a
+                # recipe on a moved card: this row does, for the vault's
+                # conversion to re-file it on its card's workflow. Only a card
+                # none of whose variants stayed: a recipe does not say which
+                # variant it was saved from.
+                conn.executemany(
+                    "INSERT OR IGNORE INTO workflow_card_move "
+                    "(workflow_key, old_workflow_id) VALUES (?, ?)",
+                    [
+                        (key, old_id)
+                        for key in sorted(keys_of[old_id])
+                        if not hub.fetchone(
+                            f"{still_in} AND v.workflow_key = ?",
+                            (
+                                CORE_RULE_VERSION,
+                                WORKFLOW_KEY_VERSION,
+                                *parts[old_id],
+                                key,
+                            ),
+                        )
+                    ],
+                )
                 logger.info(
                     "Workflow %s keeps variants the shelf has not identified; "
                     "its owner state stays and is copied to %s.",

@@ -842,6 +842,39 @@ def test_a_replaced_model_keeps_the_card_and_its_pictures(hub):
     assert model_fixes(hub, old.topology_hash) == []
 
 
+def test_a_merged_cards_family_move_rows_follow_its_recipes(hub):
+    """#1689: a model fix moves every merged card's recipes, the losers' too,
+    so each one's family-pass move rows must land on the key they move to."""
+    old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
+    early = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
+    card = card_of(hub, old.structural_hash)
+    apart = card_of(hub, early.structural_hash)
+    left = "auto:" + "a" * 64
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_card_move (workflow_key, old_workflow_id) "
+            "VALUES (?, ?)",
+            (apart, left),
+        )
+
+    moved = set_model_fix(
+        hub,
+        old.topology_hash,
+        [_base_slot_label(hub, old.topology_hash)],
+        "sdxl/test-model-FP8.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+
+    assert moved == {apart: [card]}, "apart must be the merged loser"
+    assert {
+        tuple(row)
+        for row in hub.fetchall(
+            "SELECT workflow_key, old_workflow_id FROM workflow_card_move"
+        )
+    } == {(apart, left), (card, left)}
+
+
 def test_a_fix_targets_checkpoint_slots_across_the_whole_topology(hub):
     """Every card of the graph, and never a VAE slot naming the same file.
 

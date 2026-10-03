@@ -56,6 +56,7 @@ from pixlstash.services.workflow_hash import graph_key, node_labels
 from pixlstash.services.workflow_identity import (
     core_node_labels,
     topology_node_labels,
+    WORKFLOW_KEY_VERSION,
 )
 from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
     MissingSavedRecipeWorkflowFinder,
@@ -1865,6 +1866,138 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
         lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
         priority=DBPriority.IMMEDIATE,
     )
+
+
+def _share_an_unknown_workflow(hub, library, moving_ckpt, staying_ckpt):
+    """Two variants of one topology filed under one unknown family's workflow.
+
+    The staying one's frozen family is the moving one's, so they share a
+    workflow; its own checkpoint is a different unknown, so a shelf that
+    learns *moving_ckpt* moves one variant and leaves the other.
+    """
+    moving = record_api_graph(hub, _graph(ckpt=moving_ckpt, upscale=True), library)
+    staying = record_api_graph(hub, _graph(ckpt=staying_ckpt, upscale=True), library)
+    assert moving.topology_hash == staying.topology_hash
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_variant_family SET families = (SELECT families FROM "
+            "workflow_variant_family WHERE structural_hash = ?) "
+            "WHERE structural_hash = ?",
+            (moving.structural_hash, staying.structural_hash),
+        )
+    old_id = workflow_of_variant(hub, moving.structural_hash)
+    assert workflow_of_variant(hub, staying.structural_hash) == old_id
+    return moving, staying, old_id
+
+
+def _identify(hub, filename, sha):
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance, base_model, "
+            "base_model_canonical, base_model_source) VALUES ('checkpoint', ?, ?, "
+            "'scanned', 'Qwen-Image', 'Qwen-Image', 'user')",
+            (filename, sha),
+        )
+
+
+def test_a_recipe_follows_its_card_out_of_a_workflow_that_lives_on(run_env):
+    """#1689: a family pass that leaves some variants unknown keeps the old
+    workflow; a recipe on the card that moved follows it, and a recipe on the
+    card that stayed is left where it is."""
+    server = run_env.server
+    hub = server.hub
+    moving, staying, old_id = _share_an_unknown_workflow(
+        hub,
+        server.vault.library_uuid,
+        "house-finetune-v11.safetensors",
+        "house-finetune-v12.safetensors",
+    )
+    _identify(hub, "house-finetune-v11.safetensors", "1689" + "d" * 60)
+    result = convert.reidentify_families(hub)
+    new_id = workflow_of_variant(hub, moving.structural_hash)
+    assert new_id != old_id
+    assert workflow_of_variant(hub, staying.structural_hash) == old_id
+    assert old_id in result["keys"] and old_id not in result["renamed"]
+    # `workflow_core_successor` is keyed by (topology, new workflow), so an
+    # earlier family of this topology that moved to the same workflow keeps
+    # this move off it: the move row alone must carry the recipe.
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_core_successor WHERE old_workflow_id = ?", (old_id,)
+        )
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        ids = []
+        for keys in (moving, staying):
+            recipe = SavedRecipe(
+                name="partial",
+                workflow_key=_card(hub, keys),
+                workflow_id=old_id,
+                prompt="x",
+            )
+            session.add(recipe)
+            session.flush()
+            ids.append(recipe.id)
+        session.commit()
+        return ids
+
+    moved_id, stayed_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    try:
+        finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+        task = finder.find_task()
+        # The recipe whose card stayed names a live workflow it is in: not
+        # handed out at all.
+        assert task.params["recipe_ids"] == [moved_id]
+        task.result = task._run_task()
+        assert task.result == {"converted": 1, "deferred": []}
+        finder.on_task_complete(task, None)
+        assert finder.find_task() is None, "handed out again"
+        stored = server.vault.db.run_immediate_read_task(
+            lambda session: session.exec(select(SavedRecipe)).all()
+        )
+        assert {row.id: row.workflow_id for row in stored} == {
+            moved_id: new_id,
+            stayed_id: old_id,
+        }
+    finally:
+        server.vault.db.run_task(
+            lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
+            priority=DBPriority.IMMEDIATE,
+        )
+
+
+def test_a_stale_key_version_variant_does_not_keep_a_workflow_alive(run_env):
+    """#1689: a variant row on an old key version is no variant the index
+    lists, so the family pass retires the workflow it alone was left in."""
+    server = run_env.server
+    hub = server.hub
+    moving, staying, old_id = _share_an_unknown_workflow(
+        hub,
+        server.vault.library_uuid,
+        "house-finetune-v13.safetensors",
+        "house-finetune-v14.safetensors",
+    )
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_variant SET key_version = 'stale' "
+            "WHERE structural_hash = ?",
+            (staying.structural_hash,),
+        )
+    try:
+        _identify(hub, "house-finetune-v13.safetensors", "1689" + "e" * 60)
+        result = convert.reidentify_families(hub)
+        assert result["renamed"].get(old_id) == workflow_of_variant(
+            hub, moving.structural_hash
+        )
+    finally:
+        # A stale row is a variant the backfill re-keys: put it back, or the
+        # module's later finders find work that is not theirs.
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE workflow_variant SET key_version = ? WHERE structural_hash = ?",
+                (WORKFLOW_KEY_VERSION, staying.structural_hash),
+            )
 
 
 def test_a_failed_family_pass_waits_for_the_shelf_to_change(run_env):
