@@ -39,6 +39,7 @@ from pixlstash.services.comfyui_recipe_service import format_prompt_rejection
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY
 
 from pixlstash.pixl_logging import get_logger
 
@@ -230,7 +231,16 @@ def _submit_comfyui_prompt(
     base_url: str,
     workflow: dict,
     client_id: str | None = None,
+    run_workflow_id: str | None = None,
 ) -> dict:
+    """Queue *workflow* on ComfyUI and return its answer.
+
+    *run_workflow_id*, a manual workflow's id, rides ``extra_pnginfo`` under
+    its own key, which SaveImage writes as a chunk of that name; that is how
+    a picture the watch folder imports before the completion poll sees it is
+    still filed on the workflow that ran
+    (``ComfyUIExtractionTask._run_workflow_tag``).
+    """
     # Strip PixlStash-specific metadata keys before sending to ComfyUI.
     # ComfyUI iterates all top-level entries as nodes and will crash on any
     # non-dict value (e.g. the list stored in "pixlstash_output_nodes").
@@ -247,6 +257,8 @@ def _submit_comfyui_prompt(
     payload = {
         "prompt": clean_workflow,
     }
+    if run_workflow_id:
+        payload["extra_data"] = {"extra_pnginfo": {WORKFLOW_TAG_KEY: run_workflow_id}}
     if client_id:
         payload["client_id"] = client_id
     try:
@@ -1139,10 +1151,9 @@ def _process_comfyui_outputs(
     """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
 
     *run_workflow_id* is the manual workflow that ran, whose pictures these
-    are (``Picture.run_workflow_id``). ponytail: an output the watch folder
-    imports before this poller sees it is not marked, so it counts on the
-    automatic workflow; tag the save node's ``filename_prefix`` as
-    ``_tag_for_stack`` does if that ever matters.
+    are (``Picture.run_workflow_id``). An output the watch folder imports
+    before this poller sees it is filed by the tag ``_submit_comfyui_prompt``
+    embedded instead.
 
     This is the documented single-event import path (see
     ``docs/backend_architecture.md`` §15). It is a deliberate exception to the

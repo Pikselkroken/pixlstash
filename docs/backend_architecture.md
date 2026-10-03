@@ -2492,9 +2492,14 @@ whatever the count), and `GET /workflows/{id}/pictures`, the
 `GET /pictures?workflow=` filter (`predicate_filter.workflow_keys_predicate`)
 and a picture's own workflow (`_picture_workflow_id`) read the same way.
 Deleting a manual workflow therefore needs no vault write: its pictures fall
-back to the automatic workflow their variant is in. Ceiling (logged in the
-code): an output the watch folder imports before the poller sees it is not
-marked.
+back to the automatic workflow their variant is in. An output the watch
+folder imports before the poller sees it is filed by the tag the run
+submitted: `_submit_comfyui_prompt` passes the manual id as
+`extra_data.extra_pnginfo.pixlstash_workflow_id`, which SaveImage writes as a
+PNG chunk of that name (never the `workflow` chunk, #628), and
+`ComfyUIExtractionTask._run_workflow_tag` reads it
+(`workflow_ids.submitted_run_tag`) ahead of the editor-graph tag below. A
+saver that drops `extra_pnginfo`, or writes no PNG, carries no tag.
 
 **A run started in ComfyUI files the same way.** Every editor-format document
 stored as a manual workflow carries its id at `extra.pixlstash_workflow_id`
@@ -2512,7 +2517,8 @@ hub does not hold is logged at info and files nothing. The tag never reaches a
 key: the hash tiers read the API `prompt` chunk, `reduce_ui_graph` reads only
 nodes, links and definitions, and `workflow_bindings.canonical` (the dedup and
 conversion-match key) drops it. Gaps: an API-format document has nowhere to
-carry a tag (every top-level key is a node), and *Open in ComfyUI* serves an
+carry a tag (every top-level key is a node), so only a run PixlStash
+submits files one, by the chunk above; and *Open in ComfyUI* serves an
 API graph (`GET /workflows/{id}/graph`, loaded with `app.loadApiJson`), so the
 tag reaches that canvas only once the node sets `app.graph.extra` itself.
 Pictures made before the tag existed are not rescanned.

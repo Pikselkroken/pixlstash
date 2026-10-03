@@ -1417,7 +1417,7 @@ def test_a_recipe_saved_on_a_checkpoint_b_card_still_runs_on_b(run_env, monkeypa
     monkeypatch.setattr(
         workflows_routes,
         "_submit_comfyui_prompt",
-        lambda base_url, graph, client_id=None: (
+        lambda base_url, graph, client_id=None, run_workflow_id=None: (
             submitted.append(graph) or {"prompt_id": "p1"}
         ),
     )
@@ -1504,7 +1504,7 @@ def test_a_saved_recipe_runs_the_graph_it_was_saved_on(run_env, monkeypatch):
     monkeypatch.setattr(
         workflows_routes,
         "_submit_comfyui_prompt",
-        lambda base_url, graph, client_id=None: (
+        lambda base_url, graph, client_id=None, run_workflow_id=None: (
             submitted.append(graph) or {"prompt_id": "p1"}
         ),
     )

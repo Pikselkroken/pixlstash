@@ -1492,17 +1492,20 @@ def _wipe_pictures(session):
     session.commit()
 
 
-def write_png(directory, name, api=None, parameters=None, workflow=None):
+def write_png(directory, name, api=None, parameters=None, workflow=None, run_tag=None):
     """A real PNG, carrying an API graph in its ``prompt`` chunk when given one.
 
     ``parameters`` is A1111 generation data, in the chunk A1111 writes it to;
-    ``workflow`` the editor graph, in the chunk ComfyUI's SaveImage writes.
+    ``workflow`` the editor graph, in the chunk ComfyUI's SaveImage writes;
+    ``run_tag`` the id a PixlStash run submits, as SaveImage writes it.
     """
     info = PngInfo()
     if api is not None:
         info.add_text("prompt", json.dumps(api))
     if workflow is not None:
         info.add_text("workflow", json.dumps(workflow))
+    if run_tag is not None:
+        info.add_text(WORKFLOW_TAG_KEY, json.dumps(run_tag))
     if parameters is not None:
         info.add_text("parameters", parameters)
     path = directory / name
@@ -1628,6 +1631,26 @@ def test_a_comfyui_run_of_a_manual_workflow_is_filed_on_it(store, manual_flow):
     # Filed on the workflow, keyed exactly as an untagged picture of the graph.
     assert picture.workflow_structural_hash == structural_hash(api_graph(TXT2IMG))
     assert picture.workflow_instance_hash == instance_hash(api_graph(TXT2IMG))
+
+
+def test_a_watch_folder_import_of_an_api_format_run_is_filed_on_it(store):
+    """An API-format manual workflow has no editor graph to carry its id, so
+    the run submits it as a chunk of its own (#1688)."""
+    manual = create_manual_workflow(store.hub, "api", api_graph(TXT2IMG), "import")
+    try:
+        name = write_png(
+            Path(store.image_root),
+            "api-run.png",
+            api=api_graph(TXT2IMG),
+            run_tag=manual,
+        )
+        picture_id = add_picture(store, name)
+
+        run_extraction(store, [picture_id])
+
+        assert read_picture(store, picture_id).run_workflow_id == manual
+    finally:
+        delete_manual_workflow(store.hub, manual)
 
 
 def test_a_tag_this_hub_does_not_hold_files_nothing(store):

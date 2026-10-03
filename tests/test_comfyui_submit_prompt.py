@@ -70,3 +70,11 @@ class TestSubmitPayload:
     def test_client_id_is_forwarded(self, monkeypatch):
         captured = _capture_submit_payload(monkeypatch, client_id="tab-1")
         assert captured["payload"]["client_id"] == "tab-1"
+
+    def test_a_manual_run_embeds_its_tag_in_a_chunk_of_its_own(self, monkeypatch):
+        # Never the ``workflow`` chunk (#628): a key SaveImage writes alone.
+        manual = "manual:" + "a" * 32
+        captured = _capture_submit_payload(monkeypatch, run_workflow_id=manual)
+        assert captured["payload"]["extra_data"] == {
+            "extra_pnginfo": {"pixlstash_workflow_id": manual}
+        }

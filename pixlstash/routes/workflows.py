@@ -5378,6 +5378,12 @@ def create_router(server) -> APIRouter:
             # against: a replaced seed node is only safe because this writes
             # every input it inlined.
             seed_targets = run_service.run_seed_targets(graph, object_info)
+            # A manual workflow's run is filed on it.
+            run_workflow_id = (
+                group.workflow_id
+                if (group.workflow_id or "").startswith(MANUAL_PREFIX)
+                else None
+            )
             # A selection feeding an input is the run's repeat axis: one pass
             # per picture, each its own source and, with `stack`, its own
             # stack. Otherwise one pass, and the group's first picture is the
@@ -5414,7 +5420,10 @@ def create_router(server) -> APIRouter:
                     elif body.seed_mode == "new":
                         apply_seeds(instance, seed_targets, None)
                     submitted = _submit_comfyui_prompt(
-                        comfyui_url, instance, body.client_id
+                        comfyui_url,
+                        instance,
+                        body.client_id,
+                        run_workflow_id=run_workflow_id,
                     )
                     prompt_id = submitted.get("prompt_id") or submitted.get("id")
                     if prompt_id:
@@ -5433,10 +5442,7 @@ def create_router(server) -> APIRouter:
                                 "view_context": destination,
                                 "origin_generation": lease.generation,
                                 "origin_library_uuid": lease.library_uuid,
-                                # A manual workflow's run is filed on it.
-                                "run_workflow_id": group.workflow_id
-                                if (group.workflow_id or "").startswith(MANUAL_PREFIX)
-                                else None,
+                                "run_workflow_id": run_workflow_id,
                             },
                             daemon=True,
                         ).start()
