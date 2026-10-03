@@ -29,11 +29,7 @@
  */
 import { computed, ref, watch } from "vue";
 
-import {
-  addLibrary,
-  discardLibrary,
-  promoteLibrary,
-} from "../../api/libraries";
+import { addLibrary, discardLibrary } from "../../api/libraries";
 import {
   cancelFolderStructureRead,
   getFolderStructureReadStatus,
@@ -45,7 +41,6 @@ import {
   useLibrariesStore,
   useLibrarySwitchStore,
 } from "../../stores/useLibrariesStore";
-import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import FolderMappingChooseStep from "./FolderMappingChooseStep.vue";
 import FolderMappingTreeStep from "./FolderMappingTreeStep.vue";
@@ -91,8 +86,6 @@ const session = ref(0);
 // this is true the dialog must not be dismissable by Escape or a backdrop
 // click - see that component's `update:committing` for why.
 const committing = ref(false);
-// Mirrors `committing` for the other answer: start an empty library here.
-const promoting = ref(false);
 
 watch(
   () => props.open,
@@ -276,26 +269,6 @@ function onCommitStarted(commitTaskId) {
   });
 }
 
-async function startEmptyLibraryHere() {
-  // The answer that has to stay available whatever the folder holds. Without
-  // it, a folder of pictures the owner does not want indexed has no ending:
-  // closing the question gives the folder back and asks again.
-  const uuid = librariesStore.importingUuid;
-  if (!uuid || promoting.value) return;
-  promoting.value = true;
-  try {
-    await promoteLibrary(uuid);
-    mappingStore.clear();
-    // The library was closed and reopened under its permanent name, so this
-    // session is looking at a vault handle the server has replaced.
-    reloadPage();
-  } catch (error) {
-    buildError.value =
-      errorDetail(error) || "Could not start an empty library in that folder.";
-    promoting.value = false;
-  }
-}
-
 function close() {
   // A commit that has started cannot be cancelled (integration §20.2) and
   // keeps running server-side either way, so this must be a no-op while `committing` is
@@ -361,25 +334,6 @@ function onCommitted(result) {
       {{ buildError }}
     </p>
 
-    <!--
-      Always offered while a folder is waiting on this question, on every step.
-      A folder of pictures is offered an import; an owner who does not want one
-      needs a way to say so that is not "close", because closing gives the
-      folder back and asks again.
-    -->
-    <p v-if="librariesStore.importingUuid" class="mapping-wizard__empty-option">
-      <span>Not what you wanted?</span>
-      <AppButton
-        variant="secondary"
-        size="small"
-        :loading="promoting"
-        :disabled="committing"
-        @click="startEmptyLibraryHere"
-      >
-        Start an empty library here
-      </AppButton>
-    </p>
-
     <FolderMappingChooseStep
       v-if="step === 'choose'"
       :key="session"
@@ -422,15 +376,6 @@ function onCommitted(result) {
 </template>
 
 <style scoped>
-.mapping-wizard__empty-option {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-}
-
 .mapping-wizard__error {
   /* The mapping step's body is flush; the padding is the dialog's own. */
   margin: 0;

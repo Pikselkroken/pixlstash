@@ -119,25 +119,6 @@ export async function detachLibrary(uuid) {
 }
 
 /**
- * Finish a library whose first import has not run, without importing.
- *
- * "Start an empty library here": the temporary database is renamed onto
- * `vault.db` and the folder becomes a library holding no pictures. This answer
- * has to stay available whatever a folder contains - closing the question
- * discards, so without it a folder of pictures the owner does not want indexed
- * would be asked about forever.
- *
- * The library is closed and reopened under its new name, so every client is
- * told to reload. A library that already exists is refused (409).
- *
- * @param {string} uuid
- * @returns {Promise<Object>} the finished library, in the listing's shape.
- */
-export async function promoteLibrary(uuid) {
-  return unwrap(apiClient.post(`${LIBRARIES_URL}/${uuid}/promote`));
-}
-
-/**
  * Give a folder back: undo a first import the owner did not keep.
  *
  * Deletes the temporary database and the folders PixlStash made, drops the

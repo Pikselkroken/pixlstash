@@ -33,7 +33,6 @@ import {
   discardLibrary,
   inspectLibraryPath,
   listLibraries,
-  promoteLibrary,
   setActiveLibrary,
 } from "../../api/libraries";
 import {
@@ -52,7 +51,6 @@ vi.mock("../../api/libraries", () => ({
   addLibrary: vi.fn(),
   setActiveLibrary: vi.fn(),
   listLibraries: vi.fn(),
-  promoteLibrary: vi.fn(),
   discardLibrary: vi.fn(),
 }));
 
@@ -815,35 +813,5 @@ describe("a folder still waiting on the question", () => {
     await settle();
 
     expect(discardLibrary).not.toHaveBeenCalled();
-  });
-
-  it("offers starting an empty library there instead, on every step", async () => {
-    pending();
-    promoteLibrary.mockResolvedValue({
-      uuid: "pending-uuid",
-      name: "Generations",
-    });
-    const wrapper = mountWizard();
-
-    const start = button(wrapper, "Start an empty library here");
-    expect(start, "the answer that must always be available").toBeTruthy();
-    await start.trigger("click");
-    await settle();
-
-    expect(promoteLibrary).toHaveBeenCalledWith("pending-uuid");
-    expect(discardLibrary).not.toHaveBeenCalled();
-    expect(reloadPage).toHaveBeenCalled();
-  });
-
-  it("says so rather than reloading when the folder cannot be finished", async () => {
-    pending();
-    promoteLibrary.mockRejectedValue(new Error("disk full"));
-    const wrapper = mountWizard();
-
-    await button(wrapper, "Start an empty library here").trigger("click");
-    await settle();
-
-    expect(wrapper.find(".mapping-wizard__error").exists()).toBe(true);
-    expect(reloadPage).not.toHaveBeenCalled();
   });
 });
