@@ -462,6 +462,46 @@ describe("ImageOverlay zoom - snap stops", () => {
     expect(zoomLabel(wrapper)).toBe("50%");
     expect(mediaTransform(wrapper)).toEqual({ x: 0, y: 0, scale: 1 });
   });
+
+  it("ignores the second click of the grid double-click that opened it", async () => {
+    const wrapper = await openMeasured();
+    const canvas = wrapper.find(".overlay-canvas");
+    const pressCanvas = (detail) =>
+      canvas.element.dispatchEvent(
+        new MouseEvent("mousedown", { detail, bubbles: true }),
+      );
+    // The grid opened the lightbox on click 1; click 2 arrives counting 2,
+    // late enough (a slow double-click) to clear the 500 ms reveal guard.
+    const later = Date.now() + 1000;
+    const now = vi.spyOn(Date, "now").mockReturnValue(later);
+    pressCanvas(2);
+    await canvas.trigger("click");
+    await wrapper.find(".image-overlay").trigger("click");
+    now.mockRestore();
+    await canvas.trigger("dblclick", { clientX: 0, clientY: 0 });
+    expect(zoomLabel(wrapper)).toBe("50%");
+    expect(wrapper.find(".overlay-shell").classes()).not.toContain(
+      "chrome-hidden",
+    );
+    expect(wrapper.emitted("close")).toBeUndefined();
+    // A double-click made inside the lightbox still zooms.
+    pressCanvas(1);
+    pressCanvas(2);
+    await canvas.trigger("dblclick", { clientX: 0, clientY: 0 });
+    expect(zoomLabel(wrapper)).toBe("100%");
+  });
+
+  it("does not keep ignoring once a later press sends no mousedown", async () => {
+    const wrapper = await openMeasured();
+    const canvas = wrapper.find(".overlay-canvas");
+    canvas.element.dispatchEvent(
+      new MouseEvent("mousedown", { detail: 2, bubbles: true }),
+    );
+    // A pan's cancelled pointerdown suppresses the mousedown; dblclick fires.
+    canvas.element.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await canvas.trigger("dblclick", { clientX: 0, clientY: 0 });
+    expect(zoomLabel(wrapper)).toBe("100%");
+  });
 });
 
 describe("ImageOverlay zoom - pan", () => {
