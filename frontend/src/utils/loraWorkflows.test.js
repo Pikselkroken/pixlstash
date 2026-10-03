@@ -54,13 +54,15 @@ describe("fitWorkflows", () => {
         card("unread", { family: null }),
         card("edit", { type: "img2img" }),
         card("untyped", { type: null }),
+        card("wan", { type: "video" }),
+        card("wan-sdxl", { type: "video", family: "sdxl" }),
       ],
       LORA,
       [],
     );
-    expect(ids(match)).toEqual(["krea", "untyped"]);
+    expect(ids(match)).toEqual(["krea", "untyped", "wan"]);
     expect(ids(unknown)).toEqual(["unread"]);
-    expect(ids(clash)).toEqual(["sdxl"]);
+    expect(ids(clash)).toEqual(["sdxl", "wan-sdxl"]);
     expect(ids(needsPicture)).toEqual(["edit"]);
   });
 
