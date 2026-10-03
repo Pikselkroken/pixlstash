@@ -81,7 +81,7 @@
           <WorkflowStarChart
             v-if="ratingCounts"
             :counts="ratingCounts"
-            :sampled="Boolean(defaultRecipe?.sampled)"
+            :sampled="Boolean(defaultRecipe?.sampled) && !card.manual"
           />
         </p>
       </div>
@@ -601,16 +601,32 @@
               class="wftab-rule"
               aria-hidden="true"
             ></div>
-            <!-- More than three fixed rows fold away behind their count. -->
-            <details
-              v-if="fixedDefaults.length > FIXED_SHOWN"
-              class="wftab-disclose"
-              data-testid="wftab-fixed-group"
-            >
-              <summary class="wftab-sublabel">
-                Fixed <span class="num">· {{ fixedDefaults.length }}</span>
-              </summary>
-              <div class="wftab-rows">
+            <!-- The group is one element, label, rows and note, so "in the
+                 Fixed group" is containment rather than document order. -->
+            <div class="wftab-rows" data-testid="wftab-fixed-group">
+              <!-- More than three fixed rows fold away behind their count. -->
+              <details
+                v-if="fixedDefaults.length > FIXED_SHOWN"
+                class="wftab-disclose"
+              >
+                <summary class="wftab-sublabel">
+                  Fixed <span class="num">· {{ fixedDefaults.length }}</span>
+                </summary>
+                <div class="wftab-rows">
+                  <WorkflowDefaultRow
+                    v-for="row in fixedDefaults"
+                    :key="row.label"
+                    :row="row"
+                    :busy="busy === `default:${row.label}`"
+                    @toggle-pin="togglePin(row)"
+                    @reset="resetDefault(row)"
+                  />
+                </div>
+              </details>
+              <template v-else>
+                <p class="wftab-sublabel">
+                  Fixed <span class="num">· {{ fixedDefaults.length }}</span>
+                </p>
                 <WorkflowDefaultRow
                   v-for="row in fixedDefaults"
                   :key="row.label"
@@ -619,24 +635,11 @@
                   @toggle-pin="togglePin(row)"
                   @reset="resetDefault(row)"
                 />
-              </div>
-            </details>
-            <template v-else>
-              <p class="wftab-sublabel" data-testid="wftab-fixed-group">
-                Fixed <span class="num">· {{ fixedDefaults.length }}</span>
+              </template>
+              <p class="wftab-note wftab-quiet">
+                Fixed values are used by every run.
               </p>
-              <WorkflowDefaultRow
-                v-for="row in fixedDefaults"
-                :key="row.label"
-                :row="row"
-                :busy="busy === `default:${row.label}`"
-                @toggle-pin="togglePin(row)"
-                @reset="resetDefault(row)"
-              />
-            </template>
-            <p class="wftab-note wftab-quiet">
-              Fixed values are used by every run.
-            </p>
+            </div>
           </template>
         </template>
         <p
@@ -1939,12 +1942,19 @@ const defaults = computed(() => {
 const openedPins = ref(null);
 
 // The Run popup freed a parameter on this workflow: take its list, or the next
-// lock here would write the whole set from a stale copy.
+// lock here would write the whole set from a stale copy. Taking it also
+// retires any read still out, which may have been answered before the write
+// landed; with no detail yet, the read is asked again instead.
 watch(
   () => runDialog.pinsWritten,
   (written) => {
-    if (written && stillOn(written.workflowId) && detail.value) {
+    if (!written || !stillOn(written.workflowId)) return;
+    if (detail.value) {
+      detailRead += 1;
+      detailPending.value = false;
       detail.value = { ...detail.value, pins: written.pins };
+    } else {
+      loadDetail(written.workflowId);
     }
   },
 );

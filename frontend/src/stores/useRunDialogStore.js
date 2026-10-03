@@ -59,6 +59,11 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    * the freed parameter back.
    */
   const pinsWritten = ref(null);
+  /** Bumped on every session reset, so a pin write answered after one is dropped. */
+  let session = 0;
+  function sessionEpoch() {
+    return session;
+  }
 
   let runner = null;
   /**
@@ -114,6 +119,8 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   const unsubscribeSessionReset = onSessionReset(() => {
     close();
     context.value = {};
+    pinsWritten.value = null;
+    session += 1;
   });
   onScopeDispose(() => unsubscribeSessionReset());
 
@@ -122,6 +129,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     makeMore,
     context,
     pinsWritten,
+    sessionEpoch,
     hasRunner,
     openRun,
     openMakeMore,

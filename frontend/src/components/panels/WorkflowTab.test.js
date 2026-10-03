@@ -261,18 +261,11 @@ function lockOf(wrapper, name) {
   return rowNamed(wrapper, name).find("[data-testid='wfdef-lock']");
 }
 
-/** Whether the row called `name` is drawn under the Fixed group's label. */
+/** Whether the row called `name` is drawn inside the Fixed group. */
 function inFixedGroup(wrapper, name) {
   const group = wrapper.find("[data-testid='wftab-fixed-group']");
   if (!group.exists()) return false;
-  const row = rowNamed(wrapper, name).element;
-  return (
-    group.element.contains(row) ||
-    Boolean(
-      group.element.compareDocumentPosition(row) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    )
-  );
+  return group.element.contains(rowNamed(wrapper, name).element);
 }
 
 async function flush(wrapper) {
@@ -1301,6 +1294,19 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(chart.findAll("rect.wfstars-lo")).toHaveLength(0);
   });
 
+  it("claims no source for a manual workflow, whose one sample is its own document", async () => {
+    const own = detail({ card: { manual: true } });
+    own.card.default_recipe.sampled = 1;
+    getWorkflowCard.mockResolvedValue(own);
+    const { wrapper } = await mountWith(
+      [KEY],
+      [card({ manual: true, rating_counts: [0, 0, 0, 3, 1] })],
+    );
+    const chart = wrapper.find("[data-testid='wftab-stars']");
+    expect(chart.attributes("aria-label")).not.toContain("defaults");
+    expect(chart.findAll("rect.wfstars-lo")).toHaveLength(0);
+  });
+
   it("inks every bar when none is rated 4★ yet, and draws no chart when nothing is rated", async () => {
     const { wrapper } = await mountWith([KEY], [card({ rating_counts: [1, 3, 0, 0, 0] })]);
     const chart = wrapper.find("[data-testid='wftab-stars']");
@@ -1814,7 +1820,7 @@ describe("a default's provenance and reset", () => {
       detail({ card: { defaults: [STEPS, ...fixed] } }),
     );
     const { wrapper } = await mountWith([KEY]);
-    const group = wrapper.find("details[data-testid='wftab-fixed-group']");
+    const group = wrapper.find("[data-testid='wftab-fixed-group'] details");
     expect(group.find("summary").text().replace(/\s+/g, " ")).toBe("Fixed · 4");
     expect(rowNamed(wrapper, "seed").element.closest("details")).toBe(group.element);
     expect(rowNamed(wrapper, "steps").element.closest("details")).toBeNull();
@@ -1832,6 +1838,28 @@ describe("a default's provenance and reset", () => {
       gone,
       { slot_label: "slot-a", input_name: "sampler_name" },
     ]);
+  });
+
+  it("reads the workflow again when the Run popup writes while its read is out", async () => {
+    // The read in flight may have been answered before the write landed, so
+    // its pins are the old ones and must not win.
+    let answerOld;
+    getWorkflowCard.mockReturnValueOnce(
+      new Promise((resolve) => (answerOld = resolve)),
+    );
+    const freed = [
+      { slot_label: "slot-a", input_name: "steps" },
+      { slot_label: "slot-a", input_name: "sampler_name" },
+    ];
+    getWorkflowCard.mockResolvedValueOnce(
+      detail({ card: { defaults: [STEPS, SAMPLER] }, pins: freed }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    useRunDialogStore().pinsWritten = { workflowId: KEY, pins: freed };
+    await flush(wrapper);
+    answerOld(detail({ card: { defaults: [STEPS, SAMPLER] }, pins: null }));
+    await flush(wrapper);
+    expect(lockOf(wrapper, "sampler_name").attributes("aria-pressed")).toBe("false");
   });
 
   it("keeps a toggled row where it is until the workflow is opened again", async () => {

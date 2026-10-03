@@ -70,6 +70,7 @@ vi.mock("vuetify/components", async () => {
 
 import RunDialog from "./RunDialog.vue";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { notifySessionReset } from "../../utils/apiClient";
 
 const KEY = `auto:${"a".repeat(64)}`;
 const OTHER = `auto:${"b".repeat(64)}`;
@@ -1020,6 +1021,28 @@ describe("a workflow's fixed parameters", () => {
     answer();
     await freeing;
     expect(useRunDialogStore().pinsWritten).toEqual({ workflowId: KEY, pins: [denoise] });
+  });
+
+  it("drops a pin write answered after the session was reset", async () => {
+    withPins([]);
+    let answer;
+    setWorkflowPins.mockImplementation(
+      (_key, pins) => new Promise((resolve) => (answer = () => resolve({ pins }))),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const field = wrapper.vm.fixedFields.find((f) => f.input_name === "denoise");
+    const freeing = wrapper.vm.freeField(field);
+    notifySessionReset("logout");
+    answer();
+    await freeing;
+    expect(useRunDialogStore().pinsWritten).toBeNull();
+  });
+
+  it("forgets the last pin write on a session reset", async () => {
+    const store = useRunDialogStore();
+    store.pinsWritten = { workflowId: KEY, pins: [] };
+    notifySessionReset("logout");
+    expect(store.pinsWritten).toBeNull();
   });
 
   it("keeps a reset on a fixed row that carries a value kept from another workflow", async () => {

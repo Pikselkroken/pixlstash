@@ -47,8 +47,9 @@ const props = defineProps({
   counts: { type: Array, required: true },
   /**
    * Whether the default recipe was sampled from the pictures at all. A manual
-   * workflow's is its document's own values, so the chart then claims no
-   * source and inks every bar alike.
+   * workflow's is its document's own values (the server still counts that as
+   * one sample, so the parent excludes manual cards), and the chart then
+   * claims no source and inks every bar alike.
    */
   sampled: { type: Boolean, default: false },
 });

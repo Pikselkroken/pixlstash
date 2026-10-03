@@ -1426,8 +1426,12 @@ async function freeField(field) {
   }));
   freeing.value = address(field);
   freeError.value = "";
+  const epoch = runDialog.sessionEpoch();
   try {
     const body = await setWorkflowPins(key, next);
+    // Answered for a session that has since been reset: it describes a
+    // library this one may not see, so none of it is kept.
+    if (epoch !== runDialog.sessionEpoch()) return;
     const written = body?.pins ?? next;
     // Told even when the picker has moved on: the write landed on `key`, and
     // the Workflow tab writes whole lists from its own copy.
