@@ -60,7 +60,6 @@ import RestoreConfirmDialog from "./components/widgets/RestoreConfirmDialog.vue"
 import TelemetryConsentDialog from "./components/dialogs/TelemetryConsentDialog.vue";
 import ImageGrid from "./components/views/ImageGrid.vue";
 import StatsSidebar from "./components/panels/StatsSidebar.vue";
-import ThumbnailUpgradeBanner from "./components/panels/ThumbnailUpgradeBanner.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
@@ -664,15 +663,6 @@ defineExpose({
         :check-for-updates="userPrefsStore.checkForUpdates"
         :active-library-name="activeLibraryName"
         @open-libraries="openSettingsDialog('libraries')"
-      />
-      <!-- App-level status strip: spans the whole shell above BOTH rails and the
-           grid. Thumbnail regeneration repaints grid tiles, sidebar thumbnails
-           and the Tasks row alike, so it is not a property of the grid column;
-           mounting it inside `.main-area` used to push the stats rail down while
-           leaving the left rail alone. -->
-      <ThumbnailUpgradeBanner
-        :inert="librarySwitchOverlayOpen"
-        @view-progress="sidebarStore.showTasksTab()"
       />
       <div
         class="file-manager"
