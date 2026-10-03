@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { describe, it } from 'node:test';
 
 import { inspectFolder, readVaultCounts } from '../src/setup/InspectFolder';
@@ -68,6 +68,20 @@ describe('the startup screen’s verdict on a folder', () => {
     const result = await inspectFolder(dir);
 
     assert.equal(result.pictureCount, 3, 'beach.jpg, sunset.webp and 2014/tmp/kept.jpg');
+  });
+
+  it('skips the root’s own folders however the root path is written', async () => {
+    // The root is compared with itself (it is the queue's first entry), so a
+    // trailing separator or a relative spelling cannot let `tmp` back in.
+    const dir = tempDir();
+    writeFileSync(join(dir, 'a.jpg'), Buffer.alloc(10));
+    mkdirSync(join(dir, 'tmp'));
+    writeFileSync(join(dir, 'tmp', 'face.png'), Buffer.alloc(10));
+
+    for (const spelling of [`${dir}${sep}`, relative(process.cwd(), dir)]) {
+      const result = await inspectFolder(spelling);
+      assert.equal(result.pictureCount, 1, spelling);
+    }
   });
 
   it('asks the library what it holds, because a vault proves only that one exists', async () => {
