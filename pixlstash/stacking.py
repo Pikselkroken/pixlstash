@@ -38,7 +38,21 @@ def build_workflow_filename_prefix(base_prefix: str, workflow_id: str) -> str:
     :func:`parse_workflow_tag_from_filename`. Only the id's hex rides along.
     """
     tag = WORKFLOW_TAG_PREFIX + workflow_id.removeprefix(MANUAL_PREFIX)
-    return STACK_TAG_SEPARATOR.join(part for part in (base_prefix, tag) if part)
+    base = strip_workflow_tags(base_prefix)
+    return STACK_TAG_SEPARATOR.join(part for part in (base, tag) if part)
+
+
+def strip_workflow_tags(prefix: str) -> str:
+    """*prefix* without any workflow tag an earlier run left in it.
+
+    A graph replayed from a run's output carries that run's tagged prefix, and
+    the tag must name the workflow running now, or nothing.
+    """
+    return STACK_TAG_SEPARATOR.join(
+        part
+        for part in prefix.split(STACK_TAG_SEPARATOR)
+        if not _WORKFLOW_TAG_RE.match(part)
+    )
 
 
 def parse_workflow_tag_from_filename(filename: str) -> Optional[str]:
@@ -49,10 +63,13 @@ def parse_workflow_tag_from_filename(filename: str) -> Optional[str]:
     """
     stem = os.path.splitext(os.path.basename(filename or ""))[0]
     for part in stem.split(STACK_TAG_SEPARATOR):
-        match = re.match(rf"{WORKFLOW_TAG_PREFIX}([0-9a-f]{{32}})(?![0-9a-f])", part)
+        match = _WORKFLOW_TAG_RE.match(part)
         if match:
             return MANUAL_PREFIX + match.group(1)
     return None
+
+
+_WORKFLOW_TAG_RE = re.compile(rf"{WORKFLOW_TAG_PREFIX}([0-9a-f]{{32}})(?![0-9a-f])")
 
 
 def parse_stack_tags_from_filename(

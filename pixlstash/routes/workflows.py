@@ -212,6 +212,7 @@ from pixlstash.utils.comfyui_utilities import (
 from pixlstash.stacking import (
     build_stack_filename_prefix,
     build_workflow_filename_prefix,
+    strip_workflow_tags,
 )
 from pixlstash.utils.adapter_header import (
     FILE_CHECKPOINT,
@@ -5405,8 +5406,7 @@ def create_router(server) -> APIRouter:
                 filled = deepcopy(graph)
                 if stack_id:
                     _tag_for_stack(filled, stack_id, source_id)
-                if run_workflow_id:
-                    _tag_for_workflow(filled, run_workflow_id)
+                _tag_for_workflow(filled, run_workflow_id)
                 for feed in feeds:
                     picture_id = (
                         feed.picture_id if feed.picture_id is not None else selected
@@ -5475,14 +5475,25 @@ def create_router(server) -> APIRouter:
                 source_id,
             )
 
-    def _tag_for_workflow(graph: dict, workflow_id: str) -> None:
+    def _tag_for_workflow(graph: dict, workflow_id: str | None) -> None:
         """Tag the save node so its outputs are filed on the manual workflow
         that ran however they arrive (#1688), as ``_tag_for_stack`` places them.
+
+        Every run first drops a tag the graph inherited (one replayed from an
+        earlier run's output carries it), so an automatic run's outputs, with
+        *workflow_id* ``None``, are never filed on someone else's workflow.
 
         Not ``extra_pnginfo``: a run that sets it without a ``workflow`` key
         breaks custom nodes that read ``extra_pnginfo["workflow"]`` whenever it
         is present, and that key must stay empty (#628).
         """
+        if workflow_id is None:
+            for node in graph.values():
+                if isinstance(node, dict) and node.get("class_type") == "SaveImage":
+                    own = (node.get("inputs") or {}).get("filename_prefix")
+                    if isinstance(own, str):
+                        node["inputs"]["filename_prefix"] = strip_workflow_tags(own)
+            return
         if not _tag_save_nodes(
             graph, lambda own: build_workflow_filename_prefix(own, workflow_id)
         ):
