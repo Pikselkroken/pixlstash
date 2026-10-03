@@ -226,6 +226,37 @@ afterEach(() => {
   while (mounted.length) mounted.pop().unmount();
 });
 
+describe("Ctrl+A", () => {
+  it("selects every card from the empty background, with nothing selected", async () => {
+    const wrapper = await grid(1008);
+    const store = useWorkflowsStore();
+    expect(store.selectedKeys).toEqual([]);
+    // A click on the background focuses the scroller, not `<body>`, so the
+    // key arrives with the scroller itself as its target.
+    const scroller = wrapper.find(".wfv-scroll");
+    scroller.element.focus();
+    expect(document.activeElement).toBe(scroller.element);
+    await scroller.trigger("keydown", { key: "a", ctrlKey: true });
+    expect(store.selectedKeys).toHaveLength(6);
+  });
+
+  it("the background takes no key that acts on the unseen cursor card", async () => {
+    const wrapper = await grid(1008);
+    const store = useWorkflowsStore();
+    const scroller = wrapper.find(".wfv-scroll");
+    await scroller.trigger("keydown", { key: " " });
+    await scroller.trigger("keydown", { key: "ArrowRight" });
+    expect(store.selectedKeys).toEqual([]);
+    expect(cursorKey(wrapper)).toBe("a");
+  });
+
+  it("a key on a row is handled once, not again by the scroller", async () => {
+    const wrapper = await grid(1008);
+    await wrapper.find(".wfv-row").trigger("keydown", { key: "ArrowRight" });
+    expect(cursorKey(wrapper)).toBe("b");
+  });
+});
+
 describe("Escape", () => {
   it("clears the selection", async () => {
     const wrapper = await grid(1008);

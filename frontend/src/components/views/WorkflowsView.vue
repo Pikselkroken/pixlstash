@@ -245,12 +245,18 @@
     <!-- The scroller carries the padding so the grid below is the bare
          track: `measure()` reads the grid's `clientWidth`, which INCLUDES its
          own padding, and a padded grid would be measured 32px wider than the
-         space the columns actually have. -->
+         space the columns actually have.
+         `tabindex="-1"` so a click on the background (or a gap in the grid)
+         lands focus here rather than on `<body>`, where Ctrl+A would select
+         the page's text instead of the cards. `.self` keeps keys from the
+         rows (already handled by the grid) and from the recipes tab out. -->
     <div
       v-else
       ref="scrollEl"
       class="wfv-scroll"
       :class="{ 'wfv-scroll--edge-tab': !sidebarStore.workflowInspectorOpen }"
+      tabindex="-1"
+      @keydown.self="onBackgroundKeyDown"
     >
       <!-- One `treegrid` and one tab stop: the cursor roves with the arrow
            keys and the focused row is the only one at `tabindex="0"`. -->
@@ -991,6 +997,17 @@ function onKeyDown(event) {
   }
 }
 
+/**
+ * Keys pressed with the background focused. Only the two that do not act on
+ * the cursor card: from here the cursor is not visible, so Space, Enter, F2,
+ * the arrows and the menu keys would hit a card the reader cannot see.
+ */
+function onBackgroundKeyDown(event) {
+  const selectAll =
+    (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a";
+  if (selectAll || event.key === "Escape") onKeyDown(event);
+}
+
 /** One of the cursor card's own `tabindex="-1"` buttons. */
 function activeCardButton(selector) {
   return rowElement(flatRows.value[cursorIndex.value])?.querySelector(selector);
@@ -1615,6 +1632,12 @@ async function filesChosen(event) {
      vertical one the reader asked for. */
   scrollbar-gutter: stable;
   padding: var(--space-3);
+}
+
+/* Focused only by a background click, as the target for Ctrl+A; a ring
+   around the whole pane would read as one giant control. */
+.wfv-scroll:focus-visible {
+  outline: none;
 }
 
 /* The closed inspector's edge tab (34px) floats over this edge: the cards
