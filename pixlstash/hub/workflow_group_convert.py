@@ -205,6 +205,9 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
     # workflow, as ``workflow_index`` reads it.
     core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
     workflow_of: dict[str, str] = {}
+    # The core each automatic id is built on: the cached one, else the v1 id's
+    # own (`auto:<v1 core>`), or a file-only card's topology hash.
+    core_of_workflow: dict[str, str] = {}
     for card in cards:
         workflow_id = placement.get(card.topology_hash) or _auto_id(
             hub, card, core_of.get(card.topology_hash)
@@ -218,6 +221,10 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
             )
             continue
         workflow_of[card.workflow_key] = workflow_id
+        core_of_workflow.setdefault(
+            workflow_id,
+            core_of.get(card.topology_hash) or workflow_id[len(AUTO_STACK_PREFIX) :],
+        )
 
     for workflow_id in sorted(set(placement.values())):
         conn.execute(
@@ -278,7 +285,15 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
         # rows behind while the others still convert.
         conn.execute("SAVEPOINT convert_workflow")
         try:
-            _convert_workflow(conn, hub, workflow_id, group, base, labels)
+            _convert_workflow(
+                conn,
+                hub,
+                workflow_id,
+                group,
+                base,
+                labels,
+                core_of_workflow[workflow_id],
+            )
             conn.execute("RELEASE convert_workflow")
         except Exception as exc:
             conn.execute("ROLLBACK TO convert_workflow")
@@ -679,6 +694,7 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
     heirs_of: dict[str, Counter] = {}  # old id -> {new id: variants}
     topologies_of: dict[str, set[str]] = {}
     new_of_card: dict[str, str] = {}
+    core_of_heir: dict[str, str] = {}
     stage_slots_of: dict[str, dict[str, str]] = {}
     labels_of: dict[str, dict[str, Optional[str]]] = {}
     shelf: list = []  # one shelf index for the whole step
@@ -723,13 +739,14 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
                 (_CORE_RULE_V1_UNMOVED, topology_hash, _CORE_RULE_V1),
             )
             continue
-        old_id, labels, stage_slots, card_heirs = moved
+        old_id, labels, stage_slots, card_heirs, new_core = moved
         stage_slots_of[topology_hash] = stage_slots
         labels_of[topology_hash] = labels
         topologies_of.setdefault(old_id, set()).add(topology_hash)
         heirs = heirs_of.setdefault(old_id, Counter())
         for workflow_key, new_id, variants in card_heirs:
             new_of_card[workflow_key] = new_id
+            core_of_heir[new_id] = new_core
             heirs[new_id] += variants
 
     bases = {w.workflow_id: w.base_topology for w in workflow_index(hub)}
@@ -761,6 +778,7 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
                 old_id,
                 heirs,
                 new_of_card,
+                core_of_heir,
                 labels,
                 stage_slots_of[base] if base in topologies_of[old_id] else {},
             )
@@ -813,11 +831,11 @@ def _rederive_topology(
     cards: list[Card],
     v1_rows: dict[str, str],
     shelf: list,
-) -> Optional[tuple[str, dict, dict, list[tuple[str, str, int]]]]:
+) -> Optional[tuple[str, dict, dict, list[tuple[str, str, int]], str]]:
     """Write one topology's v2 rows; ``None`` when no stored graph reduces.
 
     Returns ``(old workflow id, label map, stage slots, [(card, new id,
-    variants)])`` for :func:`rederive_cores` to retire the old id with.
+    variants)], v2 core)`` for :func:`rederive_cores` to retire the old id with.
     """
     documents = {c.workflow_key: card_document(hub, c) for c in cards}
     found = next(filter(None, documents.values()), None)
@@ -882,7 +900,7 @@ def _rederive_topology(
             "VALUES (?, ?, ?, ?)",
             (topology_hash, old_id, new_id, json.dumps(labels, sort_keys=True)),
         )
-    return old_id, labels, stage_slots, card_heirs
+    return old_id, labels, stage_slots, card_heirs, new_core
 
 
 def _retire_workflow(
@@ -890,12 +908,13 @@ def _retire_workflow(
     old_id: str,
     heirs: Counter,
     new_of_card: dict[str, str],
+    core_of_heir: dict[str, str],
     labels: dict[str, Optional[str]],
     stage_slots: dict[str, str],
 ) -> None:
     """Hand a retired automatic workflow's owner state to its successors.
 
-    *heirs* is ``{new id: variants}``. The owner rows are rewritten through
+    *heirs* is ``{new id: variants}``; *core_of_heir* gives each heir's core. The owner rows are rewritten through
     *labels*, **copied** to every heir but the primary (the most variants),
     and merged onto the primary, never dropped (:func:`_carry_group_state`).
     A card's successor row follows its own variants (*new_of_card*); the
@@ -919,7 +938,7 @@ def _retire_workflow(
             conn.execute(
                 "INSERT OR IGNORE INTO workflow_group "
                 "(workflow_id, kind, core_hash) VALUES (?, 'auto', ?)",
-                (heir, heir[len(AUTO_STACK_PREFIX) :]),
+                (heir, core_of_heir[heir]),
             )
     for (workflow_key,) in conn.execute(
         "SELECT workflow_key FROM workflow_key_successor WHERE workflow_id = ?",
@@ -1062,7 +1081,8 @@ def reidentify_families(hub) -> dict:
             if not hub.fetchone(
                 still_in, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, *parts[old_id])
             ):
-                _retire_workflow(conn, old_id, heirs, new_of_card, {}, {})
+                core = {heir: parts[old_id][1] for heir in heirs}
+                _retire_workflow(conn, old_id, heirs, new_of_card, core, {}, {})
                 renamed[old_id] = _primary(heirs)
             else:
                 # The workflow lives on, so the retired-id row cannot carry a
@@ -1547,8 +1567,12 @@ def _convert_workflow(
     group: list[Card],
     base_topology: str,
     labels: _LabelCache,
+    core: str,
 ) -> None:
-    """Write one workflow's attributes, defaults, pins and inputs. Cover first."""
+    """Write one workflow's attributes, defaults, pins and inputs. Cover first.
+
+    *core* is the core hash an automatic *workflow_id* is built on.
+    """
     cover = group[0]
     keys = [card.workflow_key for card in group]
     attrs = {
@@ -1701,7 +1725,7 @@ def _convert_workflow(
         conn.execute(
             "INSERT OR IGNORE INTO workflow_group (workflow_id, kind, core_hash) "
             "VALUES (?, 'auto', ?)",
-            (workflow_id, workflow_id[len(AUTO_STACK_PREFIX) :]),
+            (workflow_id, core),
         )
     logger.info(
         "Converted %d card(s) over %d topologies to workflow %s (cover %s, %s): %s.",
