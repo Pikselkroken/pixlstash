@@ -284,6 +284,26 @@ def manual_workflow_ids(hub: HubDatabase) -> list[str]:
     ]
 
 
+def adopted_file_cards(hub: HubDatabase) -> set[str]:
+    """Every card whose files were ALL made live manual workflows (#1720).
+
+    Hub data step 7 leaves the ``workflow_file`` rows it adopts in place, so
+    such a card still reads as an automatic workflow beside the manual one
+    of the same name. A file is adopted while a ``file`` origin row names it
+    and the manual workflow that row points at still exists.
+    """
+    return {
+        row[0]
+        for row in hub.fetchall(
+            "SELECT f.workflow_key FROM workflow_file f "
+            "LEFT JOIN workflow_origin o ON o.origin = 'file' "
+            "AND o.remote_path = f.workflow_name AND o.dismissed = 0 "
+            "AND o.workflow_name IN (SELECT workflow_id FROM workflow_document) "
+            "GROUP BY f.workflow_key HAVING MIN(o.workflow_name IS NOT NULL) = 1"
+        )
+    }
+
+
 def is_manual_workflow(hub: HubDatabase, workflow_id: str) -> bool:
     """Whether this hub holds the manual workflow *workflow_id*."""
     return (
