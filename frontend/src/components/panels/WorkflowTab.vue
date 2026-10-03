@@ -1033,9 +1033,8 @@ const recipeModels = computed(
  * same file where there is one, for its shelf name and precision, else the
  * file without its folders.
  *
- * ponytail: matched by stem prefix, because the card's `name` has its folder,
- * extension and quant postfix stripped; a shared address on both would make
- * this exact.
+ * Matched by the file the slot recorded, never by a derived name: two quant
+ * builds derive to one name, and a prefix can name an unrelated slot.
  */
 /**
  * A default-recipe model's `kind` is the model-fix kind (`checkpoint`, `vae`,
@@ -1048,17 +1047,22 @@ const RECIPE_KIND_SLOTS = {
 };
 
 function recipeModelLabel(model) {
-  const stem = fileName(model.filename).toLowerCase();
+  // A shelf loader's `filename` is a row id, never shown: `shelf_filename` is
+  // its file, and null where the shelf row names none. Every other loader's
+  // `shelf_filename` is null too, so the address is what tells them apart.
+  const file = String(model.address ?? "").endsWith("/checkpoint_id")
+    ? model.shelf_filename
+    : model.filename;
   const kinds = RECIPE_KIND_SLOTS[model.kind] ?? [model.kind];
   const slot = (card.value?.models ?? []).find(
     (entry) =>
       kinds.includes(entry.kind) &&
-      entry.name &&
-      stem.startsWith(String(entry.name).toLowerCase()),
+      modelDisplayName(entry) &&
+      entry.filename &&
+      sameFile(entry.filename, model.filename),
   );
-  return slot
-    ? withQuant(modelDisplayName(slot), slot)
-    : fileName(model.filename);
+  if (slot) return withQuant(modelDisplayName(slot), slot);
+  return file ? fileName(file) : "Unnamed shelf model";
 }
 
 // The base models, as the card's own row picks them: a Flux or SD3 graph has

@@ -1754,6 +1754,7 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
             # precision off either - and nothing is what it serves.
             "quant": None,
             "slot_label": lora_label,
+            "filename": None,
         }
     ]
 
@@ -2045,6 +2046,58 @@ def test_a_card_names_itself_without_the_precision(workflow_env):
     assert card["models"][0]["name"] == _SHELF_DERIVED
     assert card["models"][0]["quant"] == "fp8_e4m3"
     assert card["name"] == "realvisxl: Text to Image"
+
+
+def test_a_shelf_loader_slot_is_named_by_its_file_not_its_id(workflow_env):
+    """A `checkpoint_id` holds a shelf row id, never a name (#1721).
+
+    The slot serves the shelf file's derived name beside the shelf title, and
+    an id the shelf no longer holds says so rather than reading as a model
+    called "75": its name is null, the forgotten-model state.
+    """
+    hub = workflow_env.server.hub
+    model_id = hub.fetchone(
+        "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )["id"]
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_asset SET widget_name = 'checkpoint_id', "
+            "normalized_filename = ? WHERE normalized_filename = ?",
+            (str(model_id), _SHELF_FILENAME),
+        )
+        conn.execute(
+            "UPDATE workflow_topology_core SET slots = replace(slots, "
+            '\'"widget": "ckpt_name"\', \'"widget": "checkpoint_id"\') '
+            "WHERE topology_hash = ?",
+            (BUSY_TOPOLOGY,),
+        )
+
+    checkpoint = _by_key(_cards(workflow_env.owner))[BUSY_WF]["models"][0]
+    assert (checkpoint["kind"], checkpoint["name"], checkpoint["title"]) == (
+        "checkpoint",
+        _SHELF_DERIVED,
+        _SHELF_TITLE,
+    )
+    # The slot keeps the value its recipe recorded, which is what the default
+    # recipe's `filename` matches it by.
+    assert checkpoint["filename"] == str(model_id)
+    # The variant keeps the id it recorded, and says which file it names.
+    assets = [
+        asset
+        for variant in _detail(workflow_env.owner, BUSY_WF)["variants"]
+        for asset in variant["assets"]
+        if asset["widget"] == "checkpoint_id"
+    ]
+    assert assets
+    assert {(a["name"], a["shelf_filename"]) for a in assets} == {
+        (str(model_id), _SHELF_FILENAME)
+    }
+
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
+    gone = _by_key(_cards(workflow_env.owner))[BUSY_WF]["models"][0]
+    assert gone["name"] is None
+    assert gone["title"] is None
 
 
 def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
@@ -2373,6 +2426,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             # No label: a slot label is an address inside a stored topology,
             # and this card has none to address.
             "slot_label": None,
+            "filename": _SHELF_FILENAME,
         }
     ]
     # The family is the one the model shelf serves for the same file: a client
@@ -2401,6 +2455,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "kind": "lora",
             "quant": None,
             "slot_label": None,
+            "filename": "add_detail.safetensors",
         }
     ]
 

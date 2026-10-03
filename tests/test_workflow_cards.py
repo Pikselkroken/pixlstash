@@ -1499,6 +1499,35 @@ def test_the_default_recipe_is_the_modal_checkpoint_and_the_majority_loras(
     assert recipe.stages == {"face_detailer": False}
 
 
+def test_a_shelf_loader_s_default_model_names_the_file_its_id_names(hub, monkeypatch):
+    """`filename` stays the id a run writes back; `shelf_filename` is the file
+    (#1721), and an id the shelf lost says so rather than being a number."""
+    model_id = _shelf_model(hub, "flux-2-klein-9b.safetensors", "Flux.2", "f" * 64)
+    graph = _graph()
+    graph["1"] = _node("PixlStashCheckpointLoader", checkpoint_id=str(model_id))
+    runs = [record_api_graph(hub, graph, library_uuid="test-library")]
+
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    (model,) = [m for m in recipe.models if m.address.endswith("/checkpoint_id")]
+    assert (model.filename, model.shelf_filename) == (
+        str(model_id),
+        "flux-2-klein-9b.safetensors",
+    )
+
+    # Still on the shelf with no file to name: not "gone".
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET filename = NULL WHERE id = ?", (model_id,))
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    (model,) = [m for m in recipe.models if m.address.endswith("/checkpoint_id")]
+    assert model.shelf_filename is None
+
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    (model,) = [m for m in recipe.models if m.address.endswith("/checkpoint_id")]
+    assert model.shelf_filename == workflow_card_service.SHELF_MODEL_GONE
+
+
 def test_exactly_half_is_not_a_majority(hub, monkeypatch):
     runs = [
         _file_run(hub, loras=("x.safetensors",)),

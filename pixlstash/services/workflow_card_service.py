@@ -63,6 +63,7 @@ from pixlstash.services.model_shelf_service import (
     base_model_family,
 )
 from pixlstash.services.workflow_hash import (
+    SHELF_ID_FIELD,
     WorkflowGraphError,
     asset_reference,
     normalized_filename,
@@ -215,6 +216,10 @@ class SlotModel:
     # file.
     sha256: Optional[str] = None
     base_model_family: Optional[str] = None
+    # The value the recipe recorded, as ``default_recipe.models[].filename``
+    # spells it (a shelf loader's id included), so a client can tell which
+    # slot a recipe model is by identity rather than by a derived name.
+    filename: Optional[str] = None
 
 
 @dataclass
@@ -632,6 +637,15 @@ class ShelfMark:
     quant: Optional[str] = None
     sha256: Optional[str] = None
     base_model_family: Optional[str] = None
+    # The shelf row's own file, which is what a shelf loader's id names.
+    filename: Optional[str] = None
+
+
+# What a default recipe's shelf loader shows when its id names no shelf row any
+# more (the model was forgotten or removed): a bare number would read as a
+# model called "75". A card slot serves a null name instead, which every client
+# already reads as a forgotten model.
+SHELF_MODEL_GONE = "(model no longer on the shelf)"
 
 
 def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
@@ -681,7 +695,7 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
         placeholders = ",".join("?" * len(batch))
         for row in hub.fetchall(
             "SELECT id, icon_sha256, base_model, base_model_canonical, "
-            "quant, sha256 "
+            "quant, sha256, filename "
             f"FROM model WHERE id IN ({placeholders})",
             tuple(batch),
         ):
@@ -693,12 +707,13 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
                     canonical_quant(row["quant"]),
                     row["sha256"],
                     base_model_family(row),
+                    row["filename"],
                 )
     marks = {}
     for value, models in candidates.items():
         claimed = {titles.get(model_id) for model_id in models}
         title = claimed.pop() if len(claimed) == 1 and None not in claimed else None
-        marks[value] = ShelfMark(title, *pictures.get(value, (None,) * 6))
+        marks[value] = ShelfMark(title, *pictures.get(value, (None,) * 7))
     return marks
 
 
@@ -897,12 +912,16 @@ def _describe_slots(
                 )
             else:
                 name = next_name(slot)
+                filename = _slot_filename(widget, name, marks_by_name)
                 figure.models.append(
                     SlotModel(
-                        name=_derived(name),
+                        name=_derived(filename),
                         kind=slot_kind(widget) if widget else "model",
                         label=str(slot.get("label") or "") or None,
-                        **_mark_fields(marks_by_name.get((name or "").lower()), name),
+                        filename=name,
+                        **_mark_fields(
+                            marks_by_name.get((name or "").lower()), filename
+                        ),
                     )
                 )
 
@@ -912,18 +931,53 @@ def _describe_slots(
         # document by widget, not by topology. A LoRA here is named: it is in
         # the document, and there is no recipe to fill it.
         for widget, filename in recovered.get(card.workflow_key, ()):
-            fields = _mark_fields(marks_by_name.get(filename.lower()), filename)
-            name = _derived(filename)
+            shown = _slot_filename(widget, filename, marks_by_name)
+            fields = _mark_fields(marks_by_name.get(filename.lower()), shown)
+            name = _derived(shown)
             if widget == "lora_name":
-                figure.loras.append(SlotModel(name=name, kind="lora", **fields))
+                figure.loras.append(
+                    SlotModel(name=name, kind="lora", filename=filename, **fields)
+                )
             else:
                 figure.models.append(
                     SlotModel(
                         name=name,
                         kind=slot_kind(widget) if widget else "model",
+                        filename=filename,
                         **fields,
                     )
                 )
+
+
+def _slot_filename(
+    widget: str, name: Optional[str], marks: dict[str, ShelfMark]
+) -> Optional[str]:
+    """*name* as a filename: a shelf loader's id becomes the shelf row's file.
+
+    ``checkpoint_id`` holds a row id (:data:`SHELF_ID_FIELD`), which is a
+    number and not a name, so every reader of ``models[].name`` would show
+    ``75``. An id the shelf no longer holds is ``None``, the forgotten-model
+    state, so the missing-checkpoint signals still fire. The shelf lookup
+    itself stays keyed on the raw id.
+    """
+    if widget != SHELF_ID_FIELD or not name:
+        return name
+    mark = marks.get(name.lower())
+    return mark.filename if mark else None
+
+
+def shelf_filenames(hub: HubDatabase, ids: list[str]) -> dict[str, Optional[str]]:
+    """``{shelf id: the file it names}`` for a shelf loader's values.
+
+    :data:`SHELF_MODEL_GONE` where the shelf holds no such row, and ``None``
+    where it holds one but cannot name a single file for it: that model is
+    still on the shelf.
+    """
+    marks = model_marks(hub, ids)
+    return {
+        value: marks[value].filename if value in marks else SHELF_MODEL_GONE
+        for value in ids
+    }
 
 
 def _derived(name: Optional[str]) -> Optional[str]:
@@ -1136,13 +1190,17 @@ class DefaultModel:
 
     ``kind`` is the shelf ``file_kind`` the loader takes (``model_fix_kind``).
     ``filename`` is the normalized name the hub holds (``None`` for one whose
-    name was forgotten); a run writes it in ComfyUI's spelling.
+    name was forgotten); a run writes it in ComfyUI's spelling. On a shelf
+    loader that is a row id, so ``shelf_filename`` is the file it names
+    (:data:`SHELF_MODEL_GONE` once the shelf no longer holds it) for a reader
+    that shows the model rather than writing it back.
     """
 
     address: str
     kind: str
     filename: Optional[str]
     provenance: str
+    shelf_filename: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -1413,6 +1471,16 @@ def workflow_defaults(
                     provenance,
                 )
             )
+    # A shelf loader's `filename` is a row id: say which file it names.
+    on_shelf = [
+        index
+        for index, model in enumerate(recipe.models)
+        if model.address.endswith("/" + SHELF_ID_FIELD) and model.filename
+    ]
+    files = shelf_filenames(hub, [recipe.models[i].filename for i in on_shelf])
+    for index in on_shelf:
+        model = recipe.models[index]
+        recipe.models[index] = replace(model, shelf_filename=files[model.filename])
 
     by_name, _digests = adapter_digest_index(hub)
 
