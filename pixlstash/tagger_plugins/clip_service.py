@@ -19,6 +19,7 @@ import numpy as np
 # startup and every single test pay that cost before doing any work.
 
 from pixlstash.utils.accelerator import is_device_error, supports_fp16
+from pixlstash.utils.model_utils import MODEL_CONSTRUCTION_LOCK
 from pixlstash.utils.vram_utils import empty_device_cache, is_vram_oom
 
 logger = logging.getLogger(__name__)
@@ -73,9 +74,11 @@ class ClipService:
     def _load(self) -> None:
         import open_clip
 
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS
-        )
+        # Built under the process-wide lock; see MODEL_CONSTRUCTION_LOCK.
+        with MODEL_CONSTRUCTION_LOCK:
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                CLIP_MODEL_NAME, pretrained=CLIP_MODEL_WEIGHTS
+            )
         model = model.to(self._device)
         if supports_fp16(self._device):
             model = model.half()

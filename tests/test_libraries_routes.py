@@ -1403,6 +1403,22 @@ class TestCountingMediaFiles:
         assert not is_supported_media_file("a/b/IMG_1231_THUMB.WEBP")
         assert count_media_files(str(tmp_path)) == (2, False)
 
+    def test_a_librarys_own_root_folders_are_not_its_pictures(self, tmp_path):
+        """`tmp/` holds face and set thumbnails; the import never indexes them,
+        so neither count nor the "does it hold pictures" question may."""
+        (tmp_path / "tmp" / "face_thumbnails").mkdir(parents=True)
+        _write_picture(tmp_path / "tmp" / "face_thumbnails" / "character_1.png")
+        (tmp_path / "snapshots").mkdir()
+        _write_picture(tmp_path / "snapshots" / "x.png")
+
+        assert has_media_files(str(tmp_path)) is False
+        assert count_media_files(str(tmp_path)) == (0, False)
+
+        # Only the root's: a `tmp` deeper down is the owner's own folder.
+        (tmp_path / "2014" / "tmp").mkdir(parents=True)
+        _write_picture(tmp_path / "2014" / "tmp" / "kept.jpg")
+        assert count_media_files(str(tmp_path)) == (1, False)
+
 
 class TestTheRequestContract:
     def test_an_unknown_field_is_rejected(self, server):

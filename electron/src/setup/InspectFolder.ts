@@ -61,6 +61,17 @@ const PICTURE_EXTENSIONS = new Set([
 ]);
 
 /**
+ * PixlStash's own files, which the backend's folder read never counts either:
+ * the `<name>_thumb.webp` thumbnails older versions wrote beside every original
+ * (`media_files.is_pixlstash_thumbnail`), and the folders a library makes at
+ * its root (`media_files.LIBRARY_OWN_FOLDERS`; the hidden
+ * ones are covered by the dot rule). Counting them made a folder that was a
+ * library once read as twice its size here and half of it at the import.
+ */
+const THUMBNAIL_SUFFIX = '_thumb.webp';
+const LIBRARY_OWN_FOLDERS = new Set(['snapshots', 'tmp']);
+
+/**
  * Stop rather than crawl a whole disk. A person picking a folder wants to know
  * "are my pictures in here", and 20k files answers that; the exact total is the
  * import's job. Both caps are floors, and `truncated` says which one was hit.
@@ -175,10 +186,12 @@ export async function inspectFolder(
     for await (const entry of entries) {
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        if (!entry.name.startsWith('.')) queue.push(join(current, entry.name));
+        const ownFolder = current === target && LIBRARY_OWN_FOLDERS.has(entry.name);
+        if (!entry.name.startsWith('.') && !ownFolder) queue.push(join(current, entry.name));
         continue;
       }
       if (!entry.isFile() || !PICTURE_EXTENSIONS.has(extensionOf(entry.name))) continue;
+      if (entry.name.toLowerCase().endsWith(THUMBNAIL_SUFFIX)) continue;
       result.pictureCount += 1;
       try {
         result.pictureBytes += Number((await stat(join(current, entry.name))).size);

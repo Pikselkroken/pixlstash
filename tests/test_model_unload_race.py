@@ -164,3 +164,101 @@ def test_every_tagger_service_serialises_unload_against_load(
         "running: that frees device memory out from under the loader"
     )
     loader.join(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Two model *loads* at once
+# ---------------------------------------------------------------------------
+#
+# Building a PyTorch model goes through a process-wide empty-weights (meta
+# device) mode. With the text embedder and Florence-2 loading in parallel,
+# Florence-2's tied weights stayed on the meta device and every caption failed
+# with "Tensor.item() cannot be called on meta tensors" - the long-running
+# `test_semantic_search` flake. Reproduced 8/8 with the loads overlapping. These
+# pin the cure without loading a model: every construction path holds the one
+# lock, which another thread can see.
+
+
+def _lock_held_by_another_thread() -> bool:
+    """True if MODEL_CONSTRUCTION_LOCK cannot be taken from a fresh thread."""
+    from pixlstash.utils.model_utils import MODEL_CONSTRUCTION_LOCK
+
+    got = []
+
+    def _try():
+        acquired = MODEL_CONSTRUCTION_LOCK.acquire(blocking=False)
+        got.append(acquired)
+        if acquired:
+            MODEL_CONSTRUCTION_LOCK.release()
+
+    probe = threading.Thread(target=_try)
+    probe.start()
+    probe.join(timeout=5)
+    return got == [False]
+
+
+def test_a_huggingface_load_holds_the_construction_lock():
+    from pixlstash.utils.model_utils import from_pretrained_local_first
+
+    seen = []
+
+    class _Model:
+        @classmethod
+        def from_pretrained(cls, name, **kwargs):
+            seen.append(_lock_held_by_another_thread())
+            return cls()
+
+    from_pretrained_local_first(_Model, "some/model")
+
+    assert seen == [True]
+
+
+def test_a_sentence_transformer_load_holds_the_construction_lock(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from pixlstash.utils.model_utils import load_sentence_transformer
+
+    seen = []
+
+    def _fake(*args, **kwargs):
+        seen.append(_lock_held_by_another_thread())
+        return object()
+
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=_fake)
+    )
+
+    load_sentence_transformer("some/model", device="cpu")
+
+    assert seen == [True]
+
+
+def test_a_clip_load_holds_the_construction_lock(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    seen = []
+
+    class _Model:
+        def to(self, device):
+            return self
+
+        def half(self):
+            return self
+
+    def _create(*args, **kwargs):
+        seen.append(_lock_held_by_another_thread())
+        return _Model(), None, object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "open_clip",
+        SimpleNamespace(
+            create_model_and_transforms=_create, get_tokenizer=lambda name: object()
+        ),
+    )
+
+    ClipService(device="cpu")._load()
+
+    assert seen == [True]
