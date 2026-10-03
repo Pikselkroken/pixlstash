@@ -2178,3 +2178,155 @@ def test_a_recipe_on_a_workflow_live_again_is_left_where_it_is(run_env):
             lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
             priority=DBPriority.IMMEDIATE,
         )
+
+
+def _drop_twin_recipe(session) -> None:
+    session.exec(delete(SavedRecipe).where(SavedRecipe.name == "twin-kept"))
+    session.commit()
+
+
+def test_an_adopted_file_with_no_pictures_lists_once_as_its_manual_workflow(
+    run_env, tmp_path
+):
+    """Step 7 leaves an adopted file's rows, so its card still reads as an
+    automatic workflow (#1720). With no picture that is the manual workflow's
+    twin and the grid leaves it out; with pictures it is a real automatic
+    workflow beside the manual one, and both list."""
+    server = run_env.server
+    hub = server.hub
+    library = server.vault.library_uuid
+    folder = tmp_path / "user"
+    folder.mkdir()
+    empty = _graph(ckpt="twin-empty.safetensors", upscale=True, preview=True)
+    used = _graph(ckpt="twin-used.safetensors", face_detailer=True, preview=True)
+    keys = {}
+    for name, graph in (("twin-empty.json", empty), ("twin-used.json", used)):
+        (folder / name).write_text(json.dumps(graph), encoding="utf-8")
+        keys[name] = record_api_graph(hub, graph, library)
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO workflow_file (workflow_name, topology_hash, "
+            "structural_hash, workflow_key) VALUES (?, ?, ?, ?)",
+            [
+                (name, k.topology_hash, k.structural_hash, _card(hub, k))
+                for name, k in keys.items()
+            ],
+        )
+        assert convert.adopt_workflow_files(conn, str(folder)) == 2
+    manual = {
+        row[0]: row[1]
+        for row in hub.fetchall(
+            "SELECT remote_path, workflow_name FROM workflow_origin "
+            "WHERE origin = 'file' AND remote_path LIKE 'twin-%'"
+        )
+    }
+    auto = {
+        name: workflow_of_variant(hub, k.structural_hash) for name, k in keys.items()
+    }
+    assert all(a.startswith("auto:") for a in auto.values())
+    used_keys = keys["twin-used.json"]
+    # A variant of the twin's card in another family is another automatic
+    # workflow, and no file of it was adopted: it has no twin and lists.
+    sibling = record_api_graph(
+        hub, _graph(ckpt="twin-sibling.safetensors", upscale=True, preview=True)
+    )
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_variant SET workflow_key = ? WHERE structural_hash = ?",
+            (_card(hub, keys["twin-empty.json"]), sibling.structural_hash),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_variant_family (structural_hash, "
+            "families) VALUES (?, 'test-other-family')",
+            (sibling.structural_hash,),
+        )
+    other_family = workflow_of_variant(hub, sibling.structural_hash)
+    assert other_family.startswith("auto:")
+    assert other_family != auto["twin-empty.json"]
+
+    def seed(session):
+        session.add(
+            Picture(
+                file_path="twin_used.png",
+                deleted=False,
+                created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                workflow_topology_hash=used_keys.topology_hash,
+                workflow_structural_hash=used_keys.structural_hash,
+                workflow_instance_hash=used_keys.instance_hash,
+                workflow_hash_version="v1",
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    try:
+        r = run_env.owner.get(
+            f"{API}/workflows",
+            params={"include_hidden": "true", "include_one_offs": "true"},
+        )
+        assert r.status_code == 200, r.text
+        listed = {card["id"] for card in r.json()["cards"]}
+        assert manual["twin-empty.json"] in listed
+        assert auto["twin-empty.json"] not in listed, "the picture-less twin lists"
+        assert {manual["twin-used.json"], auto["twin-used.json"]} <= listed
+        assert other_family in listed, "a sibling family's workflow was hidden"
+        # A saved recipe on the twin keeps it listed, so the recipe is reachable.
+        twin = auto["twin-empty.json"]
+
+        def save_recipe(session):
+            session.add(
+                SavedRecipe(
+                    name="twin-kept",
+                    workflow_key=_card(hub, keys["twin-empty.json"]),
+                    workflow_id=twin,
+                    prompt="x",
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(save_recipe, priority=DBPriority.IMMEDIATE)
+        r = run_env.owner.get(
+            f"{API}/workflows",
+            params={"include_hidden": "true", "include_one_offs": "true"},
+        )
+        assert twin in {card["id"] for card in r.json()["cards"]}
+        server.vault.db.run_task(_drop_twin_recipe, priority=DBPriority.IMMEDIATE)
+        # Left off the grid, not gone: it still opens by its id.
+        r = run_env.owner.get(f"{API}/workflows/{auto['twin-empty.json']}")
+        assert r.status_code == 200, r.text
+        # Hidden, it is not counted in `hidden` either; dismiss its file's
+        # origin row and the file is no longer adopted: listed and counted.
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_group_attr (workflow_id, hidden) "
+                "VALUES (?, 1)",
+                (twin,),
+            )
+        before = run_env.owner.get(f"{API}/workflows").json()["hidden"]
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE workflow_origin SET dismissed = 1 "
+                "WHERE origin = 'file' AND remote_path = 'twin-empty.json'"
+            )
+        r = run_env.owner.get(f"{API}/workflows", params={"include_hidden": "true"})
+        assert r.json()["hidden"] == before + 1
+        assert twin in {c["id"] for c in r.json()["cards"]}
+    finally:
+        server.vault.db.run_task(
+            lambda session: (
+                session.exec(
+                    delete(Picture).where(Picture.file_path == "twin_used.png")
+                ),
+                session.commit(),
+            ),
+            priority=DBPriority.IMMEDIATE,
+        )
+        server.vault.db.run_task(_drop_twin_recipe, priority=DBPriority.IMMEDIATE)
+        for workflow_id in manual.values():
+            delete_manual_workflow(hub, workflow_id)
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_file WHERE workflow_name LIKE 'twin-%'")
+            conn.execute(
+                "DELETE FROM workflow_group_attr WHERE workflow_id = ?",
+                (auto["twin-empty.json"],),
+            )

@@ -2572,7 +2572,15 @@ owner saved changes where it lists. The id is a
 uuid5 of the file name and every write keeps what is there, so a second run
 writes nothing. Files and `workflow_file` rows are left in place; nothing
 writes a `workflow_file` row any more, and a legacy row on an automatic card
-still names it.
+still names it. So such a card still reads as an automatic workflow of the
+same name: `read_grid` leaves one off the grid, and out of its `hidden` and
+`one_offs` counts, when it has no kept picture and no saved recipe and every
+variant in it is an adopted file (`adopted_file_variants`, per variant because
+one card's variants can sit in workflows of several families: every file of
+that `structural_hash` has a `file` origin row naming a manual workflow that
+still exists; #1720). It still opens by its id.
+Deleting the manual workflow through the route forgets the file row, so the
+picture-less automatic workflow then lists again, under a generated name.
 
 **Data step 9** (`workflow_group_convert.hash_builtin_origins`, at hub open):
 a built-in made a manual workflow before its `builtin` origin row was written
