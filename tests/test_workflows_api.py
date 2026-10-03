@@ -2336,6 +2336,25 @@ def test_colliding_generated_names_say_how_they_differ_before_numbering():
         "b" * 64: f"{base} + Negative Prompt",
     }
 
+    # A suffixed name that another workflow generates outright is still never
+    # printed twice: every group's final name is numbered in one pass.
+    outright = WorkflowFigures(
+        card=Card(workflow_key="z" * 64, topology_hash="z" * 64, traits=()),
+        workflow=Workflow("z" * 64, topologies=["z" * 64], base_topology="z" * 64),
+        models=[
+            SlotModel(
+                name="other",
+                kind="checkpoint",
+                title=f"{base} + Negative Prompt",
+            )
+        ],
+    )
+    assert workflows_routes._display_names([*pair, outright]) == {
+        "a" * 64: base,
+        "b" * 64: f"{base} + Negative Prompt",
+        "z" * 64: f"{base} + Negative Prompt (2)",
+    }
+
 
 def test_the_grid_is_one_entry_per_workflow_not_one_per_variant(workflow_env):
     """A workflow is the unit, and BUSY's two variants are one entry, not two.
