@@ -68,7 +68,7 @@ describe("the stats rail's Tasks tab", () => {
   });
 
   it("follows the store's deep link onto the Tasks tab", async () => {
-    // What the "View progress" notice action and the thumbnail banner do. The
+    // What the "View progress" notice action does. The
     // request goes through the store because /workflows has a different
     // inspector in this rail, and a link that named this component reached
     // the tab everywhere except the screen runs are started from.
