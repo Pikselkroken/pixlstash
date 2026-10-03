@@ -1979,16 +1979,18 @@ filtered by.
   `useGridKeyboardNav.js` but its own handler — that composable is bound to the
   picture grid's stores and its justified layout. Left/Right step one card,
   Up/Down step by `columns`, clamped to the first and last card so the last row
-  stays reachable from every column. Space toggles, Enter opens ⓘ, F2 renames.
+  stays reachable from every column. Space toggles, Enter opens ⓘ, F2 renames,
+  Delete asks to delete the selection (manual workflows only, as the menu row).
   **Shift+F10 and the Menu key open the card menu** (#1455), which is what those
   keys mean everywhere else and in every file manager. Escape clears the
   selection: the `VMenu`s consume their own Escape, so what reaches the grid is
   the selection. The scroller around the grid is `tabindex="-1"` so a click on
   the empty background (or a gap between cards) focuses it rather than
   `<body>`, where Ctrl+A did nothing until a card had been clicked. From there
-  it takes only Ctrl+A and Escape (`onBackgroundKeyDown`): the cursor is not
-  visible, so Space, Enter, F2, the arrows and the menu keys would act on a card
-  the reader cannot see. Its focus ring is `--focus-ring-inset`, inside the
+  it takes only Ctrl+A, Escape and Delete (`onBackgroundKeyDown`): the cursor
+  is not visible, so Space, Enter, F2, the arrows and the menu keys would act on
+  a card the reader cannot see. Delete is allowed because it acts on the
+  selection, not the cursor card. Its focus ring is `--focus-ring-inset`, inside the
   pane's edge, as visual-language.md §11 prescribes where an outset ring has
   no room.
 - **The cursor is an entry id, never an index.** `flatRows` is rebuilt by a

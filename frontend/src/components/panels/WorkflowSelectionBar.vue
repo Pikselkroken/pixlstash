@@ -630,6 +630,7 @@ const VerbMenu = (props) => {
         on: () => props.onVerb("delete"),
         disabled: !props.deletable,
         title: props.deleteTitle,
+        kbd: "Del",
         danger: true,
       }),
     ],
