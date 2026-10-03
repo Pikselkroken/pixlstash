@@ -115,7 +115,9 @@ describe("design drift", () => {
   it("keeps a native title to revealing its own element's clipped text", () => {
     const clipping = new Set(
       files.flatMap(({ text }) =>
-        [...text.matchAll(/([^{}]*)\{([^}]*)\}/g)]
+        // Innermost blocks only, so a rule inside `@media` or `@supports` is
+        // read by its own selector rather than the at-rule's prelude.
+        [...text.matchAll(/([^{}]*)\{([^{}]*)\}/g)]
           .filter((rule) => /text-overflow:\s*ellipsis|line-clamp/.test(rule[2]))
           .flatMap((rule) => [...rule[1].matchAll(/\.([\w-]+)/g)].map((c) => c[1])),
       ),
