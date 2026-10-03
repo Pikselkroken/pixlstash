@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach } from 'node:test';
 
-import { runFirstRunSetup, type SetupChoices, type SetupDeps } from '../src/setup/RunSetup';
+import {
+  overlayStateFor,
+  runFirstRunSetup,
+  type SetupChoices,
+  type SetupDeps,
+} from '../src/setup/RunSetup';
 
 /**
  * First run has more outcomes than it looks like it does. The download has to
@@ -324,5 +329,46 @@ describe('the privacy answer', () => {
   it('clears a stale one when this run answered nothing', async () => {
     await runFirstRunSetup(CHOICES, makeDeps());
     assert.deepEqual(parkedTelemetry, [null]);
+  });
+});
+
+describe('the saved GPU choice, which dev and packaged runs share', () => {
+  function realOverlayState() {
+    const touched: string[] = [];
+    return {
+      touched,
+      real: {
+        setActiveAccel: async (accel: Accel | null) => {
+          touched.push(`set:${accel ?? 'none'}`);
+        },
+        activeOverlayAccel: async () => {
+          touched.push('read');
+          return 'cu128' as Accel;
+        },
+      },
+    };
+  }
+
+  it('is never read or cleared by a dev setup', async () => {
+    const { touched, real } = realOverlayState();
+
+    await runFirstRunSetup(
+      { imageRoot: '/home/me/Pictures', useGpu: false },
+      makeDeps({ gpu: null, ...overlayStateFor<Accel>(true, real) }),
+    );
+
+    assert.deepEqual(touched, [], 'a packaged run must find its GPU choice intact');
+    assert.deepEqual(started, [{ accel: null, navigate: true }]);
+  });
+
+  it('is still settled by a packaged setup without a GPU', async () => {
+    const { touched, real } = realOverlayState();
+
+    await runFirstRunSetup(
+      { imageRoot: '/home/me/Pictures', useGpu: false },
+      makeDeps({ gpu: null, ...overlayStateFor<Accel>(false, real) }),
+    );
+
+    assert.deepEqual(touched, ['set:none', 'read']);
   });
 });
