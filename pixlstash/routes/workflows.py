@@ -423,7 +423,10 @@ class WorkflowSlotModel(BaseModel):
             "The value the recipe recorded for the slot, spelled as "
             "`default_recipe.models[].filename` spells it (a shelf loader's "
             "row id included), so a client matches a recipe model to its slot "
-            "by identity. Null where `name` is."
+            "by identity. Null on a recipe's LoRA slot and where the recipe "
+            "recorded no value. **Not** null where only `name` is: a shelf "
+            "loader whose id the shelf no longer holds serves `name: null` "
+            "and keeps the recorded id here."
         ),
     )
 
