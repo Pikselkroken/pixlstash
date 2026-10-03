@@ -1368,6 +1368,9 @@ async function confirmDelete() {
   });
   if (!ok) return;
   const { refused } = await store.deleteSelected();
+  // The focused row may have just gone, even in a partial delete, which drops
+  // focus to <body>, where the next key reaches nothing.
+  focusCursorRow();
   if (refused) {
     notices.push({
       level: "error",
@@ -1381,9 +1384,6 @@ async function confirmDelete() {
   announcement.value = one
     ? "Workflow deleted"
     : `${cards.length} workflows deleted`;
-  // The focused row may have just gone, which drops focus to <body>, where
-  // the next key reaches nothing.
-  focusCursorRow();
 }
 
 // ── The card menu ─────────────────────────────────────────────────────────
