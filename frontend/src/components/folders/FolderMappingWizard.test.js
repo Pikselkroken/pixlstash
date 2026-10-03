@@ -696,6 +696,33 @@ describe("the branches nobody walks on purpose", () => {
     wrapper.unmount();
   });
 
+  it("records the commit on a plain entry the wizard's own read saved", async () => {
+    // A first run with no GPU step reads nothing at start-up, so the wizard
+    // reads the folder itself and saves a plain entry. The promotion then
+    // reloads before `completed` is seen; without the commit's id the reload
+    // reopened the wizard over the finished library.
+    const plain = { taskId: "read-1", path: PATH, label: "", mode: "local_import" };
+    useFolderMappingStore().save(plain);
+    const wrapper = mountWizard({
+      resume: { path: PATH, result: READ_RESULT, mode: "local_import" },
+    });
+    await settle();
+
+    await wrapper.find(".tree-stub .emit-next").trigger("click");
+    await settle();
+    wrapper
+      .findComponent(FolderMappingPreviewStep)
+      .vm.$emit("commit-started", "commit-9");
+    await settle();
+
+    expect(useFolderMappingStore().pending).toEqual({
+      ...plain,
+      commitTaskId: "commit-9",
+    });
+
+    wrapper.unmount();
+  });
+
   it("commits a parked read by its result, because its task no longer exists", async () => {
     // The failure this replaces: the desktop's first run read the folder on
     // one server process and restarted onto the GPU runtime before the owner

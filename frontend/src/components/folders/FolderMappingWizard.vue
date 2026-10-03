@@ -253,12 +253,16 @@ function onCommitStarted(commitTaskId) {
   // Started is as good as done for the entry's purposes: from here on a
   // reopen must reattach to the read, not commit it again.
   const entry = mappingStore.pending;
-  if (!entry?.autoCommit) return;
+  if (!entry) return;
+  // A first import's promotion reloads the page before the poll below can see
+  // `completed` and clear the entry, whichever path saved it; the sidebar asks
+  // the server instead (SideBar.vue, the auto-open).
+  if (!entry.autoCommit) {
+    mappingStore.save({ ...entry, commitTaskId });
+    return;
+  }
   mappingStore.save({
     taskId: entry.taskId,
-    // A first import's promotion reloads the page before the poll below can
-    // see `completed` and clear this entry; the sidebar asks the server
-    // instead (SideBar.vue, the auto-open).
     commitTaskId,
     path: entry.path,
     label: entry.label,
