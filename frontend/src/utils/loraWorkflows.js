@@ -9,12 +9,16 @@
 import { checkpointModel } from "./workflowCard";
 
 /**
- * The card types that make a picture from nothing. Anything else (img2img,
- * inpaint, upscale…) needs a picture put in, which a run started from a person
- * or a set has none of; a card with no type is one nobody has read, and is
- * offered.
+ * The card types Create with LoRA offers: a picture or a video made from a
+ * prompt. Anything else (img2img, inpaint, upscale…) needs a picture put in,
+ * which a run started from a person or a set has none of; a card with no type
+ * is one nobody has read, and is offered. `video` covers a start-frame graph
+ * too (the type cannot tell them apart): its picture input then runs on the
+ * frame the graph names, shown "As the workflow has it" in the Pictures
+ * section where the owner can change it, or is refused as unfilled when that
+ * file is gone (#1695).
  */
-const TEXT_TO_IMAGE_TYPES = new Set(["txt2img"]);
+const OFFERED_TYPES = new Set(["txt2img", "video"]);
 
 /**
  * A model name as three sources spell it, folded to one comparable key:
@@ -84,7 +88,7 @@ export function workflowFit(card, lora, paired = new Set()) {
       (value) => nameKey(value.name) === nameKey(lora?.filename),
     ),
   };
-  if (card.type && !TEXT_TO_IMAGE_TYPES.has(card.type)) {
+  if (card.type && !OFFERED_TYPES.has(card.type)) {
     return { ...base, fit: "needs_picture" };
   }
   const loraFamily = lora?.base_model_family || null;
