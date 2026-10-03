@@ -1,7 +1,7 @@
 <template>
   <AppInspector
     v-model="tab"
-    class="wftab"
+    :class="['wftab', { 'wftab--workflow': tab === 'workflow' }]"
     label="Inspector"
     :open="sidebarStore.workflowInspectorOpen"
     :tabs="tabs"
@@ -75,30 +75,23 @@
           >
             {{ picturesLabel }}</button
           ><template v-else>{{ picturesLabel }}</template>
+          <!-- Where the defaults come from is the whole workflow's, so it sits
+               here and not inside any one panel. Absent when nothing is
+               rated. -->
+          <WorkflowStarChart v-if="ratingCounts" :counts="ratingCounts" />
         </p>
       </div>
 
-      <!-- What a run starts from (#1653): the default recipe's models, LoRAs
-           and stages, as one list of label-and-value rows, so a LoRA reads
-           like the checkpoint above it. Where the values come from is said
-           once, under the label; a row says so only when it is the exception
-           ("Yours", "in 31 of 40"). "Edit LoRAs…", at the foot of the
-           section, is here even with no loader at all: an entry point that
-           only exists for workflows that already have LoRAs is how adding
-           the first one stays unreachable (#1478). -->
-      <div class="inspector-section" data-testid="wftab-default-recipe">
+      <!-- What a run starts from (#1653), as three bordered panels: Models,
+           LoRAs and Parameters, each with its verb in its own head. Inside a
+           panel, label-and-value rows on a 64px label column; a row says
+           where its value came from only when it is the exception ("Yours",
+           "in 31 of 40"). -->
+      <section class="wftab-panel" data-testid="wftab-default-recipe">
         <div class="wftab-sec-head">
-          <span
-            ref="defaultHeading"
-            class="section-label"
-            role="heading"
-            aria-level="3"
-            tabindex="-1"
-            >Default recipe</span
+          <span class="section-label" role="heading" aria-level="3"
+            >Models</span
           >
-          <!-- The clone's verb is on the models, so it sits in the head;
-               Edit LoRAs… sits at the foot, under the LoRAs it edits, as the two
-               side by side overflow a narrow inspector. -->
           <AppButton
             size="sm"
             variant="ghost"
@@ -110,13 +103,6 @@
             Clone onto a set…
           </AppButton>
         </div>
-        <p
-          v-if="provenanceNote"
-          class="wftab-note wftab-quiet"
-          data-testid="wftab-provenance"
-        >
-          {{ provenanceNote }}
-        </p>
         <!-- The list card's `default_recipe` is null, so until the detail
              lands there is no default to show: its base-card slots are not
              one. -->
@@ -425,10 +411,61 @@
           </div>
         </div>
 
+        <!-- Read-only until the default can be written (F-3); the Run form
+             skips a stage per run. Absent when the base graph has none. -->
+        <div
+          v-if="stageRows.length"
+          class="wftab-field"
+          data-testid="wftab-stages"
+        >
+          <span class="wftab-label">Stages</span>
+          <span class="wftab-value"
+            ><template v-for="(stage, index) in stageRows" :key="stage.key"
+              ><span v-if="index" class="wftab-quiet"> · </span
+              >{{ stage.label }}{{ stage.on ? "" : " off" }}</template
+            ></span
+          >
+        </div>
+        <p
+          v-if="stageRows.some((stage) => !stage.on)"
+          class="wftab-note wftab-quiet"
+        >
+          Off: most of its pictures ran without it.
+        </p>
+        </template>
+      </section>
+
+      <!-- The default recipe's LoRAs and the ones its pictures used besides,
+           as one family with two kinds of member. "Edit LoRAs…" is in the
+           head, beside what it edits, and is here even with no loader at all:
+           an entry point that only exists for workflows that already have
+           LoRAs is how adding the first one stays unreachable (#1478). -->
+      <section class="wftab-panel" data-testid="wftab-loras">
+        <div class="wftab-sec-head">
+          <span
+            ref="defaultHeading"
+            class="section-label"
+            role="heading"
+            aria-level="3"
+            tabindex="-1"
+            >LoRAs</span
+          >
+          <AppButton
+            size="sm"
+            variant="ghost"
+            data-testid="wftab-edit-loras"
+            :disabled="chainNoGraph"
+            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+            @click="openEditLoras(selectedKey)"
+          >
+            Edit LoRAs…
+          </AppButton>
+        </div>
+        <template v-if="detail">
         <!-- The default recipe's LoRAs, in the order the chain applies them.
              One that is not in every picture says how many it is in; one in
              every picture says nothing, and that silence means "all". A
-             LoRA is here or in ALSO USED, never both. -->
+             LoRA is here or in Also used, never both. -->
         <div
           v-for="lora in loraRows"
           :key="lora.id"
@@ -436,7 +473,7 @@
           data-testid="wftab-default-lora"
         >
           <span class="wftab-labelcol">
-            <span class="wftab-label">LoRA</span>
+            <span class="wftab-label">Default</span>
             <span v-if="lora.edited" class="wftab-yours">Yours</span>
           </span>
           <div class="wftab-col">
@@ -474,27 +511,6 @@
             </div>
           </div>
         </div>
-        <!-- Read-only until the default can be written (F-3); the Run form
-             skips a stage per run. Absent when the base graph has none. -->
-        <div
-          v-if="stageRows.length"
-          class="wftab-field"
-          data-testid="wftab-stages"
-        >
-          <span class="wftab-label">Stages</span>
-          <span class="wftab-value"
-            ><template v-for="(stage, index) in stageRows" :key="stage.key"
-              ><span v-if="index" class="wftab-quiet"> · </span
-              >{{ stage.label }}{{ stage.on ? "" : " off" }}</template
-            ></span
-          >
-        </div>
-        <p
-          v-if="stageRows.some((stage) => !stage.on)"
-          class="wftab-note wftab-quiet"
-        >
-          Off: most of its pictures ran without it.
-        </p>
         </template>
         <p v-if="usingChain && chainPending" class="wftab-note wftab-quiet">
           Reading its LoRAs…
@@ -523,36 +539,13 @@
         >
           No LoRA loader. Editing adds the first one.
         </p>
-        <div class="wftab-sec-foot">
-          <AppButton
-            size="sm"
-            variant="ghost"
-            data-testid="wftab-edit-loras"
-            :disabled="chainNoGraph"
-            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
-            @click="openEditLoras(selectedKey)"
-          >
-            Edit LoRAs…
-          </AppButton>
-        </div>
-      </div>
-
-      <!-- The LoRAs its pictures used that the default recipe does not
-           load, as one pile. Absent, not empty, when there are none. -->
-      <div
-        v-if="alsoUsed.length || summaryFailed"
-        class="inspector-section"
-        data-testid="wftab-changes"
-      >
-        <span class="section-label" role="heading" aria-level="3">
-          Also used
-          <span v-if="alsoUsed.length" class="wftab-legend">{{
-            changingLabel
-          }}</span>
-        </span>
-        <template v-if="alsoUsed.length">
-          <div class="wftab-field">
-            <span class="wftab-label">LoRA</span>
+        <!-- The LoRAs its pictures used that the default recipe does not
+             load, as one pile under a hairline. Absent, not empty, when there
+             are none. -->
+        <template v-if="alsoUsed.length || summaryFailed">
+          <div class="wftab-rule" aria-hidden="true"></div>
+          <div v-if="alsoUsed.length" class="wftab-field" data-testid="wftab-changes">
+            <span class="wftab-label">Also used</span>
             <WorkflowLoraPile
               :summary="pileSummary"
               :adding="busy.startsWith('default-lora:') ? busy.slice(13) : ''"
@@ -560,20 +553,26 @@
               @add-default="addLoraToDefault"
             />
           </div>
-          <p class="wftab-note wftab-quiet">{{ pileNote }}</p>
+          <p v-if="alsoUsed.length" class="wftab-note wftab-quiet">
+            {{ pileNote }}
+          </p>
+          <p v-else class="wftab-note wftab-quiet" data-testid="wftab-changes">
+            Could not read which LoRAs change between pictures just now.
+          </p>
         </template>
-        <p v-else class="wftab-note wftab-quiet">
-          Could not read which LoRAs change between pictures just now.
-        </p>
-      </div>
+      </section>
 
-      <div class="inspector-section">
-        <span class="section-label" role="heading" aria-level="3">
-          Parameters
-          <span class="wftab-legend"
-            ><v-icon size="14">mdi-pin</v-icon> = shown in Run</span
+      <!-- Each parameter is set each run (asked for by the Run form) or fixed
+           (every run uses the workflow's value; a recipe and an API or MCP
+           override still win). Grouped by what it was when the workflow was
+           opened, so a toggled row stays under the pointer and moves next
+           time. -->
+      <section class="wftab-panel" data-testid="wftab-parameters">
+        <div class="wftab-sec-head">
+          <span class="section-label" role="heading" aria-level="3"
+            >Parameters</span
           >
-        </span>
+        </div>
         <p v-if="detailPending" class="wftab-note wftab-quiet">
           Reading its parameters…
         </p>
@@ -581,27 +580,60 @@
           Could not read its parameters just now.
         </p>
         <template v-else-if="defaults.length">
-          <WorkflowDefaultRow
-            v-for="row in pinnedDefaults"
-            :key="row.label"
-            :row="row"
-            :busy="busy === `default:${row.label}`"
-            @toggle-pin="togglePin(row)"
-            @reset="resetDefault(row)"
-          />
-          <!-- The whole set, pinned rows included, because "All N" is a count
-               of the card's parameters and not of what is left over. -->
-          <details v-if="unpinnedDefaults.length" class="wftab-disclose">
-            <summary>All {{ defaults.length }} parameters</summary>
+          <template v-if="runDefaults.length">
+            <p class="wftab-sublabel">Set each run</p>
             <WorkflowDefaultRow
-              v-for="row in unpinnedDefaults"
+              v-for="row in runDefaults"
               :key="row.label"
               :row="row"
               :busy="busy === `default:${row.label}`"
               @toggle-pin="togglePin(row)"
               @reset="resetDefault(row)"
             />
-          </details>
+          </template>
+          <template v-if="fixedDefaults.length">
+            <div
+              v-if="runDefaults.length"
+              class="wftab-rule"
+              aria-hidden="true"
+            ></div>
+            <!-- More than three fixed rows fold away behind their count. -->
+            <details
+              v-if="fixedDefaults.length > FIXED_SHOWN"
+              class="wftab-disclose"
+              data-testid="wftab-fixed-group"
+            >
+              <summary class="wftab-sublabel">
+                Fixed <span class="num">· {{ fixedDefaults.length }}</span>
+              </summary>
+              <div class="wftab-rows">
+                <WorkflowDefaultRow
+                  v-for="row in fixedDefaults"
+                  :key="row.label"
+                  :row="row"
+                  :busy="busy === `default:${row.label}`"
+                  @toggle-pin="togglePin(row)"
+                  @reset="resetDefault(row)"
+                />
+              </div>
+            </details>
+            <template v-else>
+              <p class="wftab-sublabel" data-testid="wftab-fixed-group">
+                Fixed <span class="num">· {{ fixedDefaults.length }}</span>
+              </p>
+              <WorkflowDefaultRow
+                v-for="row in fixedDefaults"
+                :key="row.label"
+                :row="row"
+                :busy="busy === `default:${row.label}`"
+                @toggle-pin="togglePin(row)"
+                @reset="resetDefault(row)"
+              />
+            </template>
+            <p class="wftab-note wftab-quiet">
+              Fixed values are used by every run.
+            </p>
+          </template>
         </template>
         <p
           v-else-if="editorOnly"
@@ -616,7 +648,7 @@
           Nothing this workflow made records a setting yet, so it has no
           defaults to start from.
         </p>
-      </div>
+      </section>
 
       <div class="inspector-section">
         <!-- The box is drawn only once THIS card's notes have arrived.
@@ -811,6 +843,7 @@ import {
   checkpointUnread,
   modelDisplayName,
 } from "../../utils/workflowCard";
+import { setEachRun } from "../../utils/workflowPins";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import AppSelect from "../widgets/AppSelect.vue";
@@ -819,17 +852,12 @@ import EditLorasDialog from "../io/EditLorasDialog.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
+import WorkflowStarChart from "./WorkflowStarChart.vue";
 import WorkflowLoraPile from "./WorkflowLoraPile.vue";
 import WorkflowRecipesTab from "./WorkflowRecipesTab.vue";
 
-/**
- * What a card shows before "All N parameters" when nobody has pinned on it.
- *
- * The design's own choice: the numbers a person changes between runs are up
- * top and the sampler and scheduler are not. `null` pins from the server mean
- * "no choice made", which is deliberately not the same as an empty list.
- */
-const DEFAULT_PINS = ["steps", "cfg", "guidance", "width", "height"];
+/** Past this many, the Fixed group folds away behind "Fixed · N". */
+const FIXED_SHOWN = 3;
 
 const store = useWorkflowsStore();
 const { showPictures, showLoraPictures, showValuePictures } =
@@ -1540,25 +1568,12 @@ function valueFor(values, file) {
 }
 
 /**
- * The provenance note under DEFAULT RECIPE. Provenance is decided for the
- * whole recipe, so the first computed row speaks for it; an edited row says
- * "Yours" on itself. Nothing sampled is nothing to be "most used".
+ * Pictures per star, 1★ first, for the head's histogram; null when none of
+ * its pictures is rated, which draws no chart at all.
  */
-const provenanceNote = computed(() => {
-  const recipe = defaultRecipe.value;
-  if (!recipe?.sampled) return "";
-  const computedRow = [
-    ...(recipe.models ?? []),
-    ...(recipe.loras ?? []),
-    ...(recipe.values ?? []),
-  ].find((row) => row.provenance && row.provenance !== "edited");
-  if (computedRow?.provenance === "best") {
-    return "Most used in your 4★+ pictures.";
-  }
-  if (computedRow?.provenance === "all") {
-    return "Most used in its pictures. None is rated 4★ yet.";
-  }
-  return "";
+const ratingCounts = computed(() => {
+  const counts = card.value?.rating_counts;
+  return Array.isArray(counts) && counts.some(Boolean) ? counts : null;
 });
 
 /** The default recipe's checkpoints: a Wan 2.2 pair is two. */
@@ -1786,11 +1801,6 @@ const pileSummary = computed(() => ({
     : null,
 }));
 
-const changingLabel = computed(() => {
-  const count = alsoUsed.value.length;
-  return `${count} ${count === 1 ? "LoRA" : "LoRAs"}`;
-});
-
 const pileNote = computed(() => {
   const rest = alsoUsed.value.length - 1;
   const top = pileSummary.value.cover_asset
@@ -1902,26 +1912,38 @@ const nodeNames = computed(() =>
 );
 
 /**
- * The workflow's defaults, each with whether it is pinned: the default
- * recipe's featured values (#1623).
+ * The workflow's defaults, each with whether it is set each run (`pinned`,
+ * the stored pin list's shape): the default recipe's featured values (#1623).
  *
  * The detail read carries the pins; a card with none (`null`, not `[]`) gets
- * the default set above, which is what the server means by "the default pins
- * apply again".
+ * the default set, which is what the server means by "the default pins apply
+ * again".
  */
 const defaults = computed(() => {
   const rows = detail.value?.card?.default_recipe?.values ?? [];
-  const stored = detail.value?.pins;
-  const pinned = Array.isArray(stored)
-    ? new Set(stored.map((pin) => `${pin.slot_label}\u0000${pin.input_name}`))
-    : null;
   return rows.map((row) => ({
     ...row,
-    pinned: pinned
-      ? pinned.has(`${row.slot_label}\u0000${row.input_name}`)
-      : DEFAULT_PINS.includes(row.input_name),
+    pinned: setEachRun(row, detail.value?.pins),
   }));
 });
+
+/**
+ * The pins as they were when this workflow was opened. The panel groups by
+ * these, not by the live pins, so a row toggled here keeps its place under
+ * the pointer and moves to its new group the next time the workflow opens.
+ */
+const openedPins = ref(null);
+
+// The Run popup freed a parameter on this workflow: take its list, or the next
+// lock here would write the whole set from a stale copy.
+watch(
+  () => runDialog.pinsWritten,
+  (written) => {
+    if (written && stillOn(written.workflowId) && detail.value) {
+      detail.value = { ...detail.value, pins: written.pins };
+    }
+  },
+);
 
 /**
  * A workflow file with no recipe: an editor-format file ComfyUI has not
@@ -1933,11 +1955,11 @@ const editorOnly = computed(
   () => Boolean(card.value?.imported) && card.value?.variant_count === 0,
 );
 
-const pinnedDefaults = computed(() =>
-  defaults.value.filter((row) => row.pinned),
+const runDefaults = computed(() =>
+  defaults.value.filter((row) => setEachRun(row, openedPins.value)),
 );
-const unpinnedDefaults = computed(() =>
-  defaults.value.filter((row) => !row.pinned),
+const fixedDefaults = computed(() =>
+  defaults.value.filter((row) => !setEachRun(row, openedPins.value)),
 );
 
 /**
@@ -1972,6 +1994,7 @@ async function loadDetail(key) {
     // newer answer (the Recipes tab's write) already landed.
     if (selectedKey.value !== key || read !== detailRead) return;
     detail.value = body;
+    openedPins.value = body.pins ?? null;
     notesDraft.value = body.notes ?? "";
   } catch (err) {
     console.warn(`[workflows] could not read the card ${key}`, err);
@@ -2504,7 +2527,12 @@ async function checkInstalled(key) {
   line-height: var(--leading-tight);
 }
 
+/* "N pictures" on the left, the star histogram on the right. */
 .wftab-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
@@ -2530,19 +2558,54 @@ async function checkInstalled(key) {
   gap: var(--space-2);
 }
 
-.wftab-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+/* The Workflow tab's body pads --space-4, not the inspector's --space-3, so no
+   panel touches the rail edge; the 12px between panels is a clearly bigger
+   step than the 8px between rows inside one. Only this tab: the stats charts
+   on other tabs are drawn at a fixed width. */
+.wftab--workflow :deep(.inspector-body) {
+  gap: var(--space-4);
+  padding-inline: var(--space-4);
 }
 
-/* The 96px label column is local to this tab: no other pane pairs a label
-   with a value field at this width, so it is not a token. `minmax(0, 1fr)`,
-   not `1fr`: a bare `1fr` track grows to its longest unbreakable word, and a
-   file name then scrolls the whole inspector sideways. */
+/* A group drawn as a region of the pane, not a thing that floats: a hairline,
+   the surface radius, a whisper of fill and no elevation. */
+.wftab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-on-surface), 0.025);
+}
+
+/* One hairline between the two kinds of member of a group: Default and Also
+   used, Set each run and Fixed. */
+.wftab-rule {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: rgb(var(--v-theme-divider));
+}
+
+.wftab-sublabel {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wftab-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The label column is --space-9, which "Checkpoint" fits at --text-xs.
+   `minmax(0, 1fr)`, not `1fr`: a bare `1fr` track grows to its longest
+   unbreakable word, and a file name then scrolls the whole inspector
+   sideways. */
 .wftab-field {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: var(--space-9) minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
 }
@@ -2647,21 +2710,20 @@ async function checkInstalled(key) {
   white-space: nowrap;
 }
 
-/* A section label with one quiet job on its right, as the design heads each
-   section: Edit LoRAs…, a count, the pin legend. */
+/* A panel's label with its verb on the right. The ghost verb is pulled out
+   by its own padding, so its TEXT, not its hit area, lines up with the
+   fields' edge. */
 .wftab-sec-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  min-height: var(--control-h-sm);
+  margin-right: calc(-1 * var(--space-3));
 }
 
 .wftab-sec-head > .section-label {
   min-width: 0;
-}
-
-.wftab-sec-foot {
-  display: flex;
 }
 
 .wftab-lora-value {
@@ -2731,20 +2793,15 @@ async function checkInstalled(key) {
   color: rgb(var(--v-theme-surface-warning));
 }
 
-.wftab-legend {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin-left: auto;
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: var(--weight-regular);
-}
-
 .wftab-disclose > summary {
   padding: var(--space-2) 0;
   font-size: var(--text-sm);
   cursor: pointer;
+}
+
+.wftab-disclose > summary.wftab-sublabel {
+  padding-top: 0;
+  font-size: var(--text-xs);
 }
 
 .wftab-notes {
@@ -2773,7 +2830,7 @@ async function checkInstalled(key) {
   gap: var(--space-2);
   /* The body's inline padding, so the buttons line up with the content while
      the hairline spans the whole rail. */
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   /* `border`, not `divider`: divider all but vanishes on the sidebar tone. */
   border-top: 1px solid rgb(var(--v-theme-border));
 }

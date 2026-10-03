@@ -256,6 +256,25 @@ function rowNamed(wrapper, name) {
   return row;
 }
 
+/** A default row's lock: pressed when the parameter is fixed. */
+function lockOf(wrapper, name) {
+  return rowNamed(wrapper, name).find("[data-testid='wfdef-lock']");
+}
+
+/** Whether the row called `name` is drawn under the Fixed group's label. */
+function inFixedGroup(wrapper, name) {
+  const group = wrapper.find("[data-testid='wftab-fixed-group']");
+  if (!group.exists()) return false;
+  const row = rowNamed(wrapper, name).element;
+  return (
+    group.element.contains(row) ||
+    Boolean(
+      group.element.compareDocumentPosition(row) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+  );
+}
+
 async function flush(wrapper) {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
@@ -1231,22 +1250,56 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     return row;
   }
 
-  it("heads the section Default recipe and says where the values come from", async () => {
+  it("draws Models, LoRAs and Parameters as panels, each verb in its own head", async () => {
     const { wrapper } = await mountWith([KEY]);
-    const section = wrapper.find("[data-testid='wftab-default-recipe']");
-    expect(section.find("[role='heading']").text()).toBe("Default recipe");
-    expect(section.find("[data-testid='wftab-provenance']").text()).toBe(
-      "Most used in your 4★+ pictures.",
-    );
+    const heads = wrapper.findAll(".wftab-panel > .wftab-sec-head");
+    expect(heads.map((head) => head.find("[role='heading']").text())).toEqual([
+      "Models",
+      "LoRAs",
+      "Parameters",
+    ]);
+    expect(heads[0].find("[data-testid='wftab-clone-onto-set']").exists()).toBe(true);
+    expect(heads[1].find("[data-testid='wftab-edit-loras']").exists()).toBe(true);
     expect(textOf(wrapper)).not.toContain("In every picture");
   });
 
-  it("says so when none of its pictures is rated 4★ yet", async () => {
-    getWorkflowCard.mockResolvedValue(withRecipe({ provenance: "all" }));
-    const { wrapper } = await mountWith([KEY]);
-    expect(wrapper.find("[data-testid='wftab-provenance']").text()).toBe(
-      "Most used in its pictures. None is rated 4★ yet.",
+  it("draws its star ratings in the head, the 4★+ bars the defaults come from at full ink", async () => {
+    const counts = [0, 2, 5, 8, 4];
+    const { wrapper } = await mountWith([KEY], [card({ rating_counts: counts })]);
+    const chart = wrapper.find(".wftab-head [data-testid='wftab-stars']");
+    expect(chart.attributes("aria-label")).toBe(
+      "Ratings: 1 star 0, 2 stars 2, 3 stars 5, 4 stars 8, 5 stars 4. " +
+        "The defaults come from the 12 rated 4 stars or more.",
     );
+    const bars = chart.findAll("rect");
+    expect(bars.map((bar) => bar.classes()[0])).toEqual([
+      "wfstars-lo",
+      "wfstars-lo",
+      "wfstars-lo",
+      "wfstars-hi",
+      "wfstars-hi",
+    ]);
+    // Scaled to the tallest; an empty rating keeps a 1px stub.
+    expect(bars.map((bar) => bar.attributes("height"))).toEqual([
+      "1",
+      "4",
+      "10",
+      "16",
+      "8",
+    ]);
+  });
+
+  it("inks every bar when none is rated 4★ yet, and draws no chart when nothing is rated", async () => {
+    const { wrapper } = await mountWith([KEY], [card({ rating_counts: [1, 3, 0, 0, 0] })]);
+    const chart = wrapper.find("[data-testid='wftab-stars']");
+    expect(chart.attributes("aria-label")).toContain(
+      "None is rated 4 stars yet, so the defaults come from all its pictures.",
+    );
+    expect(chart.findAll("rect.wfstars-lo")).toHaveLength(0);
+
+    const unrated = await mountWith([KEY], [card({ rating_counts: [0, 0, 0, 0, 0] })]);
+    expect(unrated.wrapper.find("[data-testid='wftab-stars']").exists()).toBe(false);
+    expect(textOf(unrated.wrapper)).not.toContain("Star ratings");
   });
 
   it("reads its default recipe before naming any model, never the card's", async () => {
@@ -1282,9 +1335,9 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     const pile = wrapper.find("[data-testid='wftab-pile']");
     expect(pile.text()).toContain("Ada");
     expect(pile.text()).not.toContain("+1");
-    expect(wrapper.find("[data-testid='wftab-changes'] [role='heading']").text()).toContain(
-      "Also used",
-    );
+    // The pile sits in the LoRAs panel, under the default rows.
+    const pileRow = wrapper.find("[data-testid='wftab-loras'] [data-testid='wftab-changes']");
+    expect(pileRow.find(".wftab-label").text()).toBe("Also used");
   });
 
   it("never joins by filename: a same-named LoRA with another digest stays in the pile", async () => {
@@ -1702,21 +1755,22 @@ describe("a default's provenance and reset", () => {
     ]);
   });
 
-  it("pins the parameters the design pins when the card has no choice", async () => {
+  it("sets the design's numbers each run and fixes the rest when the card has no choice", async () => {
     getWorkflowCard.mockResolvedValue(
       detail({ card: { defaults: [STEPS, SAMPLER] } }),
     );
     const { wrapper } = await mountWith([KEY]);
-    // WHICH side of the fold each row is on. Counting pressed pins is
-    // equally true when the two lists are swapped, and that swap is the
-    // whole of what the pin does.
-    expect(rowNamed(wrapper, "steps").element.closest("details")).toBeNull();
-    expect(
-      rowNamed(wrapper, "sampler_name").element.closest("details"),
-    ).not.toBeNull();
-    expect(wrapper.find("details.wftab-disclose summary").text()).toContain(
-      "All 2 parameters",
-    );
+    // WHICH group each row is in. Counting pressed locks is equally true
+    // when the two groups are swapped, and that swap is the whole of what
+    // the lock does.
+    expect(inFixedGroup(wrapper, "steps")).toBe(false);
+    expect(inFixedGroup(wrapper, "sampler_name")).toBe(true);
+    expect(lockOf(wrapper, "sampler_name").attributes("aria-pressed")).toBe("true");
+    expect(lockOf(wrapper, "steps").attributes("aria-pressed")).toBe("false");
+    expect(textOf(wrapper)).toContain("Set each run");
+    expect(textOf(wrapper)).toContain("Fixed · 1");
+    expect(textOf(wrapper)).toContain("Fixed values are used by every run.");
+    expect(textOf(wrapper)).not.toContain("parameters");
   });
 
   it("keeps an empty pin list apart from no choice at all", async () => {
@@ -1724,12 +1778,65 @@ describe("a default's provenance and reset", () => {
       detail({ card: { defaults: [STEPS] }, pins: [] }),
     );
     const { wrapper } = await mountWith([KEY]);
-    expect(wrapper.findAll('.wfdef [aria-pressed="true"]')).toHaveLength(0);
-    // Nothing pinned means nothing above the fold, so every row is inside
-    // it — the section must not simply be empty.
-    expect(
-      rowNamed(wrapper, "steps").element.closest("details"),
-    ).not.toBeNull();
+    expect(wrapper.findAll('.wfdef [aria-pressed="false"]')).toHaveLength(0);
+    // Nothing set each run means every row is fixed, and the panel must not
+    // simply be empty.
+    expect(inFixedGroup(wrapper, "steps")).toBe(true);
+    expect(textOf(wrapper)).not.toContain("Set each run");
+  });
+
+  it("says nothing about fixed values when nothing is fixed", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { defaults: [STEPS] } }));
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find("[data-testid='wftab-fixed-group']").exists()).toBe(false);
+    expect(textOf(wrapper)).not.toContain("Fixed values are used by every run.");
+  });
+
+  it("folds more than three fixed rows behind their count", async () => {
+    const fixed = ["sampler_name", "scheduler", "denoise", "seed"].map((name) => ({
+      ...SAMPLER,
+      label: name,
+      input_name: name,
+    }));
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, ...fixed] } }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const group = wrapper.find("details[data-testid='wftab-fixed-group']");
+    expect(group.find("summary").text().replace(/\s+/g, " ")).toBe("Fixed · 4");
+    expect(rowNamed(wrapper, "seed").element.closest("details")).toBe(group.element);
+    expect(rowNamed(wrapper, "steps").element.closest("details")).toBeNull();
+  });
+
+  it("keeps a toggled row where it is until the workflow is opened again", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, SAMPLER] } }),
+    );
+    setWorkflowPins.mockImplementation(async (_key, pins) => ({ pins }));
+    const { wrapper } = await mountWith([KEY]);
+    await lockOf(wrapper, "sampler_name").trigger("click");
+    await flush(wrapper);
+    // The lock says it is set each run now, but the row did not jump out
+    // from under the pointer.
+    expect(lockOf(wrapper, "sampler_name").attributes("aria-pressed")).toBe("false");
+    expect(inFixedGroup(wrapper, "sampler_name")).toBe(true);
+  });
+
+  it("takes the pins the Run popup wrote, so the next lock does not undo them", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, SAMPLER] } }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const freed = [
+      { slot_label: "slot-a", input_name: "steps" },
+      { slot_label: "slot-a", input_name: "sampler_name" },
+    ];
+    useRunDialogStore().pinsWritten = { workflowId: KEY, pins: freed };
+    await flush(wrapper);
+    expect(lockOf(wrapper, "sampler_name").attributes("aria-pressed")).toBe("false");
+    await lockOf(wrapper, "steps").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowPins).toHaveBeenCalledWith(KEY, [freed[1]]);
   });
 
   it("pins one parameter without unpinning the rest", async () => {
@@ -2280,9 +2387,7 @@ describe("a write that comes back after the selection moved", () => {
     // again and `sampler_name` drops back inside the fold while the hub
     // holds it pinned.
     expect(setWorkflowPins).toHaveBeenCalledTimes(1);
-    expect(
-      rowNamed(wrapper, "sampler_name").element.closest("details"),
-    ).toBeNull();
+    expect(lockOf(wrapper, "sampler_name").attributes("aria-pressed")).toBe("false");
   });
 
   it("drops a whole-set write queued behind another when the selection moves", async () => {
@@ -2533,18 +2638,17 @@ describe("the LoRA chain (#1478)", () => {
     expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(false);
   });
 
-  it("keeps Edit LoRAs… out of the section head, below the LoRA rows", async () => {
-    // Both verbs in the head overflowed a narrow inspector sideways.
+  it("puts Edit LoRAs… in the head of the panel holding the LoRAs, apart from the clone", async () => {
+    // Both verbs in one head overflowed a narrow inspector sideways.
     const { wrapper } = await mountChain();
-    const head = wrapper.find("[data-testid='wftab-default-recipe'] .wftab-sec-head");
-    expect(head.find("[data-testid='wftab-clone-onto-set']").exists()).toBe(true);
-    expect(head.find("[data-testid='wftab-edit-loras']").exists()).toBe(false);
+    const models = wrapper.find("[data-testid='wftab-default-recipe'] .wftab-sec-head");
+    expect(models.find("[data-testid='wftab-clone-onto-set']").exists()).toBe(true);
+    expect(models.find("[data-testid='wftab-edit-loras']").exists()).toBe(false);
+    const loras = wrapper.find("[data-testid='wftab-loras']");
+    expect(loras.find(".wftab-sec-head [data-testid='wftab-edit-loras']").exists()).toBe(true);
     const rows = wrapper.findAll("[data-testid='wftab-default-lora']");
-    const last = rows[rows.length - 1].element;
-    expect(
-      last.compareDocumentPosition(editButton(wrapper).element) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => loras.element.contains(row.element))).toBe(true);
   });
 
   it("gives a chain row the file its name's tooltip carries", async () => {

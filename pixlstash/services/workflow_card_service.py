@@ -241,6 +241,8 @@ class WorkflowFigures:
     pictures: int = 0
     rated: int = 0
     score_total: int = 0
+    # Pictures per star, 1★ first (:attr:`VariantActivity.stars`).
+    stars: list[int] = field(default_factory=lambda: [0] * 5)
     last_used: Optional[datetime] = None
     rank: float = 0.0
     covers: list[CoverCandidate] = field(default_factory=list)
@@ -364,6 +366,7 @@ def _figures(
                 figure.pictures += seen.pictures
                 figure.rated += seen.rated
                 figure.score_total += seen.score_total
+                figure.stars = [a + b for a, b in zip(figure.stars, seen.stars)]
                 if seen.last_used is not None and (
                     figure.last_used is None or seen.last_used > figure.last_used
                 ):

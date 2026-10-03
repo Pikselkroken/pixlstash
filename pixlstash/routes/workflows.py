@@ -654,6 +654,10 @@ class WorkflowCard(BaseModel):
         None,
         description="Mean of the stars this workflow has; null when it has none.",
     )
+    rating_counts: list[int] = Field(
+        default_factory=lambda: [0] * 5,
+        description="How many of its pictures carry each star, 1 star first.",
+    )
     covers: list[WorkflowCover] = Field(
         default_factory=list,
         description="Up to three cover pictures, the cover first.",
@@ -2461,6 +2465,7 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         specials=None if figure.card.specials is None else list(figure.card.specials),
         picture_count=figure.pictures,
         rating=figure.rating,
+        rating_counts=list(figure.stars),
         covers=_covers(figure.covers),
         saved_recipe_count=figure.saved_recipes,
         defaults=_defaults_payload(recipe.values) if recipe else [],

@@ -1634,6 +1634,7 @@ _CONTRACT_FIELDS = {
     "loras",
     "picture_count",
     "rating",
+    "rating_counts",
     "covers",
     "saved_recipe_count",
     "defaults",
@@ -3148,9 +3149,12 @@ def test_a_card_adds_up_every_variants_kept_pictures_and_ratings(workflow_env):
     card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert card["picture_count"] == 5
     assert card["rating"] == pytest.approx(4.5)
+    # Per star, 1 first: the cleared 0 and the deleted 5s are in no bar.
+    assert card["rating_counts"] == [0, 0, 0, 1, 1]
     forgotten = _detail(workflow_env.owner, FORGOTTEN_WF)["card"]
     assert forgotten["picture_count"] == 4
     assert forgotten["rating"] == pytest.approx(2.0)
+    assert forgotten["rating_counts"] == [0, 1, 0, 0, 0]
 
 
 def test_an_unrated_card_reports_no_rating_rather_than_the_prior(workflow_env):

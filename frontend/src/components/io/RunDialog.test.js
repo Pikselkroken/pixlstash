@@ -25,6 +25,7 @@ const runWorkflowCard = vi.fn();
 const getPictureRecipe = vi.fn();
 const setWorkflowInputs = vi.fn();
 const saveFixedWorkflow = vi.fn();
+const setWorkflowPins = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -33,6 +34,7 @@ vi.mock("../../api/workflows", () => ({
   runWorkflowCard: (...args) => runWorkflowCard(...args),
   setWorkflowInputs: (...args) => setWorkflowInputs(...args),
   saveFixedWorkflow: (...args) => saveFixedWorkflow(...args),
+  setWorkflowPins: (...args) => setWorkflowPins(...args),
   workflowCoverUrl: (cover) => (cover?.url ? `/api/v1${cover.url}` : ""),
 }));
 vi.mock("../../api/comfyui", () => ({
@@ -67,6 +69,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 import RunDialog from "./RunDialog.vue";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 
 const KEY = `auto:${"a".repeat(64)}`;
 const OTHER = `auto:${"b".repeat(64)}`;
@@ -341,8 +344,18 @@ describe("switching to another workflow", () => {
   });
 
   it("names the fields that fell back to the new workflow's own values", async () => {
+    // Denoise set each run on this workflow, so it is a field to edit.
+    const own = getWorkflowCard.getMockImplementation();
+    getWorkflowCard.mockImplementation(async (key) => {
+      const answer = await own(key);
+      if (key !== KEY) return answer;
+      const pins = answer.card.defaults
+        .filter((f) => ["steps", "denoise"].includes(f.input_name))
+        .map(({ slot_label, input_name }) => ({ slot_label, input_name }));
+      return { ...answer, pins };
+    });
     const wrapper = await mountRun();
-    const denoise = wrapper.vm.restFields.find(
+    const denoise = wrapper.vm.otherRunFields.find(
       (f) => f.input_name === "denoise",
     );
     wrapper.vm.setValue(denoise, 0.6);
@@ -921,9 +934,8 @@ describe("the picture beside the form", () => {
 describe("a card that carries only half a Size", () => {
   it("draws the one it has as an ordinary parameter rather than hiding it", async () => {
     // Half a Size cell would be a control that lies about what it sets; but a
-    // width that is pinned and not drawn is worse, because it is then in
-    // neither the pinned rows nor "All N parameters" and cannot be edited at
-    // all.
+    // width that is set each run and not drawn is worse, because it then
+    // cannot be edited at all.
     getWorkflowCard.mockResolvedValue({
       card: card({
         defaults: [def("Steps", "steps", 8), def("Width", "width", 832, "Latent")],
@@ -932,7 +944,77 @@ describe("a card that carries only half a Size", () => {
     const wrapper = await mountRun();
 
     expect(wrapper.vm.sizeFields).toEqual([]);
-    expect(wrapper.vm.restFields.map((f) => f.input_name)).toContain("width");
+    expect(wrapper.vm.otherRunFields.map((f) => f.input_name)).toContain("width");
+  });
+});
+
+describe("a workflow's fixed parameters", () => {
+  /** `KEY` with its stored pins, everything else as the default mock. */
+  function withPins(pins) {
+    const own = getWorkflowCard.getMockImplementation();
+    getWorkflowCard.mockImplementation(async (key) => ({
+      ...(await own(key)),
+      ...(key === KEY ? { pins } : {}),
+    }));
+  }
+
+  it("asks for the ones set each run and lists the rest read-only, still sending them", async () => {
+    withPins([{ slot_label: "KSampler", input_name: "cfg" }]);
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(wrapper.vm.scalarFields.map((f) => f.input_name)).toEqual(["cfg"]);
+    expect(wrapper.vm.sizeFields).toEqual([]);
+    expect(wrapper.vm.otherRunFields).toEqual([]);
+    const fixed = wrapper.vm.fixedFields.map((f) => f.input_name);
+    expect(fixed).toEqual(["steps", "width", "height", "ckpt_name", "denoise"]);
+    const list = wrapper.find("[data-testid='rund-fixed-params']");
+    expect(list.find("summary").text().replace(/\s+/g, " ")).toBe(
+      "Fixed for this workflow · 5",
+    );
+    expect(list.text()).toContain("Steps");
+    // Fixed is "every run uses the workflow's value": still in the body.
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(sentValue(runWorkflowCard.mock.calls[0][0], "steps").value).toBe(8);
+  });
+
+  it("falls back to the shared default set when nobody has chosen", async () => {
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(wrapper.vm.scalarFields.map((f) => f.input_name)).toEqual(["steps", "cfg"]);
+    expect(wrapper.vm.sizeFields).toHaveLength(2);
+    expect(wrapper.vm.fixedFields.map((f) => f.input_name)).toEqual([
+      "ckpt_name",
+      "denoise",
+    ]);
+  });
+
+  it("frees one with Set each run, writing the whole list and telling the Workflow tab", async () => {
+    const steps = { slot_label: "KSampler", input_name: "steps" };
+    const denoise = { slot_label: "KSampler", input_name: "denoise" };
+    withPins([steps]);
+    setWorkflowPins.mockImplementation(async (_key, pins) => ({ pins }));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const field = wrapper.vm.fixedFields.find((f) => f.input_name === "denoise");
+    await wrapper.vm.freeField(field);
+    await flushPromises();
+    expect(setWorkflowPins).toHaveBeenCalledWith(KEY, [steps, denoise]);
+    expect(wrapper.vm.fixedFields.map((f) => f.input_name)).not.toContain("denoise");
+    expect(wrapper.vm.otherRunFields.map((f) => f.input_name)).toEqual(["denoise"]);
+    expect(useRunDialogStore().pinsWritten).toEqual({
+      workflowId: KEY,
+      pins: [steps, denoise],
+    });
+  });
+
+  it("keeps it fixed, and says so, when the write fails", async () => {
+    withPins([]);
+    setWorkflowPins.mockRejectedValue(new Error("offline"));
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const field = wrapper.vm.fixedFields.find((f) => f.input_name === "denoise");
+    await wrapper.vm.freeField(field);
+    await flushPromises();
+    expect(wrapper.vm.fixedFields.map((f) => f.input_name)).toContain("denoise");
+    expect(wrapper.vm.freeError).toBe("offline");
+    expect(useRunDialogStore().pinsWritten).toBeNull();
   });
 });
 

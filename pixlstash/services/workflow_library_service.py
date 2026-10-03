@@ -216,6 +216,7 @@ def read_variant_picture_counts(vault) -> dict[str, int]:
 # rating: counting either would drag every card's Bayesian mean towards zero in
 # proportion to how much of the library is simply unrated.
 _IS_RATED = and_(Picture.score.is_not(None), Picture.score > 0)
+_STARS = range(1, 6)
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +254,8 @@ class VariantActivity:
     rated: int
     score_total: int
     last_used: Optional[datetime]
+    # How many pictures carry each star, 1★ first: the inspector's histogram.
+    stars: tuple[int, ...] = (0, 0, 0, 0, 0)
 
 
 @dataclass(frozen=True)
@@ -337,6 +340,7 @@ def variant_activity(
             func.sum(case((_IS_RATED, 1), else_=0)),
             func.sum(case((_IS_RATED, Picture.score), else_=0)),
             func.max(_USED_AT),
+            *(func.sum(case((Picture.score == star, 1), else_=0)) for star in _STARS),
         )
         .where(column.is_not(None))
         .where(Picture.deleted.is_(False))
@@ -348,8 +352,9 @@ def variant_activity(
             rated=int(rated or 0),
             score_total=int(score_total or 0),
             last_used=last_used,
+            stars=tuple(int(count or 0) for count in stars),
         )
-        for key, pictures, rated, score_total, last_used in rows
+        for key, pictures, rated, score_total, last_used, *stars in rows
     }
 
 
