@@ -16,8 +16,10 @@ cannot interleave their way past them.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import secrets
+import shutil
 import sqlite3
 import threading
 import uuid as uuid_module
@@ -68,11 +70,53 @@ LIBRARY_MADE_ENTRIES = (
 )
 
 
+def library_made_entries_present(folder: str) -> tuple[str, ...]:
+    """The :data:`LIBRARY_MADE_ENTRIES` already in *folder*, before an import.
+
+    A folder that was a library once (a restored backup, a vault the owner
+    deleted by hand) still holds its old ``snapshots/`` and thumbnail caches.
+    Those are not this import's to delete when it is abandoned, so the names
+    present at the start are recorded and kept.
+    """
+    return tuple(
+        name
+        for name in LIBRARY_MADE_ENTRIES
+        if os.path.lexists(os.path.join(folder, name))
+    )
+
+
+def remove_library_made_entries(library: Library) -> None:
+    """Delete what an abandoned first import wrote into its folder.
+
+    Named entries only, never a sweep of whatever looks generated - this runs
+    on a folder full of the owner's pictures, and a symlink one of these names
+    points at is left alone. Entries that were there before the import began
+    are kept, and so is everything when that was never recorded.
+    """
+    if library.pending_import_kept is None:
+        logger.warning(
+            "Not removing PixlStash's folders from %s: which of them were there "
+            "before its import began was not recorded, so none is assumed ours.",
+            library.path,
+        )
+        return
+    for name in LIBRARY_MADE_ENTRIES:
+        if name in library.pending_import_kept:
+            continue
+        path = os.path.join(library.path, name)
+        if not os.path.isdir(path) or os.path.islink(path):
+            continue
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            logger.warning("Could not remove %s: %s", path, exc)
+
+
 # Every registry read selects the same columns, in the order
 # :meth:`LibraryRegistry._row_to_library` expects.
 _LIBRARY_COLUMNS = (
     "id, uuid, vault_uuid, settings_salt, identity_migration_state, name, path, created_at, attached_at, "
-    "detached_at, attached, is_active, notes, pending_import_at"
+    "detached_at, attached, is_active, notes, pending_import_at, pending_import_kept"
 )
 
 # Tables every PixlStash vault has. ``alembic_version`` proves it went through
@@ -161,6 +205,10 @@ class Library:
     detached_at: Optional[str] = None
     notes: Optional[str] = None
     pending_import_at: Optional[str] = None
+    #: The :data:`LIBRARY_MADE_ENTRIES` the folder already held when its first
+    #: import began, which an abandoned import must not delete. None when that
+    #: was not recorded (a row older than the record), which keeps them all.
+    pending_import_kept: Optional[tuple[str, ...]] = None
 
     @property
     def vault_filename(self) -> str:
@@ -667,6 +715,9 @@ class LibraryRegistry:
             resolved,
             name or os.path.basename(resolved),
             pending_import=pending_import,
+            # Start-up registers before the vault exists, so nothing of ours
+            # is in the folder yet.
+            kept=library_made_entries_present(resolved),
             # Start-up must not die on a name. `bootstrap._register_first_library`
             # passes the hardcoded "Library 1" and does not catch
             # LibraryExistsError, so refusing here would turn a duplicate label -
@@ -725,6 +776,8 @@ class LibraryRegistry:
             # never asked for.
             cleaned = (name or "").strip() or os.path.basename(resolved)
             self._refuse_duplicate_name(cleaned)
+            # Before the vault opens: opening it creates `snapshots/` and `tmp/`.
+            kept = library_made_entries_present(resolved)
 
             # Every MISSING component 0700, not only the leaf (W21: makedirs'
             # mode stops at the leaf, so a deep new path left 0775 intermediates
@@ -750,7 +803,7 @@ class LibraryRegistry:
             vault = VaultDatabase(vault_path)
             try:
                 registered = self._register(
-                    resolved, cleaned, pending_import=pending_import
+                    resolved, cleaned, pending_import=pending_import, kept=kept
                 )
             finally:
                 vault.close()
@@ -1077,6 +1130,7 @@ class LibraryRegistry:
         recovered_uuid: str | None = None,
         unique_name: bool = True,
         pending_import: bool = False,
+        kept: tuple[str, ...] = (),
     ) -> Library:
         """Register a library, reviving a previously detached row when it fits.
 
@@ -1093,6 +1147,8 @@ class LibraryRegistry:
                 :meth:`register_pending`, whose caller is start-up: a duplicate
                 name is a nuisance there and a failed boot is not, so the
                 start-up path records what it was given.
+            kept: With *pending_import*, the entries an abandoned import must
+                leave in the folder (:func:`library_made_entries_present`).
         """
         cleaned = name.strip() or os.path.basename(resolved_path)
         fingerprint = read_vault_uuid(resolved_path)
@@ -1156,8 +1212,8 @@ class LibraryRegistry:
                 cursor = conn.execute(
                     "INSERT INTO library (uuid, vault_uuid, settings_salt, "
                     "identity_migration_state, name, path, created_at, "
-                    "attached_at, is_active, pending_import_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "attached_at, is_active, pending_import_at, pending_import_kept) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         library_uuid,
                         fingerprint,
@@ -1173,6 +1229,7 @@ class LibraryRegistry:
                         now,
                         1 if first_library else 0,
                         now if pending_import else None,
+                        json.dumps(list(kept)) if pending_import else None,
                     ),
                 )
                 library_id = int(cursor.lastrowid)
@@ -1376,6 +1433,11 @@ class LibraryRegistry:
             is_active=bool(row["is_active"]),
             notes=row["notes"],
             pending_import_at=row["pending_import_at"],
+            pending_import_kept=(
+                tuple(json.loads(row["pending_import_kept"]))
+                if row["pending_import_kept"] is not None
+                else None
+            ),
         )
 
 

@@ -211,6 +211,47 @@ class TestTheStartupSweep:
         assert sorted(p.name for p in folder.iterdir()) == ["beach.jpg"]
         assert registry.by_uuid(library.uuid) is None
 
+    def test_a_previous_librarys_folders_survive_the_sweep(self, registry, tmp_path):
+        folder = tmp_path / "restored"
+        (folder / "snapshots").mkdir(parents=True)
+        (folder / "snapshots" / "old.sqlite.zst").write_bytes(b"history")
+        (folder / "beach.jpg").write_bytes(b"a picture")
+        library = registry.create(str(folder), "Restored", pending_import=True)
+        assert library.pending_import_kept == ("snapshots",)
+        (folder / THUMBNAIL_DIR_NAME).mkdir()
+
+        _sweep_unfinished_imports(registry)
+
+        assert (folder / "snapshots" / "old.sqlite.zst").read_bytes() == b"history"
+        assert not (folder / THUMBNAIL_DIR_NAME).exists(), "this one was ours"
+        assert registry.by_uuid(library.uuid) is None
+
+    def test_start_up_registration_records_them_too(self, registry, tmp_path):
+        """The desktop's first run registers through start-up, not `create`."""
+        folder = tmp_path / "restored"
+        (folder / ".pixlstash-thumbnails").mkdir(parents=True)
+
+        library = registry.register_pending(str(folder), pending_import=True)
+
+        assert library.pending_import_kept == (".pixlstash-thumbnails",)
+
+    def test_a_row_that_never_recorded_them_keeps_everything(self, registry, tmp_path):
+        """A pending row from before the record: nothing is assumed ours."""
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        library = registry.create(str(folder), "Holiday", pending_import=True)
+        with registry._hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET pending_import_kept = NULL WHERE id = ?",
+                (library.id,),
+            )
+        (folder / "snapshots").mkdir()
+
+        _sweep_unfinished_imports(registry)
+
+        assert (folder / "snapshots").is_dir()
+        assert not (folder / TEMP_VAULT_FILENAME).exists()
+
     def test_a_rename_that_landed_before_the_crash_is_just_finished(
         self, registry, tmp_path
     ):

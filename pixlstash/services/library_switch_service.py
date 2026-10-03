@@ -31,12 +31,12 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 from pixlstash.hub.registry import (
-    LIBRARY_MADE_ENTRIES,
     SCRATCH_LIBRARY_NAME as _SCRATCH_LIBRARY_NAME,
     VAULT_FILENAME,
     Library,
     LibraryError,
     LibraryNotFoundError,
+    remove_library_made_entries,
     resolve_path,
     validate_vault_folder,
 )
@@ -608,7 +608,7 @@ class LibrarySwitchService:
                     path,
                     exc,
                 )
-        self._remove_what_we_made(folder)
+        remove_library_made_entries(library)
         self._server.library_registry.forget(library.id)
         logger.info(
             "Discarded the unfinished import into %s; %s is gone and the "
@@ -617,25 +617,6 @@ class LibrarySwitchService:
             os.path.basename(temporary),
         )
         return landed
-
-    def _remove_what_we_made(self, folder: str) -> None:
-        """Delete the folders PixlStash itself wrote into *folder*.
-
-        "Exactly as PixlStash found it" is the whole claim, and the thumbnail
-        cache is only the part people notice: opening a library also creates
-        ``snapshots/`` and ``tmp/``, which a test asserting the folder's
-        listing is what found out. Named entries only, never a sweep of
-        whatever looks generated - this runs on a folder full of the owner's
-        pictures, and a symlink one of these names points at is left alone.
-        """
-        for name in LIBRARY_MADE_ENTRIES:
-            path = os.path.join(folder, name)
-            if not os.path.isdir(path) or os.path.islink(path):
-                continue
-            try:
-                shutil.rmtree(path)
-            except OSError as exc:
-                logger.warning("Could not remove %s: %s", path, exc)
 
     def switch_to_scratch_library(
         self, *, leaving: Optional[Library] = None
