@@ -1,28 +1,10 @@
 <template>
-  <div class="wfdef">
-    <!-- `AppButton icon-only` rather than a hand-rolled button: it is what
-         makes the tooltip the accessible NAME (docs/design/buttons.md). A
-         bare button holding a glyph and a `Tooltip` gets `aria-describedby`,
-         which is a description and not a name, so a screen reader announces
-         "button, pressed" and nothing else. -->
-    <AppButton
-      class="wfdef-pin"
-      size="sm"
-      variant="ghost"
-      icon-only
-      :icon-left="row.pinned ? 'pin' : 'pin-outline'"
-      :tooltip="
-        row.pinned ? `Unpin ${row.label}` : `Pin ${row.label} to the Run popup`
-      "
-      :aria-pressed="row.pinned ? 'true' : 'false'"
-      :disabled="busy"
-      @click="emit('toggle-pin')"
-    />
+  <div :class="['wfdef', { 'wfdef--fixed': fixed }]">
     <span class="wfdef-name">
       {{ row.label }}
       <!-- Only the exception is marked (#1653): where the computed values
-           come from is said once, under the section label, and "Yours" is
-           the one provenance the owner can act on (↺). -->
+           come from is drawn once, in the tab's head, and "Yours" is the one
+           provenance the owner can act on (↺). -->
       <span v-if="row.provenance === 'edited'" class="wfdef-prov">Yours</span>
     </span>
     <span class="wfdef-value">
@@ -39,20 +21,37 @@
         @click="emit('reset')"
       />
     </span>
+    <!-- A toggle with one constant name, pressed when fixed. `AppButton
+         icon-only` rather than a hand-rolled button: it is what makes the
+         tooltip the accessible NAME (docs/design/buttons.md). Open: a quiet
+         ghost lock. Fixed: the closed lock in a bordered button, so the one
+         control on a row whose value has lost its box still reads as one. -->
+    <AppButton
+      class="wfdef-lock"
+      size="sm"
+      :variant="fixed ? 'secondary' : 'ghost'"
+      icon-only
+      :icon-left="fixed ? 'lock-outline' : 'lock-open-variant-outline'"
+      :tooltip="`Fix ${row.label} for this workflow`"
+      :aria-pressed="fixed ? 'true' : 'false'"
+      :disabled="busy"
+      data-testid="wfdef-lock"
+      @click="emit('toggle-pin')"
+    />
   </div>
 </template>
 
 <script setup>
-// One parameter of a workflow's Defaults section (implementation plan §F3):
-// the pin, what it is called and where its value came from, and the value.
-//
-// Split out of `WorkflowTab.vue` because the same row is drawn twice — once
-// above "All N parameters" and once inside it — and a copy of it would be two
-// places for the reset to go wrong.
+// One parameter of the Workflow tab's Parameters panel: its name, its value,
+// and the lock that says whether the Run form asks for it each run (open) or
+// every run uses the workflow's value (fixed). `row.pinned` is "set each run";
+// the stored pin list keeps its shape.
+
+import { computed } from "vue";
 
 import AppButton from "../widgets/AppButton.vue";
 
-defineProps({
+const props = defineProps({
   /** `{label, slot_label, input_name, value, provenance, pinned}`. */
   row: { type: Object, required: true },
   /** A write for this row is out; both its controls wait for it. */
@@ -60,27 +59,18 @@ defineProps({
 });
 
 const emit = defineEmits(["toggle-pin", "reset"]);
+
+const fixed = computed(() => !props.row.pinned);
 </script>
 
 <style scoped>
-/* Local track widths, like the tab's own 96px label column: the pin is one
-   `--control-h-sm` control and the value column is the same 96px, and no
-   other pane pairs the three, so neither is a token. */
+/* Name and value take equal halves, so the value grows with the rail instead
+   of sitting in a fixed track; the lock is one `--control-h-sm` square. */
 .wfdef {
   display: grid;
-  grid-template-columns: var(--control-h-sm) 1fr minmax(0, 96px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--control-h-sm);
   align-items: center;
-  gap: var(--space-2);
-}
-
-/* `--control-h-sm` is the WCAG 2.2 pointer floor the token ramp names, and
-   `AppButton size="sm"` is already that tall; this only squares it. */
-.wfdef-pin {
-  width: var(--control-h-sm);
-}
-
-.wfdef-pin[aria-pressed="true"] {
-  color: rgb(var(--v-theme-on-surface));
+  gap: var(--space-3);
 }
 
 .wfdef-name {
@@ -88,6 +78,8 @@ const emit = defineEmits(["toggle-pin", "reset"]);
   flex-direction: column;
   min-width: 0;
   font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  overflow-wrap: anywhere;
 }
 
 /* "Yours": the one exception mark, a step above the label through weight and
@@ -104,11 +96,20 @@ const emit = defineEmits(["toggle-pin", "reset"]);
   gap: var(--space-1);
   min-width: 0;
   height: var(--control-h);
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-3);
   border: 1px solid rgb(var(--v-theme-divider));
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
   font-size: var(--text-sm);
+}
+
+/* Fixed: the value is not asked for, so it loses its field box and drops to
+   secondary ink. */
+.wfdef--fixed .wfdef-value {
+  padding-left: 0;
+  border-color: transparent;
+  background: none;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wfdef-text {
@@ -119,8 +120,15 @@ const emit = defineEmits(["toggle-pin", "reset"]);
   white-space: nowrap;
 }
 
-.wfdef-reset {
+/* `--control-h-sm` is the WCAG 2.2 pointer floor the token ramp names, and
+   `AppButton size="sm"` is already that tall; this only squares it. */
+.wfdef-reset,
+.wfdef-lock {
   flex: none;
   width: var(--control-h-sm);
+}
+
+.wfdef-lock[aria-pressed="false"] {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 </style>

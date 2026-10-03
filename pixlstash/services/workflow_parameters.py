@@ -67,7 +67,7 @@ STRING = "string"
 CHOICE = "choice"
 MODEL = "model"
 
-# The settings shown before "All N parameters", besides every model and seed. A
+# The featured settings a default recipe lists, besides every model and seed. A
 # primitive counts when it drives one of these (Flux2-Klein sets its size so).
 # ponytail: a name list; per-class rules if custom packs name these differently.
 # The tuple is also the order a workflow's default recipe lists them in, so its

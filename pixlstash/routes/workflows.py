@@ -654,6 +654,10 @@ class WorkflowCard(BaseModel):
         None,
         description="Mean of the stars this workflow has; null when it has none.",
     )
+    rating_counts: list[int] = Field(
+        default_factory=lambda: [0] * 5,
+        description="How many of its pictures carry each star, 1 star first.",
+    )
     covers: list[WorkflowCover] = Field(
         default_factory=list,
         description="Up to three cover pictures, the cover first.",
@@ -2461,6 +2465,7 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         specials=None if figure.card.specials is None else list(figure.card.specials),
         picture_count=figure.pictures,
         rating=figure.rating,
+        rating_counts=list(figure.stars),
         covers=_covers(figure.covers),
         saved_recipe_count=figure.saved_recipes,
         defaults=_defaults_payload(recipe.values) if recipe else [],
@@ -3461,9 +3466,10 @@ def create_router(server) -> APIRouter:
         "/workflows/{workflow_id}/pins",
         summary="Set a workflow's pinned parameters",
         description=(
-            "Which parameters this workflow's form shows before 'All N'. An "
-            "empty list is everything unpinned; null forgets the choice, so "
-            "the default pins apply again."
+            "Which parameters the Run form asks for each run; every other "
+            "parameter is fixed at the workflow's value (a saved recipe or an "
+            "API override still sets it). An empty list fixes everything; "
+            "null forgets the choice, so the default pins apply again."
         ),
         response_model=CardPins,
         responses={404: {"description": "This machine has no such workflow."}},

@@ -54,7 +54,7 @@
       </div>
 
       <!-- ── Right: the form, four columns ──────────────────────────────── -->
-      <div class="rund-form">
+      <div ref="formRoot" class="rund-form">
         <div class="rund-f rund-f--4">
           <span class="rund-l">
             Workflow<span class="rund-sp" />
@@ -396,6 +396,31 @@
           />
         </div>
 
+        <!-- The other parameters this workflow sets each run (its lock is
+             open in the Workflow tab): asked for here like the ones above. -->
+        <div
+          v-for="field in otherRunFields"
+          :key="address(field)"
+          class="rund-f rund-f--2"
+        >
+          <span class="rund-l">
+            {{ field.label }}
+            <RunResetChip
+              v-if="isEdited(field)"
+              :value="baseOf(field)"
+              :label="field.label"
+              @reset="resetValue(field)"
+            />
+          </span>
+          <AppInput
+            :model-value="String(currentValue(field))"
+            :aria-label="field.label"
+            :disabled="submitting"
+            @update:model-value="(v) => setValue(field, coerce(field, v))"
+            @keydown.stop
+          />
+        </div>
+
         <div class="rund-f">
           <span class="rund-l">Count</span>
           <AppInput
@@ -520,12 +545,26 @@
               @keydown.stop
             />
           </details>
-          <details v-if="restFields.length" class="rund-disc">
-            <summary>
-              All {{ defaults.length }} parameters
-              <span class="rund-quiet">{{ restFields.length }} more</span>
+          <!-- Fixed for this workflow: every run uses its value, so it is not
+               a field here. Read-only, each with the way to free it, which
+               writes the workflow's own choice; there is no one-off override
+               of a fixed value. -->
+          <details
+            v-if="fixedFields.length"
+            class="rund-disc"
+            data-testid="rund-fixed-params"
+          >
+            <summary ref="fixedSummary">
+              Fixed for this workflow
+              <span class="rund-quiet">· {{ fixedFields.length }}</span>
             </summary>
-            <div v-for="field in restFields" :key="address(field)" class="rund-rest">
+            <div
+              v-for="field in fixedFields"
+              :key="address(field)"
+              class="rund-fixed-row"
+            >
+              <!-- A value kept from another workflow or a saved recipe still
+                   overrides a fixed one for this run, so it keeps its ↺. -->
               <span class="rund-l">
                 {{ field.label }}
                 <RunResetChip
@@ -535,14 +574,19 @@
                   @reset="resetValue(field)"
                 />
               </span>
-              <AppInput
-                :model-value="String(currentValue(field))"
-                :aria-label="field.label"
-                :disabled="submitting"
-                @update:model-value="(v) => setValue(field, coerce(field, v))"
-                @keydown.stop
-              />
+              <span class="rund-fixed-value">{{ currentValue(field) }}</span>
+              <AppButton
+                size="sm"
+                variant="ghost"
+                :loading="freeing === address(field)"
+                :disabled="submitting || Boolean(freeing)"
+                :aria-label="`Set ${field.label} each run`"
+                @click="freeField(field)"
+              >
+                Set each run
+              </AppButton>
             </div>
+            <p v-if="freeError" class="rund-note" role="alert">{{ freeError }}</p>
           </details>
         </div>
 
@@ -700,6 +744,7 @@ import {
   runWorkflowCard,
   saveFixedWorkflow,
   setWorkflowInputs,
+  setWorkflowPins,
   workflowCoverUrl,
 } from "../../api/workflows";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
@@ -708,6 +753,7 @@ import { errorMessage } from "../../utils/apiError";
 import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import { fitWorkflows } from "../../utils/loraWorkflows";
 import { wouldDuplicate } from "../../utils/recipeKey";
+import { setEachRun } from "../../utils/workflowPins";
 import {
   changesNodes,
   PICTURE_INPUT_UNFILLED,
@@ -754,7 +800,7 @@ const MAX_COUNT = 200;
 const MAX_SEED = 2n ** 64n - 1n;
 /** `MAX_DEFAULTS` in `pixlstash/routes/workflows.py`: the `values` ceiling. */
 const MAX_VALUES = 200;
-/** The parameters the design pins, in its order, addressed by widget name. */
+/** The numbers drawn as one-column cells, in this order, when set each run. */
 const SCALAR_PINNED = ["steps", "cfg", "cfg_scale", "guidance"];
 const SIZE_INPUTS = ["width", "height"];
 const CHECKPOINT_INPUT = "ckpt_name";
@@ -790,6 +836,16 @@ const preflightError = ref("");
 const plannedRuns = ref(0);
 
 const card = ref(null);
+/**
+ * The workflow's stored pin list: the parameters set each run. `null` is no
+ * choice made, so the shared default set applies (`setEachRun`).
+ */
+const pins = ref(null);
+/** The address "Set each run" is writing, and what went wrong if it failed. */
+const freeing = ref("");
+const fixedSummary = ref(null);
+const formRoot = ref(null);
+const freeError = ref("");
 const recipe = ref(null);
 const cards = ref([]);
 const adapters = ref([]);
@@ -1312,20 +1368,26 @@ const byInput = computed(() => {
   return map;
 });
 
+/** Whether the Run form asks for `field`, or every run uses its value. */
+function asksFor(field) {
+  return setEachRun(field, pins.value);
+}
+
 const scalarFields = computed(() =>
-  SCALAR_PINNED.map((name) => byInput.value[name]).filter(Boolean),
+  SCALAR_PINNED.map((name) => byInput.value[name]).filter(
+    (field) => field && asksFor(field),
+  ),
 );
 /**
- * Width and height, drawn as one "Size" cell — and only when BOTH are there.
+ * Width and height, drawn as one "Size" cell — and only when BOTH are there
+ * and both are set each run.
  *
- * A card carrying one of them is drawn as an ordinary parameter instead. Half
- * a Size cell would be a control that lies about what it sets, and pinning the
- * half that exists without rendering it would hide the field from the form
- * entirely: it would be neither a pinned row nor one of "All N parameters".
+ * Otherwise each is drawn on its own, as an ordinary row or a fixed one. Half
+ * a Size cell would be a control that lies about what it sets.
  */
 const sizeFields = computed(() => {
   const both = SIZE_INPUTS.map((name) => byInput.value[name]);
-  return both.every(Boolean) ? both : [];
+  return both.every((field) => field && asksFor(field)) ? both : [];
 });
 const pinnedAddresses = computed(
   () =>
@@ -1335,10 +1397,63 @@ const pinnedAddresses = computed(
         .map(address),
     ),
 );
-/** Everything the pinned rows did not show, behind "All N parameters". */
-const restFields = computed(() =>
-  defaults.value.filter((field) => !pinnedAddresses.value.has(address(field))),
+/** Set each run, but not one of the cells above: a plain row each. */
+const otherRunFields = computed(() =>
+  defaults.value.filter(
+    (field) => asksFor(field) && !pinnedAddresses.value.has(address(field)),
+  ),
 );
+/** Fixed: not asked for, listed read-only at the foot. */
+const fixedFields = computed(() =>
+  defaults.value.filter((field) => !asksFor(field)),
+);
+
+/**
+ * "Set each run" on a fixed parameter: frees it on the workflow, so this form
+ * and every later one asks for it. The whole list is written, the way the
+ * Workflow tab writes it, and handed to that tab through the store.
+ */
+async function freeField(field) {
+  const key = activeKey.value;
+  if (!key || freeing.value) return;
+  const all = card.value?.defaults || [];
+  const current = Array.isArray(pins.value)
+    ? pins.value
+    : all.filter((row) => setEachRun(row, null));
+  const next = [...current, field].map((row) => ({
+    slot_label: row.slot_label,
+    input_name: row.input_name,
+  }));
+  freeing.value = address(field);
+  freeError.value = "";
+  const epoch = runDialog.sessionEpoch();
+  try {
+    const body = await setWorkflowPins(key, next);
+    // Answered for a session that has since been reset: it describes a
+    // library this one may not see, so none of it is kept.
+    if (epoch !== runDialog.sessionEpoch()) return;
+    const written = body?.pins ?? next;
+    // Told even when the picker has moved on: the write landed on `key`, and
+    // the Workflow tab writes whole lists from its own copy.
+    runDialog.pinsWritten = { workflowId: key, pins: written };
+    if (key !== activeKey.value) return;
+    pins.value = written;
+    // Its row is gone from under the pointer: keep focus on the list, or on
+    // the field it became when the list went with it.
+    await nextTick();
+    // Searched in this form only: "Steps" may label a field anywhere else.
+    const target =
+      fixedSummary.value ??
+      [...(formRoot.value?.querySelectorAll("input[aria-label]") ?? [])].find(
+        (input) => input.getAttribute("aria-label") === field.label,
+      );
+    target?.focus();
+  } catch (err) {
+    freeError.value = errorMessage(err, `Could not set ${field.label} each run.`);
+  } finally {
+    freeing.value = "";
+  }
+}
 
 const sizeEdited = computed(() => sizeFields.value.some(isEdited));
 function resetSize() {
@@ -2358,6 +2473,8 @@ async function loadCard(key, { keepEdits = false } = {}) {
   const detail = await getWorkflowCard(key);
   if (token !== loadToken) return;
   const next = detail?.card || null;
+  pins.value = detail?.pins ?? null;
+  freeError.value = "";
   // Stages are the graph's, so a choice made on one workflow says nothing
   // about another's.
   clearStages();
@@ -2455,6 +2572,8 @@ async function load() {
   for (const key of Object.keys(editedLabels)) delete editedLabels[key];
   recipe.value = null;
   card.value = null;
+  pins.value = null;
+  freeError.value = "";
   cards.value = [];
   loras.value = [];
   addedLoras.value = [];
@@ -2961,11 +3080,22 @@ button.rund-in-tile.rund-in-tile--off {
   cursor: pointer;
 }
 
-.rund-rest {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+.rund-fixed-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
   padding-top: var(--space-3);
+}
+
+.rund-fixed-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .rund-quiet,

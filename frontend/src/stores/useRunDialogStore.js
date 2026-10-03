@@ -52,6 +52,18 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   const makeMore = ref(null);
   /** `{client_id, set_id, project_id, character_id}` from ImageGrid. */
   const context = ref({});
+  /**
+   * The last pin list the popup wrote, as `{workflowId, pins}`: "Set each
+   * run" frees a fixed parameter on the workflow, and the Workflow tab, which
+   * writes the whole list from its own copy, takes this so it never writes
+   * the freed parameter back.
+   */
+  const pinsWritten = ref(null);
+  /** Bumped on every session reset, so a pin write answered after one is dropped. */
+  let session = 0;
+  function sessionEpoch() {
+    return session;
+  }
 
   let runner = null;
   /**
@@ -107,6 +119,8 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   const unsubscribeSessionReset = onSessionReset(() => {
     close();
     context.value = {};
+    pinsWritten.value = null;
+    session += 1;
   });
   onScopeDispose(() => unsubscribeSessionReset());
 
@@ -114,6 +128,8 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     source,
     makeMore,
     context,
+    pinsWritten,
+    sessionEpoch,
     hasRunner,
     openRun,
     openMakeMore,

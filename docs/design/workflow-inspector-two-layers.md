@@ -14,6 +14,17 @@ is marked **[needs F-n]**, is not rendered, and its field is named under
 focus move and announcement after Show N lands (§1.5 step 3), and the
 "Clone a look below" empty-state line (§1.3).
 
+**Layout superseded** by the "grouped panels with side labels" design: the
+Workflow tab is now three bordered panels (Models, LoRAs with the Also used
+pile under a hairline, Parameters), a 64px label column, a star-rating
+histogram in the head in place of the provenance note, and a lock per
+parameter ("Set each run" / "Fixed") in place of the pin and "All N
+parameters". The Run dialog changed with it: it asks only for the
+parameters set each run and lists the fixed ones read-only. Where this
+document describes a section label, the pin, "All N parameters" or the 96px
+column, `docs/frontend_architecture.md` (the Workflow tab and Run dialog
+entries) is current.
+
 Surfaces: the Workflow tab (`frontend/src/components/panels/WorkflowTab.vue`,
 `WorkflowDefaultRow.vue`, `WorkflowLoraPile.vue`), the Recipes tab
 (`WorkflowRecipesTab.vue`), the Run dialog (`components/io/RunDialog.vue`) and
