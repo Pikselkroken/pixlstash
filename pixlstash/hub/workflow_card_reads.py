@@ -284,22 +284,26 @@ def manual_workflow_ids(hub: HubDatabase) -> list[str]:
     ]
 
 
-def adopted_file_cards(hub: HubDatabase) -> set[str]:
-    """Every card whose files were ALL made live manual workflows (#1720).
+def adopted_file_variants(hub: HubDatabase) -> set[str]:
+    """Every variant whose files were ALL made live manual workflows (#1720).
 
     Hub data step 7 leaves the ``workflow_file`` rows it adopts in place, so
-    such a card still reads as an automatic workflow beside the manual one
-    of the same name. A file is adopted while a ``file`` origin row names it
-    and the manual workflow that row points at still exists.
+    such a variant still reads as an automatic workflow beside the manual one
+    of the same name. Per variant and not per card: one card's variants can
+    sit in automatic workflows of several families, and only the one the file
+    is has a manual twin. A file is adopted while a ``file`` origin row names
+    it and the manual workflow that row points at still exists. A UI-format
+    file (no ``structural_hash``) has no variant, so no twin.
     """
     return {
         row[0]
         for row in hub.fetchall(
-            "SELECT f.workflow_key FROM workflow_file f "
+            "SELECT f.structural_hash FROM workflow_file f "
             "LEFT JOIN workflow_origin o ON o.origin = 'file' "
             "AND o.remote_path = f.workflow_name AND o.dismissed = 0 "
             "AND o.workflow_name IN (SELECT workflow_id FROM workflow_document) "
-            "GROUP BY f.workflow_key HAVING MIN(o.workflow_name IS NOT NULL) = 1"
+            "WHERE f.structural_hash IS NOT NULL "
+            "GROUP BY f.structural_hash HAVING MIN(o.workflow_name IS NOT NULL) = 1"
         )
     }
 

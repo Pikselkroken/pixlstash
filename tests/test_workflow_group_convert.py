@@ -2159,6 +2159,11 @@ def test_a_recipe_on_a_workflow_live_again_is_left_where_it_is(run_env):
         )
 
 
+def _drop_twin_recipe(session) -> None:
+    session.exec(delete(SavedRecipe).where(SavedRecipe.name == "twin-kept"))
+    session.commit()
+
+
 def test_an_adopted_file_with_no_pictures_lists_once_as_its_manual_workflow(
     run_env, tmp_path
 ):
@@ -2199,6 +2204,24 @@ def test_an_adopted_file_with_no_pictures_lists_once_as_its_manual_workflow(
     }
     assert all(a.startswith("auto:") for a in auto.values())
     used_keys = keys["twin-used.json"]
+    # A variant of the twin's card in another family is another automatic
+    # workflow, and no file of it was adopted: it has no twin and lists.
+    sibling = record_api_graph(
+        hub, _graph(ckpt="twin-sibling.safetensors", upscale=True, preview=True)
+    )
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_variant SET workflow_key = ? WHERE structural_hash = ?",
+            (_card(hub, keys["twin-empty.json"]), sibling.structural_hash),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_variant_family (structural_hash, "
+            "families) VALUES (?, 'test-other-family')",
+            (sibling.structural_hash,),
+        )
+    other_family = workflow_of_variant(hub, sibling.structural_hash)
+    assert other_family.startswith("auto:")
+    assert other_family != auto["twin-empty.json"]
 
     def seed(session):
         session.add(
@@ -2225,12 +2248,33 @@ def test_an_adopted_file_with_no_pictures_lists_once_as_its_manual_workflow(
         assert manual["twin-empty.json"] in listed
         assert auto["twin-empty.json"] not in listed, "the picture-less twin lists"
         assert {manual["twin-used.json"], auto["twin-used.json"]} <= listed
+        assert other_family in listed, "a sibling family's workflow was hidden"
+        # A saved recipe on the twin keeps it listed, so the recipe is reachable.
+        twin = auto["twin-empty.json"]
+
+        def save_recipe(session):
+            session.add(
+                SavedRecipe(
+                    name="twin-kept",
+                    workflow_key=_card(hub, keys["twin-empty.json"]),
+                    workflow_id=twin,
+                    prompt="x",
+                )
+            )
+            session.commit()
+
+        server.vault.db.run_task(save_recipe, priority=DBPriority.IMMEDIATE)
+        r = run_env.owner.get(
+            f"{API}/workflows",
+            params={"include_hidden": "true", "include_one_offs": "true"},
+        )
+        assert twin in {card["id"] for card in r.json()["cards"]}
+        server.vault.db.run_task(_drop_twin_recipe, priority=DBPriority.IMMEDIATE)
         # Left off the grid, not gone: it still opens by its id.
         r = run_env.owner.get(f"{API}/workflows/{auto['twin-empty.json']}")
         assert r.status_code == 200, r.text
         # Hidden, it is not counted in `hidden` either; dismiss its file's
         # origin row and the file is no longer adopted: listed and counted.
-        twin = auto["twin-empty.json"]
         with hub.transaction() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO workflow_group_attr (workflow_id, hidden) "
@@ -2256,6 +2300,7 @@ def test_an_adopted_file_with_no_pictures_lists_once_as_its_manual_workflow(
             ),
             priority=DBPriority.IMMEDIATE,
         )
+        server.vault.db.run_task(_drop_twin_recipe, priority=DBPriority.IMMEDIATE)
         for workflow_id in manual.values():
             delete_manual_workflow(hub, workflow_id)
         with hub.transaction() as conn:

@@ -39,7 +39,7 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import (
     Card,
     Workflow,
-    adopted_file_cards,
+    adopted_file_variants,
     asset_names,
     card_index,
     find_workflow,
@@ -519,17 +519,18 @@ def read_grid(
     # **Both counts are taken over the same set whatever the flags say** -
     # hidden over every workflow, one-offs over the ones that are not hidden -
     # so ticking one checkbox does not move the other's number underneath it.
-    # An automatic workflow with no picture and no saved recipe, made only of
-    # files step 7 made manual workflows, is that manual workflow's twin:
-    # never drawn or counted, though it still opens by its id (#1720).
-    adopted = adopted_file_cards(hub)
+    # An automatic workflow with no picture and no saved recipe, every variant
+    # of it a file step 7 made a manual workflow, is that manual workflow's
+    # twin: never drawn or counted, though it still opens by its id (#1720).
+    adopted = adopted_file_variants(hub)
     listed = [
         figure
         for figure in figures
         if figure.card.manual
         or figure.pictures
         or figure.saved_recipes
-        or not all(key in adopted for key in figure.workflow.cards)
+        or not figure.workflow.variants
+        or not all(v in adopted for v in figure.workflow.variants)
     ]
     hidden = sum(1 for figure in listed if figure.card.hidden)
     one_offs = sum(1 for figure in listed if figure.one_off and not figure.card.hidden)

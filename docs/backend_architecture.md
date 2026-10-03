@@ -2575,8 +2575,10 @@ writes a `workflow_file` row any more, and a legacy row on an automatic card
 still names it. So such a card still reads as an automatic workflow of the
 same name: `read_grid` leaves one off the grid, and out of its `hidden` and
 `one_offs` counts, when it has no kept picture and no saved recipe and every
-file of every card in it is adopted (`adopted_file_cards`: a `file` origin row
-naming a manual workflow that still exists; #1720). It still opens by its id.
+variant in it is an adopted file (`adopted_file_variants`, per variant because
+one card's variants can sit in workflows of several families: every file of
+that `structural_hash` has a `file` origin row naming a manual workflow that
+still exists; #1720). It still opens by its id.
 Deleting the manual workflow through the route forgets the file row, so the
 picture-less automatic workflow then lists again, under a generated name.
 
