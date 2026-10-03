@@ -1148,6 +1148,9 @@ describe("Clone onto a workflow set", () => {
           name: "Flux dev GGUF",
           members: [
             { id: 11, slot: "checkpoint", on_shelf: true, name: "flux1-dev-Q8_0" },
+            // A second checkpoint whose file left the shelf: never sent, so
+            // the plan neither refuses the set nor swaps onto a missing file.
+            { id: 13, slot: "checkpoint", on_shelf: false, name: "flux1-low" },
             { id: 12, slot: "lora", on_shelf: true, name: "mara" },
           ],
           covers: [],
