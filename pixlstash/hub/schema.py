@@ -1186,8 +1186,10 @@ CREATE TABLE IF NOT EXISTS workflow_loader_swap (
 
 # One row per workflow somebody has decided about. ``auto`` rows exist only
 # once something is stored against the group, so an automatic workflow nobody
-# has touched is not a row. On an ``auto`` row ``core_hash`` holds the id's
-# digest, not a core hash (the id hashes core and families); nothing reads it.
+# has touched is not a row. On an ``auto`` row ``core_hash`` is the core the id
+# is built on (the id hashes core and families; a file-only card's id, and so
+# its ``core_hash``, is its topology hash). Rows written before #1692, or by an
+# older build sharing the hub, hold the id's digest instead. Nothing reads it.
 _V2_WORKFLOW_GROUP = """
 CREATE TABLE IF NOT EXISTS workflow_group (
     workflow_id  TEXT PRIMARY KEY,

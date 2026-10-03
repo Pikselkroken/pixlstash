@@ -153,6 +153,10 @@ def world(tmp_path):
         setattr(w, f"{name}_key", _card(hub, getattr(w, name)))
     assert _card(hub, w.i_second) == w.i_key, "a character LoRA forked the card"
     w.auto = workflow_of_variant(hub, w.s.structural_hash)
+    w.core = hub.fetchone(
+        "SELECT core_hash FROM workflow_topology_core WHERE topology_hash = ?",
+        (w.s.topology_hash,),
+    )[0]
     w.split = uuid.uuid5(_GROUP_NAMESPACE, w.p.topology_hash).hex
 
     w.sampler_s, w.core_sampler = _labels(hub, w.s, "5")
@@ -254,8 +258,9 @@ def _expected(w) -> dict:
                 (MANUAL, "manual", None),
                 (MANUAL_TWO, "manual", None),
                 (w.split, "manual", None),
-                # Owner state is stored against it, so the automatic one is a row.
-                (w.auto, "auto", w.auto[len("auto:") :]),
+                # Owner state is stored against it, so the automatic one is a
+                # row, holding its core (#1692).
+                (w.auto, "auto", w.core),
             ]
         ),
         "workflow_group_member": sorted(
@@ -975,9 +980,12 @@ def test_step_8_moves_every_v1_workflow_and_its_state_onto_v2(step_8, caplog):
     assert set(attrs) == {flux, qwen}
     assert attrs[flux][1] == "Plain" and "Orphan notes." in attrs[flux][2]
     assert attrs[qwen][1:3] == ("Plain", None)
-    assert rows["workflow_group"] == sorted(
-        [(i, "auto", i[len("auto:") :]) for i in (flux, qwen)]
-    )
+    # The v2 core both heirs are built on, not the id's digest (#1692).
+    core = w.hub.fetchone(
+        "SELECT core_hash FROM workflow_topology_core WHERE topology_hash = ?",
+        (w.plain.topology_hash,),
+    )[0]
+    assert rows["workflow_group"] == sorted([(i, "auto", core) for i in (flux, qwen)])
     # A card follows its own variants; the retired ids follow the primary.
     assert rows["workflow_key_successor"] == sorted(
         [(w.orphan_key, flux), (w.qwen_key, qwen)]
@@ -1765,7 +1773,16 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
     unknown_id = workflow_of_variant(hub, unknown.structural_hash)
     assert unknown_id != qwen_id
     steps = f"core:{_labels(hub, unknown, '5')[1]}/steps"
+    core = hub.fetchone(
+        "SELECT core_hash FROM workflow_topology_core WHERE topology_hash = ?",
+        (unknown.topology_hash,),
+    )[0]
     with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group (workflow_id, kind, core_hash) "
+            "VALUES (?, 'auto', ?)",
+            (unknown_id, core),
+        )
         conn.executemany(
             "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
             "VALUES (?, ?, NULL, 0)",
@@ -1833,6 +1850,10 @@ def test_an_unknown_family_the_shelf_learns_moves_with_its_state(run_env):
         "SELECT name, notes FROM workflow_group_attr WHERE workflow_id = ?", (qwen_id,)
     )
     assert attr["name"] == "Qwen upscale" and "House finetune" in attr["notes"]
+    # The heir's row names its core, not its id's digest (#1692).
+    assert [tuple(r) for r in hub.fetchall("SELECT * FROM workflow_group")] == [
+        (qwen_id, "auto", core)
+    ]
     assert (
         hub.fetchone(
             "SELECT value FROM workflow_group_default WHERE workflow_id = ? AND address = ?",
