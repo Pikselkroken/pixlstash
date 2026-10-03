@@ -1071,11 +1071,11 @@ describe("WorkflowRecipesTab", () => {
     const refused = menuRow(wrapper, "Extract workflow");
     expect(refused.attributes("aria-disabled")).toBe("true");
     expect(refused.classes()).toContain("ctx-item--disabled");
-    expect(refused.findComponent(Tooltip).props("text")).toContain("deleted");
+    expect(refused.findComponent(Tooltip).props("text")).toContain("is gone");
     await refused.trigger("click");
     await flushPromises();
     expect(extractRecipeWorkflow).not.toHaveBeenCalled();
-    expect(wrapper.find(".wfrt-sub").text()).toContain("unless its workflow was deleted");
+    expect(wrapper.find(".wfrt-sub").text()).toContain("where the graph it was saved from is still known");
 
     const offered = wrapper
       .findAll(".wfrt-card")[1]

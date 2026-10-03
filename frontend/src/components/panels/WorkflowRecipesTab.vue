@@ -511,12 +511,12 @@ const MAX_UNION_KEYS = 100;
 
 /** Why Extract workflow is refused on a row the server marks unextractable. */
 const NOT_EXTRACTABLE =
-  "Its workflow was deleted, and the graph it was saved from went with it.";
+  "The graph it was saved from is gone, as happens when its workflow is deleted.";
 
 const subtitle = computed(() => {
   if (props.unfiled) {
     return recipes.value.some((recipe) => recipe.extractable === false)
-      ? "Their workflow is gone. Extract workflow makes one a workflow of its own, unless its workflow was deleted."
+      ? "Their workflow is gone. Extract workflow makes one a workflow of its own where the graph it was saved from is still known."
       : "Their workflow is gone. Extract workflow makes each one a workflow of its own.";
   }
   const found = looks.value.length;

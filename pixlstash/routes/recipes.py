@@ -173,9 +173,10 @@ class SavedRecipeOut(BaseModel):
     extractable: Optional[bool] = Field(
         None,
         description=(
-            "The unfiled listing only: whether Extract workflow has a graph to "
-            "build on. False when the card it was saved from is gone too, as "
-            "with a deleted manual workflow. Null in every other listing."
+            "The unfiled listing only: false when the card the recipe was "
+            "saved from is gone too (a deleted manual workflow's), so Extract "
+            "workflow has nothing to build on. True does not promise the card "
+            "still yields a graph. Null in every other listing."
         ),
     )
 
@@ -363,7 +364,10 @@ def create_router(server) -> APIRouter:
                     detail="unfiled lists recipes on no workflow; name none.",
                 )
             hub = _hub()
-            known = {entry.workflow_id for entry in workflow_index(hub)}
+            all_cards = card_index(hub)
+            known = {
+                entry.workflow_id for entry in workflow_index(hub, cards=all_cards)
+            }
             unfiled_recipes = [
                 recipe
                 for recipe in saved_recipe_service.read_recipes(server.vault)
@@ -375,7 +379,7 @@ def create_router(server) -> APIRouter:
             # run planner's fallback once the workflow is gone), so a recipe
             # whose card is gone as well - a deleted manual workflow's, whose
             # only document went with it - has nothing to extract (#1687).
-            cards = {card.workflow_key for card in card_index(hub)}
+            cards = {card.workflow_key for card in all_cards}
             keys = saved_recipe_service.read_workflow_keys(server.vault)
             for recipe in unfiled_recipes:
                 recipe["extractable"] = keys.get(recipe["id"]) in cards
