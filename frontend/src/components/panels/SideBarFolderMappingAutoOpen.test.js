@@ -306,6 +306,26 @@ describe("an ordinary reference-folder pending entry", () => {
     wrapper.unmount();
   });
 
+  it("asks again when a commit that was running has since completed", async () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reference));
+    commitStatus("running");
+    const wrapper = await mountSidebar();
+    wrapper.vm.selectFoldersTab();
+    await flushPromises();
+    expect(useFolderMappingStore().pending).toEqual(reference);
+
+    commitStatus("completed");
+    await wrapper.find(".sidebar-mapping-resume-row").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.findComponent(FolderMappingWizard).props("open")).toBe(
+      false,
+    );
+    expect(useFolderMappingStore().pending).toBe(null);
+
+    wrapper.unmount();
+  });
+
   it("keeps the resume row while its commit is unfinished", async () => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(reference));
     commitStatus("running");

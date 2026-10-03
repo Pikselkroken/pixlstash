@@ -882,8 +882,8 @@ async function folderMappingWizardCommitted() {
 // Watched rather than checked once on mount: the library list that says
 // which root is active loads after this component does.
 let autoOpenedPendingMapping = false;
-// commit task id -> Promise<completed?>; see `pendingEntryIsLive`. Above the
-// watch, which runs immediately.
+// commit task id -> in-flight Promise<completed?>; see `pendingEntryIsLive`.
+// Above the watch, which runs immediately.
 const commitChecks = new Map();
 watch(
   () => pendingForThisLibrary.value,
@@ -913,7 +913,7 @@ async function openPendingMapping() {
  * and clears the entry. Opened from it, the wizard would offer to set up the
  * library the import just finished. Every way of opening a saved entry asks
  * here; anything short of a definite `completed` (running, failed, forgotten)
- * is still live, as before. One request per commit, however many ask.
+ * is still live, as before. Concurrent askers share one request.
  */
 async function pendingEntryIsLive(entry) {
   const id = entry.commitTaskId;
@@ -932,7 +932,13 @@ async function pendingEntryIsLive(entry) {
         }),
     );
   }
-  if (!(await commitChecks.get(id))) return true;
+  const completed = await commitChecks.get(id);
+  // Only a finished commit is final. One still running (or unreachable) may
+  // finish later in this session, so the next opener asks again.
+  if (!completed) {
+    commitChecks.delete(id);
+    return true;
+  }
   if (mappingStore.pending?.commitTaskId === id) mappingStore.clear();
   return false;
 }
