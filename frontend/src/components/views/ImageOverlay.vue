@@ -1,5 +1,11 @@
 <template>
-  <div v-if="open" class="image-overlay" @click.self="handleBackdropClick">
+  <div
+    v-if="open"
+    class="image-overlay"
+    @pointerdown.capture="pressCarriedIn = false"
+    @mousedown.capture="notePressOrigin"
+    @click.self="handleBackdropClick"
+  >
     <div
       class="overlay-shell"
       :class="{ 'chrome-hidden': chromeHidden, 'sidebar-open': sidebarOpen }"
@@ -1502,6 +1508,14 @@ const addToSetControlKey = ref(0);
 const pluginMenuOpen = ref(false);
 const starMenuOpen = ref(false);
 let menuWasOpenOnPointerDown = false;
+// A double-click in the grid opens the lightbox on its first click, so its
+// second press lands here with a click count of 2: it would zoom (dblclick),
+// hide the chrome or close on the backdrop. The first press after opening that
+// already counts more than one click began outside, and is ignored. Every
+// pointerdown clears the mark first: a cancelled pointerdown (pan, draw) sends
+// no mousedown, so the mousedown alone would leave the mark stale.
+let pressSeenSinceOpen = false;
+let pressCarriedIn = false;
 const overlaySelectedPluginName = ref("");
 const overlayPluginParameters = ref({});
 
@@ -2237,6 +2251,8 @@ watch(showStacks, (value) => {
 });
 
 watch(open, (isOpen) => {
+  pressSeenSinceOpen = false;
+  pressCarriedIn = false;
   if (!isOpen) {
     descriptionPanelRef.value?.cancelEditDescription();
     descriptionPanelRef.value?.resetCopyState();
@@ -2603,7 +2619,13 @@ function showSwipeHint() {
   }, 3000);
 }
 
+function notePressOrigin(event) {
+  pressCarriedIn = !pressSeenSinceOpen && event.detail > 1;
+  pressSeenSinceOpen = true;
+}
+
 function handleBackdropClick() {
+  if (pressCarriedIn) return;
   // A right-click context menu open over the lightbox is dismissed by this same
   // click. Swallow it so click-away closes the MENU ONLY, never the lightbox.
   // The menu was still in the DOM at pointerdown time (captured in
@@ -2690,6 +2712,7 @@ function handleOverlayPointerDown() {
 }
 
 function handleOverlayClick(event) {
+  if (pressCarriedIn) return;
   if (touchTapConsumed) {
     touchTapConsumed = false;
     return;
@@ -2756,6 +2779,7 @@ function toggleZoomSnap() {
 
 /** Double-click: the same fit ↔ 100% toggle, anchored at the click point. */
 function onCanvasDblClick(event) {
+  if (pressCarriedIn) return;
   const target = event?.target;
   if (target instanceof HTMLElement && target.closest(".overlay-nav")) {
     return;
