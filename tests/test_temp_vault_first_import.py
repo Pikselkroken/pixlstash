@@ -235,6 +235,44 @@ class TestTheStartupSweep:
 
         assert library.pending_import_kept == (".pixlstash-thumbnails",)
 
+    def test_a_revived_row_takes_this_imports_pending_state(self, registry, tmp_path):
+        """A pending folder has no fingerprint, so it revives any detached row
+        without one; the row must describe this attempt, not the last."""
+        registry.create(str(tmp_path / "first"), "First")  # stays active
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        earlier = registry.create(str(folder), "Holiday", pending_import=True)
+        assert earlier.pending_import_kept == ()
+        registry.detach(earlier.id)
+        os.remove(folder / TEMP_VAULT_FILENAME)
+        # Appeared after the first attempt: not this import's to delete either.
+        (folder / "snapshots").mkdir()
+
+        again = registry.create(str(folder), "Holiday", pending_import=True)
+
+        assert again.uuid == earlier.uuid, "revived, not re-registered"
+        assert again.pending_import_kept == ("snapshots",)
+        assert again.is_reachable
+
+    def test_a_revived_real_library_becomes_pending_when_imported_into(
+        self, registry, tmp_path
+    ):
+        """Without the mark the row would name a vault.db that is not there."""
+        registry.create(str(tmp_path / "first"), "First")  # stays active
+        folder = tmp_path / "old-library"
+        folder.mkdir()
+        old = registry.create(str(folder), "Old")
+        assert old.vault_uuid is None, "the revival needs a row with no fingerprint"
+        registry.detach(old.id)
+        os.remove(folder / VAULT_FILENAME)
+
+        again = registry.create(str(folder), "Old", pending_import=True)
+
+        assert again.uuid == old.uuid
+        assert again.pending_import_at is not None
+        assert again.vault_path == str(folder / TEMP_VAULT_FILENAME)
+        assert again.is_reachable
+
     def test_a_row_that_never_recorded_them_keeps_everything(self, registry, tmp_path):
         """A pending row from before the record: nothing is assumed ours."""
         folder = tmp_path / "folder-of-pictures"

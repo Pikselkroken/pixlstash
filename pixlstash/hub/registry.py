@@ -1161,7 +1161,14 @@ class LibraryRegistry:
 
         if existing is not None:
             if _fingerprints_match(existing.vault_uuid, fingerprint):
-                return self._revive(existing, cleaned, fingerprint, unique_name)
+                return self._revive(
+                    existing,
+                    cleaned,
+                    fingerprint,
+                    unique_name,
+                    pending_import=pending_import,
+                    kept=kept,
+                )
             # Before the UPDATE below, not after. That UPDATE commits, and it
             # renames the detached row's path to something `_find_by_path` can
             # never match again - so a refusal after it would strand that row's
@@ -1309,6 +1316,9 @@ class LibraryRegistry:
         name: str,
         fingerprint: Optional[str],
         unique_name: bool = True,
+        *,
+        pending_import: bool = False,
+        kept: tuple[str, ...] = (),
     ) -> Library:
         """Re-attach a detached row, keeping its uuid and its tokens.
 
@@ -1317,6 +1327,11 @@ class LibraryRegistry:
                 start-up registration takes when the folder is provably the same
                 library, so it is on that path too and must honour the flag for
                 the same reason.
+            pending_import, kept: As :meth:`_register`'s, and written over the
+                row's own: a pending folder has no ``vault.db`` and so no
+                fingerprint, which matches any detached row without one. The
+                old row's pending state describes a previous attempt (or none),
+                not the database this registration just built.
         """
         now = datetime.now(timezone.utc).isoformat()
         with self._hub.transaction() as conn:
@@ -1327,9 +1342,17 @@ class LibraryRegistry:
                 self._refuse_duplicate_name(name, except_id=existing.id, conn=conn)
             conn.execute(
                 "UPDATE library SET attached = 1, detached_at = NULL, "
-                "attached_at = ?, name = ?, vault_uuid = COALESCE(?, vault_uuid) "
+                "attached_at = ?, name = ?, vault_uuid = COALESCE(?, vault_uuid), "
+                "pending_import_at = ?, pending_import_kept = ? "
                 "WHERE id = ?",
-                (now, name, fingerprint, existing.id),
+                (
+                    now,
+                    name,
+                    fingerprint,
+                    now if pending_import else None,
+                    json.dumps(list(kept)) if pending_import else None,
+                    existing.id,
+                ),
             )
         logger.info(
             "Re-attached library %s (uuid=%s) at %s; %d token(s) are live again",
