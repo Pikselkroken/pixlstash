@@ -136,6 +136,24 @@ describe("a pending local_import entry", () => {
     wrapper.unmount();
   });
 
+  it("auto-opens on a library still on its first import", async () => {
+    // The real shape after "Yes, build this library": the server leaves a
+    // pending library out of `libraries` and names its folder separately.
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+    const libraries = useLibrariesStore();
+    libraries.libraries = [
+      { id: 1, name: "old", path: "/home/me/old", is_active: false },
+    ];
+    libraries.importingPath = entry.path;
+    const wrapper = await mountSidebar();
+
+    const wizard = wrapper.findComponent(FolderMappingWizard);
+    expect(wizard.props("open")).toBe(true);
+    expect(wizard.props("resume")).toEqual(entry);
+
+    wrapper.unmount();
+  });
+
   it("does not auto-open against a different library", async () => {
     // A stale entry from a folder added and cancelled earlier met a
     // re-attached vault and offered to "set up" a library already set up.

@@ -754,6 +754,13 @@ function routeSubfolderUnder(root) {
   };
 }
 
+// The folder this session is on. A library on its first import is left out
+// of the listing, so `activeLibrary` is undefined until the import finishes -
+// and the import is exactly what the wizard reopened against this path runs.
+const activeRoot = computed(
+  () => librariesStore.activeLibrary?.path || librariesStore.importingPath,
+);
+
 // The pending mapping this library can act on. A `local_import` entry names
 // the library root it was saved for; shown or auto-opened against any OTHER
 // library it would offer to "set up" a library that is already set up - which
@@ -764,7 +771,7 @@ const pendingForThisLibrary = computed(() => {
   const entry = mappingStore.pending;
   if (!entry) return null;
   if (entry.mode !== "local_import") return entry;
-  return _samePath(entry.path, librariesStore.activeLibrary?.path)
+  return _samePath(entry.path, activeRoot.value)
     ? entry
     : null;
 });
@@ -809,7 +816,7 @@ async function chooseLibraryFolder() {
     openFolderMappingWizard(entry);
     return;
   }
-  const path = librariesStore.activeLibrary?.path;
+  const path = activeRoot.value;
   if (path && librariesStore.canManage) {
     // Re-inspected on every click: a root that was empty when the count was
     // cached may hold pictures now. A failed inspect leaves the count alone.
@@ -944,7 +951,7 @@ async function takeParkedFolderRead() {
 
 async function _offerLoosePictures() {
   if (!librariesStore.hasLoadedSuccessfully) await librariesStore.refresh();
-  const path = librariesStore.activeLibrary?.path;
+  const path = activeRoot.value;
   if (!path || !librariesStore.canManage) return;
   // On desktop the startup screen may have read this very folder already,
   // alongside the runtime download. Resuming that read is the whole point of
