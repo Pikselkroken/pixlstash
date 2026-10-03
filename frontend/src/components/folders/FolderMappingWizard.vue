@@ -256,13 +256,17 @@ async function build(accepted, answered = null) {
   }
 }
 
-function onCommitStarted() {
+function onCommitStarted(commitTaskId) {
   // Started is as good as done for the entry's purposes: from here on a
   // reopen must reattach to the read, not commit it again.
   const entry = mappingStore.pending;
   if (!entry?.autoCommit) return;
   mappingStore.save({
     taskId: entry.taskId,
+    // A first import's promotion reloads the page before the poll below can
+    // see `completed` and clear this entry; the sidebar asks the server
+    // instead (SideBar.vue, the auto-open).
+    commitTaskId,
     path: entry.path,
     label: entry.label,
     mode: entry.mode,

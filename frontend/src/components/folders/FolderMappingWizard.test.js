@@ -411,8 +411,10 @@ describe("resuming after the switch", () => {
     expect(addLibrary).not.toHaveBeenCalled();
     expect(startFolderStructureRead).not.toHaveBeenCalled();
     // From here a reopen reattaches to the read; it must never commit twice.
+    // The commit's id rides along so a reload can ask whether it finished.
     expect(useFolderMappingStore().pending).toEqual({
       taskId: "read-1",
+      commitTaskId: "commit-1",
       path: PATH,
       label: "Generations",
       mode: "local_import",

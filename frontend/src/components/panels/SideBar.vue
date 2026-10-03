@@ -49,6 +49,7 @@ import {
   addPictureToSet,
 } from "../../api/pictureSets";
 import { inspectLibraryPath } from "../../api/libraries";
+import { getFolderStructureCommitStatus } from "../../api/folderStructure";
 import { deleteProject } from "../../api/projects";
 import {
   listReferenceFolders,
@@ -883,14 +884,41 @@ async function folderMappingWizardCommitted() {
 let autoOpenedPendingMapping = false;
 watch(
   () => pendingForThisLibrary.value,
-  (entry) => {
+  async (entry) => {
     if (autoOpenedPendingMapping || isReadOnly.value) return;
     if (entry?.mode !== "local_import") return;
     autoOpenedPendingMapping = true;
+    if (await commitAlreadyCompleted(entry)) {
+      mappingStore.clear();
+      return;
+    }
     openFolderMappingWizard(entry);
   },
   { immediate: true },
 );
+
+/**
+ * Whether the entry's commit finished before this page load.
+ *
+ * Promoting a first import closes the library's websockets, and the client
+ * reloads on that close - usually before the wizard's poll sees `completed`
+ * and clears the entry. Reopened, it would offer to set up the library the
+ * import just finished. Anything short of a definite `completed` (a running,
+ * failed or forgotten commit) still opens the wizard, as before.
+ */
+async function commitAlreadyCompleted(entry) {
+  if (!entry.commitTaskId) return false;
+  try {
+    const body = await getFolderStructureCommitStatus(entry.commitTaskId);
+    return body?.status === "completed";
+  } catch (error) {
+    console.warn("Could not check whether the saved import finished", {
+      commitTaskId: entry.commitTaskId,
+      error,
+    });
+    return false;
+  }
+}
 
 // The empty library, when its own folder is not empty. The desktop's first
 // run creates the vault in whatever folder was chosen, and the web flow's

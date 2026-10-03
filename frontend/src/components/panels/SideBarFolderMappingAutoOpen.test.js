@@ -154,6 +154,50 @@ describe("a pending local_import entry", () => {
     wrapper.unmount();
   });
 
+  it("clears instead of reopening when its commit already completed", async () => {
+    // Promotion reloads the page before the wizard's poll sees `completed`.
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...entry, commitTaskId: "commit-1" }),
+    );
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("commit/status")
+          ? { data: { status: "completed" } }
+          : respond(),
+      ),
+    );
+    activeLibraryAt(entry.path);
+    const wrapper = await mountSidebar();
+
+    expect(wrapper.findComponent(FolderMappingWizard).props("open")).toBe(
+      false,
+    );
+    expect(useFolderMappingStore().pending).toBe(null);
+
+    wrapper.unmount();
+  });
+
+  it("still reopens when its commit is still running", async () => {
+    const saved = { ...entry, commitTaskId: "commit-1" };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+    apiGet.mockImplementation((url) =>
+      Promise.resolve(
+        String(url).includes("commit/status")
+          ? { data: { status: "running" } }
+          : respond(),
+      ),
+    );
+    activeLibraryAt(entry.path);
+    const wrapper = await mountSidebar();
+
+    const wizard = wrapper.findComponent(FolderMappingWizard);
+    expect(wizard.props("open")).toBe(true);
+    expect(wizard.props("resume")).toEqual(saved);
+
+    wrapper.unmount();
+  });
+
   it("does not auto-open against a different library", async () => {
     // A stale entry from a folder added and cancelled earlier met a
     // re-attached vault and offered to "set up" a library already set up.
