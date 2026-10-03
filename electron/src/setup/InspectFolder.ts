@@ -64,7 +64,7 @@ const PICTURE_EXTENSIONS = new Set([
  * PixlStash's own files, which the backend's folder read never counts either:
  * the `<name>_thumb.webp` thumbnails older versions wrote beside every original
  * (`media_files.is_pixlstash_thumbnail`), and the folders a library makes at
- * its root (`folder_structure_commit_service.LIBRARY_OWN_FOLDERS`; the hidden
+ * its root (`media_files.LIBRARY_OWN_FOLDERS`; the hidden
  * ones are covered by the dot rule). Counting them made a folder that was a
  * library once read as twice its size here and half of it at the import.
  */

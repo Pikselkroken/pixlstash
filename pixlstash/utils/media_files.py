@@ -139,7 +139,7 @@ def _walkable(dirpath: str, root: str, dirnames: list[str]) -> list[str]:
     return [
         name
         for name in dirnames
-        if not name.startswith(".") and not (at_root and name in LIBRARY_OWN_FOLDERS)
+        if not is_hidden_entry(name) and not (at_root and name in LIBRARY_OWN_FOLDERS)
     ]
 
 
