@@ -1047,19 +1047,22 @@ const RECIPE_KIND_SLOTS = {
 };
 
 function recipeModelLabel(model) {
-  // A shelf loader's `filename` is a row id; `shelf_filename` is its file.
-  const file = model.shelf_filename ?? model.filename;
+  // A shelf loader's `filename` is a row id, never shown: `shelf_filename` is
+  // its file, and null where the shelf row names none. Every other loader's
+  // `shelf_filename` is null too, so the address is what tells them apart.
+  const file = String(model.address ?? "").endsWith("/checkpoint_id")
+    ? model.shelf_filename
+    : model.filename;
   const kinds = RECIPE_KIND_SLOTS[model.kind] ?? [model.kind];
   const slot = (card.value?.models ?? []).find(
     (entry) =>
       kinds.includes(entry.kind) &&
-      entry.name &&
+      modelDisplayName(entry) &&
       entry.filename &&
       sameFile(entry.filename, model.filename),
   );
-  return slot
-    ? withQuant(modelDisplayName(slot), slot)
-    : fileName(file);
+  if (slot) return withQuant(modelDisplayName(slot), slot);
+  return file ? fileName(file) : "Unnamed shelf model";
 }
 
 // The base models, as the card's own row picks them: a Flux or SD3 graph has

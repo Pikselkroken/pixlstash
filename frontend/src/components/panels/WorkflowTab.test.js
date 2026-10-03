@@ -388,6 +388,41 @@ describe("the models the panel names", () => {
     expect(text).not.toMatch(/\b75\b/);
   });
 
+  it("never falls back to the id when the shelf row names no file", async () => {
+    // `shelf_filename: null` on a shelf loader: the row is on the shelf but
+    // names no single file. The slot's title still names it; without one the
+    // row says so in words.
+    for (const title of ["FLUX.2 Klein 9B", null]) {
+      const named = card({
+        models: [
+          {
+            name: null,
+            title,
+            kind: "checkpoint",
+            slot_label: "m1",
+            filename: "75",
+          },
+        ],
+      });
+      const shown = detail({ card: named });
+      shown.card.default_recipe.models = [
+        {
+          address: "core:m1/checkpoint_id",
+          kind: "checkpoint",
+          filename: "75",
+          shelf_filename: null,
+          provenance: "best",
+        },
+      ];
+      getWorkflowCard.mockResolvedValue(shown);
+      const { wrapper } = await mountWith([KEY], [named]);
+      const text = textOf(wrapper);
+      expect(text).not.toMatch(/\b75\b/);
+      expect(text).toContain(title ?? "Unnamed shelf model");
+      wrapper.unmount();
+    }
+  });
+
   /** The panel for one card and a default recipe of one checkpoint *file*. */
   async function checkpointRowFor(models, file) {
     const named = card({ models });
