@@ -177,11 +177,12 @@
 // The uniform workflow card (v1.12 Workflows & Recipes, "The same in all three
 // alternatives"). A cover at a fixed 6:5 whose tracks come from the strip it
 // was handed - one picture across the whole box, two as a pair of columns,
-// three as the 2fr/1fr mosaic - then four rows (the name, always given two
-// lines so every card's rows line up; a strip of model marks; the base model's
-// name beside a LoRA count; special facts) that clip to "+N" instead of
-// wrapping, exactly
-// --wf-meta-h tall whatever the card holds. ⓘ is pinned bottom-right.
+// three as the 2fr/1fr mosaic - then four rows, together exactly --wf-meta-h
+// tall whatever the card holds. The name always gets two lines, so every
+// card's rows line up, and wraps then ellipsizes past the second; the strip of
+// model marks and the special facts clip to "+N"; the base model's name beside
+// its LoRA count ellipsizes. None of them grows the card. ⓘ is pinned
+// bottom-right.
 //
 // ⓘ is a real button at tabindex -1: the grid's roving cursor owns Tab.
 
