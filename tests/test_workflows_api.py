@@ -2047,6 +2047,44 @@ def test_a_card_names_itself_without_the_precision(workflow_env):
     assert card["name"] == "realvisxl: Text to Image"
 
 
+def test_a_shelf_loader_slot_is_named_by_its_file_not_its_id(workflow_env):
+    """A `checkpoint_id` holds a shelf row id, never a name (#1721).
+
+    The slot serves the shelf file's derived name beside the shelf title, and
+    an id the shelf no longer holds says so rather than reading as a model
+    called "75".
+    """
+    hub = workflow_env.server.hub
+    model_id = hub.fetchone(
+        "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )["id"]
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_asset SET widget_name = 'checkpoint_id', "
+            "normalized_filename = ? WHERE normalized_filename = ?",
+            (str(model_id), _SHELF_FILENAME),
+        )
+        conn.execute(
+            "UPDATE workflow_topology_core SET slots = replace(slots, "
+            '\'"widget": "ckpt_name"\', \'"widget": "checkpoint_id"\') '
+            "WHERE topology_hash = ?",
+            (BUSY_TOPOLOGY,),
+        )
+
+    checkpoint = _by_key(_cards(workflow_env.owner))[BUSY_WF]["models"][0]
+    assert (checkpoint["kind"], checkpoint["name"], checkpoint["title"]) == (
+        "checkpoint",
+        _SHELF_DERIVED,
+        _SHELF_TITLE,
+    )
+
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
+    gone = _by_key(_cards(workflow_env.owner))[BUSY_WF]["models"][0]
+    assert gone["name"] == workflow_card_service.SHELF_MODEL_GONE
+    assert gone["title"] is None
+
+
 def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
     workflow_env,
 ):

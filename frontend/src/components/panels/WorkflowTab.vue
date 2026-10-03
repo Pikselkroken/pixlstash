@@ -811,7 +811,7 @@ import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { modelLabel } from "../../utils/filterChips";
 import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
-import { quantBadge } from "../../utils/modelShelf";
+import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { PIXLSTASH_PACK_URL, STAGE_LABELS } from "../../utils/runReasons";
 import {
   checkpointMissing,
@@ -1033,9 +1033,9 @@ const recipeModels = computed(
  * same file where there is one, for its shelf name and precision, else the
  * file without its folders.
  *
- * ponytail: matched by stem prefix, because the card's `name` has its folder,
- * extension and quant postfix stripped; a shared address on both would make
- * this exact.
+ * ponytail: matched by the name the server derives, or by stem prefix,
+ * because the card's `name` has its folder, extension and quant postfix
+ * stripped; a shared address on both would make this exact.
  */
 /**
  * A default-recipe model's `kind` is the model-fix kind (`checkpoint`, `vae`,
@@ -1048,17 +1048,22 @@ const RECIPE_KIND_SLOTS = {
 };
 
 function recipeModelLabel(model) {
-  const stem = fileName(model.filename).toLowerCase();
+  // A shelf loader's `filename` is a row id; `shelf_filename` is its file.
+  const file = model.shelf_filename ?? model.filename;
+  const stem = fileName(file).toLowerCase();
+  const derived = deriveModelName(file).toLowerCase();
   const kinds = RECIPE_KIND_SLOTS[model.kind] ?? [model.kind];
   const slot = (card.value?.models ?? []).find(
     (entry) =>
       kinds.includes(entry.kind) &&
       entry.name &&
-      stem.startsWith(String(entry.name).toLowerCase()),
+      [stem, derived].some((name) =>
+        name.startsWith(String(entry.name).toLowerCase()),
+      ),
   );
   return slot
     ? withQuant(modelDisplayName(slot), slot)
-    : fileName(model.filename);
+    : fileName(file);
 }
 
 // The base models, as the card's own row picks them: a Flux or SD3 graph has

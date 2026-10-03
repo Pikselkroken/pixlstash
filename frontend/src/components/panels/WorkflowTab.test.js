@@ -349,6 +349,36 @@ describe("the models the panel names", () => {
     expect(text).not.toContain("ae.safetensors");
   });
 
+  it("names a shelf loader's checkpoint by the file its id names", async () => {
+    // A `checkpoint_id` recipe model's `filename` is a shelf row id (#1721):
+    // the slot is matched through `shelf_filename`, never the number.
+    const named = card({
+      models: [
+        {
+          name: "flux 2 klein 9b",
+          title: "FLUX.2 Klein 9B",
+          kind: "checkpoint",
+          slot_label: "m1",
+        },
+      ],
+    });
+    const shown = detail({ card: named });
+    shown.card.default_recipe.models = [
+      {
+        address: "core:m1/checkpoint_id",
+        kind: "checkpoint",
+        filename: "75",
+        shelf_filename: "flux-2-klein-9b-fp8.safetensors",
+        provenance: "best",
+      },
+    ];
+    getWorkflowCard.mockResolvedValue(shown);
+    const { wrapper } = await mountWith([KEY], [named]);
+    const text = textOf(wrapper);
+    expect(text).toContain("FLUX.2 Klein 9B");
+    expect(text).not.toMatch(/\b75\b/);
+  });
+
   it("says the precision the server took out of the name", async () => {
     // The panel shows `name`, which no longer carries the postfix - so without
     // the badge two quant builds of one model read identically here, which is

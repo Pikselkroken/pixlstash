@@ -511,6 +511,14 @@ class DefaultRecipeModel(BaseModel):
         None, description="The file, or null where its name was forgotten."
     )
     provenance: str
+    shelf_filename: str | None = Field(
+        None,
+        description=(
+            "On a shelf loader, whose `filename` is a shelf row id, the file "
+            "that id names, or `(model no longer on the shelf)`. Null "
+            "otherwise."
+        ),
+    )
 
 
 class DefaultRecipeLora(BaseModel):
@@ -2411,6 +2419,7 @@ def _recipe_payload(recipe: DefaultRecipe) -> DefaultRecipePayload:
                 kind=model.kind,
                 filename=model.filename,
                 provenance=model.provenance,
+                shelf_filename=model.shelf_filename,
             )
             for model in recipe.models
         ],
