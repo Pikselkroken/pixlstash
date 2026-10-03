@@ -82,9 +82,10 @@
            and stages, as one list of label-and-value rows, so a LoRA reads
            like the checkpoint above it. Where the values come from is said
            once, under the label; a row says so only when it is the exception
-           ("Yours", "in 31 of 40"). "Edit LoRAs…" is here even with no loader
-           at all: an entry point that only exists for workflows that already
-           have LoRAs is how adding the first one stays unreachable (#1478). -->
+           ("Yours", "in 31 of 40"). "Edit LoRAs…", at the foot of the
+           section, is here even with no loader at all: an entry point that
+           only exists for workflows that already have LoRAs is how adding
+           the first one stays unreachable (#1478). -->
       <div class="inspector-section" data-testid="wftab-default-recipe">
         <div class="wftab-sec-head">
           <span
@@ -95,31 +96,19 @@
             tabindex="-1"
             >Default recipe</span
           >
-          <!-- The two verbs on what a run starts from: the clone's on its
-               models, beside Edit LoRAs… on its LoRAs. Both open the same
-               LoRA dialog in the end, one on this card, one on the clone. -->
-          <span class="wftab-sec-verbs">
-            <AppButton
-              size="sm"
-              variant="ghost"
-              data-testid="wftab-clone-onto-set"
-              :disabled="chainNoGraph"
-              :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
-              @click="store.requestCloneOntoSet(selectedKey)"
-            >
-              Clone onto a set…
-            </AppButton>
-            <AppButton
-              size="sm"
-              variant="ghost"
-              data-testid="wftab-edit-loras"
-              :disabled="chainNoGraph"
-              :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
-              @click="openEditLoras(selectedKey)"
-            >
-              Edit LoRAs…
-            </AppButton>
-          </span>
+          <!-- The clone's verb is on the models, so it sits in the head;
+               Edit LoRAs… sits at the foot, under the LoRAs it edits, as the two
+               side by side overflow a narrow inspector. -->
+          <AppButton
+            size="sm"
+            variant="ghost"
+            data-testid="wftab-clone-onto-set"
+            :disabled="chainNoGraph"
+            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+            @click="store.requestCloneOntoSet(selectedKey)"
+          >
+            Clone onto a set…
+          </AppButton>
         </div>
         <p
           v-if="provenanceNote"
@@ -534,6 +523,18 @@
         >
           No LoRA loader. Editing adds the first one.
         </p>
+        <div class="wftab-sec-foot">
+          <AppButton
+            size="sm"
+            variant="ghost"
+            data-testid="wftab-edit-loras"
+            :disabled="chainNoGraph"
+            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+            @click="openEditLoras(selectedKey)"
+          >
+            Edit LoRAs…
+          </AppButton>
+        </div>
       </div>
 
       <!-- The LoRAs its pictures used that the default recipe does not
@@ -2683,9 +2684,12 @@ async function checkInstalled(key) {
   gap: var(--space-3);
 }
 
-.wftab-sec-verbs {
+.wftab-sec-head > .section-label {
+  min-width: 0;
+}
+
+.wftab-sec-foot {
   display: flex;
-  gap: var(--space-1);
 }
 
 .wftab-lora-value {

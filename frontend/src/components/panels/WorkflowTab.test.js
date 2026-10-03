@@ -2421,6 +2421,20 @@ describe("the LoRA chain (#1478)", () => {
     expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(false);
   });
 
+  it("keeps Edit LoRAs… out of the section head, below the LoRA rows", async () => {
+    // Both verbs in the head overflowed a narrow inspector sideways.
+    const { wrapper } = await mountChain();
+    const head = wrapper.find("[data-testid='wftab-default-recipe'] .wftab-sec-head");
+    expect(head.find("[data-testid='wftab-clone-onto-set']").exists()).toBe(true);
+    expect(head.find("[data-testid='wftab-edit-loras']").exists()).toBe(false);
+    const rows = wrapper.findAll("[data-testid='wftab-default-lora']");
+    const last = rows[rows.length - 1].element;
+    expect(
+      last.compareDocumentPosition(editButton(wrapper).element) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("gives a chain row the file its name's tooltip carries", async () => {
     const { wrapper } = await mountChain();
     const names = wrapper.findAll(".wftab-chain-name");
