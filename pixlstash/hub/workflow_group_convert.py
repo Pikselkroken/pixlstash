@@ -914,7 +914,8 @@ def _retire_workflow(
 ) -> None:
     """Hand a retired automatic workflow's owner state to its successors.
 
-    *heirs* is ``{new id: variants}``; *core_of_heir* gives each heir's core. The owner rows are rewritten through
+    *heirs* is ``{new id: variants}``; *core_of_heir* gives each heir's
+    core. The owner rows are rewritten through
     *labels*, **copied** to every heir but the primary (the most variants),
     and merged onto the primary, never dropped (:func:`_carry_group_state`).
     A card's successor row follows its own variants (*new_of_card*); the
