@@ -211,6 +211,85 @@ class TestTheStartupSweep:
         assert sorted(p.name for p in folder.iterdir()) == ["beach.jpg"]
         assert registry.by_uuid(library.uuid) is None
 
+    def test_a_previous_librarys_folders_survive_the_sweep(self, registry, tmp_path):
+        folder = tmp_path / "restored"
+        (folder / "snapshots").mkdir(parents=True)
+        (folder / "snapshots" / "old.sqlite.zst").write_bytes(b"history")
+        (folder / "beach.jpg").write_bytes(b"a picture")
+        library = registry.create(str(folder), "Restored", pending_import=True)
+        assert library.pending_import_kept == ("snapshots",)
+        (folder / THUMBNAIL_DIR_NAME).mkdir()
+
+        _sweep_unfinished_imports(registry)
+
+        assert (folder / "snapshots" / "old.sqlite.zst").read_bytes() == b"history"
+        assert not (folder / THUMBNAIL_DIR_NAME).exists(), "this one was ours"
+        assert registry.by_uuid(library.uuid) is None
+
+    def test_start_up_registration_records_them_too(self, registry, tmp_path):
+        """The desktop's first run registers through start-up, not `create`."""
+        folder = tmp_path / "restored"
+        (folder / ".pixlstash-thumbnails").mkdir(parents=True)
+
+        library = registry.register_pending(str(folder), pending_import=True)
+
+        assert library.pending_import_kept == (".pixlstash-thumbnails",)
+
+    def test_a_revived_row_takes_this_imports_pending_state(self, registry, tmp_path):
+        """A pending folder has no fingerprint, so it revives any detached row
+        without one; the row must describe this attempt, not the last."""
+        registry.create(str(tmp_path / "first"), "First")  # stays active
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        earlier = registry.create(str(folder), "Holiday", pending_import=True)
+        assert earlier.pending_import_kept == ()
+        registry.detach(earlier.id)
+        os.remove(folder / TEMP_VAULT_FILENAME)
+        # Appeared after the first attempt: not this import's to delete either.
+        (folder / "snapshots").mkdir()
+
+        again = registry.create(str(folder), "Holiday", pending_import=True)
+
+        assert again.uuid == earlier.uuid, "revived, not re-registered"
+        assert again.pending_import_kept == ("snapshots",)
+        assert again.is_reachable
+
+    def test_a_revived_real_library_becomes_pending_when_imported_into(
+        self, registry, tmp_path
+    ):
+        """Without the mark the row would name a vault.db that is not there."""
+        registry.create(str(tmp_path / "first"), "First")  # stays active
+        folder = tmp_path / "old-library"
+        folder.mkdir()
+        old = registry.create(str(folder), "Old")
+        assert old.vault_uuid is None, "the revival needs a row with no fingerprint"
+        registry.detach(old.id)
+        os.remove(folder / VAULT_FILENAME)
+
+        again = registry.create(str(folder), "Old", pending_import=True)
+
+        assert again.uuid == old.uuid
+        assert again.pending_import_at is not None
+        assert again.vault_path == str(folder / TEMP_VAULT_FILENAME)
+        assert again.is_reachable
+
+    def test_a_row_that_never_recorded_them_keeps_everything(self, registry, tmp_path):
+        """A pending row from before the record: nothing is assumed ours."""
+        folder = tmp_path / "folder-of-pictures"
+        folder.mkdir()
+        library = registry.create(str(folder), "Holiday", pending_import=True)
+        with registry._hub.transaction() as conn:
+            conn.execute(
+                "UPDATE library SET pending_import_kept = NULL WHERE id = ?",
+                (library.id,),
+            )
+        (folder / "snapshots").mkdir()
+
+        _sweep_unfinished_imports(registry)
+
+        assert (folder / "snapshots").is_dir()
+        assert not (folder / TEMP_VAULT_FILENAME).exists()
+
     def test_a_rename_that_landed_before_the_crash_is_just_finished(
         self, registry, tmp_path
     ):

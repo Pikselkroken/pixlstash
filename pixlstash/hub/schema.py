@@ -1546,6 +1546,12 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     # every row an older hub carries.
     if "pending_import_at" not in columns:
         conn.execute("ALTER TABLE library ADD COLUMN pending_import_at TEXT")
+    # JSON list of the folders PixlStash names (`snapshots`, `tmp`, the
+    # thumbnail caches) that were already there when that first import began,
+    # so abandoning it does not delete a previous library's. NULL means not
+    # recorded, and keeps them all.
+    if "pending_import_kept" not in columns:
+        conn.execute("ALTER TABLE library ADD COLUMN pending_import_kept TEXT")
 
     # Telemetry consent landed on develop while the multi-library feature lane
     # already had v2 developer hubs. Identity now lives in the hub, so mirror

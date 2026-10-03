@@ -11,7 +11,6 @@ the contents of either database.
 from __future__ import annotations
 
 import os
-import shutil
 import sqlite3
 import hashlib
 import json
@@ -27,11 +26,11 @@ from pixlstash.hub.engine import HubEngine
 from pixlstash.utils.media_files import has_media_files
 from pixlstash.hub.registry import (
     Library,
-    LIBRARY_MADE_ENTRIES,
     LibraryError,
     LibraryRegistry,
     NotAVaultError,
     VAULT_FILENAME,
+    remove_library_made_entries,
     validate_vault_folder,
 )
 from pixlstash.pixl_logging import get_logger
@@ -415,14 +414,7 @@ def _sweep_unfinished_imports(registry: LibraryRegistry) -> None:
                     os.remove(path)
             except OSError as exc:
                 logger.warning("Could not remove %s: %s", path, exc)
-        for name in LIBRARY_MADE_ENTRIES:
-            made = os.path.join(folder, name)
-            if not os.path.isdir(made) or os.path.islink(made):
-                continue
-            try:
-                shutil.rmtree(made)
-            except OSError as exc:
-                logger.warning("Could not remove %s: %s", made, exc)
+        remove_library_made_entries(library)
         try:
             # `forget`, not `detach`: a detached row revives when the folder
             # is added again, and it would come back still pending.

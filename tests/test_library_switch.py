@@ -1027,6 +1027,35 @@ class TestDiscardingAFirstImport:
         assert (folder / "beach.jpg").read_bytes() == b"not really a jpeg, but a file"
         assert server.library_registry.by_uuid(pending_library.uuid) is None
 
+    def test_a_previous_librarys_folders_are_not_this_imports_to_delete(
+        self, server, tmp_path
+    ):
+        """A restored backup holds an old library's snapshots and caches."""
+        original = server.library_registry.active_library()
+        folder = tmp_path / "restored"
+        (folder / "snapshots").mkdir(parents=True)
+        (folder / "snapshots" / "old.sqlite.zst").write_bytes(b"history")
+        (folder / "tmp").mkdir()
+        (folder / "tmp" / "face.png").write_bytes(b"face")
+        (folder / "beach.jpg").write_bytes(b"a picture")
+        library = server.library_registry.create(
+            str(folder), f"Restored {tmp_path.name}", pending_import=True
+        )
+        try:
+            server.library_switch.switch_to(library.uuid)
+            (folder / THUMBNAIL_DIR_NAME).mkdir(exist_ok=True)
+
+            server.library_switch.discard_pending_library(
+                server.library_registry.by_uuid(library.uuid)
+            )
+
+            assert (folder / "snapshots" / "old.sqlite.zst").read_bytes() == b"history"
+            assert (folder / "tmp" / "face.png").read_bytes() == b"face"
+            assert not (folder / THUMBNAIL_DIR_NAME).exists(), "this one was ours"
+        finally:
+            if server.library_registry.active_library().uuid != original.uuid:
+                server.library_switch.switch_to(original.uuid)
+
     def test_the_session_lands_on_a_library_that_is_not_that_folder(
         self, server, pending_library
     ):
