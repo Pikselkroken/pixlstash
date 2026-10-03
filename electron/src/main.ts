@@ -1235,6 +1235,19 @@ function gpuUpgrade(): Accel | undefined {
   return hardware ? gpuUpgrades(hardware, bundledAccel())[0] : undefined;
 }
 
+/**
+ * Install, switch and remove act on GPU overlays a dev run never launches and
+ * the packaged app on this machine does: switching would change its saved
+ * choice and removing would delete its download.
+ */
+function refuseAccelChangeInDev(): void {
+  if (isDevBackend()) {
+    throw new Error(
+      'This is a development run: it uses the Python environment it was started from, and GPU add-ons belong to the installed app.',
+    );
+  }
+}
+
 /** The interpreter the backend runs on: the bundled one, or the dev checkout's. */
 function backendInterpreter(): string {
   return isDevBackend() ? devInterpreter() : bundledInterpreter();
@@ -1248,6 +1261,12 @@ function backendEnv(): NodeJS.ProcessEnv {
 
 /** Describe the bundled accelerator + each installable/installed GPU overlay. */
 async function acceleratorState() {
+  // Dev runs on the checkout's interpreter and never on an overlay, so there is
+  // nothing to install or switch here - and the overlays on disk belong to the
+  // packaged app that shares this userData.
+  if (isDevBackend()) {
+    return { dev: true, bundled: { accel: null, label: 'Development environment', active: true }, items: [] };
+  }
   const active = await manager.getActiveAccel();
   const upgrades = hardware ? gpuUpgrades(hardware, bundledAccel()) : [];
   const installed = await manager.listInstalled();
@@ -1816,6 +1835,7 @@ function registerIpc(): void {
   // an `Accel` is a path segment (see requireAccel). Validate at the boundary,
   // before the value can reach a directory join.
   ipcMain.handle('accel:install', async (_e, raw: unknown) => {
+    refuseAccelChangeInDev();
     const accel = requireAccel(raw);
     if (!runtime) throw new Error('No bundled runtime available');
     // installOverlay wipes the target directory first, and a backend running on
@@ -1843,6 +1863,7 @@ function registerIpc(): void {
     // means "back to the bundled env". Anything else must be a known Accel.
     // Deactivating is the safe reading of a missing argument: it is the one
     // outcome that puts no renderer-supplied segment on a path or a PYTHONPATH.
+    refuseAccelChangeInDev();
     const accel = raw === null || raw === undefined ? null : requireAccel(raw);
     // setActiveAccel BEFORE the start is fine only because the fallback wrapper
     // guarantees a failed overlay start ends with the active state cleared
@@ -1855,6 +1876,7 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('accel:remove', async (_e, raw: unknown) => {
+    refuseAccelChangeInDev();
     await manager.remove(requireAccel(raw));
     // Relaunch on whatever remains active (another overlay or null). A remaining
     // overlay that fails to start falls back to CPU; a null start failure
