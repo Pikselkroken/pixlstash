@@ -58,6 +58,7 @@ from pixlstash.hub.workflow_card_reads import (
     group_picture_inputs,
     instance_documents,
     variant_documents,
+    workflow_index,
 )
 from pixlstash.hub import workflow_card_reads
 from pixlstash.hub.workflow_card_reads import _manual_facts_of, manual_document
@@ -5920,6 +5921,93 @@ def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypat
     # It names WHICH picture answered, and that is the card's best.
     assert r.json()["groups"][0]["source_picture_id"] == read[0]
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 33
+
+
+# A second graph of RUN_WF with more LoRA loaders than RUN_TOPOLOGY and no
+# picture in this library: the shape another library sharing the hub filed.
+RICH_TOPOLOGY = _h("richtopology")
+RICH_RECIPE = _h("richrecipe")
+RICH_CARD = _h("richcard")
+
+
+def _seed_unpictured_richer_topology(server) -> None:
+    """File RICH_TOPOLOGY into RUN_WF: three LoRA slots, no picture, no instance."""
+    rich_slots = [
+        {
+            "label": slot.label,
+            "class_type": slot.class_type,
+            "widget": slot.widget,
+            "is_lora": slot.is_lora,
+        }
+        for slot in slots(RUN_DOCUMENT)
+    ] + [
+        {
+            "label": f"lora-{n}",
+            "class_type": "LoraLoader",
+            "widget": "lora_name",
+            "is_lora": True,
+        }
+        for n in (2, 3)
+    ]
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_topology "
+            "(topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, 'v1', ?, ?)",
+            (RICH_TOPOLOGY, 6, "2026-09-01T00:00:00Z"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_topology_core "
+            "(topology_hash, core_hash, core_version, workflow_type, slots, "
+            "specials) VALUES (?, ?, ?, 'txt2img', ?, '')",
+            (RICH_TOPOLOGY, RUN_CORE, CORE_RULE_VERSION, json.dumps(rich_slots)),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_recipe "
+            "(structural_hash, topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, ?, 'v1', ?, ?)",
+            (RICH_RECIPE, RICH_TOPOLOGY, 6, "2026-09-01T00:00:00Z"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_variant "
+            "(structural_hash, topology_hash, workflow_key, key_version) "
+            "VALUES (?, ?, ?, ?)",
+            (RICH_RECIPE, RICH_TOPOLOGY, RICH_CARD, WORKFLOW_KEY_VERSION),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_variant_family (structural_hash, families) "
+            "VALUES (?, '')",
+            (RICH_RECIPE,),
+        )
+
+
+def test_the_base_is_a_graph_this_library_has_pictures_of(runnable, monkeypatch):
+    """#1738: more LoRA slots never make an unpictured graph the base.
+
+    Hub-only, the richer graph is still the base (the conversions read that);
+    with this library's counts the pictured graph is, so the workflow runs off
+    its picture and the Workflow tab shows that same graph.
+    """
+    _seed_unpictured_richer_topology(runnable.server)
+    (hub_only,) = [
+        w for w in workflow_index(runnable.server.hub) if w.workflow_id == RUN_WF
+    ]
+    assert set(hub_only.topologies) == {RUN_TOPOLOGY, RICH_TOPOLOGY}
+    assert hub_only.base_topology == RICH_TOPOLOGY
+
+    assert _detail(runnable.owner, RUN_WF)["card"]["base_topology"] == RUN_TOPOLOGY
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(RUN_DOCUMENT)),
+            [],
+        ),
+    )
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
+    assert "no_runnable_source" not in _reasons(payload), payload
+    assert payload["groups"][0]["source"] == "picture", payload
+    assert payload["groups"][0]["source_picture_id"] == runnable.picture_id
 
 
 def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypatch):

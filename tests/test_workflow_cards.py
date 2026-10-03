@@ -1484,6 +1484,35 @@ def test_one_workflow_spans_the_topologies_its_core_hash_groups(hub):
     assert entry.base_card == card_of(hub, runs[1].structural_hash)
 
 
+def test_the_base_is_a_topology_this_library_has_pictures_of(hub):
+    """#1738: a pictured topology beats stages and LoRAs nobody here ran."""
+    runs = _four_runs(hub)
+    plain = runs[3]
+    (entry,) = workflow_index(hub, {plain.structural_hash: 2})
+    assert entry.base_topology == plain.topology_hash
+    assert entry.base_card == card_of(hub, plain.structural_hash)
+    # Among pictured topologies, stage groups then LoRA loaders still decide.
+    (entry,) = workflow_index(hub, {keys.structural_hash: 1 for keys in runs})
+    assert entry.base_topology == runs[1].topology_hash
+    (entry,) = workflow_index(
+        hub, {runs[0].structural_hash: 1, runs[2].structural_hash: 1}
+    )
+    assert entry.base_topology == runs[2].topology_hash
+    # A workflow file is a source too: its topology stays in the running.
+    file_card = card_of(hub, runs[0].structural_hash)
+    cards = [
+        replace(card, file_name="example.json")
+        if card.workflow_key == file_card
+        else card
+        for card in card_index(hub)
+    ]
+    (entry,) = workflow_index(hub, {plain.structural_hash: 2}, cards)
+    assert (entry.base_topology, entry.base_card) == (
+        runs[0].topology_hash,
+        file_card,
+    )
+
+
 def test_a_topology_placed_by_hand_leaves_its_automatic_workflow(hub):
     runs = _four_runs(hub)
     workflow_id = workflow_of_variant(hub, runs[0].structural_hash)
