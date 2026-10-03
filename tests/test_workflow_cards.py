@@ -1514,6 +1514,13 @@ def test_a_shelf_loader_s_default_model_names_the_file_its_id_names(hub, monkeyp
         "flux-2-klein-9b.safetensors",
     )
 
+    # Still on the shelf with no file to name: not "gone".
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET filename = NULL WHERE id = ?", (model_id,))
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    (model,) = [m for m in recipe.models if m.address.endswith("/checkpoint_id")]
+    assert model.shelf_filename is None
+
     with hub.transaction() as conn:
         conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
     _, recipe = _defaults(hub, monkeypatch, runs)

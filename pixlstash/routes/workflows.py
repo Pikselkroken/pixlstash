@@ -138,6 +138,7 @@ from pixlstash.services.workflow_card_service import (
     read_grid,
     slot_kind,
     lora_modal_strength,
+    shelf_filenames,
     workflow_defaults,
     workflow_lora_summary,
 )
@@ -258,6 +259,14 @@ class WorkflowAsset(BaseModel):
 
     widget: str
     name: str
+    shelf_filename: str | None = Field(
+        None,
+        description=(
+            "On a shelf loader (`checkpoint_id`), whose `name` is a shelf row "
+            "id, the file that id names, or `(model no longer on the shelf)`. "
+            "Null otherwise."
+        ),
+    )
 
 
 class WorkflowVariant(BaseModel):
@@ -2086,9 +2095,17 @@ def _iso(value) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _assets(rows) -> list[WorkflowAsset]:
+def _assets(rows, shelf_files: dict[str, str | None]) -> list[WorkflowAsset]:
     return [
-        WorkflowAsset(widget=row["widget_name"], name=row["normalized_filename"])
+        WorkflowAsset(
+            widget=row["widget_name"],
+            name=row["normalized_filename"],
+            shelf_filename=(
+                shelf_files.get(row["normalized_filename"])
+                if row["widget_name"] == SHELF_ID_FIELD
+                else None
+            ),
+        )
         for row in rows
     ]
 
@@ -2470,6 +2487,17 @@ def _workflow_variants(hub, vault, workflow: Workflow) -> list[WorkflowVariant]:
         forgotten.update(forgotten_asset_counts(hub, topology).get(topology, {}))
     recipes.sort(key=lambda row: row["first_seen_at"] or "")
     activity = read_recipe_activity(vault, [row["structural_hash"] for row in recipes])
+    shelf_files = shelf_filenames(
+        hub,
+        sorted(
+            {
+                row["normalized_filename"]
+                for rows in assets.values()
+                for row in rows
+                if row["widget_name"] == SHELF_ID_FIELD
+            }
+        ),
+    )
     variants = []
     for row in recipes:
         seen = activity.get(row["structural_hash"])
@@ -2480,7 +2508,7 @@ def _workflow_variants(hub, vault, workflow: Workflow) -> list[WorkflowVariant]:
                 first_seen_at=row["first_seen_at"],
                 pictures=seen.pictures if seen else 0,
                 last_used=_iso(seen.last_used) if seen else None,
-                assets=_assets(assets.get(row["structural_hash"], [])),
+                assets=_assets(assets.get(row["structural_hash"], []), shelf_files),
                 forgotten_models=forgotten.get(row["structural_hash"], 0),
             )
         )

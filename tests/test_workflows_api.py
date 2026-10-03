@@ -2077,6 +2077,17 @@ def test_a_shelf_loader_slot_is_named_by_its_file_not_its_id(workflow_env):
         _SHELF_DERIVED,
         _SHELF_TITLE,
     )
+    # The variant keeps the id it recorded, and says which file it names.
+    assets = [
+        asset
+        for variant in _detail(workflow_env.owner, BUSY_WF)["variants"]
+        for asset in variant["assets"]
+        if asset["widget"] == "checkpoint_id"
+    ]
+    assert assets
+    assert {(a["name"], a["shelf_filename"]) for a in assets} == {
+        (str(model_id), _SHELF_FILENAME)
+    }
 
     with hub.transaction() as conn:
         conn.execute("DELETE FROM model WHERE id = ?", (model_id,))

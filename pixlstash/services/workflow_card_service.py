@@ -958,6 +958,20 @@ def _slot_filename(
     return mark.filename if mark else None
 
 
+def shelf_filenames(hub: HubDatabase, ids: list[str]) -> dict[str, Optional[str]]:
+    """``{shelf id: the file it names}`` for a shelf loader's values.
+
+    :data:`SHELF_MODEL_GONE` where the shelf holds no such row, and ``None``
+    where it holds one but cannot name a single file for it: that model is
+    still on the shelf.
+    """
+    marks = model_marks(hub, ids)
+    return {
+        value: marks[value].filename if value in marks else SHELF_MODEL_GONE
+        for value in ids
+    }
+
+
 def _derived(name: Optional[str]) -> Optional[str]:
     """A slot's filename as a card shows it: no folders, no extension, no quant.
 
@@ -1455,14 +1469,10 @@ def workflow_defaults(
         for index, model in enumerate(recipe.models)
         if model.address.endswith("/" + SHELF_ID_FIELD) and model.filename
     ]
-    marks = model_marks(hub, [recipe.models[i].filename for i in on_shelf])
+    files = shelf_filenames(hub, [recipe.models[i].filename for i in on_shelf])
     for index in on_shelf:
         model = recipe.models[index]
-        recipe.models[index] = replace(
-            model,
-            shelf_filename=_slot_filename(SHELF_ID_FIELD, model.filename, marks)
-            or SHELF_MODEL_GONE,
-        )
+        recipe.models[index] = replace(model, shelf_filename=files[model.filename])
 
     by_name, _digests = adapter_digest_index(hub)
 
