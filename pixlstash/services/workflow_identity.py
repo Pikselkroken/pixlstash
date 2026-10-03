@@ -599,6 +599,174 @@ def special_groups(document: dict) -> tuple[str, ...]:
     return tuple(group for group in SPECIAL_GROUPS if group in present)
 
 
+# What a graph's core DOES that a generated name cannot otherwise say (#1722):
+# two cards with one model, one type and one post-processing can still be
+# genuinely different workflows. In the order a name lists them; reference
+# counts are spelled ``references:N``.
+TWO_PASS = "two_pass"
+REFINE = "refine"
+MODEL_PER_PASS = "model_per_pass"
+INTERMEDIATE_SAVE = "intermediate_save"
+LIKENESS_GATE = "likeness_gate"
+NEGATIVE_PROMPT = "negative_prompt"
+REFERENCES_PREFIX = "references:"
+TRAITS = (
+    TWO_PASS,
+    REFINE,
+    MODEL_PER_PASS,
+    INTERMEDIATE_SAVE,
+    LIKENESS_GATE,
+    NEGATIVE_PROMPT,
+)
+_LIKENESS_GATE_CLASSES = frozenset(
+    {"PixlStashFaceLikenessGate", "PixlStashPictureLikenessGate"}
+)
+_SAVER_CLASS_RE = re.compile(r"Save", re.IGNORECASE)
+_TEXT_ENCODER_CLASS_RE = re.compile(r"TextEncode")
+
+
+def graph_traits(document: dict, *, strip_loras: bool = True) -> tuple[str, ...]:
+    """What this stored document's core does beyond its type and its stages.
+
+    *strip_loras* is :func:`core_hash`'s, and a caller passes the value its
+    grouping uses, so the traits are read off the core that grouped them.
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph, or nothing survives
+            the core strip.
+    """
+    return reduced_traits(_reduce(document), strip_loras=strip_loras)
+
+
+def reduced_traits(
+    nodes: dict[str, ReducedNode], *, strip_loras: bool = True
+) -> tuple[str, ...]:
+    """:func:`graph_traits` of an already reduced graph, raw or stored.
+
+    **Read off the core graph, never the whole one**: the same strip as
+    :func:`core_hash`, so two graphs one automatic workflow groups always have
+    the same traits, and a trait can only name a difference the grouping kept.
+    A hires fix's second sampler is an upscale stage there and is gone, so it
+    is not "two-pass"; a refine through an upscale model reads as a decode fed
+    straight back into a sampler, which is what it is.
+
+    Class types and edges only, so a manual workflow's raw graph answers as
+    its stored document would.
+    """
+    core = _core_of(nodes, strip_loras)[0]
+    samplers = {
+        node_id
+        for node_id, node in core.items()
+        if _SAMPLER_CLASS_RE.search(node.class_type)
+        and any(name == "latent_image" for name, _, _ in node.inputs)
+    }
+    present: set[str] = set()
+    first_passes: set[str] = set()
+    for node_id in samplers:
+        found = _upstream_sampler(core, node_id, samplers)
+        if found is None:
+            continue
+        source, encoded = found
+        first_passes.add(source)
+        present.add(REFINE if encoded else TWO_PASS)
+        if _model_root(core, source) != _model_root(core, node_id):
+            present.add(MODEL_PER_PASS)
+    for node_id, node in core.items():
+        if not _SAVER_CLASS_RE.search(node.class_type) or node_id in samplers:
+            continue
+        found = _upstream_sampler(core, node_id, samplers)
+        if found is not None and found[0] in first_passes:
+            present.add(INTERMEDIATE_SAVE)
+    if any(n.class_type in _LIKENESS_GATE_CLASSES for n in core.values()):
+        present.add(LIKENESS_GATE)
+    if any(_negative_is_prompted(core, node) for node in core.values()):
+        present.add(NEGATIVE_PROMPT)
+    traits = [trait for trait in TRAITS if trait in present]
+    references = sum(n.class_type == "ReferenceLatent" for n in core.values())
+    if references:
+        traits.append(f"{REFERENCES_PREFIX}{references}")
+    return tuple(traits)
+
+
+def _upstream_sampler(
+    nodes: dict[str, ReducedNode], node_id: str, samplers: set[str]
+) -> Optional[tuple[str, bool]]:
+    """The sampler whose picture or latent *node_id* is fed, and whether a
+    ``VAEEncode`` lies between them. ``None`` when none does.
+
+    Walks the picture/latent stream only (:data:`_STREAM_INPUTS`), so a model
+    or a conditioning shared with another sampler is not mistaken for a pass.
+    """
+    stack = [
+        (source, False)
+        for name, source, _ in nodes[node_id].inputs
+        if name in _STREAM_INPUTS
+    ]
+    seen: set[str] = set()
+    while stack:
+        current, encoded = stack.pop()
+        if current in seen or current not in nodes:
+            continue
+        seen.add(current)
+        if current in samplers:
+            return current, encoded
+        node = nodes[current]
+        encoded = encoded or node.class_type == "VAEEncode"
+        stack.extend(
+            (source, encoded)
+            for name, source, _ in node.inputs
+            if name in _STREAM_INPUTS
+        )
+    return None
+
+
+def _model_root(nodes: dict[str, ReducedNode], node_id: str) -> Optional[str]:
+    """The node a sampler's model chain starts at: its loader."""
+    seen: set[str] = set()
+    current: Optional[str] = node_id
+    while current in nodes and current not in seen:
+        seen.add(current)
+        edge = next(
+            (
+                source
+                for wanted in ("model", "guider")
+                for name, source, _ in nodes[current].inputs
+                if name == wanted
+            ),
+            None,
+        )
+        if edge is None:
+            return current
+        current = edge
+    return current
+
+
+def _negative_is_prompted(nodes: dict[str, ReducedNode], node: ReducedNode) -> bool:
+    """Whether *node*'s ``negative`` input is a typed prompt.
+
+    The walk follows conditioning only and stops at ``ConditioningZeroOut``,
+    whose input is the positive prompt: zeroing that is "no negative".
+    """
+    stack = [source for name, source, _ in node.inputs if name == "negative"]
+    seen: set[str] = set()
+    while stack:
+        current = stack.pop()
+        if current in seen or current not in nodes:
+            continue
+        seen.add(current)
+        upstream = nodes[current]
+        if upstream.class_type == "ConditioningZeroOut":
+            continue
+        if _TEXT_ENCODER_CLASS_RE.search(upstream.class_type):
+            return True
+        stack.extend(
+            source
+            for name, source, _ in upstream.inputs
+            if name.startswith("conditioning")
+        )
+    return False
+
+
 def node_groups(nodes: dict[str, ReducedNode]) -> dict[str, Optional[str]]:
     """Each node's taxonomy group, or ``None`` for one that does real work.
 
@@ -703,7 +871,13 @@ def _core_pass(
 
     *v3* off is core rule v2, kept only for data step 10's label maps.
     """
-    nodes = _reduce(document)
+    return _core_of(_reduce(document), strip_loras, v3=v3)
+
+
+def _core_of(
+    nodes: dict[str, ReducedNode], strip_loras: bool, *, v3: bool = True
+) -> tuple[dict[str, ReducedNode], Counter, bool]:
+    """:func:`_core_pass` of an already reduced graph, stored or raw."""
     strip = _core_strip(strip_loras)
     if not has_sampler(nodes):
         # Every stage is an optional addition to a graph that samples. With no

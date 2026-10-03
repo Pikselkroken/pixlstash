@@ -464,6 +464,36 @@ def test_a_topology_cached_before_the_specials_column_is_re_derived(hub):
     assert _drained(finder)
 
 
+def test_a_topology_cached_before_the_traits_column_is_re_derived(hub, monkeypatch):
+    """#1722's column fills the way `specials` did: re-queued on NULL, written
+    by the same UPDATE, without re-running the refinement or moving the row's
+    stack key."""
+    record_api_graph(hub, _graph())
+    written = hub.fetchone("SELECT traits FROM workflow_topology_core")["traits"]
+    # A fresh pass writes it; the plain graph's typed negative is its trait.
+    assert written == "negative_prompt"
+    assert card_index(hub)[0].traits == ("negative_prompt",)
+    with hub.transaction() as conn:
+        conn.execute("UPDATE workflow_topology_core SET traits = NULL")
+    before = hub.fetchone("SELECT * FROM workflow_topology_core")
+    assert card_index(hub)[0].traits is None
+
+    def explode(*args, **kwargs):
+        raise AssertionError("core_hash was re-run to fill traits alone")
+
+    monkeypatch.setattr(workflow_cards, "core_hash", explode)
+    finder = WorkflowCardBackfillFinder(hub=hub)
+    assert finder.progress() == (1, 1)
+    assert finder.find_task()._run_task()["identified"] == 1
+    after = hub.fetchone("SELECT * FROM workflow_topology_core")
+    assert after["traits"] == "negative_prompt"
+    assert (after["core_hash"], after["specials"]) == (
+        before["core_hash"],
+        before["specials"],
+    )
+    assert _drained(finder)
+
+
 def test_filling_specials_alone_does_not_rerun_the_refinement(hub, monkeypatch):
     """The upgrade may not pay the hub's most expensive pass for two words.
 

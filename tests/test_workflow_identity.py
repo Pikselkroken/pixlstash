@@ -21,15 +21,22 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.services.workflow_identity import (
     FACE_DETAILER,
+    INTERMEDIATE_SAVE,
+    LIKENESS_GATE,
+    MODEL_PER_PASS,
+    NEGATIVE_PROMPT,
     RECIPE,
+    REFINE,
     SEED_VARIANCE,
     STRUCTURAL,
+    TWO_PASS,
     UPSCALE,
     Difference,
     core_hash,
     core_node_labels,
     differences_reduced,
     differs_by,
+    graph_traits,
     guess_mark,
     reduce_stored_document,
     slots,
@@ -752,6 +759,125 @@ def test_special_groups_says_what_one_graph_has_rather_than_how_two_differ():
     # set's iteration order would make the cache churn at random.
     both = _doc(_graph(upscale=True, face_detailer=True))
     assert special_groups(both) == (UPSCALE, FACE_DETAILER)
+
+
+def _second_pass(latent, *, model=("1", 0)) -> dict:
+    """Nodes that sample *latent* again and save that, replacing the save."""
+    return {
+        "21": _node(
+            "KSamplerAdvanced",
+            model=list(model),
+            positive=["2", 0],
+            negative=["3", 0],
+            latent_image=list(latent),
+            noise_seed=1,
+            start_at_step=10,
+        ),
+        "6": _node("VAEDecode", samples=["21", 0], vae=["1", 2]),
+    }
+
+
+def test_traits_say_what_the_core_does_that_the_type_cannot():
+    """One graph per kind #1722 found told apart only by "(2)"..."(14)".
+
+    Every graph here is txt2img with no stage, so its generated name is the
+    same; the trait is the only thing that can say how they differ.
+    """
+    # A single pass has no pass trait. Its typed negative prompt is a trait
+    # (the Klein rows differ by exactly that), and zeroing the positive is not.
+    assert graph_traits(_doc(_graph())) == (NEGATIVE_PROMPT,)
+    zeroed = {"3": _node("ConditioningZeroOut", conditioning=["2", 0])}
+    assert graph_traits(_doc(_graph(extra=zeroed))) == ()
+    # A hires fix's second sampler is an upscale stage, stripped from the core
+    # like the grouping strips it: not "two-pass".
+    assert graph_traits(_doc(_graph(hires=True, extra=zeroed))) == ()
+
+    # Two chained samplers, the first's latent straight into the second.
+    two_pass = _second_pass(("5", 0))
+    assert graph_traits(_doc(_graph(extra={**zeroed, **two_pass}))) == (TWO_PASS,)
+
+    # The same with a model chain of its own for the second pass.
+    own_model = {
+        **_second_pass(("5", 0), model=("60", 0)),
+        "60": _node("CheckpointLoaderSimple", ckpt_name="refiner.safetensors"),
+    }
+    assert graph_traits(_doc(_graph(extra={**zeroed, **own_model}))) == (
+        TWO_PASS,
+        MODEL_PER_PASS,
+    )
+
+    # The first pass's picture saved as well as the last.
+    saved = {
+        **two_pass,
+        "70": _node("VAEDecode", samples=["5", 0], vae=["1", 2]),
+        "71": _node("SaveImage", images=["70", 0], filename_prefix="first"),
+    }
+    assert graph_traits(_doc(_graph(extra={**zeroed, **saved}))) == (
+        TWO_PASS,
+        INTERMEDIATE_SAVE,
+    )
+
+    # Decoded, re-encoded and sampled again: an img2img refine, which a likeness
+    # gate in front of the save can tell apart again.
+    refine = {
+        **_second_pass(("81", 0)),
+        "80": _node("VAEDecode", samples=["5", 0], vae=["1", 2]),
+        "81": _node("VAEEncode", pixels=["80", 0], vae=["1", 2]),
+    }
+    assert graph_traits(_doc(_graph(extra={**zeroed, **refine}))) == (REFINE,)
+    gated = {
+        **refine,
+        "90": _node("PixlStashPictureLikenessGate", image=["6", 0]),
+        "7": _node("SaveImage", images=["90", 0], filename_prefix="out"),
+    }
+    assert graph_traits(_doc(_graph(extra={**zeroed, **gated}))) == (
+        REFINE,
+        LIKENESS_GATE,
+    )
+
+    # Reference images, counted: one edit reference is not two.
+    one_ref = {
+        "R1": _node("ReferenceLatent", conditioning=["2", 0]),
+        "5": _node(
+            "KSampler",
+            model=["1", 0],
+            positive=["R1", 0],
+            negative=["3", 0],
+            latent_image=["4", 0],
+            seed=1,
+        ),
+    }
+    two_refs = {**one_ref, "R2": _node("ReferenceLatent", conditioning=["R1", 0])}
+    two_refs["5"] = _node(
+        "KSampler",
+        model=["1", 0],
+        positive=["R2", 0],
+        negative=["3", 0],
+        latent_image=["4", 0],
+        seed=1,
+    )
+    assert graph_traits(_doc(_graph(extra={**zeroed, **one_ref}))) == ("references:1",)
+    assert graph_traits(_doc(_graph(extra={**zeroed, **two_refs}))) == ("references:2",)
+    # A reference nothing samples from is not counted: an unused one, and one
+    # feeding only a stage, are dead once the core strip has run, and pruned.
+    unused = {**one_ref, "R9": _node("ReferenceLatent", conditioning=["2", 0])}
+    assert graph_traits(_doc(_graph(extra={**zeroed, **unused}))) == ("references:1",)
+    into_stage = {
+        **unused,
+        "31": _node(
+            "FaceDetailer",
+            image=["6", 0],
+            model=["1", 0],
+            clip=["1", 1],
+            vae=["1", 2],
+            positive=["R9", 0],
+            negative=["3", 0],
+            bbox_detector=["30", 0],
+        ),
+    }
+    assert graph_traits(
+        _doc(_graph(face_detailer=True, extra={**zeroed, **into_stage}))
+    ) == ("references:1",)
 
 
 def test_a_loader_on_its_own_is_not_the_graph_doing_the_thing():

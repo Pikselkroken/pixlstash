@@ -59,7 +59,8 @@ from pixlstash.hub.workflow_card_reads import (
     instance_documents,
     variant_documents,
 )
-from pixlstash.hub.workflow_card_reads import _manual_workflow_type, manual_document
+from pixlstash.hub import workflow_card_reads
+from pixlstash.hub.workflow_card_reads import _manual_facts_of, manual_document
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
@@ -107,6 +108,7 @@ from pixlstash.services.workflow_identity import (
     UPSCALE,
     WORKFLOW_KEY_VERSION,
     core_node_labels,
+    graph_traits,
     guess_mark,
     slots,
     special_groups,
@@ -687,7 +689,7 @@ def _seed_hub(server) -> None:
         conn.executemany(
             "INSERT INTO workflow_topology_core "
             "(topology_hash, core_hash, core_version, workflow_type, slots, "
-            "specials) VALUES (?, ?, ?, ?, ?, ?)",
+            "specials, traits) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     topology,
@@ -699,6 +701,7 @@ def _seed_hub(server) -> None:
                     # slot list is: a fixture that spelled it would go on
                     # describing the old rule after the rule changed.
                     ",".join(special_groups(_DOCUMENTS[structural])),
+                    ",".join(graph_traits(_DOCUMENTS[structural])),
                 )
                 for topology, core, kind, structural in _SEED_CORES
             ],
@@ -2277,6 +2280,82 @@ def test_generated_names_that_collide_are_numbered():
     assert card.name == "realvisxl: Text to Image (2)"
 
 
+def test_colliding_generated_names_say_how_they_differ_before_numbering():
+    """#1722: a generated name that collides says what its core does that the
+    others do not, and only what still collides is numbered.
+
+    A trait every colliding workflow shares tells none of them apart and is
+    left off; a workflow with no traits read yet claims none.
+    """
+    plain = SlotModel(name="realvisxl", kind="checkpoint")
+
+    def figure(key, traits):
+        return WorkflowFigures(
+            card=Card(
+                workflow_key=key,
+                topology_hash=key,
+                workflow_type="txt2img",
+                traits=traits,
+            ),
+            workflow=Workflow(key, topologies=[key], base_topology=key),
+            models=[plain],
+        )
+
+    figures = [
+        figure("a" * 64, ("negative_prompt",)),
+        figure("b" * 64, ("two_pass", "model_per_pass", "negative_prompt")),
+        figure("c" * 64, ("refine", "likeness_gate", "negative_prompt")),
+        figure("d" * 64, ("refine", "negative_prompt")),
+        figure("e" * 64, ("negative_prompt", "references:2")),
+        figure("f" * 64, ("negative_prompt",)),
+        figure("g" * 64, None),
+        # A trait a newer build wrote is left out rather than printed raw.
+        figure("h" * 64, ("teleportation", "negative_prompt")),
+    ]
+    base = "realvisxl: Text to Image"
+    assert workflows_routes._display_names(figures) == {
+        "a" * 64: base,
+        "b" * 64: f"{base} + Two-Pass + Model per Pass",
+        "c" * 64: f"{base} + Refine + Likeness Gate",
+        "d" * 64: f"{base} + Refine",
+        "e" * 64: f"{base} + 2 References",
+        "f" * 64: f"{base} (2)",
+        "g" * 64: f"{base} (3)",
+        "h" * 64: f"{base} (4)",
+    }
+
+    # A workflow whose name does not collide is never lengthened.
+    alone = [figure("a" * 64, ("two_pass", "negative_prompt"))]
+    assert workflows_routes._display_names(alone) == {"a" * 64: base}
+
+    # A shared trait is news once one of them lacks it: the Klein T2I with a
+    # typed negative beside the one that zeroes its prompt.
+    pair = [figure("a" * 64, ()), figure("b" * 64, ("negative_prompt",))]
+    assert workflows_routes._display_names(pair) == {
+        "a" * 64: base,
+        "b" * 64: f"{base} + Negative Prompt",
+    }
+
+    # A suffixed name that another workflow generates outright is still never
+    # printed twice: every group's final name is numbered in one pass.
+    outright = WorkflowFigures(
+        card=Card(workflow_key="z" * 64, topology_hash="z" * 64, traits=()),
+        workflow=Workflow("z" * 64, topologies=["z" * 64], base_topology="z" * 64),
+        models=[
+            SlotModel(
+                name="other",
+                kind="checkpoint",
+                title=f"{base} + Negative Prompt",
+            )
+        ],
+    )
+    assert workflows_routes._display_names([*pair, outright]) == {
+        "a" * 64: base,
+        "b" * 64: f"{base} + Negative Prompt",
+        "z" * 64: f"{base} + Negative Prompt (2)",
+    }
+
+
 def test_the_grid_is_one_entry_per_workflow_not_one_per_variant(workflow_env):
     """A workflow is the unit, and BUSY's two variants are one entry, not two.
 
@@ -2853,7 +2932,37 @@ def test_a_manual_workflow_whose_links_are_malformed_has_no_type():
         ],
         "links": [[1, 1, {"slot": 0}, 2, 0, "MODEL"]],
     }
-    assert _manual_workflow_type("manual:" + "0" * 32, json.dumps(graph)) is None
+    assert _manual_facts_of("manual:" + "0" * 32, json.dumps(graph)) == (None, None)
+
+
+def test_a_manual_graph_whose_type_read_fails_is_a_card_with_no_type(monkeypatch):
+    """A graph that reduces but trips the type read is logged and typeless, not
+    an exception out of the grid read (#1729 review)."""
+
+    def explode(nodes):
+        raise TypeError("degenerate graph")
+
+    monkeypatch.setattr(workflow_card_reads, "reduced_workflow_type", explode)
+    graph = {"1": {"class_type": "SaveImage", "inputs": {}}}
+    assert _manual_facts_of("manual:" + "1" * 32, json.dumps(graph)) == (None, ())
+
+
+def test_a_manual_graph_whose_core_strip_fails_keeps_its_type(monkeypatch):
+    """The two reads are apart: a failed trait read leaves the type standing
+    (#1729 review)."""
+
+    def explode(nodes, **kwargs):
+        raise WorkflowGraphError("nothing survives the strip")
+
+    monkeypatch.setattr(workflow_card_reads, "reduced_traits", explode)
+    graph = {
+        "1": {"class_type": "EmptyLatentImage", "inputs": {}},
+        "2": {"class_type": "SaveImage", "inputs": {}},
+    }
+    assert _manual_facts_of("manual:" + "2" * 32, json.dumps(graph)) == (
+        "txt2img",
+        None,
+    )
 
 
 def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(
@@ -3840,8 +3949,8 @@ def _seed_flip_fixture(server) -> str:
         )
         conn.execute(
             "INSERT INTO workflow_topology_core (topology_hash, core_hash, "
-            "core_version, workflow_type, slots, specials) "
-            "VALUES (?, ?, ?, 'txt2img', ?, '')",
+            "core_version, workflow_type, slots, specials, traits) "
+            "VALUES (?, ?, ?, 'txt2img', ?, '', '')",
             (
                 FLIP_TOPOLOGY,
                 FLIP_CORE,
@@ -5351,7 +5460,7 @@ def _seed_runnable_card(server) -> int:
         conn.execute(
             "INSERT OR REPLACE INTO workflow_topology_core "
             "(topology_hash, core_hash, core_version, workflow_type, slots, "
-            "specials) VALUES (?, ?, ?, ?, ?, '')",
+            "specials, traits) VALUES (?, ?, ?, ?, ?, '', '')",
             (
                 RUN_TOPOLOGY,
                 RUN_CORE,
