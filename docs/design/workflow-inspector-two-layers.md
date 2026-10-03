@@ -101,7 +101,7 @@ counts and "Show N" links, never as structure.
  │ Portrait SDXL                        │
  │ 40 pictures                          │ <- link, shows all
  │                                      │
- │ DEFAULT RECIPE         Edit LoRAs…   │
+ │ DEFAULT RECIPE   Clone onto a set…   │
  │ Most used in your 4★+ pictures.      │
  │ Checkpoint  juggernautXL_v9     Show 34│
  │             +2 others ▸              │ <- disclosure, §1.5
@@ -110,6 +110,7 @@ counts and "Show N" links, never as structure.
  │ LoRA        film_grain 0.4  in 31 of 40│
  │ LoRA        character_v2 0.8  Yours  ↺    │
  │ Stages      Upscale · Face detailer off│
+ │ Edit LoRAs…                          │
  │                                      │
  │ ALSO USED                            │
  │ LoRA  [ lighting_v3        +4 ]      │ <- pile, fans over the grid
@@ -673,7 +674,9 @@ Reference chrome is the shipped Vue (`WorkflowTab.vue`, `WorkflowDefaultRow.vue`
 #### Section head and note
 
 - `.wftab-sec-head`: `.section-label` "Default recipe" (CSS uppercases it) plus
-  the existing ghost sm "Edit LoRAs…", unchanged.
+  the ghost sm "Clone onto a set…". The ghost sm "Edit LoRAs…" sits at the
+  foot of the section, under the LoRA and Stages rows and their notes: both verbs in the head
+  overflowed a narrow inspector.
 - Provenance note under the head: `.wftab-note.wftab-quiet` ("Most used in your
   4★+ pictures." / the all-pictures wording). Loading, failed and Retry reuse the
   existing note lines. Retry is a ghost sm AppButton after the note.
