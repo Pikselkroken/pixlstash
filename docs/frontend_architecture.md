@@ -1983,7 +1983,14 @@ filtered by.
   **Shift+F10 and the Menu key open the card menu** (#1455), which is what those
   keys mean everywhere else and in every file manager. Escape clears the
   selection: the `VMenu`s consume their own Escape, so what reaches the grid is
-  the selection.
+  the selection. The scroller around the grid is `tabindex="-1"` so a click on
+  the empty background (or a gap between cards) focuses it rather than
+  `<body>`, where Ctrl+A did nothing until a card had been clicked. From there
+  it takes only Ctrl+A and Escape (`onBackgroundKeyDown`): the cursor is not
+  visible, so Space, Enter, F2, the arrows and the menu keys would act on a card
+  the reader cannot see. Its focus ring is `--focus-ring-inset`, inside the
+  pane's edge, as visual-language.md §11 prescribes where an outset ring has
+  no room.
 - **The cursor is an entry id, never an index.** `flatRows` is rebuilt by a
   resort and by a refetch; an index held across either names a different card,
   and when the list shrinks past it, no card at all — which takes the grid's
