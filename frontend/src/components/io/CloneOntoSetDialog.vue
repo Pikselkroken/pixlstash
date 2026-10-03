@@ -593,7 +593,9 @@ function candidates(payload) {
         .filter((m) => m.slot !== "checkpoint" && m.slot !== "lora")
         .map((m) => m.id),
       loraIds: members.filter((m) => m.slot === "lora").map((m) => m.id),
-      // Every one: a two-model graph takes one per base loader (#1690).
+      // Every on-shelf one (`members` is on-shelf only, so an off-shelf
+      // checkpoint never trips the server's `gone` check): a two-model graph
+      // takes one per base loader (#1690).
       checkpointIds: members
         .filter((m) => m.slot === "checkpoint")
         .map((m) => m.id),
