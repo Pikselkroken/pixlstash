@@ -129,6 +129,7 @@ from pixlstash.services import (
     workflow_inbox,
 )
 from pixlstash.server import Server
+from pixlstash.stacking import parse_workflow_tag_from_filename
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK
@@ -5564,6 +5565,8 @@ def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
     document["3"]["inputs"].update({"steps": 13, "cfg": 1.5, "seed": 5})
     document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
     document["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    # Imported from an earlier manual run's output, so it inherits that tag.
+    document["4"]["inputs"]["filename_prefix"] = f"out__wf_{'c' * 32}"
     manual = create_manual_workflow(runnable.server.hub, "Mine", document, "import")
 
     card = _by_key(_cards(runnable.owner))[manual]
@@ -5594,6 +5597,18 @@ def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
     while len(importing) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)  # the import runs on a thread of its own
     assert [kwargs["run_workflow_id"] for kwargs in importing] == [manual, None]
+    # Its save node's name carries it too, so a watch-folder import that beats
+    # the poll still files it (#1688); ComfyUI appends its counter after it.
+    manual_run, auto_run = (
+        s["graph"]["4"]["inputs"]["filename_prefix"] for s in runnable.submitted[-2:]
+    )
+    # The inherited tag is replaced, never kept ahead of this run's.
+    assert manual_run == f"out__wf_{manual.removeprefix('manual:')}"
+    assert parse_workflow_tag_from_filename(f"/out/{manual_run}_00001_.png") == manual
+    assert parse_workflow_tag_from_filename(f"{manual_run}__stack_3__src_9.png") == (
+        manual
+    )
+    assert parse_workflow_tag_from_filename(f"{auto_run}_00001_.png") is None
 
 
 def test_a_manual_workflow_opens_and_exports_the_document_run_submits(runnable):
@@ -5611,8 +5626,11 @@ def test_a_manual_workflow_opens_and_exports_the_document_run_submits(runnable):
     assert r.json()["source"] == "file"
     opened = r.json()["workflow"]
     assert opened["3"]["inputs"]["steps"] == 13
+    # The run's own adjustments: its seed, and the save node's tag (#1688).
+    assert ran["4"]["inputs"]["filename_prefix"].startswith("wf_")
     for graph in (ran, opened):
         graph["3"]["inputs"].pop("seed")
+        graph["4"]["inputs"].pop("filename_prefix")
     assert opened == ran
     r = runnable.owner.get(f"{API}/workflows/{manual}/export")
     assert r.status_code == 200, r.text
@@ -7789,6 +7807,21 @@ def test_each_save_node_keeps_its_own_prefix_under_the_stack_tag(i2i):
     assert graph["9"]["inputs"]["filename_prefix"] == (
         f"preview__stack_{stack}__src_{picture}"
     )
+
+
+@pytest.mark.parametrize("stack", [False, True])
+def test_an_automatic_run_drops_a_workflow_tag_its_graph_inherited(i2i, stack):
+    """A graph replayed from a manual run's output keeps that run's tagged
+    prefix; a watch folder would file this run's outputs on it (#1688)."""
+    i2i.graph["4"]["inputs"]["filename_prefix"] = f"out__wf_{'c' * 32}"
+    picture = _add_picture(i2i.server, i2i.tmp_path, "w.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "stack": stack},
+    )
+    assert r.status_code == 200, r.text
+    expected = f"out__stack_{i2i.outputs[0][4]}__src_{picture}" if stack else "out"
+    assert i2i.submitted[0]["graph"]["4"]["inputs"]["filename_prefix"] == expected
 
 
 def test_the_selection_sent_to_an_input_of_a_run_without_one_is_a_400(i2i):

@@ -1139,10 +1139,9 @@ def _process_comfyui_outputs(
     """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
 
     *run_workflow_id* is the manual workflow that ran, whose pictures these
-    are (``Picture.run_workflow_id``). ponytail: an output the watch folder
-    imports before this poller sees it is not marked, so it counts on the
-    automatic workflow; tag the save node's ``filename_prefix`` as
-    ``_tag_for_stack`` does if that ever matters.
+    are (``Picture.run_workflow_id``). An output the watch folder imports
+    before this poller sees it is filed by the tag ``_tag_for_workflow`` put
+    in its filename instead.
 
     This is the documented single-event import path (see
     ``docs/backend_architecture.md`` §15). It is a deliberate exception to the

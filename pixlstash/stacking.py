@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
@@ -6,10 +7,12 @@ from sqlalchemy import case
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, PictureStack
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 STACK_TAG_PREFIX = "stack_"
 SOURCE_TAG_PREFIX = "src_"
 STACK_TAG_SEPARATOR = "__"
+WORKFLOW_TAG_PREFIX = "wf_"
 
 
 def build_stack_filename_prefix(base_prefix: str, stack_id: int, source_id: int) -> str:
@@ -24,6 +27,49 @@ def build_stack_filename_prefix(base_prefix: str, stack_id: int, source_id: int)
     parts.append(f"{STACK_TAG_PREFIX}{stack_id}")
     parts.append(f"{SOURCE_TAG_PREFIX}{source_id}")
     return STACK_TAG_SEPARATOR.join(parts)
+
+
+def build_workflow_filename_prefix(base_prefix: str, workflow_id: str) -> str:
+    """Tag a save node's filename with the manual workflow whose run saves it.
+
+    ``POST /workflows/run`` writes it on a manual workflow's save nodes so a
+    watch folder that imports the output before the run's own poll still files
+    it on that workflow (#1688); its reader is
+    :func:`parse_workflow_tag_from_filename`. Only the id's hex rides along.
+    """
+    tag = WORKFLOW_TAG_PREFIX + workflow_id.removeprefix(MANUAL_PREFIX)
+    base = strip_workflow_tags(base_prefix)
+    return STACK_TAG_SEPARATOR.join(part for part in (base, tag) if part)
+
+
+def strip_workflow_tags(prefix: str) -> str:
+    """*prefix* without any workflow tag an earlier run left in it.
+
+    A graph replayed from a run's output carries that run's tagged prefix, and
+    the tag must name the workflow running now, or nothing.
+    """
+    return STACK_TAG_SEPARATOR.join(
+        part
+        for part in prefix.split(STACK_TAG_SEPARATOR)
+        if not _WORKFLOW_TAG_RE.match(part)
+    )
+
+
+def parse_workflow_tag_from_filename(filename: str) -> Optional[str]:
+    """The manual workflow id a run's output filename was tagged with, or ``None``.
+
+    ComfyUI appends its counter to the prefix (``…__wf_<hex>_00001_.png``), so
+    the hex is matched at the start of its part rather than as the whole part.
+    """
+    stem = os.path.splitext(os.path.basename(filename or ""))[0]
+    for part in stem.split(STACK_TAG_SEPARATOR):
+        match = _WORKFLOW_TAG_RE.match(part)
+        if match:
+            return MANUAL_PREFIX + match.group(1)
+    return None
+
+
+_WORKFLOW_TAG_RE = re.compile(rf"{WORKFLOW_TAG_PREFIX}([0-9a-f]{{32}})(?![0-9a-f])")
 
 
 def parse_stack_tags_from_filename(

@@ -2491,9 +2491,15 @@ whatever the count), and `GET /workflows/{id}/pictures`, the
 `GET /pictures?workflow=` filter (`predicate_filter.workflow_keys_predicate`)
 and a picture's own workflow (`_picture_workflow_id`) read the same way.
 Deleting a manual workflow therefore needs no vault write: its pictures fall
-back to the automatic workflow their variant is in. Ceiling (logged in the
-code): an output the watch folder imports before the poller sees it is not
-marked.
+back to the automatic workflow their variant is in. An output the watch
+folder imports before the poller sees it is filed by its name: `_submit_every`
+tags each `SaveImage` `filename_prefix` of a manual run with
+`__wf_<id hex>` (`stacking.build_workflow_filename_prefix`, beside the stack
+tag), and `WatchFolderImportTask` reads it back
+(`parse_workflow_tag_from_filename`). Not `extra_pnginfo`: a prompt carrying
+it without a `workflow` key breaks custom nodes (Impact Pack's Switch) that
+read `extra_pnginfo["workflow"]` whenever it is set, and that key stays empty
+(#628). A saver other than `SaveImage`, or a wired prefix, goes untagged.
 
 **A run started in ComfyUI files the same way.** Every editor-format document
 stored as a manual workflow carries its id at `extra.pixlstash_workflow_id`
