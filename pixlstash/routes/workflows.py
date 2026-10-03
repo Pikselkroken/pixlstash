@@ -1933,6 +1933,13 @@ class SetClonePlan(BaseModel):
     swaps: dict[str, str] = Field(
         description="The graph's filename -> the set's file, as the clone takes it."
     )
+    unpaired_bases: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Base-model files of the graph no set checkpoint was paired with "
+            "(the set holds fewer than the graph loads): they keep their file."
+        ),
+    )
     loaders: list[LoaderDiff]
 
 
@@ -7042,6 +7049,12 @@ def create_router(server) -> APIRouter:
                     base_model=checkpoint.base_model if checkpoint else None,
                     keeps_loras=keeps,
                     swaps=swaps,
+                    unpaired_bases=[
+                        slot.filename
+                        for _c, _w, slot in found
+                        if slot.kind in BASE_MODEL_KINDS
+                        and all(slot is not paired for paired, _new in bases)
+                    ],
                     loaders=diffs,
                 )
             )

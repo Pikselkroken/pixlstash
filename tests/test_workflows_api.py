@@ -10232,7 +10232,7 @@ def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
     )
     hub = cloneable.server.hub
     with hub.transaction() as conn:
-        low, high = (
+        low, high, own_low = (
             conn.execute(
                 "INSERT INTO model (file_kind, filename, provenance) "
                 "VALUES ('checkpoint', ?, 'scanned')",
@@ -10241,6 +10241,7 @@ def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
             for filename in (
                 "wan_v2_low_noise.safetensors",
                 "wan_v2_high_noise.safetensors",
+                "wan_low_noise.safetensors",
             )
         )
     try:
@@ -10250,6 +10251,8 @@ def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
                 "sets": [
                     {"key": "pair", "checkpoint_ids": [low, high], "model_ids": []},
                     {"key": "low", "checkpoint_ids": [low], "model_ids": []},
+                    # The very file the graph loads: paired, though unchanged.
+                    {"key": "own", "checkpoint_ids": [own_low], "model_ids": []},
                 ]
             },
         )
@@ -10266,7 +10269,9 @@ def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
         )
     finally:
         with hub.transaction() as conn:
-            conn.executemany("DELETE FROM model WHERE id = ?", [(low,), (high,)])
+            conn.executemany(
+                "DELETE FROM model WHERE id = ?", [(low,), (high,), (own_low,)]
+            )
     assert r.status_code == 200, r.text
     plans = {plan["key"]: plan for plan in r.json()["plans"]}
     assert plans["pair"]["swaps"] == {
@@ -10276,6 +10281,11 @@ def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
     assert plans["low"]["swaps"] == {
         "wan_low_noise.safetensors": "wan_v2_low_noise.safetensors"
     }
+    # What the dialog warns about is the pairing, not the unchanged rows.
+    assert plans["pair"]["unpaired_bases"] == []
+    assert plans["low"]["unpaired_bases"] == ["wan_high_noise.safetensors"]
+    assert plans["own"]["swaps"] == {}
+    assert plans["own"]["unpaired_bases"] == ["wan_high_noise.safetensors"]
     assert one.status_code == 200, one.text
     assert one.json()["plans"][0]["swaps"] == {
         "wan_high_noise.safetensors": "wan_v2_high_noise.safetensors"

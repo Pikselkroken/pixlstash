@@ -412,20 +412,15 @@ const packs = computed(() => {
 });
 
 /**
- * A base loader the set leaves alone (a refiner, Wan 2.2's other expert, when
- * the set holds fewer checkpoints than the graph loads): said rather than
- * letting a mixed graph pass as a clone onto the set.
+ * The base loaders the server paired with none of the set's checkpoints (a
+ * refiner, Wan 2.2's other expert, when the set holds fewer than the graph
+ * loads): said rather than letting a mixed graph pass as a clone onto the set.
+ * Read off the pairing, not off unchanged rows: a set checkpoint that is the
+ * very file the graph loads leaves its row unchanged too.
  */
-const baseKept = computed(() => {
-  const bases = (chosen.value?.plan.loaders ?? []).filter(
-    (row) => row.kind === "checkpoint" || row.kind === "unet",
-  );
-  if ((chosen.value?.checkpointIds.length ?? 0) >= bases.length) return "";
-  return bases
-    .filter((row) => !changed(row))
-    .map((row) => fileNames(row.was))
-    .join(", ");
-});
+const baseKept = computed(() =>
+  fileNames(chosen.value?.plan.unpaired_bases ?? []),
+);
 
 const sameFiles = computed(
   () => Boolean(chosen.value) && !Object.keys(chosen.value.plan.swaps).length,

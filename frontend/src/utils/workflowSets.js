@@ -701,7 +701,8 @@ export function slotSuggestions({
       ...heldSection,
     ];
   }
-  const base = checkpoints[0].base_model;
+  // The first checkpoint that has a base model: a pair shares one.
+  const base = checkpoints.find((m) => m.base_model)?.base_model ?? null;
   const used = new Set();
   const take = (ids) => {
     const items = [];
