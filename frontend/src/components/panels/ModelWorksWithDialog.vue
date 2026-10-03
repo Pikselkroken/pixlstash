@@ -14,67 +14,69 @@
     <template v-else>
       <!-- Which sets it is in, above the companions: a model in seventeen sets
            reads as a number and a short list rather than seventeen chips. -->
-      <template v-if="answer.sets.length">
+      <section v-if="answer.sets.length" class="ww__group">
         <h3 class="ww__section">
           {{ setsLabel }}
         </h3>
-        <ChipRow :items="setChips" class="ww__sets" />
-      </template>
+        <ChipRow :items="setChips" />
+      </section>
 
-      <h3 class="ww__section">
-        Works with
-        <span class="ww__count num">{{ recipeLabel }}</span>
-      </h3>
+      <section class="ww__group">
+        <h3 class="ww__section">
+          Works with
+          <span class="ww__count num">{{ recipeLabel }}</span>
+        </h3>
 
-      <ul v-if="answer.companions.length" class="ww__list">
-        <li
-          v-for="companion in shown"
-          :key="companion.id"
-          class="ww__companion"
-        >
-          <span class="ww__names">
-            <span class="ww__name">{{ companion.name }}</span>
-            <span v-if="companion.kindLabel" class="ww__kind">{{
-              companion.kindLabel
-            }}</span>
-            <!-- Same three causes, same one sentence: see `ModelComboCard`. -->
-            <Tooltip v-if="companion.ambiguous" :text="UNSURE_REASON">
-              <template #activator="{ props: tipProps }">
-                <v-icon v-bind="tipProps" size="14" class="ww__warn"
-                  >mdi-alert-outline</v-icon
-                >
-              </template>
-            </Tooltip>
-          </span>
-          <!-- The bar is the ranking and the number is the evidence: sorted by
-               recipes plus ComfyUI runs, the witnesses co-occurrence counts.
-               `aria-hidden` on the bar because the figures beside it say the
-               same thing in words. -->
-          <span class="ww__evidence">
-            <span class="ww__bar" aria-hidden="true">
-              <span :style="{ width: `${companion.share}%` }"></span>
+        <ul v-if="answer.companions.length" class="ww__list">
+          <li
+            v-for="companion in shown"
+            :key="companion.id"
+            class="ww__companion"
+          >
+            <span class="ww__names">
+              <span class="ww__name">{{ companion.name }}</span>
+              <span v-if="companion.kindLabel" class="ww__kind">{{
+                companion.kindLabel
+              }}</span>
+              <!-- Same three causes, same one sentence: see `ModelComboCard`. -->
+              <Tooltip v-if="companion.ambiguous" :text="UNSURE_REASON">
+                <template #activator="{ props: tipProps }">
+                  <v-icon v-bind="tipProps" size="14" class="ww__warn"
+                    >mdi-alert-outline</v-icon
+                  >
+                </template>
+              </Tooltip>
             </span>
-            <span class="ww__figures num"
-              >{{ evidenceLine(companion) }}</span
-            >
-          </span>
-        </li>
-      </ul>
-      <p v-else class="ww__state">
-        No picture in this library and no recorded ComfyUI run used this file
-        beside another one. That is
-        not a verdict on what it works with — only a record of what has been
-        tried here.
-      </p>
+            <!-- The bar is the ranking and the number is the evidence: sorted by
+                 recipes plus ComfyUI runs, the witnesses co-occurrence counts.
+                 `aria-hidden` on the bar because the figures beside it say the
+                 same thing in words. -->
+            <span class="ww__evidence">
+              <span class="ww__bar" aria-hidden="true">
+                <span :style="{ width: `${companion.share}%` }"></span>
+              </span>
+              <span class="ww__figures num"
+                >{{ evidenceLine(companion) }}</span
+              >
+            </span>
+          </li>
+        </ul>
+        <p v-else class="ww__state">
+          No picture in this library and no recorded ComfyUI run used this file
+          beside another one. That is
+          not a verdict on what it works with — only a record of what has been
+          tried here.
+        </p>
 
-      <AppButton
-        v-if="answer.companions.length > shown.length"
-        class="ww__more"
-        variant="outline"
-        size="sm"
-        @click="expanded = true"
-        >Show all {{ answer.companions.length }} companions</AppButton
-      >
+        <AppButton
+          v-if="answer.companions.length > shown.length"
+          class="ww__more"
+          variant="outline"
+          size="sm"
+          @click="expanded = true"
+          >Show all {{ answer.companions.length }} companions</AppButton
+        >
+      </section>
 
       <!-- Not decoration. Without this line a short companion list reads as a
            compatibility verdict, which is exactly the claim this screen must
@@ -249,11 +251,19 @@ const setChips = computed(() =>
 </script>
 
 <style scoped>
+/* A heading and what it heads. The dialog body spaces the groups with its own
+   `gap`; a margin here would stack on top of it. */
+.ww__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .ww__section {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin: var(--space-5) 0 var(--space-3);
+  margin: 0;
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
@@ -261,18 +271,10 @@ const setChips = computed(() =>
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.ww__section:first-child {
-  margin-top: 0;
-}
-
 .ww__count {
   font-weight: var(--weight-regular);
   letter-spacing: normal;
   text-transform: none;
-}
-
-.ww__sets {
-  margin-bottom: var(--space-3);
 }
 
 .ww__list {
@@ -361,10 +363,6 @@ const setChips = computed(() =>
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.ww__more {
-  margin-top: var(--space-4);
-}
-
 .ww__state {
   margin: 0;
   font-size: var(--text-sm);
@@ -375,7 +373,7 @@ const setChips = computed(() =>
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  margin: var(--space-5) 0 0;
+  margin: 0;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-surface-info), 0.14);

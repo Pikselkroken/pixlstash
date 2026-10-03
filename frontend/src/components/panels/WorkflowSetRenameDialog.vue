@@ -62,7 +62,7 @@ function save() {
 
 <style scoped>
 .wsr__note {
-  margin: var(--space-3) 0 0;
+  margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }

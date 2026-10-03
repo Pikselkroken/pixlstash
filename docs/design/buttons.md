@@ -74,8 +74,9 @@ screenshot as evidence for or against a row. The **Open** rows are not built.
 
 ### In the code
 
-Checked against `develop` on 2026-09-23. A row not listed here is not built
-(the **Open** ones) or is covered by a line below.
+Checked against `develop` on 2026-09-23, and the four audit rows from #1676 on
+2026-10-03. A row not listed here is not built (the **Open** ones) or is covered
+by a line below.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -90,7 +91,10 @@ Checked against `develop` on 2026-09-23. A row not listed here is not built
 | One `Tooltip` surface, `HelpTip` its preset, the `tooltip` prop | Done | `HelpTip.vue` renders `Tooltip`; `AppBarButton` takes `tooltip` |
 | No sub-pixel type | Done | No fractional `px` font size under `frontend/src` |
 | The z-index ladder stops at `--z-drawer` | Done | Every `z-index` under `frontend/src` is a `--z-*` token; what clears a dialog is a `StackLayer` (#1671). One relative value remains by name, the filter strip's `calc(var(--z-sticky) - 1)`; `styles/designDrift.test.js` holds both |
-| Native `title` only for clipped-text reveals; a raw value equal to a token; the 16px dialog gutter and `gap` spacing; the pill progress track | **Not audited** | Not checked site by site |
+| Native `title` only for clipped-text reveals | Done | 31 native `title`s left, each restating text that its element, or a child, clips with `text-overflow` or `line-clamp` (#1676). Four were not: the run popup's reset chip, the ⓘ popover's precision chip and `AppSelect`'s chip detail now use `Tooltip`; the stats histogram's was on an SVG `g`, which never shows one, and now leads the row's accessible name before its count. `styles/designDrift.test.js` holds it, naming the grid caption, whose title is the text the caption cut |
+| A raw value equal to a token | Partly | Font size, radius and spacing done: 101 raw `padding` / `margin` / `gap` values equal to a `--space-*` step now spell it, and `styles/designDrift.test.js` holds all three. **Left:** 48 offsets (`top` / `left` / `right` / `bottom` / `inset`) equal to a step, in 15 files, not swept. 52 raw colours in 14 files, nearly all white-on-photo and black scrims in the review feature and `DedupCompareDialog`; none equals a token, so each is a mapping decision onto `--scrim-photo*`, not a spelling fix. 50 raw 24 / 28 / 32px widths and heights in 22 files, which are `--control-h*` only where the element is a control; not sorted site by site |
+| The 16px dialog gutter, `gap` spacing | Partly | Two dialogs stacked a margin on the body's `gap`: Works with (its sections are now groups) and the workflow-set rename note. Nothing outside `AppDialog` restyles its body, header or footer, which `styles/designDrift.test.js` holds. Settings keeps its own two-pane padding inside the flush body. **Left:** three hand-rolled modals that are not `AppDialog` and so sit off the gutter: the review feature's new-review dialog (`.rs-dialog`, 20px padding, 14px gap, a 480px width), its abort confirm (`.rs-abort`, 18px) and its keyboard help (`.rs-keys`, 20px). Each is a migration to `AppDialog`, not a padding edit |
+| The pill progress track | Done | Every track is `--radius-pill`; the two `v-progress-linear`s take `rounded="pill"` (held by `styles/designDrift.test.js`) and every custom track already wore it. Two named exceptions: the shelf's storage band meter is flat-ended by design (#893), and the layout dialog's native `<progress>` is drawn by the platform |
 | Outlined sites folding into the filled neutral (Open) | Not built | 4 `variant="outlined"` sites remain |
 | Selection-pill verbs 34 to 32px (Open) | Not built | Still 34px |
 | An `on-dark` context on both dialects (Open) | Not built | No such prop on either button |

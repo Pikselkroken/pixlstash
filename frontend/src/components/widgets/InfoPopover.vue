@@ -62,14 +62,18 @@
           <!-- The precision, on the card's own fact chip. It sits BEFORE the
                slot note because it qualifies the name to its left, and it is
                the only thing distinguishing two rows of one model listed at
-               two precisions. Its `title` is the long form, which is also
+               two precisions. Its tooltip is the long form, which is also
                what a screen reader reads out of the line. -->
-          <span
-            v-if="model.quant"
-            class="info-popover__chip"
-            :title="model.quant.title"
-            >{{ model.quant.label }}</span
-          >
+          <template v-if="model.quant">
+            <span class="info-popover__chip" aria-hidden="true">
+              <Tooltip
+                :text="model.quant.title"
+                activator="parent"
+                :describe="false"
+              />{{ model.quant.label }}</span
+            >
+            <span class="visually-hidden">{{ model.quant.title }}</span>
+          </template>
           <span class="info-popover__note">{{ model.note }}</span>
         </div>
       </section>
@@ -101,6 +105,7 @@ import { VIcon, VMenu } from "vuetify/components";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { quantBadge } from "../../utils/modelShelf";
 import { modelDisplayName } from "../../utils/workflowCard";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */

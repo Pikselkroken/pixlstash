@@ -968,7 +968,7 @@
   letter-spacing: 0.07em;
   text-transform: uppercase;
   min-height: clamp(18px, calc(var(--sidebar-thumb-size) * 0.65), 24px);
-  padding-top: clamp(2px, calc(var(--sidebar-thumb-size) * 0.1), 8px);
+  padding-top: clamp(var(--space-1), calc(var(--sidebar-thumb-size) * 0.1), var(--space-3));
   padding-bottom: var(--space-1);
   padding-right: var(--sidebar-header-action-right-edge) !important;
   display: flex;
@@ -1763,7 +1763,7 @@
 .sidebar-folder-actions {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   flex-shrink: 0;
   opacity: 0;
   pointer-events: none;

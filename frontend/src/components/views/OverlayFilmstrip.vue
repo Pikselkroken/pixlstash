@@ -171,7 +171,7 @@ function onFilmstripWheel(event) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: var(--filmstrip-padding, 8px) 6px;
+  padding: var(--filmstrip-padding, var(--space-3)) 6px;
   transition: opacity 0.2s ease;
   overflow: hidden;
   height: calc(100% - var(--topbar-height));
@@ -193,7 +193,7 @@ function onFilmstripWheel(event) {
 .filmstrip-list {
   display: flex;
   flex-direction: column;
-  gap: var(--filmstrip-gap, 8px);
+  gap: var(--filmstrip-gap, var(--space-3));
   overflow-y: visible;
   width: var(--filmstrip-thumb-size, 100%);
   align-items: center;
@@ -241,7 +241,7 @@ function onFilmstripWheel(event) {
 }
 
 .filmstrip-thumb-stack-joined {
-  margin-top: calc(-1 * var(--filmstrip-gap, 8px));
+  margin-top: calc(-1 * var(--filmstrip-gap, var(--space-3)));
 }
 
 .filmstrip-thumb-image {

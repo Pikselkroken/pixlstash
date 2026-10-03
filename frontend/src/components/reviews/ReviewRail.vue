@@ -697,8 +697,8 @@ function archivedSummary(a) {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
+  gap: var(--space-2);
+  padding: var(--space-1) 6px;
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -732,7 +732,7 @@ function archivedSummary(a) {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-4);
 }
 .rs-abort-title {
   font-size: 15px;
@@ -746,11 +746,11 @@ function archivedSummary(a) {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-3);
 }
 .rs-abort-btn {
   height: 32px;
-  padding: 0 12px;
+  padding: 0 var(--space-4);
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -779,7 +779,7 @@ function archivedSummary(a) {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  margin: var(--space-2) 2px 2px;
+  margin: var(--space-2) var(--space-1) var(--space-1);
   height: 34px;
   border: 1px dashed rgba(var(--v-theme-on-dark-surface), 0.3);
   border-radius: var(--radius-sm);
@@ -949,7 +949,7 @@ function archivedSummary(a) {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 2px 9px 4px;
+  padding: var(--space-1) 9px var(--space-2);
   align-content: flex-start;
 }
 </style>

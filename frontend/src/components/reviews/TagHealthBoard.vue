@@ -757,7 +757,7 @@ const TAIL_TOGGLE_TITLE =
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: 20px var(--space-6);
 }
 .rs-board-inner {
   /* Fills the frame (sidebar excluded - that's `.rs-board`'s sibling), with
@@ -769,7 +769,7 @@ const TAIL_TOGGLE_TITLE =
   align-items: baseline;
   gap: var(--space-3);
   flex-wrap: wrap;
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
 }
 .rs-board-title {
   font-size: var(--text-lg);
@@ -1037,7 +1037,7 @@ const TAIL_TOGGLE_TITLE =
 .rs-board-hdr {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   padding: 0;
   border: none;
   background: none;

@@ -190,7 +190,7 @@ function openZoom(id, ext) {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-4);
   width: 100%;
 }
 
@@ -198,7 +198,7 @@ function openZoom(id, ext) {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-4);
   padding: 10px 14px;
   border-radius: var(--radius-md);
   background: color-mix(
@@ -218,7 +218,7 @@ function openZoom(id, ext) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 .rs-pair-banner-title {
   font-size: 15px;
@@ -233,7 +233,7 @@ function openZoom(id, ext) {
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   letter-spacing: 0.05em;
-  padding: 3px 8px;
+  padding: 3px var(--space-3);
   border-radius: var(--radius-pill);
   color: rgb(var(--v-theme-on-dark-surface));
   background: color-mix(in srgb, rgb(var(--v-theme-accent)) 18%, transparent);
@@ -243,7 +243,7 @@ function openZoom(id, ext) {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 16px;
+  gap: var(--space-5);
 }
 .rs-pair-pane {
   flex: 1;
@@ -263,7 +263,7 @@ function openZoom(id, ext) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 13px;
+  padding: var(--space-3) 13px;
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.1);
 }
 .rs-pair-id {
@@ -274,7 +274,7 @@ function openZoom(id, ext) {
 .rs-pair-state {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);

@@ -3,9 +3,13 @@
     class="reset-chip"
     type="button"
     :aria-label="`Put ${label} back to ${shown}`"
-    :title="`Put ${label} back to ${shown}`"
     @click.stop="emit('reset')"
   >
+    <Tooltip
+      :text="`Put ${label} back to ${shown}`"
+      activator="parent"
+      :describe="false"
+    />
     <v-icon size="11">mdi-restore</v-icon>
     <span class="reset-chip-value">{{ shown }}</span>
   </button>
@@ -23,6 +27,8 @@
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
+import Tooltip from "../widgets/Tooltip.vue";
+
 const props = defineProps({
   /**
    * The original value, shown on the chip so it can be read without acting.
@@ -38,10 +44,10 @@ const props = defineProps({
 const emit = defineEmits(["reset"]);
 
 /**
- * What the chip reads, and what its `title` carries in full.
+ * What the chip reads, and what its tooltip carries in full.
  *
  * The chip is 16px tall and ellipsises, so a prompt's original is a few
- * truncated words on screen; the `title` is what makes the whole of it
+ * truncated words on screen; the tooltip is what makes the whole of it
  * readable before a click that cannot be undone.
  */
 const shown = computed(() =>

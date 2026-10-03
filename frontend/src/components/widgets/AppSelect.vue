@@ -490,7 +490,7 @@ function toggleValue(value, checked) {
 .app-select__field--compact {
   height: var(--control-h-sm);
   font-size: var(--text-xs);
-  padding: 0 24px 0 var(--space-3);
+  padding: 0 var(--space-6) 0 var(--space-3);
 }
 
 /* ── The two-line listbox: the design system's Menu surface and row ─────── */

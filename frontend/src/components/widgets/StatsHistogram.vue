@@ -8,7 +8,7 @@
   which fill they wore, and which filter a click toggled. They differ in one more
   way that matters: not every row is clickable. A confidence row does nothing
   until a tag is selected. So interactivity is a predicate, not a boolean, and it
-  gates the row's class, its `role`, its `tabindex` and its title together - a
+  gates the row's class, its `role`, its `tabindex` and its name together - a
   row that announces itself as a button and then ignores the press is worse than
   one that never claimed to be one.
 
@@ -33,7 +33,7 @@
       :transform="`translate(0, ${i * 18})`"
       :role="interactive(item, i) ? 'button' : undefined"
       :tabindex="interactive(item, i) ? 0 : undefined"
-      :title="interactive(item, i) ? rowTitle(item, i) : undefined"
+      :aria-label="rowName(item, i)"
       @click="interactive(item, i) && emit('select', item, i)"
       @keydown.enter="interactive(item, i) && emit('select', item, i)"
     >
@@ -79,14 +79,24 @@ const props = defineProps({
   ariaLabel: { type: String, required: true },
   /** Which theme colour the bars wear: primary | secondary | tertiary. */
   fill: { type: String, default: "primary" },
-  /** Whether this row can be clicked. Gates class, role, tabindex and title. */
+  /** Whether this row can be clicked. Gates class, role, tabindex and name. */
   interactive: { type: Function, default: () => true },
   /** Whether this row's filter is currently on. */
   active: { type: Function, default: () => false },
-  rowTitle: { type: Function, default: () => undefined },
+  /**
+   * A clickable row's accessible name: what pressing it does. Not a `title`,
+   * which an SVG element never shows.
+   */
+  rowLabel: { type: Function, default: () => undefined },
 });
 
 const emit = defineEmits(["select"]);
+
+/** What pressing the row does, then how many pictures it holds. */
+function rowName(item, i) {
+  const label = props.interactive(item, i) && props.rowLabel(item, i);
+  return label ? `${label}, ${item.count}` : undefined;
+}
 
 // The tallest bar sets the scale, and an empty chart still divides by 1. A
 // non-zero count always gets at least 2px, so "one picture" is a visible sliver
