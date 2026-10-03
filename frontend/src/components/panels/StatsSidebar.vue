@@ -922,8 +922,7 @@ function handleResolutionBarClick(label) {
   }
 }
 
-// A deep link to the Tasks tab (the "View progress" notice action, the
-// thumbnail banner). Opening the rail is the store's half of `showTasksTab`;
+// A deep link to the Tasks tab (the "View progress" notice action). Opening the rail is the store's half of `showTasksTab`;
 // this is the half only the mounted inspector can do.
 watch(
   () => sidebarStore.tasksTabRequest,

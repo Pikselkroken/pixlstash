@@ -37,9 +37,9 @@ const emit = defineEmits([
 // upgrade those regenerate in the background; until that finishes, justified
 // would render old square crops stretched into variable-width slots, worse than
 // square. So the Justified option is gated on the thumbnail-regeneration worker
-// (the same signal the "Upgrading thumbnails" bar reads): disabled while any
-// pictures still await regeneration. Reading the shared worker snapshot keeps
-// this in lockstep with the progress bar and the Tasks tab.
+// (the snapshot the Tasks tab shows): disabled while any pictures still await
+// regeneration. Reading the shared worker snapshot keeps this in lockstep with
+// the Tasks tab.
 const tasksStore = useTasksStore();
 const thumbnailRegen = computed(() => {
   const s = tasksStore.workerSnapshots?.["ThumbnailGenerationTask"];

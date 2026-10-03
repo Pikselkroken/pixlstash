@@ -1847,8 +1847,8 @@ class Vault:
                 label = "orientations_read"
             elif worker_type == TaskType.THUMBNAIL_GENERATION:
                 # Whole-frame bitmap regeneration (MissingThumbnailFinder). After
-                # the v1.8.0 upgrade this counts the entire library, which is what
-                # the in-app "Upgrading thumbnails" progress bar reads.
+                # the v1.8.0 upgrade this counted the entire library; a fresh
+                # import does the same. The Tasks tab and Appearance read it.
                 missing = int(
                     self.db.run_immediate_read_task(self._count_missing_thumbnails) or 0
                 )
@@ -1924,8 +1924,8 @@ class Vault:
 
         Mirrors ``MissingThumbnailFinder._fetch_missing``: keyed on
         ``thumbnail_width IS NULL`` for live, file-backed pictures. Excludes
-        undecodable pictures (issue #585) so the "Upgrading thumbnails"
-        progress bar can reach 0 instead of stalling on files that can never
+        undecodable pictures (issue #585) so the thumbnail worker's
+        `remaining` can reach 0 instead of stalling on files that can never
         produce a thumbnail.
         """
         suppressed_ids = self.db.unprocessable_images.active_suppressed_ids()
