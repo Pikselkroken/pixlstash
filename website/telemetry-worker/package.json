@@ -13,7 +13,7 @@
     "deploy": "wrangler deploy --no-x-provision --no-x-auto-create"
   },
   "overrides": {
-    "undici": "7.29.0",
+    "undici": "7.30.0",
     "sharp": "0.35.4"
   },
   "devDependencies": {
