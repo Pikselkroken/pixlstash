@@ -15,7 +15,11 @@ from types import SimpleNamespace
 import pytest
 
 from pixlstash.hub import workflow_cards
-from pixlstash.services.workflow_hash import structural_document, topology_hash
+from pixlstash.services.workflow_hash import (
+    asset_reference,
+    structural_document,
+    topology_hash,
+)
 from pixlstash.hub.workflow_cards import record_identity
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
@@ -26,6 +30,8 @@ from pixlstash.hub.workflows import (
 )
 from pixlstash.hub.workflow_card_reads import (
     Card,
+    asset_names,
+    variant_documents,
     card_index,
     manual_document,
     manual_documents_holding,
@@ -55,6 +61,7 @@ from pixlstash.services.workflow_identity import (
     WORKFLOW_KEY_VERSION,
     core_node_labels,
     loader_swaps,
+    topology_node_labels,
     unswapped,
 )
 from pixlstash.task_runner import TaskCancelledError
@@ -1752,6 +1759,97 @@ def test_a_workflow_of_two_checkpoints_combines_only_with_the_same_family_set(hu
     assert _workflow(hub, same_set) == pair
     other_set = _two_checkpoints("sdxl_a.safetensors", "sdxl_b.safetensors")
     assert _workflow(hub, other_set) != pair
+
+
+def test_two_loaders_of_one_widget_are_named_by_their_wiring(hub):
+    """Each checkpoint loader names the file wired into it (#1691).
+
+    ``asset_names`` keys by widget, so pairing its sorted filenames to slots
+    named both orderings of the same two files identically. The refine
+    loader's label is found in the stored document by the reference it holds,
+    so a pairing that swapped the two would fail here too.
+    """
+
+    def named(generate, refine):
+        keys = record_api_graph(hub, _two_checkpoints(generate, refine))
+        card = next(c for c in card_index(hub) if keys.structural_hash in c.variants)
+        card = replace(card, variants=[keys.structural_hash])
+        figure = workflow_card_service.WorkflowFigures(
+            card=card, workflow=Workflow(card.workflow_key)
+        )
+        workflow_card_service._describe_slots(
+            hub, [figure], asset_names(hub, card.variants)
+        )
+        document = variant_documents(hub, [keys.structural_hash])[keys.structural_hash]
+        (refine_node,) = [
+            node_id
+            for node_id, node in document.items()
+            if node["inputs"].get("ckpt_name") == asset_reference(refine)
+        ]
+        refine_label = topology_node_labels(document)[refine_node] + "/ckpt_name"
+        return {m.label: m.name for m in figure.models}, refine_label
+
+    for generate, refine in (
+        ("test-aa.safetensors", "test-zz.safetensors"),
+        ("test-zz.safetensors", "test-aa.safetensors"),
+    ):
+        models, refine_label = named(generate, refine)
+        assert models[refine_label] == refine.removesuffix(".safetensors").replace(
+            "-", " "
+        )
+        assert sorted(models.values()) == ["test aa", "test zz"]
+
+
+def test_a_swapped_in_loader_of_a_repeated_widget_is_named_by_its_fix(hub):
+    """#1605 + #1691: the loader a fix swapped is named by the replacement.
+
+    The swapped-in loader filed only the digest it took, so the restored
+    loader's reference resolves through the fix, never to the other loader.
+    """
+    missing, now = "test-vae-fp8.safetensors", "test-vae-bf16.safetensors"
+    other = "test-vae-other.safetensors"
+
+    def with_vaes(first):
+        return _graph(
+            extra={
+                "8": first,
+                "9": _node("VAELoader", vae_name=other),
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+                "62": _node("VAEDecode", samples=["5", 0], vae=["9", 0]),
+                "63": _node("PreviewImage", images=["62", 0]),
+            }
+        )
+
+    original = with_vaes(_node("VAELoader", vae_name=missing))
+    old = record_api_graph(hub, original)
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        model_fix_labels(hub, old.topology_hash, missing, "vae"),
+        missing,
+        now,
+        {},
+        kind="vae",
+    )
+    swapped = with_vaes(_node("PixlStashVAELoader", vae_sha256="ab" * 32))
+    swapped_topology, swaps = loader_swaps(
+        original, swapped, {"8": {"vae_sha256": ("vae_name", now)}}
+    )
+    record_loader_swaps(hub, swapped_topology, swaps)
+    ran = record_api_graph(hub, swapped)
+    card = next(c for c in card_index(hub) if ran.structural_hash in c.variants)
+    assert card.topology_hash == old.topology_hash
+    card = replace(card, variants=[ran.structural_hash])
+    figure = workflow_card_service.WorkflowFigures(
+        card=card, workflow=Workflow(card.workflow_key)
+    )
+    workflow_card_service._describe_slots(
+        hub, [figure], asset_names(hub, card.variants)
+    )
+    names = {m.label: m.name for m in figure.models if m.kind == "vae"}
+    fixed = model_fix_labels(hub, old.topology_hash, missing, "vae")
+    assert [names[label] for label in fixed] == ["test vae"]
+    assert sorted(names.values()) == ["test vae", "test vae other"]
 
 
 def test_a_family_is_frozen_when_first_derived(hub):

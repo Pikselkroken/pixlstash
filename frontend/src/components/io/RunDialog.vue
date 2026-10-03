@@ -1019,9 +1019,8 @@ const checkpointModel = computed(() => checkpointModels.value[0] || null);
 /**
  * The files of a workflow that loads two or more DIFFERENT base models (a Wan
  * 2.2 high + low pair), or null. Such a row is read-only and lists them all:
- * which loader holds which file is not known for sure (the server pairs
- * same-widget slots with filenames in sorted order), so one editable box
- * would swap a file onto a loader it may not belong to. The run sends no
+ * nothing tells the owner which loader is high and which low, so one editable
+ * box would invite a file onto a loader it does not belong to. The run sends no
  * `models` for it, and the default recipe loads every one as stored.
  */
 const checkpointFiles = computed(() => {

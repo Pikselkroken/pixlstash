@@ -314,9 +314,9 @@ export function checkpointModel(card) {
  * one per FILE. Two files the shelf gives one title are still two models, and
  * the Checkpoint filter matches by file, so the dedup is on `name`; a surface
  * printing them dedups the joined text instead (`baseModelText`). A Wan 2.2 graph loads a high- and a low-noise UNET and is both,
- * so a surface that names "the" model lists these, never only the first. Which
- * loader holds which file is not claimed: the server pairs same-widget slots
- * with filenames in sorted order, so the set is right and the order is not.
+ * so a surface that names "the" model lists these, never only the first. The
+ * server names each loader by the file wired into it where it can (#1691),
+ * but nothing says which loader is high and which low, so no surface claims it.
  * Mirrors `_base_model_slots` in `routes/workflows.py`, which names the card.
  */
 export function baseModels(card) {
