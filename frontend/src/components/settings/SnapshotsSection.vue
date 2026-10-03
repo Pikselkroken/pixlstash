@@ -177,7 +177,7 @@ function handleRestore(cp) {
   <div class="snapshots-section">
     <!-- ── Active job banner ─────────────────────────────────────────────── -->
     <div v-if="activeJob" class="snapshot-job-banner">
-      <v-progress-linear indeterminate color="accent" />
+      <v-progress-linear indeterminate color="accent" rounded="pill" />
       <span class="snapshot-job-label">
         <v-icon size="16">mdi-restore</v-icon>
         {{

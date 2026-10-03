@@ -1166,7 +1166,7 @@ watch(
   align-items: center;
   gap: var(--space-1);
   font-size: var(--text-2xs);
-  padding: 2px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-input-background));
   border: 1px solid rgb(var(--v-theme-border));

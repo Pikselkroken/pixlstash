@@ -1174,7 +1174,7 @@ defineExpose({
   background: rgba(var(--v-theme-on-dark-surface), 0.1);
   color: rgb(var(--v-theme-on-dark-surface));
   border-radius: 6px; /* no clean token: 6px is equidistant between --radius-sm(4px) and --radius-md(8px) */
-  padding: 1px 2px 1px 6px; /* no clean token: 1px and 6px are optical nudges */
+  padding: 1px var(--space-1) 1px 6px; /* no clean token: 1px and 6px are optical nudges */
   font-size: var(--text-2xs);
   line-height: 1.2;
   justify-content: center;

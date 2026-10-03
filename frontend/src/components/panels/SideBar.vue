@@ -6882,7 +6882,7 @@ defineExpose({
               </div>
             </div>
 
-            <div class="sidebar-section-divider" style="margin-top: 8px" />
+            <div class="sidebar-section-divider" style="margin-top: var(--space-3)" />
 
             <div
               v-if="scopedResourceType !== 'character'"

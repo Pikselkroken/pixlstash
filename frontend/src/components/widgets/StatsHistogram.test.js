@@ -19,6 +19,19 @@ const mountHist = (props = {}) =>
   });
 
 describe("StatsHistogram", () => {
+  // A clickable row is named for what it does and still says its count.
+  it("names a clickable row by its action and count", () => {
+    const rows = mountHist({
+      buckets: CONF_BUCKETS,
+      interactive: (item) => item.count > 2,
+      rowLabel: (item) => `Filter: ${item.label}`,
+    }).findAll("g");
+    expect(rows.map((g) => g.attributes("aria-label"))).toEqual([
+      "Filter: 0.9+, 4",
+      undefined,
+    ]);
+  });
+
   it("scales bars against the tallest bucket", () => {
     const rects = mountHist().findAll("rect");
     expect(Number(rects[2].attributes("width"))).toBe(208); // the max

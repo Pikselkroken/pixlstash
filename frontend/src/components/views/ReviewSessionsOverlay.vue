@@ -584,7 +584,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .rs-keys-backdrop {
@@ -611,12 +611,12 @@ onUnmounted(() => {
 .rs-keys-title {
   font-size: 15px;
   font-weight: var(--weight-bold);
-  margin-bottom: 12px;
+  margin-bottom: var(--space-4);
 }
 .rs-keys-list {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 8px 14px;
+  gap: var(--space-3) 14px;
   font-size: var(--text-sm);
   margin: 0 0 14px;
 }
@@ -635,7 +635,7 @@ onUnmounted(() => {
 }
 .rs-keys-close {
   height: 30px;
-  padding: 0 12px;
+  padding: 0 var(--space-4);
   border-radius: var(--radius-sm);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
@@ -665,7 +665,7 @@ onUnmounted(() => {
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
-  padding: 5px 12px;
+  padding: 5px var(--space-4);
   border-radius: var(--radius-pill);
   background: rgba(0, 0, 0, 0.65);
   color: rgba(255, 255, 255, 0.85);

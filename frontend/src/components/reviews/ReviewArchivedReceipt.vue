@@ -67,7 +67,7 @@ function formatWhen(iso) {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--space-6);
 }
 .rs-archived-panel {
   width: 420px;
@@ -95,7 +95,7 @@ function formatWhen(iso) {
 .rs-archived-grid {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 6px 16px;
+  gap: 6px var(--space-5);
   font-size: var(--text-sm);
 }
 .rs-archived-label {
@@ -103,7 +103,7 @@ function formatWhen(iso) {
 }
 .rs-archived-tally {
   display: flex;
-  gap: 12px;
+  gap: var(--space-4);
   font-size: var(--text-sm);
 }
 .rs-archived-removed {

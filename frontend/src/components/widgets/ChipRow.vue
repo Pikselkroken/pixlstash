@@ -5,8 +5,8 @@
       v-show="i < visibleCount"
       :key="item.key ?? i"
       :class="chipClass(item)"
-      :title="item.title || undefined"
     >
+      <Tooltip v-if="item.title" :text="item.title" activator="parent" />
       <v-icon v-if="item.icon" size="12" class="chip-row__icon">{{
         `mdi-${item.icon}`
       }}</v-icon>
@@ -87,9 +87,10 @@ import {
 import { VIcon } from "vuetify/components";
 
 import { fitChipCount } from "../../utils/workflowCard";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
-  /** `{ key?, label, icon?, dashed?, fact?, badge?, title? }`; `title` is a hover. */
+  /** `{ key?, label, icon?, dashed?, fact?, badge?, title? }`; `title` is a tooltip. */
   items: { type: Array, default: () => [] },
 });
 

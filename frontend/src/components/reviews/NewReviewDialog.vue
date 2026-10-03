@@ -460,7 +460,7 @@ async function create() {
 .rs-dialog-field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-3);
 }
 .rs-dialog-label {
   font-size: var(--text-2xs);
@@ -476,7 +476,7 @@ async function create() {
 .rs-dialog-tagbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 .rs-dialog-search {
   position: relative;
@@ -522,12 +522,12 @@ async function create() {
   gap: 6px;
   max-height: 190px;
   overflow-y: auto;
-  padding: 2px;
+  padding: var(--space-1);
 }
 .rs-dialog-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   height: 28px;
   padding: 0 11px;
   border-radius: var(--radius-pill);
@@ -554,18 +554,18 @@ async function create() {
 .rs-dialog-nomatch {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
-  padding: 4px 2px;
+  padding: var(--space-2) var(--space-1);
 }
 
 .rs-dialog-scopes {
   display: flex;
-  gap: 8px;
+  gap: var(--space-3);
 }
 .rs-dialog-scope {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
   min-width: 0;
 }
 .rs-dialog-scope select {
@@ -592,7 +592,7 @@ async function create() {
 .rs-listbox-trigger {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
   width: 100%;
   height: 30px;
   padding: 0 6px;
@@ -647,7 +647,7 @@ async function create() {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 5px var(--space-3);
   border-radius: var(--radius-sm);
   font-size: var(--text-xs);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -697,7 +697,7 @@ async function create() {
 }
 .rs-dialog-preview-title {
   font-weight: var(--weight-semibold);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
   display: flex;
   align-items: center;
   gap: 5px;
@@ -711,8 +711,8 @@ async function create() {
 .rs-dialog-include {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
   cursor: pointer;
 }
 .rs-dialog-include input {
@@ -731,7 +731,7 @@ async function create() {
 .rs-dialog-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-3);
 }
 .rs-dialog-btn {
   display: inline-flex;

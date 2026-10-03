@@ -700,7 +700,7 @@ watch(
             :model-value="progress.fraction >= 0 ? progress.fraction * 100 : 0"
             color="accent"
             height="6"
-            rounded
+            rounded="pill"
           />
           <div class="compute-note">{{ progress.message }}</div>
         </div>

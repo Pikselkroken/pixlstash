@@ -1,6 +1,6 @@
 /**
- * Drift guard for the #1299 cleanup (docs/design/buttons.md, "Tooltips" and
- * "Off-token values"). Each rule was a sweep across the whole app; this is
+ * Drift guard for the #1299 cleanup (docs/design/buttons.md, "Tooltips",
+ * "Dialogs" and "Off-token values"). Each rule was a sweep across the whole app; this is
  * what stops the count climbing back one call site at a time.
  *
  * Reads the CSS and templates of `.vue` and `.css` files (not styles set from
@@ -106,6 +106,45 @@ describe("design drift", () => {
     expect(found).toEqual([]);
   });
 
+  // `title` survives only where it restates its own element's clipped text
+  // (buttons.md, "Tooltips"): everything else goes through `Tooltip` or the
+  // `tooltip` prop. Read as "the title's expression is printed inside the
+  // element", which is what a clipped-text reveal is.
+  it("keeps a native title to restating its own element's text", () => {
+    const tag =
+      /<([a-z][\w-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*?)\s((?:v-bind)?:?)title=("([^"]*)"|'([^']*)')(?:[^>"']|"[^"]*"|'[^']*')*>/g;
+    const squash = (s) => s.replace(/\s+/g, "");
+    const found = files.flatMap(({ name, text }) =>
+      [...text.matchAll(tag)]
+        .filter((m) => {
+          const raw = m[5] ?? m[6];
+          // `cond ? undefined : x` and `cond ? x : undefined` reveal `x`.
+          const shown = squash(raw)
+            .replace(/^.*\?undefined:(.+)$/, "$1")
+            .replace(/^.*\?(.+):undefined$/, "$1");
+          // A self-closing or void tag has no text to restate.
+          const after = text.slice(m.index + m[0].length);
+          const end = m[0].endsWith("/>") ? -1 : after.indexOf(`</${m[1]}`);
+          const body = end < 0 ? "" : after.slice(0, end);
+          const printed = [...body.matchAll(/\{\{([\s\S]*?)\}\}/g)].map(
+            (b) => squash(b[1]),
+          );
+          // The whole expression, not a longer name that starts with it.
+          const esc = shown.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const whole = new RegExp(`(?:^|[^\\w.])${esc}(?:$|[^\\w.])`);
+          return m[3]
+            ? !printed.some((p) => whole.test(p))
+            : !squash(body).includes(shown);
+        })
+        .map((m) => `${name}: ${m[3]}title=${m[5] ?? m[6]}`),
+    );
+    expect(found).toEqual([
+      // The grid caption: the title is the full text when the shown text was
+      // cut to fit, and empty otherwise; one function fills both.
+      "components/views/ImageGrid.vue: :title=getThumbnailInfoTitle(img.id, info.key)",
+    ]);
+  });
+
   it("has no sub-pixel type", () => {
     expect(
       hits(/font-size:\s*(?:\d+\.\d+px|\d*\.\d+rem)/g).filter(
@@ -118,6 +157,36 @@ describe("design drift", () => {
   it("spells a font size or radius that is a token as the token", () => {
     expect(hits(/font-size:\s*(?:11|12|13|14|16|18|22|28)px\b/g)).toEqual([]);
     expect(hits(/border-radius:[^;}]*\b(?:4|8|12|999|9999)px\b/g)).toEqual([]);
+  });
+
+  // Padding, margin and gap equal to a `--space-*` step spell the step. A
+  // negative offset (`-2px`) is an optical nudge, not a step, and is left.
+  it("spells a spacing value that is a token as the token", () => {
+    expect(
+      hits(
+        /(?:padding|margin|gap|row-gap|column-gap)[\w-]*:[^;}]*(?<![-\w.])(?:2|4|8|12|16|24|32|48|64)px\b/g,
+      ),
+    ).toEqual([]);
+  });
+
+  // The dialog body owns the 16px gutter and spaces its children with `gap`
+  // (buttons.md, "Dialogs"). Nothing outside AppDialog restyles either.
+  it("leaves the dialog gutter to AppDialog", () => {
+    expect(
+      hits(
+        /\.app-dialog__(?:body|footer|header)\b[^{]*\{[^}]*(?:padding|gap)[^;}]*/g,
+        ({ name }) => !name.endsWith("AppDialog.vue"),
+      ),
+    ).toEqual([]);
+  });
+
+  // A progress track rounds by its height (buttons.md, "Off-token values").
+  it("gives a Vuetify progress bar the pill", () => {
+    expect(
+      hits(/<v-progress-linear\b(?:[^>"']|"[^"]*"|'[^']*')*>/g).filter(
+        (hit) => !/\srounded="pill"/.test(hit),
+      ),
+    ).toEqual([]);
   });
 
   // A layer picks a rung, not a number (visual-language.md §14), and not a

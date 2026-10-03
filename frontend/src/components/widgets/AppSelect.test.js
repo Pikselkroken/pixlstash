@@ -11,6 +11,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 import AppSelect from "./AppSelect.vue";
+import Tooltip from "./Tooltip.vue";
 
 const GROUP = "This stack · 3 workflows";
 const OPTIONS = [
@@ -77,8 +78,8 @@ describe("AppSelect with chip options", () => {
   });
 
   it("hovers and speaks what a chip stands for, keeping the option focusless", async () => {
-    // #1597: the detail is a native `title` on the chip, which takes no
-    // focus, and the option's aria-label says it for the keyboard reader.
+    // #1597: the detail is a tooltip on the chip, which takes no focus, and
+    // the option's aria-label says it for the keyboard reader.
     const options = [
       OPTIONS[0],
       { ...OPTIONS[1], chipDetails: { "+ upscale": "+ ImageScaleBy" } },
@@ -92,10 +93,12 @@ describe("AppSelect with chip options", () => {
       "Krea, + upscale (+ ImageScaleBy), flux",
     );
     const chips = active(w).findAll(".chip-row > .chip-row__chip");
-    expect(chips.map((c) => c.attributes("title"))).toEqual([
+    const tips = chips.map((c) => c.findComponent(Tooltip));
+    expect(tips.map((tip) => tip.exists() && tip.props("text"))).toEqual([
       "+ ImageScaleBy",
-      undefined,
+      false,
     ]);
+    expect(chips.every((c) => c.attributes("title") === undefined)).toBe(true);
     expect(chips.every((c) => c.attributes("tabindex") === undefined)).toBe(true);
     w.unmount();
   });

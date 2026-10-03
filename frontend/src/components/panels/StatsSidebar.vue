@@ -1053,7 +1053,7 @@ watch(
             <v-icon size="13">{{
               topTagsOpen ? "mdi-chevron-down" : "mdi-chevron-right"
             }}</v-icon>
-            <span class="section-label" style="margin-left: 2px">Top Tags</span>
+            <span class="section-label" style="margin-left: var(--space-1)">Top Tags</span>
           </button>
           <button
             v-if="hasPenalisedTags && topTagsOpen"
@@ -1148,7 +1148,7 @@ watch(
             <v-icon size="13">{{
               coocOpen ? "mdi-chevron-down" : "mdi-chevron-right"
             }}</v-icon>
-            <span class="section-label" style="margin-left: 2px"
+            <span class="section-label" style="margin-left: var(--space-1)"
               >Co-occurrences</span
             >
           </button>
@@ -1230,7 +1230,7 @@ watch(
             <v-icon size="13">{{
               confHistOpen ? "mdi-chevron-down" : "mdi-chevron-right"
             }}</v-icon>
-            <span class="section-label" style="margin-left: 2px"
+            <span class="section-label" style="margin-left: var(--space-1)"
               >Tag Confidence</span
             >
           </button>
@@ -1299,7 +1299,7 @@ watch(
             fill="tertiary"
             :interactive="() => !!selectedConfTag"
             :active="(item, i) => isConfEntryActive(i)"
-            :row-title="
+            :row-label="
               (item, i) => `Filter: ${selectedConfTag} \u2265 ${i * 20}%`
             "
             @select="onConfBucketSelect"

@@ -411,7 +411,7 @@ function zoomToRegion(box) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px;
+  padding: 7px var(--space-4);
   border-radius: var(--radius-sm);
   flex-wrap: wrap;
 }
@@ -457,7 +457,7 @@ function zoomToRegion(box) {
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   letter-spacing: 0.05em;
-  padding: 3px 8px;
+  padding: 3px var(--space-3);
   border-radius: var(--radius-pill);
   color: rgb(var(--v-theme-on-dark-surface));
   background: color-mix(in srgb, rgb(var(--v-theme-accent)) 18%, transparent);
@@ -511,7 +511,7 @@ function zoomToRegion(box) {
 .rs-img-chip {
   position: absolute;
   top: 8px;
-  padding: 3px 8px;
+  padding: 3px var(--space-3);
   border-radius: var(--radius-sm);
   background: rgba(0, 0, 0, 0.65);
   color: #fff;
@@ -567,7 +567,7 @@ function zoomToRegion(box) {
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
-  padding: 2px;
+  padding: var(--space-1);
   border: 2px dashed
     color-mix(in srgb, rgb(var(--v-theme-accent)) 80%, white);
   border-radius: var(--radius-sm);
@@ -582,7 +582,7 @@ function zoomToRegion(box) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   padding: 10px 0;
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.14);
   border-radius: var(--radius-md);
@@ -612,7 +612,7 @@ function zoomToRegion(box) {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 10px;
+  padding: var(--space-3) 10px;
   border-bottom: 1px solid rgba(var(--v-theme-on-dark-surface), 0.1);
 }
 .rs-similar-title {
@@ -625,7 +625,7 @@ function zoomToRegion(box) {
 }
 .rs-similar-hide {
   display: inline-flex;
-  padding: 2px;
+  padding: var(--space-1);
   color: rgba(var(--v-theme-on-dark-surface), 0.6);
 }
 .rs-similar-why {

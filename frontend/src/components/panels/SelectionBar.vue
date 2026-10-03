@@ -564,7 +564,7 @@ defineExpose({ openTagInput, openPluginPanel });
 .plugin-run-controls {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .plugin-menu-panel {
@@ -581,12 +581,12 @@ defineExpose({ openTagInput, openPluginPanel });
   font-size: var(--text-base);
   font-weight: 600;
   color: rgb(var(--v-theme-on-surface));
-  padding: 10px 12px;
+  padding: 10px var(--space-4);
   border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.12);
 }
 
 .plugin-menu-body {
-  padding: 10px 12px;
+  padding: 10px var(--space-4);
 }
 
 .plugin-menu-label {
@@ -594,15 +594,15 @@ defineExpose({ openTagInput, openPluginPanel });
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2);
   opacity: 0.9;
 }
 
 .plugin-menu-checkbox-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
   font-size: var(--text-base);
   cursor: pointer;
 }
@@ -612,7 +612,7 @@ defineExpose({ openTagInput, openPluginPanel });
 }
 
 .plugin-menu-actions {
-  margin-top: 12px;
+  margin-top: var(--space-4);
   display: flex;
   justify-content: flex-end;
 }
@@ -624,7 +624,7 @@ defineExpose({ openTagInput, openPluginPanel });
   border: 1px solid rgba(var(--v-theme-primary), 0.4);
   background: rgba(var(--v-theme-background), 0.7);
   color: rgb(var(--v-theme-on-background));
-  padding: 0 8px;
+  padding: 0 var(--space-3);
 }
 
 .bar-btn-apply-label {

@@ -735,9 +735,9 @@ defineExpose({ handleKey });
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-4);
   flex-wrap: wrap;
-  padding: 20px 24px 12px;
+  padding: 20px var(--space-6) var(--space-4);
 }
 .rs-session-title {
   font-size: var(--text-lg);
@@ -763,7 +763,7 @@ defineExpose({ handleKey });
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 2px 8px;
+  padding: var(--space-1) var(--space-3);
   border: 1px solid
     color-mix(in srgb, rgb(var(--v-theme-dark-surface-warning)) 55%, transparent);
   border-radius: var(--radius-sm);
@@ -777,7 +777,7 @@ defineExpose({ handleKey });
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 5px 12px;
+  padding: 5px var(--space-4);
   border-radius: var(--radius-pill);
   background: linear-gradient(
     90deg,
@@ -804,7 +804,7 @@ defineExpose({ handleKey });
 .rs-xp-streak {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -852,7 +852,7 @@ defineExpose({ handleKey });
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 0 24px 20px;
+  padding: 0 var(--space-6) 20px;
 }
 
 .rs-card {
@@ -903,7 +903,7 @@ defineExpose({ handleKey });
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-4);
   color: rgba(var(--v-theme-on-dark-surface), 0.85);
 }
 .rs-state--error {
@@ -1030,7 +1030,7 @@ defineExpose({ handleKey });
 .rs-confirm-btn kbd {
   font-family: var(--font-mono, monospace);
   font-size: 10px;
-  padding: 0 4px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-sm);
   border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.3);
 }

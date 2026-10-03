@@ -643,7 +643,7 @@ onMounted(() => {
 }
 
 .mv-chip {
-  padding: 2px var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-background), 0.06);
   border: 1px solid rgb(var(--v-theme-border));
