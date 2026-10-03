@@ -325,7 +325,7 @@
      default is no delay at all, so a tip strobed open as the pointer crossed a
      toolbar. Hover waits this long; keyboard focus opens at once. */
   --tooltip-max-w: 280px;
-  --tooltip-delay: 400ms;
+  --tooltip-delay: 700ms;
 
   /* ---------------------------------------------------------------------------
      LAYERS (`--z-*`) - the stacking ladder. See visual-language.md §14.

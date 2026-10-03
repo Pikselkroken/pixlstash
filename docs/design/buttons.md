@@ -890,7 +890,7 @@ fail the hoverable criterion; the eleventh is `HelpTip`.**
 **Neither delay was chosen.** Vuetify sets none: `useDelay` reads an undefined
 prop, `Number(undefined)` is `NaN`, and `setTimeout(cb, NaN)` fires on the next
 tick, so a Vuetify tooltip opens the instant the pointer crosses the control.
-`--tooltip-delay: 400ms` is a starting value, not a measurement.
+`--tooltip-delay: 700ms` is a starting value, not a measurement.
 
 **One thing the defaults get right by accident.** `openOnFocus` has no default
 of its own and resolves to `openOnHover`, which is true for a tooltip. All
@@ -923,7 +923,7 @@ ellipsised text. Four in five are the only place the information exists.
 1. **Name the configuration.** `Tooltip` is the `HelpTip` settings on the app's
    own surface rather than Vuetify's 92% grey: `--text-sm` on `surface`,
    `--radius-md` (changed from `--radius-sm`, 2026-09-13), 1px border, `--elevation-3`, `--tooltip-max-w` 280px,
-   `--tooltip-delay` 400ms, and `interactive`. `HelpTip` stays as the preset
+   `--tooltip-delay` 700ms, and `interactive`. `HelpTip` stays as the preset
    for the "why is this unavailable" mark, built on `Tooltip`.
 2. **One string, both jobs.** `AppButton` and `AppBarButton` take a `tooltip`
    prop that sets the accessible name *and* renders the tip, so the 42

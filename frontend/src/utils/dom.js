@@ -39,3 +39,22 @@ export function isTypingTarget(target) {
   const active = typeof document === "undefined" ? null : document.activeElement;
   return [target, active].some(isEditableElement);
 }
+
+/**
+ * A duration custom property, in milliseconds.
+ *
+ * The production CSS minifier rewrites `700ms` as `.7s`, so a bare
+ * `parseFloat` reads 0.7 and a 700 ms delay becomes no delay at all; the unit
+ * has to be read. Unset or unparseable gives `fallback`.
+ *
+ * @param {CSSStyleDeclaration} style - usually of `document.documentElement`.
+ * @param {string} name - e.g. `--tooltip-delay`.
+ * @param {number} [fallback=0]
+ * @returns {number}
+ */
+export function cssDurationMs(style, name, fallback = 0) {
+  const value = style.getPropertyValue(name).trim();
+  const n = parseFloat(value);
+  if (Number.isNaN(n)) return fallback;
+  return value.endsWith("s") && !value.endsWith("ms") ? n * 1000 : n;
+}
