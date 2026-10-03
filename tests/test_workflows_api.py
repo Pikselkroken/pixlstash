@@ -2052,7 +2052,7 @@ def test_a_shelf_loader_slot_is_named_by_its_file_not_its_id(workflow_env):
 
     The slot serves the shelf file's derived name beside the shelf title, and
     an id the shelf no longer holds says so rather than reading as a model
-    called "75".
+    called "75": its name is null, the forgotten-model state.
     """
     hub = workflow_env.server.hub
     model_id = hub.fetchone(
@@ -2081,7 +2081,7 @@ def test_a_shelf_loader_slot_is_named_by_its_file_not_its_id(workflow_env):
     with hub.transaction() as conn:
         conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
     gone = _by_key(_cards(workflow_env.owner))[BUSY_WF]["models"][0]
-    assert gone["name"] == workflow_card_service.SHELF_MODEL_GONE
+    assert gone["name"] is None
     assert gone["title"] is None
 
 

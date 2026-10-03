@@ -637,9 +637,10 @@ class ShelfMark:
     filename: Optional[str] = None
 
 
-# What a shelf loader's slot is called when its id names no shelf row any more
-# (the model was forgotten or removed): a bare number would read as a model
-# called "75".
+# What a default recipe's shelf loader shows when its id names no shelf row any
+# more (the model was forgotten or removed): a bare number would read as a
+# model called "75". A card slot serves a null name instead, which every client
+# already reads as a forgotten model.
 SHELF_MODEL_GONE = "(model no longer on the shelf)"
 
 
@@ -947,13 +948,14 @@ def _slot_filename(
 
     ``checkpoint_id`` holds a row id (:data:`SHELF_ID_FIELD`), which is a
     number and not a name, so every reader of ``models[].name`` would show
-    ``75``. An id the shelf no longer holds is :data:`SHELF_MODEL_GONE`. The
-    shelf lookup itself stays keyed on the raw id.
+    ``75``. An id the shelf no longer holds is ``None``, the forgotten-model
+    state, so the missing-checkpoint signals still fire. The shelf lookup
+    itself stays keyed on the raw id.
     """
     if widget != SHELF_ID_FIELD or not name:
         return name
     mark = marks.get(name.lower())
-    return (mark.filename if mark else None) or SHELF_MODEL_GONE
+    return mark.filename if mark else None
 
 
 def _derived(name: Optional[str]) -> Optional[str]:
@@ -1458,7 +1460,8 @@ def workflow_defaults(
         model = recipe.models[index]
         recipe.models[index] = replace(
             model,
-            shelf_filename=_slot_filename(SHELF_ID_FIELD, model.filename, marks),
+            shelf_filename=_slot_filename(SHELF_ID_FIELD, model.filename, marks)
+            or SHELF_MODEL_GONE,
         )
 
     by_name, _digests = adapter_digest_index(hub)

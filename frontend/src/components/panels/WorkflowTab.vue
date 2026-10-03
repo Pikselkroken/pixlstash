@@ -1033,7 +1033,7 @@ const recipeModels = computed(
  * same file where there is one, for its shelf name and precision, else the
  * file without its folders.
  *
- * ponytail: matched by the name the server derives, or by stem prefix,
+ * ponytail: matched by the exact name the server derives, or by stem prefix,
  * because the card's `name` has its folder, extension and quant postfix
  * stripped; a shared address on both would make this exact.
  */
@@ -1057,9 +1057,8 @@ function recipeModelLabel(model) {
     (entry) =>
       kinds.includes(entry.kind) &&
       entry.name &&
-      [stem, derived].some((name) =>
-        name.startsWith(String(entry.name).toLowerCase()),
-      ),
+      (derived === String(entry.name).toLowerCase() ||
+        stem.startsWith(String(entry.name).toLowerCase())),
   );
   return slot
     ? withQuant(modelDisplayName(slot), slot)
