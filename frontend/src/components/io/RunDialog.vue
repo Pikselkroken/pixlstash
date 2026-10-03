@@ -54,7 +54,7 @@
       </div>
 
       <!-- ── Right: the form, four columns ──────────────────────────────── -->
-      <div class="rund-form">
+      <div ref="formRoot" class="rund-form">
         <div class="rund-f rund-f--4">
           <span class="rund-l">
             Workflow<span class="rund-sp" />
@@ -844,6 +844,7 @@ const pins = ref(null);
 /** The address "Set each run" is writing, and what went wrong if it failed. */
 const freeing = ref("");
 const fixedSummary = ref(null);
+const formRoot = ref(null);
 const freeError = ref("");
 const recipe = ref(null);
 const cards = ref([]);
@@ -1436,9 +1437,10 @@ async function freeField(field) {
     // Its row is gone from under the pointer: keep focus on the list, or on
     // the field it became when the list went with it.
     await nextTick();
+    // Searched in this form only: "Steps" may label a field anywhere else.
     const target =
       fixedSummary.value ??
-      [...document.querySelectorAll("input[aria-label]")].find(
+      [...(formRoot.value?.querySelectorAll("input[aria-label]") ?? [])].find(
         (input) => input.getAttribute("aria-label") === field.label,
       );
     target?.focus();

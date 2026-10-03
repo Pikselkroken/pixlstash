@@ -1035,6 +1035,29 @@ describe("a workflow's fixed parameters", () => {
     expect(row.find(".rund-fixed-value").text()).toBe("30");
   });
 
+  it("never moves focus to a field of the same name outside the form", async () => {
+    withPins(
+      card()
+        .defaults.filter((f) => f.input_name !== "denoise")
+        .map(({ slot_label, input_name }) => ({ slot_label, input_name })),
+    );
+    setWorkflowPins.mockImplementation(async (_key, pins) => ({ pins }));
+    const elsewhere = document.createElement("input");
+    elsewhere.setAttribute("aria-label", "Denoise");
+    document.body.append(elsewhere);
+    try {
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      const field = wrapper.vm.fixedFields.find((f) => f.input_name === "denoise");
+      // The last fixed one: the list goes with it, so the fallback runs.
+      expect(wrapper.vm.fixedFields).toHaveLength(1);
+      await wrapper.vm.freeField(field);
+      await flushPromises();
+      expect(document.activeElement).not.toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
   it("keeps it fixed, and says so, when the write fails", async () => {
     withPins([]);
     setWorkflowPins.mockRejectedValue(new Error("offline"));
