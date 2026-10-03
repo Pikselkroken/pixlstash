@@ -1485,8 +1485,10 @@ on the Workflow tab's Default recipe heading, both through
   which added LoRAs went. Clone is off while a removal is needed and the chain
   is not editable (ComfyUI down): it would be refused; and off onto another
   base model when the chain could not be read at all, since it may hold LoRAs
-  of the old one. A second base loader the set leaves alone (a refiner, Wan
-  2.2's other expert) is named in a warning: only the first one changes.
+  of the old one. The dialog sends every checkpoint of a set, and the server
+  pairs them with the graph's base loaders by filename (#1690); a base loader
+  left without one (a set holding fewer checkpoints than the graph loads) is
+  named in a warning and keeps its file.
 - The name defaults to "<card> · <set>" until typed in. The view's notice
   names a missing pack after the write.
 
@@ -1765,7 +1767,7 @@ the shelf's workflow sets section) and served as `hand_made` on
   whose prompt now names the sets that keep the file as "Not on shelf".
 - **The tray is slots, walked by slot.** `setSlots` (`utils/workflowSets.js`)
   gives each of the five fixed slots its member tiles plus a ＋ tile (Checkpoint
-  drops its ＋ once filled); the grid splices them in as `kind: "slot"` entries.
+  keeps its ＋: a two-model workflow's set holds two, #1690); the grid splices them in as `kind: "slot"` entries.
   Left/Right walk tiles, Up/Down jump slot to slot (and out to the card or the
   next row), Enter on ＋ opens the chooser, Backspace removes a member, Delete
   stays the file delete. A crossing into a slots tray lands at its edge, as it does for a List

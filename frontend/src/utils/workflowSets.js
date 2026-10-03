@@ -451,7 +451,7 @@ export const SET_SLOTS = [
   {
     id: "checkpoint",
     label: "Checkpoint",
-    hint: "exactly one",
+    hint: "one or more",
     add: "Add checkpoint",
     noun: "checkpoints",
     kinds: ["checkpoint", "unknown"],
@@ -502,9 +502,33 @@ export function defaultSlot(fileKind) {
   );
 }
 
-/** The set's checkpoint member, or null. */
+/**
+ * The set's checkpoint members, in member order: two for a two-model workflow
+ * (a Wan 2.2 high/low pair, a base and its refiner).
+ */
+export function setCheckpoints(set) {
+  return (set?.members ?? []).filter((m) => m.slot === "checkpoint");
+}
+
+/** The set's first checkpoint member, the one it is named after, or null. */
 export function setCheckpoint(set) {
-  return (set?.members ?? []).find((m) => m.slot === "checkpoint") ?? null;
+  return setCheckpoints(set)[0] ?? null;
+}
+
+/** The set's on-shelf checkpoints: the ones evidence can be read for. */
+function onShelfCheckpoints(set) {
+  return setCheckpoints(set).filter((m) => m.on_shelf);
+}
+
+/**
+ * What recipes or ComfyUI runs used beside any of the set's on-shelf
+ * checkpoints, each model once, in `worksWith` order checkpoint by checkpoint.
+ */
+function checkpointCompanions(set, combinations) {
+  const seen = new Set();
+  return onShelfCheckpoints(set)
+    .flatMap((checkpoint) => worksWith(combinations, checkpoint.id).companions)
+    .filter((companion) => !seen.has(companion.id) && seen.add(companion.id));
 }
 
 /**
@@ -669,15 +693,16 @@ export function slotSuggestions({
     needle && heldMatches.length
       ? [{ id: "held", label: "", items: sorted(heldMatches), held: true }]
       : [];
-  const checkpoint = setCheckpoint(set);
-  if (!checkpoint?.on_shelf) {
+  const checkpoints = onShelfCheckpoints(set);
+  if (!checkpoints.length) {
     const all = sorted(byId.values());
     return [
       { id: "all", label: `All ${slot.noun}`, items: all, total: all.length },
       ...heldSection,
     ];
   }
-  const base = checkpoint.base_model;
+  // The first checkpoint that has a base model: a pair shares one.
+  const base = checkpoints.find((m) => m.base_model)?.base_model ?? null;
   const used = new Set();
   const take = (ids) => {
     const items = [];
@@ -700,7 +725,7 @@ export function slotSuggestions({
       ),
   );
   const withCheckpoint = take(
-    worksWith(combinations, checkpoint.id).companions.map((c) => c.id),
+    checkpointCompanions(set, combinations).map((c) => c.id),
   );
   const sameBase = base
     ? take(
@@ -718,7 +743,10 @@ export function slotSuggestions({
     },
     {
       id: "checkpoint",
-      label: "Used with this checkpoint",
+      label:
+        checkpoints.length === 1
+          ? "Used with this checkpoint"
+          : "Used with these checkpoints",
       items: withCheckpoint,
     },
     base
@@ -743,26 +771,20 @@ export function slotSuggestions({
 
 /**
  * What "Fill from pictures" offers: every model recipes or ComfyUI runs have
- * used with this set's checkpoint that the set does not hold, strongest evidence first.
+ * used with this set's checkpoints that the set does not hold, strongest evidence
+ * first. Another checkpoint is offered too: a set holds a two-model workflow's
+ * pair (Wan 2.2's other expert, a refiner).
  *
  * @returns {Array<{id, name, kindLabel, recipes, historyRuns, slot, sha256}>}
  */
 export function fillFromPictures(set, combinations, rows) {
-  const checkpoint = setCheckpoint(set);
-  if (!checkpoint?.on_shelf) return [];
   const held = new Set((set.members ?? []).map((m) => m.sha256));
   const byId = new Map((rows ?? []).map((row) => [row.id, row]));
   return (
-    worksWith(combinations, checkpoint.id)
-      .companions.map((c) => ({ ...c, row: byId.get(c.id) }))
-      // Another checkpoint (a refiner) is not offered: the set holds one, and
-      // one refused member fails the whole all-or-nothing add.
+    checkpointCompanions(set, combinations)
+      .map((c) => ({ ...c, row: byId.get(c.id) }))
       .filter(
-        (c) =>
-          c.row?.sha256 &&
-          !held.has(c.row.sha256) &&
-          c.kind !== "engine" &&
-          defaultSlot(c.kind) !== "checkpoint",
+        (c) => c.row?.sha256 && !held.has(c.row.sha256) && c.kind !== "engine",
       )
       .map((c) => ({
         id: c.id,
@@ -790,8 +812,8 @@ export function fillFromSets(set, sets) {
     if (base && handMadeBase(other) !== base) continue;
     for (const member of other.members ?? []) {
       if (!member.on_shelf || held.has(member.sha256)) continue;
-      // One checkpoint per set: another set's checkpoint is not offered, since
-      // adding it would either fail or replace nothing.
+      // Another set's checkpoint is not offered: it is the base model of that
+      // set, not a file that goes with this one's.
       if (member.slot === "checkpoint") continue;
       const seen = found.get(member.sha256) ?? {
         id: member.id,
@@ -814,8 +836,7 @@ export function fillFromSets(set, sets) {
  * A hand-made set's tray, slot by slot, in the order it is drawn and walked.
  *
  * Every member tile, then the merge offer's ghosts for that slot (#1523), then
- * the slot's ＋ tile - which the Checkpoint slot drops once it holds its one,
- * or once a ghost stands where it would land. The keys are what the tray and
+ * the slot's ＋ tile. The keys are what the tray and
  * the grid's cursor agree on: `m:<sha256>` for a member, `g:<sha256>` for a
  * ghost, `add:<slot>` for a ＋ tile.
  *
@@ -831,9 +852,7 @@ export function setSlots(set) {
     for (const ghost of ghosts.filter((g) => g.slot === slot.id)) {
       items.push({ key: `g:${ghost.sha256}`, member: null, ghost });
     }
-    if (slot.id !== "checkpoint" || !items.length) {
-      items.push({ key: `add:${slot.id}`, member: null });
-    }
+    items.push({ key: `add:${slot.id}`, member: null });
     return { slot, items };
   });
 }

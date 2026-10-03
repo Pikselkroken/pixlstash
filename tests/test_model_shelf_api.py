@@ -31,7 +31,6 @@ the refused token is live.
 
 from __future__ import annotations
 
-import logging
 import hashlib
 import itertools
 import json
@@ -1283,7 +1282,7 @@ def test_an_empty_unnamed_set_is_a_set(shelf_env):
         assert made["name"] is None
         assert made["members"] == []
         assert made["incomplete"] is True
-        assert made["checkpoint_id"] is None
+        assert made["checkpoint_ids"] == []
         assert (made["picture_count"], made["recipes"], made["covers"]) == (0, 0, [])
         assert _hand_made(shelf_env)[made["id"]] == made
     finally:
@@ -1315,7 +1314,7 @@ def test_members_take_their_slot_from_their_kind_and_sort_by_name(shelf_env):
             ("ALPHA", "lora"),
             ("mystery.safetensors", "other"),
         ]
-        assert made["checkpoint_id"] == ids["base_xl.safetensors"]
+        assert made["checkpoint_ids"] == [ids["base_xl.safetensors"]]
         assert made["incomplete"] is False
         alice = made["members"][1]
         assert alice == {
@@ -1341,7 +1340,7 @@ def test_an_unclassified_file_may_be_the_checkpoint_and_a_lora_may_not(shelf_env
             shelf_env,
             members=[{"model_id": ids["mystery.safetensors"], "slot": "checkpoint"}],
         )
-        assert made["checkpoint_id"] == ids["mystery.safetensors"]
+        assert made["checkpoint_ids"] == [ids["mystery.safetensors"]]
         r = shelf_env.owner.post(
             f"{API}/models/workflow-sets",
             json={
@@ -1382,7 +1381,7 @@ def test_an_engine_an_unhashed_file_and_an_unknown_id_are_refused(shelf_env):
             conn.execute("DELETE FROM model WHERE id = ?", (engine,))
 
 
-def test_adding_twice_is_a_no_op_and_a_second_checkpoint_is_refused(shelf_env, caplog):
+def test_adding_twice_is_a_no_op_and_a_second_checkpoint_joins(shelf_env):
     ids = shelf_env.model_ids
     try:
         set_id = _new_set(
@@ -1399,25 +1398,22 @@ def test_adding_twice_is_a_no_op_and_a_second_checkpoint_is_refused(shelf_env, c
         assert r.json()["added"] == []
         assert len(r.json()["set"]["members"]) == 2
 
-        with caplog.at_level(logging.INFO, logger="pixlstash.routes.model_shelf"):
-            r = shelf_env.owner.post(
-                url,
-                json={
-                    "members": [
-                        {"model_id": ids["bob.safetensors"]},
-                        {"model_id": ids["mystery.safetensors"], "slot": "checkpoint"},
-                    ]
-                },
-            )
-        assert r.status_code == 409, r.text
-        # The refusal is in the server log with its reason, not only the answer.
-        assert "already has a checkpoint" in caplog.text
-        assert r.json()["detail"] == (
-            "This set already has a checkpoint. Remove it first."
+        # A two-model workflow (a Wan 2.2 high/low pair) loads two (#1690).
+        r = shelf_env.owner.post(
+            url,
+            json={
+                "members": [
+                    {"model_id": ids["mystery.safetensors"], "slot": "checkpoint"}
+                ]
+            },
         )
-        # The refusal took bob with it.
-        members = {m["sha256"] for m in _hand_made(shelf_env)[set_id]["members"]}
-        assert members == {CHECKPOINT_HASHED, ADAPTER_WITH_BASE}
+        assert r.status_code == 200, r.text
+        assert r.json()["added"] == [UNKNOWN_HASH]
+        made = _hand_made(shelf_env)[set_id]
+        assert sorted(made["checkpoint_ids"]) == sorted(
+            [ids["base_xl.safetensors"], ids["mystery.safetensors"]]
+        )
+        assert [m["slot"] for m in made["members"]].count("checkpoint") == 2
     finally:
         _wipe_sets(shelf_env.server)
 
@@ -1591,7 +1587,7 @@ def test_a_deleted_set_comes_back_whole_from_its_snapshot(shelf_env):
         assert restored["id"] != set_id
         by_sha = {m["sha256"]: m for m in restored["members"]}
         assert by_sha[ckpt_sha]["on_shelf"] is True
-        assert restored["checkpoint_id"] == ids["base_xl.safetensors"]
+        assert restored["checkpoint_ids"] == [ids["base_xl.safetensors"]]
         gone = by_sha[alice_sha]
         assert (gone["on_shelf"], gone["id"], gone["name"], gone["kind"]) == (
             False,
@@ -1844,6 +1840,83 @@ def test_one_pictures_set_is_offered_to_the_set_needing_fewest_models(shelf_env)
         sets = _hand_made(shelf_env)
         assert sets[closer]["offer"] is None
         assert sets[dana_only]["offer"]["head_id"] == ids["base_xl.safetensors"]
+    finally:
+        _wipe_sets(server)
+        _wipe_recipes(server)
+
+
+def test_a_two_checkpoint_set_is_offered_each_checkpoints_pictures(shelf_env):
+    """#1690: a set holding a two-model workflow's pair is offered the near
+    misses of either checkpoint, and a second checkpoint a near miss used
+    lands in the Checkpoint slot, not Other."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    _add_model(
+        shelf_env,
+        "checkpoint",
+        "refiner_xl.safetensors",
+        _h("refinerfile"),
+        display_name="Refiner XL",
+    )
+    try:
+        _seed_recipe(
+            server,
+            "tc-pair",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("ckpt_name", "refiner_xl.safetensors"),
+            ],
+        )
+        _seed_recipe(
+            server,
+            "tc-second",
+            [
+                ("unet_name", "mystery.safetensors"),
+                ("lora_name", "dana.safetensors"),
+            ],
+        )
+        _seed_picture(server, "tc-pair")
+        _seed_picture(server, "tc-second")
+
+        single = _new_set(
+            shelf_env, members=[{"model_id": ids["base_xl.safetensors"]}]
+        )["id"]
+        assert _offered(_hand_made(shelf_env)[single]) == [
+            ("Refiner XL", "checkpoint", 1, 1)
+        ]
+        _wipe_sets(server)
+
+        pair = _new_set(
+            shelf_env,
+            members=[
+                {"model_id": ids["base_xl.safetensors"]},
+                {"model_id": ids["mystery.safetensors"], "slot": "checkpoint"},
+            ],
+        )["id"]
+        entry = _hand_made(shelf_env)[pair]
+        # Base XL's near miss and the second checkpoint's are both offers; one
+        # set takes one at a time, the one needing fewest models.
+        assert entry["offer"]["head_id"] in (
+            ids["base_xl.safetensors"],
+            ids["mystery.safetensors"],
+        )
+        r = shelf_env.owner.post(
+            f"{API}/models/workflow-sets/{pair}/members",
+            json={
+                "members": [
+                    {"model_id": m["id"], "slot": m["slot"]}
+                    for m in entry["offer"]["models"]
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
+        # The other checkpoint's pictures are offered next.
+        follow = r.json()["set"]["offer"]
+        assert follow is not None
+        assert {entry["offer"]["head_id"], follow["head_id"]} == {
+            ids["base_xl.safetensors"],
+            ids["mystery.safetensors"],
+        }
     finally:
         _wipe_sets(server)
         _wipe_recipes(server)

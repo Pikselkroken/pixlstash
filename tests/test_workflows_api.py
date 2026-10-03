@@ -10092,7 +10092,7 @@ def _plans(env, **sets):
         # The first id is the set's checkpoint, the rest its other models.
         json={
             "sets": [
-                {"key": k, "checkpoint_id": ids[0], "model_ids": ids[1:]}
+                {"key": k, "checkpoint_ids": ids[:1], "model_ids": ids[1:]}
                 for k, ids in sets.items()
             ]
         },
@@ -10180,7 +10180,11 @@ def test_a_set_whose_model_left_the_shelf_is_refused_on_its_own(cloneable):
 
 
 def test_two_sets_asked_under_one_key_are_a_422(cloneable):
-    ask = {"key": "same", "checkpoint_id": cloneable.checkpoint_id, "model_ids": []}
+    ask = {
+        "key": "same",
+        "checkpoint_ids": [cloneable.checkpoint_id],
+        "model_ids": [],
+    }
     r = cloneable.owner.post(
         f"{API}/workflows/{RUN_WF}/set-clone-plans", json={"sets": [ask, ask]}
     )
@@ -10235,6 +10239,90 @@ def test_a_gguf_set_on_a_whole_checkpoint_loader_names_the_loader_it_needs(
     # A whole-checkpoint loader has no GGUF twin: refused with the reason.
     assert plans["gguf"]["fit"] == "wont_load"
     assert plans["gguf"]["reason"] == "Needs a UnetLoaderGGUF"
+
+
+def test_a_two_model_graph_takes_each_set_checkpoint_by_name(cloneable):
+    """#1690: a Wan 2.2 high/low graph cloned onto a set holding a pair swaps
+    each expert for its own, whatever order the set lists them in; a set
+    holding one expert replaces that one and leaves the other, and a graph
+    loading one expert takes the set's matching one."""
+    graph = _embedded_export_graph()
+    graph["1"] = {
+        "class_type": "UNETLoader",
+        "inputs": {"unet_name": "wan_high_noise.safetensors"},
+    }
+    graph["10"] = {
+        "class_type": "UNETLoader",
+        "inputs": {"unet_name": "wan_low_noise.safetensors"},
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "down")
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        low, high, own_low = (
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, provenance) "
+                "VALUES ('checkpoint', ?, 'scanned')",
+                (filename,),
+            ).lastrowid
+            for filename in (
+                "wan_v2_low_noise.safetensors",
+                "wan_v2_high_noise.safetensors",
+                "wan_low_noise.safetensors",
+            )
+        )
+    try:
+        r = cloneable.owner.post(
+            f"{API}/workflows/{RUN_WF}/set-clone-plans",
+            json={
+                "sets": [
+                    {"key": "pair", "checkpoint_ids": [low, high], "model_ids": []},
+                    {"key": "low", "checkpoint_ids": [low], "model_ids": []},
+                    # The very file the graph loads: paired, though unchanged.
+                    {"key": "own", "checkpoint_ids": [own_low], "model_ids": []},
+                ]
+            },
+        )
+        # A graph loading one expert takes the set's matching one, not the
+        # first the set lists.
+        graph.pop("10")
+        one = cloneable.owner.post(
+            f"{API}/workflows/{RUN_WF}/set-clone-plans",
+            json={
+                "sets": [
+                    {"key": "pair", "checkpoint_ids": [low, high], "model_ids": []}
+                ]
+            },
+        )
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "DELETE FROM model WHERE id = ?", [(low,), (high,), (own_low,)]
+            )
+    assert r.status_code == 200, r.text
+    plans = {plan["key"]: plan for plan in r.json()["plans"]}
+    assert plans["pair"]["swaps"] == {
+        "wan_high_noise.safetensors": "wan_v2_high_noise.safetensors",
+        "wan_low_noise.safetensors": "wan_v2_low_noise.safetensors",
+    }
+    assert plans["low"]["swaps"] == {
+        "wan_low_noise.safetensors": "wan_v2_low_noise.safetensors"
+    }
+    # What the dialog warns about is the pairing, not the unchanged rows.
+    assert plans["pair"]["unpaired_bases"] == []
+    assert plans["low"]["unpaired_bases"] == ["wan_high_noise.safetensors"]
+    assert plans["own"]["swaps"] == {}
+    assert plans["own"]["unpaired_bases"] == ["wan_high_noise.safetensors"]
+    assert one.status_code == 200, one.text
+    assert one.json()["plans"][0]["swaps"] == {
+        "wan_high_noise.safetensors": "wan_v2_high_noise.safetensors"
+    }
 
 
 def test_a_set_vae_replaces_only_the_graph_vae_of_its_layout(cloneable):

@@ -584,7 +584,7 @@ describe("hand-made sets (#1520)", () => {
     );
   });
 
-  it("never offers a second checkpoint from pictures, since the add is all or nothing", () => {
+  it("offers a second checkpoint from pictures, in the Checkpoint slot (#1690)", () => {
     const withRefiner = [
       ...combinations,
       {
@@ -597,11 +597,50 @@ describe("hand-made sets (#1520)", () => {
         ],
       },
     ];
-    const ids = fillFromPictures(mine, withRefiner, [
+    const items = fillFromPictures(mine, withRefiner, [
       ...rows,
       shelfRow(7, "Refiner", "checkpoint"),
-    ]).map((item) => item.id);
-    expect(ids).toEqual([4]);
+    ]).map((item) => [item.id, item.slot]);
+    expect(items).toEqual([
+      [4, "lora"],
+      [7, "checkpoint"],
+    ]);
+  });
+
+  it("reads the evidence of every checkpoint of a two-model set, each model once (#1690)", () => {
+    const pair = {
+      id: 8,
+      members: [
+        slotMember(1, "Wan High", "checkpoint"),
+        slotMember(7, "Wan Low", "checkpoint"),
+      ],
+    };
+    const runs = [
+      ...combinations,
+      {
+        key: "7,2,4",
+        recipes: 1,
+        picture_count: 1,
+        models: [
+          { id: 7, name: "Wan Low", kind: "checkpoint" },
+          { id: 2, name: "Film Grain", kind: "adapter" },
+          { id: 4, name: "Ink Wash", kind: "adapter" },
+        ],
+      },
+    ];
+    const shelf = [...rows, shelfRow(7, "Wan Low", "checkpoint")];
+    expect(fillFromPictures(pair, runs, shelf).map((item) => item.id)).toEqual(
+      [4, 2],
+    );
+    const used = slotSuggestions({
+      set: pair,
+      slotId: "lora",
+      rows: shelf,
+      sets: [pair],
+      combinations: runs,
+    }).find((section) => section.id === "checkpoint");
+    expect(used.label).toBe("Used with these checkpoints");
+    expect(used.items.map((row) => row.id)).toEqual([4, 2]);
   });
 
   it("fills from a set with other sets' members, never their checkpoint", () => {
@@ -610,13 +649,13 @@ describe("hand-made sets (#1520)", () => {
     ]);
   });
 
-  it("lists every slot with its ＋, and drops Checkpoint's once it holds one", () => {
+  it("lists every slot with its ＋, Checkpoint's too once it holds one (#1690)", () => {
     const keys = setSlots(mine).map(({ slot, items }) => [
       slot.id,
       items.map((i) => i.key),
     ]);
     expect(keys).toEqual([
-      ["checkpoint", ["m:h1"]],
+      ["checkpoint", ["m:h1", "add:checkpoint"]],
       ["text_encoder", ["add:text_encoder"]],
       ["vae", ["add:vae"]],
       ["lora", ["add:lora"]],
@@ -624,7 +663,7 @@ describe("hand-made sets (#1520)", () => {
     ]);
   });
 
-  it("puts the merge offer's ghosts before each slot's ＋, a checkpoint ghost in place of it (#1523)", () => {
+  it("puts the merge offer's ghosts before each slot's ＋ (#1523)", () => {
     const incomplete = {
       id: 9,
       members: [{ sha256: "h3", slot: "lora", on_shelf: true, id: 3 }],
@@ -642,7 +681,7 @@ describe("hand-made sets (#1520)", () => {
       items.map((i) => i.key),
     ]);
     expect(keys).toEqual([
-      ["checkpoint", ["g:h1"]],
+      ["checkpoint", ["g:h1", "add:checkpoint"]],
       ["text_encoder", ["add:text_encoder"]],
       ["vae", ["add:vae"]],
       ["lora", ["m:h3", "g:h5", "add:lora"]],

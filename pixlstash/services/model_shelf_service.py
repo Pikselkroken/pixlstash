@@ -1088,9 +1088,10 @@ def propose_companions(
         index: A :func:`recipe_asset_index` already built in this request.
 
     **Grouped by the owner comes first.** Ahead of the ladder, every
-    hand-made workflow set whose checkpoint member is this checkpoint proposes
-    its on-shelf VAE and text-encoder members (``via: "grouped"``, ``recipes:
-    0``, ``set_name`` the newest such set's name). ``prepick`` says whether the
+    hand-made workflow set with this checkpoint among its checkpoint members
+    (two for a two-model workflow) proposes its on-shelf VAE and text-encoder
+    members (``via: "grouped"``, ``recipes: 0``, ``set_name`` the newest such
+    set's name). ``prepick`` says whether the
     dialog may select one for the owner: true when the matching sets between
     them name exactly one on-shelf file of that kind, false when they name
     several. A set with no checkpoint never matches, and a member off the shelf

@@ -1158,7 +1158,9 @@ describe("hand-made sets (#1520)", () => {
       created_at: "2026-09-26T08:00:00Z",
       updated_at: "2026-09-26T08:00:00Z",
       incomplete: !members.some((m) => m.slot === "checkpoint"),
-      checkpoint_id: members.find((m) => m.slot === "checkpoint")?.id ?? null,
+      checkpoint_ids: members
+        .filter((m) => m.slot === "checkpoint" && m.on_shelf)
+        .map((m) => m.id),
       picture_count: 0,
       recipes: 0,
       covers: [],
@@ -1303,9 +1305,11 @@ describe("hand-made sets (#1520)", () => {
     await wrapper.vm.$nextTick();
 
     const panel = wrapper.find('[data-testid="model-set-slots-panel"]');
-    // Checkpoint holds its one and offers no ＋; the other four slots do.
+    // Every slot keeps its ＋, Checkpoint's too: a two-model workflow's set
+    // holds two (#1690).
     const addTiles = panel.findAll(".mss__tile--add");
     expect(addTiles.map((tile) => tile.attributes("aria-label"))).toEqual([
+      "Add checkpoint…",
       "Add text encoder…",
       "Add VAE…",
       "Add LoRA…",
@@ -2106,30 +2110,6 @@ describe("hand-made sets (#1520)", () => {
 
     expect(chooser.findAll('[role="option"]')).toHaveLength(10);
     expect(chooser.find(".wsc__r--cur").text()).toContain("lora_8");
-  });
-
-  it("lands on the open set's card when the tile a chooser came from is gone", async () => {
-    const { wrapper, store } = await mountGrid({
-      rows: [row(1, "realvisXL_v5", "checkpoint")],
-      handMade: [handSet(10, [])],
-      attach: true,
-    });
-    store.toggleSet("hand:10");
-    await wrapper.vm.$nextTick();
-    await wrapper.find(".mss__tile--add").trigger("click");
-    // The Checkpoint ＋ goes away underneath the open chooser.
-    store.workflowSets = {
-      ...store.workflowSets,
-      handMade: [handSet(10, [SET_CKPT])],
-    };
-    await wrapper.vm.$nextTick();
-    await wrapper
-      .find('[data-testid="workflow-set-chooser"]')
-      .trigger("keydown", { key: "Escape" });
-    await wrapper.vm.$nextTick();
-
-    expect(document.activeElement).toBe(wrapper.find(".msg__row").element);
-    wrapper.unmount();
   });
 
   it("says how many sets an undo of a delete could not bring back", async () => {

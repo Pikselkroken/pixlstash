@@ -9023,8 +9023,9 @@ The owner can also say which shelf models go together, and that one IS stored:
 like every shelf table), read and written by
 `pixlstash/services/model_workflow_sets.py`.
 
-- **A menu, not a recipe.** Fixed slots (`checkpoint` at most one - a partial
-  unique index holds it - then `text_encoder`, `vae`, `lora`, `other`), no order,
+- **A menu, not a recipe.** Fixed slots (`checkpoint`, any number since a
+  two-model workflow such as a Wan 2.2 high/low pair loads two (#1690), then
+  `text_encoder`, `vae`, `lora`, `other`), no order,
   no strengths. A set may be unnamed, empty, or have no checkpoint
   (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
   for a `checkpoint` or an `unknown` file only (a diffusion file is often
@@ -9046,14 +9047,14 @@ like every shelf table), read and written by
 - **The merge offer is derived, and only the declines are stored (#1523).**
   `_attach_offers` groups the combinations no set covers by their head (the
   grid's own evidence cards, but over `hub_combinations`: every library's
-  recipes, not only those with a picture here). A set is offered its own
-  checkpoint's group; a set with no checkpoint only a group whose models
+  recipes, not only those with a picture here). A set is offered each of its
+  own checkpoints' groups; a set with no checkpoint only a group whose models
   include all of its own. Only combinations whose missing models can all be
   added count: hashed, not an engine, and not in `model_workflow_set_decline`
   for that set. One group goes to one set, the one needing fewest models added.
   The offer is `{head_id, head_name, picture_count, recipes, covers, models}`,
   each model with the slot it would take (the head fills an empty Checkpoint,
-  a second checkpoint goes to Other). Merging is the ordinary members add;
+  any other file by kind, so a second checkpoint joins the checkpoints). Merging is the ordinary members add;
   Keep separate is `PUT .../declines`, a whole-list write that returns the old
   list as its undo. `kept_separate` counts the pictures here the declines hold
   back. The declines cascade with their set (so a build that predates the
@@ -9237,7 +9238,7 @@ missing node pack warns and never refuses.** GGUF is the one pack known; any
 other loader keeps its class and a file it cannot list is refused as before.
 `POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
 per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
-maps a set to the graph: the first base slot takes the checkpoint the caller names (`checkpoint_id`, a checkpoint or unclassified file, never guessed from the members), and a VAE or
+maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file - and a VAE or
 text-encoder slot the set's untaken file of the same layout (`family`, or the
 set's only one against the graph's only slot of that kind). Two slots of a kind
 are two different files, since the slot list merges loaders naming one, so one

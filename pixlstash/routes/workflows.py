@@ -41,6 +41,7 @@ import re
 import threading
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field as dataclass_field
+from difflib import SequenceMatcher
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
@@ -1874,8 +1875,13 @@ class SetCloneAsk(BaseModel):
     """One workflow set to plan a clone onto: a key of the caller's, its models."""
 
     key: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
-    checkpoint_id: int | None = Field(
-        None, description="The set's checkpoint (or diffusion file); null when none."
+    checkpoint_ids: list[int] = Field(
+        default_factory=list,
+        max_length=MAX_SET_MODELS,
+        description=(
+            "The set's checkpoints (or diffusion files): one per base loader "
+            "of a two-model graph, empty when none."
+        ),
     )
     model_ids: list[int] = Field(
         max_length=MAX_SET_MODELS,
@@ -1930,6 +1936,13 @@ class SetClonePlan(BaseModel):
     )
     swaps: dict[str, str] = Field(
         description="The graph's filename -> the set's file, as the clone takes it."
+    )
+    unpaired_bases: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Base-model files of the graph no set checkpoint was paired with "
+            "(the set holds fewer than the graph loads): they keep their file."
+        ),
     )
     loaders: list[LoaderDiff]
 
@@ -6818,14 +6831,48 @@ def create_router(server) -> APIRouter:
                 )
         return options
 
+    def _pair_bases(
+        found: list[tuple[str, str, SwapSlot]], checkpoints: list[SwapModel]
+    ) -> list[tuple[SwapSlot, SwapModel]]:
+        """Each base slot of *found* with the set checkpoint it takes, in graph order.
+
+        Paired by filename, closest pair first, so a high-noise file is
+        replaced by the high-noise one of a Wan 2.2 pair, a set holding only
+        the low-noise expert replaces the low-noise file, and a graph loading
+        one expert takes the set's matching one. A slot left over keeps its
+        file.
+        """
+        bases = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
+        # ponytail: name similarity, the only thing telling two experts of one
+        # base model apart; a shelf role per expert would replace it.
+        ranked = sorted(
+            (
+                -SequenceMatcher(
+                    None,
+                    normalized_filename(slot.filename),
+                    normalized_filename(model.filename),
+                ).ratio(),
+                i,
+                j,
+            )
+            for i, slot in enumerate(bases)
+            for j, model in enumerate(checkpoints)
+        )
+        paired: dict[int, int] = {}
+        for _ratio, i, j in ranked:
+            if i not in paired and j not in paired.values():
+                paired[i] = j
+        return [(bases[i], checkpoints[paired[i]]) for i in sorted(paired)]
+
     def _set_swaps(
         found: list[tuple[str, str, SwapSlot]],
-        checkpoint: SwapModel | None,
+        bases: list[tuple[SwapSlot, SwapModel]],
         members: list[SwapModel],
     ) -> dict[str, str]:
-        """The set's checkpoint, and which graph file each of its files replaces.
+        """The set's checkpoints, and which graph file each of its files replaces.
 
-        The first base slot takes the set's checkpoint. A VAE or text-encoder
+        Each base slot takes the checkpoint :func:`_pair_bases` paired it with
+        (*bases*). A VAE or text-encoder
         slot takes the set's file of the same layout (``family``) nobody has
         taken yet; with no layout to go by, the set's only file of that kind
         when the graph has only one such slot. A slot the set has nothing for
@@ -6840,14 +6887,13 @@ def create_router(server) -> APIRouter:
         slots_of = {
             kind: sum(slot.kind == kind for _c, _w, slot in found) for kind in of_kind
         }
+        paired = {slot.filename: new for slot, new in bases}
         swaps: dict[str, str] = {}
         taken: set[int] = set()
-        base_done = False
         for _cls, _widget, slot in found:
             new = None
-            if slot.kind in BASE_MODEL_KINDS and not base_done:
-                base_done = True
-                new = checkpoint
+            if slot.kind in BASE_MODEL_KINDS:
+                new = paired.get(slot.filename)
             elif slot.kind in of_kind:
                 family = slot.model.family if slot.model else None
                 files = [m for m in of_kind[slot.kind] if m.id not in taken]
@@ -6956,22 +7002,27 @@ def create_router(server) -> APIRouter:
             # A model the dialog read that has since left the shelf: planning
             # the rest would present a partial set as this one, so the set is
             # refused on its own, never the whole read.
-            gone = [
-                i
-                for i in (*ask.model_ids, ask.checkpoint_id)
-                if i is not None and i not in models
-            ]
+            gone = [i for i in (*ask.model_ids, *ask.checkpoint_ids) if i not in models]
             members = [models[i] for i in ask.model_ids if i in models]
             # Named by the caller, never guessed from the members: a set's
             # checkpoint slot takes a checkpoint or an unclassified diffusion
             # file, and an upscaler beside no checkpoint is no base model.
-            checkpoint = models.get(ask.checkpoint_id)
-            if checkpoint is not None and checkpoint.file_kind not in (
-                FILE_CHECKPOINT,
-                FILE_UNKNOWN,
-            ):
-                checkpoint = None
-            swaps = _set_swaps(found, checkpoint, members)
+            bases = _pair_bases(
+                found,
+                [
+                    models[i]
+                    for i in ask.checkpoint_ids
+                    if i in models
+                    and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
+                ],
+            )
+            # The one the graph's first base slot takes, which `old_base` is
+            # read from; else whichever slot was paired.
+            checkpoint = next(
+                (new for slot, new in bases if slot is base),
+                bases[0][1] if bases else None,
+            )
+            swaps = _set_swaps(found, bases, members)
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
@@ -7043,6 +7094,12 @@ def create_router(server) -> APIRouter:
                     base_model=checkpoint.base_model if checkpoint else None,
                     keeps_loras=keeps,
                     swaps=swaps,
+                    unpaired_bases=[
+                        slot.filename
+                        for _c, _w, slot in found
+                        if slot.kind in BASE_MODEL_KINDS
+                        and all(slot is not paired for paired, _new in bases)
+                    ],
                     loaders=diffs,
                 )
             )

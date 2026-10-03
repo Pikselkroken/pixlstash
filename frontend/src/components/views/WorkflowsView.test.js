@@ -1148,6 +1148,9 @@ describe("Clone onto a workflow set", () => {
           name: "Flux dev GGUF",
           members: [
             { id: 11, slot: "checkpoint", on_shelf: true, name: "flux1-dev-Q8_0" },
+            // A second checkpoint whose file left the shelf: never sent, so
+            // the plan neither refuses the set nor swaps onto a missing file.
+            { id: 13, slot: "checkpoint", on_shelf: false, name: "flux1-low" },
             { id: 12, slot: "lora", on_shelf: true, name: "mara" },
           ],
           covers: [],
@@ -1223,8 +1226,8 @@ describe("Clone onto a workflow set", () => {
     const wrapper = await grid();
     await openOn(wrapper);
     expect(planSetClones).toHaveBeenCalledWith("a", [
-      { key: "hand:7", checkpoint_id: 11, model_ids: [] },
-      { key: "hand:8", checkpoint_id: 21, model_ids: [] },
+      { key: "hand:7", checkpoint_ids: [11], model_ids: [] },
+      { key: "hand:8", checkpoint_ids: [21], model_ids: [] },
     ]);
     // "Fits this graph" hides the set of another base model.
     expect(wrapper.find('[data-testid="cos-set-hand:8"]').exists()).toBe(false);

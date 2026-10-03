@@ -1,7 +1,8 @@
 """Hand-made workflow sets (#1520): shelf models the owner says work together.
 
-A set is a menu, not a recipe: fixed slots (one checkpoint at most, any number
-of text encoders, VAEs, LoRAs and others), no order and no strengths. It is a
+A set is a menu, not a recipe: fixed slots (any number of checkpoints, since a
+two-model workflow such as a Wan 2.2 high/low pair loads two, and of text
+encoders, VAEs, LoRAs and others), no order and no strengths. It is a
 hub fact, like the shelf itself, so it is the same in every library.
 
 **Members are sha256s, not model ids.** A file that leaves the shelf takes its
@@ -17,7 +18,7 @@ come from :func:`~pixlstash.services.model_shelf_service.fetch_workflow_sets`
 unchanged, and :func:`attach_hand_made` layers the sets over them.
 
 **The merge offer is read too (#1523).** A set whose pictures' set is a near
-miss - recipes with the same checkpoint that used models the set lacks - is
+miss - recipes with one of its checkpoints that used models the set lacks - is
 offered those models. Nothing is stored for the offer but the models the owner
 kept out of it ("Keep separate"), so it survives restarts by being re-derived,
 and nothing joins a set until the owner adds the models.
@@ -220,8 +221,9 @@ def _attach_offers(hand_made: list[dict], combinations, digests) -> None:
 
     A *pictures' set* is the combinations no hand-made set covers, grouped by
     the file they are named after (their head), exactly as the grid groups its
-    evidence cards. A set is offered the pictures' set of its own checkpoint;
-    a set with no checkpoint only one whose models include all of the set's,
+    evidence cards. A set is offered the pictures' set of each of its own
+    checkpoints; a set with no checkpoint only one whose models include all of
+    the set's,
     or every incomplete set would be offered every card. Only combinations
     whose missing models could all be added are counted: a file still hashing
     or an engine cannot be a member, and a model the owner kept out of this set
@@ -260,7 +262,7 @@ def _attach_offers(hand_made: list[dict], combinations, digests) -> None:
             ]
         else:
             # A checkpoint off the shelf has no id, so it matches no head.
-            heads = [entry["checkpoint_id"]] if entry["checkpoint_id"] else []
+            heads = entry["checkpoint_ids"]
         declined = set(entry["declined"])
         for head in heads:
             group = by_head.get(head, [])
@@ -341,12 +343,12 @@ def _offer(head: int, offered, incomplete: bool, digests) -> dict:
 
 
 def _merge_slot(model: dict, head: int, incomplete: bool) -> str:
-    """Where a merged model lands: the head fills an empty checkpoint slot, any
-    other checkpoint-kind file (a refiner) goes to Other, the rest by kind."""
+    """Where a merged model lands: the head fills an empty checkpoint slot, the
+    rest go by kind, so a second checkpoint (Wan 2.2's other expert, a refiner)
+    joins the checkpoints."""
     if model["id"] == head and incomplete:
         return SLOT_CHECKPOINT
-    slot = _DEFAULT_SLOT.get(model["kind"], "other")
-    return "other" if slot == SLOT_CHECKPOINT else slot
+    return _DEFAULT_SLOT.get(model["kind"], "other")
 
 
 def _shape(entry: dict) -> dict:
@@ -355,14 +357,14 @@ def _shape(entry: dict) -> dict:
         (_member_out(member) for member in entry["members"]),
         key=lambda m: (SLOTS.index(m["slot"]), m["name"].lower(), m["sha256"]),
     )
-    checkpoint = next((m for m in members if m["slot"] == SLOT_CHECKPOINT), None)
+    checkpoints = [m for m in members if m["slot"] == SLOT_CHECKPOINT]
     return {
         "id": entry["id"],
         "name": entry["name"],
         "created_at": entry["created_at"],
         "updated_at": entry["updated_at"],
-        "incomplete": checkpoint is None,
-        "checkpoint_id": checkpoint["id"] if checkpoint else None,
+        "incomplete": not checkpoints,
+        "checkpoint_ids": [m["id"] for m in checkpoints if m["on_shelf"]],
         "picture_count": 0,
         "recipes": 0,
         "covers": [],
@@ -424,9 +426,9 @@ def _resolve(conn, member: dict) -> tuple[str, str, Optional[str]]:
 def _insert_members(conn, set_id: int, members: list[dict], now: str) -> list[str]:
     """Insert what is not in the set yet; return the sha256s actually added."""
     existing = {
-        row["sha256"]: row["slot"]
+        row["sha256"]
         for row in conn.execute(
-            "SELECT sha256, slot FROM model_workflow_set_member WHERE set_id = ?",
+            "SELECT sha256 FROM model_workflow_set_member WHERE set_id = ?",
             (set_id,),
         )
     }
@@ -435,16 +437,12 @@ def _insert_members(conn, set_id: int, members: list[dict], now: str) -> list[st
         sha256, slot, label = _resolve(conn, member)
         if sha256 in existing:
             continue
-        if slot == SLOT_CHECKPOINT and SLOT_CHECKPOINT in existing.values():
-            raise WorkflowSetRefusedError(
-                "This set already has a checkpoint. Remove it first."
-            )
         conn.execute(
             "INSERT INTO model_workflow_set_member "
             "(set_id, sha256, slot, label, added_at) VALUES (?, ?, ?, ?, ?)",
             (set_id, sha256, slot, label, now),
         )
-        existing[sha256] = slot
+        existing.add(sha256)
         added.append(sha256)
     return added
 
