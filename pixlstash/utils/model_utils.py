@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import re
+import threading
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,18 @@ if TYPE_CHECKING:
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
+
+#: Held for the construction of every PyTorch model in this process.
+#:
+#: Building a model goes through an empty-weights ("meta" device) mode that is
+#: process-wide, not per thread. Two loads at once - the text embedder and
+#: Florence-2, say, which the planner schedules in parallel - leave the second
+#: one's tied weights (``embed_tokens``, ``lm_head``) on the meta device, and
+#: every caption then fails with "Tensor.item() cannot be called on meta
+#: tensors". Reproduced 8/8 with the two loads overlapping, 0/3 without. Loads
+#: are rare and already seconds long, so serialising them costs little.
+#: Reentrant because a loader may nest helpers.
+MODEL_CONSTRUCTION_LOCK = threading.RLock()
 
 
 def _transformers_logging():
@@ -73,11 +86,12 @@ def from_pretrained_local_first(cls, model_name, **kwargs):
     when the model is already cached.  Falls back to a normal (online) load
     only on the first run, when the files aren't present yet.
     """
-    try:
-        return cls.from_pretrained(model_name, local_files_only=True, **kwargs)
-    except OSError:
-        logger.info("Downloading %s for the first time...", model_name)
-        return cls.from_pretrained(model_name, **kwargs)
+    with MODEL_CONSTRUCTION_LOCK:
+        try:
+            return cls.from_pretrained(model_name, local_files_only=True, **kwargs)
+        except OSError:
+            logger.info("Downloading %s for the first time...", model_name)
+            return cls.from_pretrained(model_name, **kwargs)
 
 
 @contextmanager
@@ -107,7 +121,7 @@ def load_sentence_transformer(*args, **kwargs) -> SentenceTransformer:
     # imported at module scope.
     from sentence_transformers import SentenceTransformer
 
-    with quiet_transformers_load_report():
+    with MODEL_CONSTRUCTION_LOCK, quiet_transformers_load_report():
         return SentenceTransformer(*args, **kwargs)
 
 
