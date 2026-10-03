@@ -2349,12 +2349,12 @@ member row, else the id of its core under this build's `CORE_RULE_VERSION` and
 its family row, else none), `variants_in_workflow` and `topologies_in_workflow`
 (an automatic id is a digest, so these scan the current variants and keep the
 ones whose id it is), and `workflow_index`, one `Workflow` per group built
-from `card_index`, variant by variant. The **base topology** is one with a
-source here (kept pictures in this library, or a card with a workflow file on
-this machine) before one with neither (#1738), then the one with the most
-stage groups, then the most LoRA loaders, then the most kept pictures (#1620
-D3, automatic); its busiest card (then one with a file) is `base_card`, whose
-source a run resolves. A workflow with a kept picture or a file is therefore
+from `card_index`, variant by variant. The **base topology** is one this
+library has kept pictures of before one it has none of (#1738), then the one
+with the most stage groups, then the most LoRA loaders, then the most kept
+pictures (#1620 D3, automatic); its busiest card is `base_card`, whose source a
+run resolves. A workflow file is not a key: it may be UI-format, which does not
+run, and it would move the hub-only base. A workflow with a kept picture is therefore
 never based on a graph nobody here ran, and Run, Export and the Workflow tab
 name the same graph; a picture whose file is gone can still leave it with no
 source. The base can move when the first or last picture of a topology comes

@@ -709,8 +709,7 @@ class Workflow:
     """One workflow as the hub knows it, before any picture has been counted.
 
     ``base_topology`` is the graph a run starts from and an export writes: a
-    topology with a source here (kept pictures in this library, or a workflow
-    file on this machine) before one without (#1738),
+    topology with kept pictures in this library before one without (#1738),
     then the most stage groups, then the most LoRA loaders, then the most kept
     pictures (#1620 D3). Automatic, with no owner control. Picture counts
     belong to the vault, so the base is per library, and without them both
@@ -718,7 +717,7 @@ class Workflow:
     hub-only answer stable.
 
     ``base_card`` is the card on the base topology with the most kept pictures,
-    then one with a workflow file, whose source a run resolves (``workflow_run_service.resolve_source`` takes a
+    whose source a run resolves (``workflow_run_service.resolve_source`` takes a
     card).
     """
 
@@ -852,9 +851,6 @@ def workflow_index(
     core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
     manual: list[Workflow] = []
     topology_of: dict[str, str] = {}
-    # A card with a workflow file on this machine runs without any picture
-    # (``resolve_source``'s first tier).
-    has_file = {card.workflow_key for card in cards if card.file_name}
     for card in cards:
         if card.manual:
             manual.append(
@@ -917,15 +913,15 @@ def workflow_index(
             pictures[topology_hash] = pictures.get(topology_hash, 0) + counts.get(
                 structural_hash, 0
             )
-        filed = {topology_of[key] for key in entry.cards if key in has_file}
-        # A topology with a source here first, kept pictures or a workflow
-        # file, so a workflow with either has a graph to run (#1738); then most
-        # of each, and on a full tie the smallest hash, so two reads of an
-        # unchanged hub name the same base.
+        # A topology this library has kept pictures of first, so a workflow
+        # with any picture here has a graph to run (#1738); then most of each,
+        # and on a full tie the smallest hash, so two reads of an unchanged hub
+        # name the same base. A workflow file is no key: it may be UI-format,
+        # which does not run, and the hub-only base must not move.
         entry.base_topology = min(
             entry.topologies,
             key=lambda t: (
-                not (pictures.get(t) or t in filed),
+                not pictures.get(t),
                 -len(entry.specials.get(t) or ()),
                 -loras.get(t, 0),
                 -pictures.get(t, 0),
@@ -938,7 +934,7 @@ def workflow_index(
                 on_base[key] = on_base.get(key, 0) + counts.get(structural_hash, 0)
         # A base topology no variant is filed on is a legacy file row's card.
         entry.base_card = (
-            min(on_base, key=lambda key: (-on_base[key], key not in has_file, key))
+            min(on_base, key=lambda key: (-on_base[key], key))
             if on_base
             else min(
                 (k for k in entry.cards if topology_of[k] == entry.base_topology),
