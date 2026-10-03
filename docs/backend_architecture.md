@@ -1583,6 +1583,108 @@ the OOM classifier (`is_device_error`), the allocator cache flush
 (`empty_accelerator_cache`, reached through `vram_utils.empty_device_cache`)
 and the memory budget (`accelerator_total_memory_mb`) all answer per device.
 
+#### Metal takes one thread, and does not raise when it gets two
+
+Torch's Metal backend writes shared caches and the stream's command buffer from
+outside its serial queue, so two threads using Metal at once can corrupt them:
+every cast on Metal goes through one of those caches, and
+`torch.mps.empty_cache()` frees graphs another thread may be running. The process then dies (`SIGSEGV`,
+`SIGBUS`, an `NSInvalidArgumentException` out of `matmul`) or hangs — **never a
+Python exception**, so no `try`, retry or CPU fallback can reach it. CUDA
+tolerates the same pattern, which is why none of this exists for it. torch
+`main` has fixed the first cause and most of the second, in no release yet; the
+third is unfixed. Details, and every measurement, are in
+`docs/apple-metal-thread-safety.md`.
+
+Two sources of a second thread on the accelerator are closed at their source
+rather than synchronised. The rest — the tagger preload, the anomaly-region
+route, the idle sweep's flush, the face finder's end-of-work flush, stopping the
+vault, search while the runner refuses tasks, image plugins, and a few
+allocator calls — are listed under "Not covered" in that document.
+
+**Loading.** transformers reads and casts weights on a pool of
+`min(4, cpu_count)` threads, so *merely loading a model* trips it — measured at
+10 of 10 loads failing on torch 2.13.0 / transformers 5.16.1, and 0 of 10 with
+`HF_DEACTIVATE_ASYNC_LOAD=1`. `accelerator.configure_metal_model_loading()`
+sets it, and is called from `InferenceEngine.create` before any service is
+built and from `plugin_check` before a plugin's `setup()` and `init()`. It is
+set whenever Metal is **present**, not only when it is the inference device,
+because several routes put a load on Metal whatever PixlStash chose;
+`device_map="auto"` on a Mac is one. A value already in the environment is the
+owner's and is kept, with a warning when transformers would read it as false.
+
+**Searching.** A query is encoded on a request thread — text search and export
+by query before their database task, likeness search on a threadpool worker —
+while the GPU worker runs the embedding and tagging batches. So on Metal, and
+only on Metal, `InferenceEngine.create` also builds
+`inference/cpu_query_encoders.CpuQueryEncoders`: the same classes, weights and
+preprocessing on the `cpu` device, about 0.7 GB, loading in 4.9–7.1 s on
+2026-09-27 with cold imports included.
+`TextEmbeddingWorkflow.encode_query`/`encode_clip_query` and
+`ClipEmbeddingWorkflow.encode_query_image` route to them; `engine.query_encoders
+is None` on every other host, which is what those three branch on. The worker's
+own `encode`/`encode_images` deliberately do **not** route — moving those to the
+CPU would take the whole library's indexing off the GPU.
+
+**`create` builds them; it does not load them.** Every engine service is lazy,
+so `create` reads no weights and returns in milliseconds — loading these two
+inline made it take 7.3 s, because they were then the first models in the
+process and paid the whole cold-import cost. Measured on a real library, boot
+went 1.95 s to 9.11 s. The weights load on a `CpuQueryEncoderLoadTask` instead:
+`URGENT`, on the **GPU** queue although it loads onto the CPU, because that
+queue serialises it against the worker's own model loads and so keeps it clear
+of the transformers/accelerate import race. It does not serialise it against
+the tagger, which `TagTask` loads on its own thread.
+
+`Vault._queue_cpu_query_encoder_load` is called from `ensure_ready`, `start` and
+the lazy engine build in `get_worker_future`; it is idempotent, and the call in
+`ensure_ready` is the one that queues the load. At boot `Server.__init__` calls
+`start()` before `app` builds the engine, so `start` finds nothing to load; on a
+library switch `_bring_up` calls `ensure_ready()` first, and a runner accepts
+tasks before it starts. The other calls are safety nets. The load has to be
+queued before the planner has work to queue, since `URGENT` heads the queue but
+cannot preempt a task already running — one planner-queued batch held the load
+for over 86 s. On a switch the planner has not started yet; at boot the model
+finders queue nothing until the engine exists, and `ensure_ready` queues the
+load right after building it. That is an ordering, not a guarantee, though it
+held in 8 of 8 measured restarts.
+
+A text or likeness search arriving while the load is still running waits on it
+(`CpuQueryEncoders.ensure_serving`, up to 60 s) and answers 503 only if it has
+not finished by then; an export by query fails its job instead, with the reason
+on its status. Neither falls back to the Metal services while a worker runs,
+because that fallback is the crash. When the runner refuses the load
+task, `ensure_serving` returns `False` and the caller does encode on Metal: the
+crash needs two threads there, and a runner that refuses tasks has no worker
+doing Metal work. Searches falling back take turns
+(`CpuQueryEncoders.device_fallback`), so two of them are never two threads on
+Metal. One gap remains: a stopping runner refuses tasks while its worker
+finishes its last batch. The pair serves only when **both** copies loaded: the
+services call `ensure_ready()` outside their own `try`, so a half-loaded pair
+would raise out of every search instead.
+
+That wait is why the encode must never run inside a database task or on the
+event loop. The load task can sit behind a running batch, and that batch
+commits through the DB writer: an encode waiting *inside* a database task holds
+the writer, so the batch cannot finish and the load never starts (see
+*Database*). An `async` handler waiting inline blocks every request the server
+is handling, which is why the likeness-search handler is a plain `def`, run on a
+threadpool worker.
+
+The idle sweep (`Vault._maybe_aggressive_unload`, through `engine.close()`)
+releases the copies too, and its idle check cannot see a search. So
+`CpuQueryEncoders.unload` waits for encodes already running, and an encode that
+starts after the flag cleared refuses (503) rather than reaching a service with
+no model, which would reload it lazily on the search thread — the import race
+the load task avoids. `load` sets the flag under the same lock `unload` releases
+the models under, so neither can leave it set over an empty pair. While an
+unload waits, encodes refuse and loads wait, so searches that keep arriving
+cannot hold it open; the wait is bounded (`UNLOAD_DRAIN_S`), after which the
+models are kept for the next sweep, and a load an unload overtook loads again.
+The sweep also runs on the event loop, from `PATCH /users/me/config` when "keep
+models in memory" is switched off, where that wait can block the loop for as
+long as a running encode takes, at most `UNLOAD_DRAIN_S`.
+
 #### "VRAM" on unified memory
 
 On Apple Silicon there is no card and no separate pool — the GPU reads the same
@@ -1863,6 +1965,7 @@ The fix is an additive column, `public_id`: 128 bits of randomness as lowercase 
 
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
+- **No model inference runs inside a database task.** An encode on the writer thread blocks every write for the length of the model call, and on Metal for as long as it waits for the CPU query encoders to load on the GPU worker, which commits its batches through this same writer and so cannot finish. Encode on the calling thread and pass the result in as a value: text search (`GET /pictures/search`) and export by query encode before `db.run_task`, and `Picture.semantic_search` takes `query_embedding` / `clip_query_embedding`. `tests/test_server.py` asserts both routes encode off the writer thread.
 
 ### Stored path containment (#776)
 

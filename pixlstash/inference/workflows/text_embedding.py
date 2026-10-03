@@ -65,6 +65,12 @@ class TextEmbeddingWorkflow:
     def encode_query(self, query: str) -> list:
         """Generate a SBERT embedding for a free-form query string.
 
+        Runs on the CPU copies where the engine has them, because this is
+        called on the thread handling the search while the GPU worker is busy,
+        and two threads on Metal take the process down. ``query_encoders`` is
+        ``None`` on every host that does not need the protection, which is how
+        CUDA and CPU keep encoding on the engine's own service.
+
         Args:
             query: Search query.  Lower-cased before encoding.
 
@@ -74,10 +80,23 @@ class TextEmbeddingWorkflow:
         """
         if not query:
             return []
-        return self._engine.sbert_service.encode([query.lower()])
+        encoders = self._engine.query_encoders
+        if encoders is None:
+            return self._engine.sbert_service.encode([query.lower()])
+        if encoders.ensure_serving():
+            return encoders.encode_query(query)
+        # No GPU worker is running, so nothing in the background is on the
+        # accelerator; searches falling back take turns so that two of them are
+        # not two threads on it. ``ensure_serving`` raises rather than returning
+        # False when a worker *is* running, because then this is the crash.
+        with encoders.device_fallback():
+            return self._engine.sbert_service.encode([query.lower()])
 
     def encode_clip_query(self, query: str) -> Optional[np.ndarray]:
         """Generate a CLIP text embedding for a free-form query string.
+
+        Off the inference device where the engine holds CPU copies; see
+        :meth:`encode_query`.
 
         Args:
             query: Search query.
@@ -85,7 +104,13 @@ class TextEmbeddingWorkflow:
         Returns:
             A normalised ``np.ndarray`` (shape ``[D]``) or ``None`` on failure.
         """
-        return self._engine.clip_service.encode_text(query)
+        encoders = self._engine.query_encoders
+        if encoders is None:
+            return self._engine.clip_service.encode_text(query)
+        if encoders.ensure_serving():
+            return encoders.encode_clip_query(query)
+        with encoders.device_fallback():
+            return self._engine.clip_service.encode_text(query)
 
     @staticmethod
     def _flatten_texts(texts: dict) -> list[str]:
