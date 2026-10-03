@@ -88,7 +88,7 @@
     <!-- The visible rows are hidden from assistive tech: the card's own label
          already reads all of them, including what "+N" clipped. -->
     <div class="wf-card__meta">
-      <div class="wf-card__row">
+      <div class="wf-card__row wf-card__row--name">
         <span class="wf-card__name" aria-hidden="true">{{ card.name }}</span>
       </div>
       <!-- Row 2, the strip: the base model's mark, a hairline, then one mark
@@ -177,9 +177,10 @@
 // The uniform workflow card (v1.12 Workflows & Recipes, "The same in all three
 // alternatives"). A cover at a fixed 6:5 whose tracks come from the strip it
 // was handed - one picture across the whole box, two as a pair of columns,
-// three as the 2fr/1fr mosaic - then four single-line rows (name, a strip of
-// model marks, the base model's name beside a LoRA count, special facts) that
-// clip to "+N" instead of wrapping, exactly
+// three as the 2fr/1fr mosaic - then four rows (the name, always given two
+// lines so every card's rows line up; a strip of model marks; the base model's
+// name beside a LoRA count; special facts) that clip to "+N" instead of
+// wrapping, exactly
 // --wf-meta-h tall whatever the card holds. ⓘ is pinned bottom-right.
 //
 // ⓘ is a real button at tabindex -1: the grid's roving cursor owns Tab.
@@ -374,10 +375,10 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
 </script>
 
 <style scoped>
-/* 122 = 8 + 24 + 28 + 2 × 24 + 3 × 2 + 8: the meta block - three
-   --control-h-sm rows and row 2 at --wf-mark, which is fixed whatever the
-   card holds and is `flex: none` so a change to that sum shows as a wrong
-   height rather than being absorbed. Local on purpose (approved as
+/* 134 = 8 + 36 + 28 + 2 × 24 + 3 × 2 + 8: the meta block - the name's
+   two-line --wf-name-h, row 2 at --wf-mark and two --control-h-sm rows. The
+   block is fixed whatever the card holds and is `flex: none`, so a change to
+   that sum shows as a wrong height rather than being absorbed. Local on purpose (approved as
    component-local, not global).
 
    The COVER is not fixed. It used to be a flat 132px against a fluid card
@@ -387,7 +388,10 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
    Pictures here are mostly portrait or square (832×1216, 1024×1024), so that
    shape threw away most of every cover. */
 .wf-card {
-  --wf-meta-h: 122px;
+  --wf-meta-h: 134px;
+  /* Row 1 is always two lines tall, a one-line name included, so the rows
+     below it line up across every card. Two 18px lines of --text-sm. */
+  --wf-name-h: 36px;
   /* Row 2's marks, a step up from the shared --entity-thumb (24px) so the
      models a card is made of stand out on it. Local, like --wf-meta-h. */
   --wf-mark: 28px;
@@ -638,7 +642,7 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   flex: none;
   display: grid;
   grid-template-rows:
-    var(--control-h-sm) var(--wf-mark) var(--control-h-sm)
+    var(--wf-name-h) var(--wf-mark) var(--control-h-sm)
     var(--control-h-sm);
   row-gap: var(--space-1);
   padding: var(--space-3);
@@ -661,13 +665,23 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   padding-right: calc(var(--control-h-sm) + var(--space-3));
 }
 
+/* A short name sits on the first line, not centred in the two. */
+.wf-card__row--name {
+  align-items: flex-start;
+  white-space: normal;
+}
+
 .wf-card__name {
   flex: 1;
   min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+  line-height: calc(var(--wf-name-h) / 2);
 }
 
 .wf-card__none {

@@ -237,7 +237,7 @@ describe("WorkflowCard height", () => {
       2 * px(meta.padding) +
       rows.reduce((sum, track) => sum + px(track, t), 0) +
       3 * px(meta["row-gap"]);
-    expect(t["--wf-meta-h"]).toBe(122);
+    expect(t["--wf-meta-h"]).toBe(134);
     expect(total).toBe(t["--wf-meta-h"]);
   });
 
@@ -332,11 +332,25 @@ describe("WorkflowCard height", () => {
     expect(rowContentEnd).toBeGreaterThan(infoLeftEdge);
   });
 
-  it("keeps every row on one line, the name ellipsized", () => {
+  it("keeps every row on one line but the name, which gets two", () => {
     // Rows do not clip themselves (that would cut ▸'s focus ring); the name
     // and each ChipRow do.
     expect(rule(".wf-card__row")["white-space"]).toBe("nowrap");
-    expect(rule(".wf-card__name")["text-overflow"]).toBe("ellipsis");
+    const nameRow = rule(".wf-card__row--name");
+    expect(nameRow["white-space"]).toBe("normal");
+    // A one-line name sits on the top line, level with its two-line neighbours.
+    expect(nameRow["align-items"]).toBe("flex-start");
+    const name = rule(".wf-card__name");
+    expect(name.display).toBe("-webkit-box");
+    expect(name["-webkit-box-orient"]).toBe("vertical");
+    expect(name["-webkit-line-clamp"]).toBe("2");
+    expect(name.overflow).toBe("hidden");
+    // A name with no spaces breaks rather than running off the card.
+    expect(name["overflow-wrap"]).toBe("anywhere");
+    // Two lines fill the row exactly, so a one-line name still reserves two.
+    expect(name["line-height"]).toBe("calc(var(--wf-name-h) / 2)");
+    const tracks = rule(".wf-card__meta")["grid-template-rows"].split(/\s+/);
+    expect(tracks[0]).toBe("var(--wf-name-h)");
   });
 
   it("gives the cover a fixed box its content cannot grow", () => {
