@@ -1559,8 +1559,13 @@ function registerIpc(): void {
         clearConfig: () => rmSync(serverConfigPath(), { force: true }),
         parkTelemetry: writePendingTelemetry,
         parkMapping: writePendingMapping,
-        setActiveAccel: (accel) => manager.setActiveAccel(accel),
-        activeOverlayAccel,
+        // Dev never runs an overlay, and it shares userData with packaged
+        // runs: clearing the saved accelerator here would put the next
+        // packaged launch on the CPU.
+        setActiveAccel: isDevBackend()
+          ? async () => undefined
+          : (accel) => manager.setActiveAccel(accel),
+        activeOverlayAccel: isDevBackend() ? async () => null : activeOverlayAccel,
         startBackend: startFromSetup,
         installOverlay: (accel) =>
           manager.installOverlay(
