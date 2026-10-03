@@ -246,22 +246,29 @@ def _manual_facts_of(
 def _manual_facts(
     workflow_id: str, nodes: dict
 ) -> tuple[Optional[str], Optional[tuple[str, ...]]]:
-    """Type and traits of a reduced manual graph; ``(None, None)``, logged, if
-    a degenerate graph trips either, so one bad document never takes the grid
-    down with it."""
+    """Type and traits of a reduced manual graph, read apart: either one is
+    ``None``, logged, if a degenerate graph trips it, so one failed read
+    neither blanks the other nor takes the grid down."""
     try:
-        return (
-            reduced_workflow_type(nodes),
-            reduced_traits(nodes, strip_loras=STRIP_LORAS_FOR_STACKS),
-        )
+        workflow_type = reduced_workflow_type(nodes)
     except (WorkflowGraphError, ValueError, TypeError, KeyError) as exc:
         logger.warning(
-            "Manual workflow %s: its graph could not be read for its type and "
-            "traits, so it shows neither: %s",
+            "Manual workflow %s: its graph could not be read for its type, so "
+            "it shows none: %s",
             workflow_id,
             exc,
         )
-        return None, None
+        workflow_type = None
+    try:
+        traits = reduced_traits(nodes, strip_loras=STRIP_LORAS_FOR_STACKS)
+    except (WorkflowGraphError, ValueError, TypeError, KeyError) as exc:
+        logger.warning(
+            "Manual workflow %s: its core strip failed, so its name says no traits: %s",
+            workflow_id,
+            exc,
+        )
+        traits = None
+    return workflow_type, traits
 
 
 def _manual_reduction(workflow_id: str, document: str) -> Optional[dict]:

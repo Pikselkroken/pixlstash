@@ -2925,7 +2925,25 @@ def test_a_manual_graph_whose_type_read_fails_is_a_card_with_no_type(monkeypatch
 
     monkeypatch.setattr(workflow_card_reads, "reduced_workflow_type", explode)
     graph = {"1": {"class_type": "SaveImage", "inputs": {}}}
-    assert _manual_facts_of("manual:" + "1" * 32, json.dumps(graph)) == (None, None)
+    assert _manual_facts_of("manual:" + "1" * 32, json.dumps(graph)) == (None, ())
+
+
+def test_a_manual_graph_whose_core_strip_fails_keeps_its_type(monkeypatch):
+    """The two reads are apart: a failed trait read leaves the type standing
+    (#1729 review)."""
+
+    def explode(nodes, **kwargs):
+        raise WorkflowGraphError("nothing survives the strip")
+
+    monkeypatch.setattr(workflow_card_reads, "reduced_traits", explode)
+    graph = {
+        "1": {"class_type": "EmptyLatentImage", "inputs": {}},
+        "2": {"class_type": "SaveImage", "inputs": {}},
+    }
+    assert _manual_facts_of("manual:" + "2" * 32, json.dumps(graph)) == (
+        "txt2img",
+        None,
+    )
 
 
 def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(
