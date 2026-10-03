@@ -1918,6 +1918,14 @@ def test_a_recipe_follows_its_card_out_of_a_workflow_that_lives_on(run_env):
     assert new_id != old_id
     assert workflow_of_variant(hub, staying.structural_hash) == old_id
     assert old_id in result["keys"] and old_id not in result["renamed"]
+    assert {
+        tuple(row)
+        for row in hub.fetchall(
+            "SELECT workflow_key, old_workflow_id, new_workflow_id "
+            "FROM workflow_card_move WHERE old_workflow_id = ?",
+            (old_id,),
+        )
+    } == {(_card(hub, moving), old_id, new_id)}, "only the card that moved"
     # `workflow_core_successor` is keyed by (topology, new workflow), so an
     # earlier family of this topology that moved to the same workflow keeps
     # this move off it: the move row alone must carry the recipe.
@@ -1961,6 +1969,59 @@ def test_a_recipe_follows_its_card_out_of_a_workflow_that_lives_on(run_env):
             stayed_id: old_id,
         }
     finally:
+        server.vault.db.run_task(
+            lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
+            priority=DBPriority.IMMEDIATE,
+        )
+
+
+def test_a_moved_recipe_goes_where_the_move_says_not_where_a_variant_is(
+    run_env,
+):
+    """#1689: a card's variants may sit in several workflows, so the
+    conversion re-files on the recorded target, never on its first variant's
+    workflow (which here is the very workflow the recipe names)."""
+    server = run_env.server
+    hub = server.hub
+    keys = record_api_graph(
+        hub,
+        _graph(ckpt="house-finetune-v15.safetensors", upscale=True),
+        server.vault.library_uuid,
+    )
+    here = workflow_of_variant(hub, keys.structural_hash)
+    target = "auto:" + "9" * 64
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_card_move (workflow_key, old_workflow_id, "
+            "new_workflow_id) VALUES (?, ?, ?)",
+            (_card(hub, keys), here, target),
+        )
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        recipe = SavedRecipe(
+            name="target", workflow_key=_card(hub, keys), workflow_id=here, prompt="x"
+        )
+        session.add(recipe)
+        session.commit()
+        return recipe.id
+
+    recipe_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    try:
+        finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+        task = finder.find_task()
+        assert task.params["recipe_ids"] == [recipe_id]
+        task.result = task._run_task()
+        assert task.result == {"converted": 1, "deferred": []}
+        (stored,) = server.vault.db.run_immediate_read_task(
+            lambda session: session.exec(select(SavedRecipe)).all()
+        )
+        assert stored.workflow_id == target
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_card_move WHERE old_workflow_id = ?", (here,)
+            )
         server.vault.db.run_task(
             lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
             priority=DBPriority.IMMEDIATE,

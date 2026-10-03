@@ -1336,13 +1336,15 @@ CREATE TABLE IF NOT EXISTS workflow_family_pass (
 """
 
 # A card a family pass (`reidentify_families`) moved out of a workflow that
-# lives on, its other variants still unknown (#1689). Read by the vault's
-# saved-recipe conversion, which re-files a recipe naming both on the card's
-# workflow; the retired-id table cannot say it, the old id being live.
+# lives on, its other variants still unknown (#1689), and the workflow it moved
+# to. Read by the vault's saved-recipe conversion, which re-files a recipe
+# naming the card and the old workflow onto `new_workflow_id`; the retired-id
+# table cannot say it, the old id being live.
 _V2_WORKFLOW_CARD_MOVE = """
 CREATE TABLE IF NOT EXISTS workflow_card_move (
     workflow_key     TEXT NOT NULL,
     old_workflow_id  TEXT NOT NULL,
+    new_workflow_id  TEXT NOT NULL,
     PRIMARY KEY (workflow_key, old_workflow_id)
 )
 """
@@ -1636,6 +1638,14 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
 
     for statement in _V2_MODEL_SHELF_TABLES:
         conn.execute(statement)
+
+    # `workflow_card_move` first shipped on an unmerged branch without its
+    # target column. Dropped rather than migrated: a row without its target
+    # cannot be completed, and losing one leaves a recipe where it was, still
+    # running. False on a fresh hub and on every re-run after.
+    card_move_ddl = existing.get("workflow_card_move")
+    if card_move_ddl is not None and "new_workflow_id" not in card_move_ddl:
+        conn.execute("DROP TABLE workflow_card_move")
 
     # The workflow library (v1.11), amended into v2 for the same reason the
     # model shelf was: a build shipped before this change has

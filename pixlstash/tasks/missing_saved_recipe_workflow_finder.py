@@ -56,7 +56,7 @@ class MissingSavedRecipeWorkflowFinder(BaseTaskFinder):
         skip = self._deferred | self._handed_out
         limit = SavedRecipeConvertTask.BATCH_SIZE + len(skip)
         retired = json.dumps(sorted(workflow_id_successors(self._vault.hub)))
-        moved = json.dumps(moved_card_workflows(self._vault.hub))
+        moved = json.dumps(sorted(moved_card_workflows(self._vault.hub)))
         ids = self._vault.db.run_immediate_read_task(
             lambda session: [
                 row[0]

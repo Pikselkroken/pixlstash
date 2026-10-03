@@ -1027,7 +1027,8 @@ def reidentify_families(hub) -> dict:
     renamed: dict[str, str] = {}
     with hub.transaction() as conn:
         heirs_of: dict[str, Counter] = {}
-        keys_of: dict[str, set[str]] = {}
+        # Per old workflow, per card: where its moved variants went.
+        cards_of: dict[str, dict[str, Counter]] = {}
         new_of_card: dict[str, str] = {}
         parts: dict[str, tuple[str, str]] = {}
         for row, families in moves:
@@ -1045,7 +1046,9 @@ def reidentify_families(hub) -> dict:
                 (row["topology_hash"], old_id, new_id),
             )
             heirs_of.setdefault(old_id, Counter())[new_id] += 1
-            keys_of.setdefault(old_id, set()).add(row["workflow_key"])
+            cards_of.setdefault(old_id, {}).setdefault(row["workflow_key"], Counter())[
+                new_id
+            ] += 1
             new_of_card[row["workflow_key"]] = new_id
         # A variant still in the old workflow, for the workflow or one card.
         still_in = (
@@ -1068,11 +1071,12 @@ def reidentify_families(hub) -> dict:
                 # none of whose variants stayed: a recipe does not say which
                 # variant it was saved from.
                 conn.executemany(
-                    "INSERT OR IGNORE INTO workflow_card_move "
-                    "(workflow_key, old_workflow_id) VALUES (?, ?)",
+                    "INSERT OR REPLACE INTO workflow_card_move "
+                    "(workflow_key, old_workflow_id, new_workflow_id) "
+                    "VALUES (?, ?, ?)",
                     [
-                        (key, old_id)
-                        for key in sorted(keys_of[old_id])
+                        (key, old_id, _primary(went))
+                        for key, went in sorted(cards_of[old_id].items())
                         if not hub.fetchone(
                             f"{still_in} AND v.workflow_key = ?",
                             (

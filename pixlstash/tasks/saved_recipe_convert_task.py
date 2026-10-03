@@ -92,7 +92,7 @@ class SavedRecipeConvertTask(BaseTask):
                 ),
                 {
                     "retired": json.dumps(sorted(successors)),
-                    "moved": json.dumps(moved),
+                    "moved": json.dumps(sorted(moved)),
                 },
             ).all()
         )
@@ -132,15 +132,19 @@ class SavedRecipeConvertTask(BaseTask):
             found = card_document(hub, card) if card is not None else None
             overrides = _overrides(recipe_id, raw_overrides)
             core_map = _core_successor_map(hub, was)
-            if core_map is None and f"{workflow_key} {was}" in moved:
-                # Same core, so nothing to rewrite: re-filed as a family
-                # pass's retired workflow is, on its own card's workflow.
+            # Where the family pass moved its card: recorded, never guessed
+            # from a variant, since a card's variants may sit in several
+            # workflows. Same core, so nothing to rewrite.
+            target = moved.get(f"{workflow_key} {was}")
+            if target is not None and core_map is None:
                 core_map = {}
             if core_map is not None:
                 # Retired by core rule v2 (data step 8): the overrides and
                 # models are already workflow addresses, on the v1 core. A
                 # split workflow's recipe follows its own card's variant.
-                if card is not None and card.variants:
+                if target is not None:
+                    workflow_id = successors.get(target, target)
+                elif card is not None and card.variants:
                     workflow_id = (
                         workflow_of_variant(hub, card.variants[0]) or workflow_id
                     )

@@ -979,3 +979,17 @@ class TestHandMadeWorkflowSets:
         self._member(hub, set_id, "not-on-the-shelf", "lora")
         with pytest.raises(sqlite3.IntegrityError):
             self._member(hub, set_id, "not-on-the-shelf", "other")
+
+
+def test_a_card_move_table_without_its_target_is_replaced(hub):
+    """#1689: the move table first existed without ``new_workflow_id``; a hub
+    that opened that shape gets the current one on its next open."""
+    apply_migrations(hub)
+    hub.execute("DROP TABLE workflow_card_move")
+    hub.execute(
+        "CREATE TABLE workflow_card_move (workflow_key TEXT NOT NULL, "
+        "old_workflow_id TEXT NOT NULL, PRIMARY KEY (workflow_key, old_workflow_id))"
+    )
+    hub.commit()
+    apply_migrations(hub)
+    assert "new_workflow_id" in ddl_for(hub, "workflow_card_move")
