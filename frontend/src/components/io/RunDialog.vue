@@ -545,7 +545,20 @@
               @reset="checkpointEdit = null"
             />
           </span>
+          <!-- A checkpoint this ComfyUI does not have is offered the shelf's
+               of the same base model, so the recipe's LoRAs still fit. -->
+          <AppSelect
+            v-if="checkpointFix?.options.length"
+            :model-value="checkpointValue"
+            label="Checkpoint"
+            hide-label
+            compact
+            :options="checkpointOptions"
+            :disabled="submitting"
+            @update:model-value="pickCheckpoint"
+          />
           <AppInput
+            v-else
             :model-value="checkpointValue"
             aria-label="Checkpoint"
             mono
@@ -553,6 +566,9 @@
             @update:model-value="setCheckpoint"
             @keydown.stop
           />
+          <p v-if="checkpointFix" class="rund-note" data-testid="rund-checkpoint-missing">
+            {{ checkpointFixNote }}
+          </p>
         </div>
 
         <div class="rund-f rund-f--4 rund-more">
@@ -765,6 +781,7 @@ import {
   getWorkflowCard,
   listWorkflowCards,
   preflightWorkflowRun,
+  readModelSwap,
   runWorkflowCard,
   saveFixedWorkflow,
   setWorkflowInputs,
@@ -783,6 +800,7 @@ import {
   MISSING_CHOICES,
   PICTURE_INPUT_UNFILLED,
   LORAS_BYPASSED,
+  PIXLSTASH_PACK_INSTALL,
   reasonsBlock,
   STAGE_LABELS,
   repairNotices,
@@ -1294,6 +1312,90 @@ const runModels = computed(() =>
       }))
     : [],
 );
+
+/** ComfyUI's folders for a base model, as `missing_models` names them. */
+const BASE_MODEL_FOLDERS = ["checkpoints", "diffusion_models"];
+
+/**
+ * The checkpoint the pre-flight says this ComfyUI does not have, with what may
+ * replace it: `{file, options, reason}`, or null. `options` are the shelf
+ * checkpoints of the missing one's base model that this workflow's loader can
+ * load (`model-swap?replacing=`, the Workflow tab's "Replace with…"), so the
+ * recipe's LoRAs still fit; `reason` says why there are none. Kept once
+ * offered, so the picker stays after a pick clears the reason.
+ */
+const checkpointFix = ref(null);
+
+/** The picker's rows: the missing file first, so the row shows what it was. */
+const checkpointOptions = computed(() => {
+  const fix = checkpointFix.value;
+  if (!fix) return [];
+  return [
+    { value: fix.file, label: `${fix.file} (not on this ComfyUI)` },
+    ...fix.options.map((model) => ({
+      value: model.filename,
+      label: model.display_name || model.filename,
+    })),
+  ];
+});
+
+const checkpointFixNote = computed(() => {
+  const fix = checkpointFix.value;
+  if (!fix) return "";
+  const gone = `${fix.file} is not on this ComfyUI.`;
+  if (fix.options.length) {
+    return `${gone} Pick another of the same base model for this run.`;
+  }
+  switch (fix.reason) {
+    case "none_same_base_model":
+      return `${gone} No checkpoint on your model shelf is known to have its base model.`;
+    case "none_loadable":
+      return `${gone} None of the same base model on your model shelf can be loaded by this workflow.`;
+    case "needs_pixlstash_nodes":
+      return `${gone} One of the same base model could load through ComfyUI-PixlStash. ${PIXLSTASH_PACK_INSTALL}`;
+    default:
+      return `${gone} Type the name of one it has.`;
+  }
+});
+
+function pickCheckpoint(filename) {
+  setCheckpoint(filename);
+  void runPreflight();
+}
+
+/**
+ * Offer replacements when *found* (a pre-flight's reasons) names the
+ * checkpoint the row started at as missing. Asked once per file: the server
+ * reads the whole shelf to answer.
+ */
+async function offerCheckpoints(found, key) {
+  const file = checkpointBase.value;
+  if (!checkpointModel.value || checkpointFiles.value || !file) return;
+  if (checkpointFix.value?.file === file) return;
+  const missing = found.some(
+    (reason) =>
+      reason?.code === "missing_models" &&
+      (reason.models || []).some(
+        (model) => BASE_MODEL_FOLDERS.includes(model?.folder) && model.file === file,
+      ),
+  );
+  if (!missing) return;
+  checkpointFix.value = { file, options: [], reason: "" };
+  let answer;
+  try {
+    answer = await readModelSwap(key, { replacing: file, slotKind: "checkpoint" });
+  } catch (err) {
+    // The row keeps its text box, and the note still says the file is gone.
+    console.warn(`[run] could not read replacements for ${file} on ${key}`, err);
+    return;
+  }
+  if (key !== activeKey.value || checkpointFix.value?.file !== file) return;
+  checkpointFix.value = {
+    file,
+    options: answer?.replacements || [],
+    reason: answer?.replacements_reason || "",
+  };
+}
 
 /**
  * The optional stages the base graph carries, as the rows draw them. Only the
@@ -2540,6 +2642,7 @@ async function loadCard(key, { keepEdits = false } = {}) {
   // Stages are the graph's, so a choice made on one workflow says nothing
   // about another's.
   clearStages();
+  checkpointFix.value = null;
   if (!keepEdits) {
     card.value = next;
     fellBack.value = [];
@@ -2609,6 +2712,7 @@ async function runPreflight(token = loadToken) {
       return;
     }
     reasons.value = all;
+    void offerCheckpoints(all, askedFor);
     bypassed.value = (answer?.groups || []).flatMap((group) => [
       ...repairNotices(group),
       ...unplacedNotice(group),
@@ -2676,6 +2780,7 @@ async function load() {
   pickerFor.value = null;
   stackChoice.value = null;
   checkpointEdit.value = null;
+  checkpointFix.value = null;
   clearStages();
   inputsError.value = "";
   try {

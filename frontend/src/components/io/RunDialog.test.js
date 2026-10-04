@@ -26,6 +26,7 @@ const getPictureRecipe = vi.fn();
 const setWorkflowInputs = vi.fn();
 const saveFixedWorkflow = vi.fn();
 const setWorkflowPins = vi.fn();
+const readModelSwap = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -35,6 +36,7 @@ vi.mock("../../api/workflows", () => ({
   setWorkflowInputs: (...args) => setWorkflowInputs(...args),
   saveFixedWorkflow: (...args) => saveFixedWorkflow(...args),
   setWorkflowPins: (...args) => setWorkflowPins(...args),
+  readModelSwap: (...args) => readModelSwap(...args),
   workflowCoverUrl: (cover) => (cover?.url ? `/api/v1${cover.url}` : ""),
 }));
 vi.mock("../../api/comfyui", () => ({
@@ -1332,6 +1334,93 @@ describe("the body it sends", () => {
     ]);
     // Never twice: the ckpt_name widget is not also sent as a value.
     expect(sentValue(body, "ckpt_name")).toBeUndefined();
+  });
+
+  describe("a checkpoint this ComfyUI does not have", () => {
+    const address = "core:CheckpointLoader/ckpt_name";
+    const missing = (folder = "checkpoints") => ({
+      ok: false,
+      runs: 1,
+      groups: [
+        {
+          reasons: [
+            { code: "missing_models", models: [{ file: "realvisXL_v5.safetensors", folder }] },
+          ],
+        },
+      ],
+    });
+
+    beforeEach(() => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({
+          default_recipe: {
+            models: [{ address, kind: "checkpoint", filename: "realvisXL_v5.safetensors" }],
+            loras: [],
+            values: [],
+            stages: {},
+          },
+        }),
+      });
+    });
+
+    it("offers the shelf's of the same base model and runs the one picked", async () => {
+      preflightWorkflowRun.mockResolvedValueOnce(missing());
+      readModelSwap.mockResolvedValue({
+        replacements: [
+          { id: 7, filename: "juggernautXL.safetensors", display_name: "Juggernaut XL" },
+        ],
+        replacements_reason: null,
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+
+      expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+        replacing: "realvisXL_v5.safetensors",
+        slotKind: "checkpoint",
+      });
+      expect(wrapper.vm.checkpointOptions.map((o) => o.value)).toEqual([
+        "realvisXL_v5.safetensors",
+        "juggernautXL.safetensors",
+      ]);
+      expect(wrapper.find("[aria-label='Checkpoint']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='rund-checkpoint-missing']").text()).toContain(
+        "Pick another of the same base model",
+      );
+
+      wrapper.vm.pickCheckpoint("juggernautXL.safetensors");
+      await flushPromises();
+      // Kept once offered: the pick cleared the reason, not the picker.
+      expect(wrapper.vm.checkpointOptions).toHaveLength(2);
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0].models).toEqual([
+        { address, filename: "juggernautXL.safetensors" },
+      ]);
+    });
+
+    it("says why when nothing fits, and keeps the text box", async () => {
+      preflightWorkflowRun.mockResolvedValueOnce(missing());
+      readModelSwap.mockResolvedValue({
+        replacements: [],
+        replacements_reason: "none_same_base_model",
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(wrapper.find("[aria-label='Checkpoint']").exists()).toBe(true);
+      expect(wrapper.find("[data-testid='rund-checkpoint-missing']").text()).toContain(
+        "No checkpoint on your model shelf is known to have its base model",
+      );
+      // Asked once per file, however often the pre-flight says it again.
+      preflightWorkflowRun.mockResolvedValueOnce(missing());
+      await wrapper.vm.runPreflight();
+      await flushPromises();
+      expect(readModelSwap).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks nothing for a missing file that is not a base model", async () => {
+      preflightWorkflowRun.mockResolvedValueOnce(missing("loras"));
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(readModelSwap).not.toHaveBeenCalled();
+      expect(wrapper.find("[data-testid='rund-checkpoint-missing']").exists()).toBe(false);
+    });
   });
 
   it("lists two different checkpoints read-only and runs them as stored", async () => {
