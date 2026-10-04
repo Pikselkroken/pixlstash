@@ -29,7 +29,7 @@
             data-testid="mrail-fits"
             @click="toggleFits"
           >
-            Fits {{ fitsChipLabel }}
+            <span class="mrail-chip-text">Fits {{ fitsChipLabel }}</span>
             <v-icon v-if="fitsSet" size="12" aria-hidden="true"
               >mdi-close</v-icon
             >
@@ -130,6 +130,7 @@
               'mrail-row--sel': selected.has(row.id),
               'mrail-row--cur': cursorId === row.id,
               'mrail-row--off': !row.sha256,
+              'mrail-row--lifted': dragIds.has(row.id),
             }"
             role="option"
             :aria-selected="selected.has(row.id) ? 'true' : 'false'"
@@ -167,6 +168,7 @@
               size="sm"
               tabindex="-1"
               :disabled="rowState(row) === 'hashing' || pending.has(row.id)"
+              :tooltip="rowState(row) === 'second' ? secondNote() : ''"
               data-testid="mrail-add"
               @click.stop="addFromRow(row)"
               >{{ addLabel(row) }}</AppButton
@@ -178,7 +180,15 @@
 
     <template v-if="tab === 'models'" #footer>
       <div class="mrail-foot">
-        <p v-if="footNote" class="mrail-foot-hint" role="status">
+        <p
+          v-if="store.railDrag"
+          class="mrail-foot-hint mrail-foot-hint--drag"
+          data-testid="mrail-drag-hint"
+        >
+          <v-icon size="14" aria-hidden="true">mdi-cursor-move</v-icon>
+          Drop {{ dragWhat }} on a set with a dashed rim.
+        </p>
+        <p v-else-if="footNote" class="mrail-foot-hint" role="status">
           {{ footNote }}
         </p>
         <p v-else-if="filtering" class="mrail-foot-hint">
@@ -197,13 +207,14 @@
           <span class="mrail-spacer"></span>
           <AppButton
             v-if="targetSet"
+            class="mrail-foot-add"
             size="sm"
+            :tooltip="`Add to ${targetName}`"
             :disabled="!addableSelection.length"
             data-testid="mrail-add-selection"
             @click="addSelection"
-            >Add to {{ targetName }}<kbd class="mrail-kbd" aria-hidden="true"
-              >⏎</kbd
-            ></AppButton
+            ><span class="mrail-foot-add-name">Add to {{ targetName }}</span
+            ><kbd class="mrail-kbd" aria-hidden="true">⏎</kbd></AppButton
           >
           <AppBarButton
             ref="moreBtn"
@@ -353,7 +364,6 @@ import {
   handMadeName,
   pictureCount,
   railListed,
-  rowBaseModel,
   rowMatches,
   SET_SLOTS,
   setCheckpoint,
@@ -639,9 +649,6 @@ function whyLine(row) {
     const slot = SET_SLOTS.find((s) => s.id === defaultSlot(row.file_kind));
     return `Added to ${slot?.label ?? "the set"} · Undo on the receipt`;
   }
-  if (state === "second") {
-    return `This set already has ${setCheckpoint(targetSet.value).name}`;
-  }
   const evidence = fits.value?.evidence.get(row.id);
   if (evidence) {
     const checkpoint = setCheckpoint(fitsSet.value)?.name ?? "its checkpoint";
@@ -657,16 +664,26 @@ function whyLine(row) {
     .join(" · ");
 }
 
+/**
+ * Why a checkpoint's Add reads *Add as 2nd*. Said on its button and to a
+ * screen reader, not on the row's second line: on every checkpoint row at once
+ * the same sentence crowded out where each one is and its size.
+ */
+function secondNote() {
+  return `This set already has ${setCheckpoint(targetSet.value)?.name ?? "a checkpoint"}`;
+}
+
 /** What Enter does to this row, for a screen reader: the option's description. */
 function rowDescription(row) {
   const state = rowState(row);
+  const second = state === "second" ? secondNote() : "";
   const where =
     state === "add" || state === "second"
       ? `Enter adds it to ${targetName.value}.`
       : state === "held"
         ? `In ${targetName.value}.`
         : "";
-  return [whyLine(row), where].filter(Boolean).join(". ");
+  return [whyLine(row), second, where].filter(Boolean).join(". ");
 }
 
 function optionId(row) {
@@ -1063,20 +1080,12 @@ const addSetsHeading = computed(() => {
  */
 const setChoices = computed(() => {
   const rows = hashedActionRows.value;
-  const bases = new Set(rows.map(rowBaseModel).filter(Boolean));
-  const rowsBase = bases.size === 1 ? [...bases][0] : null;
   const kinds = new Set(rows.map((row) => defaultSlot(row.file_kind)));
   const slot = kinds.size === 1 ? SET_SLOTS.find((s) => kinds.has(s.id)) : null;
   return store.handMadeSets.map((set) => {
     const held = new Set((set.members ?? []).map((member) => member.sha256));
     const already = rows.filter((row) => held.has(row.sha256)).length;
-    const base = handMadeBase(set);
-    const refused =
-      already === rows.length
-        ? "Already in it"
-        : base && rowsBase && base !== rowsBase
-          ? `${base}, not ${rowsBase}`
-          : "";
+    const refused = store.railDropRefusal(set, rows);
     const detail = already
       ? `${already} already in it`
       : `→ ${slot?.label ?? "their slots"}`;
@@ -1088,6 +1097,17 @@ const setChoices = computed(() => {
 
 const dragChipEl = ref(null);
 const dragChipText = ref("");
+
+/** The rows a drag from here is carrying, drawn as picked up. */
+const dragIds = computed(
+  () => new Set((store.railDrag ?? []).map((row) => row.id)),
+);
+
+/** What the drag carries, in words: one model's name, or how many. */
+const dragWhat = computed(() => {
+  const rows = store.railDrag ?? [];
+  return rows.length === 1 ? nameOf(rows[0]) : `${rows.length} models`;
+});
 
 function draggable(row) {
   return Boolean(row.sha256) && onSetAxis.value;
@@ -1173,6 +1193,19 @@ function onDragStart(row, event) {
   cursor: pointer;
 }
 
+/* A set's name is the owner's and can be any length: the chip ends in an
+   ellipsis rather than pushing the rail wider than itself. */
+.mrail-chip {
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.mrail-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .mrail-chip:hover:not(:disabled) {
   background: var(--hover-wash);
 }
@@ -1235,6 +1268,16 @@ function onDragStart(row, event) {
 
 .mrail-row--sel {
   background: var(--active-wash);
+}
+
+/* Picked up: the rows a drag is carrying, so the source says it too. */
+.mrail-row--lifted {
+  background: var(--active-wash);
+  box-shadow: var(--selection-ring);
+}
+
+.mrail-row--lifted > * {
+  opacity: var(--opacity-disabled);
 }
 
 .mrail-row--off .mrail-name {
@@ -1305,6 +1348,13 @@ function onDragStart(row, event) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+.mrail-foot-hint--drag {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--active-text);
+}
+
 .mrail-link {
   padding: 0;
   border: 0;
@@ -1322,6 +1372,8 @@ function onDragStart(row, event) {
 }
 
 .mrail-foot-count {
+  flex-shrink: 0;
+  white-space: nowrap;
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
 }
@@ -1330,25 +1382,53 @@ function onDragStart(row, event) {
   flex: 1;
 }
 
+/* Add to <set>: the set's name gives way before ⋯ is pushed out of the rail. */
+.mrail-foot-add {
+  min-width: 0;
+}
+
+.mrail-foot-add :deep(.app-btn__label) {
+  display: flex;
+  min-width: 0;
+}
+
+.mrail-foot-add-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .mrail-kbd {
   margin-left: var(--space-2);
   font-family: inherit;
   opacity: 0.7;
 }
 
+/* The drag image. A solid primary fill, the sidebar's live-drop colour: the
+   browser draws a drag image half-transparent, and a chip in the surface's own
+   colours all but vanished against the dark shelf it was dragged over. */
 .mrail-dragchip {
   position: fixed;
   top: -1000px;
   left: -1000px;
   z-index: var(--z-notice);
+  max-width: var(--stats-panel-w);
+  overflow: hidden;
   pointer-events: none;
-  border: 1px solid rgb(var(--v-theme-border));
-  box-shadow: var(--elevation-2);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-md);
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-primary));
+  color: rgb(var(--v-theme-on-primary));
   font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mrail-dragchip::before {
+  content: "\F0415"; /* mdi-plus */
+  margin-right: var(--space-2);
+  font-family: "Material Design Icons";
+  font-weight: normal;
 }
 </style>

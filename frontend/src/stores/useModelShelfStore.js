@@ -2632,21 +2632,40 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         slot: slotId || defaultSlot(row.file_kind),
       }));
     if (!members.length) return null;
-    // The rail's Add to set… fades a set on another base model; a drop on its
-    // card is refused the same way rather than filed by a slip of the hand.
-    const base = handMadeBase(withShelfNames(set));
-    const bases = new Set(models.map(rowBaseModel).filter(Boolean));
-    if (base && bases.size === 1 && !bases.has(base)) {
+    // The card already refused this during the drag; this is the same rule
+    // stated where the write happens.
+    const refusal = railDropRefusal(set, models);
+    if (refusal) {
       useNoticeStore().push({
         level: "info",
-        text: `Nothing added: "${setLabel(set)}" is ${base}, and ${
-          models.length === 1 ? "that model is" : "those models are"
-        } ${[...bases][0]}.`,
+        text: `Nothing added to "${setLabel(set)}": ${refusal}.`,
       });
       return null;
     }
     if (!(await confirmSecondCheckpoint(set, members))) return null;
     return addToHandMadeSet(set, members);
+  }
+
+  /**
+   * Why a hand-made set will not take these shelf rows, or "" when it will:
+   * it holds them all already, or it is on another base model. One rule for
+   * the rail's *Add to set…* menu and for a drag over a card, so a card
+   * refuses while the pointer is over it rather than after the drop.
+   *
+   * @param {Object} set
+   * @param {Array<Object>} models - shelf rows.
+   */
+  function railDropRefusal(set, models) {
+    const held = new Set((set.members ?? []).map((member) => member.sha256));
+    if (models.length && models.every((row) => held.has(row.sha256))) {
+      return "Already in it";
+    }
+    const base = handMadeBase(withShelfNames(set));
+    const bases = new Set(models.map(rowBaseModel).filter(Boolean));
+    if (base && bases.size === 1 && !bases.has(base)) {
+      return `${base}, not ${[...bases][0]}`;
+    }
+    return "";
   }
 
   /** A new set holding these shelf rows, each in its kind's slot. */
@@ -3758,6 +3777,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     deleteHandMadeSets,
     addToHandMadeSet,
     addRowsToHandMadeSet,
+    railDropRefusal,
     createSetFromRows,
     confirmSecondCheckpoint,
     railDrag,

@@ -500,7 +500,14 @@ describe("adding", () => {
     expect(juggernaut.find('[data-testid="mrail-add"]').text()).toBe(
       "Add as 2nd",
     );
-    expect(juggernaut.text()).toContain("This set already has");
+    // Named to a screen reader, not printed on every checkpoint's second line,
+    // which keeps where the row already is and its size.
+    expect(juggernaut.attributes("aria-description")).toContain(
+      "This set already has",
+    );
+    expect(juggernaut.find(".mrail-why").text()).not.toContain(
+      "This set already has",
+    );
   });
 
   it("lists a model still being hashed but will not add or drag it", async () => {
@@ -543,6 +550,23 @@ describe("starting a drag", () => {
     expect(data["application/x-pixlstash-rail-models"]).toBe("rail-models");
     expect(dataTransfer.setDragImage).toHaveBeenCalledTimes(1);
     expect(store.railDrag.map((row) => row.id)).toEqual([5]);
+  });
+
+  it("shows the carried rows as picked up, and says where to drop them", async () => {
+    const { wrapper } = await mountRail({
+      handMade: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
+    });
+    expect(wrapper.find('[data-testid="mrail-drag-hint"]').exists()).toBe(false);
+    await option(wrapper, "Soft").trigger("dragstart", {
+      dataTransfer: { setData: () => {}, setDragImage: vi.fn(), effectAllowed: "" },
+    });
+    expect(option(wrapper, "Soft").classes()).toContain("mrail-row--lifted");
+    expect(wrapper.find('[data-testid="mrail-drag-hint"]').text()).toMatch(
+      /^Drop Soft.* on a set with a dashed rim\.$/,
+    );
+    await option(wrapper, "Soft").trigger("dragend");
+    expect(option(wrapper, "Soft").classes()).not.toContain("mrail-row--lifted");
+    expect(wrapper.find('[data-testid="mrail-drag-hint"]').exists()).toBe(false);
   });
 
   it("leaves a model still being hashed behind, and says so on the chip", async () => {
@@ -661,6 +685,93 @@ describe("dropping on the set grid", () => {
     slot.element.dispatchEvent(drop);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+    grid.unmount();
+  });
+
+  it("marks every target from the start of the drag, not only under the pointer", async () => {
+    listAdapters.mockResolvedValue(ROWS);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [handSet(10, [])],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    const grid = mount(ModelSetGrid, { global: { stubs } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await grid.vm.$nextTick();
+    expect(grid.findAll('[data-testid="rail-drop-mark"]')).toHaveLength(0);
+
+    store.railDrag = [store.rows.find((r) => r.id === 5)];
+    await grid.vm.$nextTick();
+    const marks = () => grid.findAll('[data-testid="rail-drop-mark"]');
+    // The hand-made card and New workflow set, before any dragover.
+    expect(marks()).toHaveLength(2);
+    expect(marks().some((m) => m.classes("msg__drop--over"))).toBe(false);
+
+    const card = grid.find('[data-key="hand:10"]');
+    await card.trigger("dragover", { dataTransfer: { dropEffect: "" } });
+    const over = grid.find('[data-key="hand:10"] [data-testid="rail-drop-mark"]');
+    expect(over.classes()).toContain("msg__drop--over");
+    expect(over.text()).toMatch(/^Add Soft/);
+
+    // Crossing into the card's own child is not leaving it: no flicker.
+    const inner = card.find(".msg__cell").element;
+    await card.trigger("dragleave", { relatedTarget: inner });
+    expect(over.classes()).toContain("msg__drop--over");
+    await card.trigger("dragleave", { relatedTarget: document.body });
+    expect(over.classes()).not.toContain("msg__drop--over");
+
+    store.railDrag = null;
+    await grid.vm.$nextTick();
+    expect(marks()).toHaveLength(0);
+  });
+
+  it("refuses a set of another base model during the drag, and says why", async () => {
+    listAdapters.mockResolvedValue([
+      row(5, "Soft_Light", "adapter", { base_model: "SD 1.5" }),
+    ]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [
+        handSet(10, [
+          { ...member(1, "RealVisXL_v5", "checkpoint"), base_model: "SDXL" },
+        ]),
+      ],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    const grid = mount(ModelSetGrid, { global: { stubs }, attachTo: document.body });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await grid.vm.$nextTick();
+    store.railDrag = store.rows.filter((r) => r.id === 5);
+    await grid.vm.$nextTick();
+
+    const card = grid.find('[data-key="hand:10"]');
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    over.dataTransfer = { dropEffect: "" };
+    card.element.dispatchEvent(over);
+    await grid.vm.$nextTick();
+    expect(over.defaultPrevented).toBe(false);
+    const mark = card.find('[data-testid="rail-drop-mark"]');
+    expect(mark.classes()).toEqual(
+      expect.arrayContaining(["msg__drop--refused", "msg__drop--over"]),
+    );
+    expect(mark.text()).toBe("SDXL, not SD 1.5");
+    await card.trigger("drop", { dataTransfer: { dropEffect: "" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+
+    // Its open tray agrees with its card: the LoRA slot refuses too.
+    store.toggleSet("hand:10");
+    store.railDrag = store.rows.filter((r) => r.id === 5);
+    await grid.vm.$nextTick();
+    const slot = grid.find('[data-slot="lora"]');
+    expect(slot.classes()).toContain("mss__slot--refuse");
+    expect(slot.classes()).not.toContain("mss__slot--target");
     grid.unmount();
   });
 

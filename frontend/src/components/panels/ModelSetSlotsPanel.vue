@@ -22,54 +22,57 @@
           <span class="msp__name">{{ name }}</span>
           <span class="mss__mark">Grouped by you</span>
           <span class="msp__count num">{{ facts }}</span>
-          <span class="msp__spacer"></span>
-          <!-- The way to the Models rail from where the need arises: it opens
-               the rail with Fits on this set, which nothing else does. -->
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="cube-outline"
-            data-testid="models-fit"
-            :tooltip="`Show the shelf models that fit ${name || 'this set'}`"
-            @click="emit('models-fit')"
-            >Models · {{ fitCount }} fit</AppButton
-          >
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="table-arrow-down"
-            :disabled="!canFillFromSet"
-            :tooltip="
-              canFillFromSet
-                ? 'Add models from your other sets'
-                : 'None of your other sets has anything to add.'
-            "
-            @click="emit('fill', { mode: 'set', el: $event.currentTarget })"
-            >Fill from a set…</AppButton
-          >
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="image-multiple-outline"
-            :disabled="!canFillFromPictures"
-            :tooltip="
-              canFillFromPictures
-                ? 'Add models your pictures used with this checkpoint'
-                : fillFromPicturesRefusal
-            "
-            @click="
-              emit('fill', { mode: 'pictures', el: $event.currentTarget })
-            "
-            >Fill from pictures…</AppButton
-          >
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="close"
-            icon-only
-            tooltip="Close this set"
-            @click="emit('close')"
-          />
+          <!-- One unit, so a narrow bar wraps the actions together to the
+               right of the next line rather than stranding Close on the left. -->
+          <span class="mss__actions">
+            <!-- The way to the Models rail from where the need arises: it opens
+                 the rail with Fits on this set, which nothing else does. -->
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="cube-outline"
+              data-testid="models-fit"
+              :tooltip="`Show the shelf models that fit ${name || 'this set'}`"
+              @click="emit('models-fit')"
+              >Models · {{ fitCount }} fit</AppButton
+            >
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="table-arrow-down"
+              :disabled="!canFillFromSet"
+              :tooltip="
+                canFillFromSet
+                  ? 'Add models from your other sets'
+                  : 'None of your other sets has anything to add.'
+              "
+              @click="emit('fill', { mode: 'set', el: $event.currentTarget })"
+              >Fill from a set…</AppButton
+            >
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="image-multiple-outline"
+              :disabled="!canFillFromPictures"
+              :tooltip="
+                canFillFromPictures
+                  ? 'Add models your pictures used with this checkpoint'
+                  : fillFromPicturesRefusal
+              "
+              @click="
+                emit('fill', { mode: 'pictures', el: $event.currentTarget })
+              "
+              >Fill from pictures…</AppButton
+            >
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="close"
+              icon-only
+              tooltip="Close this set"
+              @click="emit('close')"
+            />
+          </span>
         </div>
       </div>
     </div>
@@ -219,12 +222,13 @@
         class="mss__slot"
         :class="{
           'mss__slot--refuse': dragRows && !dragFits(slot),
+          'mss__slot--target': dragRows && dragFits(slot),
           'mss__slot--drop': dropSlot === slot.id,
         }"
         role="presentation"
         :data-slot="slot.id"
         @dragover="onSlotDragOver(slot, $event)"
-        @dragleave="dropSlot === slot.id && (dropSlot = '')"
+        @dragleave="onSlotDragLeave(slot, $event)"
         @drop="onSlotDrop(slot, $event)"
       >
         <div class="mss__label" role="presentation">
@@ -411,6 +415,11 @@ const props = defineProps({
   fitCount: { type: Number, default: 0 },
   /** The shelf rows a drag from the Models rail carries, else null. */
   dragRows: { type: Array, default: null },
+  /**
+   * Why the whole set refuses that drag (`store.railDropRefusal`), else "":
+   * then no slot takes it either, as its card does not.
+   */
+  dragRefused: { type: String, default: "" },
 });
 
 const emit = defineEmits([
@@ -447,6 +456,7 @@ watch(
 
 /** A slot takes a drop only when every dragged model fits it. */
 function dragFits(slot) {
+  if (props.dragRefused) return false;
   return (props.dragRows ?? []).every((row) => fitsSlot(row, slot));
 }
 
@@ -461,6 +471,12 @@ function onSlotDragOver(slot, event) {
   event.stopPropagation();
   event.dataTransfer.dropEffect = "copy";
   dropSlot.value = slot.id;
+}
+
+/** Only a leave that lands outside the slot is one; see `onRailDragLeave`. */
+function onSlotDragLeave(slot, event) {
+  if (event.currentTarget?.contains?.(event.relatedTarget)) return;
+  if (dropSlot.value === slot.id) dropSlot.value = "";
 }
 
 function onSlotDrop(slot, event) {
@@ -656,10 +672,6 @@ const notchStyle = computed(() => {
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
-.msp__spacer {
-  flex: 1;
-}
-
 .msp__note > [role="gridcell"] {
   display: flex;
   align-items: flex-start;
@@ -720,6 +732,13 @@ const notchStyle = computed(() => {
 }
 
 /* The hand-made mark: the dashed pill the card's cover badge also wears. */
+.mss__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+
 .mss__mark {
   flex-shrink: 0;
   padding: 0 var(--space-2);
@@ -744,15 +763,23 @@ const notchStyle = computed(() => {
   align-items: start;
 }
 
-/* A rail drag: a slot the models do not fit fades and refuses the drop; the
-   one under the pointer that takes it gets the selection ring. */
+/* A rail drag: a slot the models do not fit fades and refuses the drop; every
+   slot that takes them wears a dashed rim for the whole drag, and the one under
+   the pointer turns it solid over the active wash. An outline, not an inset
+   ring: an outline paints above the slot's own tiles. */
 .mss__slot--refuse {
   opacity: var(--opacity-disabled);
 }
 
-.mss__slot--drop {
-  box-shadow: var(--selection-ring);
+.mss__slot--target {
+  outline: var(--focus-width) dashed var(--active-bar);
+  outline-offset: var(--space-1);
   border-radius: var(--radius-md);
+}
+
+.mss__slot--drop {
+  outline-style: solid;
+  background: var(--active-wash);
 }
 
 .mss__label {

@@ -5833,12 +5833,23 @@ the first time a hand-made set opens while the rail is closed.
   body the window's import handler takes it for a file from outside. The drag
   chip is teleported to `<body>` and moved under the pointer for the one frame
   Chromium paints it in, since an off-screen or clipped element paints an empty
-  drag image. `ModelSetGrid` accepts a
+  drag image; it is a solid primary pill, because the browser draws drag
+  images half-transparent. `ModelSetGrid` accepts a
   drop on a hand-made card (each model to its kind's slot,
   `store.addRowsToHandMadeSet`), on a slot in the open tray when every dragged
   model fits it (`ModelSetSlotsPanel` fades the rest), and on *New workflow
-  set* (`store.createSetFromRows`). Evidence cards dim for the whole drag. A
-  drop is one write and one receipt.
+  set* (`store.createSetFromRows`). A drop is one write and one receipt.
+- **What a drag shows.** The page never relies on the drag image alone. For
+  the whole drag every target wears a dashed rim (`railTargets` in
+  `ModelSetGrid`, an overlay above the card's cover, since an inset ring
+  paints under its pictures), the target under the pointer turns solid over
+  the active wash and says what the drop does, the carried rows look picked
+  up, and the rail's footer says where to drop. A hand-made set that will not
+  take the models (`store.railDropRefusal`: holds them all, or another base
+  model) fades, refuses the drop, and states the reason under the pointer;
+  its open tray's slots refuse too. Evidence cards fade. A target's
+  `dragleave` counts only when the pointer leaves it, not when it crosses
+  into a child (the sidebar's `leftDropRow`), or the mark flickers.
 - Not built yet: the narrow-window drawer (`statsForcedHidden`), *Works with*
   from the rail, and virtualisation (rows use `content-visibility: auto`).
 
