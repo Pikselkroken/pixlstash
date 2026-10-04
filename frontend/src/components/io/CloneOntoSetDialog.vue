@@ -58,8 +58,8 @@
             >
               <span class="cos-cover" aria-hidden="true">
                 <img v-if="set.cover" :src="coverSrc(set.cover)" alt="" loading="lazy" />
-                <span v-if="set.handMade" class="cos-badge">Grouped by you</span>
-                <span v-else-if="set.pictures" class="cos-badge">{{
+                <v-icon v-else class="cos-cover-none" size="20">mdi-image-off-outline</v-icon>
+                <span v-if="set.pictures" class="cos-badge">{{
                   picturesText(set.pictures)
                 }}</span>
               </span>
@@ -75,6 +75,13 @@
                   >{{ loraVerdict(set.plan) }}</span
                 >
               </span>
+              <!-- Who grouped it is a tooltip: as a badge it was cut short on
+                   a cover this size and hid the picture count. -->
+              <Tooltip
+                v-if="set.handMade"
+                text="Grouped by you"
+                activator="parent"
+              />
             </button>
           </template>
 
@@ -277,6 +284,7 @@ import { errorMessage } from "../../utils/apiError";
 import { loraStem } from "../../utils/loraChain";
 import { deriveModelName } from "../../utils/modelShelf";
 import {
+  cloneOntoSetName,
   handMadeName,
   setCheckpoint,
   setGroups,
@@ -284,6 +292,7 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import EditLorasDialog from "./EditLorasDialog.vue";
 
 const props = defineProps({
@@ -292,6 +301,8 @@ const props = defineProps({
   workflowId: { type: String, default: "" },
   /** What the owner calls it: the subtitle, and the clone's name's stem. */
   cardName: { type: String, default: "" },
+  /** The card's `type_label`, which tells a generated name from the owner's. */
+  cardTypeLabel: { type: String, default: "" },
 });
 
 const emit = defineEmits(["close", "cloned", "pick-files"]);
@@ -558,6 +569,33 @@ function ranWith(checkpointId) {
   return out;
 }
 
+/** A file as the shelf and the plan both spell it: no folder, any case. */
+function fileKey(file) {
+  return String(file).split(/[/\\]/).pop().toLowerCase();
+}
+
+/** Each member's shelf name, by `fileKey` of its file. */
+function namesByFile(members) {
+  return Object.fromEntries(
+    members.filter((m) => m.filename).map((m) => [fileKey(m.filename), m.name]),
+  );
+}
+
+/**
+ * The base models the clone loads, by their shelf names: the plan's base
+ * loaders' new files in loader order, each name once (a two-model graph names
+ * both, as the server's generated names do). Off the plan, not the set's
+ * first checkpoint, which may be off the shelf or paired with no loader.
+ */
+function loadedModelName(set) {
+  if (!set) return "";
+  const names = set.plan.loaders
+    .filter((row) => row.kind === "checkpoint" || row.kind === "unet")
+    .flatMap((row) => row.now)
+    .map((file) => set.modelNames[fileKey(file)] || deriveModelName(file) || file);
+  return [...new Set(names)].join(" + ");
+}
+
 /** The names a set's files line shows: its checkpoint, then the rest. */
 function filesLine(members) {
   return members
@@ -595,6 +633,7 @@ function candidates(payload) {
         .filter((m) => m.slot === "checkpoint")
         .map((m) => m.id),
       checkpointName: checkpoint?.name || "",
+      modelNames: namesByFile(members),
     };
   });
   // A set whose base model is off the shelf has no checkpoint to clone onto.
@@ -622,6 +661,7 @@ function candidates(payload) {
           .map((m) => m.id),
       ],
       checkpointName: group.head?.name || "",
+      modelNames: namesByFile(models),
     };
   });
   return [...handMade, ...evidence];
@@ -694,8 +734,12 @@ function choose(key) {
   edited.value = null;
   chosenKey.value = key;
   if (!nameTouched.value) {
-    const set = chosen.value;
-    name.value = [props.cardName, set?.name].filter(Boolean).join(" · ");
+    name.value = cloneOntoSetName(
+      props.cardName,
+      props.cardTypeLabel,
+      chosen.value?.name,
+      loadedModelName(chosen.value),
+    );
   }
 }
 
@@ -844,6 +888,10 @@ defineExpose({ sets, chosenKey, choose, lorasBody });
   overflow: hidden;
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+.cos-cover-none {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .cos-cover img {

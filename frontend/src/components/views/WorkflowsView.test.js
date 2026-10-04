@@ -1239,10 +1239,18 @@ describe("Clone onto a workflow set", () => {
           id: 7,
           name: "Flux dev GGUF",
           members: [
-            { id: 11, slot: "checkpoint", on_shelf: true, name: "flux1-dev-Q8_0" },
-            // A second checkpoint whose file left the shelf: never sent, so
-            // the plan neither refuses the set nor swaps onto a missing file.
+            // A checkpoint whose file left the shelf, listed FIRST: never
+            // sent, so the plan neither refuses the set nor swaps onto a
+            // missing file, and never what the clone is named after.
             { id: 13, slot: "checkpoint", on_shelf: false, name: "flux1-low" },
+            {
+              id: 11,
+              slot: "checkpoint",
+              on_shelf: true,
+              name: "Flux Dev Q8",
+              // Cased unlike the plan's file: the lookup must fold case.
+              filename: "Flux1-Dev-Q8_0.gguf",
+            },
             { id: 12, slot: "lora", on_shelf: true, name: "mara" },
           ],
           covers: [],
@@ -1336,6 +1344,27 @@ describe("Clone onto a workflow set", () => {
       loras: { entries: [], lanes: null },
     });
     expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+  });
+
+  it("names the clone after the model the plan loads and marks a set with no cover", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    // Replaced, not mutated: the card objects are the shared fixture.
+    const at = store.cards.findIndex((c) => c.id === "a");
+    store.cards[at] = {
+      ...store.cards[at],
+      name: "Flux Dev: Text to Image (2)",
+      type_label: "Text to Image",
+    };
+    await openOn(wrapper);
+    const set = wrapper.find('[data-testid="cos-set-hand:7"]');
+    // No picture: an icon, not a blank cover, and no cut-short badge.
+    expect(set.find(".cos-cover-none").exists()).toBe(true);
+    expect(set.find(".cos-badge").exists()).toBe(false);
+    await set.trigger("click");
+    expect(wrapper.find(".cos-name input").element.value).toBe(
+      "Flux Dev Q8: Text to Image",
+    );
   });
 
   it("keeps the chain on the same base model and warns of a missing pack", async () => {

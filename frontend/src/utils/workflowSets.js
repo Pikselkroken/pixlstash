@@ -592,6 +592,29 @@ export function handMadeName(set) {
   return set?.name || setCheckpoint(set)?.name || "Untitled set";
 }
 
+/**
+ * The name a clone onto *setName*, whose checkpoint is *modelName*, suggests.
+ *
+ * A generated card name is "<model>: <type> + …" (`_display_name` on the
+ * server), so the clone takes the set's checkpoint in the model's place:
+ * keeping the old model's name would call the clone after the model it no
+ * longer loads, and a hand-made set's own label need not name a model at all.
+ * The grid's " (2)" goes too, since it numbered the original. Any other name
+ * (the owner's, a file's) is theirs, and the set's name is appended to it.
+ *
+ * ponytail: "generated" is guessed from ": <type>" in the name, since the card
+ * does not say; an owner name spelled that way is rewritten too.
+ */
+export function cloneOntoSetName(cardName, typeLabel, setName, modelName) {
+  const name = cardName || "";
+  const model = modelName || setName;
+  const at = typeLabel ? name.indexOf(`: ${typeLabel}`) : -1;
+  if (at > 0 && model) {
+    return model + name.slice(at).replace(/ \(\d+\)$/, "");
+  }
+  return [name, setName].filter(Boolean).join(" · ");
+}
+
 /** The base model a set's suggestions follow: its checkpoint's, or null. */
 export function handMadeBase(set) {
   return setCheckpoint(set)?.base_model || null;
