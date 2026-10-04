@@ -18,7 +18,7 @@
       is named for the date it shows. Every column but Name begins with a handle
       that resizes it: Left and Right move the edge, Home and End take it to its
       widest and narrowest, Enter puts it back. The bar ends in the app-wide
-      controls: Settings and the stats sidebar toggle. Nothing on this screen
+      controls: Settings and the Models and tasks toggle. Nothing on this screen
       can be undone. A ring around a model's mark says who it is assigned to. A
       name in italics has not been given one. A row that stands for a training
       run says how many files it holds; Right and Left open and close it.
@@ -406,7 +406,11 @@
              alone cannot separate identical icon buttons into "this view's
              controls" and "the app's". -->
         <span class="bar-separator" aria-hidden="true"></span>
-        <TbGlobalActions @open-settings="emit('open-settings')" />
+        <TbGlobalActions
+          rail="models"
+          rail-name="Models and tasks"
+          @open-settings="emit('open-settings')"
+        />
       </div>
     </div>
 
@@ -460,6 +464,17 @@
       <!-- The visible half of the same statement. `inert` on the wrapper is
            what actually stops the interaction; this is what says so. -->
       <div v-if="moves.running" class="shelf-dim" aria-hidden="true"></div>
+      <!-- The closed Models rail's handle (design B): a plain tab with the
+           count, no selection stripe. It moves at most once a session, the
+           first time a hand-made set is opened while the rail is closed. -->
+      <InspectorEdgeTab
+        v-if="!sidebarStore.modelsRailOpen"
+        :count="railCount"
+        :name="`Show models (${railCount.toLocaleString()})`"
+        :nudge="railNudge"
+        data-testid="models-rail-handle"
+        @open="sidebarStore.setModelsRailOpen(true)"
+      />
       <!-- An unplugged drive states its scope ONCE, here, rather than through
            300 rows each carrying the same mark. The rows still take the offline
            treatment - that is what tells one row from its neighbour - but the
@@ -1561,6 +1576,12 @@
   </div>
 </template>
 
+<script>
+// The closed Models rail's one nudge a session, across remounts of the shelf
+// (see `railNudge`).
+let railNudged = false;
+</script>
+
 <script setup>
 import { withRef } from "../../utils/withRef.js";
 import {
@@ -1577,7 +1598,7 @@ import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
 import WorkflowSetRenameDialog from "../panels/WorkflowSetRenameDialog.vue";
-import { handMadeName } from "../../utils/workflowSets";
+import { handMadeName, railListed } from "../../utils/workflowSets";
 import WorkflowSetSelectionBar from "../panels/WorkflowSetSelectionBar.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
@@ -1586,6 +1607,7 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import ModelSetGrid from "./ModelSetGrid.vue";
+import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
@@ -1677,6 +1699,24 @@ const moves = useModelMovesStore();
 // owns the key before it clears anything. See `onShelfEscape`.
 const reviewSessionsStore = useReviewSessionsStore();
 const sidebarStore = useSidebarStore();
+
+/** Every model the Models rail can offer: what its closed handle counts. */
+const railCount = computed(() => store.rows.filter(railListed).length);
+
+// One nudge of the closed rail's handle per session, never a glyph flash (the
+// toolbar glyph is busy showing tasks): the first hand-made set opened while
+// the rail is closed. Module-level so a remount of the shelf is not a new
+// session.
+const railNudge = ref(0);
+watch(
+  () => store.openSetKey,
+  (key) => {
+    if (railNudged || sidebarStore.modelsRailOpen) return;
+    if (!key?.startsWith("hand:")) return;
+    railNudged = true;
+    railNudge.value += 1;
+  },
+);
 // The date column is stamped in the reader's own format, through the same
 // `formatUserDate(iso, dateFormat)` pattern every other timestamp in the app
 // uses.

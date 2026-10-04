@@ -1075,7 +1075,7 @@ describe("the shelf's own accessible name", () => {
     // them.
     const wrapper = await mountShelf([adapter()]);
     const help = wrapper.find("#shelf-help").text();
-    expect(help).toContain("Settings and the stats sidebar toggle");
+    expect(help).toContain("Settings and the Models and tasks toggle");
     expect(help).toMatch(/nothing on this screen can be undone/i);
     expect(help).not.toMatch(/undo and redo/i);
   });
@@ -4485,7 +4485,7 @@ describe("a long move, in the panel that is running it", () => {
 // moment the grid unmounts. Undo is the exception: nothing on this screen writes
 // to the operation log, so there is nothing here for it to take back.
 describe("the app-wide toolbar tail", () => {
-  it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
+  it("asks App.vue for Settings and toggles the Models rail itself", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const sidebar = useSidebarStore();
     const settings = wrapper.find(
@@ -4497,10 +4497,17 @@ describe("the app-wide toolbar tail", () => {
 
     // Directional, not a flip: the rail opens on the first press and closes on
     // the second, from the shut state a fresh session starts in.
+    // The rail on this screen is Models | Tasks, with its own flag: the
+    // Library's stats flag is left alone.
+    sidebar.modelsRailOpen = false;
     sidebar.statsOpen = false;
-    await wrapper.find(".shelf-toolbar .tb-stats-btn").trigger("click");
-    expect(sidebar.statsOpen).toBe(true);
-    await wrapper.find(".shelf-toolbar .tb-stats-btn").trigger("click");
+    const toggle = wrapper.find(".shelf-toolbar .tb-stats-btn");
+    expect(toggle.attributes("aria-label")).toBe("Models and tasks");
+    await toggle.trigger("click");
+    expect(sidebar.modelsRailOpen).toBe(true);
+    expect(toggle.attributes("aria-pressed")).toBe("true");
+    await toggle.trigger("click");
+    expect(sidebar.modelsRailOpen).toBe(false);
     expect(sidebar.statsOpen).toBe(false);
   });
 

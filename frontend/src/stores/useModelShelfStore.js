@@ -1,4 +1,11 @@
-import { computed, onScopeDispose, reactive, ref, watch } from "vue";
+import {
+  computed,
+  onScopeDispose,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+} from "vue";
 import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import { mergeModelCopies } from "../api/modelFiles";
@@ -20,6 +27,7 @@ import {
   setWorkflowSetDeclines,
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
+import { useConfirm } from "../composables/useConfirm";
 import { useNoticeStore } from "./useNoticeStore";
 import { useOperationStore } from "./useOperationStore";
 import { errorDetail } from "../utils/apiError";
@@ -42,10 +50,12 @@ import {
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
 import {
+  defaultSlot,
   handMadeCard,
   handMadeName,
   pictureCount,
   setCard,
+  setCheckpoint,
   setGroups,
   worksWith,
 } from "../utils/workflowSets";
@@ -1538,6 +1548,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const openSetKey = ref("");
 
   /**
+   * The Models rail (design B, a sibling of the shelf in App.vue), as far as
+   * the set grid has to see it: the shelf rows a drag from it carries, while
+   * it is in the air, and the set its *Fits* filter is on, which the set
+   * panel's *Models · N fit* button sets.
+   *
+   * A drag's DATA is unreadable during `dragover`, and the slots have to fade
+   * or not while the pointer is still down, so the rows live here for the
+   * length of the drag rather than in `dataTransfer`.
+   */
+  const railDrag = shallowRef(null);
+  const railFitsSetId = ref(null);
+
+  /**
    * Read which models have run together, once.
    *
    * `force` is what a scan passes: a scan can add a model, and a model with no
@@ -2159,6 +2182,59 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       );
     }
     return result;
+  }
+
+  /**
+   * Ask before a set gets a second checkpoint. Nothing does that silently: a
+   * two-model workflow wants one, but a mis-drop of a checkpoint onto a set
+   * looks exactly like it.
+   *
+   * @param {Object} set
+   * @param {Array<{model_id: number, slot: string}>} members - slots resolved.
+   * @returns {Promise<boolean>} whether to go ahead.
+   */
+  async function confirmSecondCheckpoint(set, members) {
+    const current = setCheckpoint(withShelfNames(set));
+    const incoming = members.filter((m) => m.slot === "checkpoint");
+    if (!current || !incoming.length) return true;
+    const byId = new Map(rows.value.map((row) => [row.id, row]));
+    const names = incoming.map(
+      (m) => modelName(byId.get(m.model_id) ?? {}).text || "this checkpoint",
+    );
+    return useConfirm().confirm({
+      title: `Add a second checkpoint to "${setLabel(set)}"?`,
+      message: `It already has ${current.name}. ${names.join(", ")} would go in beside it, as a two-model workflow does.`,
+      confirmLabel: "Add as 2nd",
+    });
+  }
+
+  /**
+   * Shelf rows into a set, from a drop: each to `slotId`, or to the slot its
+   * kind goes to. One write and one receipt with Undo, the ＋ chooser's own.
+   *
+   * @param {Object} set
+   * @param {Array<Object>} models - shelf rows.
+   * @param {string} [slotId]
+   */
+  async function addRowsToHandMadeSet(set, models, slotId = "") {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({
+        model_id: row.id,
+        slot: slotId || defaultSlot(row.file_kind),
+      }));
+    if (!members.length) return null;
+    if (!(await confirmSecondCheckpoint(set, members))) return null;
+    return addToHandMadeSet(set, members);
+  }
+
+  /** A new set holding these shelf rows, each in its kind's slot. */
+  function createSetFromRows(models) {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({ model_id: row.id, slot: defaultSlot(row.file_kind) }));
+    if (!members.length) return Promise.resolve(null);
+    return createHandMadeSet({ members });
   }
 
   /**
@@ -3151,6 +3227,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsLoading.value = false;
     setsError.value = "";
     openSetKey.value = "";
+    railDrag.value = null;
+    railFitsSetId.value = null;
     selectedSetIds.value = new Set();
     checkpointAdded.value = null;
   }
@@ -3237,6 +3315,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     renameHandMadeSet,
     deleteHandMadeSets,
     addToHandMadeSet,
+    addRowsToHandMadeSet,
+    createSetFromRows,
+    confirmSecondCheckpoint,
+    railDrag,
+    railFitsSetId,
     announceAdded,
     removeFromHandMadeSet,
     keepOutOfHandMadeSet,
