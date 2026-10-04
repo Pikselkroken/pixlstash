@@ -301,10 +301,15 @@
   </v-menu>
 
   <!-- What a drag carries, drawn by the browser from this element: the
-       grabbed model's name, or how many. Off screen, never on it. -->
-  <div ref="dragChipEl" class="mrail-dragchip" aria-hidden="true">
-    {{ dragChipText }}
-  </div>
+       grabbed model's name, or how many. Teleported to <body>, because a
+       transformed or clipping ancestor would turn `fixed` into "fixed to that
+       box" and paint an empty drag image; parked off screen except for the one
+       frame the browser paints it in (see `onDragStart`). -->
+  <Teleport to="body">
+    <div ref="dragChipEl" class="mrail-dragchip" aria-hidden="true">
+      {{ dragChipText }}
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -339,6 +344,7 @@ import { VIcon, VMenu } from "vuetify/components";
 import { GRID_GROUP_BY, useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { setInternalDragPayload } from "../../utils/media";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { formatModelSize, modelName } from "../../utils/modelShelf";
 import {
@@ -1108,14 +1114,27 @@ function onDragStart(row, event) {
   store.railDrag = rows;
   dragChipText.value = rows.length === 1 ? nameOf(rows[0]) : `${rows.length} models`;
   event.dataTransfer.effectAllowed = "copy";
-  event.dataTransfer.setData(
-    "application/x-pixlstash-models",
-    JSON.stringify(rows.map((candidate) => candidate.id)),
-  );
-  if (dragChipEl.value) {
-    // The chip has to hold its text before the browser draws it.
-    dragChipEl.value.textContent = dragChipText.value;
-    event.dataTransfer.setDragImage(dragChipEl.value, 12, 12);
+  // An internal payload, as every in-app drag is: on the desktop shell a drag
+  // of a row holding an <img> also fills `dataTransfer.files`, and without the
+  // JSON body the window's import handler reads it as a file dropped from
+  // outside.
+  setInternalDragPayload(event.dataTransfer, {
+    type: "rail-models",
+    ids: rows.map((candidate) => candidate.id),
+  });
+  const chip = dragChipEl.value;
+  if (chip) {
+    // Chromium paints a drag image from the element's on-screen rendering, so
+    // the chip is put under the pointer for the frame it is painted in, then
+    // parked again. It has to hold its text before that frame, too.
+    chip.textContent = dragChipText.value;
+    chip.style.left = `${event.clientX}px`;
+    chip.style.top = `${event.clientY}px`;
+    event.dataTransfer.setDragImage(chip, 12, 12);
+    setTimeout(() => {
+      chip.style.left = "";
+      chip.style.top = "";
+    }, 0);
   }
 }
 </script>
@@ -1315,6 +1334,10 @@ function onDragStart(row, event) {
   position: fixed;
   top: -1000px;
   left: -1000px;
+  z-index: var(--z-notice);
+  pointer-events: none;
+  border: 1px solid rgb(var(--v-theme-border));
+  box-shadow: var(--elevation-2);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-md);
   background: rgb(var(--v-theme-surface));

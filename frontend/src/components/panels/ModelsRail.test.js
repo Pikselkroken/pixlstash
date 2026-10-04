@@ -518,6 +518,34 @@ describe("adding", () => {
   });
 });
 
+describe("starting a drag", () => {
+  it("carries an internal payload, so the window's file import leaves it alone", async () => {
+    const { wrapper, store } = await mountRail({
+      handMade: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
+    });
+    const data = {};
+    const dataTransfer = {
+      setData: (type, value) => (data[type] = value),
+      setDragImage: vi.fn(),
+      effectAllowed: "",
+    };
+    await option(wrapper, "Soft").trigger("dragstart", {
+      dataTransfer,
+      clientX: 40,
+      clientY: 50,
+    });
+    // On the desktop shell a row holding an <img> also fills `files`; the JSON
+    // body is what `isInternalImageDrag` reads to say "not from outside".
+    expect(JSON.parse(data["application/json"])).toEqual({
+      type: "rail-models",
+      ids: [5],
+    });
+    expect(data["application/x-pixlstash-rail-models"]).toBe("rail-models");
+    expect(dataTransfer.setDragImage).toHaveBeenCalledTimes(1);
+    expect(store.railDrag.map((row) => row.id)).toEqual([5]);
+  });
+});
+
 describe("dropping on the set grid", () => {
   it("files the dragged rows into a hand-made card, each in its kind's slot", async () => {
     addWorkflowSetMembers.mockResolvedValue({

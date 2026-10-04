@@ -5767,8 +5767,14 @@ the first time a hand-made set opens while the rail is closed.
   model differs from the dragged models' one is refused with a notice, as the
   *Add to set…* menu fades that set.
 - **Dragging.** Only on the Workflow set axis. The rows travel in
-  `store.railDrag` (a drag's data is unreadable during `dragover`), with
-  `application/x-pixlstash-models` on the transfer. `ModelSetGrid` accepts a
+  `store.railDrag` (a drag's data is unreadable during `dragover`), and the
+  transfer carries an ordinary internal payload (`setInternalDragPayload`,
+  type `rail-models`, marker `RAIL_MODELS_DRAG_MIME`): on the desktop shell a
+  row holding an `<img>` also fills `dataTransfer.files`, and without the JSON
+  body the window's import handler takes it for a file from outside. The drag
+  chip is teleported to `<body>` and moved under the pointer for the one frame
+  Chromium paints it in, since an off-screen or clipped element paints an empty
+  drag image. `ModelSetGrid` accepts a
   drop on a hand-made card (each model to its kind's slot,
   `store.addRowsToHandMadeSet`), on a slot in the open tray when every dragged
   model fits it (`ModelSetSlotsPanel` fades the rest), and on *New workflow
