@@ -373,6 +373,8 @@ import { getPictureWorkflow } from "../../api/comfyui";
 import { listAdapters } from "../../api/modelShelf";
 import { listSavedRecipes } from "../../api/recipes";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { errorMessage } from "../../utils/apiError";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import { saveFileAs } from "../../utils/downloadFile";
@@ -550,6 +552,7 @@ function onUseAsInput() {
 }
 
 const router = useRouter();
+const notices = useNoticeStore();
 /** Input rows whose thumbnail failed to load; see `shownAsPicture`. */
 const unloadable = reactive(new Set());
 
@@ -981,6 +984,10 @@ async function downloadWorkflow() {
     );
   } catch (err) {
     console.warn("Failed to save the workflow JSON:", err);
+    notices.push({
+      level: "error",
+      text: errorMessage(err, "Could not save the workflow."),
+    });
   }
 }
 
