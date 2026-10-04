@@ -647,7 +647,6 @@ kbd {
 }
 .tbm-btn--compact {
   flex: 0 0 auto;
-  min-height: var(--control-h);
   padding: 0 var(--space-4);
 }
 
