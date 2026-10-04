@@ -976,19 +976,27 @@ def _fill_base_model(
     """
     if any(m.kind in BASE_MODEL_KINDS for m in figure.models):
         return
+    # Counted per model, not per spelling: a shelf id and the file it names
+    # (`checkpoint_id` and `ckpt_name` on one core) are one vote, once per
+    # variant. The first spelling seen is the one the slot carries.
     named: Counter = Counter()
+    spelled: dict[str, tuple[str, str]] = {}
     for variant in figure.card.variants:
-        for widget, filename in dict.fromkeys(names.get(variant, ())):
+        models = set()
+        for widget, value in names.get(variant, ()):
             # A shelf id the shelf no longer holds names nothing.
-            if base_model_kind(widget) and _slot_filename(
-                widget, filename, marks_by_name
-            ):
-                named[(widget, filename)] += 1
+            resolved = base_model_kind(widget) and _slot_filename(
+                widget, value, marks_by_name
+            )
+            if resolved:
+                models.add(resolved.lower())
+                spelled.setdefault(resolved.lower(), (widget, value))
+        named.update(models)
     if not named:
         return
     # ponytail: one base model, counted by variants; a Wan high/low pair is
     # named by its commoner half, and pictures would rank better than variants.
-    widget, name = min(named, key=lambda pair: (-named[pair], pair))
+    widget, name = spelled[min(named, key=lambda model: (-named[model], model))]
     filename = _slot_filename(widget, name, marks_by_name)
     figure.models.append(
         SlotModel(

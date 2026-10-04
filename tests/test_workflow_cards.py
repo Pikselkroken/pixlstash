@@ -2295,6 +2295,31 @@ def test_the_base_model_most_variants_name_is_the_one_shown(hub):
     assert [m.filename for m in figure.models] == [str(common)]
 
 
+def test_a_shelf_id_and_the_file_it_names_are_one_vote(hub):
+    """`checkpoint_id` and `ckpt_name` naming one file count together, so
+    they outvote a second file named twice."""
+    one = _shelf_model(hub, "zzz-one.safetensors", "FLUX.1 dev", "a" * 64)
+    blank = record_api_graph(hub, _shelf_loader_graph(""), library_uuid="test-library")
+    graphs = [
+        _shelf_loader_graph(one),
+        _graph(ckpt="zzz-one.safetensors"),
+        _graph(ckpt="zzz-one.safetensors", preview=True),
+        _graph(ckpt="bbb-two.safetensors"),
+        _graph(ckpt="bbb-two.safetensors", preview=True),
+    ]
+    variants = [blank.structural_hash] + [
+        record_api_graph(hub, g, library_uuid="test-library").structural_hash
+        for g in graphs
+    ]
+    card = next(c for c in card_index(hub) if blank.structural_hash in c.variants)
+    figure = workflow_card_service.WorkflowFigures(
+        card=replace(card, slots=[], variants=variants),
+        workflow=Workflow(card.workflow_key),
+    )
+    workflow_card_service._describe_slots(hub, [figure], asset_names(hub, variants))
+    assert [m.name for m in figure.models] == ["zzz one"]
+
+
 def test_a_retired_workflow_a_new_variant_lands_in_is_live_again(hub):
     """A family the shelf learned, then forgot (a checkpoint renamed back):
     the id comes back to life and leaves the retired list."""
