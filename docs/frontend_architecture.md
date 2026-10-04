@@ -1476,7 +1476,8 @@ in the Workflow tab's Models panel head, both through
   fits, it opens on *All*. Each card says in advance "Keeps its N LoRAs" or
   "Clears N LoRAs".
 - **Right: the clone as a node diff**, the plan's `loaders` read as they come:
-  class and files before, then after, the node pack chip, and "Unchanged". A
+  class, files and a CLIP loader's type before, then after, the node pack chip,
+  and "Unchanged". A
   pack ComfyUI does not have is a warning, never a refusal.
 - **LoRAs go only when the base model changes** (`keeps_loras`, the server's
   rule). Then "Removed <checkpoint> LoRAs" with a struck chip per loader and a

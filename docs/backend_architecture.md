@@ -9354,9 +9354,14 @@ maps a set to the graph: the base slots take the checkpoints the caller names (`
 text-encoder slot the set's untaken file of the same layout (`family`), and
 when the set holds exactly as many files of a kind as the graph has slots, the
 rest in graph order whatever their layout: a set's files go with its
-checkpoint. `maps_cleanly` says the set's checkpoints, VAEs and text encoders
-fill those loaders one for one, which is what *Fits this graph* lists besides
-the same base model and family. Two slots of a kind
+checkpoint. A slot already loads the set's file only when its name is that
+shelf row; a name the shelf cannot pin to one row is compared whole, so a
+generic `diffusion_pytorch_model.safetensors` in another folder is swapped,
+never kept. The plan runs the clone's `retype_text_encoders` on its copy, so a
+loader row carries `was_type`/`now_type`. `maps_cleanly` says the set's
+checkpoints, VAEs and text encoders fill those loaders one for one and, onto
+another family, every CLIP loader takes the type the new model loads as; it is
+what *Fits this graph* lists besides the same base model and family. Two slots of a kind
 are two different files, since the slot list merges loaders naming one, so one
 set VAE is never written over a video VAE and an image VAE alike. **LoRAs go only when the
 base model changes**: `keeps_loras` compares `_base_key` of the set's

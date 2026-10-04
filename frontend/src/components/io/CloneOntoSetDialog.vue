@@ -129,11 +129,17 @@
                 <span class="cos-was">
                   <span class="cos-class">{{ row.was_class }}</span>
                   {{ fileNames(row.was) }}
+                  <template v-if="row.was_type !== row.now_type">
+                    · {{ row.was_type }}</template
+                  >
                 </span>
                 <span class="cos-now">
                   <v-icon size="14" aria-hidden="true">mdi-arrow-right</v-icon>
                   <span class="cos-class">{{ row.now_class }}</span>
                   {{ fileNames(row.now) }}
+                  <template v-if="row.was_type !== row.now_type">
+                    · {{ row.now_type }}</template
+                  >
                   <span v-if="row.pack" class="cos-pack">{{ row.pack }}</span>
                 </span>
               </span>
@@ -519,6 +525,7 @@ const pendingEdit = computed(() => {
 function changed(row) {
   return (
     row.was_class !== row.now_class ||
+    (row.was_type ?? null) !== (row.now_type ?? null) ||
     row.was.length !== row.now.length ||
     row.was.some((file, index) => file !== row.now[index])
   );
