@@ -3193,6 +3193,35 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(store.hiddenSetCount).toBe(0);
   });
 
+  it("reopens the tray a hide closed when the hide is undone", async () => {
+    useOperationStore().setLocalReceiptHost(true);
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    store.toggleSet("model:1");
+    store.hideSets([store.setGroups[0]]);
+    expect(store.openSetKey).toBe("");
+    await useOperationStore().takeLocalReceiptAction();
+    expect(store.openSetKey).toBe("model:1");
+  });
+
+  it("reports a twin check that throws instead of rejecting unhandled", async () => {
+    const store = await openOn([handSet(7)]);
+    // Naming the set reads the shelf rows; one it cannot read throws there,
+    // outside any write's own error handling.
+    const naming = vi
+      .spyOn(store.rows, "map")
+      .mockImplementation(() => {
+        throw new Error("test-naming-failure");
+      });
+    store.toggleSet("hand:7");
+    await flush();
+    naming.mockRestore();
+    await flush();
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.at(-1)).toMatchObject({ level: "error" });
+  });
+
   it("keeps a hidden set hidden in a new session", async () => {
     window.localStorage.setItem(
       "pixlstash:modelShelfHiddenSets",

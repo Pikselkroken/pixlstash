@@ -1709,13 +1709,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const fresh = groups.filter((group) => !hiddenSetKeys.value.has(group.key));
     if (!fresh.length) return;
     const keys = fresh.map((group) => group.key);
+    const wasOpen = keys.includes(openSetKey.value) ? openSetKey.value : "";
     changeHidden(keys, true);
     raiseSetReceipt(
       fresh.length === 1
         ? `Hid the set "${fresh[0].card.name}". No file was touched.`
         : `Hid ${fresh.length} sets. No file was touched.`,
       "hide",
-      async () => changeHidden(keys, false),
+      async () => {
+        changeHidden(keys, false);
+        // Undo puts back the tray the hide closed, unless another has opened.
+        if (wasOpen && !openSetKey.value) openSetKey.value = wasOpen;
+      },
       async () => changeHidden(keys, true),
     );
   }
@@ -2231,7 +2236,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   // Closing a hand-made set's tray - or opening another - is the owner done
   // with it, which is when a re-created set from pictures gives way.
   watch(openSetKey, (_, left) => {
-    if (left?.startsWith("hand:")) yieldToTwin(Number(left.slice(5)));
+    if (!left?.startsWith("hand:")) return;
+    const setId = Number(left.slice(5));
+    yieldToTwin(setId).catch((err) => {
+      console.warn("[ModelShelf] checking a set against its twin failed", {
+        setId,
+        err,
+      });
+      useNoticeStore().push({
+        level: "error",
+        text:
+          errorDetail(err) ||
+          "The set could not be checked against the sets from pictures.",
+      });
+    });
   });
 
   /** A removed or deleted member, as the create and add routes take it back. */
