@@ -58,7 +58,8 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
         # before it tells the finder how the task went, so without this the
         # identical batch can be issued twice (see MissingCheckpointHashFinder).
         self._handed_out: set[str] = set()
-        # The shelf's base models as of the last family pass: only a change can
+        # The shelf's base models (and the known families of cores holding an
+        # unresolved variant) as of the last family pass: only a change can
         # identify an unknown family. Persisted in the hub, so a start (or a
         # library switch) with an unchanged shelf runs nothing; None while an
         # unknown family is filed and the shelf moved since the last pass, so
@@ -99,11 +100,12 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
         return WorkflowCardBackfillTask(hub=self._hub, structural_hashes=batch)
 
     def _reidentify_task(self):
-        """A pass moving unknown base-model families the shelf has since learned.
+        """A pass moving unknown base-model families that are now known.
 
         Asked only once the backfill is drained, and only when the shelf's
-        base models changed since the last pass: a scan or the owner setting a
-        base model is what identifies one.
+        base models changed since the last pass (a scan or the owner setting a
+        base model), or a core holding an unresolved variant gained a known
+        family set (``shelf_family_signature``).
         """
         signature = shelf_family_signature(self._hub)
         if signature == self._family_signature:

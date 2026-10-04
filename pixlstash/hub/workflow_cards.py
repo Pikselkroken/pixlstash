@@ -171,16 +171,19 @@ def variant_families(
 
     **A loader naming no model takes its core's one known family set**
     (:func:`_sibling_families`), when the caller says which *core* the
-    variant is on and every other variant of that core whose families are
-    known agrees on one set. A shelf loader filed before its id was kept,
+    variant is on, every other variant of that core whose families are
+    known agrees on one set, and that set holds every family this variant's
+    own loaders did resolve. A shelf loader filed before its id was kept,
     or left blank, is the same graph as its siblings with the value
     missing, and a workflow of its own named "Text to Image" was the cost
     of reading it as a family nobody else has.
 
-    ponytail: two models of different families whose loaders name no model
-    anywhere (no document value, no stored run) share :data:`UNRESOLVED_FAMILY`
-    and combine; a stored run arriving later does not re-trigger the family
-    pass, which watches the shelf only.
+    ponytail: the sibling set is read when the variant is derived, so the
+    answer depends on what was filed before it: a variant adopted while its
+    core had one known set keeps it after a second set arrives. Two models of
+    different families whose loaders name no model anywhere, on a core with
+    no single known set, share :data:`UNRESOLVED_FAMILY` and combine; a stored
+    run arriving later does not re-trigger the family pass.
     """
     names = {
         asset_reference(name): name
@@ -240,7 +243,8 @@ def variant_families(
         families.add(family)
     if UNRESOLVED_FAMILY in families and core is not None:
         sibling = _sibling_families(hub, core, structural_hash)
-        if sibling is not None:
+        known = {f for f in families if not _has_unknown(f)}
+        if sibling is not None and known <= set(sibling.split(",")):
             logger.info(
                 "Variant %s: a base-model loader names no model, so it takes "
                 "the families %r every other variant of its core has.",
@@ -283,7 +287,8 @@ def _has_unknown(families: str) -> bool:
 def shelf_family_signature(hub) -> str:
     """A digest of what a family pass can learn from.
 
-    The shelf's base models, and each core's known family sets: a variant
+    The shelf's base models, and the known family sets of each core that
+    holds an unresolved variant: a variant
     derived after both last changed already has every family they give it,
     so only a change here can identify an unknown one (a loader naming no
     model takes its core's one known set, :func:`_sibling_families`, and a
@@ -310,8 +315,17 @@ def shelf_family_signature(hub) -> str:
                 "AND c.core_version = ? "
                 "WHERE vf.families NOT LIKE '%asset:%' "
                 "AND vf.families NOT LIKE '%unresolved%' "
+                # Only cores holding an unresolved variant: a new graph shape
+                # anywhere else has nothing to teach a pass.
+                "AND c.core_hash IN (SELECT c2.core_hash "
+                "FROM workflow_variant_family vf2 "
+                "JOIN workflow_variant v2 ON v2.structural_hash = vf2.structural_hash "
+                "AND v2.key_version = ? "
+                "JOIN workflow_topology_core c2 "
+                "ON c2.topology_hash = v2.topology_hash AND c2.core_version = ? "
+                "WHERE vf2.families LIKE '%unresolved%') "
                 "ORDER BY c.core_hash, vf.families",
-                (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION),
+                (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION) * 2,
             )
         ]
     )

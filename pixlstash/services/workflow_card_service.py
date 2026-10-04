@@ -979,10 +979,15 @@ def _fill_base_model(
     named: Counter = Counter()
     for variant in figure.card.variants:
         for widget, filename in dict.fromkeys(names.get(variant, ())):
-            if base_model_kind(widget):
+            # A shelf id the shelf no longer holds names nothing.
+            if base_model_kind(widget) and _slot_filename(
+                widget, filename, marks_by_name
+            ):
                 named[(widget, filename)] += 1
     if not named:
         return
+    # ponytail: one base model, counted by variants; a Wan high/low pair is
+    # named by its commoner half, and pictures would rank better than variants.
     widget, name = min(named, key=lambda pair: (-named[pair], pair))
     filename = _slot_filename(widget, name, marks_by_name)
     figure.models.append(

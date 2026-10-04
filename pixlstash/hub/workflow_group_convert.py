@@ -1355,7 +1355,7 @@ def reidentify_families(hub) -> dict:
                     ],
                 )
                 logger.info(
-                    "Workflow %s keeps variants the shelf has not identified; "
+                    "Workflow %s keeps variants whose family is still unknown; "
                     "its owner state stays and is copied to %s.",
                     old_id,
                     sorted(heirs),
@@ -1364,7 +1364,7 @@ def reidentify_families(hub) -> dict:
                     _carry_group_state(conn, old_id, heir, keep=True)
     logger.info(
         "Base-model families: %d variants moved to the workflow of the family "
-        "the shelf now knows.",
+        "now known for them.",
         len(moves),
     )
     return {
