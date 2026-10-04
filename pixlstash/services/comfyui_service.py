@@ -704,6 +704,11 @@ def _wait_for_comfyui_outputs(
         )
         if images or pixlstash_ids is not None:
             return images, pixlstash_ids
+        if status_str == "success":
+            # Finished with nothing to import: ComfyUI writes a prompt's outputs
+            # and its status together, so polling on would only wait out the
+            # timeout before saying the same thing.
+            return [], None
         if status_str in {"error", "failed", "failure", "interrupted", "cancelled"}:
             raise RuntimeError(error_text or f"ComfyUI status={status_str}")
         if error_text and status_str != "success":
@@ -1135,8 +1140,13 @@ def _process_comfyui_outputs(
     origin_generation: int | None = None,
     origin_library_uuid: str | None = None,
     run_workflow_id: str | None = None,
+    rejected: str | None = None,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
+
+    *rejected* is ComfyUI's account of the outputs it dropped at validation
+    while still accepting the prompt (``format_prompt_rejection``); a run that
+    then produces nothing reports it instead of a bare "no outputs".
 
     *run_workflow_id* is the manual workflow that ran, whose pictures these
     are (``Picture.run_workflow_id``). An output the watch folder imports
@@ -1212,7 +1222,7 @@ def _process_comfyui_outputs(
         )
         if not images and pixlstash_ids is None:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
-            emit_failure_if_current("ComfyUI finished without outputs.")
+            emit_failure_if_current(rejected or "ComfyUI finished without outputs.")
             return
         entries = []
         for entry in images:

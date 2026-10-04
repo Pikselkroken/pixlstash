@@ -369,6 +369,32 @@ class TestOutputProcessing:
         ]
         assert server.vault.events[0][1]["status"] == "failed"
 
+    def test_an_empty_run_reports_the_outputs_comfyui_dropped(self, monkeypatch):
+        # ComfyUI accepted the prompt but dropped the save output at validation;
+        # its reason, not "finished without outputs", is what the owner sees.
+        server, _calls = self._run(
+            monkeypatch,
+            images=[],
+            pixlstash_ids=None,
+            rejected="KSamplerAdvanced (node 94): sampler_name: 'res_2s' not in []",
+        )
+        assert server.vault.events[0][1]["message"] == (
+            "KSamplerAdvanced (node 94): sampler_name: 'res_2s' not in []"
+        )
+
+    def test_a_finished_run_with_no_outputs_stops_waiting(self, monkeypatch):
+        monkeypatch.setattr(
+            comfyui_service, "_fetch_comfyui_history", lambda *a: _history({})
+        )
+        monkeypatch.setattr(
+            comfyui_service.time,
+            "sleep",
+            lambda _s: (_ for _ in ()).throw(AssertionError("kept polling")),
+        )
+        assert comfyui_service._wait_for_comfyui_outputs(
+            "http://comfy", "prompt-1", ["9"]
+        ) == ([], None)
+
 
 def demo() -> None:
     """Smoke the extraction split without pytest."""

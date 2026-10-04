@@ -3444,6 +3444,10 @@ def format_prompt_rejection(body: Any) -> str | None:
                                            "message": "Value not in list",
                                            "details": "ckpt_name: 'x' not in [...]"}]}}}
 
+    ComfyUI also answers 200 when only SOME outputs validate, running those
+    and listing the dropped ones in ``node_errors``; the run route renders that
+    the same way, so the import can say why a run made nothing.
+
     Every field is treated as optional - a custom fork or a future version may
     omit any of them, and an unparseable body must degrade to ``None`` (the
     caller then falls back to the raw text) rather than raise.

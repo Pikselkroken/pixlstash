@@ -137,6 +137,10 @@ const clientId = ref(null);
 const comfyuiRefreshRetryCounts = reactive({});
 const isAborting = ref(false);
 const comfyuiFailureLocked = ref(false);
+// Failures by prompt id. A run can fail before `/workflows/run` has answered
+// (a cached graph, a batch still submitting), so its registration arrives
+// after the failure and must not paper over it with "queued".
+const comfyuiFailedPromptMessages = new Map();
 const comfyuiWsState = reactive({
   connecting: false,
   url: "",
@@ -419,6 +423,7 @@ function markComfyuiPromptFailed(promptKey, reason, errorMessage) {
   comfyuiFailureLocked.value = true;
 
   if (promptKey) {
+    comfyuiFailedPromptMessages.set(promptKey, message);
     const completed = comfyuiCompletedPromptIds.value;
     if (!completed.has(promptKey)) {
       completed.add(promptKey);
@@ -847,6 +852,16 @@ function handleComfyuiRun(payload) {
   comfyuiPendingOverlayRefresh.value = Boolean(comfyuiSourcePictureId.value);
   startComfyuiWatchdog();
   void ensureComfyuiSocket();
+  const failedEarly = ids.find((id) => comfyuiFailedPromptMessages.has(id));
+  if (failedEarly) {
+    markComfyuiPromptFailed(
+      failedEarly,
+      "failed-before-registered",
+      comfyuiFailedPromptMessages.get(failedEarly),
+    );
+  }
+  // Consumed: `markComfyuiPromptFailed` re-records it, and nothing needs it now.
+  for (const id of ids) comfyuiFailedPromptMessages.delete(id);
 }
 
 // Promote backend ComfyUI failure progress events into the ComfyUI runner banner
