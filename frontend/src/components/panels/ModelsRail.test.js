@@ -596,7 +596,8 @@ describe("dragging", () => {
     // The page's own pill, under the pointer, naming what it carries.
     expect(ghost().style.display).not.toBe("none");
     expect(ghost().textContent).toContain("Soft");
-    expect(ghost().style.transform).toBe("translate(54px, 54px)");
+    // Held at the pointer (40, 40): just right of it, centred on it.
+    expect(ghost().style.transform).toBe("translate(44px, 40px) translateY(-50%)");
     expect(option(wrapper, "Soft").classes()).toContain("mrail-row--lifted");
     expect(wrapper.find('[data-testid="mrail-drag-hint"]').text()).toMatch(
       /^Drop Soft.* on a set with a dashed rim\.$/,

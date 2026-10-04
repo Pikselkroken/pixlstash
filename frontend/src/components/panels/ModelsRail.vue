@@ -1102,6 +1102,8 @@ const DRAG_START_PX = 4;
 /** How close to a scroll container's edge a drag scrolls it, and how fast. */
 const EDGE_PX = 48;
 const EDGE_SPEED_PX = 18;
+/** How far right of the pointer's tip the pill starts. */
+const GHOST_GAP_PX = 4;
 
 const ghostEl = ref(null);
 const ghostShown = ref(false);
@@ -1188,10 +1190,14 @@ function startDrag() {
   nextTick(() => dragging && findTarget());
 }
 
-/** The pill sits just below and right of the pointer, moved without a render. */
+/**
+ * The pill hangs off the pointer: its left end just past the pointer's tip,
+ * centred on it vertically, so it reads as held rather than trailing. Moved
+ * without a render.
+ */
 function placeGhost() {
   if (ghostEl.value) {
-    ghostEl.value.style.transform = `translate(${point.x + 14}px, ${point.y + 14}px)`;
+    ghostEl.value.style.transform = `translate(${point.x + GHOST_GAP_PX}px, ${point.y}px) translateY(-50%)`;
   }
 }
 
