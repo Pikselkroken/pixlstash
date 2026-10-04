@@ -544,6 +544,24 @@ describe("starting a drag", () => {
     expect(dataTransfer.setDragImage).toHaveBeenCalledTimes(1);
     expect(store.railDrag.map((row) => row.id)).toEqual([5]);
   });
+
+  it("leaves a model still being hashed behind, and says so on the chip", async () => {
+    const { wrapper, store } = await mountRail({
+      rows: [...ROWS, row(11, "Anime_Detail", "adapter", { sha256: null })],
+    });
+    await option(wrapper, "Soft").trigger("click");
+    await option(wrapper, "Anime").trigger("click", { ctrlKey: true });
+    const dataTransfer = {
+      setData: () => {},
+      setDragImage: vi.fn(),
+      effectAllowed: "",
+    };
+    await option(wrapper, "Soft").trigger("dragstart", { dataTransfer });
+    expect(store.railDrag.map((r) => r.id)).toEqual([5]);
+    expect(dataTransfer.setDragImage.mock.calls[0][0].textContent).toContain(
+      "1 still hashing, left out",
+    );
+  });
 });
 
 describe("dropping on the set grid", () => {

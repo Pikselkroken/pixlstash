@@ -1108,11 +1108,17 @@ function onDragStart(row, event) {
   }
   cursorId.value = row.id;
   endRun();
-  const rows = flat.value.filter(
-    (candidate) => selected.value.has(candidate.id) && candidate.sha256,
+  const picked = flat.value.filter((candidate) =>
+    selected.value.has(candidate.id),
   );
+  // A model still being hashed cannot be kept by a set, so it stays behind,
+  // and the chip says so rather than letting it vanish from the drop.
+  const rows = picked.filter((candidate) => candidate.sha256);
+  const hashing = picked.length - rows.length;
   store.railDrag = rows;
-  dragChipText.value = rows.length === 1 ? nameOf(rows[0]) : `${rows.length} models`;
+  dragChipText.value =
+    (rows.length === 1 ? nameOf(rows[0]) : `${rows.length} models`) +
+    (hashing ? ` · ${hashing} still hashing, left out` : "");
   event.dataTransfer.effectAllowed = "copy";
   // An internal payload, as every in-app drag is: on the desktop shell a drag
   // of a row holding an <img> also fills `dataTransfer.files`, and without the
