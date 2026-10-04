@@ -6,9 +6,9 @@
 // the lightbox's Recipe tab and the Workflows view's Workflow tab. The dialogs
 // themselves are mounted once, in App.vue.
 //
-// The grid still owns two things this cannot: the live selection's view context
-// (where a run's output is filed) and the ComfyUI progress runner. It feeds
-// both in, exactly as it fed the panel.
+// The grid still owns the live selection's view context (where a run's output
+// is filed) and feeds it in. The ComfyUI progress runner is attached by
+// whichever view is mounted: the grid's, or the Workflows view's.
 
 import { defineStore } from "pinia";
 import { onScopeDispose, ref } from "vue";
@@ -67,11 +67,11 @@ export const useRunDialogStore = defineStore("runDialog", () => {
 
   let runner = null;
   /**
-   * Whether a grid is mounted to follow a run's progress.
+   * Whether a progress runner is mounted to follow a run.
    *
-   * `App.vue` mounts `ImageGrid` under `v-else`, so on the Workflows view there
-   * is none: a run started from the Workflow tab has no progress overlay and no
-   * `client_id` worth sending, and the toast is the whole of its feedback.
+   * The grid attaches one, and so does the Workflows view (`App.vue` mounts
+   * `ImageGrid` under `v-else`, so the grid's is gone there). Only the grid's
+   * comes with a `client_id` in `context`.
    */
   const hasRunner = ref(false);
 
@@ -91,9 +91,9 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   }
 
   /**
-   * Register the grid's progress runner. Returns the function that detaches it,
-   * which only detaches this one, so a remounted grid is not unhooked by the
-   * old one's teardown.
+   * Register a progress runner (the grid's or the Workflows view's). Returns
+   * the function that detaches it, which only detaches this one, so a late
+   * teardown does not unhook the runner that replaced it.
    */
   function attachRunner(handler) {
     runner = handler;
