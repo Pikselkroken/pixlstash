@@ -1296,6 +1296,14 @@ primary route**: it swaps to `GET /pictures/search` and carries the same scope.
 thumbnail, a workflow's Fixed input, a run-time answer — and multi-select would
 be built on the argument that something might want it one day.
 
+**Still images only, by default.** Every read (stream, search and the
+*Everything* count) carries the grid's own *Images* `format` list, because a
+workflow's `LoadImage` cannot read a video file and a run uploads the file as
+it is. A caller that can use a video passes `offer-videos`, which adds an
+unticked *Include videos* checkbox: only the shelf's thumbnail verb does, since
+it stores the picture's thumbnail and a video's is a frame. The facet counts
+stay all-media.
+
 **Paste imports — and the picker deliberately handles none of it.**
 `useWindowFileImport` already claims a pasted image anywhere in the window, and
 `ImageImporter` — what it hands off to — announces the import from inside the
