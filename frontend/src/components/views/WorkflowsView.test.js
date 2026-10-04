@@ -308,6 +308,14 @@ describe("Escape", () => {
     await wrapper.find(".wfv-scroll").trigger("pointerdown");
     await mouseClick(wrapper.find(".wfv-scroll"));
     expect(store.selectedKeys).toEqual([]);
+    // A background press that never became a click (a scrollbar drag) leaves
+    // nothing armed for the next card click: that click's own press reaches
+    // the scroller first and re-records where it started.
+    store.select("b");
+    await wrapper.find(".wfv-scroll").trigger("pointerdown");
+    await wrapper.find(".wfv-row").trigger("pointerdown");
+    await mouseClick(wrapper.find(".wfv-row"));
+    expect(store.selectedKeys).toEqual(["a"]);
   });
 
   it("the sort popover owns its own Escape", async () => {
