@@ -1501,6 +1501,55 @@ describe("the body it sends", () => {
       );
     });
 
+    it("shows and offers to change the saved replacement for a gone checkpoint", async () => {
+      // The Workflow tab replaced the gone file: every run loads `now`, so
+      // the pre-flight finds nothing missing and the row must not name `was`.
+      getWorkflowCard.mockResolvedValue({
+        card: card({
+          default_recipe: {
+            models: [{ address, kind: "checkpoint", filename: "realvisXL_v5.safetensors" }],
+            loras: [],
+            values: [],
+            stages: {},
+          },
+        }),
+        model_fixes: [
+          {
+            slot_label: "CheckpointLoader/ckpt_name",
+            was: "RealVisXL_V5.safetensors",
+            now: "juggernautXL.safetensors",
+            slot_kind: "checkpoint",
+          },
+        ],
+      });
+      readModelSwap.mockResolvedValue({
+        replacements: [{ id: 8, filename: "dreamshaperXL.safetensors" }],
+        replacements_narrowed: true,
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+
+      expect(wrapper.vm.checkpointValue).toBe("juggernautXL.safetensors");
+      expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+        replacing: "juggernautXL.safetensors",
+        slotKind: "checkpoint",
+      });
+      expect(wrapper.vm.checkpointOptions).toEqual([
+        {
+          value: "juggernautXL.safetensors",
+          label: "juggernautXL.safetensors (in place of RealVisXL_V5.safetensors)",
+        },
+        { value: "dreamshaperXL.safetensors", label: "dreamshaperXL.safetensors" },
+      ]);
+      expect(wrapper.vm.checkpointFixNote).toContain(
+        "RealVisXL_V5.safetensors is not on this ComfyUI, so this workflow loads juggernautXL.safetensors in its place",
+      );
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0].models).toEqual([
+        { address, filename: "juggernautXL.safetensors" },
+      ]);
+    });
+
     it("asks nothing for a missing file that is not a base model", async () => {
       preflightWorkflowRun.mockResolvedValueOnce(missing("loras"));
       const wrapper = await mountRun({ kind: "card", workflowId: KEY });

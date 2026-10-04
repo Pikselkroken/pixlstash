@@ -1282,13 +1282,43 @@ const runsOwnWorkflow = computed(() =>
     : false,
 );
 
-/** The checkpoint the row starts at: the picture's own, else the default's. */
-const checkpointBase = computed(() => {
+/**
+ * The models the owner replaced in this workflow because the original is gone
+ * (`model_fixes` on the detail read, `PUT …/model-fix`): a run loads `now`
+ * wherever the graph names `was`, so the row must show `now`.
+ */
+const modelFixes = ref([]);
+
+/** The owner's saved replacement for checkpoint *file*, or null. */
+function savedReplacement(file) {
+  const key = fileKey(file);
+  if (!key) return null;
+  return (
+    modelFixes.value.find(
+      (fix) => fix.slot_kind === "checkpoint" && fileKey(fix.was) === key,
+    ) || null
+  );
+}
+
+/** *file*, or what a run loads in its place. */
+function inPlaceOf(file) {
+  return savedReplacement(file)?.now || file;
+}
+
+/** The checkpoint the recipe names: the picture's own, else the default's. */
+const checkpointNamed = computed(() => {
   const own = runsOwnWorkflow.value
     ? recipe.value?.settings?.[CHECKPOINT_INPUT]
     : null;
   return String(own || checkpointModel.value?.filename || "");
 });
+/** The owner's saved replacement for that checkpoint, or null. */
+const checkpointReplaced = computed(() => savedReplacement(checkpointNamed.value));
+/**
+ * The checkpoint the row starts at: what the run will load, which is the
+ * saved replacement where the named one is gone.
+ */
+const checkpointBase = computed(() => inPlaceOf(checkpointNamed.value));
 const checkpointValue = computed(() => checkpointEdit.value ?? checkpointBase.value);
 const checkpointEdited = computed(() => checkpointEdit.value !== null);
 
@@ -1316,8 +1346,9 @@ const runModels = computed(() =>
 const BASE_MODEL_FOLDERS = ["checkpoints", "diffusion_models"];
 
 /**
- * The checkpoint the pre-flight says this ComfyUI does not have, with what may
- * replace it: `{file, options, reason, narrowed}`, or null. `options` are the
+ * The checkpoint the pre-flight says this ComfyUI does not have, or the saved
+ * replacement for one that is gone, with what may replace it:
+ * `{file, missing, was, options, reason, narrowed}`, or null. `options` are the
  * shelf checkpoints this workflow's loader can load, held to the missing one's
  * base model where anything says which (`narrowed`), so the LoRAs still fit
  * (`model-swap?replacing=`, the Workflow tab's "Replace with…"); `reason` says
@@ -1333,7 +1364,12 @@ const checkpointOptions = computed(() => {
   const fix = checkpointFix.value;
   if (!fix) return [];
   return [
-    { value: fix.file, label: `${fix.file} (not on this ComfyUI)` },
+    {
+      value: fix.file,
+      label: fix.missing
+        ? `${fix.file} (not on this ComfyUI)`
+        : `${fix.file} (in place of ${fix.was})`,
+    },
     ...fix.options.map((model) => ({
       value: model.filename,
       label: model.display_name || model.filename,
@@ -1344,7 +1380,9 @@ const checkpointOptions = computed(() => {
 const checkpointFixNote = computed(() => {
   const fix = checkpointFix.value;
   if (!fix) return "";
-  const gone = `${fix.file} is not on this ComfyUI.`;
+  const gone = fix.missing
+    ? `${fix.file} is not on this ComfyUI.`
+    : `${fix.was} is not on this ComfyUI, so this workflow loads ${fix.file} in its place (set in the Workflow tab).`;
   // Nothing to suggest until the replacements are read.
   if (fix.loading) return gone;
   if (fix.options.length) {
@@ -1371,8 +1409,10 @@ function pickCheckpoint(filename) {
 
 /**
  * Offer replacements when *found* (a pre-flight's reasons) names the
- * checkpoint the row started at as missing. Asked once per file: the server
- * reads the whole shelf to answer.
+ * checkpoint the row started at as missing, or when that checkpoint is the
+ * owner's saved replacement for one that is gone: the run loads it without a
+ * word otherwise, and it may not be the one wanted. Asked once per file: the
+ * server reads the whole shelf to answer.
  *
  * The server answers for a file the workflow's graph loads, so a picture's own
  * checkpoint that is not the graph's is asked about as the graph's file, and
@@ -1389,11 +1429,22 @@ async function offerCheckpoints(found, key, token) {
         (model) => BASE_MODEL_FOLDERS.includes(model?.folder) && model.file === file,
       ),
   );
-  if (!missing) return;
-  const fix = { file, options: [], reason: "", narrowed: false, loading: true };
+  const was = checkpointReplaced.value?.was || "";
+  if (!missing && !was) return;
+  const fix = {
+    file,
+    missing,
+    was,
+    options: [],
+    reason: "",
+    narrowed: false,
+    loading: true,
+  };
   checkpointFix.value = fix;
   const ask = ++checkpointAsk;
-  const graphFile = checkpointModel.value.filename || file;
+  // As the graph names it once the owner's fixes are applied, which is what
+  // the server reads.
+  const graphFile = inPlaceOf(checkpointModel.value.filename || file);
   const current = () =>
     token === loadToken && key === activeKey.value && ask === checkpointAsk;
   let answer;
@@ -2665,6 +2716,7 @@ async function loadCard(key, { keepEdits = false } = {}) {
   if (token !== loadToken) return;
   const next = detail?.card || null;
   pins.value = detail?.pins ?? null;
+  modelFixes.value = detail?.model_fixes ?? [];
   freeError.value = "";
   // Stages are the graph's, so a choice made on one workflow says nothing
   // about another's.
@@ -2791,6 +2843,7 @@ async function load() {
   recipe.value = null;
   card.value = null;
   pins.value = null;
+  modelFixes.value = [];
   freeError.value = "";
   cards.value = [];
   loras.value = [];
