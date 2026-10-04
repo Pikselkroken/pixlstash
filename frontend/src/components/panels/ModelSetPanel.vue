@@ -80,8 +80,12 @@
       <div role="gridcell">
         <v-icon size="16">mdi-alert-outline</v-icon>
         <span
-          >Made with <strong>{{ missing.name }}</strong>, which is not on your
-          shelf.
+          >Made with
+          <template v-for="(file, i) in missing.names" :key="file"
+            >{{ i ? (i === missing.names.length - 1 ? " and " : ", ") : ""
+            }}<strong>{{ file }}</strong></template
+          >, {{ missing.names.length === 1 ? "which is" : "which are" }} not on
+          your shelf.
           <template v-if="missing.workflowIds.length === 1">
             Replace it in
             <router-link
@@ -290,7 +294,7 @@ const props = defineProps({
   /** The group's name, as its card carries it. */
   name: { type: String, default: "" },
   /**
-   * `{name, workflowIds}` when the group is named after a base model the shelf
+   * `{name, names, workflowIds}` when the group is named after a base model the shelf
    * does not hold (see `headModel`), else null.
    */
   missing: { type: Object, default: null },

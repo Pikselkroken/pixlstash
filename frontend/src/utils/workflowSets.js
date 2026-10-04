@@ -57,15 +57,21 @@ const COVER_DEPTH = 3;
 export function headModel(combination) {
   const first = (combination.models ?? [])[0] ?? null;
   if (BASE_KINDS.has(first?.kind)) return first;
-  const gone = (combination.missing ?? [])[0];
+  const missing = combination.missing ?? [];
+  const gone = missing[0];
   if (!gone) return null;
+  // Named after the first, like a two-checkpoint set after its first; the
+  // others still go in the note, with the workflows that load any of them.
   return {
     id: null,
     name: gone.name,
     filename: gone.name,
     kind: "checkpoint",
     missing: true,
-    workflowIds: gone.workflow_ids ?? [],
+    names: missing.map((entry) => entry.name),
+    workflowIds: [
+      ...new Set(missing.flatMap((entry) => entry.workflow_ids ?? [])),
+    ].sort(),
   };
 }
 
@@ -114,7 +120,8 @@ export function setGroups(combinations) {
     const key = head.missing ? `missing:${head.name}` : `model:${head.id}`;
     let group = byHead.get(key);
     if (group?.head.missing) {
-      // Each combination names the workflows ITS recipes are in.
+      // Each combination names the files and workflows ITS recipes load.
+      group.head.names = [...new Set([...group.head.names, ...head.names])];
       group.head.workflowIds = [
         ...new Set([...group.head.workflowIds, ...head.workflowIds]),
       ].sort();

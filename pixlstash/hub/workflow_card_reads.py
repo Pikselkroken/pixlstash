@@ -774,6 +774,9 @@ def workflow_of_variant(hub: HubDatabase, structural_hash: str) -> Optional[str]
 def variant_workflows(hub: HubDatabase) -> dict[str, str]:
     """:func:`workflow_of_variant` for every variant at once.
 
+    The same precedence: a ``workflow_group_member`` placement wins, and
+    ``_AUTO_VARIANTS`` already skips the topologies such a row places, so the
+    overwrite below only ever fills what that query left out.
     ``{structural_hash: workflow_id}``; a variant in no workflow yet is absent.
     """
     found = {

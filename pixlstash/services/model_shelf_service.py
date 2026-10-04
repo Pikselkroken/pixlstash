@@ -1540,7 +1540,9 @@ def fetch_workflow_sets(hub, vault) -> dict:
         every.append(
             {
                 # JSON for the names: a filename may hold a comma.
-                "key": f"{key}+{json.dumps(sorted(absent))}" if absent else key,
+                "key": f"{key}+{json.dumps(sorted(absent), separators=(',', ':'))}"
+                if absent
+                else key,
                 "models": [
                     {
                         "id": model_id,

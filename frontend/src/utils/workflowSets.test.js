@@ -767,6 +767,20 @@ describe("a set whose base model is not on the shelf", () => {
     expect(card.kinds).toEqual(["VAE 1", "Text encoder 1"]);
   });
 
+  it("keeps every missing file and its workflows on the card it is filed under", () => {
+    const pair = {
+      ...combination("8+pair", [T5]),
+      missing: [
+        { name: "high.safetensors", workflow_ids: ["auto:h"] },
+        { name: "low.safetensors", workflow_ids: ["auto:l"] },
+      ],
+    };
+    const [group] = setGroups([pair]);
+    expect(group.key).toBe("missing:high.safetensors");
+    expect(group.head.names).toEqual(["high.safetensors", "low.safetensors"]);
+    expect(group.head.workflowIds).toEqual(["auto:h", "auto:l"]);
+  });
+
   it("draws no card for a combination with no base model at all", () => {
     const loose = combination("2,5", [VAE, LORA]);
     expect(headModel(loose)).toBeNull();
