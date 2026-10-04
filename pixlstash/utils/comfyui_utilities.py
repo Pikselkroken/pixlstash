@@ -13,7 +13,7 @@ from typing import Any
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import model_filename_fields
-from pixlstash.services.workflow_hash import MODEL_EXTENSIONS
+from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SHELF_ID_FIELD
 
 logger = get_logger(__name__)
 
@@ -657,18 +657,37 @@ def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
                 if widget not in widgets
             )
             for widget, value in named:
+                value = _shelf_id_text(widget, value)
                 if isinstance(value, str) and value:
                     found.append((widget, value))
     return found
 
 
-def iter_model_fields_api(workflow: dict):
+def _shelf_id_text(widget: str, value):
+    """A shelf loader's id as text: a JSON number is an id the node runs.
+
+    The node does ``str(checkpoint_id)``, so ``77`` and ``"77"`` load the same
+    row (``workflow_hash.structural_widget_value`` reads it the same way).
+    """
+    if (
+        widget == SHELF_ID_FIELD
+        and isinstance(value, int)
+        and not isinstance(value, bool)
+    ):
+        return str(value)
+    return value
+
+
+def iter_model_fields_api(workflow: dict, *, shelf_ids_as_text: bool = False):
     """Yield ``(node_id, class_type, widget, filename)`` for an API graph.
 
     The one walk over "which widget of which loader names a model file" in an
     API-format graph: :func:`loaded_model_widgets` reads through it, and so do
     the clone dialog's slot list and ``apply_filename_swap``'s rewrite, which
     must agree with it about which fields a swap reaches.
+
+    *shelf_ids_as_text* also yields a numeric ``checkpoint_id`` as text, for a
+    reader that names models; a rewrite keeps seeing only what it can rewrite.
     """
     for node_id, node in (workflow or {}).items():
         if not isinstance(node, dict):
@@ -683,13 +702,18 @@ def iter_model_fields_api(workflow: dict):
             *(w for w in _base_model_widgets() if w not in widgets),
         ):
             value = inputs.get(widget)
+            if shelf_ids_as_text:
+                value = _shelf_id_text(widget, value)
             if isinstance(value, str) and value:
                 yield node_id, class_type, widget, value
 
 
 def _loaded_model_widgets_api(workflow: dict) -> list[tuple[str, str]]:
     return [
-        (widget, value) for _id, _cls, widget, value in iter_model_fields_api(workflow)
+        (widget, value)
+        for _id, _cls, widget, value in iter_model_fields_api(
+            workflow, shelf_ids_as_text=True
+        )
     ]
 
 

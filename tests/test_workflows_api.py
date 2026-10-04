@@ -7240,9 +7240,10 @@ def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
             "inputs": {"checkpoint_id": str(model_id)},
         }
         # A second loader on an id no shelf row holds: still its own entry.
+        # Spelled as a JSON number, which the node runs just the same.
         instance["9"] = {
             "class_type": "PixlStashCheckpointLoader",
-            "inputs": {"checkpoint_id": "987654321"},
+            "inputs": {"checkpoint_id": 987654321},
         }
         conn.execute(
             "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
