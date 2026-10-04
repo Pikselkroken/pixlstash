@@ -1140,6 +1140,18 @@ class RunLoraSlot(BaseModel):
     field: str = Field("lora_name", min_length=1, max_length=MAX_LABEL_LENGTH)
 
 
+class RunChoice(BaseModel):
+    """A sampler or scheduler this run uses in place of the graph's.
+
+    The answer to ``missing_choices``, addressed by node as that reason names
+    it. For THIS run only; the workflow keeps its own value.
+    """
+
+    node_id: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
+    field: Literal["sampler_name", "scheduler"]
+    value: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
+
+
 class RunModel(BaseModel):
     """One model a run loads at one loader, over the default recipe (#1622).
 
@@ -1237,6 +1249,9 @@ class RunRequest(BaseModel):
         default_factory=list, max_length=3
     )
     values: list[RunValue] = Field(default_factory=list, max_length=MAX_DEFAULTS)
+    # Samplers and schedulers this run swaps in for ones this ComfyUI does not
+    # list (`missing_choices`), applied last so they win over `values`.
+    choices: list[RunChoice] = Field(default_factory=list, max_length=MAX_DEFAULTS)
     # The models this run loads, by loader address (#1622). A model from
     # another family than the one it replaces is flagged on the group
     # (`family_mismatch`) and still runs.
@@ -5167,6 +5182,12 @@ def create_router(server) -> APIRouter:
                         swap["field"],
                     )
 
+            # After every value, so the replacement for a sampler or scheduler
+            # this ComfyUI lacks wins over the default the form also sent.
+            run_service.apply_choices(
+                graph, [(c.node_id, c.field, c.value) for c in body.choices]
+            )
+
             # The ComfyUI-PixlStash policy (#1521): a saver runs as SaveImage,
             # so the import below is the only one, and a loader's frozen
             # project, set or character id is looked up in this library.
@@ -5360,7 +5381,7 @@ def create_router(server) -> APIRouter:
             "not run: comfyui_not_configured, comfyui_unreachable, ui_format, "
             "missing_nodes, missing_models, a1111, picture_input_unfilled, "
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source, "
-            "lora_not_skippable, stage_not_skippable. "
+            "lora_not_skippable, stage_not_skippable, missing_choices. "
             "A group runs when its reasons are empty - or when the only ones "
             "left are an uninspectable ComfyUI the body said allow_unchecked "
             "to. A LoRA this ComfyUI does not have is NOT among them: its "
@@ -5373,7 +5394,10 @@ def create_router(server) -> APIRouter:
             "cannot be skipped without dropping another LoRA is "
             "lora_not_skippable. skip_stages names optional stages (upscale, "
             "face_detailer, seed_variance) this run goes without; a card whose stage cannot "
-            "be taken out is stage_not_skippable. Likewise a custom seed node this ComfyUI "
+            "be taken out is stage_not_skippable. missing_choices names each "
+            "sampler_name or scheduler this ComfyUI does not list, with its "
+            "options and a replacement (euler, simple) to send back in choices. "
+            "Likewise a custom seed node this ComfyUI "
             "lacks (rgthree's Seed and its kin) is replaced by the run's own "
             "seed and named in replaced_nodes, where every input it fed is one "
             "the seed pass writes; so is a plain text node (Text Multiline, "

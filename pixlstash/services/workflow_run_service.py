@@ -72,6 +72,14 @@ NO_SAVE_NODE = "no_save_node"
 NO_RUNNABLE_SOURCE = "no_runnable_source"
 LORA_NOT_SKIPPABLE = "lora_not_skippable"
 STAGE_NOT_SKIPPABLE = "stage_not_skippable"
+MISSING_CHOICES = "missing_choices"
+
+# The sampler settings a run can swap for one this ComfyUI lists, and the
+# replacement offered first: a sampler or scheduler from a node pack this
+# ComfyUI lacks (RES4LYF's `res_2s`) is refused by `POST /prompt`, and unlike a
+# model it has an everyday stand-in. Offered, never applied unasked: the run
+# names its pick in `RunRequest.choices`.
+CHOICE_FALLBACKS = {"sampler_name": "euler", "scheduler": "simple"}
 
 # A reference whose ``workflow_recipe_asset`` row is gone: the owner forgot the
 # model's name, and the stored graph still says a model went there without
@@ -476,12 +484,82 @@ def judge(
     ]
     if models:
         reasons.append(Reason(MISSING_MODELS, {"models": models}))
+    if object_info is not None:
+        choices = missing_choices(graph, object_info)
+        if choices:
+            reasons.append(Reason(MISSING_CHOICES, {"choices": choices}))
     # Only meaningful when the graph was actually inspected: an unchecked
     # pre-flight reports no save node because it read nothing, and refusing on
     # that would turn "ComfyUI is down" into "your workflow is broken".
     if preflight.get("checked") and not preflight.get("has_save_image"):
         reasons.append(Reason(NO_SAVE_NODE))
     return reasons, preflight
+
+
+def missing_choices(graph: dict, object_info: dict) -> list[dict]:
+    """Every sampler or scheduler in *graph* this ComfyUI does not list.
+
+    Only a literal on a field ComfyUI enumerates for that node: a wired value
+    is computed at run time, and a node whose options are unknown is not
+    reported missing on a guess.
+
+    Returns:
+        ``{node_id, class_type, field, value, options, replacement}`` per
+        field, ``replacement`` being :data:`CHOICE_FALLBACKS`' pick when
+        listed, else the first option.
+    """
+    found = []
+    for node_id, node in graph.items():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        for field_name, fallback in CHOICE_FALLBACKS.items():
+            value = inputs.get(field_name)
+            if not isinstance(value, str):
+                continue
+            options = listed_options(object_info, node.get("class_type"), field_name)
+            if not options or value in options:
+                continue
+            found.append(
+                {
+                    "node_id": str(node_id),
+                    "class_type": node.get("class_type"),
+                    "field": field_name,
+                    "value": value,
+                    "options": options,
+                    "replacement": fallback if fallback in options else options[0],
+                }
+            )
+    return found
+
+
+def apply_choices(graph: dict, choices: list[tuple[str, str, str]]) -> None:
+    """Write each ``(node_id, field, value)`` replacement into *graph*.
+
+    Only over a literal: a wired input is left alone, as a parameter value
+    is, and a node or field the graph lacks is logged rather than invented.
+    Whether the value is one ComfyUI lists is :func:`judge`'s to say.
+    """
+    for node_id, field_name, value in choices:
+        node = graph.get(node_id)
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict) or not isinstance(inputs.get(field_name), str):
+            logger.info(
+                "Replacement %s=%r names node %s, which has no such setting on "
+                "this graph, so it is not applied.",
+                field_name,
+                value,
+                node_id,
+            )
+            continue
+        logger.info(
+            "Node %s runs %s=%r in place of %r, as the run asked.",
+            node_id,
+            field_name,
+            value,
+            inputs[field_name],
+        )
+        inputs[field_name] = value
 
 
 def with_pixlstash_refusals(reasons: list[Reason], nodes: list[dict]) -> list[Reason]:

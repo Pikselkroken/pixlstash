@@ -106,6 +106,13 @@ export const PIXLSTASH_PACK_INSTALL =
   "from github.com/Pikselkroken/ComfyUI-PixlStash, then restart ComfyUI.";
 const PIXLSTASH_NODE_PREFIX = "PixlStash";
 
+/**
+ * A sampler or scheduler this ComfyUI does not list (a node pack's `res_2s`).
+ * The Run popup offers each its replacement and asks again, so it is a
+ * refusal only where nothing picks one.
+ */
+export const MISSING_CHOICES = "missing_choices";
+
 /** One value per `fix`, so a caller switches on a constant and not on prose. */
 export const FIX_SETTINGS = "settings";
 export const FIX_RETRY = "retry";
@@ -299,6 +306,14 @@ export function readReason(reason) {
         `${count} ${count === 1 ? "model is" : "models are"} missing.`,
         null,
         files,
+      );
+    }
+    case MISSING_CHOICES: {
+      const values = (reason.choices || [])
+        .map((choice) => `${choice.field} ${choice.value}`)
+        .join(", ");
+      return read(
+        `This ComfyUI does not have ${values}. Pick a replacement in the Run popup, or set another value in the workflow's Parameters.`,
       );
     }
     case "missing_nodes": {

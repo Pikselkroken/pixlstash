@@ -6411,6 +6411,73 @@ def test_a_model_this_comfyui_does_not_have_names_the_file_and_the_folder(runnab
     )
 
 
+def test_a_sampler_this_comfyui_lacks_is_offered_a_replacement(runnable):
+    """``missing_choices`` names the option list and euler/simple; ``choices`` runs it.
+
+    The workflow's own default (res_2s) is sent as a value too, as the Run
+    popup sends every displayed value, so the replacement has to win over it.
+    """
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"].update(
+        {
+            "steps": 13,
+            "cfg": 1.5,
+            "seed": 5,
+            "sampler_name": "res_2s",
+            "scheduler": "bong_tangent",
+        }
+    )
+    document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    document["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    manual = create_manual_workflow(runnable.server.hub, "Res", document, "import")
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["KSampler"]["input"]["required"].update(
+        {
+            "sampler_name": [["dpmpp_2m", "euler"], {}],
+            "scheduler": ["COMBO", {"options": ["karras", "normal"]}],
+        }
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    payload = _preflight(runnable.owner, workflow_id=manual)
+    (reason,) = [
+        r
+        for g in payload["groups"]
+        for r in g["reasons"]
+        if r["code"] == "missing_choices"
+    ]
+    assert [
+        (c["node_id"], c["field"], c["value"], c["options"], c["replacement"])
+        for c in reason["choices"]
+    ] == [
+        ("3", "sampler_name", "res_2s", ["dpmpp_2m", "euler"], "euler"),
+        # No `simple` on this ComfyUI: the first it lists.
+        ("3", "scheduler", "bong_tangent", ["karras", "normal"], "karras"),
+    ], reason
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": manual})
+    assert r.status_code == 200 and not runnable.submitted, r.text
+
+    defaults = _detail(runnable.owner, manual)["card"]["default_recipe"]["values"]
+    sampler = next(v for v in defaults if v["input_name"] == "sampler_name")
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": manual,
+            "values": [{k: sampler[k] for k in ("slot_label", "input_name", "value")}],
+            "choices": [
+                {"node_id": "3", "field": "sampler_name", "value": "euler"},
+                {"node_id": "3", "field": "scheduler", "value": "normal"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["reasons"] == [], r.json()
+    inputs = runnable.submitted[0]["graph"]["3"]["inputs"]
+    assert (inputs["sampler_name"], inputs["scheduler"]) == ("euler", "normal")
+
+
 @pytest.fixture
 def merged_checkpoint(runnable):
     """The shelf after a duplicate merge: one model, one name gone, one kept.

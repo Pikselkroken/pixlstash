@@ -421,6 +421,30 @@
           />
         </div>
 
+        <!-- A sampler or scheduler this ComfyUI does not have (`missing_choices`):
+             the run uses the one picked here, euler / simple when listed. For
+             this run only; the workflow keeps its own value. -->
+        <div
+          v-for="fix in choiceFixes"
+          :key="`${fix.node_id}/${fix.field}`"
+          class="rund-f rund-f--2"
+          data-testid="rund-choice"
+        >
+          <span class="rund-l">{{ fix.field }}</span>
+          <AppSelect
+            v-model="fix.chosen"
+            :label="`${fix.field} for this run`"
+            hide-label
+            compact
+            :options="fix.options"
+            :disabled="submitting"
+          />
+          <p class="rund-note">
+            {{ fix.value }} is not on this ComfyUI, so this run uses the one
+            picked here.
+          </p>
+        </div>
+
         <div class="rund-f">
           <span class="rund-l">Count</span>
           <AppInput
@@ -756,6 +780,7 @@ import { wouldDuplicate } from "../../utils/recipeKey";
 import { setEachRun } from "../../utils/workflowPins";
 import {
   changesNodes,
+  MISSING_CHOICES,
   PICTURE_INPUT_UNFILLED,
   LORAS_BYPASSED,
   reasonsBlock,
@@ -850,6 +875,12 @@ const recipe = ref(null);
 const cards = ref([]);
 const adapters = ref([]);
 const reasons = ref([]);
+/**
+ * Replacements for the samplers and schedulers this ComfyUI does not list
+ * (`missing_choices`): `{node_id, field, value, options, chosen}`, sent as
+ * `choices`. Kept once offered, so the row stays after the reason clears.
+ */
+const choiceFixes = ref([]);
 /**
  * What this run WILL do differently, which is not a reason it would not run.
  *
@@ -1039,6 +1070,8 @@ async function switchCard(key, keepEdits) {
   // What the last pre-flight and save said is about the card being left.
   changedNodes.value = false;
   fixedNote.value = "";
+  // Addressed by node, which is the card being left's.
+  choiceFixes.value = [];
   // A pick is addressed by a slot of the card it was made on; another card's
   // slots are other slots, so nothing carries over - and neither do the rows,
   // which are the set a pin would be written from.
@@ -2137,6 +2170,13 @@ function runBody() {
   if (skippedStages.value.length) body.skip_stages = skippedStages.value;
   // The checkpoint row, by the default recipe's loader address (#1623).
   if (runModels.value.length) body.models = runModels.value;
+  if (choiceFixes.value.length) {
+    body.choices = choiceFixes.value.map((fix) => ({
+      node_id: fix.node_id,
+      field: fix.field,
+      value: fix.chosen,
+    }));
+  }
   if (savedRecipe.value) {
     body.saved_recipe_id = savedRecipe.value.id;
     // `target` is the workflow the picker chose, whatever named the group.
@@ -2523,7 +2563,30 @@ async function runPreflight(token = loadToken) {
     // about a card nobody is looking at, and its rows must not become the set
     // a pin on the new card is written from.
     if (!mine() || askedFor !== activeKey.value) return;
-    reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
+    const all = (answer?.groups || []).flatMap((group) => group.reasons || []);
+    // A sampler or scheduler this ComfyUI lacks is offered its replacement,
+    // and asked again with it: the answer that counts is the one about the
+    // graph this run would submit. Only a new one re-asks, so a pick the
+    // server still refuses stays on screen as its refusal.
+    const fresh = all
+      .flatMap((reason) =>
+        reason?.code === MISSING_CHOICES ? reason.choices || [] : [],
+      )
+      .filter(
+        (choice) =>
+          !choiceFixes.value.some(
+            (fix) => fix.node_id === choice.node_id && fix.field === choice.field,
+          ),
+      );
+    if (fresh.length) {
+      choiceFixes.value = [
+        ...choiceFixes.value,
+        ...fresh.map((choice) => ({ ...choice, chosen: choice.replacement })),
+      ];
+      await runPreflight(token);
+      return;
+    }
+    reasons.value = all;
     bypassed.value = (answer?.groups || []).flatMap((group) => [
       ...repairNotices(group),
       ...unplacedNotice(group),
@@ -2567,6 +2630,7 @@ async function load() {
   loadFailed.value = "";
   submitError.value = "";
   reasons.value = [];
+  choiceFixes.value = [];
   fellBack.value = [];
   for (const key of Object.keys(edits)) delete edits[key];
   for (const key of Object.keys(editedLabels)) delete editedLabels[key];
