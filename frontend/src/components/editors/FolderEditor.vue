@@ -16,7 +16,6 @@
         class="editor-path-input"
       />
       <AppButton
-        variant="outline"
         icon-only
         icon-left="folder-open-outline"
         class="editor-browse-btn"
@@ -71,7 +70,6 @@
           dockerMountSnippet
         }}</code>
         <AppButton
-          variant="outline"
           size="sm"
           icon-only
           icon-left="content-copy"
@@ -91,7 +89,6 @@
           dockerRemoveContainerSnippet
         }}</code>
         <AppButton
-          variant="outline"
           size="sm"
           icon-only
           icon-left="content-copy"
@@ -120,7 +117,6 @@
           >{{ dockerRestartCommandSnippet }}</code
         >
         <AppButton
-          variant="outline"
           size="sm"
           icon-only
           icon-left="content-copy"
@@ -152,7 +148,6 @@
         activeFolder?.folder
       }}</span>
       <AppButton
-        variant="outline"
         icon-only
         icon-left="folder-move-outline"
         class="editor-relocate-btn"
@@ -216,7 +211,6 @@
           dockerRemoveContainerSnippet
         }}</code>
         <AppButton
-          variant="outline"
           size="sm"
           icon-only
           icon-left="content-copy"
@@ -247,7 +241,6 @@
           dockerEditRestartCommandSnippet
         }}</code>
         <AppButton
-          variant="outline"
           size="sm"
           icon-only
           icon-left="content-copy"
@@ -409,7 +402,6 @@
     <template #footer>
       <AppButton
         v-if="isEditMode && !confirmingDelete"
-        variant="outline"
         class="editor-delete-btn"
         :loading="deleteLoading"
         @click="confirmingDelete = true"

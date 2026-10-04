@@ -71,7 +71,6 @@
         <AppButton
           v-if="answer.companions.length > shown.length"
           class="ww__more"
-          variant="outline"
           size="sm"
           @click="expanded = true"
           >Show all {{ answer.companions.length }} companions</AppButton

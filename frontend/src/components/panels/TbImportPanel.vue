@@ -104,7 +104,6 @@
       />
       <div class="tb-import-actions">
         <AppButton
-          variant="outline"
           icon-left="file-plus-outline"
           @click="openLocalPicker"
         >

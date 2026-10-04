@@ -47,7 +47,6 @@
         </template>
         <AppButton
           v-else
-          variant="outline"
           size="sm"
           icon-left="folder-plus-outline"
           :disabled="!browsePath"

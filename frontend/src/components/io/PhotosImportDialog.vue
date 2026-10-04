@@ -265,7 +265,7 @@ watch(dialogOpen, (isOpen) => {
               :accept="IMPORT_FILE_ACCEPT"
               @change="handleLocalChange"
             />
-            <AppButton variant="outline" @click="openLocalPicker">
+            <AppButton @click="openLocalPicker">
               Choose files
             </AppButton>
           </div>

@@ -68,15 +68,12 @@
              is the way BACK: while the Decided page is showing, this button is
              the visible exit from a sub-page, so it stays on the bar and
              compresses to its arrow, which needs no label. -->
-        <AppButton
+        <AppBarButton
           v-if="!store.showingMixed"
-          variant="outline"
-          :icon-left="store.showingDecided ? 'arrow-left' : 'history'"
+          :icon="store.showingDecided ? 'arrow-left' : 'history'"
+          :active="store.showingDecided"
           class="dq-bar-action"
-          :class="{
-            'dq-fold-906': pageTogglesFold,
-            'dq-bar-action--on': store.showingDecided,
-          }"
+          :class="{ 'dq-fold-906': pageTogglesFold }"
           :tooltip="decidedToggleLabel"
           :aria-label="decidedToggleLabel"
           :aria-pressed="store.showingDecided ? 'true' : 'false'"
@@ -84,7 +81,7 @@
           @click="onToggleDecided"
         >
           <span class="dq-toggle-label">{{ decidedToggleLabel }}</span>
-        </AppButton>
+        </AppBarButton>
 
         <!-- The THIRD page (design D5), and deliberately not a sidebar row:
              only a destination with a to-do count earns one, and 9 to 26
@@ -95,15 +92,12 @@
              The count rides on THIS toggle and never on the sidebar badge:
              that badge means "groups to review", and it is the one number in
              the app that has to stay trusted. -->
-        <AppButton
+        <AppBarButton
           v-if="!store.showingDecided"
-          variant="outline"
-          :icon-left="store.showingMixed ? 'arrow-left' : 'alert-outline'"
+          :icon="store.showingMixed ? 'arrow-left' : 'alert-outline'"
+          :active="store.showingMixed"
           class="dq-bar-action"
-          :class="{
-            'dq-fold-906': pageTogglesFold,
-            'dq-bar-action--on': store.showingMixed,
-          }"
+          :class="{ 'dq-fold-906': pageTogglesFold }"
           :tooltip="mixedToggleTitle"
           :aria-label="mixedToggleTitle"
           :aria-pressed="store.showingMixed ? 'true' : 'false'"
@@ -117,7 +111,7 @@
             aria-hidden="true"
             >{{ store.mixedTotal.toLocaleString() }}</span
           >
-        </AppButton>
+        </AppBarButton>
 
         <!-- The ⋯, and it stands where the controls it collapses stood: at the
              end of the toggle run, inside the group it serves (amendment #2's
@@ -209,10 +203,11 @@
                trigger's grammar), so the button carries its own accessible
                name at every width - without it the hidden span would leave
                the name empty (WCAG 4.1.2). -->
-          <AppButton
+          <AppBarButton
             ref="tierButtonEl"
-            variant="outline"
-            icon-left="filter-outline"
+            icon="filter-outline"
+            chevron
+            :open="tierMenuOpen"
             class="dq-bar-action"
             :tooltip="tierLabel"
             :aria-label="tierLabel"
@@ -222,8 +217,7 @@
             @click="toggleTierMenu"
           >
             <span class="dq-tier-label">{{ tierLabel }}</span>
-            <v-icon size="16">mdi-menu-down</v-icon>
-          </AppButton>
+          </AppBarButton>
           <!-- Two menus behind one button. The tier gate says nothing about a
                decision already made - the server ignores it on the decided
                page entirely - so what a user reviewing decisions wants to
@@ -823,6 +817,7 @@ import DedupCompareDialog from "../widgets/DedupCompareDialog.vue";
 import DedupAutoStackDialog from "../widgets/DedupAutoStackDialog.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 /**
@@ -3165,12 +3160,13 @@ defineExpose({ windowedGroups, tierLabel });
   z-index: var(--z-dropdown);
 }
 
-/* The bar's AppButtons (the page toggles, the tier trigger, Auto-stack) join
-   the shrink chain. Structural no-wrap: under width pressure the LABEL
-   ellipsizes on one line; the 28px button (`--control-h`) and the 36px band,
-   which leaves it 3.5px either side, never grow. AppButton's label wrapper
-   becomes a flex row so the glyphs and the count flank the ellipsis and never
-   feed it. */
+/* The bar's buttons join the shrink chain: the page toggles and the tier
+   trigger are flat `AppBarButton`s, like every other toolbar's (#1673), and
+   Auto-stack stays the raised amber key action. Structural no-wrap: under
+   width pressure the LABEL ellipsizes on one line, and the button and the 36px
+   band never grow. Auto-stack's label wrapper becomes a flex row so its glyph
+   and count flank the ellipsis and never feed it; a bar button is already
+   one. */
 .dq-bar-action {
   min-width: 0;
 }
@@ -3184,22 +3180,6 @@ defineExpose({ windowedGroups, tierLabel });
 
 .dq-bar-action .v-icon {
   flex-shrink: 0;
-}
-
-/* A page toggle that is ON is a chosen page, not a pressed action: olive
-   selects. The wash and the edge carry the olive; label and glyph stay ink
-   (no olive on olive). The hover layers the ink wash over the selection
-   rather than replacing it, so the toggle never looks off under the pointer. */
-.dq-bar-action.dq-bar-action--on {
-  background: var(--active-wash);
-  border-color: var(--active-bar);
-  color: var(--active-text);
-}
-.dq-bar-action.dq-bar-action--on:not(:disabled):not(
-    [aria-disabled="true"]
-  ):hover {
-  background: linear-gradient(var(--hover-wash), var(--hover-wash))
-    var(--active-wash);
 }
 
 .queue {

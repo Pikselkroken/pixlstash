@@ -226,7 +226,7 @@ function confirmDeleteUnprotected() {
           Cancel
         </AppButton>
         <AppButton
-          variant="outline"
+          variant="danger"
           :disabled="unprotectedCount === 0 || busy"
           @click="confirmDeleteUnprotected"
         >
