@@ -1489,8 +1489,12 @@ in the Workflow tab's Models panel head, both through
   pairs them with the graph's base loaders by filename (#1690); a base loader
   left without one (a set holding fewer checkpoints than the graph loads) is
   named in a warning and keeps its file.
-- The name defaults to "<card> · <set>" until typed in. The view's notice
-  names a missing pack after the write.
+- The name defaults, until typed in, to the card's generated name with the
+  set's checkpoint in the model's place ("<checkpoint>: <type> + …", read off
+  the card's `type_label`), else "<card> · <set>" for a name the owner chose.
+  The view's notice names a missing pack after the write.
+- A set with no cover picture shows an icon; a hand-made set says "Grouped by
+  you" in a tooltip, leaving the cover for its picture count.
 
 #### `CloneWithModelsDialog.vue` (`io/`)
 

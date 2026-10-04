@@ -705,6 +705,7 @@ function choose(key) {
       props.cardName,
       props.cardTypeLabel,
       chosen.value?.name,
+      chosen.value?.checkpointName,
     );
   }
 }

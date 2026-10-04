@@ -1338,7 +1338,7 @@ describe("Clone onto a workflow set", () => {
     expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
   });
 
-  it("names the clone after the set's model and marks a set with no cover", async () => {
+  it("names the clone after the set's checkpoint and marks a set with no cover", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
     // Replaced, not mutated: the card objects are the shared fixture.
@@ -1355,7 +1355,7 @@ describe("Clone onto a workflow set", () => {
     expect(set.find(".cos-badge").exists()).toBe(false);
     await set.trigger("click");
     expect(wrapper.find(".cos-name input").element.value).toBe(
-      "Flux dev GGUF: Text to Image",
+      "flux1-dev-Q8_0: Text to Image",
     );
   });
 

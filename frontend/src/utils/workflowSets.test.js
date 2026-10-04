@@ -413,13 +413,14 @@ describe("cloneOntoSetName", () => {
       cloneOntoSetName(
         "Z-Image Turbo: Image to Image + Upscale (2)",
         "Image to Image",
+        "My Krea kit",
         "Krea 2",
       ),
     ).toBe("Krea 2: Image to Image + Upscale");
   });
 
   it("appends the set to a name the owner chose", () => {
-    expect(cloneOntoSetName("Portraits", "Image to Image", "Krea 2")).toBe(
+    expect(cloneOntoSetName("Portraits", "Image to Image", "Krea 2", "krea2")).toBe(
       "Portraits · Krea 2",
     );
   });
