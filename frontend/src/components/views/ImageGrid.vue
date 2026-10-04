@@ -2218,13 +2218,14 @@ function runWorkflowOnPicture(pictureId) {
 function openRunFromEditTab({ pictureId, workflowId, prompt } = {}) {
   const id = Number(getPictureId(pictureId));
   if (!Number.isFinite(id) || id <= 0 || isReadOnly.value) return;
-  if (overlayOpen.value) closeOverlay(false);
+  // The lightbox stays: the Edit tab follows the run, as it does its own.
   runDialogStore.openRun({
     kind: "selection",
     pictureIds: [id],
     workflowId: workflowId || undefined,
     pickWorkflow: true,
     prompt: prompt || undefined,
+    fromEditTab: true,
   });
 }
 

@@ -167,6 +167,21 @@ describe("the Edit tab", () => {
     expect(wrapper.emitted("more-options").at(-1)[0].workflowId).toBe("out");
   });
 
+  it("follows a run the Run popup started for it, as one of its own", async () => {
+    const wrapper = await mountPanel();
+    useRunDialogStore().editRun = {
+      prompts: [{ prompt_id: "p9" }],
+      pictureId: 7,
+      workflowName: "Relight with reference",
+      instruction: "warmer light",
+      stack: true,
+    };
+    await flush();
+    await flush();
+    expect(wrapper.text()).toContain("Running");
+    expect(wrapper.emitted("running")?.at(-1)).toEqual([true]);
+  });
+
   it("keeps every card when ComfyUI cannot be asked, or the check fails", async () => {
     preflightWorkflowRun.mockImplementation(async ({ target }) => {
       if (target === "out") throw new Error("offline");

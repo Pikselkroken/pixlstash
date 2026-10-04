@@ -663,16 +663,7 @@ async function submit() {
       return;
     }
     remember(workflowId.value);
-    run.value = {
-      sourceId: id,
-      workflowName: card?.name || "Untitled workflow",
-      instruction: text,
-      stack: stack.value,
-      status: "running",
-      message: "",
-      beforeIds: before,
-      resultId: null,
-    };
+    follow(id, card?.name, text, stack.value, before);
     // No picture ids: see the component's docstring.
     runDialog.started(prompts, []);
   } catch (err) {
@@ -681,6 +672,51 @@ async function submit() {
     submitting.value = false;
   }
 }
+
+function follow(sourceId, workflowName, text, stacked, before) {
+  run.value = {
+    sourceId,
+    workflowName: workflowName || "Untitled workflow",
+    instruction: text,
+    stack: stacked,
+    status: "running",
+    message: "",
+    beforeIds: before,
+    resultId: null,
+  };
+}
+
+// A run the Run popup started for this tab (*More options…*, or a card that
+// needs a reference picture), followed as one of its own. App.vue has already
+// handed it to the runner without picture ids, so the lightbox stays put.
+watch(
+  () => runDialog.editRun,
+  async (started) => {
+    if (!started) return;
+    clearTimeout(resolveTimer);
+    // ponytail: the stack is read just AFTER the run was queued, not before; an
+    // output imported within this read would count as old and never be shown.
+    // ComfyUI takes seconds, the read milliseconds.
+    let before = new Set([String(started.pictureId)]);
+    if (started.stack) {
+      try {
+        before = (await stackMemberIds(started.pictureId)).ids;
+      } catch (err) {
+        console.warn(
+          `Could not read the stack of picture ${started.pictureId} before following its run:`,
+          err,
+        );
+      }
+    }
+    follow(
+      started.pictureId,
+      started.workflowName,
+      started.instruction,
+      started.stack,
+      before,
+    );
+  },
+);
 
 defineExpose({ submit });
 </script>

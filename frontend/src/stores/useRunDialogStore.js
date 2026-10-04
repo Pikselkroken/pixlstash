@@ -38,6 +38,8 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    *                   The picker narrows to the workflows that fit the LoRA
    *                   attached to it, that LoRA starts as an added row, and
    *                   the results go to the person or set.
+   *   fromEditTab   - opened from the lightbox's Edit tab, which stays open
+   *                   and follows the run itself (see `editRun`).
    */
   const source = ref(null);
   /**
@@ -59,6 +61,11 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    * the freed parameter back.
    */
   const pinsWritten = ref(null);
+  /**
+   * The last run a popup opened from the Edit tab started, for the tab to
+   * follow: `{prompts, pictureId, workflowName, instruction, stack}`.
+   */
+  const editRun = ref(null);
   /** Bumped on every session reset, so a pin write answered after one is dropped. */
   let session = 0;
   function sessionEpoch() {
@@ -120,6 +127,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     close();
     context.value = {};
     pinsWritten.value = null;
+    editRun.value = null;
     session += 1;
   });
   onScopeDispose(() => unsubscribeSessionReset());
@@ -129,6 +137,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     makeMore,
     context,
     pinsWritten,
+    editRun,
     sessionEpoch,
     hasRunner,
     openRun,

@@ -1655,6 +1655,27 @@ describe("the body it sends", () => {
       prompts: [{ prompt_id: "p1" }],
       pictureIds: [42],
     });
+    // Only a popup the Edit tab opened hands it the run to follow.
+    expect(useRunDialogStore().editRun).toBe(null);
+  });
+
+  it("hands a run opened from the Edit tab to the tab to follow", async () => {
+    const wrapper = await mountRun({
+      kind: "selection",
+      pictureIds: [42],
+      fromEditTab: true,
+    });
+    wrapper.vm.prompt = "warmer light";
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(useRunDialogStore().editRun).toEqual(
+      expect.objectContaining({
+        prompts: [{ prompt_id: "p1" }],
+        pictureId: 42,
+        instruction: "warmer light",
+      }),
+    );
   });
 });
 

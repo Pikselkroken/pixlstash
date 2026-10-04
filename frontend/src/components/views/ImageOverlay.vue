@@ -927,6 +927,7 @@ import { listProjects } from "../../api/projects";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useSearchStore } from "../../stores/useSearchStore";
@@ -972,6 +973,7 @@ import { errorDetail } from "../../utils/apiError";
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
 const noticeStore = useNoticeStore();
+const runDialogStore = useRunDialogStore();
 // Undo/redo is the same stack the grid uses; only the narration differs here
 // (OverlayActionReceipt, in the lightbox's own dark chrome).
 const operationStore = useOperationStore();
@@ -2343,6 +2345,9 @@ function handleKeydown(e) {
   // its handler runs first; without this, ImageGrid would process the same
   // keypress (e.g. Escape) after the overlay has already handled it.
   e.stopImmediatePropagation();
+  // The Run popup the Edit tab opened sits over the lightbox: its keys are its
+  // own, and an arrow or Escape must not step or close the lightbox below.
+  if (runDialogStore.source || runDialogStore.makeMore) return;
 
   // Keyboard access to the media context menu (Shift+F10 / ContextMenu key),
   // available regardless of chrome visibility. Suppressed while typing so the

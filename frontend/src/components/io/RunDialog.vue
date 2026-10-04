@@ -2837,6 +2837,15 @@ async function submit() {
       return;
     }
     if (picksDestination.value) rememberSet(destinationSetId.value);
+    if (props.source?.fromEditTab) {
+      runDialog.editRun = {
+        prompts,
+        pictureId: pictureIds.value[0],
+        workflowName: card.value?.name || "",
+        instruction: prompt.value || "",
+        stack: stack.value,
+      };
+    }
     emit("run", { prompts, pictureIds: pictureIds.value });
     emit("close");
   } catch (err) {
