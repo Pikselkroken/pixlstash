@@ -5780,6 +5780,38 @@ def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
     assert parse_workflow_tag_from_filename(f"{auto_run}_00001_.png") is None
 
 
+def test_outputs_comfyui_dropped_at_validation_reach_the_import(runnable):
+    """ComfyUI accepts a prompt any output of which validates, naming the
+    dropped ones in ``node_errors``; the import reports them if nothing comes."""
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_submit_comfyui_prompt",
+        lambda *a, **k: {
+            "prompt_id": "prompt-1",
+            "node_errors": {
+                "94": {
+                    "class_type": "KSamplerAdvanced",
+                    "errors": [{"details": "sampler_name: 'res_2s' not in []"}],
+                }
+            },
+        },
+    )
+    importing: list[dict] = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_process_comfyui_outputs",
+        lambda *args, **kwargs: importing.append(kwargs),
+    )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    deadline = time.monotonic() + 5
+    while not importing and time.monotonic() < deadline:
+        time.sleep(0.01)  # the import runs on a thread of its own
+    assert importing[0]["rejected"] == (
+        "KSamplerAdvanced (node 94): sampler_name: 'res_2s' not in []"
+    )
+
+
 def test_a_manual_workflow_opens_and_exports_the_document_run_submits(runnable):
     """One graph per workflow (#1682): for a manual one, its stored document."""
     document = json.loads(json.dumps(RUN_DOCUMENT))

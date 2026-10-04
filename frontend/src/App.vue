@@ -407,6 +407,22 @@ function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
   });
 }
 
+// The grid's ComfyUI runner banners a failed run; on a view without the grid
+// (the Workflows view) nothing else would, so the failure becomes a notice.
+watch(
+  () => wsStore.wsPluginProgress,
+  (wrapped) => {
+    const payload = wrapped?.payload;
+    if (runDialogStore.hasRunner) return;
+    if (String(payload?.plugin || "").toLowerCase() !== "comfyui") return;
+    if (payload.status !== "failed") return;
+    const message = String(payload.message || "").trim() || "ComfyUI failed";
+    // Keyed by the message, not the run: a batch whose every prompt failed
+    // the same way is one card with a count, not one card per prompt.
+    noticeStore.error(message, { key: `comfyui-failed-${message}` });
+  },
+);
+
 /**
  * Open the settings dialog. `tab` deep-links to a nav entry (e.g. "scrapheap"
  * from the scrapheap header's "change" link); omitted callers land on Appearance.

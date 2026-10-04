@@ -105,6 +105,7 @@ from pixlstash.services.comfyui_recipe_service import (
     apply_seeds,
     detect_lora_targets,
     detect_model_targets,
+    format_prompt_rejection,
     insert_adapter,
     listed_as,
     listed_options,
@@ -5554,6 +5555,17 @@ def create_router(server) -> APIRouter:
                         comfyui_url, instance, body.client_id
                     )
                     prompt_id = submitted.get("prompt_id") or submitted.get("id")
+                    # ComfyUI accepts a prompt when ANY output validates and
+                    # drops the rest, naming them in `node_errors`.
+                    rejected = format_prompt_rejection(
+                        {"node_errors": submitted.get("node_errors")}
+                    )
+                    if rejected:
+                        logger.warning(
+                            "[workflows] ComfyUI dropped outputs of prompt %s: %s",
+                            prompt_id,
+                            rejected,
+                        )
                     if prompt_id:
                         lease = request.state.library_lease
                         threading.Thread(
@@ -5571,6 +5583,7 @@ def create_router(server) -> APIRouter:
                                 "origin_generation": lease.generation,
                                 "origin_library_uuid": lease.library_uuid,
                                 "run_workflow_id": run_workflow_id,
+                                "rejected": rejected,
                             },
                             daemon=True,
                         ).start()
