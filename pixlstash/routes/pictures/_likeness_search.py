@@ -68,7 +68,7 @@ def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
     except CpuQueryEncodersNotReadyError as exc:
         # Already a 503, but say why: the generic message below would send
         # the owner looking at CLIP rather than at the start-up log.
-        logger.warning("likeness-search: cannot encode the query image yet: %s", exc)
+        logger.warning("likeness-search: cannot encode the query image: %s", exc)
         raise HTTPException(
             status_code=503,
             detail=str(exc),

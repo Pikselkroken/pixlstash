@@ -31,6 +31,7 @@ from pixlstash.inference.cpu_query_encoders import (
     build_cpu_query_encoders,
 )
 from pixlstash.inference.engine import InferenceEngine
+import pixlstash.inference.engine as engine_module
 from pixlstash.inference.workflows.clip_embedding import ClipEmbeddingWorkflow
 from pixlstash.inference.workflows.text_embedding import TextEmbeddingWorkflow
 from pixlstash.tasks.task_type import TaskType
@@ -186,6 +187,23 @@ def test_a_metal_host_gets_copies_on_the_cpu_without_loading_them(device):
     assert not encoders.is_loaded(), "building the copies loaded weights"
 
 
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+def test_create_gives_the_engine_copies_only_on_metal(device, monkeypatch):
+    """The wiring in ``InferenceEngine.create``, not just the builder: without
+    the assignment there, a Metal engine has no copies and every search encodes
+    on the device. The device is faked; the copies are built, never loaded."""
+    monkeypatch.setattr(engine_module, "resolve_device", lambda *a, **k: device)
+    monkeypatch.setattr(engine_module, "configure_metal_model_loading", lambda: None)
+
+    engine = InferenceEngine.create(force_cpu=False, fast_captions=True)
+
+    if device == "mps":
+        assert isinstance(engine.query_encoders, CpuQueryEncoders)
+        assert not engine.query_encoders.is_loaded()
+    else:
+        assert engine.query_encoders is None
+
+
 @pytest.mark.parametrize(
     "clip_loads,sbert_loads",
     [(False, True), (True, False)],
@@ -203,6 +221,12 @@ def test_a_half_loaded_pair_refuses_every_search(clip_loads, sbert_loads, caplog
         TextEmbeddingWorkflow(engine).encode_query("a cat")
     assert engine.sbert_service.calls == [], "fell back to the accelerator"
     assert ("CLIP" if not clip_loads else "SBERT") in caplog.text
+    healthy = (
+        engine.query_encoders._sbert_service
+        if not clip_loads
+        else engine.query_encoders._clip_service
+    )
+    assert healthy.is_loaded(), "one failed copy stopped the other loading"
 
 
 # ---------------------------------------------------------------------------

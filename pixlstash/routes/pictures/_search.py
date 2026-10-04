@@ -355,7 +355,7 @@ def register_routes(router, server):
         except CpuQueryEncodersNotReadyError as exc:
             # 503 rather than a 500: nothing is wrong with the request; the
             # CPU query encoders failed to load at start-up.
-            logger.warning("Text search cannot encode its query yet: %s", exc)
+            logger.warning("Text search cannot encode its query: %s", exc)
             raise HTTPException(
                 status_code=503,
                 detail=str(exc),

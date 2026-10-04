@@ -372,7 +372,9 @@ counted.
 
 The same overlap in the app itself, driven by a harness: a real `Server` on a
 throwaway library of 24 pictures, every finder but face extraction, tagging and
-image embedding detached, and `ensure_ready` called as the app does. On
+image embedding detached, and `ensure_ready` called as the app does. (These
+runs predate the synchronous load: the copies then loaded on a queued task
+after the engine was published.) On
 restarts with work already pending, the first preload overlapped a CLIP batch
 on the GPU worker in 8 of 8 with the CPU copies on (and in both of two other
 runs), and in 3 of 8 with them patched out, with a cache flush inside it in 8
