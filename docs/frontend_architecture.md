@@ -1798,7 +1798,9 @@ the shelf's workflow sets section) and served as `hand_made` on
   `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
   either kind clears the other; Ctrl+click and select-all hold both (see the
   set-grid notes above), with both pills up side by side. Sets get
-  `WorkflowSetSelectionBar` (Rename, Delete set, and the card's context menu);
+  `WorkflowSetSelectionBar` (Rename, Duplicate set, Delete set, and the card's
+  context menu; Duplicate re-posts the members by sha256 and slot, so no
+  backend route of its own);
   files keep `ShelfSelectionBar`, which gains **Remove from set** while every
   selected file is a member of the open hand-made tray, and **New workflow set
   with this checkpoint** for one hashed checkpoint (from an evidence card it

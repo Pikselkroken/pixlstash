@@ -1,9 +1,9 @@
 <template>
   <!-- The pill while hand-made SETS are selected (#1520). The same floating
        object as the file pill (`ShelfSelectionBar`), with the set vocabulary:
-       Rename and Delete set. No file verb is here, and none of these touches a
-       file - which is why Delete set is not in the error colour the file
-       Delete wears. -->
+       Rename, Duplicate set and Delete set. No file verb is here, and none of
+       these touches a file - which is why Delete set is not in the error
+       colour the file Delete wears. -->
   <div
     v-if="store.selectedSets.length"
     class="selbar"
@@ -29,6 +29,19 @@
           : 'Rename one set at a time.'
       "
       @click="emit('rename')"
+    />
+    <AppBarButton
+      shape="round"
+      icon="content-duplicate"
+      data-verb="duplicate-set"
+      aria-label="Duplicate set"
+      :disabled="store.selectedSets.length !== 1"
+      :tooltip="
+        store.selectedSets.length === 1
+          ? 'Duplicate set: a copy with the same models. No file is touched.'
+          : 'Duplicate one set at a time.'
+      "
+      @click="emit('duplicate')"
     />
     <AppBarButton
       shape="round"
@@ -65,6 +78,16 @@
         <v-icon class="ctx-icon">mdi-pencil-outline</v-icon>
         <span class="ctx-label-text">Rename</span>
         <span class="ctx-shortcut">F2</span>
+      </button>
+      <button
+        v-if="store.selectedSets.length === 1"
+        class="ctx-item"
+        type="button"
+        role="menuitem"
+        @click="verb('duplicate')"
+      >
+        <v-icon class="ctx-icon">mdi-content-duplicate</v-icon>
+        <span class="ctx-label-text">Duplicate set</span>
       </button>
       <!-- The merge offer (#1523), for the one set the menu is about. -->
       <template v-if="offered">
@@ -130,6 +153,7 @@ import Tooltip from "../widgets/Tooltip.vue";
 
 const emit = defineEmits([
   "rename",
+  "duplicate",
   "delete",
   "merge-offer",
   "keep-separate",
