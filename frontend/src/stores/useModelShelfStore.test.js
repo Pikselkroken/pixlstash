@@ -33,6 +33,7 @@ const setAdapterAttachments = vi.fn();
 const fetchWorkflowSets = vi.fn();
 const createWorkflowSet = vi.fn();
 const deleteWorkflowSet = vi.fn();
+const setWorkflowSetDeclines = vi.fn();
 const setModelIcon = vi.fn();
 const clearModelIcons = vi.fn();
 
@@ -55,6 +56,7 @@ vi.mock("../api/modelShelf", () => ({
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
   createWorkflowSet: (...args) => createWorkflowSet(...args),
   deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
+  setWorkflowSetDeclines: (...args) => setWorkflowSetDeclines(...args),
 }));
 
 const mergeModelCopies = vi.fn();
@@ -79,6 +81,7 @@ import {
   useModelShelfStore,
 } from "./useModelShelfStore";
 import { useNoticeStore } from "./useNoticeStore";
+import { useOperationStore } from "./useOperationStore";
 
 /** One row of the shape `/adapters` really returns (see the fixture probe). */
 function adapter(overrides = {}) {
@@ -3200,68 +3203,110 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(store.hiddenSetCount).toBe(1);
   });
 
-  it("swaps a hand-made re-creation for the set from pictures", async () => {
-    window.localStorage.setItem(
-      "pixlstash:modelShelfHiddenSets",
-      JSON.stringify({ keys: ["model:1"] }),
-    );
-    const made = {
-      id: 7,
+  /** A hand-made set; `extra` adds members beyond the twin's two. */
+  function handSet(id, extra = [], others = {}) {
+    return {
+      id,
       name: null,
-      members: [member(checkpoint, "a".repeat(64)), member(lora, "b".repeat(64))],
+      declined: [],
+      members: [
+        member(checkpoint, "a".repeat(64)),
+        member(lora, "b".repeat(64)),
+        ...extra,
+      ],
+      ...others,
     };
-    const store = shelfWithASet();
-    await store.fetchRows();
-    createWorkflowSet.mockReset().mockImplementation(async () => {
-      fetchWorkflowSets.mockResolvedValue({
-        ...(await fetchWorkflowSets()),
-        hand_made: [made],
-      });
-      return made;
+  }
+
+  /** The store with `sets` on the hub, its first one's tray open. */
+  async function openOn(sets, coveredBy = sets.map((set) => set.id)) {
+    const store = shelfWithASet(sets);
+    fetchWorkflowSets.mockResolvedValue({
+      ...(await fetchWorkflowSets()),
+      combinations: [
+        {
+          key: "1+2",
+          models: [checkpoint, lora],
+          recipes: 2,
+          picture_count: 5,
+          covers: [],
+          covered_by: coveredBy,
+        },
+      ],
     });
-    deleteWorkflowSet.mockReset().mockImplementation(async () => {
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    store.toggleSet(`hand:${sets[0].id}`);
+    await flush();
+    deleteWorkflowSet.mockReset().mockImplementation(async (id) => {
       fetchWorkflowSets.mockResolvedValue({
         combinations: [
           { key: "1+2", models: [checkpoint, lora], recipes: 2, covers: [] },
         ],
         no_set: [],
-        hand_made: [],
+        hand_made: sets.filter((set) => set.id !== id),
       });
-      return { deleted: made };
+      return { deleted: sets.find((set) => set.id === id) };
     });
+    return store;
+  }
 
-    const created = await store.createHandMadeSet({ members: [] });
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(created).toBeNull();
+  it("swaps a hand-made re-creation for the set from pictures when its tray closes", async () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfHiddenSets",
+      JSON.stringify({ keys: ["model:1"] }),
+    );
+    useOperationStore().setLocalReceiptHost(true);
+    const store = await openOn([handSet(7, [], { declined: ["c".repeat(64)] })]);
+    // Open, it is being built: nothing gives way yet.
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+
+    store.toggleSet("hand:7");
+    await flush();
+    await flush();
+
     expect(deleteWorkflowSet).toHaveBeenCalledWith(7);
     expect(store.handMadeSets).toHaveLength(0);
     // Shown, unhidden, and opened, instead of the hand-made one.
     expect(store.setGroups.map((g) => g.key)).toEqual(["model:1"]);
     expect(store.hiddenSetCount).toBe(0);
     expect(store.openSetKey).toBe("model:1");
+
+    // Undo brings the set back with what it kept out, and re-hides the twin.
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9 });
+    setWorkflowSetDeclines.mockReset().mockResolvedValue({});
+    const operations = useOperationStore();
+    expect(operations.receipt.summary).toContain("so that set is shown instead");
+    await operations.takeLocalReceiptAction();
+    expect(createWorkflowSet).toHaveBeenCalledTimes(1);
+    expect(setWorkflowSetDeclines).toHaveBeenCalledWith(9, ["c".repeat(64)]);
+    expect(store.hiddenSetCount).toBe(1);
   });
 
-  it("leaves a hand-made set alone when it holds anything else", async () => {
-    const made = {
-      id: 8,
-      name: null,
-      members: [member(checkpoint, "a".repeat(64))],
-    };
-    const store = shelfWithASet();
-    await store.fetchRows();
-    createWorkflowSet.mockReset().mockImplementation(async () => {
-      fetchWorkflowSets.mockResolvedValue({
-        ...(await fetchWorkflowSets()),
-        hand_made: [made],
-      });
-      return made;
-    });
-    deleteWorkflowSet.mockReset();
-
-    const created = await store.createHandMadeSet({ members: [] });
-
-    expect(created).toEqual(made);
+  it("leaves a set holding anything more than the set from pictures", async () => {
+    const extra = member({ id: 3, name: "x.st", kind: "vae" }, "d".repeat(64));
+    const store = await openOn([handSet(8, [extra])]);
+    store.toggleSet("hand:8");
+    await flush();
     expect(deleteWorkflowSet).not.toHaveBeenCalled();
-    expect(store.openSetKey).toBe("hand:8");
+  });
+
+  it("leaves a set holding anything less than the set from pictures", async () => {
+    const set = handSet(8);
+    set.members = set.members.slice(0, 1);
+    const store = await openOn([set], []);
+    store.toggleSet("hand:8");
+    await flush();
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  });
+
+  it("leaves a set alone when another set also covers the twin", async () => {
+    // Deleting it would not bring the set from pictures back on screen.
+    const store = await openOn([handSet(7), handSet(6)]);
+    store.toggleSet("hand:7");
+    await flush();
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
   });
 });

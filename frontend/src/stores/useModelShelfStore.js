@@ -2114,7 +2114,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Read from every combination, not only the uncovered ones: the hand-made
    * set covers its twin's combinations, which is why the twin left the grid.
    * A member off the shelf rules a match out, since no set from pictures can
-   * hold a file the shelf does not have.
+   * hold a file the shelf does not have. So does a twin some OTHER hand-made
+   * set also covers: deleting this one would not bring it back on screen.
    */
   function automaticTwin(set) {
     const members = set?.members ?? [];
@@ -2127,7 +2128,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         (group) =>
           !group.head?.missing &&
           group.models.length === ids.size &&
-          group.models.every((model) => ids.has(model.id)),
+          group.models.every((model) => ids.has(model.id)) &&
+          group.combinations.every((combination) =>
+            (combination.covered_by ?? []).every((id) => id === set.id),
+          ),
       ) ?? null
     );
   }
@@ -2137,7 +2141,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *
    * The two would be one set drawn twice, so the hand-made one is deleted and
    * the set from pictures is shown (unhidden, if it was) and opened, with a
-   * receipt that says why. Its Undo brings the hand-made set back.
+   * receipt that says why. Its Undo brings the hand-made set back, kept-out
+   * models included, and hides the twin again if it was hidden.
+   *
+   * Asked when the owner closes the set's tray, never on each add: a set is
+   * built one model at a time, and on the way it routinely passes through a
+   * set from pictures (a checkpoint that only ever ran alone) that it is not
+   * meant to stop at.
    *
    * @param {number} setId
    * @returns {Promise<boolean>} true when the set gave way.
@@ -2148,23 +2158,36 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (!twin) return false;
     const name = setLabel(set);
     const twinName = setCard(twin).name;
-    if (hiddenSetKeys.value.has(twin.key)) changeHidden([twin.key], false);
+    const wasHidden = hiddenSetKeys.value.has(twin.key);
     const done = await setWrite(() => deleteWorkflowSet(set.id), {
       receipt: `"${name}" holds the same models as the set from pictures "${twinName}", so that set is shown instead. No file was touched.`,
-      undo: () =>
-        createWorkflowSet({
+      undo: async () => {
+        const restored = await createWorkflowSet({
           name: set.name ?? null,
           members: (set.members ?? []).map(memberBack),
-        }),
+        });
+        if (set.declined?.length) {
+          await setWorkflowSetDeclines(restored.id, set.declined);
+        }
+        if (wasHidden) changeHidden([twin.key], true);
+        return restored;
+      },
       redo: async (restored) => (await deleteHandMadeSets([restored])) ?? false,
       verb: "twin",
       failure: "The set could not be swapped for the set from pictures.",
     });
     if (!done) return false;
+    if (wasHidden) changeHidden([twin.key], false);
     clearSetSelection();
     openSetKey.value = twin.key;
     return true;
   }
+
+  // Closing a hand-made set's tray - or opening another - is the owner done
+  // with it, which is when a re-created set from pictures gives way.
+  watch(openSetKey, (_, left) => {
+    if (left?.startsWith("hand:")) yieldToTwin(Number(left.slice(5)));
+  });
 
   /** A removed or deleted member, as the create and add routes take it back. */
   function memberBack(member) {
@@ -2191,7 +2214,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       failure: "The set could not be made.",
     });
     if (created) {
-      if (await yieldToTwin(created.id)) return null;
       clearSelection();
       openSetKey.value = `hand:${created.id}`;
       noteCheckpoint(created.id, created.members ?? []);
@@ -2315,8 +2337,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       },
     );
     if (result?.added?.length) {
-      // A quiet add is the picker's, which checks when it closes.
-      if (!quiet && (await yieldToTwin(set.id))) return result;
       const added = new Set(result.added);
       noteCheckpoint(
         set.id,
@@ -2338,9 +2358,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *   added - in the order they went in.
    * @param {string} noun - the slot's plural, e.g. "LoRAs".
    */
-  async function announceAdded(set, added, noun) {
+  function announceAdded(set, added, noun) {
     if (!added.length) return;
-    if (await yieldToTwin(set.id)) return;
     const what =
       added.length === 1 ? `"${added[0].name}"` : `${added.length} ${noun}`;
     raiseSetReceipt(

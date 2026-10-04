@@ -2439,7 +2439,8 @@ function onShelfKeydown(event) {
   // both. Delete deletes the sets only when no model is selected: with both,
   // it falls through to the FILE confirmation below, so one key never deletes
   // sets unprompted while also arming a file delete. The sets' own pill still
-  // deletes them.
+  // deletes them. (With the cursor on a set from pictures, the grid has
+  // already taken Delete to hide that set; it never arrives here.)
   if (store.selectedSets.length && isSetGrid.value) {
     if (event.key === "Escape") {
       event.preventDefault();

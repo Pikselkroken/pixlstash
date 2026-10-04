@@ -180,7 +180,7 @@
                 @offer="openOffer(entry.setId)"
                 @add="answerOffer(entry, true)"
                 @keep-separate="answerOffer(entry, false)"
-                @hide="hideCards(entry)"
+                @hide="hideCard(entry)"
                 @unhide="unhideCard(entry)"
               />
             </div>
@@ -281,7 +281,9 @@
  * **A card stands for ONE model: the base model it is named after.** That is the
  * whole of what makes this screen safe to act on. The shelf's selection is by
  * `model.id` and carries verbs that destroy bytes, so a card standing for its
- * whole SET would put a shared VAE behind a Delete aimed at a checkpoint. It
+ * whole SET would put a shared VAE behind a Delete aimed at a checkpoint. (The
+ * Delete KEY on a card is the exception: it hides the set from pictures, and
+ * reaches no file.) It
  * stands for its head instead - the file whose name, kind and mark the card
  * already draws - and the other members of the set are selected one at a time in
  * the tray, where each row is one model. An EVIDENCE card never selects a set.
@@ -913,19 +915,10 @@ function groupOf(entry) {
   return store.setGroups.find((group) => group.key === entry?.key) ?? null;
 }
 
-/**
- * Hide a set from pictures: every selected evidence card along with this one,
- * as a Delete on a selection reaches all of it. Never a file.
- */
-function hideCards(entry) {
-  const picked = flatRows.value.filter(
-    (other) =>
-      other.kind === "card" &&
-      !other.hand &&
-      (other.key === entry.key || cardSelected(other)),
-  );
-  const groups = picked.map(groupOf).filter((group) => group && !group.hidden);
-  store.hideSets(groups);
+/** Hide one set from pictures. Never a file. */
+function hideCard(entry) {
+  const group = groupOf(entry);
+  if (group) store.hideSets([group]);
 }
 
 function unhideCard(entry) {
@@ -1805,14 +1798,15 @@ function onHandKey(event, entry) {
   }
   if (entry?.kind === "card" && !entry.hand) {
     if (event.key !== "Delete" && event.key !== "Backspace") return false;
-    // A set from pictures cannot be deleted, only hidden. Stopped, so the
-    // shelf's file Delete never takes a press aimed at the set for its base
-    // model: the file verbs stay on the menu and the bar.
+    // A set from pictures cannot be deleted, only hidden: the key is aimed at
+    // the card under the cursor, never a selection. Stopped, so the shelf's
+    // file Delete never takes a press aimed at the set for its base model:
+    // the file verbs stay on the menu and the bar.
     event.preventDefault();
     event.stopPropagation();
     if (!event.repeat) {
       if (groupOf(entry)?.hidden) unhideCard(entry);
-      else hideCards(entry);
+      else hideCard(entry);
     }
     return true;
   }
@@ -2010,9 +2004,6 @@ function onKeyDown(event) {
   color: rgb(var(--v-theme-on-surface));
 }
 
-/* Dashed, because it is the one card that stands for an absence. Not in the
-   grid's own track: a set it is not, and it must not be the last thing the
-   arrow keys walk into. */
 .msg__hidden {
   display: flex;
   align-items: center;
@@ -2022,6 +2013,9 @@ function onKeyDown(event) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+/* Dashed, because it is the one card that stands for an absence. Not in the
+   grid's own track: a set it is not, and it must not be the last thing the
+   arrow keys walk into. */
 .msg__ghost {
   display: flex;
   flex-direction: column;
