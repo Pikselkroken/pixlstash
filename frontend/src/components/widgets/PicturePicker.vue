@@ -84,6 +84,18 @@
                import and `ImageImporter` announces it from inside, which is the
                only place that knows whether it happened. See the Paste note in
                the script block for why announcing it from here was removed. -->
+          <!-- Offered only where a video is usable: a caller that takes the
+               picture's thumbnail gets a frame from a video for free. A
+               workflow's LoadImage cannot read a video file at all, so the Run
+               popup never offers this. -->
+          <v-checkbox
+            v-if="offerVideos"
+            v-model="includeVideos"
+            class="pp-videos"
+            label="Include videos"
+            density="compact"
+            hide-details
+          />
           <span class="pp-paste">
             or press <kbd>Ctrl</kbd><kbd>V</kbd>
           </span>
@@ -103,7 +115,9 @@
               error ||
               (loading
                 ? "Loading pictures…"
-                : "No pictures here. Try another grouping, search, or paste one in.")
+                : includeVideos
+                  ? "No pictures here. Try another grouping, search, or paste one in."
+                  : "No still images here. Videos are not offered for this. Try another grouping, search, or paste one in.")
             }}
           </p>
           <div v-if="pictures.length" class="pp-grid">
@@ -227,6 +241,7 @@ import {
   streamPictures,
 } from "../../api/pictures";
 import { errorDetail } from "../../utils/apiError";
+import { PIL_IMAGE_EXTENSIONS } from "../../utils/media";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 
@@ -235,6 +250,10 @@ const props = defineProps({
   // What the picture is FOR, said in the caller's own words ("for Reference",
   // "for Flux Realism"). The title never changes; this does.
   subtitle: { type: String, default: "" },
+  // Still images only unless this is set AND the reader ticks "Include
+  // videos". Set it only where a video is usable as a frame - see the
+  // checkbox in the template.
+  offerVideos: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["close", "pick"]);
@@ -264,6 +283,7 @@ const searchRef = ref(null);
 const facet = reactive({ kind: "", id: null });
 const expanded = reactive({ character: false, set: false });
 const search = ref("");
+const includeVideos = ref(false);
 const pictures = ref([]);
 const chosen = ref(null);
 const loading = ref(false);
@@ -283,6 +303,8 @@ const unavailable = ref(new Set());
 // list the reader is now looking at. Asserted in the suite by resolving two
 // reads out of order.
 let loadSeq = 0;
+// The same guard for the Everything count, which the checkbox re-reads.
+let countSeq = 0;
 
 const facets = computed(() => ({
   character: entityLists.characters
@@ -338,9 +360,18 @@ function choose(kind, id) {
   reload();
 }
 
+/** Restrict a query to still images, unless videos were asked for. */
+function mediaParams() {
+  const params = new URLSearchParams();
+  if (includeVideos.value) return params;
+  // The grid's own "Images" filter, so the two agree on what an image is.
+  for (const ext of PIL_IMAGE_EXTENSIONS) params.append("format", ext.toUpperCase());
+  return params;
+}
+
 /** The facet as listing query params, shared by the stream and the search. */
 function scopeParams() {
-  const params = new URLSearchParams();
+  const params = mediaParams();
   if (facet.kind === "project") params.set("project_id", String(facet.id));
   if (facet.kind === "character") params.set("character_id", String(facet.id));
   if (facet.kind === "set") params.set("set_id", String(facet.id));
@@ -496,6 +527,27 @@ function onCellKeydown(event, index) {
 // the reader has made in the meantime, and any import may be one this reader
 // never started.
 
+function readTotal() {
+  const seq = ++countSeq;
+  getPictureCount(mediaParams().toString())
+    .then((body) => {
+      if (seq === countSeq) totalCount.value = Number(body?.count);
+    })
+    .catch((err) => {
+      if (seq !== countSeq) return;
+      // A missing headline count is cosmetic: the rail still narrows and the
+      // grid still fills. Logged rather than surfaced.
+      console.warn("[PicturePicker] could not read the library count", err);
+      totalCount.value = null;
+    });
+}
+
+watch(includeVideos, () => {
+  if (!props.open) return;
+  readTotal();
+  reload();
+});
+
 const importsRunning = computed(() => Object.keys(tasks.importRuns).length);
 
 watch(importsRunning, (now, before) => {
@@ -506,7 +558,12 @@ watch(importsRunning, (now, before) => {
 watch(
   () => props.open,
   (isOpen) => {
-    if (!isOpen) return;
+    // Reset on CLOSE, so the checkbox's own watcher sees a closed picker and
+    // does not read the list a second time on the next open.
+    if (!isOpen) {
+      includeVideos.value = false;
+      return;
+    }
     facet.kind = "";
     facet.id = null;
     search.value = "";
@@ -518,16 +575,7 @@ watch(
     entityLists.refresh("characters");
     entityLists.refresh("sets");
     if (entityLists.canSeeProjects) entityLists.refresh("projects");
-    getPictureCount()
-      .then((body) => {
-        totalCount.value = Number(body?.count);
-      })
-      .catch((err) => {
-        // A missing headline count is cosmetic: the rail still narrows and the
-        // grid still fills. Logged rather than surfaced.
-        console.warn("[PicturePicker] could not read the library count", err);
-        totalCount.value = null;
-      });
+    readTotal();
     load();
     // The search field is where a reader who did not come for a facet starts,
     // and the dialog would otherwise open with focus on its Close button.
@@ -623,6 +671,9 @@ watch(
 }
 .pp-search {
   flex: 1;
+}
+.pp-videos {
+  flex: none;
 }
 .pp-paste {
   display: flex;

@@ -432,6 +432,7 @@
     <PicturePicker
       :open="thumbnailPickerOpen"
       :subtitle="thumbnailSubject"
+      offer-videos
       @close="thumbnailPickerOpen = false"
       @pick="onThumbnailPicked"
     >
