@@ -929,6 +929,8 @@ def _describe_slots(
                     )
                 )
 
+        _fill_base_model(figure, names, marks_by_name)
+
         # A manual card has no cached slots at all, so this is the other
         # branch of the same `if` rather than an addition to it: the loop
         # above ran zero times. **No `label`** - these are read off the
@@ -951,6 +953,46 @@ def _describe_slots(
                         **fields,
                     )
                 )
+
+
+def _fill_base_model(
+    figure: WorkflowFigures,
+    names: dict[str, list[tuple]],
+    marks_by_name: dict[str, ShelfMark],
+) -> None:
+    """Name the workflow's base model off its variants when its slot list has none.
+
+    The slot list is cached per topology from whichever variant reached it
+    first. A shelf loader filed before its id was kept, or left blank, has no
+    slot there, and the card was then called "Text to Image" with "No
+    checkpoint" while the workflow's other runs named the model all along.
+    The model named by the most variants (then by name, so two reads agree)
+    joins the list, with no label: it is read by widget, not off the base
+    topology.
+
+    **A base-model slot with no name is left alone.** That is a model whose
+    name was forgotten or never recorded, and "Checkpoint missing" is the
+    card saying so; a sibling's file is not what that loader loads.
+    """
+    if any(m.kind in BASE_MODEL_KINDS for m in figure.models):
+        return
+    named: Counter = Counter()
+    for variant in figure.card.variants:
+        for widget, filename in dict.fromkeys(names.get(variant, ())):
+            if base_model_kind(widget):
+                named[(widget, filename)] += 1
+    if not named:
+        return
+    widget, name = min(named, key=lambda pair: (-named[pair], pair))
+    filename = _slot_filename(widget, name, marks_by_name)
+    figure.models.append(
+        SlotModel(
+            name=_derived(filename),
+            kind=slot_kind(widget),
+            filename=name,
+            **_mark_fields(marks_by_name.get(name.lower()), filename),
+        )
+    )
 
 
 def _slot_filename(

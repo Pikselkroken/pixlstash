@@ -2166,6 +2166,72 @@ def test_a_value_the_stored_document_lost_is_read_from_a_stored_run(hub):
     assert _families(hub, keys) == workflow_cards.UNRESOLVED_FAMILY
 
 
+def _shelf_loader_graph(model_id, preview: bool = False) -> dict:
+    graph = _graph(preview=preview)
+    graph["1"] = _node("PixlStashCheckpointLoader", checkpoint_id=str(model_id))
+    return graph
+
+
+def test_a_shelf_loader_naming_no_model_joins_its_core_s_one_family(hub):
+    """A blank (or pre-#1416, nulled) shelf id is the same graph with the
+    value missing: it joins the workflow its siblings are in, whichever is
+    filed first, and never one of two."""
+    flux = _shelf_model(hub, "Flux1-Dev-FP8.safetensors", "FLUX.1 dev", "e" * 64)
+    named = _workflow(hub, _shelf_loader_graph(flux))
+    assert _workflow(hub, _shelf_loader_graph("")) == named
+
+    # Filed first, it has no sibling yet: the family pass the sibling's
+    # arrival arms moves it.
+    other = HubDatabase(str(hub.path) + ".blank-first")
+    try:
+        flux = _shelf_model(other, "Flux1-Dev-FP8.safetensors", "FLUX.1 dev", "e" * 64)
+        blank = record_api_graph(
+            other, _shelf_loader_graph(""), library_uuid="test-library"
+        )
+        finder = WorkflowCardBackfillFinder(hub=other)
+        assert _family_pass(finder).result["moved"] == 0
+        named = _workflow(other, _shelf_loader_graph(flux))
+        assert workflow_of_variant(other, blank.structural_hash) != named
+        assert _family_pass(finder).result["moved"] == 1
+        assert workflow_of_variant(other, blank.structural_hash) == named
+
+        # Two families on the core is no answer: it stays apart.
+        qwen = _shelf_model(other, "house-model-q.safetensors", "Qwen-Image", "1" * 64)
+        _workflow(other, _shelf_loader_graph(qwen))
+        lone = record_api_graph(
+            other, _shelf_loader_graph("", preview=True), library_uuid="test-library"
+        )
+        assert _families(other, lone) == workflow_cards.UNRESOLVED_FAMILY
+    finally:
+        other.close()
+
+
+def test_a_base_card_naming_no_base_model_is_named_by_its_siblings(hub):
+    """The slot cache and the base card's names come from one variant; a
+    workflow whose other runs name the checkpoint is named after it."""
+    from pixlstash.routes.workflows import _display_name
+
+    flux = _shelf_model(hub, "Flux1-Dev-FP8.safetensors", "FLUX.1 dev", "e" * 64)
+    blank = record_api_graph(hub, _shelf_loader_graph(""), library_uuid="test-library")
+    named = record_api_graph(
+        hub, _shelf_loader_graph(flux), library_uuid="test-library"
+    )
+    card = next(c for c in card_index(hub) if blank.structural_hash in c.variants)
+    assert not [s for s in card.slots if s["widget"] == "checkpoint_id"], (
+        "the topology's slot list was cached off the blank variant"
+    )
+    figure = workflow_card_service.WorkflowFigures(
+        card=replace(card, variants=[blank.structural_hash, named.structural_hash]),
+        workflow=Workflow(card.workflow_key),
+    )
+    workflow_card_service._describe_slots(
+        hub, [figure], asset_names(hub, figure.card.variants)
+    )
+    (model,) = [m for m in figure.models if m.kind == "checkpoint"]
+    assert (model.name, model.filename) == ("Flux1 Dev", str(flux))
+    assert _display_name(figure.card, figure.models) == "Flux1 Dev: Text to Image"
+
+
 def test_a_retired_workflow_a_new_variant_lands_in_is_live_again(hub):
     """A family the shelf learned, then forgot (a checkpoint renamed back):
     the id comes back to life and leaves the retired list."""

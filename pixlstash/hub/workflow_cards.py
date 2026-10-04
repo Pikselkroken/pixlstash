@@ -143,7 +143,11 @@ UNRESOLVED_FAMILY = "unresolved"
 
 
 def variant_families(
-    hub, structural_hash: str, document: dict, shelf: Optional[list] = None
+    hub,
+    structural_hash: str,
+    document: dict,
+    shelf: Optional[list] = None,
+    core: Optional[str] = None,
 ) -> str:
     """The base-model families a variant loads, sorted and comma-joined.
 
@@ -164,6 +168,14 @@ def variant_families(
     is; :func:`~pixlstash.hub.workflow_group_convert.reidentify_families`
     moves an unknown one once the shelf learns it. *shelf* is a cache of the
     shelf index a caller deriving many variants passes to every call.
+
+    **A loader naming no model takes its core's one known family set**
+    (:func:`_sibling_families`), when the caller says which *core* the
+    variant is on and every other variant of that core whose families are
+    known agrees on one set. A shelf loader filed before its id was kept,
+    or left blank, is the same graph as its siblings with the value
+    missing, and a workflow of its own named "Text to Image" was the cost
+    of reading it as a family nobody else has.
 
     ponytail: two models of different families whose loaders name no model
     anywhere (no document value, no stored run) share :data:`UNRESOLVED_FAMILY`
@@ -226,23 +238,80 @@ def variant_families(
                 family,
             )
         families.add(family)
+    if UNRESOLVED_FAMILY in families and core is not None:
+        sibling = _sibling_families(hub, core, structural_hash)
+        if sibling is not None:
+            logger.info(
+                "Variant %s: a base-model loader names no model, so it takes "
+                "the families %r every other variant of its core has.",
+                structural_hash,
+                sibling,
+            )
+            return sibling
     return ",".join(sorted(families))
 
 
-def shelf_family_signature(hub) -> str:
-    """A digest of the shelf's base models: what a family pass can learn from.
+def _sibling_families(hub, core: str, structural_hash: str) -> Optional[str]:
+    """The one known family set the other variants of *core* share, else ``None``.
 
-    A variant derived after the shelf last changed already has every family
-    the shelf knows, so only a change here can identify an unknown one. The
-    rule version is in it too, so a build that derives families differently
-    passes again over an unchanged shelf.
+    Known means no unresolved loader and no unidentified model in it; two
+    known sets, or none, is not an answer.
+    """
+    found = {
+        families
+        for (families,) in hub.fetchall(
+            "SELECT DISTINCT vf.families FROM workflow_variant_family vf "
+            "JOIN workflow_variant v ON v.structural_hash = vf.structural_hash "
+            "AND v.key_version = ? "
+            "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+            "AND c.core_version = ? "
+            "WHERE c.core_hash = ? AND vf.structural_hash != ?",
+            (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION, core, structural_hash),
+        )
+        if not _has_unknown(families)
+    }
+    return found.pop() if len(found) == 1 else None
+
+
+def _has_unknown(families: str) -> bool:
+    return any(
+        family.startswith(ASSET_REFERENCE_PREFIX) or family == UNRESOLVED_FAMILY
+        for family in families.split(",")
+    )
+
+
+def shelf_family_signature(hub) -> str:
+    """A digest of what a family pass can learn from.
+
+    The shelf's base models, and each core's known family sets: a variant
+    derived after both last changed already has every family they give it,
+    so only a change here can identify an unknown one (a loader naming no
+    model takes its core's one known set, :func:`_sibling_families`, and a
+    sibling filed after it is such a change). The rule version is in it too,
+    so a build that derives families differently passes again over an
+    unchanged hub.
     """
     return _digest(
-        [CORE_RULE_VERSION]
+        [CORE_RULE_VERSION, "siblings"]
         + [
             list(row)
             for row in hub.fetchall(
                 "SELECT id, base_model, base_model_canonical FROM model ORDER BY id"
+            )
+        ]
+        + [
+            list(row)
+            for row in hub.fetchall(
+                "SELECT DISTINCT c.core_hash, vf.families "
+                "FROM workflow_variant_family vf "
+                "JOIN workflow_variant v ON v.structural_hash = vf.structural_hash "
+                "AND v.key_version = ? "
+                "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+                "AND c.core_version = ? "
+                "WHERE vf.families NOT LIKE '%asset:%' "
+                "AND vf.families NOT LIKE '%unresolved%' "
+                "ORDER BY c.core_hash, vf.families",
+                (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION),
             )
         ]
     )
@@ -327,6 +396,7 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     row = hub.fetchone(
         "SELECT r.topology_hash AS topology_hash, g.document AS document, "
         "v.workflow_key AS workflow_key, c.topology_hash AS core_cached, "
+        "c.core_hash AS core_hash, "
         "c.specials AS core_specials, c.traits AS core_traits, "
         "vf.families AS families "
         f"{_VARIANT_JOIN} WHERE r.structural_hash = ?",
@@ -377,11 +447,6 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
         # the original's, which a card made from a workflow file alone lacks.
         core_missing = True
     document_slots = slots(document)
-    families = (
-        variant_families(hub, structural_hash, document)
-        if row["families"] is None
-        else None
-    )
     # Computed before the transaction opens: this is the CPU of the pass (a
     # Weisfeiler-Leman refinement and a strip), and the write lock is shared
     # with a second process. Only when the cache is missing or stale, because a
@@ -390,6 +455,11 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     core = (
         core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
         if core_missing
+        else None
+    )
+    families = (
+        variant_families(hub, structural_hash, document, core=core or row["core_hash"])
+        if row["families"] is None
         else None
     )
     # The specials-only path's CPU, outside the lock for the same reason.
