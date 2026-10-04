@@ -632,6 +632,38 @@ describe("dropping on the set grid", () => {
     expect(addWorkflowSetMembers).not.toHaveBeenCalled();
   });
 
+  it("lets nothing take a drop on a slot that refuses it", async () => {
+    listAdapters.mockResolvedValue(ROWS);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    const grid = mount(ModelSetGrid, { global: { stubs }, attachTo: document.body });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.toggleSet("hand:10");
+    store.railDrag = [store.rows.find((r) => r.id === 5)];
+    await grid.vm.$nextTick();
+    // A LoRA over the Checkpoint slot: refused there, and the event bubbles
+    // up through the tray to nothing that accepts it.
+    const slot = grid.find('[data-slot="checkpoint"]');
+    expect(slot.classes()).toContain("mss__slot--refuse");
+    const dataTransfer = { dropEffect: "" };
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    over.dataTransfer = dataTransfer;
+    slot.element.dispatchEvent(over);
+    expect(over.defaultPrevented).toBe(false);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    drop.dataTransfer = dataTransfer;
+    slot.element.dispatchEvent(drop);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+    grid.unmount();
+  });
+
   it("refuses a drop on a set of another base model, as the menu does", async () => {
     const store = useModelShelfStore();
     listAdapters.mockResolvedValue([
