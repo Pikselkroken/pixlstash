@@ -74,7 +74,9 @@
               :aria-labelledby="`${workflowLabelId} ${pickerValueId}`"
             >
               <span :id="pickerValueId" class="edit-select-name">{{
-                chosenCard?.name || "Untitled workflow"
+                workflowId
+                  ? chosenCard?.name || "Untitled workflow"
+                  : "Choose a workflow"
               }}</span>
               <span class="edit-kind">{{ chosenCard?.type_label }}</span>
               <v-icon class="edit-select-chevron" aria-hidden="true"
@@ -98,9 +100,11 @@
               :aria-checked="card.id === workflowId ? 'true' : 'false'"
               @click="choose(card.id)"
             >
-              <span class="ctx-label-text">{{
-                card.name || "Untitled workflow"
-              }}</span>
+              <!-- The ellipsis: this one opens the Run popup. -->
+              <span class="ctx-label-text"
+                >{{ card.name || "Untitled workflow"
+                }}{{ fillInPopup.has(card.id) ? "…" : "" }}</span
+              >
               <span class="visually-hidden">, </span>
               <span class="edit-kind">{{ card.type_label }}</span>
             </button>
@@ -212,7 +216,7 @@
           Run edit
         </AppButton>
         <div class="edit-foot-row">
-          <button type="button" class="edit-link" @click="onMoreOptions">
+          <button type="button" class="edit-link" @click="onMoreOptions()">
             More options…
           </button>
           <span :id="shortcutHintId" class="edit-note">Ctrl + Enter</span>
@@ -238,8 +242,10 @@
  *
  * **Only cards that would run.** Each edit card is pre-flighted against the
  * open picture, the same question Run asks, and one that answers with a reason
- * is dropped: a missing node or model, two open picture inputs, a UI-format
- * file. A node the server replaces (a seed node) or a LoRA it bypasses is not
+ * is dropped: a missing node or model, a UI-format file. A card whose only
+ * reason is an open picture input (a reference beside the open picture) is
+ * listed with an ellipsis and never becomes the tab's card: an instruction
+ * alone cannot run it, so choosing it opens the Run popup, which can fill it. A node the server replaces (a seed node) or a LoRA it bypasses is not
  * a reason, so those cards stay. A ComfyUI that cannot be asked (not set up,
  * not running) is no verdict on any one card, so every card stays and the run
  * says why; so does a card whose pre-flight itself failed.
@@ -262,15 +268,19 @@ import {
   preflightWorkflowRun,
   runWorkflowCard,
 } from "../../api/workflows";
-import { getPictureMetadata, pictureThumbnailUrl } from "../../api/pictures";
-import { listStackPictures } from "../../api/stacks";
+import { pictureThumbnailUrl } from "../../api/pictures";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
-import { UNCHECKED_CODES, readReason } from "../../utils/runReasons";
+import {
+  PICTURE_INPUT_UNFILLED,
+  UNCHECKED_CODES,
+  readReason,
+} from "../../utils/runReasons";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
 import { withRef } from "../../utils/withRef";
 import { selectNewestStackMember } from "../../utils/stack";
+import { stackMemberIds } from "../../utils/stackMembers";
 
 const props = defineProps({
   /** The open picture. */
@@ -301,6 +311,8 @@ const libraries = useLibrariesStore();
 const cards = ref([]);
 // Edit cards the pre-flight turned away, so the empty state can say so.
 const unrunnable = ref(0);
+// Cards that run once the Run popup fills their other picture inputs.
+const fillInPopup = ref(new Set());
 const loaded = ref(false);
 const loading = ref(false);
 const loadError = ref("");
@@ -334,10 +346,15 @@ const chosenCard = computed(
 let choseByHand = false;
 
 function choose(key) {
+  pickerOpen.value = false;
+  if (fillInPopup.value.has(key)) {
+    // The Run popup takes focus; handing it back to the picker would steal it.
+    onMoreOptions(key, true);
+    return;
+  }
+  refocusPicker = true;
   choseByHand = true;
   workflowId.value = key;
-  pickerOpen.value = false;
-  refocusPicker = true;
 }
 
 function onPickerAfterLeave() {
@@ -357,10 +374,7 @@ const storageKey = computed(
 watch(storageKey, () => {
   if (!loaded.value) return;
   rememberedKey.value = readRemembered();
-  if (
-    !choseByHand &&
-    cards.value.some((card) => card.id === rememberedKey.value)
-  ) {
+  if (!choseByHand && runsHere(rememberedKey.value)) {
     workflowId.value = rememberedKey.value;
   }
 });
@@ -420,15 +434,18 @@ async function loadCards() {
     const edits = all.filter((card) => EDIT_TYPES.has(card.type));
     const runs = await Promise.all(edits.map(wouldRun));
     cards.value = edits.filter((_, index) => runs[index]);
+    fillInPopup.value = new Set(
+      edits.filter((_, index) => runs[index] === FILL).map((card) => card.id),
+    );
     unrunnable.value = edits.length - cards.value.length;
     rememberedKey.value = readRemembered();
-    const known = cards.value.some((card) => card.id === rememberedKey.value);
     // The last one used from this tab, else the first Image to Image card in
-    // the grid's own order, else whatever edit card comes first.
-    workflowId.value = known
+    // the grid's own order, else whatever edit card comes first - of the
+    // cards the open picture alone can run.
+    const here = cards.value.filter((card) => runsHere(card.id));
+    workflowId.value = runsHere(rememberedKey.value)
       ? rememberedKey.value
-      : (cards.value.find((card) => card.type === "img2img") || cards.value[0])
-          ?.id || "";
+      : (here.find((card) => card.type === "img2img") || here[0])?.id || "";
     loaded.value = true;
   } catch (err) {
     loadError.value = errorMessage(err, "Could not read your workflows.");
@@ -437,7 +454,19 @@ async function loadCards() {
   }
 }
 
-/** False only when the pre-flight names a reason this card cannot run. */
+const FILL = "fill";
+
+/** A listed card the open picture alone can run. */
+function runsHere(key) {
+  return (
+    !fillInPopup.value.has(key) && cards.value.some((card) => card.id === key)
+  );
+}
+
+/**
+ * True when the card runs on the open picture, `FILL` when the pre-flight's
+ * only objection is a picture input the Run popup can fill, false otherwise.
+ */
 async function wouldRun(card) {
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return true;
@@ -446,9 +475,13 @@ async function wouldRun(card) {
       picture_ids: [id],
       target: card.id,
     });
-    return (answer?.groups || [])
+    const reasons = (answer?.groups || [])
       .flatMap((group) => group.reasons || [])
-      .every((reason) => UNCHECKED_CODES.includes(reason.code));
+      .filter((reason) => !UNCHECKED_CODES.includes(reason.code));
+    if (!reasons.length) return true;
+    return reasons.every((reason) => reason.code === PICTURE_INPUT_UNFILLED)
+      ? FILL
+      : false;
   } catch (err) {
     console.warn(`Could not pre-flight ${card.id} for the Edit tab:`, err);
     return true;
@@ -462,15 +495,6 @@ watch(
   },
   { immediate: true },
 );
-
-/** The source picture's stack members' ids, or `[source]` when it has none. */
-async function stackMemberIds(sourceId) {
-  const meta = await getPictureMetadata(sourceId);
-  const stackId = meta?.stack_id ?? meta?.stackId ?? null;
-  if (stackId == null) return { members: [], ids: new Set([String(sourceId)]) };
-  const members = (await listStackPictures(stackId)) || [];
-  return { members, ids: new Set(members.map((row) => String(row.id))) };
-}
 
 /**
  * The picture this run made: the newest stack member that was not there
@@ -491,6 +515,12 @@ const RESOLVE_DELAY_MS = 1500;
 
 async function resolveResult(current, attempt = 1) {
   if (run.value !== current || !current.stack) return;
+  // The popup could not read the stack before the run, so no member can be
+  // told apart as this run's: say so rather than guess.
+  if (!current.beforeIds) {
+    run.value = { ...current, lookedInVain: true };
+    return;
+  }
   try {
     current.resultId = await findResult(current);
   } catch (err) {
@@ -573,12 +603,20 @@ function openInWorkflows() {
   router.push({ name: "workflows", query: { workflow: workflowId.value } });
 }
 
-function onMoreOptions() {
+/**
+ * The Run popup for this picture. *edit* is a card chosen because it needs
+ * another picture: the popup opens as an edit of this one, reading none of its
+ * recipe, as the tab's own Run would. *More options…* keeps the recipe read.
+ */
+function onMoreOptions(key = workflowId.value, edit = false) {
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return;
   emit("more-options", {
     pictureId: id,
-    workflowId: workflowId.value,
+    workflowId: key,
+    edit,
+    // The tab's own choice, which the popup would otherwise re-default.
+    stack: stack.value,
     // Trimmed as Run trims it, so a blank box means the same thing on both
     // paths: no instruction.
     prompt: instruction.value.trim(),
@@ -631,16 +669,7 @@ async function submit() {
       return;
     }
     remember(workflowId.value);
-    run.value = {
-      sourceId: id,
-      workflowName: card?.name || "Untitled workflow",
-      instruction: text,
-      stack: stack.value,
-      status: "running",
-      message: "",
-      beforeIds: before,
-      resultId: null,
-    };
+    follow(id, card?.name, text, stack.value, before);
     // No picture ids: see the component's docstring.
     runDialog.started(prompts, []);
   } catch (err) {
@@ -649,6 +678,40 @@ async function submit() {
     submitting.value = false;
   }
 }
+
+function follow(sourceId, workflowName, text, stacked, before) {
+  run.value = {
+    sourceId,
+    workflowName: workflowName || "Untitled workflow",
+    instruction: text,
+    stack: stacked,
+    status: "running",
+    message: "",
+    beforeIds: before,
+    resultId: null,
+  };
+}
+
+// A run the Run popup started for this tab (*More options…*, or a card that
+// needs a reference picture), followed as one of its own. App.vue has already
+// handed it to the runner without picture ids, so the lightbox stays put.
+watch(
+  () => runDialog.editRun,
+  (started) => {
+    if (!started) return;
+    // Taken, so nothing stale is left on the store for a later reader.
+    runDialog.editRun = null;
+    clearTimeout(resolveTimer);
+    // Read by the popup BEFORE it queued the run, as `submit` does here.
+    follow(
+      started.pictureId,
+      started.workflowName,
+      started.instruction,
+      started.stack,
+      started.beforeIds,
+    );
+  },
+);
 
 defineExpose({ submit });
 </script>

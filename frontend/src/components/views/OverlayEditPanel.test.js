@@ -131,6 +131,72 @@ describe("the Edit tab", () => {
     });
   });
 
+  it("sends a card missing only a picture straight to the Run popup", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "i2i"
+              ? [{ code: "picture_input_unfilled", inputs: [] }]
+              : [],
+        },
+      ],
+    }));
+    window.localStorage.setItem("pixlstash:editTabWorkflow:", "i2i");
+    const wrapper = await mountPanel();
+    const rows = wrapper.findAll("[role=menuitemradio]");
+    expect(rows.map((row) => row.text())).toEqual([
+      "Widen, Outpaint",
+      "Relight…, Image to Image",
+    ]);
+    // Never the tab's own card, even when it was the last one used.
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+    await wrapper.find("textarea").setValue("warmer light");
+    // The tab's own stack choice goes with it, explicit false included.
+    await wrapper.find("input[type=checkbox]").setValue(false);
+    await rows[1].trigger("click");
+    await flush();
+    expect(runWorkflowCard).not.toHaveBeenCalled();
+    // As an edit of this picture: the popup reads none of its recipe.
+    expect(wrapper.emitted("more-options")).toEqual([
+      [
+        {
+          pictureId: 7,
+          workflowId: "i2i",
+          prompt: "warmer light",
+          edit: true,
+          stack: false,
+        },
+      ],
+    ]);
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+    // More options… still opens the tab's own card, not the click event.
+    const moreOptions = wrapper.findAll("button").find((b) =>
+      b.text().includes("More options"),
+    );
+    await moreOptions.trigger("click");
+    expect(wrapper.emitted("more-options").at(-1)[0]).toEqual(
+      expect.objectContaining({ workflowId: "out", edit: false }),
+    );
+  });
+
+  it("follows a run the Run popup started for it, as one of its own", async () => {
+    const wrapper = await mountPanel();
+    useRunDialogStore().editRun = {
+      prompts: [{ prompt_id: "p9" }],
+      pictureId: 7,
+      workflowName: "Relight with reference",
+      instruction: "warmer light",
+      stack: true,
+    };
+    await flush();
+    await flush();
+    expect(wrapper.text()).toContain("Running");
+    expect(wrapper.emitted("running")?.at(-1)).toEqual([true]);
+    // Taken off the store once followed.
+    expect(useRunDialogStore().editRun).toBe(null);
+  });
+
   it("keeps every card when ComfyUI cannot be asked, or the check fails", async () => {
     preflightWorkflowRun.mockImplementation(async ({ target }) => {
       if (target === "out") throw new Error("offline");
@@ -258,6 +324,60 @@ describe("the Edit tab", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("tells the popup's result by the stack the popup read before queuing", async () => {
+    const stacks = await import("../../api/stacks");
+    const pictures = await import("../../api/pictures");
+    pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
+    // The output is already in by the time the tab hears of the run.
+    stacks.listStackPictures.mockResolvedValue([
+      { id: 7 },
+      { id: 99, created_at: "2026-01-01T00:00:00Z" },
+    ]);
+    const wrapper = await mountPanel();
+    useRunDialogStore().editRun = {
+      prompts: [{ prompt_id: "p9" }],
+      pictureId: 7,
+      workflowName: "Relight with reference",
+      instruction: "",
+      stack: true,
+      beforeIds: new Set(["7"]),
+    };
+    await flush();
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    await flush();
+    await flush();
+    const showIt = wrapper.findAll("button").find((b) => b.text() === "Show it");
+    await showIt.trigger("click");
+    expect(wrapper.emitted("show-picture")).toEqual([[99, 7]]);
+  });
+
+  it("points at no result when the popup could not read the stack first", async () => {
+    const stacks = await import("../../api/stacks");
+    const pictures = await import("../../api/pictures");
+    pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
+    // An older member: with the before-run stack unknown it could pass for
+    // the result, so nothing is offered.
+    stacks.listStackPictures.mockResolvedValue([
+      { id: 7 },
+      { id: 50, created_at: "2025-01-01T00:00:00Z" },
+    ]);
+    const wrapper = await mountPanel();
+    useRunDialogStore().editRun = {
+      prompts: [{ prompt_id: "p9" }],
+      pictureId: 7,
+      workflowName: "Relight with reference",
+      instruction: "",
+      stack: true,
+      beforeIds: null,
+    };
+    await flush();
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    await flush();
+    await flush();
+    expect(wrapper.findAll("button").some((b) => b.text() === "Show it")).toBe(false);
+    expect(wrapper.text()).toContain("It has not reached the stack yet");
   });
 
   it("says so, with no link, when the result never reaches the stack", async () => {

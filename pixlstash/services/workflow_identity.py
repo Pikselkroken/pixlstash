@@ -699,7 +699,31 @@ def reduced_traits(
     if any(_negative_is_prompted(core, node) for node in core.values()):
         present.add(NEGATIVE_PROMPT)
     traits = [trait for trait in TRAITS if trait in present]
-    references = sum(n.class_type == "ReferenceLatent" for n in core.values())
+    # Pictures, not ReferenceLatent nodes: a Flux 2 edit feeds each picture
+    # through two of them (positive and negative), so counting nodes said "4
+    # References" of one picture and one reference. The picture being edited
+    # is a reference there too, and "Image to Image" already names it, so the
+    # count is the pictures beside it. A graph with no loader has only its
+    # distinct reference latents to count.
+    referencing = [n for n in core.values() if n.class_type == "ReferenceLatent"]
+    loaders = sum(is_picture_loader(n.class_type) for n in core.values())
+    references = (
+        loaders - 1
+        if referencing and loaders
+        else len(
+            {
+                next(
+                    (
+                        (source, slot)
+                        for name, source, slot in n.inputs
+                        if name == "latent"
+                    ),
+                    id(n),
+                )
+                for n in referencing
+            }
+        )
+    )
     if references:
         traits.append(f"{REFERENCES_PREFIX}{references}")
     return tuple(traits)

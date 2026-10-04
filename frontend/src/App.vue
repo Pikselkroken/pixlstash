@@ -391,6 +391,12 @@ function onRestoreConfirmed() {
  * tab, which is where a run this app started is followed.
  */
 function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
+  // From the lightbox's Edit tab: no picture ids, so the runner leaves the
+  // lightbox on the original, and no toast, because the tab tells the run.
+  if (runDialogStore.source?.fromEditTab) {
+    runDialogStore.started(prompts, []);
+    return;
+  }
   runDialogStore.started(prompts, pictureIds);
   noticeStore.push({
     level: "success",

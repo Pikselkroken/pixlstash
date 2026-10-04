@@ -111,6 +111,7 @@ from pixlstash.services.comfyui_recipe_service import (
     listed_as,
     listed_options,
     live_lora_targets,
+    live_node_ids,
     lora_display_name,
     model_filename_fields,
     plan_loader_rewrites,
@@ -4311,6 +4312,7 @@ def create_router(server) -> APIRouter:
         graph: dict,
         addressed: bool,
         bindings: list | None = None,
+        object_info: dict | None = None,
     ) -> list[CardInput]:
         """The picture inputs in *graph*, with the workflow's stored setup over them.
 
@@ -4327,7 +4329,11 @@ def create_router(server) -> APIRouter:
             else []
         )
         try:
-            inputs = card_input_modes(graph, _on_graph_labels(graph, stored))
+            inputs = card_input_modes(
+                graph,
+                _on_graph_labels(graph, stored),
+                live_node_ids(graph, object_info) if object_info else None,
+            )
         except WorkflowGraphError as exc:
             if addressed:
                 raise HTTPException(
@@ -5062,7 +5068,12 @@ def create_router(server) -> APIRouter:
             # keeps every other node's id - so the fill below still finds its
             # nodes in the graph the bypass left.
             card_inputs = _card_inputs(
-                hub, group.workflow_id, graph, bool(requested), source.bindings
+                hub,
+                group.workflow_id,
+                graph,
+                bool(requested),
+                source.bindings,
+                object_info,
             )
             reached_inputs = True
             addressed.update(item.address for item in card_inputs)

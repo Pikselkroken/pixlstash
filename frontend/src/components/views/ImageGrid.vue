@@ -2215,16 +2215,26 @@ function runWorkflowOnPicture(pictureId) {
  * input for…* does: `emptyPrompt` would send `""` over a recipe prompt, which
  * blanks every positive prompt node in the graph.
  */
-function openRunFromEditTab({ pictureId, workflowId, prompt } = {}) {
+function openRunFromEditTab({
+  pictureId,
+  workflowId,
+  prompt,
+  edit = false,
+  stack,
+} = {}) {
   const id = Number(getPictureId(pictureId));
   if (!Number.isFinite(id) || id <= 0 || isReadOnly.value) return;
-  if (overlayOpen.value) closeOverlay(false);
+  // The lightbox stays: the Edit tab follows the run, as it does its own.
   runDialogStore.openRun({
-    kind: "selection",
+    // An edit reads none of the picture's recipe: its prompt was for whatever
+    // workflow made the picture, not for this one.
+    kind: edit ? "edit" : "selection",
     pictureIds: [id],
     workflowId: workflowId || undefined,
     pickWorkflow: true,
     prompt: prompt || undefined,
+    stack,
+    fromEditTab: true,
   });
 }
 

@@ -20,9 +20,12 @@ Two rules govern everything here:
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import re
+import threading
+from concurrent.futures import Future
 from copy import deepcopy
 from graphlib import CycleError, TopologicalSorter
 from typing import Any, Callable, Optional
@@ -39,6 +42,10 @@ from pixlstash.services.workflow_hash import (
 logger = get_logger(__name__)
 
 OBJECT_INFO_TIMEOUT_S = 15.0
+# The /object_info GETs in flight, by URL: a request arriving while one is out
+# waits for that answer instead of asking ComfyUI again (see fetch_object_info).
+_object_info_inflight: dict[str, Future] = {}
+_object_info_inflight_lock = threading.Lock()
 
 # ComfyUI's own seed ceiling for the core sampler nodes. Note this is 64-bit,
 # NOT the 32-bit limit the t2i endpoint validates against: the shipped
@@ -190,6 +197,13 @@ def model_filename_fields(class_type: str) -> tuple[str, ...]:
 def fetch_object_info(base_url: str) -> dict:
     """Return ComfyUI's ``GET /object_info`` map, keyed by node class name.
 
+    **Requests arriving together share one GET.** ComfyUI builds the map per
+    request and serially, so the Edit tab's pre-flights (one per card, six at a
+    time from a browser) cost six builds of a multi-megabyte answer in a row.
+    Nothing outlives the GET: a request after it finishes asks ComfyUI again,
+    so the answer is still what ComfyUI has now. Each caller parses its own
+    copy, because callers edit the map they are handed.
+
     Args:
         base_url: The ComfyUI base URL, without a trailing slash.
 
@@ -201,6 +215,43 @@ def fetch_object_info(base_url: str) -> dict:
             that is not a JSON object. The caller turns this into an
             *unchecked* pre-flight rather than a failure.
     """
+    with _object_info_inflight_lock:
+        shared = _object_info_inflight.get(base_url)
+        if shared is None:
+            mine = _object_info_inflight[base_url] = Future()
+    if shared is not None:
+        text = shared.result()
+    else:
+        try:
+            text = _get_object_info_text(base_url)
+        except BaseException as exc:
+            # Every waiter is released, but a shutdown signal is this thread's
+            # own: the others are told the fetch failed, not interrupted.
+            mine.set_exception(
+                exc if isinstance(exc, Exception) else RuntimeError(repr(exc))
+            )
+            raise
+        else:
+            mine.set_result(text)
+        finally:
+            with _object_info_inflight_lock:
+                _object_info_inflight.pop(base_url, None)
+    try:
+        payload = json.loads(text)
+    except ValueError as exc:
+        logger.warning("ComfyUI object_info returned invalid JSON from %s", base_url)
+        raise RuntimeError("ComfyUI returned invalid JSON for /object_info") from exc
+    if not isinstance(payload, dict):
+        logger.warning(
+            "ComfyUI object_info returned %s, expected an object",
+            type(payload).__name__,
+        )
+        raise RuntimeError("ComfyUI returned an unexpected /object_info shape")
+    return payload
+
+
+def _get_object_info_text(base_url: str) -> str:
+    """The body of one ``GET /object_info``, unparsed."""
     url = f"{base_url}/object_info"
     try:
         response = requests.get(url, timeout=OBJECT_INFO_TIMEOUT_S)
@@ -216,18 +267,7 @@ def fetch_object_info(base_url: str) -> dict:
             detail,
         )
         raise RuntimeError(f"ComfyUI answered {response.status_code} for /object_info")
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        logger.warning("ComfyUI object_info returned invalid JSON from %s", url)
-        raise RuntimeError("ComfyUI returned invalid JSON for /object_info") from exc
-    if not isinstance(payload, dict):
-        logger.warning(
-            "ComfyUI object_info returned %s, expected an object",
-            type(payload).__name__,
-        )
-        raise RuntimeError("ComfyUI returned an unexpected /object_info shape")
-    return payload
+    return response.text
 
 
 def find_input_spec(node_spec: Any, field: str) -> tuple[Any, dict] | None:
@@ -1414,7 +1454,7 @@ def _live_graph(graph: dict, object_info: dict) -> dict:
     read as a second model or a second chain. A graph whose ``object_info``
     names no output node is returned whole: nothing says what is dead.
     """
-    live = _live_ids(graph, object_info)
+    live = live_node_ids(graph, object_info)
     if live is None:
         return graph
     dead = sorted(set(map(str, graph)) - live)
@@ -1433,7 +1473,7 @@ def live_lora_targets(prompt_graph: dict, object_info: dict | None) -> list[dict
     :func:`_live_graph` reads it.
     """
     targets = detect_lora_targets(prompt_graph)
-    live = _live_ids(prompt_graph or {}, object_info) if object_info else None
+    live = live_node_ids(prompt_graph or {}, object_info) if object_info else None
     if live is None:
         return targets
     return [target for target in targets if str(target["node_id"]) in live]
@@ -1449,7 +1489,7 @@ def _output_ids(graph: dict, object_info: dict) -> list[str]:
     ]
 
 
-def _live_ids(graph: dict, object_info: dict) -> set[str] | None:
+def live_node_ids(graph: dict, object_info: dict) -> set[str] | None:
     """The ids of the nodes some output reads, or ``None`` when none is known.
 
     ``None`` rather than every id: a graph whose ``object_info`` names no
@@ -2037,7 +2077,7 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
     from pixlstash.services.workflow_identity import SEED_VARIANCE, node_groups
 
     graph = deepcopy(prompt_graph)
-    live_before = _live_ids(graph, object_info)
+    live_before = live_node_ids(graph, object_info)
     in_stage = {
         node_id
         for node_id, node_group in node_groups(reduce_api_graph(graph)).items()
@@ -2127,7 +2167,7 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
         changes.append(
             {"node_id": node_id, "class_type": class_type, "action": "bypassed"}
         )
-    live_after = _live_ids(graph, object_info)
+    live_after = live_node_ids(graph, object_info)
     if live_before is not None and live_after is not None:
         for node_id in sorted(live_before - live_after, key=_node_order_key):
             if node_id in graph:

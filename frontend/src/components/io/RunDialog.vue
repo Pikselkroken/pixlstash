@@ -776,6 +776,7 @@ import { VIcon } from "vuetify/components";
 import { getPictureRecipe } from "../../api/comfyui";
 import { fetchWorkflowSets, listAdapters } from "../../api/modelShelf";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { stackMemberIds } from "../../utils/stackMembers";
 import { listSavedRecipes } from "../../api/recipes";
 import {
   getWorkflowCard,
@@ -2863,7 +2864,8 @@ async function load() {
   inputsKey.value = "";
   clearPicks();
   pickerFor.value = null;
-  stackChoice.value = null;
+  // The caller's own checkbox, explicit false included; else the popup decides.
+  stackChoice.value = props.source?.stack ?? null;
   checkpointEdit.value = null;
   checkpointFix.value = null;
   checkpointAsk += 1;
@@ -3011,6 +3013,23 @@ async function submit() {
   submitting.value = true;
   submitError.value = "";
   try {
+    // For the Edit tab that opened this: who was in the stack BEFORE the run,
+    // so the member it adds can be told apart once it is imported.
+    const sourceId = pictureIds.value[0];
+    let beforeIds = new Set([String(sourceId)]);
+    if (props.source?.fromEditTab && stack.value) {
+      try {
+        beforeIds = (await stackMemberIds(sourceId)).ids;
+      } catch (err) {
+        // Unknown, not just the source: guessing would offer an older stack
+        // member as this run's result.
+        console.warn(
+          `Could not read the stack of picture ${sourceId} before its run, so the Edit tab will not point at a result:`,
+          err,
+        );
+        beforeIds = null;
+      }
+    }
     const answer = await runWorkflowCard(runBody());
     const prompts = Array.isArray(answer?.prompts) ? answer.prompts : [];
     if (!prompts.length) {
@@ -3027,6 +3046,16 @@ async function submit() {
       return;
     }
     if (picksDestination.value) rememberSet(destinationSetId.value);
+    if (props.source?.fromEditTab) {
+      runDialog.editRun = {
+        prompts,
+        pictureId: pictureIds.value[0],
+        workflowName: card.value?.name || "",
+        instruction: prompt.value || "",
+        stack: stack.value,
+        beforeIds,
+      };
+    }
     emit("run", { prompts, pictureIds: pictureIds.value });
     emit("close");
   } catch (err) {

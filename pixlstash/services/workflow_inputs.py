@@ -171,7 +171,9 @@ class CardInput:
         return (self.slot_label, self.input_name)
 
 
-def card_input_modes(graph: dict, stored: list[dict]) -> list[CardInput]:
+def card_input_modes(
+    graph: dict, stored: list[dict], live: Optional[set[str]] = None
+) -> list[CardInput]:
     """Every picture input of *graph*, with a card's stored mode or its default.
 
     The label-addressed twin of :func:`resolve_input_modes`, and a wrapper of
@@ -183,9 +185,15 @@ def card_input_modes(graph: dict, stored: list[dict]) -> list[CardInput]:
     Enumerated from the graph and not from the rows, because a card nobody
     has set up has no rows at all and still has inputs.
 
+    A loader outside *live* (the nodes some output reads) is not an input:
+    ComfyUI never runs it, so it is neither offered the selection nor refused
+    as unfilled. ``None`` keeps every loader, as when ComfyUI did not answer.
+
     Args:
         graph: The API-format graph a run resolved for the card.
         stored: The card's rows, ``[{slot_label, input_name, mode, pixel_sha}]``.
+        live: :func:`~pixlstash.services.comfyui_recipe_service.live_node_ids`
+            of *graph*, or ``None`` when it is not known.
 
     Raises:
         WorkflowGraphError: The graph will not reduce, so nothing in it can be
@@ -199,7 +207,7 @@ def card_input_modes(graph: dict, stored: list[dict]) -> list[CardInput]:
         detected.picture_inputs, detected.picture_input_classes
     ):
         label = labels.get(node_id)
-        if label is None:
+        if label is None or (live is not None and node_id not in live):
             continue
         class_of[node_id] = class_type
         nodes_by_address.setdefault((label, picture_fields(class_type)[0]), []).append(
