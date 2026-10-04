@@ -139,6 +139,7 @@ from pixlstash.services.workflow_card_service import (
     BEST_SCORE,
     EDITED,
     LORA_OFF,
+    SHELF_MODEL_UNNAMED,
     DefaultRecipe,
     read_grid,
     slot_kind,
@@ -2803,7 +2804,7 @@ def create_router(server) -> APIRouter:
         graph_models = (
             None
             if _base_model_slots(figure.models) or figure.base is None
-            else _graph_base_models(figure.base)
+            else _graph_base_models(hub, figure.base)
         )
         return WorkflowCardDetail(
             card=_entry(figure, recipe, _display_names(grid.figures)),
@@ -3019,7 +3020,7 @@ def create_router(server) -> APIRouter:
                 exc,
             )
 
-    def _graph_base_models(card) -> list[str] | None:
+    def _graph_base_models(hub, card) -> list[str] | None:
         """The base-model files the card's runnable graph names, in order.
 
         Read off the same source a run would submit (:func:`_source_graph_for`:
@@ -3030,6 +3031,10 @@ def create_router(server) -> APIRouter:
         back as :data:`~run_service.FORGOTTEN_MODEL` and is left out: it names
         nothing a person could look for. ``None`` when there is no graph to
         read, which is not the same answer as a graph that loads none.
+
+        A PixlStash shelf loader's ``checkpoint_id`` is a shelf row id, not a
+        file, so it is read as the file that row names (or the shelf's own
+        "gone" / "unnamed" words): a bare ``77`` reads as a model called 77.
         """
         try:
             source, _reason = _source_graph_for(card)
@@ -3043,13 +3048,19 @@ def create_router(server) -> APIRouter:
             return None
         if source is None:
             return None
+        loaded = [
+            (widget, value)
+            for widget, value in loaded_model_widgets(source.graph)
+            if widget in CHECKPOINT_WIDGETS and value != run_service.FORGOTTEN_MODEL
+        ]
+        shelf_files = shelf_filenames(
+            hub, [value for widget, value in loaded if widget == SHELF_ID_FIELD]
+        )
         found = []
-        for widget, value in loaded_model_widgets(source.graph):
-            if (
-                widget in CHECKPOINT_WIDGETS
-                and value != run_service.FORGOTTEN_MODEL
-                and value not in found
-            ):
+        for widget, value in loaded:
+            if widget == SHELF_ID_FIELD:
+                value = shelf_files[value] or SHELF_MODEL_UNNAMED
+            if value not in found:
                 found.append(value)
         return found
 

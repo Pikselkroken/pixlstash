@@ -651,6 +651,9 @@ class ShelfMark:
 # already reads as a forgotten model.
 SHELF_MODEL_GONE = "(model no longer on the shelf)"
 
+# The same for a shelf row that is still there but names no single file.
+SHELF_MODEL_UNNAMED = "(unnamed shelf model)"
+
 
 def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     """``{slot name: ShelfMark}`` - how the shelf would draw each model.

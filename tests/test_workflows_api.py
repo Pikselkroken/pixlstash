@@ -99,6 +99,7 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
+    SHELF_MODEL_GONE,
     SlotModel,
     WorkflowFigures,
     model_marks,
@@ -7218,6 +7219,39 @@ def test_a_pack_checkpoint_loader_is_refused_outside_a_stored_file(runnable):
         "5": "per_hub_checkpoint",
         "6": "no_policy",
     }, payload
+
+
+def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
+    """A card with no base-model name falls back to the graph a run submits.
+
+    A PixlStash loader there holds a shelf row id, so the Workflow tab read
+    `77` as the checkpoint's name; it gets the file that row names, and says
+    so when the shelf no longer holds it.
+    """
+    hub = runnable.server.hub
+    model_id = hub.fetchone(
+        "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )["id"]
+    with hub.transaction() as conn:
+        instance = json.loads(json.dumps(RUN_DOCUMENT))
+        instance["1"] = {
+            "class_type": "PixlStashCheckpointLoader",
+            "inputs": {"checkpoint_id": str(model_id)},
+        }
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(instance), RUN_INSTANCE),
+        )
+        conn.execute(
+            "DELETE FROM workflow_recipe_asset "
+            "WHERE structural_hash = ? AND widget_name = 'ckpt_name'",
+            (RUN_RECIPE,),
+        )
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [_SHELF_FILENAME]
+
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [SHELF_MODEL_GONE]
 
 
 def _pack_graph(project: str | None = None) -> dict:
