@@ -40,6 +40,7 @@ from sqlmodel import delete as sqlmodel_delete, select
 from pixlstash.db_models import DeletedFileLog, Generation, Picture
 from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub import workflow_card_reads
 from pixlstash.hub.workflow_card_reads import workflow_of_variant
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
@@ -4668,6 +4669,31 @@ def test_adding_a_lora_is_a_second_set_not_a_change_to_the_first(store, set_shel
         {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
     )
     assert set(combinations) == {plain, plain | {"lora_a.safetensors"}}
+
+
+def test_a_workflow_whose_own_graph_lacks_the_missing_file_is_not_named(
+    store, set_shelf, monkeypatch
+):
+    """A workflow lists a missing file only where its fix can be made: its
+    base graph loads it. A recipe from another of its topologies does not make
+    the workflow a place to fix it, and the fix route would refuse it."""
+    picture_from(
+        store,
+        "gone.png",
+        generation_graph(
+            "Gone-Base.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    support = frozenset({"vae_a.safetensors", "clip_shared.safetensors"})
+    monkeypatch.setattr(
+        workflow_card_reads, "model_fix_labels", lambda hub, topology, was, kind: []
+    )
+
+    combinations, _ = sets_of(store)
+
+    assert combinations[support]["missing"] == [
+        {"name": "gone-base.safetensors", "workflow_ids": []}
+    ]
 
 
 def test_a_set_whose_checkpoint_is_off_the_shelf_is_named_after_the_missing_file(

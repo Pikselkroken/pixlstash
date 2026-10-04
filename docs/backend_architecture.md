@@ -9086,7 +9086,13 @@ band can only put a row in one place.
   client names such a set after the missing file and links each workflow, where
   its model fix (`PUT /workflows/{id}/model-fix`) is made; the workflow ids come
   from `workflow_card_reads.variant_workflows`, never the emptied
-  `workflow_group_member`. A fix answers first: it is stored on the workflow's
+  `workflow_group_member`, and are kept only where that fix can be made
+  (`_fixable_workflows`: the route's own `model_fix_labels` on the base card's
+  topology, chosen on the same picture counts), so a workflow whose own graph
+  does not load the name, only a recipe of another of its topologies, is not
+  named; manual ones are kept, being fixed by cloning. The route treats a slot
+  another original is already replaced by the same model in as done: a 200
+  that writes nothing there, never "undo that first". A fix answers first: it is stored on the workflow's
   base topology and read per WORKFLOW, so a missing name the workflow's
   `checkpoint` fix replaced resolves to the replacement for every recipe in it,
   and the two cards fold into one. Only the grid reads fixes: they are the
