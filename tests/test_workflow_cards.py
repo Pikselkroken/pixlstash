@@ -2217,6 +2217,17 @@ def test_a_sibling_set_is_adopted_only_when_known_and_holding_its_own(hub):
     )
     assert _families(hub, half_blank) == "flux1,unresolved"
     assert workflow_of_variant(hub, half_blank.structural_hash) != sdxl
+    # A loader holding a model of no known family keeps it: no adoption.
+    unidentified = record_api_graph(
+        hub,
+        _two_checkpoints(
+            "house-finetune-v7.safetensors",
+            "",
+        ),
+        library_uuid="test-library",
+    )
+    assert _families(hub, unidentified).endswith(",unresolved")
+    assert _families(hub, unidentified).startswith("asset:")
     # The half-blank set carries an unknown, so the core's one known set is
     # still the sdxl pair's, and a wholly blank variant takes it.
     blank = record_api_graph(hub, _two_checkpoints("", ""), library_uuid="test-library")

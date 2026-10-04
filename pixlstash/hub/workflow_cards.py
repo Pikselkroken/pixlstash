@@ -172,8 +172,8 @@ def variant_families(
     **A loader naming no model takes its core's one known family set**
     (:func:`_sibling_families`), when the caller says which *core* the
     variant is on, every other variant of that core whose families are
-    known agrees on one set, and that set holds every family this variant's
-    own loaders did resolve. A shelf loader filed before its id was kept,
+    known agrees on one set, that set holds every family this variant's own
+    loaders did resolve, and none of them loads a model of unknown family. A shelf loader filed before its id was kept,
     or left blank, is the same graph as its siblings with the value
     missing, and a workflow of its own named "Text to Image" was the cost
     of reading it as a family nobody else has.
@@ -244,7 +244,13 @@ def variant_families(
     if UNRESOLVED_FAMILY in families and core is not None:
         sibling = _sibling_families(hub, core, structural_hash)
         known = {f for f in families if not _has_unknown(f)}
-        if sibling is not None and known <= set(sibling.split(",")):
+        # An unidentified model (`asset:`) is a model this loader does load;
+        # adopting would drop it, so only `unresolved` may be the unknown.
+        if (
+            sibling is not None
+            and known | {UNRESOLVED_FAMILY} == families
+            and known <= set(sibling.split(","))
+        ):
             logger.info(
                 "Variant %s: a base-model loader names no model, so it takes "
                 "the families %r every other variant of its core has.",

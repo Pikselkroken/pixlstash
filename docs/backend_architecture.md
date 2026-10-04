@@ -2690,8 +2690,8 @@ loader takes its core's one known family set** (`_sibling_families`): a blank
 shelf id, or one an older hash version nulled with no stored run to read it
 from, is the same graph as its siblings with the value missing, so when every
 other variant of the core whose families are known agrees on one set, and that
-set holds every family the variant's own loaders resolved, the variant takes
-it. Two known sets, none, or one missing a family the variant has, leave it
+set holds every family the variant's own loaders resolved, and none of them
+loads a model of unknown family (`asset:`), the variant takes it. Two known sets, none, or one missing a family the variant has, leave it
 `unresolved`. It is read when the variant is derived, so it depends on what was
 filed first: a variant adopted while its core had one known set keeps it. The empty set means
 a graph with no base-model loader, never an unresolved value. A workflow
