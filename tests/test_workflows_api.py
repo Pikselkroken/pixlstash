@@ -126,6 +126,7 @@ from pixlstash.utils.workflow_ids import stamp_workflow_id
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.services import (
+    comfyui_recipe_service,
     comfyui_service,
     saved_recipe_service,
     workflow_bindings,
@@ -10244,11 +10245,33 @@ def test_cloning_with_comfyui_down_writes_the_names_unchecked(cloneable):
 
 
 def test_a_clone_onto_another_base_model_retypes_its_text_encoder(cloneable):
-    """The CLIP loader's `type` names the new model, not the source's."""
+    """The replaced model's CLIP loader `type` names the new model; another
+    model's encoder in the same graph keeps its own."""
     graph = _embedded_export_graph()
+    # The swapped branch: checkpoint "1" -> LoRA "2" -> sampler "3", its
+    # prompts encoded through CLIPLoader "8".
     graph["8"] = {
         "class_type": "CLIPLoader",
         "inputs": {"clip_name": "qwen_2.5_vl_7b.safetensors", "type": "qwen_image"},
+    }
+    graph["5"]["inputs"]["clip"] = ["8", 0]
+    graph["6"]["inputs"]["clip"] = ["8", 0]
+    # An untouched branch fed the first one's picture: its encoder is Wan's.
+    graph["9"] = {
+        "class_type": "UNETLoader",
+        "inputs": {"unet_name": "wan.safetensors"},
+    }
+    graph["10"] = {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "umt5_xxl.safetensors", "type": "wan"},
+    }
+    graph["11"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "pan left", "clip": ["10", 0]},
+    }
+    graph["12"] = {
+        "class_type": "KSampler",
+        "inputs": {"model": ["9", 0], "positive": ["11", 0], "latent_image": ["3", 0]},
     }
     cloneable.monkeypatch.setattr(
         workflows_routes,
@@ -10265,7 +10288,8 @@ def test_a_clone_onto_another_base_model_retypes_its_text_encoder(cloneable):
             (CLONE_CHECKPOINT,),
         )
     try:
-        r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+        # Keyed in another spelling than the graph's: the rewrite folds case.
+        r = _clone(cloneable, {_SHELF_FILENAME.upper(): CLONE_CHECKPOINT})
     finally:
         with hub.transaction() as conn:
             conn.execute(
@@ -10276,7 +10300,33 @@ def test_a_clone_onto_another_base_model_retypes_its_text_encoder(cloneable):
     written = _written(cloneable, r.json())
     assert written["1"]["inputs"]["ckpt_name"] == CLONE_CHECKPOINT
     assert written["8"]["inputs"]["type"] == "krea2"
+    assert written["10"]["inputs"]["type"] == "wan"
     assert graph["8"]["inputs"]["type"] == "qwen_image"
+
+
+def test_a_dual_encoder_cloned_onto_flux1_loads_as_flux():
+    graph = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "sd35.safetensors"}},
+        "2": {
+            "class_type": "DualCLIPLoader",
+            "inputs": {
+                "clip_name1": "l.safetensors",
+                "clip_name2": "t5.safetensors",
+                "type": "sd3",
+            },
+        },
+        "3": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "x", "clip": ["2", 0]},
+        },
+        "4": {
+            "class_type": "KSampler",
+            "inputs": {"model": ["1", 0], "positive": ["3", 0]},
+        },
+    }
+    rows = comfyui_recipe_service.retype_text_encoders(graph, {"1": "flux1"})
+    assert [(r["node_id"], r["now"]) for r in rows] == [("2", "flux")]
+    assert graph["2"]["inputs"]["type"] == "flux"
 
 
 def test_a_clone_where_nothing_could_be_swapped_is_refused(cloneable):
