@@ -189,14 +189,30 @@ def test_a_metal_host_gets_copies_on_the_cpu_without_loading_them(device):
 
 @pytest.mark.parametrize("device", ["cpu", "mps"])
 def test_create_gives_the_engine_copies_only_on_metal(device, monkeypatch):
-    """The wiring in ``InferenceEngine.create``, not just the builder: without
-    the assignment there, a Metal engine has no copies and every search encodes
-    on the device. The device is faked; the copies are built, never loaded."""
-    monkeypatch.setattr(engine_module, "resolve_device", lambda *a, **k: device)
-    monkeypatch.setattr(engine_module, "configure_metal_model_loading", lambda: None)
+    """The wiring in ``InferenceEngine.create``, not just the helpers.
+
+    Without the assignment there, a Metal engine has no copies and every search
+    encodes on the device. Without ``configure_metal_model_loading`` - called
+    before the device is resolved, and so before any service exists -
+    transformers loads on several threads again. The device is faked; the
+    copies are built, never loaded.
+    """
+    order = []
+
+    def fake_resolve(*_args, **_kwargs):
+        order.append("resolve_device")
+        return device
+
+    monkeypatch.setattr(engine_module, "resolve_device", fake_resolve)
+    monkeypatch.setattr(
+        engine_module,
+        "configure_metal_model_loading",
+        lambda: order.append("configure_metal_model_loading"),
+    )
 
     engine = InferenceEngine.create(force_cpu=False, fast_captions=True)
 
+    assert order == ["configure_metal_model_loading", "resolve_device"], order
     if device == "mps":
         assert isinstance(engine.query_encoders, CpuQueryEncoders)
         assert not engine.query_encoders.is_loaded()
