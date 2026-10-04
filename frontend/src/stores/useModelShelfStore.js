@@ -1614,9 +1614,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         // from the pictures no hand-made set covers.
         !combination.covered_by?.length &&
         ((combination.models ?? []).some((model) => shown.has(model.id)) ||
-          // Only a missing base model, no shelf row for `Show` to filter on:
-          // drawn always, or the one card for that file could never appear.
-          !combination.models?.length),
+          // Named after a missing base model, which has no shelf row for
+          // `Show` to filter on: drawn always, or hiding its support files
+          // would hide the one card for that file.
+          Boolean(combination.missing?.length)),
     );
   });
 

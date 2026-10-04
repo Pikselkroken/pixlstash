@@ -184,6 +184,23 @@ beforeEach(() => {
 });
 
 describe("the cards", () => {
+  it("keeps a missing checkpoint's card when Show hides its support files", async () => {
+    const { wrapper, store } = await mountGrid({
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        {
+          ...combination('2+["gone.sft"]', [VAE]),
+          missing: [{ name: "gone.sft", workflow_ids: [] }],
+        },
+      ],
+    });
+    // Show unticks the support files, the VAE with them.
+    await store.setFilters({ support: false });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAll('[data-testid="model-set-card"]')).toHaveLength(1);
+  });
+
   it("draws a set with only a missing checkpoint, and opens its fix note", async () => {
     // An all-in-one checkpoint off the shelf: nothing the shelf holds, so no
     // member for `Show` to filter on and none for the tray to anchor on.
