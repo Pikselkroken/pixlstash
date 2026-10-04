@@ -778,6 +778,32 @@ describe("selection and the verbs", () => {
     );
   });
 
+  it("clears the selection on a click on the background, not on a card", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    await wrapper.find(".msg__row").trigger("click");
+    expect([...store.selectedIds]).toEqual([1]);
+
+    const grid = wrapper.find('[role="treegrid"]');
+    // Pressed on a card, released elsewhere: the click lands on the grid but
+    // is a fumbled pick, not a click on nothing.
+    await wrapper.find(".msg__row").trigger("pointerdown");
+    await grid.trigger("click");
+    expect([...store.selectedIds]).toEqual([1]);
+
+    await grid.trigger("pointerdown");
+    await grid.trigger("click");
+    expect([...store.selectedIds]).toEqual([]);
+
+    await wrapper.find(".msg__row").trigger("click");
+    await wrapper.find(".msg__scroll").trigger("pointerdown");
+    await wrapper.find(".msg__scroll").trigger("click");
+    expect([...store.selectedIds]).toEqual([]);
+  });
+
   it("selects one model in the tray, and marks it", async () => {
     const { wrapper, store } = await openTray();
 

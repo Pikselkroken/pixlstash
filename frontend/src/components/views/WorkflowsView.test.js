@@ -266,6 +266,26 @@ describe("Escape", () => {
     expect(store.selectedKeys).toEqual([]);
   });
 
+  it("a click on the background clears it too, a click on a card does not", async () => {
+    const wrapper = await grid(1008);
+    const store = useWorkflowsStore();
+    store.select("b");
+    await wrapper.find(".wfv-row").trigger("click", { ctrlKey: true });
+    expect(store.selectedKeys).toEqual(["b", "a"]);
+    // A press that slips from one card to another clicks the grid, their
+    // common ancestor: that is a fumbled pick and leaves the selection alone.
+    await wrapper.find(".wfv-row").trigger("pointerdown");
+    await wrapper.find(".wfv-grid").trigger("click");
+    expect(store.selectedKeys).toEqual(["b", "a"]);
+    await wrapper.find(".wfv-grid").trigger("pointerdown");
+    await wrapper.find(".wfv-grid").trigger("click");
+    expect(store.selectedKeys).toEqual([]);
+    store.select("b");
+    await wrapper.find(".wfv-scroll").trigger("pointerdown");
+    await wrapper.find(".wfv-scroll").trigger("click");
+    expect(store.selectedKeys).toEqual([]);
+  });
+
   it("the sort popover owns its own Escape", async () => {
     const wrapper = await grid(1008);
     const store = useWorkflowsStore();

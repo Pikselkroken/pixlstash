@@ -2566,6 +2566,35 @@ describe("focus under folder grouping, where a model is drawn twice", () => {
   });
 });
 
+describe("a click on the list's background", () => {
+  it("clears the selection, and a click on a row does not", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 }), adapter({ id: 8 })]);
+    const store = useModelShelfStore();
+    await wrapper.findAll(".shelf-row")[0].trigger("click");
+    expect(store.selectedRows).toHaveLength(1);
+
+    // Pressed on a row and released on another (or a text drag out of the
+    // rename field): the click lands on the list, and must not clear.
+    await wrapper.findAll(".shelf-row")[0].trigger("pointerdown");
+    await wrapper.find(".shelf-list").trigger("click");
+    expect(store.selectedRows).toHaveLength(1);
+
+    await wrapper.find(".shelf-list").trigger("pointerdown");
+    await wrapper.find(".shelf-list").trigger("click");
+    expect(store.selectedRows).toHaveLength(0);
+
+    await wrapper.findAll(".shelf-row")[0].trigger("click");
+    await wrapper.find(".shelf-group").trigger("pointerdown");
+    await wrapper.find(".shelf-group").trigger("click");
+    expect(store.selectedRows).toHaveLength(0);
+
+    await wrapper.findAll(".shelf-row")[0].trigger("click");
+    await wrapper.find(".shelf-scroll").trigger("pointerdown");
+    await wrapper.find(".shelf-scroll").trigger("click");
+    expect(store.selectedRows).toHaveLength(0);
+  });
+});
+
 describe("a click on the row being renamed", () => {
   it("does not pick it, and does not stop the OTHER rows being picked", async () => {
     // The panel is `user-select: none` (#932) and the rename field is the one
