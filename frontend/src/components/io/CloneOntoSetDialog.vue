@@ -597,7 +597,11 @@ function candidates(payload) {
       checkpointName: checkpoint?.name || "",
     };
   });
-  const evidence = setGroups(payload.combinations ?? []).map((group) => {
+  // A set whose base model is off the shelf has no checkpoint to clone onto.
+  const groups = setGroups(payload.combinations ?? []).filter(
+    (group) => !group.head?.missing,
+  );
+  const evidence = groups.map((group) => {
     const models = group.models ?? [];
     return {
       key: group.key,

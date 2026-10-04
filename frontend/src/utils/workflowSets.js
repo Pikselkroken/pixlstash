@@ -25,6 +25,9 @@
 
 import { fileKindLabel, modelName } from "./modelShelf";
 
+/** The kinds a set is named after, as the server's `_SET_BASE_KINDS`. */
+const BASE_KINDS = new Set(["checkpoint", "unknown"]);
+
 /**
  * How many covers a card's mosaic draws.
  *
@@ -39,12 +42,26 @@ const COVER_DEPTH = 3;
  *
  * The server sorts a combination's members checkpoint-first, then unclassified,
  * then the support files, then the adapters, so the head is the checkpoint where
- * there is one and the diffusion file where there is not (Flux, Wan). No fallback
- * is invented here: reading the head is what makes that rule one decision in one
- * place rather than two that can disagree.
+ * there is one and the diffusion file where there is not (Flux, Wan).
+ *
+ * **A base model the shelf does not hold names the set instead of its VAE.** A
+ * recipe whose checkpoint is gone resolves to its support files alone, and the
+ * server lists the file it loaded under `missing`. The head is then that file,
+ * with no id, `missing: true` and the workflows where it can be replaced.
  */
 export function headModel(combination) {
-  return (combination.models ?? [])[0] ?? null;
+  const first = (combination.models ?? [])[0] ?? null;
+  if (BASE_KINDS.has(first?.kind)) return first;
+  const gone = (combination.missing ?? [])[0];
+  if (!gone) return first;
+  return {
+    id: null,
+    name: gone.name,
+    filename: gone.name,
+    kind: "checkpoint",
+    missing: true,
+    workflowIds: gone.workflow_ids ?? [],
+  };
 }
 
 /**
@@ -89,8 +106,14 @@ export function setGroups(combinations) {
   for (const combination of byEvidence(combinations ?? [])) {
     const head = headModel(combination);
     if (!head) continue;
-    const key = `model:${head.id}`;
+    const key = head.missing ? `missing:${head.name}` : `model:${head.id}`;
     let group = byHead.get(key);
+    if (group?.head.missing) {
+      // Each combination names the workflows ITS recipes are in.
+      group.head.workflowIds = [
+        ...new Set([...group.head.workflowIds, ...head.workflowIds]),
+      ].sort();
+    }
     if (!group) {
       group = {
         key,
@@ -282,9 +305,11 @@ export function setCard(group) {
   return {
     key: group.key,
     // The head names the card, so a Flux or Wan group with no checkpoint row is
-    // named by its diffusion file without this file inventing a second rule.
-    name: group.head?.name || "Unnamed set",
-    kindLabel: memberKindLabel(group.head),
+    // named by its diffusion file without this file inventing a second rule -
+    // read as the shelf reads a name, so no card is called `….safetensors`.
+    name: headName(group.head) || "Unnamed set",
+    kindLabel: group.head?.missing ? "Missing" : memberKindLabel(group.head),
+    missing: Boolean(group.head?.missing),
     kinds: kindCounts(models.filter((model) => model.id !== group.head?.id)),
     facts: [
       models.length === 1 ? "1 model" : `${models.length} models`,
@@ -299,6 +324,23 @@ export function setCard(group) {
     covers: group.covers ?? [],
     size: models.length,
   };
+}
+
+/**
+ * What a card is called after its head: the name a person gave the file, else
+ * the shelf's readable reading of its filename.
+ *
+ * A member's `name` is its display name or, without one, its filename, so the
+ * two being equal means nobody named it.
+ */
+export function headName(head) {
+  if (!head) return "";
+  const named = head.name && head.name !== head.filename ? head.name : "";
+  return (
+    modelName({ display_name: named, filename: head.filename }).text ||
+    head.name ||
+    ""
+  );
 }
 
 /**

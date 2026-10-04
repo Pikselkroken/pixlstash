@@ -1003,14 +1003,21 @@ def test_workflow_sets_flags_a_member_two_shelf_rows_answer_to(shelf_env):
                     (shelf_env.model_ids["dana.safetensors"],),
                 ],
             )
-        _seed_recipe(shelf_env.server, "sh-twin", [("lora_name", "twin.safetensors")])
+        # With a checkpoint: a set with no base model is not served.
+        _seed_recipe(
+            shelf_env.server,
+            "sh-twin",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "twin.safetensors")],
+        )
         _seed_picture(shelf_env.server, "sh-twin", score=3)
 
         body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
 
         card = body["combinations"][0]
-        assert {m["name"] for m in card["models"]} == {"Alice", "Dana"}
-        assert all(m["ambiguous"] is True for m in card["models"])
+        base = shelf_env.model_ids["base_xl.safetensors"]
+        twins = [m for m in card["models"] if m["id"] != base]
+        assert {m["name"] for m in twins} == {"Alice", "Dana"}
+        assert all(m["ambiguous"] is True for m in twins)
     finally:
         _wipe_recipes(shelf_env.server)
 
@@ -1092,7 +1099,11 @@ def test_workflow_sets_never_mark_a_run_ambiguous(shelf_env):
                 "UPDATE model SET filename = 'twin.safetensors' WHERE id = ?",
                 [(ids["alice.safetensors"],), (ids["dana.safetensors"],)],
             )
-        _seed_recipe(shelf_env.server, "hr-twin", [("lora_name", "twin.safetensors")])
+        _seed_recipe(
+            shelf_env.server,
+            "hr-twin",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "twin.safetensors")],
+        )
         _seed_picture(shelf_env.server, "hr-twin", score=3)
         _seed_run(
             shelf_env.server,
@@ -1103,8 +1114,18 @@ def test_workflow_sets_never_mark_a_run_ambiguous(shelf_env):
         body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
 
         by_key = {c["key"]: c for c in body["combinations"]}
-        twin = by_key[_key(ids["alice.safetensors"], ids["dana.safetensors"])]
-        assert all(m["ambiguous"] for m in twin["models"])
+        twin = by_key[
+            _key(
+                ids["base_xl.safetensors"],
+                ids["alice.safetensors"],
+                ids["dana.safetensors"],
+            )
+        ]
+        assert all(
+            m["ambiguous"]
+            for m in twin["models"]
+            if m["id"] != ids["base_xl.safetensors"]
+        )
         run = by_key[_key(ids["base_xl.safetensors"], ids["alice.safetensors"])]
         assert [m["ambiguous"] for m in run["models"]] == [False, False]
     finally:
@@ -1128,15 +1149,16 @@ def test_workflow_sets_skip_a_run_member_the_shelf_forgot(shelf_env):
 
 def test_workflow_sets_order_run_only_sets_by_their_runs(shelf_env):
     ids = shelf_env.model_ids
-    _seed_run(shelf_env.server, "run-once", [ids["dana.safetensors"]])
+    base = ids["base_xl.safetensors"]
+    _seed_run(shelf_env.server, "run-once", [base, ids["dana.safetensors"]])
     for n in range(2):
-        _seed_run(shelf_env.server, f"run-often-{n}", [ids["bob.safetensors"]])
+        _seed_run(shelf_env.server, f"run-often-{n}", [base, ids["bob.safetensors"]])
 
     body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
 
     keys = [c["key"] for c in body["combinations"]]
-    assert keys.index(_key(ids["bob.safetensors"])) < keys.index(
-        _key(ids["dana.safetensors"])
+    assert keys.index(_key(base, ids["bob.safetensors"])) < keys.index(
+        _key(base, ids["dana.safetensors"])
     )
 
 

@@ -94,6 +94,7 @@
             v-else-if="entry.kind === 'member' && entry.memberIndex === 0"
             :panel-id="PANEL_ID"
             :name="openName"
+            :missing="openGroup?.head?.missing ? openGroup.head : null"
             :members="openMembers"
             :view="store.view.trayView"
             :columns="trayColumns"
@@ -198,8 +199,9 @@
              or from pictures since deleted. What is true is the narrower thing,
              and it is worded so it cannot be read as a verdict. -->
         <p class="msg__ghost-note">
-          No kept picture in this library was made with them and no recorded
-          ComfyUI run used them, so there is no set to draw. That is all it means — nothing here rules out what they work
+          No kept picture in this library and no recorded ComfyUI run used
+          them with a base model PixlStash can name, so there is no set to
+          draw. That is all it means — nothing here rules out what they work
           with, and a model may well have been used somewhere this library
           cannot see.
         </p>

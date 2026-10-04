@@ -4595,6 +4595,81 @@ def test_adding_a_lora_is_a_second_set_not_a_change_to_the_first(store, set_shel
     assert set(combinations) == {plain, plain | {"lora_a.safetensors"}}
 
 
+def test_a_set_whose_checkpoint_is_off_the_shelf_is_named_after_the_missing_file(
+    store, set_shelf
+):
+    """A recipe loading a checkpoint the shelf lacks resolves to its VAE and
+    encoder alone. The set says which base it ran on rather than leading with
+    the VAE, and a model fix on that name folds it into the replacement's set.
+    """
+    ids = set_shelf
+    picture_from(
+        store,
+        "gone.png",
+        generation_graph(
+            "Gone-Base.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    support = frozenset({"vae_a.safetensors", "clip_shared.safetensors"})
+
+    combinations, _ = sets_of(store)
+
+    assert set(combinations) == {support}
+    found = combinations[support]
+    topology = store.hub.fetchone("SELECT topology_hash FROM workflow_recipe")[
+        "topology_hash"
+    ]
+    workflow = store.hub.fetchone(
+        "SELECT workflow_id FROM workflow_group_member WHERE topology_hash = ?",
+        (topology,),
+    )
+    assert found["missing"] == [
+        {
+            "name": "gone-base.safetensors",
+            "workflow_ids": [workflow["workflow_id"]] if workflow else [],
+        }
+    ]
+    assert found["key"].endswith("+gone-base.safetensors")
+
+    with store.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name, slot_kind) "
+            "VALUES (?, 'any', 'gone-base.safetensors', 'ckpt_b.safetensors', "
+            "'Gone-Base.safetensors', 'ckpt_b.safetensors', 'checkpoint')",
+            (topology,),
+        )
+    try:
+        combinations, _ = sets_of(store)
+    finally:
+        with store.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_model_fix")
+
+    fixed = support | {"ckpt_b.safetensors"}
+    assert set(combinations) == {fixed}
+    assert combinations[fixed]["missing"] == []
+    assert combinations[fixed]["models"][0]["id"] == ids["ckpt_b"]
+
+
+def test_a_combination_with_no_base_model_is_no_set(store, set_shelf):
+    """A recipe naming no base model at all is not drawn as a set led by its
+    VAE or LoRA; its files fall to `no_set` instead of vanishing."""
+    ids = set_shelf
+    graph = generation_graph(
+        "ckpt_a.safetensors", "vae_b.safetensors", "clip_shared.safetensors"
+    )
+    # A custom loader whose field is no base-model widget PixlStash knows,
+    # loading a file the shelf does not hold: only the VAE and encoder resolve.
+    graph["1"]["class_type"] = "SomeCustomLoader"
+    graph["1"]["inputs"] = {"model_file": "elsewhere.safetensors"}
+    picture_from(store, "headless.png", graph)
+
+    combinations, no_set = sets_of(store)
+
+    assert combinations == {}
+    assert ids["vae_b"] in no_set
+
+
 def test_a_recipe_whose_pictures_are_all_deleted_is_no_set_and_its_models_say_so(
     store, set_shelf
 ):
@@ -4678,8 +4753,8 @@ def test_a_model_forgotten_between_the_two_reads_is_dropped_rather_than_raising(
 
     real = model_shelf_service.resolve_recipe_models
 
-    def resolve_then_forget(hub):
-        resolved = real(hub)
+    def resolve_then_forget(hub, index=None):
+        resolved = real(hub, index)
         with store.hub.transaction() as conn:
             conn.execute("DELETE FROM model WHERE id = ?", (ids["vae_a"],))
         return resolved

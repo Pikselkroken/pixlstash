@@ -116,7 +116,12 @@
           @click="emit('toggle')"
         />
         <span class="msc__name" aria-hidden="true">{{ card.name }}</span>
-        <span v-if="card.kindLabel" class="msc__kind" aria-hidden="true">{{
+        <span
+          v-if="card.kindLabel"
+          class="msc__kind"
+          :class="{ 'msc__kind--missing': card.missing }"
+          aria-hidden="true"
+          >{{
           card.kindLabel
         }}</span>
       </div>
@@ -259,7 +264,7 @@ const accessibleName = computed(() => {
   }
   return [
     name,
-    kindLabel,
+    props.card.missing ? "base model not on shelf" : kindLabel,
     props.card.fromComfyUI ? "ran in ComfyUI" : null,
     kinds.length ? `with ${kinds.join(", ")}` : "nothing else has run with it",
     facts.join(", "),
@@ -542,6 +547,12 @@ const accessibleName = computed(() => {
   font-size: var(--text-2xs);
   line-height: var(--leading-snug);
   white-space: nowrap;
+}
+
+.msc__kind--missing {
+  border-color: rgba(var(--v-theme-warning), 0.5);
+  background: rgba(var(--v-theme-warning), 0.16);
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .msc__facts {

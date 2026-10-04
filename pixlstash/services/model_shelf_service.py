@@ -51,12 +51,14 @@ from pixlstash.services.model_features import (
 from pixlstash.services.stack_detector import repair_stacks
 from pixlstash.services.workflow_hash import (
     SHA256_FIELD_RE,
+    SHELF_ID_FIELD,
     WorkflowGraphError,
     assets_from_reduction,
     digests_with_prefix,
     normalized_filename,
     reduce_api_graph,
 )
+from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
 from pixlstash.services.workflow_library_service import (
     cover_order,
     recipe_picture_counts,
@@ -1308,6 +1310,75 @@ def _history_runs(hub) -> dict[str, set[int]]:
     return runs
 
 
+# The widgets a recipe names its base model by FILENAME. The shelf loader's
+# `checkpoint_id` is an id, not a name a reader could recognise or a fix could
+# match, so it is left out.
+_BASE_NAME_WIDGETS = tuple(sorted(CHECKPOINT_WIDGETS - {SHELF_ID_FIELD}))
+
+
+def _missing_bases(
+    hub, by_name: dict[str, set[int]], recipe_models, ambiguous
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """The base models each recipe loads that no shelf row answers to.
+
+    A recipe whose checkpoint (or diffusion file) is off the shelf resolves to
+    its VAE and encoders alone, and a combination of those would be named after
+    the VAE. This is what lets the grid name it after the missing file instead.
+
+    **A model fix answers first.** Where the owner replaced the missing name in
+    that recipe's topology (``PUT /workflows/{id}/model-fix``), the replacement
+    is added to the recipe's models in *recipe_models* (and to *ambiguous* when
+    its name is shared), so the recipe joins the replacement's combination.
+
+    Returns:
+        ``(missing, workflows)``: ``{structural_hash: {normalized name}}`` and
+        ``{normalized name: {workflow_id}}``, the workflows whose recipes load
+        that name, which is where its fix is made.
+    """
+    topology_of = {
+        row["structural_hash"]: row["topology_hash"]
+        for row in hub.fetchall(
+            "SELECT structural_hash, topology_hash FROM workflow_recipe"
+        )
+    }
+    workflow_of = {
+        row["topology_hash"]: row["workflow_id"]
+        for row in hub.fetchall(
+            "SELECT topology_hash, workflow_id FROM workflow_group_member"
+        )
+    }
+    fixes = {
+        (row["topology_hash"], row["was_norm"]): row["now_norm"]
+        for row in hub.fetchall(
+            "SELECT topology_hash, was_norm, now_norm FROM workflow_model_fix "
+            "WHERE slot_kind = ?",
+            (FILE_CHECKPOINT,),
+        )
+    }
+    missing: dict[str, set[str]] = {}
+    workflows: dict[str, set[str]] = {}
+    for row in hub.fetchall(
+        "SELECT structural_hash, normalized_filename FROM workflow_recipe_asset "
+        f"WHERE widget_name IN ({', '.join('?' for _ in _BASE_NAME_WIDGETS)})",
+        _BASE_NAME_WIDGETS,
+    ):
+        name = row["normalized_filename"]
+        if by_name.get(name):
+            continue
+        recipe = row["structural_hash"]
+        topology = topology_of.get(recipe)
+        fixed = by_name.get(fixes.get((topology, name)), set())
+        if fixed:
+            recipe_models.setdefault(recipe, set()).update(fixed)
+            if len(fixed) > 1:
+                ambiguous.setdefault(recipe, set()).update(fixed)
+            continue
+        missing.setdefault(recipe, set()).add(name)
+        if topology in workflow_of:
+            workflows.setdefault(name, set()).add(workflow_of[topology])
+    return missing, workflows
+
+
 def fetch_workflow_sets(hub, vault) -> dict:
     """Every set of shelf models a picture here or a ComfyUI run proves ran together.
 
@@ -1318,10 +1389,11 @@ def fetch_workflow_sets(hub, vault) -> dict:
 
     **Co-occurrence is evidence; its absence is not.** Two models in one recipe
     proves they ran together; two models never seen together proves nothing at
-    all, so no combination is withheld and no pair is ruled out. The models no
-    recipe in this library names come back under ``no_set`` rather than being
-    dropped, so the caller can say it cannot tell rather than implying nobody
-    has tried them.
+    all, so no pair is ruled out. The one combination withheld is one with no
+    base model, on the shelf or named by its recipes: a VAE, an encoder or a
+    LoRA is not what a set is named after. The models no served combination
+    holds come back under ``no_set`` rather than being dropped, so the caller
+    can say it cannot tell rather than implying nobody has tried them.
 
     Pictures are scoped to the ACTIVE library, unlike
     :func:`fetch_companions`, which counts every recipe the hub holds. The two
@@ -1344,13 +1416,18 @@ def fetch_workflow_sets(hub, vault) -> dict:
         ``{"combinations": [...], "no_set": [model_id, ...]}``. Each
         combination carries ``key`` (its sorted member ids, joined), ``models``
         (``id``, ``name``, ``filename``, ``kind``, ``file_size``,
-        ``ambiguous``), ``recipes``, ``history_runs``, ``picture_count`` and
-        ``covers`` (up to :data:`SET_COVER_DEPTH` cover candidates, best
-        first). ``hub_combinations`` is every combination some recipe names,
+        ``ambiguous``), ``missing`` (the base models its recipes load that
+        the shelf does not hold, each ``{"name", "workflow_ids"}``; see
+        :func:`_missing_bases`), ``recipes``, ``history_runs``,
+        ``picture_count`` and ``covers`` (up to :data:`SET_COVER_DEPTH` cover
+        candidates, best first). A combination with no base model, on the
+        shelf or missing, is not served. ``hub_combinations`` is every combination some recipe names,
         before the "a picture here" cut, so it holds every library's recipes
         and no run-only combination; only the merge offer reads it.
     """
-    recipe_models, ambiguous, unresolved = resolve_recipe_models(hub)
+    index = recipe_asset_index(hub)
+    recipe_models, ambiguous, unresolved = resolve_recipe_models(hub, index)
+    missing, missing_workflows = _missing_bases(hub, index[0], recipe_models, ambiguous)
     runs = _history_runs(hub)
     pictures = vault.db.run_immediate_read_task(
         lambda session: (
@@ -1371,11 +1448,11 @@ def fetch_workflow_sets(hub, vault) -> dict:
         )
     }
 
-    # Keyed on the frozen member set, so two recipes naming the same files are
-    # one card. `unsure` is OR-ed across the witnesses rather than AND-ed: one
+    # Keyed on the frozen member set and the missing base names, so two
+    # recipes naming the same files are one card. `unsure` is OR-ed across the witnesses rather than AND-ed: one
     # recipe that could only match a basename is enough to make the membership
     # a guess, and a second, cleaner witness does not unmake the first.
-    grouped: dict[frozenset[int], dict] = {}
+    grouped: dict[tuple[frozenset[int], frozenset[str]], dict] = {}
 
     def empty() -> dict:
         return {
@@ -1392,7 +1469,9 @@ def fetch_workflow_sets(hub, vault) -> dict:
         present = frozenset(member for member in members if member in models)
         if not present:
             continue
-        entry = grouped.setdefault(present, empty())
+        entry = grouped.setdefault(
+            (present, frozenset(missing.get(recipe, ()))), empty()
+        )
         entry["recipes"] += 1
         entry["picture_count"] += counts.get(recipe, 0)
         entry["covers"].extend(covers_by_recipe.get(recipe, ()))
@@ -1409,20 +1488,21 @@ def fetch_workflow_sets(hub, vault) -> dict:
         present = frozenset(member for member in members if member in models)
         if not present:
             continue
-        grouped.setdefault(present, empty())["history_runs"] += 1
+        grouped.setdefault((present, frozenset()), empty())["history_runs"] += 1
 
     def name(model_id: int) -> str:
         row = models[model_id]
         return row["display_name"] or row["filename"] or f"model {model_id}"
 
     every = []
-    for present, entry in grouped.items():
+    for (present, absent), entry in grouped.items():
         ordered = sorted(
             present, key=lambda m: (_set_kind_rank(models[m]), name(m).lower())
         )
+        key = ",".join(str(m) for m in sorted(present))
         every.append(
             {
-                "key": ",".join(str(m) for m in sorted(present)),
+                "key": f"{key}+{','.join(sorted(absent))}" if absent else key,
                 "models": [
                     {
                         "id": model_id,
@@ -1433,6 +1513,13 @@ def fetch_workflow_sets(hub, vault) -> dict:
                         "ambiguous": model_id in entry["unsure"],
                     }
                     for model_id in ordered
+                ],
+                "missing": [
+                    {
+                        "name": missing_name,
+                        "workflow_ids": sorted(missing_workflows.get(missing_name, ())),
+                    }
+                    for missing_name in sorted(absent)
                 ],
                 "recipes": entry["recipes"],
                 "history_runs": entry["history_runs"],
@@ -1456,6 +1543,15 @@ def fetch_workflow_sets(hub, vault) -> dict:
     # ComfyUI run is not a set here: a recipe that made nothing in it has no
     # cover, no count and nothing to show. A run is its own proof, cover or no.
     combinations = [c for c in every if c["picture_count"] or c["history_runs"]]
+    # Nor is one with no base model at all, on the shelf or missing: a VAE,
+    # an encoder or a LoRA is not something a set is named after, and a card
+    # led by one says nothing about what it ran on. Its models fall to
+    # `no_set` below unless another set holds them.
+    combinations = [
+        c
+        for c in combinations
+        if c["missing"] or any(m["kind"] in _SET_BASE_KINDS for m in c["models"])
+    ]
 
     # Read off the combinations that SURVIVED, not off `grouped`: a model whose
     # only recipes made no kept picture here would otherwise be in no
@@ -1506,6 +1602,11 @@ _SET_KIND_RANK = {
     FILE_ADAPTER: 4,
     FILE_ENGINE: 5,
 }
+
+
+# The kinds a set is named after: a checkpoint, or an unclassified file that may
+# be a diffusion model (see `_SET_KIND_RANK`).
+_SET_BASE_KINDS = (FILE_CHECKPOINT, FILE_UNKNOWN)
 
 
 def _set_kind_rank(row) -> int:

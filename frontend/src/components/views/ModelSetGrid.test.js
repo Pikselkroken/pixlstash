@@ -79,6 +79,10 @@ const globalOpts = {
       Tooltip: {
         template: "<span><slot name='activator' :props='{}' /><slot /></span>",
       },
+      RouterLink: {
+        props: ["to"],
+        template: "<a :data-workflow='to.query.workflow'><slot /></a>",
+      },
     },
   },
 };
@@ -180,6 +184,30 @@ beforeEach(() => {
 });
 
 describe("the cards", () => {
+  it("names a set whose base model is gone after it, and links to its fix", async () => {
+    const { wrapper, store } = await mountGrid({
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        {
+          ...combination("2+flux1-dev.sft", [VAE]),
+          missing: [{ name: "flux1-dev.sft", workflow_ids: ["auto:a"] }],
+        },
+      ],
+    });
+
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.text()).toContain("flux1 dev");
+    expect(card.text()).toContain("Missing");
+    expect(card.text()).not.toContain("sdxl_vae");
+    expect(card.attributes("aria-label")).toContain("base model not on shelf");
+
+    store.toggleSet("missing:flux1-dev.sft");
+    await wrapper.vm.$nextTick();
+    const note = wrapper.find('[data-testid="model-set-missing"]');
+    expect(note.text()).toContain("flux1-dev.sft");
+    expect(note.find("a").attributes("data-workflow")).toBe("auto:a");
+  });
+
   it("draws one card per base model, named after it", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
@@ -193,7 +221,7 @@ describe("the cards", () => {
 
     const cards = wrapper.findAll('[data-testid="model-set-card"]');
     expect(cards).toHaveLength(1);
-    expect(cards[0].text()).toContain("realvisXL_v5");
+    expect(cards[0].text()).toContain("realvisXL v5");
     // The per-kind tally of everything else, and the facts summed over both.
     expect(cards[0].text()).toContain("VAE 1");
     expect(cards[0].text()).toContain("LoRA 1");
@@ -632,7 +660,9 @@ describe("the models no recipe names", () => {
     expect(ghost.text()).toContain("1 model");
     // The NARROW claim, and no more: `no_set` means no kept picture here was
     // made with them, which is not "no recipe names them" and is not a verdict.
-    expect(ghost.text()).toContain("No kept picture in this library was made");
+    expect(ghost.text()).toContain(
+      "No kept picture in this library and no recorded ComfyUI run used",
+    );
     expect(ghost.text()).toContain(
       "nothing here rules out what they work with",
     );
@@ -1232,7 +1262,7 @@ describe("hand-made sets (#1520)", () => {
     const names = wrapper
       .findAll('[data-testid="model-set-card"]')
       .map((card) => card.attributes("aria-label").split(",")[0]);
-    expect(names).toEqual(["realvisXL v5", "juggernautXL_v9"]);
+    expect(names).toEqual(["realvisXL v5", "juggernautXL v9"]);
   });
 
   it("selects the SET on a hand-made card, never a file, and deletes it with Delete and an Undo", async () => {

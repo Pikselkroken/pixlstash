@@ -518,7 +518,7 @@ and groups nothing; the client folds.**
 | Route | Answers | Costs |
 |---|---|---|
 | `GET /models/workflow-sets` | **Which shelf models a kept picture or a stored ComfyUI run proves ran together** — one entry per *combination* (the exact model ids one or more recipes or runs bound), with its recipe count, its `history_runs` (finished ComfyUI runs, #1565, counted apart), its picture count and up to three cover thumbnails as `{picture_id, version}`, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
-picture in this library was made with and no stored ComfyUI run used** (engines excluded - see rule 1). | one pass over `workflow_recipe_asset` and one over `comfyui_history_model`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
+picture in this library and no stored ComfyUI run used with a base model** (engines excluded - see rule 1). A combination carries `missing: [{name, workflow_ids}]` for base models its recipes load that the shelf does not hold; one with no base model, on the shelf or missing, is not served. | one pass over `workflow_recipe_asset` and one over `comfyui_history_model`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
 
 Rules neither side may drift from:
 
@@ -536,7 +536,10 @@ Rules neither side may drift from:
 3. **`models` arrives in ONE order and the client reads its head.** Checkpoint,
    then `unknown`, then VAE, text encoder, adapter, engine. The head is the file
    the set is named after, which is how a Flux or Wan set with no `checkpoint`
-   row gets a name without the client inventing a second fallback rule.
+   row gets a name without the client inventing a second fallback rule. When
+   the head is not a checkpoint or `unknown`, the set's base is off the shelf:
+   `headModel` names it after `missing[0]` (keyed `missing:<name>`), and the
+   card's name is read through `modelName`, never the raw filename.
 4. **The GROUPING is the client's, and the payload stays per-combination.** The
    server proposes no grouping at all: `setGroups` (`utils/workflowSets.js`) unions
    the combinations under each head to make the cards, while the combinations

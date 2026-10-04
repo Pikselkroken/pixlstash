@@ -9050,6 +9050,23 @@ band can only put a row in one place.
   (the rest), and second place is what keeps such a set named after its model
   rather than after whichever VAE sorted first. It is a ranking, not a claim
   about what the file is.
+- **A base model off the shelf is named, not dropped (`_missing_bases`).** A
+  recipe whose checkpoint or diffusion file no shelf row answers to resolves to
+  its VAE and encoders alone, which would name the set after the VAE. The names
+  its base-model widgets (`CHECKPOINT_WIDGETS` minus the shelf loader's
+  `checkpoint_id`) load and the shelf cannot resolve go on the combination as
+  `missing: [{name, workflow_ids}]`, and they are part of its grouping key, so
+  two recipes on different missing checkpoints stay two combinations. The
+  client names such a set after the missing file and links each workflow, where
+  its model fix (`PUT /workflows/{id}/model-fix`) is made. A fix answers first:
+  a missing name a `checkpoint` fix replaced in that recipe's topology resolves
+  to the replacement, so the recipe joins the replacement's combination and the
+  two cards fold into one.
+- **A combination with no base model at all is not served.** Neither a
+  checkpoint/`unknown` member nor a `missing` name: a VAE, an encoder or a LoRA
+  is not what a set is named after. Its members fall to `no_set` unless another
+  served combination holds them, which is why `no_set` means "not used *with a
+  base model*" rather than "not used".
 - **A cover is served as `{picture_id, version}`, never as a URL.** An
   `<img src>` never reaches the client's Axios interceptor, so a path built in
   this route would arrive with no API base and no share token and the browser

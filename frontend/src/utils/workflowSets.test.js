@@ -727,3 +727,69 @@ describe("hand-made sets (#1520)", () => {
     });
   });
 });
+
+describe("a set whose base model is not on the shelf", () => {
+  // What the server sends for a Flux recipe whose diffusion file is gone: its
+  // support files alone, and the file it loaded under `missing`.
+  const FLUX_VAE = model(7, "flux-vae-bf16", "vae");
+  const T5 = model(8, "t5xxl_fp16", "text_encoder");
+  const gone = (key, ids, extra) => ({
+    ...combination(key, [FLUX_VAE, T5], extra),
+    missing: [{ name: "flux1-dev.sft", workflow_ids: ids }],
+  });
+
+  it("is named after the missing file, not its VAE", () => {
+    const head = headModel(gone("7,8+flux1-dev.sft", ["auto:a"]));
+    expect(head).toMatchObject({
+      id: null,
+      missing: true,
+      name: "flux1-dev.sft",
+      workflowIds: ["auto:a"],
+    });
+  });
+
+  it("is one group across combinations, with every workflow that loads it", () => {
+    const groups = setGroups([
+      gone("7,8+flux1-dev.sft", ["auto:b"], { pictures: 5 }),
+      { ...gone("8+flux1-dev.sft", ["auto:a", "auto:b"]), models: [T5] },
+    ]);
+    expect(groups.map((g) => g.key)).toEqual(["missing:flux1-dev.sft"]);
+    expect(groups[0].head.workflowIds).toEqual(["auto:a", "auto:b"]);
+    // Every on-shelf file is a member; the missing head is not one of them.
+    expect(new Set(groups[0].models.map((m) => m.id))).toEqual(new Set([7, 8]));
+  });
+
+  it("draws its card as missing, its name read as the shelf reads one", () => {
+    const card = setCard(setGroups([gone("7,8+flux1-dev.sft", [])])[0]);
+    expect(card.name).toBe("flux1 dev");
+    expect(card.kindLabel).toBe("Missing");
+    expect(card.missing).toBe(true);
+    expect(card.kinds).toEqual(["VAE 1", "Text encoder 1"]);
+  });
+
+  it("leaves a set with a checkpoint on the shelf led by it", () => {
+    const both = { ...combination("1,7", [CKPT, FLUX_VAE]), missing: [] };
+    expect(headModel(both).id).toBe(CKPT.id);
+  });
+});
+
+describe("a card's automatic name", () => {
+  it("never carries the file's extension", () => {
+    const plain = model(9, "moody_v1", "checkpoint", {
+      name: "moodyMix_v1.safetensors",
+      filename: "moodyMix_v1.safetensors",
+    });
+    expect(setCard(setGroups([combination("9", [plain])])[0]).name).not.toMatch(
+      /safetensors/,
+    );
+  });
+
+  it("keeps a name a person gave the file", () => {
+    const named = model(9, "My Mix", "checkpoint", {
+      filename: "moodyMix_v1.safetensors",
+    });
+    expect(setCard(setGroups([combination("9", [named])])[0]).name).toBe(
+      "My Mix",
+    );
+  });
+});
