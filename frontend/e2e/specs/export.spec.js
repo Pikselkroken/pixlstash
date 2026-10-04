@@ -37,7 +37,7 @@ async function downloadExportZip(page, testInfo) {
     .selectOption('none')
 
   const downloadPromise = page.waitForEvent('download', { timeout: 60_000 })
-  await panel.locator('.tbm-action--primary', { hasText: 'Export' }).click()
+  await panel.locator('.app-btn--primary', { hasText: 'Export' }).click()
   const download = await downloadPromise
   const zipPath = testInfo.outputPath(`export-${Date.now()}.zip`)
   await download.saveAs(zipPath)

@@ -103,14 +103,13 @@
         @change="onLocalChange"
       />
       <div class="tb-import-actions">
-        <button
-          class="tbm-action tbm-action--outline"
-          type="button"
+        <AppButton
+          variant="outline"
+          icon-left="file-plus-outline"
           @click="openLocalPicker"
         >
-          <v-icon size="16">mdi-file-plus-outline</v-icon>
           Choose files
-        </button>
+        </AppButton>
       </div>
     </div>
 

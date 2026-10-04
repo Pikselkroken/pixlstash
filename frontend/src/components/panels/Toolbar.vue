@@ -295,27 +295,23 @@
 
             <div class="tbm-section">
               <span class="tbm-label">Stacks</span>
-              <div class="tbm-btngroup">
-                <button
-                  class="tbm-action tbm-action--secondary"
-                  type="button"
-                  style="flex: 1"
+              <div class="gb-stacks-actions">
+                <AppButton
+                  icon-left="arrow-expand-vertical"
+                  block
                   :disabled="gbExpandAllStacksDisabled"
                   @click="emit('expand-all-stacks')"
                 >
-                  <v-icon size="16">mdi-arrow-expand-vertical</v-icon>
                   Expand all
-                </button>
-                <button
-                  class="tbm-action tbm-action--secondary"
-                  type="button"
-                  style="flex: 1"
+                </AppButton>
+                <AppButton
+                  icon-left="arrow-collapse-vertical"
+                  block
                   :disabled="gbCollapseAllStacksDisabled"
                   @click="emit('collapse-all-stacks')"
                 >
-                  <v-icon size="16">mdi-arrow-collapse-vertical</v-icon>
                   Collapse all
-                </button>
+                </AppButton>
               </div>
             </div>
 
@@ -1323,6 +1319,13 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-view-panel {
   width: 264px;
   max-width: 92vw;
+}
+
+/* Stacked, not side by side: at --control-h a pair of AppButtons with icons
+   needs ~270px of system font, wider than the panel's 238px section. */
+.gb-stacks-actions {
+  display: grid;
+  gap: var(--space-3);
 }
 
 .gb-size-section {

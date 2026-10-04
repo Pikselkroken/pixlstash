@@ -4856,9 +4856,9 @@ watch(
 
 /* ── The view switcher ─────────────────────────────────────────────────────
    The shipped segmented track (`.tbm-seg`, `App.css`), sized for this bar per
-   the design system's `Segmented`: zero gap between segments, 24px segments
-   with a minimum width, and `--elevation-1` on the selected one as the cue
-   beyond hue. `--space-1` of inset rather than the spec's `--space-2`, so the
+   the design system's `Segmented`: zero gap between segments,
+   `--control-h-sm` segments with a minimum width, and `--elevation-1` on the
+   selected one as the cue beyond hue. `--space-1` of inset rather than the spec's `--space-2`, so the
    track is 30px and sits inside the 36px band with room for a focus ring.
    `tbm-seg-btn--on` fills in `primary` and carries no weight change, so
    selecting a segment never resizes the pair (the guardrail in
@@ -4871,8 +4871,6 @@ watch(
 .shelf-viewseg {
   flex: none;
   min-width: 56px;
-  min-height: 24px;
-  height: 24px;
 }
 
 .shelf-viewseg--on {
