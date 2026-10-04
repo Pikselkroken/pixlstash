@@ -306,6 +306,23 @@ def slots(document: dict) -> list[Slot]:
     return _slots(_reduce(document))
 
 
+def live_slots(document: dict) -> list[Slot]:
+    """:func:`slots` without the ones on dead nodes, which a run never loads.
+
+    A loader wired into nothing (a left-over second UNET and its LoRA) never
+    runs, as ComfyUI executes backwards from its outputs; the LoRA chain
+    already ignores it (``comfyui_recipe_service._live_graph``), so a default
+    recipe counting it shows a LoRA Edit LoRAs can neither see nor remove.
+    Dead is :func:`_prune`'s rule, offline; the labels are :func:`slots`'.
+
+    Raises:
+        WorkflowGraphError: As :func:`slots`.
+    """
+    nodes = _reduce(document)
+    live, _pruned, _refused = _prune(nodes)
+    return [slot for slot in _slots(nodes) if slot.node_id in live]
+
+
 def _slots(nodes: dict[str, ReducedNode]) -> list[Slot]:
     """:func:`slots` over an already-reduced document.
 

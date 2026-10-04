@@ -27,6 +27,7 @@ from pixlstash.services.comfyui_recipe_service import (
     format_prompt_rejection,
     bypass_node,
     insert_adapter,
+    live_lora_targets,
     model_filename_fields,
     pass_label,
     plan_loader_rewrites,
@@ -2090,6 +2091,20 @@ class TestLoraChain:
         chain = read_lora_chain(graph, info)
         assert chain["model_source"]["node_id"] == "4"
         assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
+
+    def test_a_run_fills_only_the_live_lora_slots(self):
+        """A recipe LoRA put in a dead loader would be reported placed and do nothing."""
+        graph = self._graph(loaders=("a",))
+        graph["9"] = {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}}
+        graph["20"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["21"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"lora_name": "b.safetensors", "model": ["20", 0]},
+        }
+        info = {**self.INFO, "SaveImage": {"output": [], "output_node": True}}
+        assert [t["node_id"] for t in live_lora_targets(graph, info)] == ["10"]
+        # Nothing says which nodes are outputs, so nothing is dead.
+        assert [t["node_id"] for t in live_lora_targets(graph, None)] == ["10", "21"]
 
     def test_a_second_model_that_goes_several_ways_is_refused(self):
         graph = self._graph(loaders=("a",))

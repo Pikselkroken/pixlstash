@@ -9460,6 +9460,72 @@ def test_a_saved_recipes_own_loras_are_placed_in_the_graphs_slots(runnable):
     assert inputs["strength_model"] == 0.6, inputs
 
 
+def test_a_saved_recipes_lora_never_lands_in_a_loader_wired_into_nothing(runnable):
+    """The free-slot fill skips a dead loader, which ComfyUI would never run.
+
+    A clone onto another model keeps the old model's leftover branch. Its
+    loader comes first in graph order here, so a fill by order alone takes it.
+    """
+    graph = {
+        "0": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "add_detail.safetensors", "model": ["1", 0]},
+        },
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "realvisxl.safetensors"},
+        },
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "add_detail.safetensors", "model": ["1", 0]},
+        },
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"steps": 20, "cfg": 7.0, "seed": 1, "model": ["2", 0]},
+        },
+        "4": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "run", "images": ["3", 0]},
+        },
+    }
+    source = run_service.Source(graph=graph, origin=run_service.FROM_FILE)
+    runnable.monkeypatch.setattr(
+        run_service, "resolve_source", lambda *args, **kwargs: (source, None)
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["SaveImage"]["output_node"] = True
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={
+            "name": "with its lora",
+            "workflow_id": RUN_WF,
+            "prompt": "a cat",
+            "loras": [
+                {
+                    "filename": RUN_ADAPTER_FILENAME,
+                    "sha256": RUN_ADAPTER_DIGEST,
+                    "strength": 0.6,
+                }
+            ],
+        },
+    )
+    assert r.status_code in {200, 201}, r.text
+    run = runnable.owner.post(
+        f"{API}/workflows/run", json={"saved_recipe_id": r.json()["id"]}
+    )
+    assert run.status_code == 200, run.text
+    submitted = runnable.submitted[0]["graph"]
+    # Filled by order alone, "2" is left empty and bypassed out of the graph.
+    live = submitted.get("2", {}).get("inputs", {})
+    assert live.get("lora_name") == RUN_ADAPTER_FILENAME, submitted
+    assert submitted.get("0", {}).get("inputs", {}).get("lora_name") != (
+        RUN_ADAPTER_FILENAME
+    ), submitted
+
+
 def test_a_saved_recipes_pinned_model_is_loaded(runnable):
     """``saved_recipe.models`` reaches the run as typed models (#1622)."""
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
