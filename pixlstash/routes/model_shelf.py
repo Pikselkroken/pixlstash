@@ -1925,7 +1925,9 @@ def create_router(server) -> APIRouter:
         summary="Which models have actually run together",
         description=(
             "One entry per **combination**: the exact set of shelf models one "
-            "or more recipes bound together, with the kept pictures they made. "
+            "or more recipes bound together, plus `missing`, the base models "
+            "they load that the shelf does not hold (so `models` may be empty), "
+            "with the kept pictures they made. "
             "A model appears in every combination it has run in, so membership "
             "overlaps and is stored nowhere - the evidence is a self-join over "
             "`workflow_recipe_asset`, which is read here and nowhere written, "
@@ -1934,8 +1936,10 @@ def create_router(server) -> APIRouter:
             "**Co-occurrence is evidence; its absence is not.** Two models in "
             "one recipe proves they ran together. Two models never seen "
             "together proves nothing, so nothing is withheld for lacking a "
-            "pairing and the ids no recipe names come back under `no_set` "
-            "rather than being dropped. A member the evidence could only reach "
+            "pairing. A combination with no base model, on the shelf or "
+            "missing, is still listed but is no set, so the ids in no "
+            "combination WITH a base come back under `no_set` rather than "
+            "being dropped - an id can be in both. A member the evidence could only reach "
             "by a basename two shelf rows share is flagged `ambiguous` and "
             "still listed.\n\n"
             "Pictures are scoped to the active library, unlike "

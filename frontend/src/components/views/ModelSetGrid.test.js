@@ -184,6 +184,28 @@ beforeEach(() => {
 });
 
 describe("the cards", () => {
+  it("draws a set with only a missing checkpoint, and opens its fix note", async () => {
+    // An all-in-one checkpoint off the shelf: nothing the shelf holds, so no
+    // member for `Show` to filter on and none for the tray to anchor on.
+    const { wrapper, store } = await mountGrid({
+      combinations: [
+        {
+          ...combination('+["aio.safetensors"]', []),
+          missing: [{ name: "aio.safetensors", workflow_ids: ["auto:x"] }],
+        },
+      ],
+    });
+
+    expect(wrapper.find('[data-testid="model-set-card"]').text()).toContain(
+      "aio",
+    );
+    store.toggleSet("missing:aio.safetensors");
+    await wrapper.vm.$nextTick();
+    const note = wrapper.find('[data-testid="model-set-missing"]');
+    expect(note.exists()).toBe(true);
+    expect(note.find("a").attributes("data-workflow")).toBe("auto:x");
+  });
+
   it("names a set whose base model is gone after it, and links to its fix", async () => {
     const { wrapper, store } = await mountGrid({
       support: [row(2, "sdxl_vae", "vae")],

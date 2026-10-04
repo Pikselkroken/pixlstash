@@ -91,7 +91,10 @@
           />
 
           <ModelSetPanel
-            v-else-if="entry.kind === 'member' && entry.memberIndex === 0"
+            v-else-if="
+              (entry.kind === 'member' && entry.memberIndex === 0) ||
+              entry.trayAnchor
+            "
             :panel-id="PANEL_ID"
             :name="openName"
             :missing="openGroup?.head?.missing ? openGroup.head : null"
@@ -545,8 +548,15 @@ const flatRows = computed(() => {
   // cursor's `index ± columns` walks out of the tray.
   const trayCols = Math.max(1, trayColumns.value);
   const padded = Math.ceil(Math.max(block.length, 1) / trayCols) * trayCols;
+  // A set named after a missing file may have no shelf member at all; its
+  // tray is still drawn, in the first hole, for the note that links the fix.
+  const anchored = block.length > 0;
   while (block.length < padded) {
-    block.push({ kind: "hole", id: `hole:block:${block.length}` });
+    block.push({
+      kind: "hole",
+      id: `hole:block:${block.length}`,
+      trayAnchor: !anchored && block.length === 0,
+    });
   }
   return [...head, ...block, ...cards.slice(rowEnd)];
 });

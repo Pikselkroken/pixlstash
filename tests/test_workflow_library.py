@@ -4649,6 +4649,45 @@ def test_a_set_whose_checkpoint_is_off_the_shelf_is_named_after_the_missing_file
     assert combinations[fixed]["models"][0]["id"] == ids["ckpt_b"]
 
 
+def test_a_recipe_naming_only_a_missing_checkpoint_is_still_a_set(store, set_shelf):
+    """An all-in-one checkpoint off the shelf: no shelf row resolves at all, and
+    the set is still drawn, named after the file, with no members."""
+    graph = generation_graph(
+        "all-in-one.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+    )
+    # Its VAE and encoder come from the checkpoint itself.
+    del graph["8"], graph["9"]
+    graph["2"]["inputs"]["clip"] = ["1", 1]
+    graph["3"]["inputs"]["clip"] = ["1", 1]
+    graph["6"]["inputs"]["vae"] = ["1", 2]
+    picture_from(store, "all-in-one.png", graph)
+
+    found = fetch_workflow_sets(store.hub, SimpleNamespace(db=store.vault))
+
+    (only,) = found["combinations"]
+    assert only["models"] == []
+    assert [m["name"] for m in only["missing"]] == ["all-in-one.safetensors"]
+    assert only["picture_count"] == 1
+
+
+def test_a_vae_sharing_the_missing_checkpoints_name_does_not_hide_it(store, set_shelf):
+    """The base-name lookup is kind-aware: a VAE whose file happens to share the
+    checkpoint's basename is not that checkpoint."""
+    shelf_file(store.hub, "twin.safetensors", "vae")
+    picture_from(
+        store,
+        "twin.png",
+        generation_graph(
+            "twin.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+
+    combinations, _ = sets_of(store)
+
+    (only,) = combinations.values()
+    assert [m["name"] for m in only["missing"]] == ["twin.safetensors"]
+
+
 def test_a_combination_with_no_base_model_is_no_set(store, set_shelf):
     """A recipe naming no base model at all is not drawn as a set led by its
     VAE or LoRA: the combination is still served, for *Works with*, but its

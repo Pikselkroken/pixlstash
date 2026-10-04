@@ -1365,13 +1365,11 @@ def _missing_bases(
     ):
         for workflow_id in workflows_on.get(row["topology_hash"], ()):
             fixes[(workflow_id, row["was_norm"])] = row["now_norm"]
-    bases = {
-        int(row["id"])
-        for row in hub.fetchall(
-            "SELECT id FROM model WHERE file_kind IN (?, ?)",
-            _SET_BASE_KINDS,
-        )
+    kinds = {
+        int(row["id"]): row["file_kind"]
+        for row in hub.fetchall("SELECT id, file_kind FROM model")
     }
+    bases = {model_id for model_id, kind in kinds.items() if kind in _SET_BASE_KINDS}
 
     unresolved: dict[str, set[str]] = {}
     for row in hub.fetchall(
@@ -1380,10 +1378,18 @@ def _missing_bases(
         _BASE_NAME_WIDGETS,
     ):
         name = row["normalized_filename"]
-        if by_name.get(name):
+        # Kind-aware: a VAE or LoRA sharing the basename is not this base.
+        if by_name.get(name, set()) & bases:
             continue
         recipe = row["structural_hash"]
-        fixed = by_name.get(fixes.get((workflow_of.get(recipe), name)), set())
+        # The fix endpoint chose a checkpoint row, so only checkpoints answer.
+        fixed = {
+            model_id
+            for model_id in by_name.get(
+                fixes.get((workflow_of.get(recipe), name)), set()
+            )
+            if kinds.get(model_id) == FILE_CHECKPOINT
+        }
         if fixed:
             recipe_models.setdefault(recipe, set()).update(fixed)
             if len(fixed) > 1:
@@ -1490,11 +1496,15 @@ def fetch_workflow_sets(hub, vault) -> dict:
             "unsure": set(),
         }
 
-    for recipe, members in recipe_models.items():
+    # A recipe whose only base is off the shelf (an all-in-one checkpoint with
+    # its VAE and encoder inside) resolves to no shelf row at all, and is
+    # still a set: the one named after its missing file, with no members.
+    for recipe in recipe_models.keys() | missing.keys():
+        members = recipe_models.get(recipe, set())
         # Models the shelf no longer holds - a Forget between the recipe read
         # and now - are dropped rather than drawn as an id with no name.
         present = frozenset(member for member in members if member in models)
-        if not present:
+        if not present and recipe not in missing:
             continue
         entry = grouped.setdefault(
             (present, frozenset(missing.get(recipe, ()))), empty()

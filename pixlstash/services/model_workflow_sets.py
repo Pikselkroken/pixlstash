@@ -246,6 +246,10 @@ def _attach_offers(hand_made: list[dict], combinations, digests) -> None:
     """
     by_head: dict[int, list[tuple[dict, set[int]]]] = {}
     for combination in combinations:
+        if combination.get("missing"):
+            # Named after a file the shelf lacks: no set's checkpoint is its
+            # head, and it may have no shelf member at all.
+            continue
         ids = {model["id"] for model in combination["models"]}
         if any(ids <= entry["_on_shelf"] for entry in hand_made):
             continue

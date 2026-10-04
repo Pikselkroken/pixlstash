@@ -1613,7 +1613,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         // card and not again as evidence (#1520): evidence cards are built only
         // from the pictures no hand-made set covers.
         !combination.covered_by?.length &&
-        (combination.models ?? []).some((model) => shown.has(model.id)),
+        ((combination.models ?? []).some((model) => shown.has(model.id)) ||
+          // Only a missing base model, no shelf row for `Show` to filter on:
+          // drawn always, or the one card for that file could never appear.
+          !combination.models?.length),
     );
   });
 
