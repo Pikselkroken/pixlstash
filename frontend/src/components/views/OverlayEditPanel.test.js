@@ -131,29 +131,40 @@ describe("the Edit tab", () => {
     });
   });
 
-  it("keeps a card missing only a picture, and hands its Run to the popup", async () => {
+  it("sends a card missing only a picture straight to the Run popup", async () => {
     preflightWorkflowRun.mockImplementation(async ({ target }) => ({
       groups: [
         {
           reasons:
             target === "i2i"
               ? [{ code: "picture_input_unfilled", inputs: [] }]
-              : [{ code: "missing_models", models: [] }],
+              : [],
         },
       ],
     }));
+    window.localStorage.setItem("pixlstash:editTabWorkflow:", "i2i");
     const wrapper = await mountPanel();
-    const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
-    expect(rows).toEqual(["Relight, Image to Image"]);
-    const run = wrapper.find("button.run");
-    expect(run.text()).toContain("Pick pictures");
+    const rows = wrapper.findAll("[role=menuitemradio]");
+    expect(rows.map((row) => row.text())).toEqual([
+      "Widen, Outpaint",
+      "Relight…, Image to Image",
+    ]);
+    // Never the tab's own card, even when it was the last one used.
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
     await wrapper.find("textarea").setValue("warmer light");
-    await run.trigger("click");
+    await rows[1].trigger("click");
     await flush();
     expect(runWorkflowCard).not.toHaveBeenCalled();
-    expect(wrapper.emitted("more-options")?.at(-1)).toEqual([
-      { pictureId: 7, workflowId: "i2i", prompt: "warmer light" },
+    expect(wrapper.emitted("more-options")).toEqual([
+      [{ pictureId: 7, workflowId: "i2i", prompt: "warmer light" }],
     ]);
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+    // More options… still opens the tab's own card, not the click event.
+    const moreOptions = wrapper.findAll("button").find((b) =>
+      b.text().includes("More options"),
+    );
+    await moreOptions.trigger("click");
+    expect(wrapper.emitted("more-options").at(-1)[0].workflowId).toBe("out");
   });
 
   it("keeps every card when ComfyUI cannot be asked, or the check fails", async () => {

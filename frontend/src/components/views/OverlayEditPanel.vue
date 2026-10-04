@@ -74,7 +74,9 @@
               :aria-labelledby="`${workflowLabelId} ${pickerValueId}`"
             >
               <span :id="pickerValueId" class="edit-select-name">{{
-                chosenCard?.name || "Untitled workflow"
+                workflowId
+                  ? chosenCard?.name || "Untitled workflow"
+                  : "Choose a workflow"
               }}</span>
               <span class="edit-kind">{{ chosenCard?.type_label }}</span>
               <v-icon class="edit-select-chevron" aria-hidden="true"
@@ -98,9 +100,11 @@
               :aria-checked="card.id === workflowId ? 'true' : 'false'"
               @click="choose(card.id)"
             >
-              <span class="ctx-label-text">{{
-                card.name || "Untitled workflow"
-              }}</span>
+              <!-- The ellipsis: this one opens the Run popup. -->
+              <span class="ctx-label-text"
+                >{{ card.name || "Untitled workflow"
+                }}{{ fillInPopup.has(card.id) ? "…" : "" }}</span
+              >
               <span class="visually-hidden">, </span>
               <span class="edit-kind">{{ card.type_label }}</span>
             </button>
@@ -209,10 +213,10 @@
           @click="submit"
         >
           <v-icon v-if="!submitting" size="16">mdi-play</v-icon>
-          {{ needsPictures ? "Pick pictures…" : "Run edit" }}
+          Run edit
         </AppButton>
         <div class="edit-foot-row">
-          <button type="button" class="edit-link" @click="onMoreOptions">
+          <button type="button" class="edit-link" @click="onMoreOptions()">
             More options…
           </button>
           <span :id="shortcutHintId" class="edit-note">Ctrl + Enter</span>
@@ -239,8 +243,9 @@
  * **Only cards that would run.** Each edit card is pre-flighted against the
  * open picture, the same question Run asks, and one that answers with a reason
  * is dropped: a missing node or model, a UI-format file. A card whose only
- * reason is an open picture input (a reference beside the open picture) stays,
- * and its Run opens the Run popup, which can fill it. A node the server replaces (a seed node) or a LoRA it bypasses is not
+ * reason is an open picture input (a reference beside the open picture) is
+ * listed with an ellipsis and never becomes the tab's card: an instruction
+ * alone cannot run it, so choosing it opens the Run popup, which can fill it. A node the server replaces (a seed node) or a LoRA it bypasses is not
  * a reason, so those cards stay. A ComfyUI that cannot be asked (not set up,
  * not running) is no verdict on any one card, so every card stays and the run
  * says why; so does a card whose pre-flight itself failed.
@@ -335,17 +340,20 @@ let refocusPicker = false;
 const chosenCard = computed(
   () => cards.value.find((card) => card.id === workflowId.value) || null,
 );
-const needsPictures = computed(() => fillInPopup.value.has(workflowId.value));
 
 // Whether the reader has picked a card by hand since the list loaded, which the
 // late library key below must not overrule.
 let choseByHand = false;
 
 function choose(key) {
-  choseByHand = true;
-  workflowId.value = key;
   pickerOpen.value = false;
   refocusPicker = true;
+  if (fillInPopup.value.has(key)) {
+    onMoreOptions(key);
+    return;
+  }
+  choseByHand = true;
+  workflowId.value = key;
 }
 
 function onPickerAfterLeave() {
@@ -365,10 +373,7 @@ const storageKey = computed(
 watch(storageKey, () => {
   if (!loaded.value) return;
   rememberedKey.value = readRemembered();
-  if (
-    !choseByHand &&
-    cards.value.some((card) => card.id === rememberedKey.value)
-  ) {
+  if (!choseByHand && runsHere(rememberedKey.value)) {
     workflowId.value = rememberedKey.value;
   }
 });
@@ -433,13 +438,13 @@ async function loadCards() {
     );
     unrunnable.value = edits.length - cards.value.length;
     rememberedKey.value = readRemembered();
-    const known = cards.value.some((card) => card.id === rememberedKey.value);
     // The last one used from this tab, else the first Image to Image card in
-    // the grid's own order, else whatever edit card comes first.
-    workflowId.value = known
+    // the grid's own order, else whatever edit card comes first - of the
+    // cards the open picture alone can run.
+    const here = cards.value.filter((card) => runsHere(card.id));
+    workflowId.value = runsHere(rememberedKey.value)
       ? rememberedKey.value
-      : (cards.value.find((card) => card.type === "img2img") || cards.value[0])
-          ?.id || "";
+      : (here.find((card) => card.type === "img2img") || here[0])?.id || "";
     loaded.value = true;
   } catch (err) {
     loadError.value = errorMessage(err, "Could not read your workflows.");
@@ -449,6 +454,13 @@ async function loadCards() {
 }
 
 const FILL = "fill";
+
+/** A listed card the open picture alone can run. */
+function runsHere(key) {
+  return (
+    !fillInPopup.value.has(key) && cards.value.some((card) => card.id === key)
+  );
+}
 
 /**
  * True when the card runs on the open picture, `FILL` when the pre-flight's
@@ -593,12 +605,12 @@ function openInWorkflows() {
   router.push({ name: "workflows", query: { workflow: workflowId.value } });
 }
 
-function onMoreOptions() {
+function onMoreOptions(key = workflowId.value) {
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return;
   emit("more-options", {
     pictureId: id,
-    workflowId: workflowId.value,
+    workflowId: key,
     // Trimmed as Run trims it, so a blank box means the same thing on both
     // paths: no instruction.
     prompt: instruction.value.trim(),
@@ -609,7 +621,6 @@ async function submit() {
   const id = Number(props.pictureId);
   if (submitting.value || !workflowId.value) return;
   if (!Number.isFinite(id) || id <= 0) return;
-  if (needsPictures.value) return onMoreOptions();
   submitting.value = true;
   submitError.value = "";
   clearTimeout(resolveTimer);
