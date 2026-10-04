@@ -1665,10 +1665,14 @@ function registerIpc(): void {
     // filename resolve against the process working directory (the home folder).
     const dir = downloadsDir();
     const options: Electron.SaveDialogOptions = {
-      title: 'Save media as',
+      title: 'Save as',
       defaultPath: dir ? join(dir, suggestedName) : suggestedName,
       ...(filterExtension
-        ? { filters: [{ name: 'Media', extensions: [filterExtension] }] }
+        ? {
+            filters: [
+              { name: `${filterExtension.toUpperCase()} file`, extensions: [filterExtension] },
+            ],
+          }
         : {}),
     };
     const result = mainWindow

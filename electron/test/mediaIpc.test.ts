@@ -4,8 +4,16 @@ import { ipcBytes, pngClipboardPayload, safeMediaFilename } from '../src/mediaIp
 
 describe('media IPC boundary', () => {
   it('accepts typed bytes and sanitizes filename suggestions independently', () => {
-    assert.equal(safeMediaFilename('../../bad:name?.JPG'), 'bad_name_.JPG');
+    assert.equal(safeMediaFilename('../../bad:name?.JPG', 'win32'), 'bad_name_.JPG');
     assert.deepEqual([...ipcBytes(new Uint8Array([1, 2, 3]))], [1, 2, 3]);
+  });
+
+  it('keeps a colon in a name except on Windows', () => {
+    const name = 'Krea 2: Text to Image.json';
+    assert.equal(safeMediaFilename(name, 'linux'), name);
+    assert.equal(safeMediaFilename(name, 'darwin'), name);
+    assert.equal(safeMediaFilename(name, 'win32'), 'Krea 2_ Text to Image.json');
+    assert.equal(safeMediaFilename('bad?name.json', 'linux'), 'bad_name.json');
   });
 
   it('never accepts a renderer-provided destination path', () => {

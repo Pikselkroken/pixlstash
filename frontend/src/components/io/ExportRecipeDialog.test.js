@@ -108,6 +108,79 @@ describe("ExportRecipeDialog", () => {
     expect(said).toContain("1 LoRA slot");
   });
 
+  it("stays open and says nothing when the Save dialog is cancelled", async () => {
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(async () => ({ canceled: true })),
+      completeMediaSaveAs: vi.fn(),
+    };
+    try {
+      const wrapper = render();
+      await flushPromises();
+      await wrapper
+        .findAll("button")
+        .find((button) => button.text().includes("Export workflow"))
+        .trigger("click");
+      await flushPromises();
+      expect(window.pixlstashDesktop.beginMediaSaveAs).toHaveBeenCalledWith(
+        "cinematic-portrait.json",
+      );
+      expect(wrapper.emitted("close")).toBeFalsy();
+      expect(useNoticeStore().notices).toEqual([]);
+    } finally {
+      delete window.pixlstashDesktop;
+    }
+  });
+
+  it("shows progress on the export that was pressed, not its neighbour", async () => {
+    let answer;
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(() => new Promise((resolve) => (answer = resolve))),
+      completeMediaSaveAs: vi.fn(),
+    };
+    try {
+      const wrapper = render();
+      await flushPromises();
+      const button = (label) =>
+        wrapper.findAll("button").find((b) => b.text().includes(label));
+      await button("Export recipe").trigger("click");
+      await flushPromises();
+      expect(button("Export recipe").attributes("aria-busy")).toBe("true");
+      expect(button("Export workflow").attributes("aria-busy")).toBeUndefined();
+      expect(button("Export workflow").attributes("disabled")).toBeDefined();
+      answer({ canceled: true });
+      await flushPromises();
+      expect(button("Export recipe").attributes("aria-busy")).toBeUndefined();
+    } finally {
+      delete window.pixlstashDesktop;
+    }
+  });
+
+  it("blames the save, not the export, when writing the file fails", async () => {
+    const failure = new Error();
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(async () => ({ canceled: false, saveId: "s1" })),
+      completeMediaSaveAs: vi.fn(async () => {
+        throw failure;
+      }),
+      cancelMediaSaveAs: vi.fn(),
+    };
+    try {
+      const wrapper = render();
+      await flushPromises();
+      await wrapper
+        .findAll("button")
+        .find((button) => button.text().includes("Export workflow"))
+        .trigger("click");
+      await flushPromises();
+      expect(wrapper.find("[role=alert]").text()).toBe(
+        "Could not save that workflow.",
+      );
+      expect(wrapper.emitted("close")).toBeFalsy();
+    } finally {
+      delete window.pixlstashDesktop;
+    }
+  });
+
   it("writes nothing until the owner presses Export recipe", async () => {
     const wrapper = render();
     await flushPromises();

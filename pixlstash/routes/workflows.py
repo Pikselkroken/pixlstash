@@ -6003,8 +6003,13 @@ def create_router(server) -> APIRouter:
                     f"safe to share: {exc}"
                 ),
             ) from exc
+        # Named as the grid shows it. A generated name needs the models
+        # (`Krea 2: Text to Image`), which `_file_stem`'s fallback has not got.
+        shown = _display_names(
+            read_grid(hub, server.vault, manual_models=_manual_models).figures
+        ).get(workflow.workflow_id)
         return WorkflowExport(
-            filename=f"{_file_stem(card, workflow.name)}.json",
+            filename=f"{_file_stem(card, workflow.name or shown)}.json",
             workflow=document,
             removed=removed,
             source=source.origin,
