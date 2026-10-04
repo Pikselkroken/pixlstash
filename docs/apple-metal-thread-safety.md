@@ -412,8 +412,6 @@ Terms used below:
 - **Planner**: the work planner's thread. Its **model finders** queue tagging,
   embedding and face-extraction tasks, but only once the inference engine
   exists.
-- **`URGENT`**: the highest task priority. It goes ahead of queued tasks but
-  does not interrupt the one running.
 - **The CPU copies**: `CpuQueryEncoders`, a second CLIP and SBERT held on the
   CPU for search queries (see "Searching").
 
@@ -449,100 +447,55 @@ worker runs the embedding and tagging batches. So on Metal, and only on Metal,
 (`inference/cpu_query_encoders.py`): the same classes, weights and
 preprocessing on the `cpu` device.
 
+Every query encode goes through `InferenceEngine.query_services()`, which
+yields the CPU copies on Metal and the engine's own CLIP and SBERT on every
+other host (`engine.query_encoders is None` there).
 `TextEmbeddingWorkflow.encode_query` / `encode_clip_query` and
-`ClipEmbeddingWorkflow.encode_query_image` route to them.
-`engine.query_encoders is None` on every other host, which is what those three
-branch on. The worker's own `encode` / `encode_images` deliberately do **not**
-route: moving those to the CPU would take the whole library's indexing off the
-GPU, which is its own regression.
+`ClipEmbeddingWorkflow.encode_query_image` are its callers. The worker's own
+`encode` / `encode_images` deliberately do **not** use it: moving those to the
+CPU would take the whole library's indexing off the GPU, which is its own
+regression.
 
-`create` builds the copies but does not load them. Every engine service is lazy,
-so `create` reads no weights and, once the tagger files are downloaded, returns
-in milliseconds (on first run it downloads the built-in taggers). Loading these
-two inline made it take 7.3 s, because they were then the first models in the
-process and paid the whole cold-import cost; on a real library, boot went from
-1.95 s to 9.11 s. The weights load on a `CpuQueryEncoderLoadTask` instead.
-
-That task is `URGENT` and runs on the **GPU** queue although it loads onto the
-CPU. That looks wrong and is the point: the queue serialises it against the
-worker's own model loads. Loading a model on a request thread beside one of
-those races transformers' and accelerate's *imports* rather than Metal; it
-failed with `ImportError: cannot import name 'AcceleratorState' from partially
-initialized module 'accelerate.state'`. The queue does not serialise it against
-the tagger, which `TagTask` loads on its own thread (see "Not covered").
+The copies load once, synchronously, before the engine is published.
+`Vault._create_engine` builds the engine, loads the copies, and only then is the
+engine assigned to `Vault._engine`; `ensure_ready` and the lazy build in
+`get_worker_future` both go through it. The model finders queue nothing while
+`_engine` is `None`, so nothing else loads a model while the copies do. That
+matters because a load beside another one races transformers' and accelerate's
+*imports* rather than Metal: it failed with `ImportError: cannot import name
+'AcceleratorState' from partially initialized module 'accelerate.state'`. It
+holds at boot too, where `Server.__init__` has already started the planner
+before `app` calls `ensure_ready`.
 
 `torchvision` has the same import problem. Its package imports itself in a
 cycle, so when two threads import it for the first time from different entry
 points (`open_clip` for CLIP, `torchvision.models` for the tagger), one raises
 `_DeadlockError` and the other gets a half-built `torchvision.ops`. A harness
 hit it in 7 of 12 cold starts, and in 0 of 12 once `open_clip` and
-`torchvision` had been imported on one thread first (2026-09-27). Neither side
-is left broken: each load succeeds when retried.
+`torchvision` had been imported on one thread first (2026-09-27). Loading the
+copies first, alone, imports both before anything else can.
 
-`Vault._queue_cpu_query_encoder_load` is called from `ensure_ready`, from
-`start`, and from the lazy engine build in `get_worker_future`; it is
-idempotent. The call in `ensure_ready` is the one that queues the load in both
-production sequences. At boot `Server.__init__` calls `start()` before `app`
-builds the engine, so `start` finds nothing to load. On a library switch
-`_bring_up` calls `ensure_ready()` first, and a runner accepts tasks before it
-starts. The call in `start` changes nothing in either sequence and remains as a
-safety net.
+The cost is start-up time. Every other engine service is lazy, so the copies are
+the first models in the process and pay the cold imports: loaded inline at boot
+they took boot from 1.95 s to 9.11 s on a real library (2026-09-21), and the
+server does not listen until they are in. Part of that is import cost the first
+tagging or embedding load would otherwise pay a little later.
 
-The load has to be queued before the planner has work to queue: `URGENT` heads
-the queue but cannot preempt a running task, and one planner-queued batch held
-the load for over 86 s — long enough for a search to time out. On a library
-switch the planner has not started yet. At boot it has, but the model finders
-queue nothing until the engine exists, and `ensure_ready` queues the load right
-after building it. That is an ordering, not a guarantee: the planner can see
-the engine a moment before the load is queued, and a tagger preload can start
-while the load is still importing. On restarts with work already pending, the
-load ran first in 8 of 8, and the first tagger preload began 1.1–1.6 s after it
-finished (2026-09-27). Running first also meant the load imported `torchvision`
-alone, so the `torchvision` race did not occur in those restarts. With the CPU
-copies patched out, as a stand-in for a CUDA or CPU host measured on the same
-Mac, it occurred in 1 of 8.
+The copies then stay resident for the life of the engine, even with "keep
+models in memory" off: `engine.close()` and the idle sweep leave them, and they
+go with the engine on a library switch or shutdown. On unified memory that is
+about 0.7 GB the owner cannot reclaim; unloading and reloading them safely is
+#1774. Nothing reloads them, so if either copy fails to load, every search
+answers 503 rather than fall back to the Metal services, because that fallback
+is the crash. The pair serves only when **both** loaded: the services call
+`ensure_ready()` outside their own `try`, so a copy with no model would load
+lazily on the search thread.
 
-A text or likeness search that arrives while the load is still running waits
-for it, up to 60 s, and answers 503 only if it has not finished by then; an
-export by query fails its job instead, with the reason on its status. None of
-them falls back to the Metal services while a worker runs, because that
-fallback is the crash. The wait is also why no encode runs inside a database
-task or on the event loop: the load can sit behind a running batch that commits
-through the single DB writer, so a wait holding that writer stalls every write
-until it times out, and a wait on the event loop stalls every request.
-
-When the runner refuses the load task, `CpuQueryEncoders.ensure_serving`
-returns `False` and the caller encodes on the Metal services. The reasoning is
-that the crash needs a second thread on Metal, and a runner that refuses tasks
-has no worker doing Metal work. Refusing instead broke search in configurations
-with an engine but no running worker, which the multi-project authz suite
-caught. Searches falling back take turns (`CpuQueryEncoders.device_fallback`),
-so two of them are never two threads on Metal. One gap remains, listed under
-"Not covered".
-
-The pair serves only when **both** copies loaded — the services call
-`ensure_ready()` outside their own `try`, so a half-loaded pair would raise out
-of every search instead.
-
-`engine.close()` releases the copies *before* handing the device services to
-`ModelLifecycleManager`, so the `gc.collect()` in that call frees them too.
-(The `trim_process_memory()` after it only acts on Linux, and the copies exist
-only on Macs.) The idle sweep (`Vault._maybe_aggressive_unload`) reaches
-them through `engine.close()`, and that is deliberate: it runs only when the
-owner chose memory over speed, and on unified memory the copies sit in the very
-pool it is freeing. `unload()` clears the loaded flag, so the next search queues
-a reload and waits rather than encoding against models that are no longer
-there.
-
-`unload()` also waits for encodes already running, because releasing a model
-under one makes the service reload it lazily on the search thread, the import
-race above. While it waits, new encodes refuse (503) and a load may not flag
-the pair, so searches that keep arriving cannot hold the unload open: they
-queue a reload that waits for the unload to finish. The wait is bounded
-(`UNLOAD_DRAIN_S`, 10 s): an encode still running then is left alone, the
-models are kept, and the next sweep tries again. A load that an unload
-overtakes, releasing what it had just loaded, loads once more instead of
-leaving its waiters to time out.
+`query_services()` also lets one query encode run at a time, on every host. The
+encodes run on request threads and share one pair of service instances, which
+read their model and tokenizer without a lock once loaded. They used to take
+turns on the single DB writer thread; no encode runs inside a database task any
+more, because there it holds every write for the length of a model call.
 
 ### Not covered
 
@@ -565,9 +518,8 @@ These do, or may do, Metal work on a thread other than the GPU worker:
 - **The idle sweep.** `Vault._maybe_aggressive_unload` runs `engine.close()`,
   which flushes with `torch.mps.empty_cache()` (cause 3). It runs from the
   worker-progress poll, on a request thread, and from `PATCH /users/me/config`
-  when "keep models in memory" is switched off, on the event loop, where the
-  CPU copies' unload can wait for a running encode (at most `UNLOAD_DRAIN_S`).
-  It runs only with that setting off. Its idle check reads the planner's
+  when "keep models in memory" is switched off, on the event loop. It runs only
+  with that setting off. Its idle check reads the planner's
   progress and whether a GPU task is running at that instant, so a batch the
   worker starts just after the check can meet the flush, and it sees neither
   the tagger preload nor the anomaly route. Nothing stops two polls sweeping at
@@ -581,12 +533,6 @@ These do, or may do, Metal work on a thread other than the GPU worker:
   to finish, then carries on. `Vault.stop()` then releases the face models and
   runs `engine.close()`, flushing and freeing on the stopping thread, which a
   worker that outlived the wait may still be using. Not measured.
-- **Search with no worker.** The fallback above encodes on Metal whenever the
-  runner refuses tasks. A stopping runner refuses from the first line of
-  `TaskRunner.stop()`, while its worker may still be finishing a batch, and may
-  outlive the stop. Only `Vault.stop()` stops the runner (a library switch or
-  shutdown), where admission control probably keeps searches out; that was not
-  verified.
 - **Image plugins.** They run on `asyncio.to_thread`
   (`services/plugin_service.py`), so a torch plugin that uses Metal is a second
   thread on it. No built-in image plugin imports torch.
@@ -611,12 +557,9 @@ does not do.
 | The same, with the CPU copies | not recorded in the notes | The Metal services received no query call at all, and 4 of 4 runs were clean. At a 1-in-3 rate, four clean runs would happen by chance about one time in five, so the first half is the evidence |
 | Boot, real app and real library, before the CPU copies existed | 2026-09-21 | 1.95 s (`create` builds the engine in 0.003 s) |
 | Boot with the copies loaded inline in `create` | 2026-09-21 | **9.11 s** — they became the first models in the process and paid every import; `create` alone took 7.3 s |
-| Boot with the load queued onto the GPU worker | 2026-09-23 | 1.87–2.06 s |
-| When the queued load finishes, in the harness on throwaway libraries | 2026-09-27 | 6.1–8.8 s after the harness started; the load task itself took 4.9–7.1 s, cold imports included |
-| Memory the CPU copies hold, Metal hosts only | 2026-09-28 | About 0.7 GB: 696 MB of fp32 weights by parameter count (CLIP 605 MB, SBERT 91 MB); the process grew by 610 MB loading them. Released by the idle sweep |
+| The load itself, in a harness on throwaway libraries | 2026-09-27 | 4.9–7.1 s, cold imports included |
+| Memory the CPU copies hold, Metal hosts only | 2026-09-28 | About 0.7 GB: 696 MB of fp32 weights by parameter count (CLIP 605 MB, SBERT 91 MB); the process grew by 610 MB loading them. Kept resident (#1774) |
 | Do fp32 CLIP query vectors rank differently from the fp16 ones they replace? (SBERT was fp32 on Metal already.) | 2026-09-23 | No. 20 queries over a real library of several thousand pictures: top-1 identical 20/20, top-10 identical 20/20, largest rank move 1 place, max per-dim delta 4.91e-04 |
-| A search arriving before the queued load finishes | 2026-09-23 | Waits 8.6 s and then answers; the next query takes 0.05 s |
-| A library switch | 2026-09-23 | The new vault gets its own copies; its first query waits 4.5 s and then answers |
 
 torch 2.13.0, transformers 5.16.1, macOS 26.6.2, arm64, unless a row says
 otherwise. The crash is a race, so its rate depends on load and timing: several
