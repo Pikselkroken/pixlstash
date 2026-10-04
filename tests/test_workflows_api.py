@@ -7336,9 +7336,25 @@ def test_a_gone_shelf_loader_is_named_by_the_pictures_editor_graph(
     }
     assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [SHELF_MODEL_GONE]
 
-    # A malformed one is not a 500: the loader just reads as gone.
+    # A malformed node is not a 500, and loses only its own name: a second
+    # gone loader whose editor node reads is still named.
     editor["nodes"][0] = {"id": 1, "type": "CheckpointLoaderSimple", "inputs": 7}
-    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [SHELF_MODEL_GONE]
+    embedded["9"] = {
+        "class_type": "PixlStashCheckpointLoader",
+        "inputs": {"checkpoint_id": "987654322"},
+    }
+    editor["nodes"].append(
+        {
+            "id": 9,
+            "type": "CheckpointLoaderSimple",
+            "inputs": [],
+            "widgets_values": ["SDXL/ninth.safetensors"],
+        }
+    )
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_GONE,
+        "SDXL/ninth.safetensors",
+    ]
 
 
 def _pack_graph(project: str | None = None) -> dict:
