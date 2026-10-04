@@ -3073,7 +3073,7 @@ def create_router(server) -> APIRouter:
         for widget, value in loaded:
             first_widget.setdefault(value, widget)
         return [
-            shelf_files[value] or SHELF_MODEL_UNNAMED
+            shelf_files.get(value, SHELF_MODEL_GONE) or SHELF_MODEL_UNNAMED
             if widget == SHELF_ID_FIELD
             else value
             for value, widget in first_widget.items()
