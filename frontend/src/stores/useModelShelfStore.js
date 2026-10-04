@@ -326,6 +326,9 @@ const MAX_MODELS_PER_ICON_SET = 500;
 // had committed. It also leaves sockets for the row thumbnails.
 const ICON_SET_CONCURRENCY = 6;
 
+// The server's cap on a set name (`MAX_SET_NAME_LENGTH` in the set service).
+const MAX_SET_NAME_LENGTH = 200;
+
 // The glyph on each set verb's receipt: the one on the control that did it
 // where there is one, else the picture sets' own add/remove glyphs.
 const SET_RECEIPT_ICONS = {
@@ -2036,6 +2039,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return created;
   }
 
+  /**
+   * Make a copy of a set: the same members in the same slots, by hash, so a
+   * member off the shelf is copied too. What it was kept separate from is not
+   * copied; the copy is offered the merge afresh.
+   *
+   * @param {Object} set - a set from `handMadeSets`.
+   * @returns {Promise<Object|null>} the new set.
+   */
+  function duplicateHandMadeSet(set) {
+    return createHandMadeSet({
+      // Cut to the server's limit, in code points as it counts them, keeping
+      // " copy" so a long name's copy is neither a 422 nor indistinguishable.
+      name: `${Array.from(setLabel(set))
+        .slice(0, MAX_SET_NAME_LENGTH - " copy".length)
+        .join("")} copy`,
+      members: (set.members ?? []).map(memberBack),
+    });
+  }
+
   /** Rename one set; an empty name goes back to the checkpoint's. */
   function renameHandMadeSet(set, name) {
     const before = set.name ?? null;
@@ -3234,6 +3256,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     selectSet,
     clearSetSelection,
     createHandMadeSet,
+    duplicateHandMadeSet,
     renameHandMadeSet,
     deleteHandMadeSets,
     addToHandMadeSet,

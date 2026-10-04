@@ -1398,6 +1398,42 @@ describe("hand-made sets (#1520)", () => {
     expect(deleteWorkflowSet).toHaveBeenLastCalledWith(12);
   });
 
+  it("duplicates a set with every member by hash and slot, and opens the copy", async () => {
+    const gone = slotMember(5, "old_lora", "lora", {
+      on_shelf: false,
+      id: null,
+    });
+    const original = handSet(10, [SET_CKPT, SET_VAE, gone], {
+      name: "Portrait kit",
+    });
+    createWorkflowSet.mockResolvedValue(
+      handSet(12, [SET_CKPT, SET_VAE, gone], { name: "Portrait kit copy" }),
+    );
+    deleteWorkflowSet.mockResolvedValue({ deleted: handSet(12, []) });
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      support: [row(2, "sdxl_vae", "vae")],
+      handMade: [original],
+    });
+    const operations = useOperationStore();
+
+    await store.duplicateHandMadeSet(original);
+
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      name: "Portrait kit copy",
+      members: [SET_CKPT, SET_VAE, gone].map((m) => ({
+        sha256: m.sha256,
+        slot: m.slot,
+        label: m.label,
+      })),
+    });
+    expect(store.openSetKey).toBe("hand:12");
+    // Undo takes the copy away, never the original.
+    await operations.takeLocalReceiptAction();
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(12);
+    expect(deleteWorkflowSet).not.toHaveBeenCalledWith(10);
+  });
+
   it("makes a set from the keyboard with N and from the tile", async () => {
     createWorkflowSet.mockResolvedValue(handSet(12, []));
     const { wrapper, store } = await mountGrid({
