@@ -515,6 +515,12 @@ export const FACE_DRAG_MIME = "application/x-pixlstash-faces";
  * dragover, before the pointer ever suggests the drop would work.
  */
 export const MODEL_FILE_DRAG_MIME = "application/x-pixlstash-model-files";
+/**
+ * Shelf models dragged from the Models rail onto a workflow set. Not the
+ * model-files marker: a folder header takes that one and moves bytes, while
+ * this only files a model in a set.
+ */
+export const RAIL_MODELS_DRAG_MIME = "application/x-pixlstash-rail-models";
 
 /**
  * Payload `type` to its marker. A kind absent from this map gets no marker, so
@@ -526,6 +532,7 @@ const DRAG_MARKERS = {
   "image-ids": PICTURE_DRAG_MIME,
   "face-bbox": FACE_DRAG_MIME,
   "model-files": MODEL_FILE_DRAG_MIME,
+  "rail-models": RAIL_MODELS_DRAG_MIME,
 };
 
 /**
