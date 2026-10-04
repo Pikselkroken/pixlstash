@@ -1622,11 +1622,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * it is in the air, and the set its *Fits* filter is on, which the set
    * panel's *Models · N fit* button sets.
    *
-   * A drag's DATA is unreadable during `dragover`, and the slots have to fade
-   * or not while the pointer is still down, so the rows live here for the
-   * length of the drag rather than in `dataTransfer`.
+   * The drag is the rail's own pointer drag, not the browser's, so the rows
+   * live here for its length, and `railOver` is the `data-rail-drop` key of
+   * the target under the pointer, which that target lights up from.
    */
   const railDrag = shallowRef(null);
+  const railOver = ref("");
   const railFitsSetId = ref(null);
 
   /**
@@ -3676,6 +3677,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError.value = "";
     openSetKey.value = "";
     railDrag.value = null;
+    railOver.value = "";
     railFitsSetId.value = null;
     selectedSetIds.value = new Set();
     clearMissingSelection();
@@ -3781,6 +3783,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     createSetFromRows,
     confirmSecondCheckpoint,
     railDrag,
+    railOver,
     railFitsSetId,
     announceAdded,
     removeFromHandMadeSet,

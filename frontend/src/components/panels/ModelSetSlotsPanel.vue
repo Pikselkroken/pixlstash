@@ -223,13 +223,17 @@
         :class="{
           'mss__slot--refuse': dragRows && !dragFits(slot),
           'mss__slot--target': dragRows && dragFits(slot),
-          'mss__slot--drop': dropSlot === slot.id,
+          'mss__slot--drop': dragOver === `slot:${slot.id}` && dragFits(slot),
         }"
         role="presentation"
         :data-slot="slot.id"
-        @dragover="onSlotDragOver(slot, $event)"
-        @dragleave="onSlotDragLeave(slot, $event)"
-        @drop="onSlotDrop(slot, $event)"
+        :data-rail-drop="dragRows ? `slot:${slot.id}` : undefined"
+        :data-rail-refused="
+          dragRows && !dragFits(slot)
+            ? dragRefused || `Not for ${slot.label}`
+            : undefined
+        "
+        @rail-drop.stop="onSlotDrop(slot)"
       >
         <div class="mss__label" role="presentation">
           <span class="mss__slotname">{{ slot.label }}</span>
@@ -415,6 +419,8 @@ const props = defineProps({
   fitCount: { type: Number, default: 0 },
   /** The shelf rows a drag from the Models rail carries, else null. */
   dragRows: { type: Array, default: null },
+  /** The `data-rail-drop` key under the pointer (`store.railOver`). */
+  dragOver: { type: String, default: "" },
   /**
    * Why the whole set refuses that drag (`store.railDropRefusal`), else "":
    * then no slot takes it either, as its card does not.
@@ -444,16 +450,6 @@ const emit = defineEmits([
   "drop-slot",
 ]);
 
-/** The slot a rail drag is over, when every dragged model fits it. */
-const dropSlot = ref("");
-
-watch(
-  () => props.dragRows,
-  (rows) => {
-    if (!rows) dropSlot.value = "";
-  },
-);
-
 /** A slot takes a drop only when every dragged model fits it. */
 function dragFits(slot) {
   if (props.dragRefused) return false;
@@ -461,29 +457,12 @@ function dragFits(slot) {
 }
 
 /**
- * Accept the drag, or leave it refused: `preventDefault()` is what accepts,
- * so a slot the models do not fit never calls it. It fades instead.
+ * A drop handed over by the rail (`rail-drop`), which only hands it to a slot
+ * that does not refuse it. Stopped here: the tray's own row must not take it
+ * as well.
  */
-function onSlotDragOver(slot, event) {
+function onSlotDrop(slot) {
   if (!props.dragRows?.length || !dragFits(slot)) return;
-  event.preventDefault();
-  // The card under the tray must not take this drop as well.
-  event.stopPropagation();
-  event.dataTransfer.dropEffect = "copy";
-  dropSlot.value = slot.id;
-}
-
-/** Only a leave that lands outside the slot is one; see `onRailDragLeave`. */
-function onSlotDragLeave(slot, event) {
-  if (event.currentTarget?.contains?.(event.relatedTarget)) return;
-  if (dropSlot.value === slot.id) dropSlot.value = "";
-}
-
-function onSlotDrop(slot, event) {
-  if (!props.dragRows?.length || !dragFits(slot)) return;
-  event.preventDefault();
-  event.stopPropagation();
-  dropSlot.value = "";
   emit("drop-slot", slot.id);
 }
 

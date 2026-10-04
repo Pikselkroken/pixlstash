@@ -135,12 +135,11 @@
             role="option"
             :aria-selected="selected.has(row.id) ? 'true' : 'false'"
             :aria-description="rowDescription(row)"
-            :draggable="draggable(row) ? 'true' : 'false'"
             :data-model-id="row.id"
             @click="onRowClick(row, $event)"
             @contextmenu.prevent="openMenu($event.clientX, $event.clientY, row)"
-            @dragstart="onDragStart(row, $event)"
-            @dragend="store.railDrag = null"
+            @pointerdown="onRowPointerDown(row, $event)"
+            @dragstart.prevent
           >
             <v-icon
               class="mrail-grip"
@@ -311,14 +310,22 @@
     </div>
   </v-menu>
 
-  <!-- What a drag carries, drawn by the browser from this element: the
-       grabbed model's name, or how many. Teleported to <body>, because a
-       transformed or clipping ancestor would turn `fixed` into "fixed to that
-       box" and paint an empty drag image; parked off screen except for the one
-       frame the browser paints it in (see `onDragStart`). -->
+  <!-- What a drag carries, drawn by the page and moved under the pointer
+       (see "Dragging"). Teleported to <body> so no transformed or clipping
+       ancestor can turn `fixed` into "fixed to that box". Over a target that
+       refuses the drop it goes neutral, with the refusal glyph. -->
   <Teleport to="body">
-    <div ref="dragChipEl" class="mrail-dragchip" aria-hidden="true">
-      {{ dragChipText }}
+    <div
+      v-show="ghostShown"
+      ref="ghostEl"
+      class="mrail-ghost"
+      :class="{ 'mrail-ghost--refused': overRefused }"
+      aria-hidden="true"
+      data-testid="mrail-ghost"
+    >
+      <v-icon size="16">{{ overRefused ? "mdi-cancel" : "mdi-plus" }}</v-icon>
+      <span class="mrail-ghost-text">{{ dragWhat }}</span>
+      <span v-if="dragNote" class="mrail-ghost-note">· {{ dragNote }}</span>
     </div>
   </Teleport>
 </template>
@@ -355,7 +362,6 @@ import { VIcon, VMenu } from "vuetify/components";
 import { GRID_GROUP_BY, useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
-import { setInternalDragPayload } from "../../utils/media";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { formatModelSize, modelName } from "../../utils/modelShelf";
 import {
@@ -905,19 +911,6 @@ watch(
 );
 onBeforeUnmount(() => endRun());
 
-// A drag whose source row left the DOM mid-flight never sees its `dragend`,
-// so the window's own end of every drag clears it too, as does leaving.
-function clearDrag() {
-  store.railDrag = null;
-}
-window.addEventListener("dragend", clearDrag, true);
-window.addEventListener("drop", clearDrag);
-onBeforeUnmount(() => {
-  window.removeEventListener("dragend", clearDrag, true);
-  window.removeEventListener("drop", clearDrag);
-  clearDrag();
-});
-
 /**
  * Add shelf rows to a set, quietly, as part of the current run.
  *
@@ -1094,9 +1087,28 @@ const setChoices = computed(() => {
 });
 
 // ── Dragging ──────────────────────────────────────────────────────────────
+//
+// A pointer drag, not the browser's. HTML5 drag-and-drop hands the drag and
+// its image to the window system, which on the desktop shell (X11) drew the
+// image late and dim and made the whole gesture lag. Here the page draws its
+// own pill, moved straight from `pointermove`, finds the target under the
+// pointer with `elementFromPoint`, and hands the drop to it as a `rail-drop`
+// event. Targets mark themselves `data-rail-drop="<key>"` (and
+// `data-rail-refused="<why>"` when they will not take it); `store.railOver`
+// is the key under the pointer, which they light up from.
 
-const dragChipEl = ref(null);
-const dragChipText = ref("");
+/** How far the pointer moves before a press becomes a drag. */
+const DRAG_START_PX = 4;
+/** How close to a scroll container's edge a drag scrolls it, and how fast. */
+const EDGE_PX = 48;
+const EDGE_SPEED_PX = 18;
+
+const ghostEl = ref(null);
+const ghostShown = ref(false);
+/** What the pill adds after the name: models left behind for their hash. */
+const dragNote = ref("");
+/** Why the target under the pointer refuses the drop, else "". */
+const overRefused = ref("");
 
 /** The rows a drag from here is carrying, drawn as picked up. */
 const dragIds = computed(
@@ -1113,15 +1125,45 @@ function draggable(row) {
   return Boolean(row.sha256) && onSetAxis.value;
 }
 
+/** `{row, x, y}` from the press, until it becomes a drag or is let go. */
+let press = null;
+let dragging = false;
+let point = { x: 0, y: 0 };
+let overEl = null;
+let edgeFrame = 0;
+
+function onRowPointerDown(row, event) {
+  // A mouse or pen press with the main button. Touch scrolls the list.
+  if (event.button !== 0 || event.pointerType === "touch") return;
+  if (!draggable(row) || event.target.closest?.("button")) return;
+  press = { row, x: event.clientX, y: event.clientY };
+  window.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", cancelDrag);
+  window.addEventListener("keydown", onDragKeydown, true);
+}
+
+function onPointerMove(event) {
+  if (!press) return;
+  point = { x: event.clientX, y: event.clientY };
+  if (!dragging) {
+    if (Math.hypot(point.x - press.x, point.y - press.y) < DRAG_START_PX) {
+      return;
+    }
+    startDrag();
+  }
+  // No text selection sweeping across the page behind the pill.
+  event.preventDefault();
+  placeGhost();
+  findTarget();
+}
+
 /**
  * Drag the selection when the grabbed row is in it, else that row alone (and
  * it becomes the selection): the file-manager rule the shelf follows.
  */
-function onDragStart(row, event) {
-  if (!draggable(row)) {
-    event.preventDefault();
-    return;
-  }
+function startDrag() {
+  const { row } = press;
   if (!selected.value.has(row.id)) {
     selected.value = new Set([row.id]);
     anchorId.value = row.id;
@@ -1132,37 +1174,126 @@ function onDragStart(row, event) {
     selected.value.has(candidate.id),
   );
   // A model still being hashed cannot be kept by a set, so it stays behind,
-  // and the chip says so rather than letting it vanish from the drop.
+  // and the pill says so rather than letting it vanish from the drop.
   const rows = picked.filter((candidate) => candidate.sha256);
   const hashing = picked.length - rows.length;
+  dragNote.value = hashing ? `${hashing} still hashing, left out` : "";
   store.railDrag = rows;
-  dragChipText.value =
-    (rows.length === 1 ? nameOf(rows[0]) : `${rows.length} models`) +
-    (hashing ? ` · ${hashing} still hashing, left out` : "");
-  event.dataTransfer.effectAllowed = "copy";
-  // An internal payload, as every in-app drag is: on the desktop shell a drag
-  // of a row holding an <img> also fills `dataTransfer.files`, and without the
-  // JSON body the window's import handler reads it as a file dropped from
-  // outside.
-  setInternalDragPayload(event.dataTransfer, {
-    type: "rail-models",
-    ids: rows.map((candidate) => candidate.id),
-  });
-  const chip = dragChipEl.value;
-  if (chip) {
-    // Chromium paints a drag image from the element's on-screen rendering, so
-    // the chip is put under the pointer for the frame it is painted in, then
-    // parked again. It has to hold its text before that frame, too.
-    chip.textContent = dragChipText.value;
-    chip.style.left = `${event.clientX}px`;
-    chip.style.top = `${event.clientY}px`;
-    event.dataTransfer.setDragImage(chip, 12, 12);
-    setTimeout(() => {
-      chip.style.left = "";
-      chip.style.top = "";
-    }, 0);
+  dragging = true;
+  ghostShown.value = true;
+  document.documentElement.classList.add("rail-dragging");
+  edgeFrame = requestAnimationFrame(edgeScroll);
+  // The targets mark themselves only once they have rendered this drag; until
+  // then nothing under the pointer carries `data-rail-drop`.
+  nextTick(() => dragging && findTarget());
+}
+
+/** The pill sits just below and right of the pointer, moved without a render. */
+function placeGhost() {
+  if (ghostEl.value) {
+    ghostEl.value.style.transform = `translate(${point.x + 14}px, ${point.y + 14}px)`;
   }
 }
+
+function findTarget() {
+  // The pill and the targets' marks are `pointer-events: none`, so this is
+  // what is really under the pointer.
+  const hit = document
+    .elementFromPoint?.(point.x, point.y)
+    ?.closest?.("[data-rail-drop]");
+  overEl = hit ?? null;
+  store.railOver = hit?.dataset.railDrop ?? "";
+  overRefused.value = hit?.dataset.railRefused ?? "";
+  document.documentElement.classList.toggle(
+    "rail-dragging--refused",
+    Boolean(overRefused.value),
+  );
+}
+
+/**
+ * Scroll whatever the pointer is near the edge of, as the browser's own drag
+ * did: a set further down the grid is otherwise out of reach.
+ */
+function edgeScroll() {
+  if (!dragging) return;
+  let el = document.elementFromPoint?.(point.x, point.y) ?? null;
+  while (el && el !== document.body) {
+    const { overflowY } = getComputedStyle(el);
+    if (/(auto|scroll)/.test(overflowY) && el.scrollHeight > el.clientHeight) {
+      const box = el.getBoundingClientRect();
+      const top = point.y - box.top;
+      const bottom = box.bottom - point.y;
+      const step =
+        top < EDGE_PX
+          ? -EDGE_SPEED_PX * (1 - top / EDGE_PX)
+          : bottom < EDGE_PX
+            ? EDGE_SPEED_PX * (1 - bottom / EDGE_PX)
+            : 0;
+      if (step) {
+        el.scrollTop += step;
+        findTarget();
+      }
+      break;
+    }
+    el = el.parentElement;
+  }
+  edgeFrame = requestAnimationFrame(edgeScroll);
+}
+
+function onPointerUp() {
+  const target = dragging && !overRefused.value ? overEl : null;
+  const wasDragging = dragging;
+  // Handed over before the drag is cleared: the target reads `railDrag`.
+  target?.dispatchEvent(new CustomEvent("rail-drop", { bubbles: true }));
+  endDrag();
+  // The release would otherwise land as a click on the row the drag began
+  // on, and select that row alone.
+  if (wasDragging) {
+    window.addEventListener("click", swallowClick, true);
+    setTimeout(() => window.removeEventListener("click", swallowClick, true));
+  }
+}
+
+function swallowClick(event) {
+  event.stopPropagation();
+  event.preventDefault();
+  window.removeEventListener("click", swallowClick, true);
+}
+
+function onDragKeydown(event) {
+  if (event.key !== "Escape" || !dragging) return;
+  // Escape puts the models back; it must not also clear a selection.
+  event.stopPropagation();
+  event.preventDefault();
+  cancelDrag();
+}
+
+function cancelDrag() {
+  endDrag();
+}
+
+function endDrag() {
+  window.removeEventListener("pointermove", onPointerMove);
+  window.removeEventListener("pointerup", onPointerUp);
+  window.removeEventListener("pointercancel", cancelDrag);
+  window.removeEventListener("keydown", onDragKeydown, true);
+  cancelAnimationFrame(edgeFrame);
+  document.documentElement.classList.remove(
+    "rail-dragging",
+    "rail-dragging--refused",
+  );
+  press = null;
+  overEl = null;
+  overRefused.value = "";
+  ghostShown.value = false;
+  if (dragging) {
+    dragging = false;
+    store.railDrag = null;
+    store.railOver = "";
+  }
+}
+
+onBeforeUnmount(endDrag);
 </script>
 
 <style scoped>
@@ -1404,31 +1535,58 @@ function onDragStart(row, event) {
   opacity: 0.7;
 }
 
-/* The drag image. A solid primary fill, the sidebar's live-drop colour: the
-   browser draws a drag image half-transparent, and a chip in the surface's own
-   colours all but vanished against the dark shelf it was dragged over. */
-.mrail-dragchip {
+/* The drag pill. A solid primary fill, the sidebar's live-drop colour, so it
+   reads against anything it passes over. Parked at the origin and moved by
+   `transform` alone, the cheapest thing to change on every pointer move. */
+.mrail-ghost {
   position: fixed;
-  top: -1000px;
-  left: -1000px;
+  top: 0;
+  left: 0;
   z-index: var(--z-notice);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   max-width: var(--stats-panel-w);
-  overflow: hidden;
   pointer-events: none;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-primary));
+  box-shadow: var(--elevation-2);
   color: rgb(var(--v-theme-on-primary));
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
-  text-overflow: ellipsis;
   white-space: nowrap;
+  will-change: transform;
 }
 
-.mrail-dragchip::before {
-  content: "\F0415"; /* mdi-plus */
-  margin-right: var(--space-2);
-  font-family: "Material Design Icons";
-  font-weight: normal;
+.mrail-ghost--refused {
+  background: rgb(var(--v-theme-surface));
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.mrail-ghost-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mrail-ghost-note {
+  flex-shrink: 0;
+  font-weight: var(--weight-regular);
+}
+</style>
+
+<style>
+/* While a rail drag is live the whole page shows it in the cursor, and nothing
+   under the pointer gets text-selected or hover-lit as the pill passes. */
+html.rail-dragging,
+html.rail-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+html.rail-dragging.rail-dragging--refused,
+html.rail-dragging.rail-dragging--refused * {
+  cursor: no-drop !important;
 }
 </style>

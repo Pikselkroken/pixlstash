@@ -5825,31 +5825,38 @@ the first time a hand-made set opens while the rail is closed.
   drop ask first (`store.confirmSecondCheckpoint`). A drop on a set whose base
   model differs from the dragged models' one is refused with a notice, as the
   *Add to set…* menu fades that set.
-- **Dragging.** Only on the Workflow set axis. The rows travel in
-  `store.railDrag` (a drag's data is unreadable during `dragover`), and the
-  transfer carries an ordinary internal payload (`setInternalDragPayload`,
-  type `rail-models`, marker `RAIL_MODELS_DRAG_MIME`): on the desktop shell a
-  row holding an `<img>` also fills `dataTransfer.files`, and without the JSON
-  body the window's import handler takes it for a file from outside. The drag
-  chip is teleported to `<body>` and moved under the pointer for the one frame
-  Chromium paints it in, since an off-screen or clipped element paints an empty
-  drag image; it is a solid primary pill, because the browser draws drag
-  images half-transparent. `ModelSetGrid` accepts a
-  drop on a hand-made card (each model to its kind's slot,
-  `store.addRowsToHandMadeSet`), on a slot in the open tray when every dragged
-  model fits it (`ModelSetSlotsPanel` fades the rest), and on *New workflow
-  set* (`store.createSetFromRows`). A drop is one write and one receipt.
-- **What a drag shows.** The page never relies on the drag image alone. For
-  the whole drag every target wears a dashed rim (`railTargets` in
-  `ModelSetGrid`, an overlay above the card's cover, since an inset ring
-  paints under its pictures), the target under the pointer turns solid over
-  the active wash and says what the drop does, the carried rows look picked
-  up, and the rail's footer says where to drop. A hand-made set that will not
-  take the models (`store.railDropRefusal`: holds them all, or another base
-  model) fades, refuses the drop, and states the reason under the pointer;
-  its open tray's slots refuse too. Evidence cards fade. A target's
-  `dragleave` counts only when the pointer leaves it, not when it crosses
-  into a child (the sidebar's `leftDropRow`), or the mark flickers.
+- **Dragging is a pointer drag, not HTML5 drag-and-drop.** The browser's
+  drag hands the gesture and its image to the window system, and on the
+  desktop shell (X11) that image arrived late and dim and the whole drag
+  lagged. So a press on a row (mouse or pen, main button) becomes a drag after
+  4 px of travel; the rail draws its own pill (`.mrail-ghost`, teleported to
+  `<body>`, moved by `transform` on every `pointermove`), finds the target
+  under the pointer with `elementFromPoint(...).closest("[data-rail-drop]")`,
+  and on release dispatches a bubbling `rail-drop` event on it. Only on the
+  Workflow set axis. Escape puts the models back, the edges of whatever
+  scrolls under the pointer scroll it, and the click the release fires on the
+  source row is swallowed so it cannot narrow the selection. Touch never
+  starts one.
+- **The target contract.** A target carries `data-rail-drop="<key>"` (a card
+  key, `new`, or `slot:<id>`), plus `data-rail-refused="<why>"` when it will not
+  take the drag, and listens for `rail-drop`. The rows travel in
+  `store.railDrag` and the key under the pointer in `store.railOver`, which
+  targets light up from. The rail never hands a drop to a refusing target, and
+  each target checks again where it writes. `ModelSetGrid` takes a drop on a
+  hand-made card (each model to its kind's slot,
+  `store.addRowsToHandMadeSet`) and on *New workflow set*
+  (`store.createSetFromRows`); `ModelSetSlotsPanel` takes it on a slot every
+  dragged model fits, and stops it there. A drop is one write and one receipt.
+- **What a drag shows.** For the whole drag every target wears a dashed rim
+  (`railTargets` in `ModelSetGrid`, an overlay above the card's cover, since
+  an inset ring paints under its pictures), the target under the pointer
+  turns solid over the active wash and says what the drop does, the carried
+  rows look picked up, the pill names them in the primary fill, and the
+  rail's footer says where to drop. A hand-made set that will not take the
+  models (`store.railDropRefusal`: holds them all, or another base model)
+  fades and states the reason; its open tray's slots refuse too, and over any
+  refusing target the pill goes neutral with ⊘ and the cursor shows no-drop.
+  Evidence cards fade.
 - Not built yet: the narrow-window drawer (`statsForcedHidden`), *Works with*
   from the rail, and virtualisation (rows use `content-visibility: auto`).
 

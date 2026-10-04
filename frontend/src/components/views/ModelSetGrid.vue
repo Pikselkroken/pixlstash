@@ -83,6 +83,7 @@
             :base-offer="baseOffer"
             :fit-count="openFitCount"
             :drag-rows="store.railDrag"
+            :drag-over="store.railOver"
             :drag-refused="railTargets.get(store.openSetKey)?.refused ?? ''"
             @models-fit="showFitsInRail"
             @drop-slot="(slotId) => dropOnSet(openHand.set, slotId)"
@@ -139,10 +140,9 @@
             aria-keyshortcuts="N"
             :tabindex="index === cursorIndex ? 0 : -1"
             data-key="new"
+            :data-rail-drop="railTargets.has('new') ? 'new' : undefined"
             @click="onNewClick(entry)"
-            @dragover="onRailDragOver('new', $event)"
-            @dragleave="onRailDragLeave('new', $event)"
-            @drop="onRailDrop(entry, $event)"
+            @rail-drop="onRailDrop(entry)"
           >
             <div class="msg__cell" role="gridcell">
               <div class="msg__new" data-testid="new-workflow-set">
@@ -200,9 +200,9 @@
             @click="onRowClick(entry, $event)"
             @dblclick="targetOwnsTheGesture($event) || toggle(entry)"
             @contextmenu="onRowMenu(entry, $event)"
-            @dragover="onRailDragOver(entry.key, $event)"
-            @dragleave="onRailDragLeave(entry.key, $event)"
-            @drop="onRailDrop(entry, $event)"
+            :data-rail-drop="railTargets.has(entry.key) ? entry.key : undefined"
+            :data-rail-refused="railTargets.get(entry.key)?.refused || undefined"
+            @rail-drop="onRailDrop(entry)"
           >
             <div class="msg__cell" role="gridcell">
               <ModelSetCard
@@ -1386,13 +1386,16 @@ async function keepSeparate(models) {
 // receipt with Undo, the ＋ chooser's own.
 //
 // Every target says so from the moment the drag starts, not only under the
-// pointer: the drag image is the browser's to draw (and on some desktops it
-// draws nothing), so the page itself has to show where a drop can go.
+// pointer. The drag is the rail's own pointer drag (see `ModelsRail.vue`):
+// targets carry `data-rail-drop`, light up from `store.railOver`, and take
+// the drop as a `rail-drop` event.
 
 const sidebarStore = useSidebarStore();
 
-/** The card or tile the pointer is over with a rail drag. */
-const dropKey = ref("");
+/** The card or tile the pointer is over with a rail drag, by row key. */
+const dropKey = computed(() =>
+  railTargets.value.has(store.railOver) ? store.railOver : "",
+);
 
 /** What the drag carries, in words: one model's name, or how many. */
 const railDragWhat = computed(() => {
@@ -1430,42 +1433,13 @@ const railTargets = computed(() => {
 });
 
 /**
- * Accept the drag over a target, or leave it refused: `preventDefault()` is
- * what accepts. A refused card is still marked as under the pointer, so the
- * reason shows where the reader is looking.
+ * A drop handed over by the rail (`rail-drop`). The rail only hands it to a
+ * target that does not refuse it; the check is repeated where the write is.
  */
-function onRailDragOver(key, event) {
-  const target = railTargets.value.get(key);
-  if (!target) return;
-  dropKey.value = key;
-  if (target.refused) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = "copy";
-}
-
-/**
- * `dragleave` also fires when the pointer crosses into one of the target's own
- * children; only a leave that lands outside it is a real one (the sidebar's
- * `leftDropRow`), or the mark flickers off at every edge inside the card.
- */
-function onRailDragLeave(key, event) {
-  if (event?.currentTarget?.contains?.(event.relatedTarget)) return;
-  if (dropKey.value === key) dropKey.value = "";
-}
-
-// However the drag ended, nothing stays marked.
-watch(
-  () => store.railDrag,
-  (rows) => {
-    if (!rows) dropKey.value = "";
-  },
-);
-
-async function onRailDrop(entry, event) {
+async function onRailDrop(entry) {
   const rows = store.railDrag;
   const target = railTargets.value.get(entry.kind === "new" ? "new" : entry.key);
   if (!rows?.length || !target || target.refused) return;
-  event.preventDefault();
   store.railDrag = null;
   if (entry.kind === "new") {
     await store.createSetFromRows(rows);

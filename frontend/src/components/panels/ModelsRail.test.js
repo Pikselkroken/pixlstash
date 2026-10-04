@@ -4,7 +4,7 @@
 // count on its tab; its selection is its own, so a click there never reaches
 // the shelf's (and with it Delete, Move and Forget); two quick presses on Add
 // file one model; a run of adds is one receipt whose Undo takes all of it
-// back; and a drop on a hand-made card files the dragged rows.
+// back; and a pointer drag onto a hand-made card files the dragged rows.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -121,7 +121,12 @@ const ROWS = [
   row(7, "engine_x", "engine"),
 ];
 
-async function mountRail({ handMade = [], rows = ROWS, open = "" } = {}) {
+async function mountRail({
+  handMade = [],
+  rows = ROWS,
+  open = "",
+  attach = false,
+} = {}) {
   listAdapters.mockResolvedValue(rows);
   fetchWorkflowSets.mockResolvedValue({
     combinations: [],
@@ -134,11 +139,53 @@ async function mountRail({ handMade = [], rows = ROWS, open = "" } = {}) {
   await store.loadWorkflowSets();
   if (open) store.toggleSet(open);
   useSidebarStore().setModelsRailOpen(true);
-  const wrapper = mount(ModelsRail, { global: { stubs } });
+  const wrapper = mount(ModelsRail, {
+    global: { stubs },
+    attachTo: attach ? document.body : undefined,
+  });
+  mounted.push(wrapper);
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
   return { wrapper, store };
 }
+
+/** Every mount, unmounted after its test: a live drag holds window listeners. */
+const mounted = [];
+
+function mountGrid() {
+  const grid = mount(ModelSetGrid, { global: { stubs }, attachTo: document.body });
+  mounted.push(grid);
+  return grid;
+}
+
+/** A pointer event as the rail reads it; jsdom has no PointerEvent. */
+function pointer(type, target, x, y, extra = {}) {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    clientX: x,
+    clientY: y,
+    ...extra,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+/** What is "under the pointer": jsdom has no layout, so the test says. */
+function pointAt(element) {
+  document.elementFromPoint = () => element;
+}
+
+/** Press a row and move far enough for the press to become a drag. */
+async function startDrag(wrapper, name) {
+  pointer("pointerdown", option(wrapper, name).element, 10, 10);
+  pointer("pointermove", window, 40, 40);
+  await wrapper.vm.$nextTick();
+}
+
+const ghost = () =>
+  [...document.querySelectorAll('[data-testid="mrail-ghost"]')].at(-1);
 
 const option = (wrapper, name) =>
   wrapper.findAll('[role="option"]').find((o) => o.text().includes(name));
@@ -158,6 +205,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  mounted.splice(0).forEach((wrapper) => wrapper.unmount());
+  delete document.elementFromPoint;
 });
 
 describe("what the rail lists", () => {
@@ -229,6 +278,7 @@ describe("what it knows before it says it", () => {
     await store.fetchRows();
     useSidebarStore().setModelsRailOpen(true);
     const wrapper = mount(ModelsRail, { global: { stubs } });
+    mounted.push(wrapper);
     await wrapper.vm.$nextTick();
     expect(option(wrapper, "Soft").text()).not.toContain("In no set yet");
     expect(wrapper.text()).toContain("Reading your sets");
@@ -245,6 +295,7 @@ describe("what it knows before it says it", () => {
     await store.fetchRows();
     useSidebarStore().setModelsRailOpen(true);
     const wrapper = mount(ModelsRail, { global: { stubs } });
+    mounted.push(wrapper);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await wrapper.vm.$nextTick();
     expect(option(wrapper, "Soft").text()).not.toContain("In no set yet");
@@ -521,99 +572,125 @@ describe("adding", () => {
     const add = hashing.find('[data-testid="mrail-add"]');
     expect(add.text()).toBe("Hashing…");
     expect(add.attributes("disabled")).toBeDefined();
-    expect(hashing.attributes("draggable")).toBe("false");
+    // Its grip is hidden and a press on it never starts a drag.
+    expect(hashing.find(".mrail-grip").classes()).toContain("mrail-grip--off");
+    await startDrag(wrapper, "Anime");
+    expect(useModelShelfStore().railDrag).toBe(null);
   });
 });
 
-describe("starting a drag", () => {
-  it("carries an internal payload, so the window's file import leaves it alone", async () => {
+describe("dragging", () => {
+  it("turns a press into a drag only past a few pixels, and carries the row", async () => {
     const { wrapper, store } = await mountRail({
       handMade: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
     });
-    const data = {};
-    const dataTransfer = {
-      setData: (type, value) => (data[type] = value),
-      setDragImage: vi.fn(),
-      effectAllowed: "",
-    };
-    await option(wrapper, "Soft").trigger("dragstart", {
-      dataTransfer,
-      clientX: 40,
-      clientY: 50,
-    });
-    // On the desktop shell a row holding an <img> also fills `files`; the JSON
-    // body is what `isInternalImageDrag` reads to say "not from outside".
-    expect(JSON.parse(data["application/json"])).toEqual({
-      type: "rail-models",
-      ids: [5],
-    });
-    expect(data["application/x-pixlstash-rail-models"]).toBe("rail-models");
-    expect(dataTransfer.setDragImage).toHaveBeenCalledTimes(1);
-    expect(store.railDrag.map((row) => row.id)).toEqual([5]);
-  });
+    pointer("pointerdown", option(wrapper, "Soft").element, 10, 10);
+    pointer("pointermove", window, 12, 11);
+    await wrapper.vm.$nextTick();
+    expect(store.railDrag).toBe(null);
+    expect(ghost().style.display).toBe("none");
 
-  it("shows the carried rows as picked up, and says where to drop them", async () => {
-    const { wrapper } = await mountRail({
-      handMade: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
-    });
-    expect(wrapper.find('[data-testid="mrail-drag-hint"]').exists()).toBe(false);
-    await option(wrapper, "Soft").trigger("dragstart", {
-      dataTransfer: { setData: () => {}, setDragImage: vi.fn(), effectAllowed: "" },
-    });
+    pointer("pointermove", window, 40, 40);
+    await wrapper.vm.$nextTick();
+    expect(store.railDrag.map((r) => r.id)).toEqual([5]);
+    // The page's own pill, under the pointer, naming what it carries.
+    expect(ghost().style.display).not.toBe("none");
+    expect(ghost().textContent).toContain("Soft");
+    expect(ghost().style.transform).toBe("translate(54px, 54px)");
     expect(option(wrapper, "Soft").classes()).toContain("mrail-row--lifted");
     expect(wrapper.find('[data-testid="mrail-drag-hint"]').text()).toMatch(
       /^Drop Soft.* on a set with a dashed rim\.$/,
     );
-    await option(wrapper, "Soft").trigger("dragend");
+
+    pointer("pointerup", window, 40, 40);
+    await wrapper.vm.$nextTick();
+    expect(store.railDrag).toBe(null);
+    expect(ghost().style.display).toBe("none");
     expect(option(wrapper, "Soft").classes()).not.toContain("mrail-row--lifted");
     expect(wrapper.find('[data-testid="mrail-drag-hint"]').exists()).toBe(false);
   });
 
-  it("leaves a model still being hashed behind, and says so on the chip", async () => {
+  it("drags the whole selection, and the release's click does not narrow it", async () => {
+    // Attached: the swallowed click is caught on its way through `window`.
+    const { wrapper, store } = await mountRail({ attach: true });
+    await option(wrapper, "Soft").trigger("click");
+    await option(wrapper, "Real").trigger("click", { ctrlKey: true });
+    await startDrag(wrapper, "Soft");
+    expect(store.railDrag.map((r) => r.id).sort()).toEqual([1, 5]);
+    expect(ghost().textContent).toContain("2 models");
+    pointer("pointerup", window, 40, 40);
+    // The click the browser fires after a release on the row it began on.
+    await option(wrapper, "Soft").trigger("click");
+    expect(wrapper.find(".mrail-foot-count").text()).toBe("2 selected");
+  });
+
+  it("leaves a model still being hashed behind, and says so on the pill", async () => {
     const { wrapper, store } = await mountRail({
       rows: [...ROWS, row(11, "Anime_Detail", "adapter", { sha256: null })],
     });
     await option(wrapper, "Soft").trigger("click");
     await option(wrapper, "Anime").trigger("click", { ctrlKey: true });
-    const dataTransfer = {
-      setData: () => {},
-      setDragImage: vi.fn(),
-      effectAllowed: "",
-    };
-    await option(wrapper, "Soft").trigger("dragstart", { dataTransfer });
+    await startDrag(wrapper, "Soft");
     expect(store.railDrag.map((r) => r.id)).toEqual([5]);
-    expect(dataTransfer.setDragImage.mock.calls[0][0].textContent).toContain(
-      "1 still hashing, left out",
-    );
+    expect(ghost().textContent).toContain("1 still hashing, left out");
+    pointer("pointerup", window, 40, 40);
+  });
+
+  it("hands the drop to the target under the pointer, never to one that refuses", async () => {
+    const { wrapper } = await mountRail();
+    const target = document.createElement("div");
+    target.dataset.railDrop = "somewhere";
+    document.body.append(target);
+    const drops = [];
+    target.addEventListener("rail-drop", (event) => drops.push(event));
+    pointAt(target);
+    await startDrag(wrapper, "Soft");
+    pointer("pointerup", window, 40, 40);
+    expect(drops).toHaveLength(1);
+
+    target.dataset.railRefused = "Not here";
+    await startDrag(wrapper, "Soft");
+    pointer("pointerup", window, 40, 40);
+    expect(drops).toHaveLength(1);
+    target.remove();
+  });
+
+  it("puts the models back on Escape, dropping nothing", async () => {
+    const { wrapper, store } = await mountRail({
+      handMade: [handSet(10, [])],
+    });
+    const grid = mountGrid();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    pointAt(grid.find('[data-key="hand:10"] .msg__cell').element);
+    await startDrag(wrapper, "Soft");
+    expect(store.railOver).toBe("hand:10");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(store.railDrag).toBe(null);
+    pointer("pointerup", window, 40, 40);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
   });
 });
 
 describe("dropping on the set grid", () => {
-  it("files the dragged rows into a hand-made card, each in its kind's slot", async () => {
+  it("files the dragged rows into the hand-made card under the pointer", async () => {
     addWorkflowSetMembers.mockResolvedValue({
       set: handSet(10, []),
       added: [shaOf(5)],
     });
-    listAdapters.mockResolvedValue(ROWS);
-    fetchWorkflowSets.mockResolvedValue({
-      combinations: [],
-      no_set: [],
-      hand_made: [handSet(10, [])],
-    });
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "workflow_set" });
-    await store.fetchRows();
-    const grid = mount(ModelSetGrid, { global: { stubs } });
+    const { wrapper, store } = await mountRail({ handMade: [handSet(10, [])] });
+    const grid = mountGrid();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await grid.vm.$nextTick();
 
-    store.railDrag = [store.rows.find((r) => r.id === 5)];
-    await grid.vm.$nextTick();
-    const card = grid.find('[data-key="hand:10"]');
-    const dataTransfer = { dropEffect: "" };
-    await card.trigger("dragover", { dataTransfer });
-    expect(dataTransfer.dropEffect).toBe("copy");
-    await card.trigger("drop", { dataTransfer });
+    // Under the pointer: something inside the card, as a real hit would be.
+    pointAt(grid.find('[data-key="hand:10"] .msg__cell').element);
+    await startDrag(wrapper, "Soft");
+    const mark = grid.find('[data-key="hand:10"] [data-testid="rail-drop-mark"]');
+    expect(mark.classes()).toContain("msg__drop--over");
+    expect(mark.text()).toMatch(/^Add Soft/);
+
+    pointer("pointerup", window, 40, 40);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(addWorkflowSetMembers.mock.calls).toEqual([
       [10, [{ model_id: 5, slot: "lora" }]],
@@ -624,7 +701,7 @@ describe("dropping on the set grid", () => {
   it("never takes a drop on an evidence card, and dims it for the drag", async () => {
     const ckpt = { id: 1, name: "RealVisXL_v5", kind: "checkpoint" };
     const lora = { id: 3, name: "FilmGrain_XL", kind: "adapter" };
-    listAdapters.mockResolvedValue(ROWS);
+    const { wrapper, store } = await mountRail();
     fetchWorkflowSets.mockResolvedValue({
       combinations: [
         {
@@ -639,53 +716,63 @@ describe("dropping on the set grid", () => {
       no_set: [],
       hand_made: [],
     });
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "workflow_set" });
-    await store.fetchRows();
-    const grid = mount(ModelSetGrid, { global: { stubs } });
+    await store.loadWorkflowSets({ force: true });
+    const grid = mountGrid();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await grid.vm.$nextTick();
-    store.railDrag = [store.rows.find((r) => r.id === 5)];
-    await grid.vm.$nextTick();
     const card = grid.find(".msg__row");
+    pointAt(card.find(".msg__cell").element);
+    await startDrag(wrapper, "Soft");
     expect(card.classes()).toContain("msg__row--dim");
-    const dataTransfer = { dropEffect: "" };
-    await card.trigger("dragover", { dataTransfer });
-    expect(dataTransfer.dropEffect).toBe("");
-    await card.trigger("drop", { dataTransfer });
+    expect(card.attributes("data-rail-drop")).toBeUndefined();
+    expect(store.railOver).toBe("");
+    pointer("pointerup", window, 40, 40);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(addWorkflowSetMembers).not.toHaveBeenCalled();
   });
 
   it("lets nothing take a drop on a slot that refuses it", async () => {
-    listAdapters.mockResolvedValue(ROWS);
-    fetchWorkflowSets.mockResolvedValue({
-      combinations: [],
-      no_set: [],
-      hand_made: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
+    const { wrapper } = await mountRail({
+      handMade: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
+      open: "hand:10",
     });
-    const store = useModelShelfStore();
-    store.setView({ groupBy: "workflow_set" });
-    await store.fetchRows();
-    const grid = mount(ModelSetGrid, { global: { stubs }, attachTo: document.body });
+    const grid = mountGrid();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    store.toggleSet("hand:10");
-    store.railDrag = [store.rows.find((r) => r.id === 5)];
     await grid.vm.$nextTick();
-    // A LoRA over the Checkpoint slot: refused there, and the event bubbles
-    // up through the tray to nothing that accepts it.
+    // A LoRA over the Checkpoint slot: refused there, and the pill says so.
     const slot = grid.find('[data-slot="checkpoint"]');
+    pointAt(slot.element);
+    await startDrag(wrapper, "Soft");
     expect(slot.classes()).toContain("mss__slot--refuse");
-    const dataTransfer = { dropEffect: "" };
-    const over = new Event("dragover", { bubbles: true, cancelable: true });
-    over.dataTransfer = dataTransfer;
-    slot.element.dispatchEvent(over);
-    expect(over.defaultPrevented).toBe(false);
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    drop.dataTransfer = dataTransfer;
-    slot.element.dispatchEvent(drop);
+    expect(ghost().classList).toContain("mrail-ghost--refused");
+    expect(document.documentElement.classList).toContain("rail-dragging--refused");
+    pointer("pointerup", window, 40, 40);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(addWorkflowSetMembers).not.toHaveBeenCalled();
-    grid.unmount();
+    expect(document.documentElement.classList).not.toContain("rail-dragging");
+  });
+
+  it("files into the slot under the pointer when every model fits it", async () => {
+    addWorkflowSetMembers.mockResolvedValue({
+      set: handSet(10, []),
+      added: [shaOf(5)],
+    });
+    const { wrapper } = await mountRail({
+      handMade: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
+      open: "hand:10",
+    });
+    const grid = mountGrid();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await grid.vm.$nextTick();
+    const slot = grid.find('[data-slot="lora"]');
+    pointAt(slot.element);
+    await startDrag(wrapper, "Soft");
+    expect(slot.classes()).toContain("mss__slot--drop");
+    pointer("pointerup", window, 40, 40);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers.mock.calls).toEqual([
+      [10, [{ model_id: 5, slot: "lora" }]],
+    ]);
   });
 
   it("marks every target from the start of the drag, not only under the pointer", async () => {
@@ -698,7 +785,7 @@ describe("dropping on the set grid", () => {
     const store = useModelShelfStore();
     store.setView({ groupBy: "workflow_set" });
     await store.fetchRows();
-    const grid = mount(ModelSetGrid, { global: { stubs } });
+    const grid = mountGrid();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await grid.vm.$nextTick();
     expect(grid.findAll('[data-testid="rail-drop-mark"]')).toHaveLength(0);
@@ -706,22 +793,15 @@ describe("dropping on the set grid", () => {
     store.railDrag = [store.rows.find((r) => r.id === 5)];
     await grid.vm.$nextTick();
     const marks = () => grid.findAll('[data-testid="rail-drop-mark"]');
-    // The hand-made card and New workflow set, before any dragover.
+    // The hand-made card and New workflow set, before the pointer reaches one.
     expect(marks()).toHaveLength(2);
     expect(marks().some((m) => m.classes("msg__drop--over"))).toBe(false);
 
-    const card = grid.find('[data-key="hand:10"]');
-    await card.trigger("dragover", { dataTransfer: { dropEffect: "" } });
-    const over = grid.find('[data-key="hand:10"] [data-testid="rail-drop-mark"]');
-    expect(over.classes()).toContain("msg__drop--over");
-    expect(over.text()).toMatch(/^Add Soft/);
-
-    // Crossing into the card's own child is not leaving it: no flicker.
-    const inner = card.find(".msg__cell").element;
-    await card.trigger("dragleave", { relatedTarget: inner });
-    expect(over.classes()).toContain("msg__drop--over");
-    await card.trigger("dragleave", { relatedTarget: document.body });
-    expect(over.classes()).not.toContain("msg__drop--over");
+    store.railOver = "new";
+    await grid.vm.$nextTick();
+    const tile = grid.find('[data-key="new"] [data-testid="rail-drop-mark"]');
+    expect(tile.classes()).toContain("msg__drop--over");
+    expect(tile.text()).toMatch(/^New set with Soft/);
 
     store.railDrag = null;
     await grid.vm.$nextTick();
@@ -744,24 +824,23 @@ describe("dropping on the set grid", () => {
     const store = useModelShelfStore();
     store.setView({ groupBy: "workflow_set" });
     await store.fetchRows();
-    const grid = mount(ModelSetGrid, { global: { stubs }, attachTo: document.body });
+    const grid = mountGrid();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await grid.vm.$nextTick();
     store.railDrag = store.rows.filter((r) => r.id === 5);
+    store.railOver = "hand:10";
     await grid.vm.$nextTick();
 
     const card = grid.find('[data-key="hand:10"]');
-    const over = new Event("dragover", { bubbles: true, cancelable: true });
-    over.dataTransfer = { dropEffect: "" };
-    card.element.dispatchEvent(over);
-    await grid.vm.$nextTick();
-    expect(over.defaultPrevented).toBe(false);
+    // The rail reads this to refuse the drop and grey its pill.
+    expect(card.attributes("data-rail-refused")).toBe("SDXL, not SD 1.5");
     const mark = card.find('[data-testid="rail-drop-mark"]');
     expect(mark.classes()).toEqual(
       expect.arrayContaining(["msg__drop--refused", "msg__drop--over"]),
     );
     expect(mark.text()).toBe("SDXL, not SD 1.5");
-    await card.trigger("drop", { dataTransfer: { dropEffect: "" } });
+    // Handed a drop anyway, the card still files nothing.
+    card.element.dispatchEvent(new CustomEvent("rail-drop", { bubbles: true }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(addWorkflowSetMembers).not.toHaveBeenCalled();
 
@@ -772,7 +851,6 @@ describe("dropping on the set grid", () => {
     const slot = grid.find('[data-slot="lora"]');
     expect(slot.classes()).toContain("mss__slot--refuse");
     expect(slot.classes()).not.toContain("mss__slot--target");
-    grid.unmount();
   });
 
   it("refuses a drop on a set of another base model, as the menu does", async () => {
