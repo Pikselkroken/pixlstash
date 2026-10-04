@@ -84,6 +84,7 @@ from pixlstash.utils.known_base_models import (
     rank,
 )
 from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 logger = get_logger(__name__)
 
@@ -1418,6 +1419,48 @@ def _missing_bases(
     return missing, workflows
 
 
+def _fixable_workflows(
+    hub, picture_counts: dict[str, int], workflows: dict[str, set[str]]
+) -> dict[str, set[str]]:
+    """Per missing name, the workflows where its fix can be made.
+
+    A workflow's recipes can load a name its own graph does not: a variant on
+    another of its topologies ran with it. Run uses the workflow's own graph,
+    so nothing there is missing, and ``PUT /workflows/{id}/model-fix`` refuses
+    it ("does not load that model"). Kept by the route's own test,
+    ``model_fix_labels`` on the base card's topology, chosen on the same
+    picture counts, so the note never names a workflow the fix then refuses.
+    A manual workflow is kept: it is fixed by cloning, and the note says so.
+    """
+    if not any(workflows.values()):
+        return workflows
+    # Local: `hub.workflow_cards` imports this module.
+    from pixlstash.hub.workflow_card_reads import (
+        card_index,
+        model_fix_labels,
+        workflow_index,
+    )
+
+    cards = card_index(hub)
+    topology_of = {card.workflow_key: card.topology_hash for card in cards}
+    base = {
+        workflow.workflow_id: topology_of.get(workflow.base_card)
+        for workflow in workflow_index(hub, picture_counts, cards)
+    }
+    return {
+        name: {
+            workflow_id
+            for workflow_id in ids
+            if workflow_id.startswith(MANUAL_PREFIX)
+            or (
+                base.get(workflow_id)
+                and model_fix_labels(hub, base[workflow_id], name, FILE_CHECKPOINT)
+            )
+        }
+        for name, ids in workflows.items()
+    }
+
+
 def fetch_workflow_sets(hub, vault) -> dict:
     """Every set of shelf models a picture here or a ComfyUI run proves ran together.
 
@@ -1479,6 +1522,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
             variant_cover_candidates(session, SET_COVER_DEPTH),
         )
     )
+    missing_workflows = _fixable_workflows(hub, pictures[0], missing_workflows)
     counts, candidates = pictures
 
     covers_by_recipe: dict[str, list] = {}

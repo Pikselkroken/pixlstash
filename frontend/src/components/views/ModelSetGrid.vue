@@ -119,6 +119,7 @@
             @pick="openWorksWith"
             @select="onMemberClick"
             @menu="onMemberMenu"
+            @replace-missing="(head) => emit('replace-missing', [head])"
           />
 
           <!-- The way in to a hand-made set, first because the grid leads with
@@ -163,9 +164,11 @@
             :aria-selected="
               entry.hand
                 ? String(store.selectedSetIds.has(entry.setId))
-                : selectable(entry.headId)
-                  ? String(cardSelected(entry))
-                  : undefined
+                : entry.missingKey
+                  ? String(store.selectedMissingKeys.has(entry.missingKey))
+                  : selectable(entry.headId)
+                    ? String(cardSelected(entry))
+                    : undefined
             "
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
@@ -180,7 +183,9 @@
                 :selected="
                   entry.hand
                     ? store.selectedSetIds.has(entry.setId)
-                    : cardSelected(entry)
+                    : entry.missingKey
+                      ? store.selectedMissingKeys.has(entry.missingKey)
+                      : cardSelected(entry)
                 "
                 :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
                 @toggle="store.toggleSet(entry.key)"
@@ -370,6 +375,8 @@ const emit = defineEmits([
   "rename",
   "set-menu",
   "rename-set",
+  "replace-missing",
+  "missing-menu",
 ]);
 
 const store = useModelShelfStore();
@@ -513,6 +520,9 @@ const flatRows = computed(() => {
     card: group.card,
     // The model the card IS, which is what a selection or a verb is aimed at.
     headId: group.head?.id ?? null,
+    // Named after a file the shelf does not hold: no row to select, so the
+    // card is selected as itself, for Replace (`selectedMissingKeys`).
+    missingKey: group.head?.missing ? group.key : null,
     cardIndex: hand.length + cardIndex,
   }));
   const cards = [{ kind: "new", id: "new", key: "new" }, ...hand, ...evidence];
@@ -883,7 +893,29 @@ function onRowClick(entry, event) {
     selectSetEntry(entry, event);
     return;
   }
+  if (entry.missingKey) {
+    selectMissingEntry(entry, event);
+    return;
+  }
   selectEntry(entry, event);
+}
+
+/** The missing-base card keys in drawn order, which a Shift-range spans. */
+const orderedMissingKeys = computed(() =>
+  flatRows.value
+    .filter((entry) => entry.kind === "card" && entry.missingKey)
+    .map((entry) => entry.missingKey),
+);
+
+function selectMissingEntry(entry, event = {}) {
+  store.selectMissing(
+    entry.missingKey,
+    {
+      ctrl: Boolean(event.ctrlKey || event.metaKey),
+      shift: Boolean(event.shiftKey),
+    },
+    orderedMissingKeys.value,
+  );
 }
 
 // ── Hand-made sets (#1520) ────────────────────────────────────────────────
@@ -1471,6 +1503,12 @@ defineExpose({ openFill, openOffer });
  * is open, and the occurrence decides whether its card lights.
  */
 function openMenu(entry, x, y) {
+  // A missing-base card's menu is its own pill's: Replace is its verb.
+  if (entry?.kind === "card" && entry.missingKey) {
+    if (!store.selectedMissingKeys.has(entry.missingKey)) selectMissingEntry(entry);
+    emit("missing-menu", { x, y, el: rowElement(entry) });
+    return true;
+  }
   const id = modelIdOf(entry);
   if (!selectable(id)) return false;
   if (!store.isSelected(id)) selectEntry(entry, {});
@@ -1904,6 +1942,11 @@ function onKeyDown(event) {
       // Refused before it is swallowed: a row with no shelf model behind it has
       // no answer to Space, and `preventDefault` on a press nothing then handles
       // takes the page's own scroll away for nothing.
+      if (entry?.kind === "card" && entry.missingKey) {
+        event.preventDefault();
+        selectMissingEntry(entry, { ctrlKey: true });
+        return;
+      }
       if (!selectable(modelIdOf(entry))) return;
       event.preventDefault();
       selectCursor({ ctrlKey: true });

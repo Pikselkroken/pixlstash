@@ -482,6 +482,32 @@
           @click="offlineDismissed = true"
         />
       </p>
+      <!-- Sets whose checkpoint is gone, said once. A selection shortcut, not a
+           second verb: Replace lives on the pill and the card's menu, and
+           replacing one is the same operation as replacing twelve. -->
+      <p
+        v-if="isSetGrid && missingCount && !missingDismissed"
+        class="shelf-banner"
+        data-testid="shelf-missing-banner"
+      >
+        <v-icon size="16">mdi-file-alert-outline</v-icon>
+        <span class="shelf-banner-text"
+          ><b>{{
+            missingCount === 1
+              ? "1 set is missing its checkpoint"
+              : `${missingCount} sets are missing their checkpoint`
+          }}</b>
+          · not on your shelf; replace it in the workflows that load it</span
+        >
+        <AppButton size="sm" @click="store.selectAllMissing()">Select them</AppButton>
+        <span class="shelf-spacer"></span>
+        <AppBarButton
+          icon="close"
+          tooltip="Dismiss"
+          aria-label="Dismiss the missing checkpoint notice"
+          @click="dismissedMissing = new Set(store.missingSetKeys)"
+        />
+      </p>
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
@@ -496,6 +522,8 @@
         @rename="startRenameSelected"
         @set-menu="({ x, y, el }) => setBarRef?.openContextMenu(x, y, el)"
         @rename-set="startRenameSet"
+        @replace-missing="(heads) => (replacingHeads = heads)"
+        @missing-menu="({ x, y, el }) => missingBarRef?.openContextMenu(x, y, el)"
       />
       <p v-else-if="firstRead" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -1442,7 +1470,17 @@
         @keep-separate="store.keepOutOfHandMadeSet(store.selectedSets[0])"
         @offer-again="store.offerMergeAgain(store.selectedSets[0])"
       />
+      <MissingSetSelectionBar
+        v-if="isSetGrid"
+        ref="missingBarRef"
+        @replace="replacingHeads = store.selectedMissing"
+      />
     </div>
+    <ReplaceMissingDialog
+      :open="replacingHeads.length > 0"
+      :heads="replacingHeads"
+      @close="replacingHeads = []"
+    />
     <!-- The set receipts (#1573): the grid's own pill, lifted clear of the
          selection pill when both are up. Local receipts only - a library
          action's Undo would revert something this screen cannot show. -->
@@ -1588,6 +1626,8 @@ import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
 import WorkflowSetRenameDialog from "../panels/WorkflowSetRenameDialog.vue";
 import { handMadeName } from "../../utils/workflowSets";
 import WorkflowSetSelectionBar from "../panels/WorkflowSetSelectionBar.vue";
+import MissingSetSelectionBar from "../panels/MissingSetSelectionBar.vue";
+import ReplaceMissingDialog from "../io/ReplaceMissingDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
@@ -2450,6 +2490,18 @@ function onShelfKeydown(event) {
   // sets unprompted while also arming a file delete. The sets' own pill still
   // deletes them. (With the cursor on a set from pictures, the grid has
   // already taken Delete to hide that set; it never arrives here.)
+  // Missing-base cards answer Escape only: they have no file for Delete.
+  if (
+    store.selectedMissing.length &&
+    isSetGrid.value &&
+    event.key === "Escape"
+  ) {
+    event.preventDefault();
+    store.clearMissingSelection();
+    store.clearSetSelection();
+    store.clearSelection();
+    return;
+  }
   if (store.selectedSets.length && isSetGrid.value) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -2488,6 +2540,17 @@ onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
 
 const setGridRef = ref(null);
+
+/** The missing-base heads the Replace dialog is open on, `[]` while closed. */
+const replacingHeads = ref([]);
+const missingBarRef = ref(null);
+const missingCount = computed(() => store.missingSetKeys.length);
+// The sets it was dismissed over: a missing set not among them brings the
+// banner back, which a count would not (fix one, lose another).
+const dismissedMissing = ref(new Set());
+const missingDismissed = computed(() =>
+  store.missingSetKeys.every((key) => dismissedMissing.value.has(key)),
+);
 const setBarRef = ref(null);
 
 // The set receipt sits above whichever selection pill is up, lifted by its
@@ -4944,6 +5007,10 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.shelf-banner b {
+  font-weight: var(--weight-semibold);
 }
 
 /* ── Drive bands ───────────────────────────────────────────────────────────

@@ -4909,6 +4909,53 @@ def test_the_picture_grid_narrows_a_workflow_to_one_lora(workflow_env):
         delete_manual_workflow(server.hub, manual)
 
 
+def test_a_slot_already_replaced_by_that_model_is_left_alone(workflow_env, monkeypatch):
+    """Where another original is already replaced by the same model in the
+    same slot, the slot loads that model already: a 200 that writes nothing,
+    never a refusal. Slots that do not yet load it are still fixed."""
+    owner, server = workflow_env.owner, workflow_env.server
+    _seed_flip_fixture(server)
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            (_REPLACEMENT_FILENAME, _h("noop-digest")),
+        )
+    written = []
+    monkeypatch.setattr(
+        workflows_routes,
+        "set_model_fix",
+        lambda hub, topology, labels, original, now, *a, **k: (
+            written.append((labels, original, now)) or {}
+        ),
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "model_fixes",
+        lambda hub, topology: [
+            ("slot-a", "test-older.safetensors", _REPLACEMENT_FILENAME, "checkpoint")
+        ],
+    )
+    route = f"{API}/workflows/{FLIP_WF}/model-fix"
+    body = {"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME}
+
+    monkeypatch.setattr(
+        workflows_routes, "model_fix_labels", lambda hub, t, was, kind: ["slot-a"]
+    )
+    r = owner.put(route, json=body)
+    assert r.status_code == 200, r.text
+    assert written == []
+
+    monkeypatch.setattr(
+        workflows_routes,
+        "model_fix_labels",
+        lambda hub, t, was, kind: ["slot-a", "slot-b"],
+    )
+    r = owner.put(route, json=body)
+    assert r.status_code == 200, r.text
+    assert written == [(["slot-b"], _SHELF_FILENAME, _REPLACEMENT_FILENAME)]
+
+
 def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     workflow_env, monkeypatch
 ):

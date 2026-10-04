@@ -1684,6 +1684,30 @@ proves ran together, with a model free to appear in more than one.
   the sets to their own pill, so one press never deletes sets unprompted while
   arming a file delete. The one exception is the cursor on an evidence card,
   where the grid takes the key to hide that set (below) and no file is reached.
+- **A card named after a missing base model is selected as itself**, a third
+  selection (`selectedMissingKeys`, its heads `selectedMissing`): it has no
+  shelf row for a file verb, so it gets its own pill
+  (`MissingSetSelectionBar`) whose one verb, *Replace*, opens
+  `io/ReplaceMissingDialog.vue`. As the Model Shelf design has it, the card's
+  context menu (right-click, Menu key) is the full inventory: the file menu's
+  verbs in its order, led by *Replace missing model…*, with *Copy filename*
+  copying the missing names and every verb that writes the checkpoint's shelf
+  row listed disabled with the reason; the pill is a shortcut into it. A one-line banner over the
+  grid, "N sets are missing their checkpoint · Select them", is the design's
+  selection shortcut (`selectAllMissing`), not a second verb; dismissed, it
+  returns when a missing set it was not dismissed over appears. A hidden set
+  is not counted or selected (`setGroupList` leaves it out), and the Delete
+  key hides a missing card as it hides any set from pictures. Same rules as the hand-made sets: Ctrl+click
+  and Space add, a plain click or Shift-range replaces, select-all takes them,
+  Escape clears, leaving the grid clears. The tray's missing note opens the same
+  dialog (*Replace in all N workflows…*) and names each workflow as the
+  Workflows grid does (`useWorkflowNames`, one `GET /workflows/{id}` per id,
+  cached for the session). The dialog has one row per missing file
+  (`head.workflowsByName`), offers the Workflow tab's own candidates
+  (`GET …/model-swap?replacing=` on the first workflow loading it) and writes
+  the choice to each of them through `PUT …/model-fix`, in turn, listing every
+  refusal by workflow. Manual workflows are never written (a fix re-keys
+  topologies they are not on); the row says to clone them instead.
 - **Rename has no inline field on the grid**, because a name lives on a card and
   the dashed rule under a row is what makes an inline field honest. The verb
   falls through to `ShelfEditDialog`'s `rename`, which already exists for the

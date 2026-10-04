@@ -72,6 +72,10 @@ export function headModel(combination) {
     workflowIds: [
       ...new Set(missing.flatMap((entry) => entry.workflow_ids ?? [])),
     ].sort(),
+    // Per file, because a fix replaces one file in the workflows loading it.
+    workflowsByName: Object.fromEntries(
+      missing.map((entry) => [entry.name, [...(entry.workflow_ids ?? [])].sort()]),
+    ),
   };
 }
 
@@ -125,6 +129,11 @@ export function setGroups(combinations) {
       group.head.workflowIds = [
         ...new Set([...group.head.workflowIds, ...head.workflowIds]),
       ].sort();
+      for (const [name, ids] of Object.entries(head.workflowsByName)) {
+        group.head.workflowsByName[name] = [
+          ...new Set([...(group.head.workflowsByName[name] ?? []), ...ids]),
+        ].sort();
+      }
     }
     if (!group) {
       group = {

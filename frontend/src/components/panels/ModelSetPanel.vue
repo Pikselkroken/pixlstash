@@ -86,26 +86,50 @@
             }}<strong>{{ file }}</strong></template
           >, {{ missing.names.length === 1 ? "which is" : "which are" }} not on
           your shelf.
-          <template v-if="missing.workflowIds.length === 1">
-            Replace it in
-            <router-link
-              :to="workflowLink(missing.workflowIds[0])"
-              class="msp__link"
-              >the workflow that loads it</router-link
-            >
-            and these pictures join that model's set.
-          </template>
-          <template v-else-if="missing.workflowIds.length">
-            Replace it in each workflow that loads it
-            <template v-for="(id, i) in missing.workflowIds" :key="id"
-              >{{ i ? " · " : " (" }}<router-link
+          <template v-if="fixableIds.length">
+            {{
+              fixableIds.length === 1
+                ? "It is loaded by"
+                : "It is loaded by these workflows:"
+            }}
+            <template v-for="(id, i) in fixableIds" :key="id"
+              >{{ i ? " · " : " " }}<router-link
                 :to="workflowLink(id)"
                 class="msp__link"
-                >workflow {{ i + 1 }}</router-link
+                >{{ nameOf(id) || `workflow ${i + 1}` }}</router-link
               ></template
-            >) and these pictures join that model's set.
+            >. Replace it and these pictures join that model's set.
+          </template>
+          <template v-if="manualIds.length">
+            {{
+              manualIds.length === 1
+                ? "A manual workflow loads it"
+                : "Manual workflows load it"
+            }}{{ fixableIds.length ? " too" : "" }}:
+            <template v-for="(id, i) in manualIds" :key="id"
+              >{{ i ? " · " : "" }}<router-link
+                :to="workflowLink(id)"
+                class="msp__link"
+                >{{ nameOf(id) || `manual workflow ${i + 1}` }}</router-link
+              ></template
+            >; clone {{ manualIds.length === 1 ? "it" : "them" }} with other
+            models to change that.
           </template>
         </span>
+        <AppButton
+          v-if="fixableIds.length"
+          class="msp__replace"
+          size="sm"
+          icon-left="file-replace-outline"
+          data-testid="model-set-replace-missing"
+          @click.stop="emit('replace-missing', missing)"
+        >
+          {{
+            fixableIds.length === 1
+              ? "Replace…"
+              : `Replace in all ${fixableIds.length} workflows…`
+          }}
+        </AppButton>
       </div>
     </div>
 
@@ -266,6 +290,7 @@ import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { formatModelSize, generatedMark } from "../../utils/modelShelf";
+import { useWorkflowNames } from "../../composables/useWorkflowNames";
 import { pictureCount } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
@@ -322,7 +347,27 @@ const props = defineProps({
   marks: { type: Object, default: () => new Map() },
 });
 
-const emit = defineEmits(["close", "view", "pick", "select", "menu"]);
+const emit = defineEmits([
+  "close",
+  "view",
+  "pick",
+  "select",
+  "menu",
+  "replace-missing",
+]);
+
+const { nameOf } = useWorkflowNames();
+
+/**
+ * The workflows Replace can write: not the manual ones, which change by
+ * cloning, so neither the count nor the button promises them.
+ */
+const fixableIds = computed(() =>
+  (props.missing?.workflowIds ?? []).filter((id) => !id.startsWith("manual:")),
+);
+const manualIds = computed(() =>
+  (props.missing?.workflowIds ?? []).filter((id) => id.startsWith("manual:")),
+);
 
 /** The Workflows screen with one workflow open, where its model fix is made. */
 function workflowLink(id) {
@@ -450,7 +495,7 @@ const notchStyle = computed(() => {
   font-size: var(--text-xs);
 }
 
-.msp__note .v-icon {
+.msp__note [role="gridcell"] > .v-icon {
   flex-shrink: 0;
   color: rgb(var(--v-theme-surface-info));
 }
@@ -459,13 +504,18 @@ const notchStyle = computed(() => {
   background: rgba(var(--v-theme-warning), 0.16);
 }
 
-.msp__note--missing .v-icon {
+.msp__note--missing [role="gridcell"] > .v-icon {
   color: rgb(var(--v-theme-surface-warning));
 }
 
 .msp__link {
   color: inherit;
   text-decoration: underline;
+}
+
+.msp__replace {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 /* The SAME column count as the grid above, taken from `--wf-columns` rather than

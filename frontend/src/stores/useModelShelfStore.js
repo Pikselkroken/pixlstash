@@ -1984,7 +1984,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @param {Array<number>} ordered - the set ids in drawn order, for a range.
    */
   function selectSet(id, { ctrl = false, shift = false } = {}, ordered = []) {
-    if (!ctrl) clearSelection();
+    if (!ctrl) {
+      clearSelection();
+      clearMissingSelection();
+    }
     if (shift && setAnchor != null) {
       const from = ordered.indexOf(setAnchor);
       const to = ordered.indexOf(id);
@@ -2004,6 +2007,87 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   function clearSetSelection() {
     if (selectedSetIds.value.size) selectedSetIds.value = new Set();
   }
+
+  // ── Sets named after a missing base model: selection ────────────────────
+  //
+  // A third kind, beside models and hand-made sets: such a card has no shelf
+  // row behind it, so no file verb can touch it, but its missing file can be
+  // replaced in every workflow that loads it, several sets at a time. Held
+  // and cleared by the same rules as the hand-made sets.
+
+  /** Selected missing-base cards, by group key (`missing:<name>`). */
+  const selectedMissingKeys = ref(new Set());
+  let missingAnchor = null;
+
+  /** The selected missing heads, in drawn order: `{name, names, workflowsByName, …}`. */
+  const selectedMissing = computed(() =>
+    setGroupList.value
+      .filter((group) => selectedMissingKeys.value.has(group.key))
+      .map((group) => group.head),
+  );
+
+  /**
+   * Click, Ctrl+click, Shift+click on a card named after a missing file.
+   *
+   * @param {string} key
+   * @param {{ctrl?: boolean, shift?: boolean}} mods
+   * @param {Array<string>} ordered - the missing keys in drawn order.
+   */
+  function selectMissing(key, { ctrl = false, shift = false } = {}, ordered = []) {
+    if (!ctrl) {
+      clearSelection();
+      clearSetSelection();
+    }
+    if (shift && missingAnchor != null) {
+      const from = ordered.indexOf(missingAnchor);
+      const to = ordered.indexOf(key);
+      if (from >= 0 && to >= 0) {
+        const [a, b] = from < to ? [from, to] : [to, from];
+        selectedMissingKeys.value = new Set(ordered.slice(a, b + 1));
+        return;
+      }
+    }
+    const next = ctrl ? new Set(selectedMissingKeys.value) : new Set();
+    if (ctrl && next.has(key)) next.delete(key);
+    else next.add(key);
+    selectedMissingKeys.value = next;
+    missingAnchor = key;
+  }
+
+  function clearMissingSelection() {
+    if (selectedMissingKeys.value.size) selectedMissingKeys.value = new Set();
+    missingAnchor = null;
+  }
+
+  /** Every drawn card named after a missing base model, by key. */
+  const missingSetKeys = computed(() =>
+    setGroupList.value
+      .filter((group) => group.head?.missing)
+      .map((group) => group.key),
+  );
+
+  /**
+   * The set grid's "N sets are missing their checkpoint · Select them": a
+   * selection shortcut, not a second verb. It REPLACES the selection, as a
+   * plain click does, so the pill that comes up acts on exactly these.
+   */
+  function selectAllMissing() {
+    clearSelection();
+    clearSetSelection();
+    selectedMissingKeys.value = new Set(missingSetKeys.value);
+    missingAnchor = missingSetKeys.value[0] ?? null;
+  }
+
+  // A card that is no longer drawn (its file was replaced) cannot stay selected.
+  watch(setGroupList, (groups) => {
+    const live = new Set(
+      groups.filter((group) => group.head?.missing).map((group) => group.key),
+    );
+    const kept = [...selectedMissingKeys.value].filter((key) => live.has(key));
+    if (kept.length !== selectedMissingKeys.value.size) {
+      selectedMissingKeys.value = new Set(kept);
+    }
+  });
 
   // A set that is gone cannot stay selected.
   watch(handMadeSets, (sets) => {
@@ -2912,6 +2996,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // A plain click or a range REPLACES the selection, selected sets included;
     // only Ctrl adds a model beside them.
     clearSetSelection();
+    clearMissingSelection();
     const sequence = Array.isArray(order) ? order : [];
     const idOf = (item) => (typeof item === "object" ? item.id : item);
     const occurrenceOf = (item) =>
@@ -2971,6 +3056,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       selectedSetIds.value = new Set(handMadeSets.value.map((set) => set.id));
       setAnchor = handMadeSets.value[0].id;
     }
+    if (view.groupBy === GRID_GROUP_BY && missingSetKeys.value.length) {
+      selectedMissingKeys.value = new Set(missingSetKeys.value);
+      missingAnchor = missingSetKeys.value[0];
+    }
     // **With nothing drawn the selection is left alone, and this is where that
     // is decided.** It used to be a guard at one caller, reading `visibleRows`;
     // on the set grid that is the wrong list, so the key said "select" and
@@ -2997,7 +3086,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   watch(
     () => view.groupBy,
     (axis) => {
-      if (axis !== GRID_GROUP_BY) clearSetSelection();
+      if (axis !== GRID_GROUP_BY) {
+        clearSetSelection();
+        clearMissingSelection();
+      }
     },
   );
 
@@ -3422,6 +3514,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError.value = "";
     openSetKey.value = "";
     selectedSetIds.value = new Set();
+    clearMissingSelection();
     checkpointAdded.value = null;
   }
 
@@ -3504,6 +3597,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     handMadeSets,
     handMadeGroups,
     selectedSetIds,
+    selectedMissingKeys,
+    selectedMissing,
+    selectMissing,
+    clearMissingSelection,
+    missingSetKeys,
+    selectAllMissing,
     selectedSets,
     selectSet,
     clearSetSelection,

@@ -3405,23 +3405,28 @@ def create_router(server) -> APIRouter:
                     status_code=422, detail="That is the model it already loads."
                 )
             labels = model_fix_labels(hub, card.topology_hash, was, kind)
-            # Two originals folded onto one replacement in one slot would file
-            # the replacement's pictures on whichever row SQLite read last.
-            clash = [
-                fix_was
+            # A slot another original is already replaced by `now` in loads
+            # `now` already: nothing to do there. Writing a second fix would
+            # fold two originals onto one replacement in one slot and file the
+            # replacement's pictures on whichever row SQLite read last.
+            loaded = {
+                label: fix_was
                 for label, fix_was, fix_now, _kind in fixes
                 if label in labels
                 and normalized_filename(fix_now) == normalized_filename(now)
                 and normalized_filename(fix_was) != was_norm
-            ]
-            if clash:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"{clash[0]} is already replaced by that model in this "
-                        "workflow; undo that first."
-                    ),
+            }
+            if labels and set(labels) <= loaded.keys():
+                logger.info(
+                    "Workflow %s already loads %s where it loaded %s (replacing "
+                    "%s); nothing to change.",
+                    workflow_id,
+                    now,
+                    was,
+                    ", ".join(sorted(set(loaded.values()))),
                 )
+                return _read_detail(hub, workflow_id)
+            labels = [label for label in labels if label not in loaded]
             targets = [(was, labels)] if labels else []
         else:
             for original in sorted(set(chained)) or [was]:

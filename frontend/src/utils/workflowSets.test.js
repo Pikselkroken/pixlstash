@@ -805,6 +805,9 @@ describe("a set whose base model is not on the shelf", () => {
     ]);
     expect(groups.map((g) => g.key)).toEqual(["missing:flux1-dev.sft"]);
     expect(groups[0].head.workflowIds).toEqual(["auto:a", "auto:b"]);
+    expect(groups[0].head.workflowsByName).toEqual({
+      "flux1-dev.sft": ["auto:a", "auto:b"],
+    });
     // Every on-shelf file is a member; the missing head is not one of them.
     expect(new Set(groups[0].models.map((m) => m.id))).toEqual(new Set([7, 8]));
   });
@@ -829,6 +832,11 @@ describe("a set whose base model is not on the shelf", () => {
     expect(group.key).toBe("missing:high.safetensors");
     expect(group.head.names).toEqual(["high.safetensors", "low.safetensors"]);
     expect(group.head.workflowIds).toEqual(["auto:h", "auto:l"]);
+    // Per file too: a fix replaces one file in the workflows loading IT.
+    expect(group.head.workflowsByName).toEqual({
+      "high.safetensors": ["auto:h"],
+      "low.safetensors": ["auto:l"],
+    });
   });
 
   it("draws no card for a combination with no base model at all", () => {

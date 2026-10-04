@@ -212,6 +212,7 @@ const globalOpts = {
       ShelfMoveDialog: true,
       WorkflowSetRenameDialog: true,
       MergeCopiesDialog: true,
+      ReplaceMissingDialog: true,
 
       // Same reason, for the same provider: it wraps `AppDialog`. Its own suite
       // mounts it against the companions payload.
@@ -985,6 +986,40 @@ describe("refetching after an edit", () => {
     useModelShelfStore().fetchRows();
     await wrapper.vm.$nextTick();
     expect(wrapper.find(".set-grid-stub").element).toBe(grid);
+  });
+
+  it("offers to select every set missing its checkpoint, once, dismissibly", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    const gone = (name) => ({
+      key: `+${name}`,
+      models: [],
+      missing: [{ name, workflow_ids: ["auto:a"] }],
+      recipes: 1,
+      history_runs: 0,
+      picture_count: 1,
+      covers: [],
+    });
+    store.workflowSets = {
+      combinations: [gone("a.sft"), gone("b.sft")],
+      noSet: [],
+      handMade: [],
+    };
+    await wrapper.vm.$nextTick();
+    const banner = () => wrapper.find('[data-testid="shelf-missing-banner"]');
+    expect(textOf(banner())).toContain("2 sets are missing their checkpoint");
+    await banner()
+      .findAll("button")
+      .find((b) => b.text().includes("Select them"))
+      .trigger("click");
+    expect([...store.selectedMissingKeys]).toEqual(["missing:a.sft", "missing:b.sft"]);
+    await banner().find('[aria-label="Dismiss the missing checkpoint notice"]').trigger("click");
+    expect(banner().exists()).toBe(false);
+    // One fixed, another gone missing: the count is unchanged, the banner back.
+    store.workflowSets = { ...store.workflowSets, combinations: [gone("a.sft"), gone("c.sft")] };
+    await wrapper.vm.$nextTick();
+    expect(banner().exists()).toBe(true);
   });
 
   it("says it is reading, not 'no models', while Reset refetches an empty view", async () => {
