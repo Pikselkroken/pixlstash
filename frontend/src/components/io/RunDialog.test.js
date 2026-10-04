@@ -525,11 +525,16 @@ describe("a refusal the popup offers to fix", () => {
     const wrapper = await mountRun();
     expect(wrapper.vm.choiceFixes).toHaveLength(1);
 
-    wrapper.vm.setValue(
-      wrapper.vm.defaults.find((field) => field.input_name === "sampler_name"),
-      "dpmpp_2m",
+    const sampler = wrapper.vm.defaults.find(
+      (field) => field.input_name === "sampler_name",
     );
+    // Typed a key at a time: one re-ask, for the whole name.
+    const asks = preflightWorkflowRun.mock.calls.length;
+    wrapper.vm.setValue(sampler, "dpmpp");
+    wrapper.vm.setValue(sampler, "dpmpp_2m");
+    await new Promise((resolve) => setTimeout(resolve, 350));
     await flushPromises();
+    expect(preflightWorkflowRun.mock.calls.length).toBe(asks + 1);
 
     expect(wrapper.vm.choiceFixes).toEqual([]);
     const asked = preflightWorkflowRun.mock.calls.at(-1)[0];

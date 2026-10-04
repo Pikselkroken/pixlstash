@@ -1365,6 +1365,10 @@ function coerce(field, raw) {
   return Number.isFinite(value) ? value : undefined;
 }
 
+/** The pending re-ask after the owner types over a replaced field. */
+let choiceReask = null;
+const CHOICE_REASK_MS = 300;
+
 function setValue(field, value) {
   const key = address(field);
   // Not a value: the field goes back to what it started at rather than
@@ -1379,12 +1383,21 @@ function setValue(field, value) {
   // The owner's own pick for a sampler or scheduler: a replacement offered
   // for it would otherwise win on the server and override it unsaid. Asked
   // again AFTER the edit is recorded, so the re-ask carries it and a pick
-  // this ComfyUI still lacks is offered afresh.
-  if (choiceFixes.value.some((fix) => fix.field === field.input_name)) {
+  // this ComfyUI still lacks is offered afresh. Trailing, because the field
+  // emits per keystroke: a partial name is missing too, and re-asking for
+  // each one would re-offer and race.
+  if (
+    choiceReask ||
+    choiceFixes.value.some((fix) => fix.field === field.input_name)
+  ) {
     choiceFixes.value = choiceFixes.value.filter(
       (fix) => fix.field !== field.input_name,
     );
-    void runPreflight();
+    clearTimeout(choiceReask);
+    choiceReask = setTimeout(() => {
+      choiceReask = null;
+      void runPreflight();
+    }, CHOICE_REASK_MS);
   }
 }
 
