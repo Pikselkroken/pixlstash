@@ -6,9 +6,9 @@
 // the lightbox's Recipe tab and the Workflows view's Workflow tab. The dialogs
 // themselves are mounted once, in App.vue.
 //
-// The grid still owns two things this cannot: the live selection's view context
-// (where a run's output is filed) and the ComfyUI progress runner. It feeds
-// both in, exactly as it fed the panel.
+// The grid still owns the live selection's view context (where a run's output
+// is filed) and feeds it in. The ComfyUI progress runner is attached by
+// whichever view is mounted: the grid's, or the Workflows view's.
 
 import { defineStore } from "pinia";
 import { onScopeDispose, ref } from "vue";

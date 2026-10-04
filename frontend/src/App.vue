@@ -386,7 +386,7 @@ function onRestoreConfirmed() {
 }
 
 /**
- * A Run popup queued something. The prompts go to the grid's ComfyUI runner
+ * A Run popup queued something. The prompts go to the attached ComfyUI runner
  * for progress, and the toast says where the pictures will turn up: the Tasks
  * tab, which is where a run this app started is followed.
  */
