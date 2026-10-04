@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cloneOntoSetName,
   evidenceLine,
   fillFromPictures,
   fillFromSets,
@@ -403,6 +404,30 @@ describe("setName", () => {
 
   it("falls back to the members it has when a set is all adapters", () => {
     expect(setName(combination("5", [LORA]))).toBe("filmgrain_xl");
+  });
+});
+
+describe("cloneOntoSetName", () => {
+  it("puts the set's model in place of the generated name's model", () => {
+    expect(
+      cloneOntoSetName(
+        "Z-Image Turbo: Image to Image + Upscale (2)",
+        "Image to Image",
+        "Krea 2",
+      ),
+    ).toBe("Krea 2: Image to Image + Upscale");
+  });
+
+  it("appends the set to a name the owner chose", () => {
+    expect(cloneOntoSetName("Portraits", "Image to Image", "Krea 2")).toBe(
+      "Portraits · Krea 2",
+    );
+  });
+
+  it("appends when the card has no type", () => {
+    expect(cloneOntoSetName("Z-Image Turbo", "", "Krea 2")).toBe(
+      "Z-Image Turbo · Krea 2",
+    );
   });
 });
 

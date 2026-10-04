@@ -378,6 +378,7 @@
       :open="Boolean(ontoSetKey)"
       :workflow-id="ontoSetKey"
       :card-name="ontoSetName"
+      :card-type-label="ontoSetCard?.type_label || ''"
       @close="closeCloneOntoSet"
       @cloned="clonedWithModels"
       @pick-files="pickFilesMyself"
@@ -1278,9 +1279,10 @@ function landOn(workflowId) {
 // Held by id rather than by the selection, so the dialog keeps its card if the
 // selection moves under it.
 const ontoSetKey = computed(() => store.cloneOntoSetKey);
-const ontoSetName = computed(
-  () => store.cards.find((card) => card.id === ontoSetKey.value)?.name || "",
+const ontoSetCard = computed(
+  () => store.cards.find((card) => card.id === ontoSetKey.value) ?? null,
 );
+const ontoSetName = computed(() => ontoSetCard.value?.name || "");
 
 function startCloneOntoSet() {
   const card = onlyCard.value;

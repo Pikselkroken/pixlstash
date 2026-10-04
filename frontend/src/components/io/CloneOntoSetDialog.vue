@@ -58,8 +58,8 @@
             >
               <span class="cos-cover" aria-hidden="true">
                 <img v-if="set.cover" :src="coverSrc(set.cover)" alt="" loading="lazy" />
-                <span v-if="set.handMade" class="cos-badge">Grouped by you</span>
-                <span v-else-if="set.pictures" class="cos-badge">{{
+                <v-icon v-else class="cos-cover-none" size="20">mdi-image-off-outline</v-icon>
+                <span v-if="set.pictures" class="cos-badge">{{
                   picturesText(set.pictures)
                 }}</span>
               </span>
@@ -75,6 +75,13 @@
                   >{{ loraVerdict(set.plan) }}</span
                 >
               </span>
+              <!-- Who grouped it is a tooltip: as a badge it was cut short on
+                   a cover this size and hid the picture count. -->
+              <Tooltip
+                v-if="set.handMade"
+                text="Grouped by you"
+                activator="parent"
+              />
             </button>
           </template>
 
@@ -277,6 +284,7 @@ import { errorMessage } from "../../utils/apiError";
 import { loraStem } from "../../utils/loraChain";
 import { deriveModelName } from "../../utils/modelShelf";
 import {
+  cloneOntoSetName,
   handMadeName,
   setCheckpoint,
   setGroups,
@@ -284,6 +292,7 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import EditLorasDialog from "./EditLorasDialog.vue";
 
 const props = defineProps({
@@ -292,6 +301,8 @@ const props = defineProps({
   workflowId: { type: String, default: "" },
   /** What the owner calls it: the subtitle, and the clone's name's stem. */
   cardName: { type: String, default: "" },
+  /** The card's `type_label`, which tells a generated name from the owner's. */
+  cardTypeLabel: { type: String, default: "" },
 });
 
 const emit = defineEmits(["close", "cloned", "pick-files"]);
@@ -690,8 +701,11 @@ function choose(key) {
   edited.value = null;
   chosenKey.value = key;
   if (!nameTouched.value) {
-    const set = chosen.value;
-    name.value = [props.cardName, set?.name].filter(Boolean).join(" · ");
+    name.value = cloneOntoSetName(
+      props.cardName,
+      props.cardTypeLabel,
+      chosen.value?.name,
+    );
   }
 }
 
@@ -840,6 +854,10 @@ defineExpose({ sets, chosenKey, choose, lorasBody });
   overflow: hidden;
   border-radius: var(--radius-sm);
   background: rgba(var(--v-theme-on-surface), 0.06);
+}
+
+.cos-cover-none {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .cos-cover img {

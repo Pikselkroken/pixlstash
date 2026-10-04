@@ -1338,6 +1338,27 @@ describe("Clone onto a workflow set", () => {
     expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
   });
 
+  it("names the clone after the set's model and marks a set with no cover", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    // Replaced, not mutated: the card objects are the shared fixture.
+    const at = store.cards.findIndex((c) => c.id === "a");
+    store.cards[at] = {
+      ...store.cards[at],
+      name: "Flux Dev: Text to Image (2)",
+      type_label: "Text to Image",
+    };
+    await openOn(wrapper);
+    const set = wrapper.find('[data-testid="cos-set-hand:7"]');
+    // No picture: an icon, not a blank cover, and no cut-short badge.
+    expect(set.find(".cos-cover-none").exists()).toBe(true);
+    expect(set.find(".cos-badge").exists()).toBe(false);
+    await set.trigger("click");
+    expect(wrapper.find(".cos-name input").element.value).toBe(
+      "Flux dev GGUF: Text to Image",
+    );
+  });
+
   it("keeps the chain on the same base model and warns of a missing pack", async () => {
     const wrapper = await grid();
     await openOn(wrapper);
