@@ -1882,6 +1882,91 @@ def test_a_set_holding_one_of_two_namesakes_is_not_offered_the_other(shelf_env):
             conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in twins])
 
 
+def test_a_namesake_reached_through_a_copy_name_is_not_offered(shelf_env):
+    """A row answers to its copies' basenames too, so two models with
+    different stored filenames can both be reached by one recipe name. The
+    namesake is the resolver's grouping, not a filename match."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    own = _add_model(shelf_env, "text_encoder", "qwen3vl_4b.safetensors", "e3" * 32)
+    alias = _add_model(
+        shelf_env, "text_encoder", "qwen3vl_4b_old.safetensors", "e4" * 32
+    )
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state, "
+            "seen_at) VALUES (?, 1, 'copies/qwen3vl_4b.safetensors', 'present', "
+            "'2026-08-09T00:00:00Z')",
+            (alias,),
+        )
+    try:
+        _seed_recipe(
+            server,
+            "alias-te",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("clip_name", "qwen3vl_4b.safetensors"),
+            ],
+        )
+        _seed_picture(server, "alias-te")
+        set_id = _new_set(
+            shelf_env,
+            members=[{"model_id": ids["base_xl.safetensors"]}, {"model_id": own}],
+        )["id"]
+
+        entry = _hand_made(shelf_env)[set_id]
+        assert entry["offer"] is None
+        assert entry["picture_count"] == 1
+    finally:
+        _wipe_sets(server)
+        _wipe_recipes(server)
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model_file WHERE model_id = ?", (alias,))
+            conn.executemany("DELETE FROM model WHERE id = ?", [(own,), (alias,)])
+
+
+@pytest.mark.parametrize("held_twin", [0, 1])
+def test_a_set_on_either_checkpoint_namesake_is_offered_what_it_lacks(
+    shelf_env, held_twin
+):
+    """Two checkpoints one recipe name reaches: the pictures' set is keyed on
+    whichever comes first, and a set holding either one is its own. It is
+    offered the LoRA it lacks, never the other checkpoint."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    twins = [
+        _add_model(shelf_env, "checkpoint", "twin_ckpt.safetensors", sha)
+        for sha in ("c1" * 32, "c2" * 32)
+    ]
+    try:
+        _seed_recipe(
+            server,
+            "twin-ckpt",
+            [
+                ("ckpt_name", "twin_ckpt.safetensors"),
+                ("lora_name", "alice.safetensors"),
+                ("lora_name", "dana.safetensors"),
+            ],
+        )
+        _seed_picture(server, "twin-ckpt")
+        set_id = _new_set(
+            shelf_env,
+            members=[
+                {"model_id": twins[held_twin]},
+                {"model_id": ids["alice.safetensors"]},
+            ],
+        )["id"]
+
+        entry = _hand_made(shelf_env)[set_id]
+        assert entry["offer"] is not None
+        assert [m[0] for m in _offered(entry)] == ["Dana"]
+    finally:
+        _wipe_sets(server)
+        _wipe_recipes(server)
+        with server.hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in twins])
+
+
 def test_one_pictures_set_is_offered_to_the_set_needing_fewest_models(shelf_env):
     """A set with no checkpoint is offered a pictures' set holding all of its
     models, and the checkpoint lands in its Checkpoint slot. Once another set

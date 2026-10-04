@@ -31,7 +31,6 @@ from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import SET_COVER_DEPTH, known_base_model
-from pixlstash.services.workflow_hash import normalized_filename
 from pixlstash.services.workflow_library_service import cover_order
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
@@ -270,8 +269,20 @@ def _attach_offers(hand_made: list[dict], combinations, digests) -> None:
                 and held <= set().union(*(ids for _, ids in group))
             ]
         else:
-            # A checkpoint off the shelf has no id, so it matches no head.
-            heads = entry["checkpoint_ids"]
+            # A checkpoint off the shelf has no id, so it matches no head. A
+            # head that is a namesake of the set's checkpoint (one name reached
+            # both) is the set's own: the group is keyed on whichever came first.
+            own = set(entry["checkpoint_ids"])
+            heads = [
+                head
+                for head, group in by_head.items()
+                if head in own
+                or any(
+                    head in names and own & set(names)
+                    for combination, _ in group
+                    for names in combination.get("namesakes", ())
+                )
+            ]
         declined = set(entry["declined"])
         for head in heads:
             group = by_head.get(head, [])
@@ -315,25 +326,20 @@ def _near_miss(group, held: set[int], declined: set[str], digests) -> list:
 def _lacks(combination: dict, held: set[int]) -> set[int]:
     """The models of *combination* a set holding *held* does not have.
 
-    A recipe that names a file only by its basename reaches every shelf row of
-    that name (``ambiguous``), so its combination holds them all though it ran
-    with one. Holding one of them is holding the file it ran with, so its
-    namesakes are not missing: offering them put a second "qwen3vl 4b" beside
-    the one the set already has, and kept the recipe's pictures out of it.
+    A recipe that names a file only by its basename (or a short digest) reaches
+    every shelf row answering to it, so its combination holds them all though
+    it ran with one. Holding one of them is holding the file it ran with, so
+    its namesakes are not missing: offering them put a second "qwen3vl 4b"
+    beside the one the set already has, and kept the recipe's pictures out of
+    it. The groups are the resolver's own (``namesakes``), never re-derived
+    from filenames: a row also answers to every copy's basename.
     """
-    held_names = {
-        normalized_filename(model["filename"])
-        for model in combination["models"]
-        if model["id"] in held
-    }
+    groups = [set(names) for names in combination.get("namesakes", ())]
     return {
         model["id"]
         for model in combination["models"]
         if model["id"] not in held
-        and not (
-            model.get("ambiguous")
-            and normalized_filename(model["filename"]) in held_names
-        )
+        and not any(model["id"] in names and names & held for names in groups)
     }
 
 
