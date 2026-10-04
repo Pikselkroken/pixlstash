@@ -14,8 +14,14 @@ describe("breakableName", () => {
     ]);
   });
 
+  it("splits accented camelCase", () => {
+    expect(breakableName("caféÉté")).toEqual([["café", "Été"]]);
+  });
+
   it("leaves an unsplittable word whole", () => {
-    expect(breakableName("  aaaaaaaaaaaaaaaa ")).toEqual([["aaaaaaaaaaaaaaaa"]]);
+    expect(breakableName("  aaaaaaaaaaaaaaaa ")).toEqual([
+      ["aaaaaaaaaaaaaaaa"],
+    ]);
     expect(breakableName(null)).toEqual([]);
   });
 });

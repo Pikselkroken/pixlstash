@@ -65,8 +65,12 @@
       <div class="inspector-section wftab-head">
         <!-- Wraps at spaces, then at camelCase / snake_case joins; a chunk
              still wider than the rail ellipsizes, and the tip has it whole. -->
-        <p class="wftab-title" data-testid="wftab-title">
-          <Tooltip :text="card.name" activator="parent" /><template
+        <p class="wftab-title">
+          <Tooltip
+            :text="card.name"
+            activator="parent"
+            :describe="false"
+          /><template
             v-for="(word, w) in titleWords"
             :key="w"
             >{{ w ? " " : ""
@@ -1033,12 +1037,12 @@ const recipesName = computed(() =>
     : card.value?.name || "",
 );
 
+const titleWords = computed(() => breakableName(card.value?.name));
+
 // Plain numbers, as `WorkflowsView`'s own subtitle writes them: the shelf's
 // grouped spelling went with the shelf in F1b, and this screen never used it.
 // Split from its prefix so the figure alone is F7's *Show all N pictures*
 // link, and the words that place the card stay text.
-const titleWords = computed(() => breakableName(card.value?.name));
-
 const picturesLabel = computed(() => {
   const count = card.value?.picture_count ?? 0;
   return `${count} ${count === 1 ? "picture" : "pictures"}`;

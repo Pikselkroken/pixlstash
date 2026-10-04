@@ -12,7 +12,9 @@ export function breakableName(name) {
     .filter(Boolean)
     .map((word) =>
       word
-        .split(/(?<=[_\-.])|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)
+        .split(
+          /(?<=[_\-.])|(?<=[\p{Ll}\d])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})/u,
+        )
         .filter(Boolean),
     );
 }
