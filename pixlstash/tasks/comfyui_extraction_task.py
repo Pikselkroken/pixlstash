@@ -7,7 +7,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Generation, Picture
-from pixlstash.hub.workflow_card_reads import is_manual_workflow
+from pixlstash.hub.workflow_card_reads import is_manual_workflow, workflow_of_variant
 from pixlstash.hub.workflows import record_api_graph, record_reduction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.a1111_recipe import reduce_a1111
@@ -93,7 +93,12 @@ class ComfyUIExtractionTask(BaseTask):
 
     def _run_task(self):
         if not self._pictures:
-            return {"checked": 0, "found_comfyui": 0, "found_workflow": 0}
+            return {
+                "checked": 0,
+                "found_comfyui": 0,
+                "found_workflow": 0,
+                "workflow_ids": [],
+            }
 
         picture_ids = [pic.id for pic in self._pictures]
 
@@ -211,9 +216,17 @@ class ComfyUIExtractionTask(BaseTask):
             checked += 1
 
         if not updates:
-            return {"checked": 0, "found_comfyui": 0, "found_workflow": 0}
+            return {
+                "checked": 0,
+                "found_comfyui": 0,
+                "found_workflow": 0,
+                "workflow_ids": [],
+            }
 
         scanned_workflows = {pid: keys for pid, *keys in workflow_updates}
+        # (run_workflow_id, structural_hash) of each picture filed under a
+        # recipe, as persisted: which workflows' covers and counts just moved.
+        filed: list[tuple] = []
 
         def persist(session: Session, rows: list[tuple]):
             vanished: list[str] = []
@@ -248,9 +261,17 @@ class ComfyUIExtractionTask(BaseTask):
                     topology, structural, instance, seed, run_workflow_id = (
                         scanned_workflows[pid]
                     )
+                    # A revisit (a migration's rescan) moves no card's covers,
+                    # and announcing it would re-read the grid per batch.
+                    first_filing = db_pic.workflow_instance_hash is None
                     # The manual workflow its ComfyUI run was tagged with. A
                     # value already there is PixlStash's own run's, and stays.
-                    if run_workflow_id and db_pic.run_workflow_id is None:
+                    # A tag written now files the picture on that workflow even
+                    # without a graph, so it is announced either way.
+                    newly_tagged = bool(
+                        run_workflow_id and db_pic.run_workflow_id is None
+                    )
+                    if newly_tagged:
                         db_pic.run_workflow_id = run_workflow_id
                     # Never replaced by NULL: nothing found this time is a fact
                     # about the read, and the keys came from a read that worked.
@@ -263,6 +284,12 @@ class ComfyUIExtractionTask(BaseTask):
                         db_pic.workflow_instance_hash = instance
                     # Set last: it is the marker that the other three are final.
                     db_pic.workflow_hash_version = HASH_VERSION
+                    if newly_tagged or (
+                        first_filing and db_pic.workflow_structural_hash is not None
+                    ):
+                        filed.append(
+                            (db_pic.run_workflow_id, db_pic.workflow_structural_hash)
+                        )
                     if db_pic.workflow_instance_hash is not None:
                         generation = session.get(Generation, pid)
                         if generation is None:
@@ -275,6 +302,7 @@ class ComfyUIExtractionTask(BaseTask):
                 enqueue_ghost_cascade_in_session(session, vanished)
 
         self._db.run_task(persist, updates, priority=DBPriority.LOW)
+        workflow_ids = self._workflows_of(filed)
         found_workflow = sum(1 for keys in scanned_workflows.values() if keys[0])
         logger.debug(
             "ComfyUIExtractionTask: checked=%s, found_comfyui=%s, found_workflow=%s",
@@ -286,7 +314,36 @@ class ComfyUIExtractionTask(BaseTask):
             "checked": checked,
             "found_comfyui": found_comfyui,
             "found_workflow": found_workflow,
+            "workflow_ids": workflow_ids,
         }
+
+    def _workflows_of(self, filed: list[tuple]) -> list[str]:
+        """The workflows the batch's pictures landed on, for the finder to announce.
+
+        A picture a manual workflow's run made is on that workflow; any other is
+        on the workflow its recipe is in. A recipe in none yet (its card could
+        not be derived) is left out: the backfill finder gives it one later and
+        the next full read of the grid shows it.
+        """
+        hub = self._hub
+        ids = set()
+        for run_workflow_id, structural_hash in filed:
+            if run_workflow_id:
+                ids.add(run_workflow_id)
+            elif hub is not None:
+                try:
+                    workflow_id = workflow_of_variant(hub, structural_hash)
+                except Exception as exc:
+                    logger.warning(
+                        "ComfyUIExtractionTask: could not read which workflow "
+                        "recipe %s is in, so its card is not refreshed: %s",
+                        structural_hash,
+                        exc,
+                    )
+                    continue
+                if workflow_id:
+                    ids.add(workflow_id)
+        return sorted(ids)
 
     def _record(
         self, workflow_updates: list, picture_id: int, embedded_metadata, revisit: bool

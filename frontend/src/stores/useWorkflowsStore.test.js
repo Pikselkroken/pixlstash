@@ -366,6 +366,33 @@ describe("onWorkflowsChanged", () => {
   });
 });
 
+describe("a re-read keeps the cards that did not change", () => {
+  it("swaps in only the card that changed, and every changed rank", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    const before = new Map(store.cards.map((card) => [card.id, card]));
+    // A ComfyUI run filed a rated picture on the workhorse: its cover and
+    // count moved, and the library mean moved the-stack's rank with it.
+    const fresh = CARDS.map((card) => ({ ...card }));
+    fresh[2] = { ...fresh[2], picture_count: 91, covers: [{ url: "/new" }] };
+    fresh[3] = { ...fresh[3], rank: 4.2 };
+    listWorkflowCards.mockResolvedValue({ cards: fresh, one_offs: 3, hidden: 1 });
+
+    store.onWorkflowsChanged({ reason: "pictures", keys: ["workhorse"] });
+    await new Promise((resolve) => setTimeout(resolve));
+
+    const after = new Map(store.cards.map((card) => [card.id, card]));
+    expect(after.get("workhorse")).not.toBe(before.get("workhorse"));
+    expect(after.get("workhorse").picture_count).toBe(91);
+    expect(after.get("the-stack")).not.toBe(before.get("the-stack"));
+    expect(after.get("the-stack").rank).toBe(4.2);
+    expect(after.get("few-but-loved")).toBe(before.get("few-but-loved"));
+    expect(after.get("never-kept-a-picture")).toBe(
+      before.get("never-kept-a-picture"),
+    );
+  });
+});
+
 describe("onWorkflowsChanged across a burst", () => {
   it("follows a chain of renames to its end", async () => {
     const store = useWorkflowsStore();

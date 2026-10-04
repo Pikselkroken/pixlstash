@@ -377,6 +377,7 @@ class Vault:
                     image_root=self.image_root,
                     hub=registered_hub,
                     library_uuid=self._library_uuid,
+                    vault=self,
                 )
             )
         self._work_planner = WorkPlanner(

@@ -42,8 +42,17 @@ _WS_SNAPSHOT_EVENT_TYPES = {
 # site naming something else still says "look again", which is the whole of the
 # contract, and the reason is a hint about what to look at first.
 # "regrouped" is the background family pass retiring ids; its frame's
-# ``renamed`` says where each retired id went.
-WORKFLOW_CHANGE_REASONS = ("imported", "changed", "stacks", "recipes", "regrouped")
+# ``renamed`` says where each retired id went. "pictures" is the ComfyUI
+# extraction filing new pictures onto the workflows in ``keys``: only their
+# counts and covers moved, so a client may re-read just those.
+WORKFLOW_CHANGE_REASONS = (
+    "imported",
+    "changed",
+    "stacks",
+    "recipes",
+    "regrouped",
+    "pictures",
+)
 DEFAULT_REASON = "changed"
 
 
