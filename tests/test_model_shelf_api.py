@@ -1844,6 +1844,44 @@ def test_a_near_miss_is_offered_kept_separate_and_merged(shelf_env):
         _wipe_recipes(server)
 
 
+def test_a_set_holding_one_of_two_namesakes_is_not_offered_the_other(shelf_env):
+    """A recipe naming a text encoder by basename reaches every shelf row of
+    that name. A set holding one of them holds the file the recipe ran with:
+    it is not offered the namesake, and the recipe's pictures join it."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    twins = [
+        _add_model(shelf_env, "text_encoder", "qwen3vl_4b.safetensors", sha)
+        for sha in ("e1" * 32, "e2" * 32)
+    ]
+    try:
+        _seed_recipe(
+            server,
+            "twin-te",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("clip_name", "qwen3vl_4b.safetensors"),
+            ],
+        )
+        _seed_picture(server, "twin-te")
+        set_id = _new_set(
+            shelf_env,
+            members=[
+                {"model_id": ids["base_xl.safetensors"]},
+                {"model_id": twins[0]},
+            ],
+        )["id"]
+
+        entry = _hand_made(shelf_env)[set_id]
+        assert entry["offer"] is None
+        assert entry["picture_count"] == 1
+    finally:
+        _wipe_sets(server)
+        _wipe_recipes(server)
+        with server.hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in twins])
+
+
 def test_one_pictures_set_is_offered_to_the_set_needing_fewest_models(shelf_env):
     """A set with no checkpoint is offered a pictures' set holding all of its
     models, and the checkpoint lands in its Checkpoint slot. Once another set

@@ -31,6 +31,7 @@ from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import SET_COVER_DEPTH, known_base_model
+from pixlstash.services.workflow_hash import normalized_filename
 from pixlstash.services.workflow_library_service import cover_order
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
@@ -183,7 +184,6 @@ def attach_hand_made(hub, found: dict) -> dict:
         hand_made.append(shaped)
 
     for combination in found["combinations"]:
-        ids = {model["id"] for model in combination["models"]}
         combination["covered_by"] = []
         if combination.get("missing"):
             # Its base model is off the shelf, so no set holding its support
@@ -191,8 +191,8 @@ def attach_hand_made(hub, found: dict) -> dict:
             continue
         for entry in hand_made:
             # Every model of the combination on the set; the set may hold more.
-            # `ids` is never empty, so an empty set covers nothing.
-            if ids <= entry["_on_shelf"]:
+            # A combination is never empty, so an empty set covers nothing.
+            if not _lacks(combination, entry["_on_shelf"]):
                 combination["covered_by"].append(entry["id"])
                 entry["picture_count"] += combination["picture_count"]
                 entry["recipes"] += combination["recipes"]
@@ -251,7 +251,7 @@ def _attach_offers(hand_made: list[dict], combinations, digests) -> None:
             # head, and it may have no shelf member at all.
             continue
         ids = {model["id"] for model in combination["models"]}
-        if any(ids <= entry["_on_shelf"] for entry in hand_made):
+        if any(not _lacks(combination, entry["_on_shelf"]) for entry in hand_made):
             continue
         by_head.setdefault(combination["models"][0]["id"], []).append(
             (combination, ids)
@@ -299,8 +299,8 @@ def _near_miss(group, held: set[int], declined: set[str], digests) -> list:
     cannot add - no digest yet, an engine, a model kept separate - is left out.
     """
     found = []
-    for combination, ids in group:
-        extra = ids - held
+    for combination, _ids in group:
+        extra = _lacks(combination, held)
         kinds = {model["id"]: model["kind"] for model in combination["models"]}
         if extra and all(
             digests.get(model_id)
@@ -310,6 +310,31 @@ def _near_miss(group, held: set[int], declined: set[str], digests) -> list:
         ):
             found.append((combination, extra))
     return found
+
+
+def _lacks(combination: dict, held: set[int]) -> set[int]:
+    """The models of *combination* a set holding *held* does not have.
+
+    A recipe that names a file only by its basename reaches every shelf row of
+    that name (``ambiguous``), so its combination holds them all though it ran
+    with one. Holding one of them is holding the file it ran with, so its
+    namesakes are not missing: offering them put a second "qwen3vl 4b" beside
+    the one the set already has, and kept the recipe's pictures out of it.
+    """
+    held_names = {
+        normalized_filename(model["filename"])
+        for model in combination["models"]
+        if model["id"] in held
+    }
+    return {
+        model["id"]
+        for model in combination["models"]
+        if model["id"] not in held
+        and not (
+            model.get("ambiguous")
+            and normalized_filename(model["filename"]) in held_names
+        )
+    }
 
 
 def _pictures(offered) -> int:

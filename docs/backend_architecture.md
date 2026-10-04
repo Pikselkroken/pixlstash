@@ -9166,6 +9166,10 @@ like every shelf table), read and written by
   The offer is `{head_id, head_name, picture_count, recipes, covers, models}`,
   each model with the slot it would take (the head fills an empty Checkpoint,
   any other file by kind, so a second checkpoint joins the checkpoints). Merging is the ordinary members add;
+  **A namesake is not a missing model** (`_lacks`, used for coverage and the
+  offer alike): a recipe naming a file by basename reaches every shelf row of
+  that name (`ambiguous`), so a set holding one of them holds the file it ran
+  with, and the others are neither offered nor needed for its pictures to join.
   Keep separate is `PUT .../declines`, a whole-list write that returns the old
   list as its undo. `kept_separate` counts the pictures here the declines hold
   back. The declines cascade with their set (so a build that predates the
