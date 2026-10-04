@@ -344,6 +344,19 @@ describe("the media type", () => {
     expect(lastStreamQuery().getAll("format")).toEqual([]);
     expect(getPictureCount.mock.calls.at(-1)[0]).toBe("");
 
+    // An empty grid names the checkbox only where there is one.
+    streamPictures.mockResolvedValue(batch([]));
+    await w.find(".pp-videos").setValue(false);
+    await flush(w);
+    expect(w.find(".pp-note").text()).toContain("Tick Include videos");
+    await w.setProps({ offerVideos: false });
+    expect(w.find(".pp-note").text()).toContain("Videos are not offered");
+
+    await w.setProps({ offerVideos: true });
+    await w.find(".pp-videos").setValue(true);
+    await flush(w);
+    expect(w.find(".pp-videos").element.checked).toBe(true);
+
     // Not remembered: the next open is images only again.
     await w.setProps({ open: false });
     await w.setProps({ open: true });

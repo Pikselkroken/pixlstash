@@ -111,14 +111,7 @@
             :class="{ 'pp-note--error': error }"
             role="status"
           >
-            {{
-              error ||
-              (loading
-                ? "Loading pictures…"
-                : includeVideos
-                  ? "No pictures here. Try another grouping, search, or paste one in."
-                  : "No still images here. Videos are not offered for this. Try another grouping, search, or paste one in.")
-            }}
+            {{ error || (loading ? "Loading pictures…" : emptyNote) }}
           </p>
           <div v-if="pictures.length" class="pp-grid">
             <button
@@ -321,6 +314,18 @@ const projectFacets = computed(() =>
     .map((p) => ({ id: p.id, name: p.name, count: p.image_count ?? 0 }))
     .sort((a, b) => b.count - a.count),
 );
+
+// What an empty grid says, which has to name the way out: where videos are
+// hidden but can be shown, that is the checkbox above.
+const emptyNote = computed(() => {
+  if (includeVideos.value) {
+    return "No pictures here. Try another grouping, search, or paste one in.";
+  }
+  if (props.offerVideos) {
+    return "No still images here. Tick Include videos to show videos too.";
+  }
+  return "No still images here. Videos are not offered for this. Try another grouping, search, or paste one in.";
+});
 
 function shown(group) {
   const rows = facets.value[group];
