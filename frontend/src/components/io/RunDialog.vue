@@ -760,6 +760,7 @@ import { VIcon } from "vuetify/components";
 import { getPictureRecipe } from "../../api/comfyui";
 import { fetchWorkflowSets, listAdapters } from "../../api/modelShelf";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { stackMemberIds } from "../../utils/stackMembers";
 import { listSavedRecipes } from "../../api/recipes";
 import {
   getWorkflowCard,
@@ -2822,6 +2823,17 @@ async function submit() {
   submitting.value = true;
   submitError.value = "";
   try {
+    // For the Edit tab that opened this: who was in the stack BEFORE the run,
+    // so the member it adds can be told apart once it is imported.
+    const sourceId = pictureIds.value[0];
+    let beforeIds = new Set([String(sourceId)]);
+    if (props.source?.fromEditTab && stack.value) {
+      try {
+        beforeIds = (await stackMemberIds(sourceId)).ids;
+      } catch (err) {
+        console.warn(`Could not read the stack of picture ${sourceId} before its run:`, err);
+      }
+    }
     const answer = await runWorkflowCard(runBody());
     const prompts = Array.isArray(answer?.prompts) ? answer.prompts : [];
     if (!prompts.length) {
@@ -2845,6 +2857,7 @@ async function submit() {
         workflowName: card.value?.name || "",
         instruction: prompt.value || "",
         stack: stack.value,
+        beforeIds,
       };
     }
     emit("run", { prompts, pictureIds: pictureIds.value });

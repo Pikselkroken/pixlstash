@@ -27,6 +27,11 @@ const setWorkflowInputs = vi.fn();
 const saveFixedWorkflow = vi.fn();
 const setWorkflowPins = vi.fn();
 
+const stackMemberIds = vi.fn();
+vi.mock("../../utils/stackMembers", () => ({
+  stackMemberIds: (...a) => stackMemberIds(...a),
+}));
+
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   listWorkflowCards: (...args) => listWorkflowCards(...args),
@@ -1660,20 +1665,34 @@ describe("the body it sends", () => {
   });
 
   it("hands a run opened from the Edit tab to the tab to follow", async () => {
+    // The stack as it stood BEFORE the run was queued: read after, a quick
+    // output would already be in it and never be told apart as the result.
+    const order = [];
+    stackMemberIds.mockImplementation(async () => {
+      order.push("stack");
+      return { members: [], ids: new Set(["42", "41"]) };
+    });
+    runWorkflowCard.mockImplementation(async () => {
+      order.push("run");
+      return { prompts: [{ prompt_id: "p1" }], groups: [] };
+    });
     const wrapper = await mountRun({
       kind: "selection",
       pictureIds: [42],
       fromEditTab: true,
+      stack: true,
     });
     wrapper.vm.prompt = "warmer light";
     await wrapper.vm.$nextTick();
     await wrapper.vm.submit();
     await flushPromises();
+    expect(order).toEqual(["stack", "run"]);
     expect(useRunDialogStore().editRun).toEqual(
       expect.objectContaining({
         prompts: [{ prompt_id: "p1" }],
         pictureId: 42,
         instruction: "warmer light",
+        beforeIds: new Set(["42", "41"]),
       }),
     );
   });

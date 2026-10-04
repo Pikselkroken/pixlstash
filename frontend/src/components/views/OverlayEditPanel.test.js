@@ -324,6 +324,33 @@ describe("the Edit tab", () => {
     }
   });
 
+  it("tells the popup's result by the stack the popup read before queuing", async () => {
+    const stacks = await import("../../api/stacks");
+    const pictures = await import("../../api/pictures");
+    pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
+    // The output is already in by the time the tab hears of the run.
+    stacks.listStackPictures.mockResolvedValue([
+      { id: 7 },
+      { id: 99, created_at: "2026-01-01T00:00:00Z" },
+    ]);
+    const wrapper = await mountPanel();
+    useRunDialogStore().editRun = {
+      prompts: [{ prompt_id: "p9" }],
+      pictureId: 7,
+      workflowName: "Relight with reference",
+      instruction: "",
+      stack: true,
+      beforeIds: new Set(["7"]),
+    };
+    await flush();
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    await flush();
+    await flush();
+    const showIt = wrapper.findAll("button").find((b) => b.text() === "Show it");
+    await showIt.trigger("click");
+    expect(wrapper.emitted("show-picture")).toEqual([[99, 7]]);
+  });
+
   it("says so, with no link, when the result never reaches the stack", async () => {
     const pictures = await import("../../api/pictures");
     pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });

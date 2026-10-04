@@ -268,8 +268,7 @@ import {
   preflightWorkflowRun,
   runWorkflowCard,
 } from "../../api/workflows";
-import { getPictureMetadata, pictureThumbnailUrl } from "../../api/pictures";
-import { listStackPictures } from "../../api/stacks";
+import { pictureThumbnailUrl } from "../../api/pictures";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
@@ -281,6 +280,7 @@ import {
 import { onMenuKeydown } from "../../utils/menuKeyboard";
 import { withRef } from "../../utils/withRef";
 import { selectNewestStackMember } from "../../utils/stack";
+import { stackMemberIds } from "../../utils/stackMembers";
 
 const props = defineProps({
   /** The open picture. */
@@ -496,15 +496,6 @@ watch(
   { immediate: true },
 );
 
-/** The source picture's stack members' ids, or `[source]` when it has none. */
-async function stackMemberIds(sourceId) {
-  const meta = await getPictureMetadata(sourceId);
-  const stackId = meta?.stack_id ?? meta?.stackId ?? null;
-  if (stackId == null) return { members: [], ids: new Set([String(sourceId)]) };
-  const members = (await listStackPictures(stackId)) || [];
-  return { members, ids: new Set(members.map((row) => String(row.id))) };
-}
-
 /**
  * The picture this run made: the newest stack member that was not there
  * before the run. Null while the output has not been imported yet.
@@ -700,29 +691,16 @@ function follow(sourceId, workflowName, text, stacked, before) {
 // handed it to the runner without picture ids, so the lightbox stays put.
 watch(
   () => runDialog.editRun,
-  async (started) => {
+  (started) => {
     if (!started) return;
     clearTimeout(resolveTimer);
-    // ponytail: the stack is read just AFTER the run was queued, not before; an
-    // output imported within this read would count as old and never be shown.
-    // ComfyUI takes seconds, the read milliseconds.
-    let before = new Set([String(started.pictureId)]);
-    if (started.stack) {
-      try {
-        before = (await stackMemberIds(started.pictureId)).ids;
-      } catch (err) {
-        console.warn(
-          `Could not read the stack of picture ${started.pictureId} before following its run:`,
-          err,
-        );
-      }
-    }
+    // Read by the popup BEFORE it queued the run, as `submit` does here.
     follow(
       started.pictureId,
       started.workflowName,
       started.instruction,
       started.stack,
-      before,
+      started.beforeIds || new Set([String(started.pictureId)]),
     );
   },
 );
