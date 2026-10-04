@@ -1,3 +1,8 @@
+# [1.11.4] [Security:High]
+- Desktop app: updated Electron to 42.11.10, which includes upstream Chromium security fixes, among them memory-safety fixes in image handling. Desktop users should update.
+- Updated the web UI's HTTP library to pick up upstream security fixes.
+- Updated sentence-transformers, used for text search, to pick up an upstream fix that stopped it from running code in a model folder it had been told not to trust.
+
 # [1.11.3]
 - Fix issue where GIF and TIF files were dropped from the database during a library sync
 - Fix issue where the full-screen viewer stayed on the original picture after a ComfyUI run, instead of showing the new picture it made
