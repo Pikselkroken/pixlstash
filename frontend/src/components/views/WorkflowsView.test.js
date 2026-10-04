@@ -1239,10 +1239,18 @@ describe("Clone onto a workflow set", () => {
           id: 7,
           name: "Flux dev GGUF",
           members: [
-            { id: 11, slot: "checkpoint", on_shelf: true, name: "flux1-dev-Q8_0" },
-            // A second checkpoint whose file left the shelf: never sent, so
-            // the plan neither refuses the set nor swaps onto a missing file.
+            // A checkpoint whose file left the shelf, listed FIRST: never
+            // sent, so the plan neither refuses the set nor swaps onto a
+            // missing file, and never what the clone is named after.
             { id: 13, slot: "checkpoint", on_shelf: false, name: "flux1-low" },
+            {
+              id: 11,
+              slot: "checkpoint",
+              on_shelf: true,
+              name: "Flux Dev Q8",
+              // Cased unlike the plan's file: the lookup must fold case.
+              filename: "Flux1-Dev-Q8_0.gguf",
+            },
             { id: 12, slot: "lora", on_shelf: true, name: "mara" },
           ],
           covers: [],
@@ -1338,7 +1346,7 @@ describe("Clone onto a workflow set", () => {
     expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
   });
 
-  it("names the clone after the set's checkpoint and marks a set with no cover", async () => {
+  it("names the clone after the model the plan loads and marks a set with no cover", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
     // Replaced, not mutated: the card objects are the shared fixture.
@@ -1355,7 +1363,7 @@ describe("Clone onto a workflow set", () => {
     expect(set.find(".cos-badge").exists()).toBe(false);
     await set.trigger("click");
     expect(wrapper.find(".cos-name input").element.value).toBe(
-      "flux1-dev-Q8_0: Text to Image",
+      "Flux Dev Q8: Text to Image",
     );
   });
 

@@ -569,6 +569,33 @@ function ranWith(checkpointId) {
   return out;
 }
 
+/** A file as the shelf and the plan both spell it: no folder, any case. */
+function fileKey(file) {
+  return String(file).split(/[/\\]/).pop().toLowerCase();
+}
+
+/** Each member's shelf name, by `fileKey` of its file. */
+function namesByFile(members) {
+  return Object.fromEntries(
+    members.filter((m) => m.filename).map((m) => [fileKey(m.filename), m.name]),
+  );
+}
+
+/**
+ * The base models the clone loads, by their shelf names: the plan's base
+ * loaders' new files in loader order, each name once (a two-model graph names
+ * both, as the server's generated names do). Off the plan, not the set's
+ * first checkpoint, which may be off the shelf or paired with no loader.
+ */
+function loadedModelName(set) {
+  if (!set) return "";
+  const names = set.plan.loaders
+    .filter((row) => row.kind === "checkpoint" || row.kind === "unet")
+    .flatMap((row) => row.now)
+    .map((file) => set.modelNames[fileKey(file)] || deriveModelName(file) || file);
+  return [...new Set(names)].join(" + ");
+}
+
 /** The names a set's files line shows: its checkpoint, then the rest. */
 function filesLine(members) {
   return members
@@ -606,6 +633,7 @@ function candidates(payload) {
         .filter((m) => m.slot === "checkpoint")
         .map((m) => m.id),
       checkpointName: checkpoint?.name || "",
+      modelNames: namesByFile(members),
     };
   });
   const evidence = setGroups(payload.combinations ?? []).map((group) => {
@@ -629,6 +657,7 @@ function candidates(payload) {
           .map((m) => m.id),
       ],
       checkpointName: group.head?.name || "",
+      modelNames: namesByFile(models),
     };
   });
   return [...handMade, ...evidence];
@@ -705,7 +734,7 @@ function choose(key) {
       props.cardName,
       props.cardTypeLabel,
       chosen.value?.name,
-      chosen.value?.checkpointName,
+      loadedModelName(chosen.value),
     );
   }
 }
