@@ -10243,6 +10243,42 @@ def test_cloning_with_comfyui_down_writes_the_names_unchecked(cloneable):
     assert written["1"]["inputs"]["ckpt_name"] == CLONE_CHECKPOINT
 
 
+def test_a_clone_onto_another_base_model_retypes_its_text_encoder(cloneable):
+    """The CLIP loader's `type` names the new model, not the source's."""
+    graph = _embedded_export_graph()
+    graph["8"] = {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "qwen_2.5_vl_7b.safetensors", "type": "qwen_image"},
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "down")
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'Krea 2' WHERE filename = ?",
+            (CLONE_CHECKPOINT,),
+        )
+    try:
+        r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model = 'FLUX.1 dev' WHERE filename = ?",
+                (CLONE_CHECKPOINT,),
+            )
+    assert r.status_code == 201, r.text
+    written = _written(cloneable, r.json())
+    assert written["1"]["inputs"]["ckpt_name"] == CLONE_CHECKPOINT
+    assert written["8"]["inputs"]["type"] == "krea2"
+    assert graph["8"]["inputs"]["type"] == "qwen_image"
+
+
 def test_a_clone_where_nothing_could_be_swapped_is_refused(cloneable):
     r = _clone(cloneable, {_SHELF_FILENAME: "not-on-comfyui.safetensors"})
     assert r.status_code == 409, r.text

@@ -9306,6 +9306,12 @@ the loader that will read it; a class ComfyUI lacks lists nothing, so its file
 goes in unchecked and the answer's `loaders` says `installed: false`: **a
 missing node pack warns and never refuses.** GGUF is the one pack known; any
 other loader keeps its class and a file it cannot list is refused as before.
+**The CLIP loaders' `type` follows the new checkpoint.** After the swap the
+clone route sets every CLIP loader's `type` to the one the swapped-in
+checkpoint's base-model family loads as (`retype_text_encoders`,
+`CLIP_TYPE_BY_FAMILY`), or a Krea 2 clone of a Qwen-Image graph still encodes
+for Qwen-Image and fails in the sampler. A family missing from the map, or a
+type ComfyUI does not list for that class, keeps the graph's own.
 `POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
 per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
 maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file - and a VAE or

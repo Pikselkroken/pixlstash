@@ -943,6 +943,74 @@ def apply_loader_rewrites(prompt_graph: dict, rewrites: list[dict]) -> None:
         node["class_type"] = rewrite["now"]
 
 
+# The CLIP loader `type` a base model family's text encoder loads as, in
+# ComfyUI's spelling. A family missing here keeps the graph's own type.
+CLIP_TYPE_BY_FAMILY = {
+    "chroma": "chroma",
+    "flux2": "flux2",
+    "hidream": "hidream",
+    "hunyuan_image": "hunyuan_image",
+    "krea2": "krea2",
+    "ltxv": "ltxv",
+    "lumina": "lumina2",
+    "pixart": "pixart",
+    "qwen": "qwen_image",
+    "sd35": "sd3",
+    "wan": "wan",
+}
+
+
+def retype_text_encoders(
+    prompt_graph: dict, family: str | None, object_info: dict | None = None
+) -> list[dict]:
+    """Give every CLIP loader of *prompt_graph* the ``type`` *family* loads as.
+
+    A clone onto another base model swaps the files but the loader's ``type``
+    still names the old model, and ComfyUI then encodes the prompt for it
+    (a Krea 2 clone of a Qwen-Image graph fails in the sampler). A loader whose
+    ``type`` ComfyUI does not list for its class is left as it is.
+
+    Returns:
+        One ``{node_id, class_type, was, now}`` per loader rewritten.
+    """
+    now = CLIP_TYPE_BY_FAMILY.get(family or "")
+    if now is None:
+        return []
+    rewritten = []
+    for node_id, node in prompt_graph.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type", "")
+        inputs = node.get("inputs") or {}
+        was = inputs.get("type")
+        if (
+            not isinstance(was, str)
+            or was == now
+            or "CLIPVision" in class_type
+            or not any(
+                f.startswith("clip_name") for f in model_filename_fields(class_type)
+            )
+        ):
+            continue
+        options = listed_options(object_info, class_type, "type")
+        if options and now not in options:
+            logger.warning(
+                "Clone keeps CLIP type %r on node %s (%s): ComfyUI does not list "
+                "%r for it, so the %s text encoder may load wrongly",
+                was,
+                node_id,
+                class_type,
+                now,
+                family,
+            )
+            continue
+        inputs["type"] = now
+        rewritten.append(
+            {"node_id": str(node_id), "class_type": class_type, "was": was, "now": now}
+        )
+    return rewritten
+
+
 def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     """Find every patchable seed input in *prompt_graph*.
 
