@@ -2788,6 +2788,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
     if (view.groupBy === GRID_GROUP_BY && missingSetKeys.value.length) {
       selectedMissingKeys.value = new Set(missingSetKeys.value);
+      missingAnchor = missingSetKeys.value[0];
     }
     // **With nothing drawn the selection is left alone, and this is where that
     // is decided.** It used to be a guard at one caller, reading `visibleRows`;
@@ -3243,7 +3244,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError.value = "";
     openSetKey.value = "";
     selectedSetIds.value = new Set();
-    selectedMissingKeys.value = new Set();
+    clearMissingSelection();
     checkpointAdded.value = null;
   }
 

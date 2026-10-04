@@ -102,7 +102,7 @@
           </template>
         </span>
         <AppButton
-          v-if="missing.workflowIds.length"
+          v-if="fixableIds.length"
           class="msp__replace"
           size="sm"
           icon-left="file-replace-outline"
@@ -110,9 +110,9 @@
           @click.stop="emit('replace-missing', missing)"
         >
           {{
-            missing.workflowIds.length === 1
+            fixableIds.length === 1
               ? "Replace…"
-              : `Replace in all ${missing.workflowIds.length} workflows…`
+              : `Replace in all ${fixableIds.length} workflows…`
           }}
         </AppButton>
       </div>
@@ -342,6 +342,14 @@ const emit = defineEmits([
 ]);
 
 const { nameOf } = useWorkflowNames();
+
+/**
+ * The workflows Replace can write: not the manual ones, which change by
+ * cloning, so neither the count nor the button promises them.
+ */
+const fixableIds = computed(() =>
+  (props.missing?.workflowIds ?? []).filter((id) => !id.startsWith("manual:")),
+);
 
 /** The Workflows screen with one workflow open, where its model fix is made. */
 function workflowLink(id) {

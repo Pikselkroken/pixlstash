@@ -333,6 +333,41 @@ describe("the cards", () => {
     expect(heads[0].workflowsByName).toEqual({ "gone.sft": ["auto:n1", "auto:n2"] });
   });
 
+  it("counts only the workflows Replace can write, never the manual ones", async () => {
+    const { wrapper, store } = await mountGrid({
+      combinations: [
+        {
+          ...combination('+["mix.sft"]', []),
+          missing: [{ name: "mix.sft", workflow_ids: ["auto:m1", "manual:m2"] }],
+        },
+        {
+          ...combination('+["solo.sft"]', []),
+          missing: [{ name: "solo.sft", workflow_ids: ["manual:m3"] }],
+        },
+      ],
+    });
+    store.toggleSet("missing:mix.sft");
+    await wrapper.vm.$nextTick();
+    const replace = () => wrapper.find('[data-testid="model-set-replace-missing"]');
+    expect(replace().text()).toBe("Replace…");
+    store.toggleSet("missing:solo.sft");
+    await wrapper.vm.$nextTick();
+    expect(replace().exists()).toBe(false);
+  });
+
+  it("ranges from the first missing card after select-all", async () => {
+    const { store } = await mountGrid({
+      combinations: ["a", "b", "c"].map((n) => ({
+        ...combination(`+["${n}.sft"]`, []),
+        missing: [{ name: `${n}.sft`, workflow_ids: ["auto:a"] }],
+      })),
+    });
+    const order = store.missingSetKeys;
+    store.selectVisible();
+    store.selectMissing(order[1], { shift: true }, order);
+    expect([...store.selectedMissingKeys]).toEqual(order.slice(0, 2));
+  });
+
   it("draws one card per base model, named after it", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],

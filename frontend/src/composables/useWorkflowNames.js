@@ -8,8 +8,11 @@ import { onSessionReset } from "../utils/apiClient";
 // shared: the missing-model note and the Replace dialog ask for the same ids.
 const names = reactive(new Map());
 const asked = new Set();
+// A read that lands after a credential change belongs to the old one.
+let session = 0;
 
 onSessionReset(() => {
+  session += 1;
   names.clear();
   asked.clear();
 });
@@ -25,10 +28,11 @@ export function useWorkflowNames() {
     if (!id) return null;
     if (!asked.has(id)) {
       asked.add(id);
+      const mine = session;
       Promise.resolve()
         .then(() => getWorkflowCard(id))
         .then((body) => {
-          if (body?.card?.name) names.set(id, body.card.name);
+          if (mine === session && body?.card?.name) names.set(id, body.card.name);
         })
         .catch((err) => {
           console.warn(`[workflows] could not read the name of workflow ${id}`, err);

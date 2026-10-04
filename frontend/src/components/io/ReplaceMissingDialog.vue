@@ -6,8 +6,9 @@
     @accept="apply"
   >
     <p class="rmd-note rmd-quiet">
-      The model you pick is loaded in every workflow that loads the missing one.
-      They keep their pictures, and each can be undone in its Workflow tab.
+      The model you pick is loaded in every workflow below that loads the
+      missing one. They keep their pictures, and each can be undone in its
+      Workflow tab. A manual workflow is changed by cloning it instead.
     </p>
     <ul class="rmd-rows" data-testid="rmd-rows">
       <li v-for="row in rows" :key="row.name" class="rmd-row">
@@ -17,15 +18,15 @@
           >
           <span class="rmd-file">{{ fileName(row.name) }}</span>
         </div>
-        <p class="rmd-note">
+        <p v-if="row.fixable.length" class="rmd-note">
           {{ row.fixable.length === 1 ? "Loaded by" : `Loaded by ${row.fixable.length} workflows:` }}
           {{ row.fixable.map((id, i) => nameOf(id) || `workflow ${i + 1}`).join(" · ") }}
         </p>
         <p v-if="row.manual.length" class="rmd-note rmd-quiet">
           {{
             row.manual.length === 1
-              ? "1 manual workflow loads it too; clone it with other models instead."
-              : `${row.manual.length} manual workflows load it too; clone them with other models instead.`
+              ? `1 manual workflow loads it${row.fixable.length ? " too" : ""}; clone it with other models instead.`
+              : `${row.manual.length} manual workflows load it${row.fixable.length ? " too" : ""}; clone them with other models instead.`
           }}
         </p>
         <p v-if="row.loading" class="rmd-note rmd-quiet">
@@ -81,13 +82,14 @@
  * `PUT …/model-fix`, one at a time, and every refusal is listed by workflow.
  * A manual workflow is never written: its models change by cloning.
  */
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, onScopeDispose, reactive, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { readModelSwap, setWorkflowModelFix } from "../../api/workflows";
 import { useWorkflowNames } from "../../composables/useWorkflowNames";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { errorMessage } from "../../utils/apiError";
+import { onSessionReset } from "../../utils/apiClient";
 import { NO_REPLACEMENT_TEXT, replacementLabel } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -115,15 +117,32 @@ const applying = ref(false);
 /** `{name, id, message}` per workflow that refused its fix. */
 const failures = ref([]);
 let token = 0;
+/** `name\u0000id` of every write that landed since the dialog opened: a retry skips them. */
+const succeeded = reactive(new Set());
+// Bumped by a credential change: a loop of writes started under the old one
+// stops before its next request, and does not reload the cleared shelf.
+let session = 0;
+const unsubscribe = onSessionReset(() => {
+  session += 1;
+  token += 1;
+  applying.value = false;
+  invoker = null;
+  emit("close");
+});
+onScopeDispose(() => unsubscribe());
 // Opened from code (a pill, a tray note), so the overlay has no activator to
 // hand focus back to: the control that opened it is remembered instead.
 let invoker = null;
 
-/** Each `{name, now, id}` an Apply would write. */
+const writeKey = (write) => `${write.name}\u0000${write.id}`;
+
+/** Each `{name, now, id}` an Apply would write, less what already landed. */
 const writes = computed(() =>
   rows.value.flatMap((row) =>
     choices[row.name]
-      ? row.fixable.map((id) => ({ name: row.name, now: choices[row.name], id }))
+      ? row.fixable
+          .map((id) => ({ name: row.name, now: choices[row.name], id }))
+          .filter((write) => !succeeded.has(writeKey(write)))
       : [],
   ),
 );
@@ -167,6 +186,7 @@ function rowsFor(heads) {
 async function load() {
   const mine = ++token;
   failures.value = [];
+  succeeded.clear();
   for (const key of Object.keys(choices)) delete choices[key];
   rows.value = rowsFor(props.heads);
   await Promise.all(
@@ -215,13 +235,16 @@ async function apply() {
   applying.value = true;
   failures.value = [];
   const done = [];
-  for (const write of writes.value) {
+  const mine = session;
+  for (const write of [...writes.value]) {
+    if (mine !== session) return;
     try {
       await setWorkflowModelFix(write.id, {
         was: write.name,
         now: write.now,
         slot_kind: "checkpoint",
       });
+      succeeded.add(writeKey(write));
       done.push(write);
     } catch (err) {
       console.warn(
@@ -235,10 +258,12 @@ async function apply() {
       });
     }
   }
+  if (mine !== session) return;
   applying.value = false;
   // The sets are read again: pictures made with a fixed model join its set.
+  // `loadWorkflowSets` reports its own failure on the grid (`setsError`).
   if (done.length) await store.loadWorkflowSets({ force: true });
-  if (!failures.value.length) close();
+  if (mine === session && !failures.value.length) close();
 }
 
 function close() {

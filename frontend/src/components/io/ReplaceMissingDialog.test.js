@@ -23,6 +23,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 import ReplaceMissingDialog from "./ReplaceMissingDialog.vue";
+import { notifySessionReset } from "../../utils/apiClient";
 
 const HEADS = [
   {
@@ -86,6 +87,58 @@ describe("ReplaceMissingDialog", () => {
     ]);
     expect(fetchWorkflowSets).toHaveBeenCalled();
     expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("retries only the workflows that refused", async () => {
+    setWorkflowModelFix
+      .mockRejectedValueOnce({ response: { data: { detail: "Busy." } } })
+      .mockResolvedValue({});
+    const wrapper = await mountDialog();
+    await wrapper.find("select").setValue("new.sft");
+    await applyButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(applyButton(wrapper).text()).not.toContain("2 workflows");
+    await applyButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(setWorkflowModelFix.mock.calls.map(([id]) => id)).toEqual([
+      "auto:a",
+      "auto:b",
+      "auto:a",
+    ]);
+  });
+
+  it("stops writing and closes when the credential changes mid-run", async () => {
+    setWorkflowModelFix.mockImplementationOnce(async () => {
+      notifySessionReset();
+      return {};
+    });
+    const wrapper = await mountDialog();
+    await wrapper.find("select").setValue("new.sft");
+    await applyButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(setWorkflowModelFix).toHaveBeenCalledTimes(1);
+    expect(fetchWorkflowSets).not.toHaveBeenCalled();
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("says nothing about workflows it would write when only manual ones load it", async () => {
+    const wrapper = mount(ReplaceMissingDialog, {
+      props: {
+        open: true,
+        heads: [
+          {
+            name: "solo.sft",
+            names: ["solo.sft"],
+            workflowIds: ["manual:x"],
+            workflowsByName: { "solo.sft": ["manual:x"] },
+          },
+        ],
+      },
+      global: { stubs: { teleport: true } },
+    });
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Loaded by");
+    expect(wrapper.text()).toContain("1 manual workflow loads it; clone it");
   });
 
   it("lists a refusal by workflow, keeps going, and stays open", async () => {
