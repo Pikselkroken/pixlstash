@@ -2902,3 +2902,48 @@ def test_a_stacker_is_never_half_swapped():
             graph, "2", "a" * 64, {"PixlStashAdapterLoader": _ADAPTER_LOADER_SPEC}
         )
     assert graph["2"]["class_type"] == "LoraStacker"
+
+
+def test_object_info_requests_arriving_together_share_one_get(monkeypatch):
+    """The Edit tab pre-flights every card at once; ComfyUI builds the map
+    once per GET, serially, so concurrent callers must not each ask."""
+    import threading
+    import time
+
+    import pixlstash.services.comfyui_recipe_service as service
+
+    release = threading.Event()
+    asked = []
+
+    class Answer:
+        status_code = 200
+        text = json.dumps({"KSampler": {"input": {}}})
+
+    def slow_get(url, timeout=None):
+        asked.append(url)
+        release.wait(5)
+        return Answer()
+
+    monkeypatch.setattr(service.requests, "get", slow_get)
+    results = []
+    callers = [
+        threading.Thread(
+            target=lambda: results.append(service.fetch_object_info("http://c"))
+        )
+        for _ in range(4)
+    ]
+    for caller in callers:
+        caller.start()
+    while not asked:
+        time.sleep(0.01)
+    # The other callers arrive while the one GET is still out.
+    time.sleep(0.2)
+    release.set()
+    for caller in callers:
+        caller.join(5)
+    assert len(results) == 4 and len(asked) == 1
+    # Each its own copy: callers edit the map they are handed.
+    assert len({id(result) for result in results}) == 4
+    # Nothing outlives the GET: the next caller asks ComfyUI again.
+    service.fetch_object_info("http://c")
+    assert len(asked) == 2
