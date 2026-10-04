@@ -1129,6 +1129,12 @@ kbd {
   --v-theme-surface-error: var(--v-theme-dark-surface-error);
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
+}
+/* The open state's border is a theme token; the ink at 28% is its dark-ground
+   value, as on `AppButton`'s outline. `!important` to match `.bar-btn--open`. */
+.bar-btn--on-dark.bar-btn--open {
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.28) !important;
 }
 /* Set as a colour, not through `--selected-ink`: a `v-icon` carries its own
    theme class, which redeclares the variable on the glyph itself. */

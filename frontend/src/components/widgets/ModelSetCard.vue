@@ -535,6 +535,7 @@ const accessibleName = computed(() => {
 
 .msc__ask-acts {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 

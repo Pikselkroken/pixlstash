@@ -186,7 +186,7 @@ defineExpose({ focus });
 
 /* ON DARK: the ground stays dark in both themes, so the theme's own values are
    the light theme's wrong ones there. The context swaps the tokens the variants
-   read rather than repainting each variant: the bright amber (#1413), the
+   read wherever a token exists: the bright amber (#1413), the
    dark-surface ink for the quiet and outlined labels, the hover wash and the
    focus ring. Custom properties holding var() resolve where they are declared,
    so `--hover-wash`, `--hover-neutral` and `--focus-stroke` are restated here
@@ -202,7 +202,10 @@ defineExpose({ focus });
     rgba(var(--v-theme-on-dark-surface), 0.16)
   );
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
+  --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }
+/* The neutral fill and the outline have no theme token to remap onto: their
+   dark-ground values are washes of the ink, so they are set here. */
 .app-btn--on-dark.app-btn--secondary {
   background-color: rgba(var(--v-theme-on-dark-surface), 0.16);
 }

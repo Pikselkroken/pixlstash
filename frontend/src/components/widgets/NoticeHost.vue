@@ -360,11 +360,13 @@ const hostEl = ref(null);
 .notice-host--on-dark .notice-action {
   color: rgb(var(--v-theme-on-dark-surface));
 }
-.notice-host--on-dark .notice-count {
+/* Muted at rest (spec §2.5); the `on-dark` bar button's own hover, which
+   outranks this, lifts the dismiss to full ink and brings the wash and ring.
+   The action below is not a button component and restates them. */
+.notice-host--on-dark .notice-count,
+.notice-host--on-dark .notice-dismiss {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
 }
-/* The dismiss is an `on-dark` bar button, which brings its own ink, wash and
-   focus ring; the action below is not a button component and restates them. */
 .notice-host--on-dark .notice-action:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }

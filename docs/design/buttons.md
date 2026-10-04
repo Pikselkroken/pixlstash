@@ -256,21 +256,23 @@ No `icon-right` is needed: there is no `append-icon` in the codebase.
 in both themes: the lightbox, a `dark-surface` card, a scrim over a picture.
 It is a context, not a variant: every variant keeps its job and the prop swaps
 the tokens they read. No new values; each one is already the `dark-surface`
-family's.
+family's. Two rows have no theme token to remap (the neutral fill and the
+outlined border are washes of the ink), so those are set directly.
 
 | Token the variant reads | On dark |
 |---|---|
 | `accent` (key action fill) | `dark-surface-accent`, the bright amber (#1413) |
 | `on-surface` (quiet and outlined labels) | `on-dark-surface` |
 | Neutral fill / label | `on-dark-surface` at 16% / `on-dark-surface`. The wash over the dark theme's ground is its own `cancel-button` to within a shade |
-| Outlined border | `on-dark-surface` at 28% |
+| Outlined border, open bar button's border | `on-dark-surface` at 28% |
 | `toolbar-text` (bar label and glyph) | `on-dark-surface` |
 | `surface-error` (destructive bar verb) | `dark-surface-error` |
 | Active bar glyph (`--selected-ink`) | `dark-surface-primary`, set as a colour because a `v-icon` redeclares the variable on itself |
 | `--hover-wash`, `--hover-neutral` | `on-dark-surface` at 16% |
-| `--focus-stroke` | `on-dark-surface` |
+| `--focus-stroke` (and `--focus-ring-inset`, restated) | `on-dark-surface` |
 
-The danger fill needs nothing: `error` with `on-error` is one value in both
+The key action keeps white on the bright amber, the trade-off #1413 already
+made for every amber fill on a dark panel. The danger fill needs nothing: `error` with `on-error` is one value in both
 themes. The hover, wash and focus tokens are restated on the button rather
 than inherited, because a custom property holding `var()` resolves where it is
 declared, which is the theme root.
