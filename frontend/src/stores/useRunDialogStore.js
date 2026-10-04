@@ -67,11 +67,11 @@ export const useRunDialogStore = defineStore("runDialog", () => {
 
   let runner = null;
   /**
-   * Whether a grid is mounted to follow a run's progress.
+   * Whether a progress runner is mounted to follow a run.
    *
-   * `App.vue` mounts `ImageGrid` under `v-else`, so on the Workflows view there
-   * is none: a run started from the Workflow tab has no progress overlay and no
-   * `client_id` worth sending, and the toast is the whole of its feedback.
+   * The grid attaches one, and so does the Workflows view (`App.vue` mounts
+   * `ImageGrid` under `v-else`, so the grid's is gone there). Only the grid's
+   * comes with a `client_id` in `context`.
    */
   const hasRunner = ref(false);
 

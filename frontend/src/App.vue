@@ -407,8 +407,9 @@ function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
   });
 }
 
-// The grid's ComfyUI runner banners a failed run; on a view without the grid
-// (the Workflows view) nothing else would, so the failure becomes a notice.
+// A mounted ComfyUI runner (the grid's, or the Workflows view's) banners a
+// failed run; on a view with neither nothing else would, so the failure
+// becomes a notice.
 watch(
   () => wsStore.wsPluginProgress,
   (wrapped) => {
