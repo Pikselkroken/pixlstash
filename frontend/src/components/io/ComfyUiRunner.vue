@@ -95,7 +95,7 @@ const progress = reactive({
 
 // Mirror this runner's progress into the tasks store so it shows up as a row in
 // the Tasks tab (the "task manager") and drives the app-wide activity light.
-// Each runner instance (one in the grid, one in the overlay) owns a stable id.
+// Each runner instance (the grid's, the Workflows view's) owns a stable id.
 // Only in-progress / completing runs go to the store; the failed state stays in
 // the inline banner below so an error is never buried in a collapsed sidebar.
 const tasksStore = useTasksStore();

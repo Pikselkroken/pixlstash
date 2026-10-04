@@ -91,9 +91,9 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   }
 
   /**
-   * Register the grid's progress runner. Returns the function that detaches it,
-   * which only detaches this one, so a remounted grid is not unhooked by the
-   * old one's teardown.
+   * Register a progress runner (the grid's or the Workflows view's). Returns
+   * the function that detaches it, which only detaches this one, so a late
+   * teardown does not unhook the runner that replaced it.
    */
   function attachRunner(handler) {
     runner = handler;

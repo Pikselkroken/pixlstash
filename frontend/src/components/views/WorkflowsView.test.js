@@ -1910,21 +1910,24 @@ describe("a run started from the Workflows view", () => {
         close() {}
       },
     );
-    const wrapper = await grid();
-    const runDialog = useRunDialogStore();
-    const tasks = useTasksStore();
-    expect(runDialog.hasRunner).toBe(true);
+    try {
+      const wrapper = await grid();
+      const runDialog = useRunDialogStore();
+      const tasks = useTasksStore();
+      expect(runDialog.hasRunner).toBe(true);
 
-    runDialog.started([{ prompt_id: "p-1" }]);
-    await flush();
-    const runs = Object.values(tasks.comfyuiRuns);
-    expect(runs).toHaveLength(1);
-    expect(runs[0].status).toBe("queued");
+      runDialog.started([{ prompt_id: "p-1" }]);
+      await flush();
+      const runs = Object.values(tasks.comfyuiRuns);
+      expect(runs).toHaveLength(1);
+      expect(runs[0].status).toBe("queued");
 
-    mounted.splice(mounted.indexOf(wrapper), 1);
-    wrapper.unmount();
-    expect(runDialog.hasRunner).toBe(false);
-    expect(Object.keys(tasks.comfyuiRuns)).toHaveLength(0);
-    vi.unstubAllGlobals();
+      mounted.splice(mounted.indexOf(wrapper), 1);
+      wrapper.unmount();
+      expect(runDialog.hasRunner).toBe(false);
+      expect(Object.keys(tasks.comfyuiRuns)).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
