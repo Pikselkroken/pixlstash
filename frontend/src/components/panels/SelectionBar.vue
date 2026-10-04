@@ -215,8 +215,8 @@
           @click="$emit('clear-selection')"
         />
         <!-- Separated from Clear selection by its own group gap. Two identical
-             40px transparent icon buttons 8px apart, one of them destructive,
-             is the adjacency this pill can least afford - and Delete now also
+             32px (48px on touch) transparent icon buttons 8px apart, one of
+             them destructive, is the adjacency this pill can least afford - and Delete now also
              sits in the same surface as the bulk Assign write. -->
         <AppBarButton
           class="delete-btn"

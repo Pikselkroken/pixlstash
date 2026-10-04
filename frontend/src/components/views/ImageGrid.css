@@ -192,7 +192,8 @@
 .grid-content-area {
   /* Offset for the absolutely-positioned 36px toolbar. Set 2px under the toolbar
      height so the grid content tucks right beneath the toolbar's bottom border
-     with no dark seam (the toolbar overlays the 2px, so nothing is clipped). */
+     with no dark seam (the toolbar overlays the 2px, so nothing is clipped).
+     This is the band's offset, not a control height: it is not --control-h-bar. */
   --selbar-height: 34px;
   /* Container context for the floating SelectionBar's `@container selbar`
      query. The bar itself is `width: max-content` and cannot host the
