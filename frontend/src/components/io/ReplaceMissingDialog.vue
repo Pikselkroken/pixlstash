@@ -2,11 +2,13 @@
   <AppDialog
     :open="open"
     :title="rows.length === 1 ? 'Replace a missing model' : 'Replace missing models'"
-    subtitle="In every workflow that loads it. The workflows keep their pictures."
-    size="lg"
     @close="close"
     @accept="apply"
   >
+    <p class="rmd-note rmd-quiet">
+      The model you pick is loaded in every workflow that loads the missing one.
+      They keep their pictures, and each can be undone in its Workflow tab.
+    </p>
     <ul class="rmd-rows" data-testid="rmd-rows">
       <li v-for="row in rows" :key="row.name" class="rmd-row">
         <div class="rmd-head">
@@ -261,7 +263,7 @@ function fileName(value) {
 .rmd-rows {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-5);
   margin: 0;
   padding: 0;
   list-style: none;

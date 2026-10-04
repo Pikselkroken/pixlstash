@@ -1946,6 +1946,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     missingAnchor = null;
   }
 
+  /** Every drawn card named after a missing base model, by key. */
+  const missingSetKeys = computed(() =>
+    setGroupList.value
+      .filter((group) => group.head?.missing)
+      .map((group) => group.key),
+  );
+
+  /**
+   * The set grid's "N sets are missing their checkpoint · Select them": a
+   * selection shortcut, not a second verb. It REPLACES the selection, as a
+   * plain click does, so the pill that comes up acts on exactly these.
+   */
+  function selectAllMissing() {
+    clearSelection();
+    clearSetSelection();
+    selectedMissingKeys.value = new Set(missingSetKeys.value);
+    missingAnchor = missingSetKeys.value[0] ?? null;
+  }
+
   // A card that is no longer drawn (its file was replaced) cannot stay selected.
   watch(setGroupList, (groups) => {
     const live = new Set(
@@ -2767,11 +2786,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       selectedSetIds.value = new Set(handMadeSets.value.map((set) => set.id));
       setAnchor = handMadeSets.value[0].id;
     }
-    if (view.groupBy === GRID_GROUP_BY) {
-      const missing = setGroupList.value.filter((group) => group.head?.missing);
-      if (missing.length) {
-        selectedMissingKeys.value = new Set(missing.map((group) => group.key));
-      }
+    if (view.groupBy === GRID_GROUP_BY && missingSetKeys.value.length) {
+      selectedMissingKeys.value = new Set(missingSetKeys.value);
     }
     // **With nothing drawn the selection is left alone, and this is where that
     // is decided.** It used to be a guard at one caller, reading `visibleRows`;
@@ -3310,6 +3326,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     selectedMissing,
     selectMissing,
     clearMissingSelection,
+    missingSetKeys,
+    selectAllMissing,
     selectedSets,
     selectSet,
     clearSetSelection,

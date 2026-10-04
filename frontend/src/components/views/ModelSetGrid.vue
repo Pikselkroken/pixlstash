@@ -355,6 +355,7 @@ const emit = defineEmits([
   "set-menu",
   "rename-set",
   "replace-missing",
+  "missing-menu",
 ]);
 
 const store = useModelShelfStore();
@@ -1460,6 +1461,12 @@ defineExpose({ openFill, openOffer });
  * is open, and the occurrence decides whether its card lights.
  */
 function openMenu(entry, x, y) {
+  // A missing-base card's menu is its own pill's: Replace is its verb.
+  if (entry?.kind === "card" && entry.missingKey) {
+    if (!store.selectedMissingKeys.has(entry.missingKey)) selectMissingEntry(entry);
+    emit("missing-menu", { x, y, el: rowElement(entry) });
+    return true;
+  }
   const id = modelIdOf(entry);
   if (!selectable(id)) return false;
   if (!store.isSelected(id)) selectEntry(entry, {});

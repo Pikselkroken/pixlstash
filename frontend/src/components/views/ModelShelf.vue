@@ -482,6 +482,32 @@
           @click="offlineDismissed = true"
         />
       </p>
+      <!-- Sets whose checkpoint is gone, said once. A selection shortcut, not a
+           second verb: Replace lives on the pill and the card's menu, and
+           replacing one is the same operation as replacing twelve. -->
+      <p
+        v-if="isSetGrid && missingCount && missingDismissed !== missingCount"
+        class="shelf-banner"
+        data-testid="shelf-missing-banner"
+      >
+        <v-icon size="16">mdi-file-alert-outline</v-icon>
+        <span class="shelf-banner-text"
+          ><b>{{
+            missingCount === 1
+              ? "1 set is missing its checkpoint"
+              : `${missingCount} sets are missing their checkpoint`
+          }}</b>
+          · not on your shelf; replace it in the workflows that load it</span
+        >
+        <AppButton size="sm" @click="store.selectAllMissing()">Select them</AppButton>
+        <span class="shelf-spacer"></span>
+        <AppBarButton
+          icon="close"
+          tooltip="Dismiss"
+          aria-label="Dismiss the missing checkpoint notice"
+          @click="missingDismissed = missingCount"
+        />
+      </p>
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
@@ -497,6 +523,7 @@
         @set-menu="({ x, y, el }) => setBarRef?.openContextMenu(x, y, el)"
         @rename-set="startRenameSet"
         @replace-missing="(heads) => (replacingHeads = heads)"
+        @missing-menu="({ x, y, el }) => missingBarRef?.openContextMenu(x, y, el)"
       />
       <p v-else-if="firstRead" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -1444,6 +1471,7 @@
       />
       <MissingSetSelectionBar
         v-if="isSetGrid"
+        ref="missingBarRef"
         @replace="replacingHeads = store.selectedMissing"
       />
     </div>
@@ -2513,6 +2541,10 @@ const setGridRef = ref(null);
 
 /** The missing-base heads the Replace dialog is open on, `[]` while closed. */
 const replacingHeads = ref([]);
+const missingBarRef = ref(null);
+const missingCount = computed(() => store.missingSetKeys.length);
+// The count it was dismissed at: a NEW missing set brings the banner back.
+const missingDismissed = ref(0);
 const setBarRef = ref(null);
 
 // The set receipt sits above whichever selection pill is up, lifted by its
@@ -4969,6 +5001,10 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.shelf-banner b {
+  font-weight: var(--weight-semibold);
 }
 
 /* ── Drive bands ───────────────────────────────────────────────────────────

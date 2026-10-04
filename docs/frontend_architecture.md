@@ -1687,7 +1687,12 @@ proves ran together, with a model free to appear in more than one.
   selection (`selectedMissingKeys`, its heads `selectedMissing`): it has no
   shelf row for a file verb, so it gets its own pill
   (`MissingSetSelectionBar`) whose one verb, *Replace*, opens
-  `io/ReplaceMissingDialog.vue`. Same rules as the hand-made sets: Ctrl+click
+  `io/ReplaceMissingDialog.vue`. As the Model Shelf design has it, the card's
+  context menu (right-click, Menu key) is the full inventory and holds the
+  same *Replace…*; the pill is a shortcut into it. A one-line banner over the
+  grid, "N sets are missing their checkpoint · Select them", is the design's
+  selection shortcut (`selectAllMissing`), not a second verb; dismissed, it
+  returns when the count changes. Same rules as the hand-made sets: Ctrl+click
   and Space add, a plain click or Shift-range replaces, select-all takes them,
   Escape clears, leaving the grid clears. The tray's missing note opens the same
   dialog (*Replace in all N workflows…*) and names each workflow as the

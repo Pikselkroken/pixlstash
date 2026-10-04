@@ -105,7 +105,6 @@
           v-if="missing.workflowIds.length"
           class="msp__replace"
           size="sm"
-          variant="outline"
           icon-left="file-replace-outline"
           data-testid="model-set-replace-missing"
           @click.stop="emit('replace-missing', missing)"

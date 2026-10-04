@@ -294,6 +294,21 @@ describe("the cards", () => {
     expect([...store.selectedMissingKeys]).toEqual(["missing:a.sft"]);
   });
 
+  it("opens the Replace menu on a missing card, selecting it first", async () => {
+    const { wrapper, store } = await mountGrid({
+      combinations: [
+        {
+          ...combination('+["a.sft"]', []),
+          missing: [{ name: "a.sft", workflow_ids: ["auto:a"] }],
+        },
+      ],
+    });
+    await wrapper.find('.msg__row[data-key="missing:a.sft"]').trigger("contextmenu");
+    expect([...store.selectedMissingKeys]).toEqual(["missing:a.sft"]);
+    expect(wrapper.emitted("missing-menu")).toHaveLength(1);
+    expect(wrapper.emitted("menu")).toBeUndefined();
+  });
+
   it("names the workflows in the note and offers to replace in all of them", async () => {
     getWorkflowCard.mockImplementation(async (id) => ({
       card: { id, name: id === "auto:n1" ? "Text to Image" : "Upscale" },
