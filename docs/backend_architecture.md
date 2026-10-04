@@ -2387,7 +2387,12 @@ workflow: each featured parameter's mode by address; each checkpoint, VAE and
 text-encoder loader's modal file (`model_fix_kind` says which loaders those
 are); every LoRA present in **more than half** the instances, at its modal
 strength (D2); and each stage the base topology has, on unless most instances
-ran without it. Prompt, negative and seed are not part of it.
+ran without it. Prompt, negative and seed are not part of it. **A loader no
+output reads is not counted** (`workflow_identity.live_slots`): a leftover
+branch wired into nothing never runs, the LoRA chain already ignores it, and a
+default naming its LoRA showed a row Edit LoRAs could not reach or remove (a
+clone onto another model keeps the old model's dead branch). The LoRA summary
+reads the same way.
 `workflow_group_default` edits replace what they name (`EDITED`); a `lora:`
 edit holding `off` takes a LoRA out.
 

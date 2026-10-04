@@ -76,6 +76,7 @@ from pixlstash.services.workflow_identity import (
     core_node_labels,
     unswapped,
     is_lora_widget,
+    live_slots,
     model_fix_kind,
     slots,
     topology_node_labels,
@@ -1558,7 +1559,9 @@ def _manual_sample(
     try:
         structural = structural_document(graph)
         read = _VariantRead(
-            core={}, base=topology_node_labels(structural), slots=slots(structural)
+            core={},
+            base=topology_node_labels(structural),
+            slots=live_slots(structural),
         )
     except WorkflowGraphError as exc:
         logger.info(
@@ -1616,7 +1619,7 @@ def _variant_reads(
             reads[structural_hash] = _VariantRead(
                 core=core_node_labels(document, strip_loras=STRIP_LORAS_FOR_STACKS),
                 base=topology_node_labels(document) if on_base else {},
-                slots=slots(document),
+                slots=live_slots(document),
             )
         except WorkflowGraphError as exc:
             logger.info(
@@ -1809,7 +1812,7 @@ def workflow_lora_summary(
             )
             continue
         try:
-            document_slots = slots(document)
+            document_slots = live_slots(document)
         except WorkflowGraphError as exc:
             logger.info(
                 "Variant %s will not reduce, so its pictures are left out of "

@@ -1750,6 +1750,36 @@ def test_a_manual_default_recipe_is_its_own_graph_by_its_own_slot_labels(
     ]
 
 
+def test_a_manual_default_recipe_leaves_out_a_lora_wired_into_nothing(hub, monkeypatch):
+    """A dead loader never runs, so the default recipe must not list its LoRA.
+
+    A clone onto another model kept the old model's leftover branch (a second
+    loader and its LoRA, read by nothing); the LoRA chain ignored it while the
+    default recipe listed it, so Edit LoRAs could not remove what was shown.
+    """
+    graph = _graph(
+        loras=("x.safetensors",),
+        extra={
+            "40": _node("UNETLoader", unet_name="old.safetensors"),
+            "41": _node(
+                "LoraLoaderModelOnly",
+                lora_name="dead.safetensors",
+                strength_model=0.8,
+                model=["40", 0],
+            ),
+        },
+    )
+    manual = create_manual_workflow(hub, "Leftover", graph, "clone")
+    monkeypatch.setattr(
+        workflow_card_service, "read_variant_picture_counts", lambda vault: {}
+    )
+    recipe = workflow_card_service.workflow_defaults(
+        hub, SimpleNamespace(library_uuid="test-library"), manual
+    )
+
+    assert [lora.filename for lora in recipe.loras] == ["x.safetensors"]
+
+
 def test_a_lora_split_with_no_majority_decides_nothing(hub, monkeypatch):
     """50/50 between two LoRAs is no consensus, not "run without LoRAs"."""
     split = [
