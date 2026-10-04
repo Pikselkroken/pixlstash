@@ -9,9 +9,11 @@ import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
 const deleteWorkflow = vi.fn();
+const getWorkflowCard = vi.fn();
 vi.mock("../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   deleteWorkflow: (...args) => deleteWorkflow(...args),
+  getWorkflowCard: (...args) => getWorkflowCard(...args),
 }));
 
 import { useWorkflowsStore } from "./useWorkflowsStore";
@@ -363,6 +365,41 @@ describe("onWorkflowsChanged", () => {
 
     expect(store.selectedKeys).toEqual(["workhorse"]);
     expect(store.recipesEpoch).toBe(epoch + 1);
+  });
+});
+
+describe("onWorkflowsChanged with reason pictures", () => {
+  it("re-reads only the named card and keeps every other object", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    const before = [...store.cards];
+    listWorkflowCards.mockClear();
+    getWorkflowCard.mockReset();
+    const fresh = { ...CARDS[2], picture_count: 91, covers: [{ url: "/new" }] };
+    getWorkflowCard.mockResolvedValue({ card: fresh });
+
+    await store.onWorkflowsChanged({ reason: "pictures", keys: ["workhorse"] });
+    await new Promise((resolve) => setTimeout(resolve));
+
+    expect(getWorkflowCard).toHaveBeenCalledWith("workhorse");
+    expect(listWorkflowCards).not.toHaveBeenCalled();
+    expect(store.cards.find((card) => card.id === "workhorse")).toEqual(fresh);
+    for (const card of store.cards.filter((c) => c.id !== "workhorse")) {
+      expect(before).toContain(card);
+    }
+  });
+
+  it("re-reads the whole grid for a card it does not draw", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    listWorkflowCards.mockClear();
+    getWorkflowCard.mockReset();
+
+    store.onWorkflowsChanged({ reason: "pictures", keys: ["auto:one-off"] });
+    await Promise.resolve();
+
+    expect(getWorkflowCard).not.toHaveBeenCalled();
+    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
   });
 });
 

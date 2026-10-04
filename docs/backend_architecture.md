@@ -2690,7 +2690,12 @@ setting a base model). The signature a pass succeeded against is kept in the
 hub (`workflow_family_pass`, one row), so a start or library switch with an
 unchanged shelf runs no pass. A pass that moved anything emits
 `workflows_changed` with reason `regrouped` and `renamed: {retired id: heir}`
-(integration §8) through `workflow_events.announce_to_vault`. `reidentify_families` re-derives every variant whose
+(integration §8) through `workflow_events.announce_to_vault`.
+`MissingComfyUIExtractionFinder` announces the same way, reason `pictures`,
+after a `ComfyUIExtractionTask` batch files pictures: the task's
+`workflow_ids` names the workflow each landed on (its run's manual workflow,
+else `workflow_of_variant` of its recipe), so an open Workflows view redraws
+those cards' covers. `reidentify_families` re-derives every variant whose
 set carries an unknown and moves those that now derive fewer: the family row
 is rewritten and the retiring workflow handed on with `_retire_workflow`, the
 same carry data step 8 uses (owner state merged, never dropped; successor,

@@ -26,11 +26,17 @@ class MissingComfyUIExtractionFinder(SimpleMissingFinder):
     re-offering the same pictures forever (``stand_down``).
     """
 
-    def __init__(self, database, image_root: str, hub=None, library_uuid=None):
+    def __init__(
+        self, database, image_root: str, hub=None, library_uuid=None, vault=None
+    ):
         super().__init__(database)
         self._image_root = image_root
         self._hub = hub
         self._library_uuid = library_uuid
+        # Where a batch that filed pictures onto workflows says so
+        # (``workflows_changed``, reason ``pictures``), so an open Workflows
+        # view redraws those cards' covers. ``None`` announces nothing.
+        self._vault = vault
         self._scanning_workflows = hub is not None
 
     def finder_name(self) -> str:
@@ -66,6 +72,19 @@ class MissingComfyUIExtractionFinder(SimpleMissingFinder):
             on_hub_failure=self.stand_down,
             library_uuid=self._library_uuid,
         )
+
+    def on_task_complete(self, task, error) -> None:
+        """Release the batch's pictures, and announce the workflows they joined."""
+        super().on_task_complete(task, error)
+        if error is not None or self._vault is None:
+            return
+        workflow_ids = (getattr(task, "result", None) or {}).get("workflow_ids")
+        if workflow_ids:
+            # Local: workflow_events imports the broadcaster, whose routes
+            # import reaches the work planner, which imports this finder.
+            from pixlstash.services.workflow_events import announce_to_vault
+
+            announce_to_vault(self._vault, workflow_ids, "pictures")
 
     def stand_down(self) -> None:
         """Narrow back to the pre-B3 predicate after an unwritable hub.

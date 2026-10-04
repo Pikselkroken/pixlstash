@@ -5,6 +5,7 @@ import {
   cloneWorkflowWithModels,
   deleteWorkflow,
   duplicateWorkflow,
+  getWorkflowCard,
   listWorkflowCards,
   patchWorkflowCard,
 } from "../api/workflows";
@@ -330,6 +331,42 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     fetchCards();
   }
 
+  /**
+   * Re-read just these cards, after a ComfyUI run filed new pictures on them.
+   *
+   * Swapped in place, so the rest of the grid keeps its objects and its
+   * thumbnails do not reload. Anything this cannot do honestly falls back to
+   * `invalidate`: an id the grid does not draw (a one-off that just crossed
+   * the threshold), a full read already on the wire, more cards than a
+   * whole-grid read costs (each detail read is one on the server), or a
+   * refused read.
+   */
+  async function refreshCards(ids) {
+    if (!loaded.value) return;
+    const drawn = new Set(cards.value.map((card) => card.id));
+    if (
+      loading.value ||
+      !ids?.length ||
+      ids.length > 3 ||
+      ids.some((id) => !drawn.has(id))
+    ) {
+      invalidate();
+      return;
+    }
+    const mine = epoch;
+    let fresh;
+    try {
+      fresh = await Promise.all(ids.map((id) => getWorkflowCard(id)));
+    } catch (err) {
+      console.warn("[workflows] could not re-read the changed cards", ids, err);
+      if (mine === epoch) invalidate();
+      return;
+    }
+    if (mine !== epoch) return;
+    const byId = new Map(ids.map((id, i) => [id, fresh[i]?.card]));
+    cards.value = cards.value.map((card) => byId.get(card.id) ?? card);
+  }
+
   // ── The selection's own verbs (v1.12 F3, #1455) ───────────────────────
   //
   // The grid's selection bar and the rail's Workflow tab offer the same bulk
@@ -609,9 +646,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * (reason "regrouped": the shelf identified an unknown base model). The
    * selection follows the rename, so the rail's open card does not 404; an id
    * the grid then does not list drops out of `selectedCards` on its own. The
-   * grid is re-read only if it has been read (`invalidate`).
+   * grid is re-read only if it has been read (`invalidate`). Reason
+   * "pictures" names the only cards that moved, and re-reads just those.
    */
-  function onWorkflowsChanged({ reason, renamed } = {}) {
+  function onWorkflowsChanged({ reason, renamed, keys } = {}) {
     const map = renamed && typeof renamed === "object" ? renamed : {};
     if (Object.keys(map).length && selectedKeys.value.length) {
       selectedKeys.value = [
@@ -619,7 +657,8 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       ];
     }
     if (reason === "recipes") notedRecipesChanged();
-    invalidate();
+    if (reason === "pictures") refreshCards(keys);
+    else invalidate();
   }
 
   /**

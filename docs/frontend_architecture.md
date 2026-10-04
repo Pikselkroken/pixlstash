@@ -2472,7 +2472,13 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   epoch is the writer's in-process half. The same handler follows a
   `"regrouped"` event's `renamed` map (a background pass retired `auto:` ids
   when the shelf identified a base model): the selection moves to the heir and
-  the grid is re-read. The tab does **not** bump
+  the grid is re-read. A `"pictures"` event (a ComfyUI run's output was filed
+  onto the workflows in `keys`) re-reads only those cards through
+  `GET /workflows/{id}` and swaps them into `cards` in place, so their covers
+  update without leaving the view; a key the grid does not draw, more than
+  three keys, or a full read already in flight falls back to the whole grid.
+  The socket keeps a debounced burst as `"pictures"` only if every event in it
+  was. The tab does **not** bump
   it for its own delete or rename: it is the writer there. Deleting a manual
   workflow (`useWorkflowsStore.deleteSelected`) bumps it too, because that
   workflow's saved recipes become unfiled.

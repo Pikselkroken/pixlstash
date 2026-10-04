@@ -38,6 +38,7 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import delete as sqlmodel_delete, select
 
 from pixlstash.db_models import DeletedFileLog, Generation, Picture
+from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import workflow_of_variant
 from pixlstash.hub.workflow_group_writes import (
@@ -1682,8 +1683,55 @@ def test_every_return_path_reports_the_same_keys(store):
     empty = run_extraction(store, [])
 
     assert (
-        set(empty) == set(populated) == {"checked", "found_comfyui", "found_workflow"}
+        set(empty)
+        == set(populated)
+        == {"checked", "found_comfyui", "found_workflow", "workflow_ids"}
     )
+
+
+def test_the_result_names_the_workflow_each_picture_landed_on(store):
+    """The auto workflow by recipe, and a picture a manual run made by its run.
+
+    What an open Workflows view re-reads after a ComfyUI run: these cards and
+    no others.
+    """
+    name = write_png(Path(store.image_root), "auto.png", api=api_graph(TXT2IMG))
+    auto_id = add_picture(store, name)
+    name = write_png(Path(store.image_root), "manual.png", api=api_graph(UPSCALE))
+    manual_id = add_picture(store, name)
+    ran = "manual:" + "d" * 32
+
+    def set_ran(session):
+        session.get(Picture, manual_id).run_workflow_id = ran
+        session.commit()
+
+    store.vault.run_task(set_ran)
+
+    result = run_extraction(store, [auto_id, manual_id])
+
+    expected = workflow_of_variant(store.hub, structural_hash(api_graph(TXT2IMG)))
+    assert expected is not None
+    assert result["workflow_ids"] == sorted([expected, ran])
+
+
+def test_the_finder_announces_the_workflows_a_batch_filed_pictures_on(store):
+    """``workflows_changed`` with reason ``pictures``, and nothing for a failure."""
+    events = []
+    vault = SimpleNamespace(notify=lambda event, data: events.append((event, data)))
+    finder = MissingComfyUIExtractionFinder(
+        database=store.vault, image_root=store.image_root, hub=store.hub, vault=vault
+    )
+    task = SimpleNamespace(params={}, result={"workflow_ids": ["auto:a"]})
+
+    finder.on_task_complete(task, RuntimeError("example-failure"))
+    assert events == []
+    finder.on_task_complete(SimpleNamespace(params={}, result={}), None)
+    assert events == []
+
+    finder.on_task_complete(task, None)
+    assert [(event, data["keys"], data["reason"]) for event, data in events] == [
+        (EventType.CHANGED_WORKFLOWS, ["auto:a"], "pictures")
+    ]
 
 
 def test_a_picture_with_no_graph_is_marked_scanned_rather_than_re_read(store):
