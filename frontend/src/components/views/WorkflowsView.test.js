@@ -1329,7 +1329,8 @@ describe("Clone onto a workflow set", () => {
       { key: "hand:7", checkpoint_ids: [11], model_ids: [] },
       { key: "hand:8", checkpoint_ids: [21], model_ids: [] },
     ]);
-    // "Fits this graph" hides the set of another base model.
+    // "Fits this graph" hides the set of another base model that does not
+    // fill the graph's loaders one for one.
     expect(wrapper.find('[data-testid="cos-set-hand:8"]').exists()).toBe(false);
     await wrapper.findAll(".cos-tab")[1].trigger("click");
     await wrapper.find('[data-testid="cos-set-hand:8"]').trigger("click");
@@ -1344,6 +1345,43 @@ describe("Clone onto a workflow set", () => {
       loras: { entries: [], lanes: null },
     });
     expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+  });
+
+  it("lists a set of another base model that maps cleanly under Fits", async () => {
+    const reply = await planSetClones();
+    planSetClones.mockResolvedValue({
+      ...reply,
+      plans: reply.plans.map((plan) =>
+        plan.key === "hand:8"
+          ? {
+              ...plan,
+              maps_cleanly: true,
+              // The encoder file stays; only the type it loads as changes.
+              loaders: [
+                ...plan.loaders,
+                loader("t5.safetensors", "t5.safetensors", {
+                  node_id: "2",
+                  kind: "clip",
+                  was_class: "CLIPLoader",
+                  now_class: "CLIPLoader",
+                  was_type: "flux",
+                  now_type: "chroma",
+                }),
+              ],
+            }
+          : plan,
+      ),
+    });
+    const wrapper = await grid();
+    await openOn(wrapper);
+    const chroma = wrapper.find('[data-testid="cos-set-hand:8"]');
+    expect(chroma.exists()).toBe(true);
+    expect(chroma.attributes("disabled")).toBeUndefined();
+    await chroma.trigger("click");
+    const clip = wrapper.findAll('[data-testid="cos-loaders"] li')[1];
+    expect(clip.classes()).not.toContain("cos-row--same");
+    expect(clip.find(".cos-was").text()).toContain("flux");
+    expect(clip.find(".cos-now").text()).toContain("chroma");
   });
 
   it("names the clone after the model the plan loads and marks a set with no cover", async () => {

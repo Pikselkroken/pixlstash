@@ -34,8 +34,8 @@
         </div>
 
         <p v-if="!shownGroups.length && view === 'fits'" class="cos-note">
-          No set on your shelf has this workflow's base model or family.
-          All lists every set.
+          No set on your shelf has this workflow's base model or family, or
+          fills its loaders one for one. All lists every set.
         </p>
 
         <div class="cos-list" role="radiogroup" aria-labelledby="cos-sets-label">
@@ -129,11 +129,17 @@
                 <span class="cos-was">
                   <span class="cos-class">{{ row.was_class }}</span>
                   {{ fileNames(row.was) }}
+                  <template v-if="row.was_type !== row.now_type">
+                    · {{ row.was_type }}</template
+                  >
                 </span>
                 <span class="cos-now">
                   <v-icon size="14" aria-hidden="true">mdi-arrow-right</v-icon>
                   <span class="cos-class">{{ row.now_class }}</span>
                   {{ fileNames(row.now) }}
+                  <template v-if="row.was_type !== row.now_type">
+                    · {{ row.now_type }}</template
+                  >
                   <span v-if="row.pack" class="cos-pack">{{ row.pack }}</span>
                 </span>
               </span>
@@ -363,18 +369,25 @@ const chosen = computed(
   () => sets.value.find((set) => set.key === chosenKey.value) ?? null,
 );
 
+/**
+ * Fits this graph: the same base model or family, or a set whose files fill
+ * the graph's checkpoint, VAE and text-encoder loaders one for one
+ * (`maps_cleanly`), whatever its base model.
+ */
+function fits(set) {
+  return (
+    ["same_base_model", "same_family"].includes(set.plan.fit) ||
+    Boolean(set.plan.maps_cleanly)
+  );
+}
+
 const shownGroups = computed(() =>
-  FIT_GROUPS.filter(
-    (group) =>
-      view.value === "all" ||
-      group.id === "same_base_model" ||
-      group.id === "same_family",
-  )
-    .map((group) => ({
-      ...group,
-      sets: sets.value.filter((set) => set.plan.fit === group.id),
-    }))
-    .filter((group) => group.sets.length),
+  FIT_GROUPS.map((group) => ({
+    ...group,
+    sets: sets.value.filter(
+      (set) => set.plan.fit === group.id && (view.value === "all" || fits(set)),
+    ),
+  })).filter((group) => group.sets.length),
 );
 
 /** Every loader of the original's chain, trunk and lanes. */
@@ -512,6 +525,7 @@ const pendingEdit = computed(() => {
 function changed(row) {
   return (
     row.was_class !== row.now_class ||
+    (row.was_type ?? null) !== (row.now_type ?? null) ||
     row.was.length !== row.now.length ||
     row.was.some((file, index) => file !== row.now[index])
   );

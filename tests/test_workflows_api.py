@@ -10628,6 +10628,8 @@ def test_a_set_plan_names_the_swap_and_the_loader_before_and_after(cloneable):
             "now": [f"flux/{CLONE_CHECKPOINT}"],
             "pack": None,
             "installed": None,
+            "was_type": None,
+            "now_type": None,
         }
     ]
     # A plan writes nothing.
@@ -10871,8 +10873,8 @@ def test_a_set_vae_replaces_only_the_graph_vae_of_its_layout(cloneable):
     }
 
 
-def test_a_set_vae_of_another_known_layout_is_not_swapped_in(cloneable):
-    """One slot, one set VAE, two known layouts that differ: no fallback."""
+def test_a_set_vae_of_another_layout_replaces_the_graphs_only_one(cloneable):
+    """One slot, one set VAE: the set's VAE goes with its checkpoint."""
     graph = _embedded_export_graph()
     graph["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}}
     cloneable.monkeypatch.setattr(
@@ -10891,14 +10893,116 @@ def test_a_set_vae_of_another_known_layout_is_not_swapped_in(cloneable):
             for filename, family in (
                 ("ae.safetensors", "vae_16ch"),
                 ("wan-video-vae.safetensors", "wan_vae"),
+                ("other-vae.safetensors", "wan_vae"),
             )
         ]
     try:
-        _body, plans = _plans(cloneable, wan=[cloneable.checkpoint_id, ids[1]])
+        _body, plans = _plans(
+            cloneable,
+            wan=[cloneable.checkpoint_id, ids[1]],
+            # Two VAEs for one slot: no fill by order, nothing it could guess.
+            two=[cloneable.checkpoint_id, ids[1], ids[2]],
+            bare=[cloneable.checkpoint_id],
+        )
     finally:
         with hub.transaction() as conn:
             conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in ids])
-    assert plans["wan"]["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+    assert plans["wan"]["swaps"] == {
+        _SHELF_FILENAME: CLONE_CHECKPOINT,
+        "ae.safetensors": "wan-video-vae.safetensors",
+    }
+    assert plans["wan"]["maps_cleanly"] is True
+    assert plans["two"]["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+    assert plans["two"]["maps_cleanly"] is False
+    # The graph's VAE would be left beside another model's checkpoint.
+    assert plans["bare"]["maps_cleanly"] is False
+
+
+def test_a_set_of_another_family_fits_only_when_its_encoder_is_retyped(cloneable):
+    """The plan runs the clone's retype: the diff shows the type it writes,
+    and a type it cannot name keeps the set out of Fits."""
+    graph = _embedded_export_graph()
+    graph["8"] = {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "qwen_3_4b.safetensors", "type": "lumina2"},
+    }
+    graph["5"]["inputs"]["clip"] = ["8", 0]
+    graph["6"]["inputs"]["clip"] = ["8", 0]
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    # ComfyUI down: every name is written unchecked, so no set is refused.
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "down")
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        encoder = conn.execute(
+            "INSERT INTO model (file_kind, filename, family, provenance) "
+            "VALUES ('text_encoder', 'qwen_3_vl.safetensors', 'qwen3_vl', 'scanned')"
+        ).lastrowid
+        unknown = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', 'mystery.safetensors', 'scanned')"
+        ).lastrowid
+        conn.execute(
+            "UPDATE model SET base_model = 'Krea 2' WHERE filename = ?",
+            (CLONE_CHECKPOINT,),
+        )
+    try:
+        _body, plans = _plans(
+            cloneable,
+            krea=[cloneable.checkpoint_id, encoder],
+            mystery=[unknown, encoder],
+        )
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(encoder,), (unknown,)])
+            conn.execute(
+                "UPDATE model SET base_model = 'FLUX.1 dev' WHERE filename = ?",
+                (CLONE_CHECKPOINT,),
+            )
+    krea = plans["krea"]
+    clip = next(row for row in krea["loaders"] if row["node_id"] == "8")
+    assert (clip["was_type"], clip["now_type"]) == ("lumina2", "krea2")
+    assert krea["maps_cleanly"] is True
+    # No known base model, so no type to load the encoder as: the clone would
+    # encode for Z-Image, and nothing says it maps cleanly.
+    mystery = plans["mystery"]
+    assert mystery["fit"] == "other"
+    assert mystery["maps_cleanly"] is False
+
+
+def test_a_generic_name_in_another_folder_is_not_read_as_the_sets_file(cloneable):
+    """Two shelf rows share the basename: the graph's is swapped, never kept."""
+    generic = "diffusion_pytorch_model.safetensors"
+    graph = _embedded_export_graph()
+    graph["1"]["inputs"]["ckpt_name"] = f"original/{generic}"
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        ids = [
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, provenance) "
+                "VALUES ('checkpoint', ?, 'scanned')",
+                (generic,),
+            ).lastrowid
+            for _ in range(2)
+        ]
+    try:
+        _body, plans = _plans(cloneable, target=[ids[1]])
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in ids])
+    target = plans["target"]
+    assert target["swaps"] == {f"original/{generic}": generic}
+    assert target["maps_cleanly"] is False
 
 
 def test_two_unknown_base_models_are_not_the_same_one(cloneable):

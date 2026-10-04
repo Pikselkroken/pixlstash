@@ -1467,14 +1467,17 @@ in the Workflow tab's Models panel head, both through
 - **Left: the shelf's sets, built as the shelf builds them**
   (`fetchWorkflowSets`: the hand-made ones, then `setGroups` over the
   combinations), each planned once per open by `POST …/set-clone-plans`.
-  *Fits this graph* shows the same-base-model and same-family groups; *All*
+  *Fits this graph* shows the same-base-model and same-family groups, and any
+  set of another base model whose plan `maps_cleanly` (its checkpoints, VAEs
+  and text encoders fill the graph's loaders one for one); *All*
   adds the other base models, the sets that will not load (disabled, the
   reason in place of the files line) and *Pick files myself*, which closes this
   dialog and opens `CloneWithModelsDialog` on the same card. With nothing that
   fits, it opens on *All*. Each card says in advance "Keeps its N LoRAs" or
   "Clears N LoRAs".
 - **Right: the clone as a node diff**, the plan's `loaders` read as they come:
-  class and files before, then after, the node pack chip, and "Unchanged". A
+  class, files and a CLIP loader's type before, then after, the node pack chip,
+  and "Unchanged". A
   pack ComfyUI does not have is a warning, never a refusal.
 - **LoRAs go only when the base model changes** (`keeps_loras`, the server's
   rule). Then "Removed <checkpoint> LoRAs" with a struck chip per loader and a

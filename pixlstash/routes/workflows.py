@@ -94,6 +94,7 @@ from pixlstash.hub.workflows import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
+    CLIP_TYPE_BY_FAMILY,
     LORA_FILENAME_FIELD_RE,
     MAX_SEED_64,
     PIXLSTASH_ADAPTER_LOADER,
@@ -1977,6 +1978,12 @@ class LoaderDiff(BaseModel):
     installed: bool | None = Field(
         None, description="Whether ComfyUI has now_class; null when not asked."
     )
+    was_type: str | None = Field(
+        None, description="A CLIP loader's `type` before the clone, else null."
+    )
+    now_type: str | None = Field(
+        None, description="Its `type` in the clone: the new model's, when known."
+    )
 
 
 class SetClonePlan(BaseModel):
@@ -2001,6 +2008,17 @@ class SetClonePlan(BaseModel):
         description=(
             "Base-model files of the graph no set checkpoint was paired with "
             "(the set holds fewer than the graph loads): they keep their file."
+        ),
+    )
+    maps_cleanly: bool = Field(
+        False,
+        description=(
+            "True when the set's checkpoints, VAEs and text encoders fill the "
+            "graph's loaders of those kinds one for one, whatever the base "
+            "model: no file of the original is left and none of the set's is "
+            "unused. Onto another family, every CLIP loader must also take "
+            "the type the new model loads as. Never true for a set that will "
+            "not load."
         ),
     )
     loaders: list[LoaderDiff]
@@ -7021,21 +7039,47 @@ def create_router(server) -> APIRouter:
                 paired[i] = j
         return [(bases[i], checkpoints[paired[i]]) for i in sorted(paired)]
 
+    def _clip_type(node: dict) -> str | None:
+        """A CLIP loader node's ``type``, or None for any other node."""
+        class_type = node.get("class_type", "")
+        value = (node.get("inputs") or {}).get("type")
+        if (
+            isinstance(value, str)
+            and "CLIPVision" not in class_type
+            and any(
+                f.startswith("clip_name") for f in model_filename_fields(class_type)
+            )
+        ):
+            return value
+        return None
+
     def _set_swaps(
         found: list[tuple[str, str, SwapSlot]],
         bases: list[tuple[SwapSlot, SwapModel]],
         members: list[SwapModel],
-    ) -> dict[str, str]:
+    ) -> tuple[dict[str, str], dict[str, SwapModel]]:
         """The set's checkpoints, and which graph file each of its files replaces.
 
         Each base slot takes the checkpoint :func:`_pair_bases` paired it with
         (*bases*). A VAE or text-encoder
         slot takes the set's file of the same layout (``family``) nobody has
-        taken yet; with no layout to go by, the set's only file of that kind
-        when the graph has only one such slot. A slot the set has nothing for
-        keeps its file. Two slots of a kind are two different files (the
-        slot list merges loaders naming one file), so one set file is never
-        written over both.
+        taken yet. When the set holds exactly as many files of a kind as the
+        graph has slots, every slot takes one, the layout matches first and
+        the rest in order: the set's files go with the set's checkpoint, so a
+        Krea 2 text encoder replaces a Z-Image one whatever their layouts. A
+        slot the set has nothing for keeps its file. Two slots of a kind are
+        two different files (the slot list merges loaders naming one file), so
+        one set file is never written over both.
+
+        A slot already loads the set's file only when its name is that shelf
+        row (``SwapSlot.model``); a name the shelf cannot pin to one row is
+        compared whole, so a generic ``diffusion_pytorch_model.safetensors``
+        in another folder is swapped rather than read as the same file.
+
+        Returns:
+            ``(swaps, filled)``: the graph's filename -> the set's, for the
+            files that change, and every slot's filename -> the set's model
+            it now loads, changed or not.
         """
         of_kind = {
             "vae": [m for m in members if m.file_kind == FILE_VAE],
@@ -7047,31 +7091,51 @@ def create_router(server) -> APIRouter:
         paired = {slot.filename: new for slot, new in bases}
         swaps: dict[str, str] = {}
         taken: set[int] = set()
+        chosen: dict[str, SwapModel] = {}
+        # Layout matches first, so an in-order fill never takes a file a
+        # later slot of its layout needed.
         for _cls, _widget, slot in found:
-            new = None
             if slot.kind in BASE_MODEL_KINDS:
-                new = paired.get(slot.filename)
+                if slot.filename in paired:
+                    chosen[slot.filename] = paired[slot.filename]
             elif slot.kind in of_kind:
                 family = slot.model.family if slot.model else None
-                files = [m for m in of_kind[slot.kind] if m.id not in taken]
-                new = next((m for m in files if family and m.family == family), None)
-                only = of_kind[slot.kind][0] if len(of_kind[slot.kind]) == 1 else None
-                # With no layout to go by on one side or the other: two known
-                # layouts that differ are a mismatch, never a fallback.
-                if (
-                    new is None
-                    and only is not None
-                    and slots_of[slot.kind] == 1
-                    and (family is None or only.family is None)
-                ):
-                    new = only
+                new = next(
+                    (
+                        m
+                        for m in of_kind[slot.kind]
+                        if m.id not in taken and family and m.family == family
+                    ),
+                    None,
+                )
                 if new is not None:
                     taken.add(new.id)
-            if new is not None and normalized_filename(
-                new.filename
-            ) != normalized_filename(slot.filename):
-                swaps[slot.filename] = new.filename
-        return swaps
+                    chosen[slot.filename] = new
+        for _cls, _widget, slot in found:
+            kind = slot.kind
+            if (
+                kind in of_kind
+                and slot.filename not in chosen
+                and len(of_kind[kind]) == slots_of[kind]
+            ):
+                # ponytail: in graph order; a dual text encoder of two unknown
+                # layouts may pair crosswise, the dialog's diff shows it.
+                new = next((m for m in of_kind[kind] if m.id not in taken), None)
+                if new is not None:
+                    taken.add(new.id)
+                    chosen[slot.filename] = new
+        slots = {slot.filename: slot for _c, _w, slot in found}
+        for filename, new in chosen.items():
+            own = slots[filename].model
+            same = (
+                own.id == new.id
+                if own is not None
+                else filename.replace("\\", "/").casefold()
+                == new.filename.replace("\\", "/").casefold()
+            )
+            if not same:
+                swaps[filename] = new.filename
+        return swaps, chosen
 
     def _wont_load(
         found, unswapped: list[dict], object_info: dict | None
@@ -7164,26 +7228,28 @@ def create_router(server) -> APIRouter:
             # Named by the caller, never guessed from the members: a set's
             # checkpoint slot takes a checkpoint or an unclassified diffusion
             # file, and an upscaler beside no checkpoint is no base model.
-            bases = _pair_bases(
-                found,
-                [
-                    models[i]
-                    for i in ask.checkpoint_ids
-                    if i in models
-                    and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
-                ],
-            )
+            set_checkpoints = [
+                models[i]
+                for i in ask.checkpoint_ids
+                if i in models
+                and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
+            ]
+            bases = _pair_bases(found, set_checkpoints)
             # The one the graph's first base slot takes, which `old_base` is
             # read from; else whichever slot was paired.
             checkpoint = next(
                 (new for slot, new in bases if slot is base),
                 bases[0][1] if bases else None,
             )
-            swaps = _set_swaps(found, bases, members)
+            swaps, filled = _set_swaps(found, bases, members)
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
             loaders, _swapped, unswapped = _swap_files(pending, swaps, object_info)
+            # The clone's own retype, so the diff shows the type it writes.
+            retype_text_encoders(
+                pending, _swapped_in_families(models, index, graph, swaps), object_info
+            )
             rewritten = {str(row["node_id"]): row for row in loaders}
             # The workflow's own reason first: it applies to every set.
             reason = (
@@ -7241,12 +7307,49 @@ def create_router(server) -> APIRouter:
                         ],
                         pack=row["pack"] if row else None,
                         installed=row["installed"] if row else None,
+                        was_type=_clip_type(graph[node_id]),
+                        now_type=_clip_type(now_node),
                     )
                 )
+            essentials = [
+                slot
+                for _c, _w, slot in found
+                if slot.kind in (*BASE_MODEL_KINDS, "vae", "clip")
+            ]
+            set_ids = {
+                m.id
+                for m in (
+                    *set_checkpoints,
+                    *(
+                        m
+                        for m in members
+                        if m.file_kind in (FILE_VAE, FILE_TEXT_ENCODER)
+                    ),
+                )
+            }
+            took = [filled.get(slot.filename) for slot in essentials]
+            # Onto another family the encoders must load as the new model:
+            # a type the retype could not name would encode for the old one.
+            wanted_type = CLIP_TYPE_BY_FAMILY.get(
+                family_of(checkpoint.base_model) if checkpoint else ""
+            )
+            typed = fit != "other" or all(
+                diff.now_type == wanted_type
+                for diff in diffs
+                if diff.now_type is not None
+            )
+            maps_cleanly = (
+                fit != "wont_load"
+                and typed
+                and len(essentials) == len(set_ids)
+                and all(took)
+                and {m.id for m in took} == set_ids
+            )
             plans.append(
                 SetClonePlan(
                     key=ask.key,
                     fit=fit,
+                    maps_cleanly=maps_cleanly,
                     reason=reason,
                     base_model=checkpoint.base_model if checkpoint else None,
                     keeps_loras=keeps,
@@ -7326,7 +7429,9 @@ def create_router(server) -> APIRouter:
                 except LookupError as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
         # Read before the swap: the base slot is found by the file it names now.
-        families = _swapped_in_families(hub, graph, body.swaps)
+        families = _swapped_in_families(
+            _swap_models(hub), recipe_asset_index(hub), graph, body.swaps
+        )
         loaders, swapped, unswapped = _swap_files(graph, body.swaps, object_info)
         if not swapped and not unswapped and not chain_changed:
             raise HTTPException(
@@ -7378,15 +7483,16 @@ def create_router(server) -> APIRouter:
             verified=all(entry["verified"] for entry in swapped),
         )
 
-    def _swapped_in_families(hub, graph: dict, swaps: dict[str, str]) -> dict[str, str]:
+    def _swapped_in_families(
+        models: dict[int, SwapModel], index: tuple, graph: dict, swaps: dict[str, str]
+    ) -> dict[str, str]:
         """Each base loader *swaps* replaces a file of -> the new file's family.
 
         Matched as the rewrite matches (``swap_target``). A loader is left out
         when the shelf holds no single row of the new file's name, or that row
         has no known base model.
         """
-        models = _swap_models(hub)
-        by_name = recipe_asset_index(hub)[0]
+        by_name = index[0]
         families: dict[str, str] = {}
         for node_id, class_type, widget, value in iter_model_fields_api(graph):
             if slot_kind(widget) not in BASE_MODEL_KINDS:
