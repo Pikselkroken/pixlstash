@@ -1699,6 +1699,37 @@ def test_a_set_covers_the_combinations_it_holds_and_leaves_no_set(shelf_env):
         _wipe_recipes(server)
 
 
+def test_a_set_holding_the_support_files_does_not_take_a_missing_base_set(shelf_env):
+    """Pictures made on a checkpoint the shelf lacks are not credited to a
+    hand-made set that merely holds the same LoRA: they keep their own card,
+    named after the missing file."""
+    server, ids = shelf_env.server, shelf_env.model_ids
+    try:
+        _seed_recipe(
+            server,
+            "hm-gone",
+            [
+                ("ckpt_name", "not-here.safetensors"),
+                ("lora_name", "alice.safetensors"),
+            ],
+        )
+        _seed_picture(server, "hm-gone", score=3)
+        holder = _new_set(shelf_env, members=[{"model_id": ids["alice.safetensors"]}])[
+            "id"
+        ]
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        (gone,) = [c for c in body["combinations"] if c["missing"]]
+        assert [m["name"] for m in gone["missing"]] == ["not-here.safetensors"]
+        assert gone["covered_by"] == []
+        sets = {entry["id"]: entry for entry in body["hand_made"]}
+        assert sets[holder]["picture_count"] == 0
+    finally:
+        _wipe_sets(server)
+        _wipe_recipes(server)
+
+
 def _declines(shelf_env, set_id, sha256s) -> dict:
     r = shelf_env.owner.put(
         f"{API}/models/workflow-sets/{set_id}/declines", json={"sha256": sha256s}

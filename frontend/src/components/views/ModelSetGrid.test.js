@@ -547,7 +547,9 @@ describe("the cards", () => {
             { pictures: 1 },
           ),
           combination("1,2", [CKPT, VAE], { pictures: 9 }),
-          combination("3x", [LORA], { pictures: 5 }),
+          combination("3x", [member(3, "filmgrain_xl", "checkpoint")], {
+            pictures: 5,
+          }),
         ],
       });
       // The third card in the row is the one whose tray is open.

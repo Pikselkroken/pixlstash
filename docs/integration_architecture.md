@@ -518,7 +518,7 @@ and groups nothing; the client folds.**
 | Route | Answers | Costs |
 |---|---|---|
 | `GET /models/workflow-sets` | **Which shelf models a kept picture or a stored ComfyUI run proves ran together** — one entry per *combination* (the exact model ids one or more recipes or runs bound), with its recipe count, its `history_runs` (finished ComfyUI runs, #1565, counted apart), its picture count and up to three cover thumbnails as `{picture_id, version}`, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
-picture in this library and no stored ComfyUI run used with a base model** (engines excluded - see rule 1). A combination carries `missing: [{name, workflow_ids}]` for base models its recipes load that the shelf does not hold; one with no base model, on the shelf or missing, is not served. | one pass over `workflow_recipe_asset` and one over `comfyui_history_model`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
+picture in this library and no stored ComfyUI run used with a base model** (engines excluded - see rule 1). A combination carries `missing: [{name, workflow_ids}]` for base models its recipes load that the shelf does not hold; one with no base model, on the shelf or missing, is listed for *Works with* but drawn as no set. | one pass over `workflow_recipe_asset` and one over `comfyui_history_model`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
 
 Rules neither side may drift from:
 

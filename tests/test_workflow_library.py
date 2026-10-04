@@ -39,6 +39,7 @@ from sqlmodel import delete as sqlmodel_delete, select
 
 from pixlstash.db_models import DeletedFileLog, Generation, Picture
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.workflow_card_reads import workflow_of_variant
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
@@ -4616,20 +4617,17 @@ def test_a_set_whose_checkpoint_is_off_the_shelf_is_named_after_the_missing_file
 
     assert set(combinations) == {support}
     found = combinations[support]
-    topology = store.hub.fetchone("SELECT topology_hash FROM workflow_recipe")[
-        "topology_hash"
-    ]
-    workflow = store.hub.fetchone(
-        "SELECT workflow_id FROM workflow_group_member WHERE topology_hash = ?",
-        (topology,),
+    recipe = store.hub.fetchone(
+        "SELECT structural_hash, topology_hash FROM workflow_recipe"
     )
+    topology = recipe["topology_hash"]
+    workflow = workflow_of_variant(store.hub, recipe["structural_hash"])
+    # The link the tray offers: a real workflow, or the note has no way to the fix.
+    assert workflow is not None
     assert found["missing"] == [
-        {
-            "name": "gone-base.safetensors",
-            "workflow_ids": [workflow["workflow_id"]] if workflow else [],
-        }
+        {"name": "gone-base.safetensors", "workflow_ids": [workflow]}
     ]
-    assert found["key"].endswith("+gone-base.safetensors")
+    assert found["key"].endswith('+["gone-base.safetensors"]')
 
     with store.hub.transaction() as conn:
         conn.execute(
@@ -4653,7 +4651,8 @@ def test_a_set_whose_checkpoint_is_off_the_shelf_is_named_after_the_missing_file
 
 def test_a_combination_with_no_base_model_is_no_set(store, set_shelf):
     """A recipe naming no base model at all is not drawn as a set led by its
-    VAE or LoRA; its files fall to `no_set` instead of vanishing."""
+    VAE or LoRA: the combination is still served, for *Works with*, but its
+    files count as in no set rather than vanishing."""
     ids = set_shelf
     graph = generation_graph(
         "ckpt_a.safetensors", "vae_b.safetensors", "clip_shared.safetensors"
@@ -4666,8 +4665,32 @@ def test_a_combination_with_no_base_model_is_no_set(store, set_shelf):
 
     combinations, no_set = sets_of(store)
 
-    assert combinations == {}
+    loose = frozenset({"vae_b.safetensors", "clip_shared.safetensors"})
+    assert set(combinations) == {loose}
+    assert combinations[loose]["missing"] == []
     assert ids["vae_b"] in no_set
+
+
+def test_a_recipe_with_a_base_on_the_shelf_reports_nothing_missing(store, set_shelf):
+    """A second base-model name the shelf lacks (a refiner, or an A1111 recipe's
+    guessed filename beside the digest that did resolve) does not make the
+    set's own checkpoint look missing, nor split its combination."""
+    graph = generation_graph(
+        "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+    )
+    graph["11"] = {
+        "class_type": "UNETLoader",
+        "inputs": {"unet_name": "absent-refiner.safetensors"},
+    }
+    picture_from(store, "refined.png", graph)
+
+    combinations, _ = sets_of(store)
+
+    plain = frozenset(
+        {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
+    )
+    assert set(combinations) == {plain}
+    assert combinations[plain]["missing"] == []
 
 
 def test_a_recipe_whose_pictures_are_all_deleted_is_no_set_and_its_models_say_so(

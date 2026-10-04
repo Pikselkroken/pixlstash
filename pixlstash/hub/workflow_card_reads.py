@@ -771,6 +771,26 @@ def workflow_of_variant(hub: HubDatabase, structural_hash: str) -> Optional[str]
     return auto_workflow_id(row["core_hash"], row["families"]) if row else None
 
 
+def variant_workflows(hub: HubDatabase) -> dict[str, str]:
+    """:func:`workflow_of_variant` for every variant at once.
+
+    ``{structural_hash: workflow_id}``; a variant in no workflow yet is absent.
+    """
+    found = {
+        row["structural_hash"]: auto_workflow_id(row["core_hash"], row["families"])
+        for row in hub.fetchall(
+            _AUTO_VARIANTS, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION)
+        )
+    }
+    for row in hub.fetchall(
+        "SELECT v.structural_hash AS structural_hash, m.workflow_id AS workflow_id "
+        "FROM workflow_group_member m "
+        "JOIN workflow_variant v ON v.topology_hash = m.topology_hash"
+    ):
+        found[row["structural_hash"]] = row["workflow_id"]
+    return found
+
+
 def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
     """Every topology one workflow holds, sorted; empty for an unknown id."""
     if not workflow_id.startswith(AUTO_STACK_PREFIX):

@@ -26,6 +26,7 @@ thing that differs.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -1324,39 +1325,55 @@ def _missing_bases(
     A recipe whose checkpoint (or diffusion file) is off the shelf resolves to
     its VAE and encoders alone, and a combination of those would be named after
     the VAE. This is what lets the grid name it after the missing file instead.
+    A recipe that resolves to a base model anyway - by digest, as an A1111
+    recipe does, or through another loader - has nothing missing to report.
 
     **A model fix answers first.** Where the owner replaced the missing name in
-    that recipe's topology (``PUT /workflows/{id}/model-fix``), the replacement
-    is added to the recipe's models in *recipe_models* (and to *ambiguous* when
-    its name is shared), so the recipe joins the replacement's combination.
+    the recipe's workflow (``PUT /workflows/{id}/model-fix``, stored on that
+    workflow's base topology), the replacement is added to the recipe's models
+    in *recipe_models* (and to *ambiguous* when its name is shared), so the
+    recipe joins the replacement's combination. This is the owner's word that
+    the workflow now loads it, which is why the grid reads it and the delete
+    warning (:func:`fetch_companions`) does not.
 
     Returns:
         ``(missing, workflows)``: ``{structural_hash: {normalized name}}`` and
         ``{normalized name: {workflow_id}}``, the workflows whose recipes load
         that name, which is where its fix is made.
     """
+    # Local: `hub.workflow_cards` imports this module.
+    from pixlstash.hub.workflow_card_reads import variant_workflows
+
+    workflow_of = variant_workflows(hub)
     topology_of = {
         row["structural_hash"]: row["topology_hash"]
         for row in hub.fetchall(
             "SELECT structural_hash, topology_hash FROM workflow_recipe"
         )
     }
-    workflow_of = {
-        row["topology_hash"]: row["workflow_id"]
+    workflows_on: dict[str, set[str]] = {}
+    for recipe, workflow_id in workflow_of.items():
+        workflows_on.setdefault(topology_of.get(recipe), set()).add(workflow_id)
+    # Per workflow, not per topology: the fix is written on the workflow's
+    # base topology and speaks for every recipe the workflow holds. Ordered so
+    # a name fixed differently in two slots resolves the same way every time.
+    fixes: dict[tuple[str, str], str] = {}
+    for row in hub.fetchall(
+        "SELECT topology_hash, was_norm, now_norm FROM workflow_model_fix "
+        "WHERE slot_kind = ? ORDER BY topology_hash, slot_label DESC",
+        (FILE_CHECKPOINT,),
+    ):
+        for workflow_id in workflows_on.get(row["topology_hash"], ()):
+            fixes[(workflow_id, row["was_norm"])] = row["now_norm"]
+    bases = {
+        int(row["id"])
         for row in hub.fetchall(
-            "SELECT topology_hash, workflow_id FROM workflow_group_member"
+            "SELECT id FROM model WHERE file_kind IN (?, ?)",
+            _SET_BASE_KINDS,
         )
     }
-    fixes = {
-        (row["topology_hash"], row["was_norm"]): row["now_norm"]
-        for row in hub.fetchall(
-            "SELECT topology_hash, was_norm, now_norm FROM workflow_model_fix "
-            "WHERE slot_kind = ?",
-            (FILE_CHECKPOINT,),
-        )
-    }
-    missing: dict[str, set[str]] = {}
-    workflows: dict[str, set[str]] = {}
+
+    unresolved: dict[str, set[str]] = {}
     for row in hub.fetchall(
         "SELECT structural_hash, normalized_filename FROM workflow_recipe_asset "
         f"WHERE widget_name IN ({', '.join('?' for _ in _BASE_NAME_WIDGETS)})",
@@ -1366,16 +1383,23 @@ def _missing_bases(
         if by_name.get(name):
             continue
         recipe = row["structural_hash"]
-        topology = topology_of.get(recipe)
-        fixed = by_name.get(fixes.get((topology, name)), set())
+        fixed = by_name.get(fixes.get((workflow_of.get(recipe), name)), set())
         if fixed:
             recipe_models.setdefault(recipe, set()).update(fixed)
             if len(fixed) > 1:
                 ambiguous.setdefault(recipe, set()).update(fixed)
             continue
-        missing.setdefault(recipe, set()).add(name)
-        if topology in workflow_of:
-            workflows.setdefault(name, set()).add(workflow_of[topology])
+        unresolved.setdefault(recipe, set()).add(name)
+
+    missing: dict[str, set[str]] = {}
+    workflows: dict[str, set[str]] = {}
+    for recipe, names in unresolved.items():
+        if recipe_models.get(recipe, set()) & bases:
+            continue
+        missing[recipe] = names
+        if recipe in workflow_of:
+            for name in names:
+                workflows.setdefault(name, set()).add(workflow_of[recipe])
     return missing, workflows
 
 
@@ -1389,11 +1413,12 @@ def fetch_workflow_sets(hub, vault) -> dict:
 
     **Co-occurrence is evidence; its absence is not.** Two models in one recipe
     proves they ran together; two models never seen together proves nothing at
-    all, so no pair is ruled out. The one combination withheld is one with no
-    base model, on the shelf or named by its recipes: a VAE, an encoder or a
-    LoRA is not what a set is named after. The models no served combination
-    holds come back under ``no_set`` rather than being dropped, so the caller
-    can say it cannot tell rather than implying nobody has tried them.
+    all, so no combination is withheld and no pair is ruled out. One with no
+    base model, on the shelf or named by its recipes, is served but is no set:
+    a VAE, an encoder or a LoRA is not what a set is named after. The models
+    in no combination WITH a base model come back under ``no_set`` rather
+    than being dropped, so the caller can say it cannot tell rather than
+    implying nobody has tried them.
 
     Pictures are scoped to the ACTIVE library, unlike
     :func:`fetch_companions`, which counts every recipe the hub holds. The two
@@ -1414,14 +1439,16 @@ def fetch_workflow_sets(hub, vault) -> dict:
 
     Returns:
         ``{"combinations": [...], "no_set": [model_id, ...]}``. Each
-        combination carries ``key`` (its sorted member ids, joined), ``models``
+        combination carries ``key`` (its sorted member ids, joined, then
+        ``+`` and its missing names as a JSON list when it has any), ``models``
         (``id``, ``name``, ``filename``, ``kind``, ``file_size``,
         ``ambiguous``), ``missing`` (the base models its recipes load that
         the shelf does not hold, each ``{"name", "workflow_ids"}``; see
         :func:`_missing_bases`), ``recipes``, ``history_runs``,
         ``picture_count`` and ``covers`` (up to :data:`SET_COVER_DEPTH` cover
         candidates, best first). A combination with no base model, on the
-        shelf or missing, is not served. ``hub_combinations`` is every combination some recipe names,
+        shelf or missing, is served but counts for no model's set.
+        ``hub_combinations`` is every combination some recipe names,
         before the "a picture here" cut, so it holds every library's recipes
         and no run-only combination; only the merge offer reads it.
     """
@@ -1502,7 +1529,8 @@ def fetch_workflow_sets(hub, vault) -> dict:
         key = ",".join(str(m) for m in sorted(present))
         every.append(
             {
-                "key": f"{key}+{','.join(sorted(absent))}" if absent else key,
+                # JSON for the names: a filename may hold a comma.
+                "key": f"{key}+{json.dumps(sorted(absent))}" if absent else key,
                 "models": [
                     {
                         "id": model_id,
@@ -1543,11 +1571,12 @@ def fetch_workflow_sets(hub, vault) -> dict:
     # ComfyUI run is not a set here: a recipe that made nothing in it has no
     # cover, no count and nothing to show. A run is its own proof, cover or no.
     combinations = [c for c in every if c["picture_count"] or c["history_runs"]]
-    # Nor is one with no base model at all, on the shelf or missing: a VAE,
-    # an encoder or a LoRA is not something a set is named after, and a card
-    # led by one says nothing about what it ran on. Its models fall to
-    # `no_set` below unless another set holds them.
-    combinations = [
+    # One with no base model at all, on the shelf or missing, is still served,
+    # because *Works with* reads every combination - but the grid draws no card
+    # for it: a VAE, an encoder or a LoRA is not something a set is named
+    # after. So its models count as in no set, below, unless a based one
+    # holds them.
+    based = [
         c
         for c in combinations
         if c["missing"] or any(m["kind"] in _SET_BASE_KINDS for m in c["models"])
@@ -1558,7 +1587,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
     # combination and in no `no_set` either, and so be missing from the screen
     # altogether - the one outcome the honesty rule forbids.
     in_a_set = {
-        member["id"] for combination in combinations for member in combination["models"]
+        member["id"] for combination in based for member in combination["models"]
     }
     return {
         "combinations": combinations,

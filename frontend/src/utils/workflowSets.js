@@ -21,7 +21,8 @@
 // **Co-occurrence is evidence; its absence is not.** Nothing here may hide a
 // model and nothing may infer a pairing: two models never seen together are not
 // drawn as a pair, and that is not a claim they cannot work. The models no recipe
-// names arrive from the server under `no_set` and get a card of their own.
+// names - or names only beside no base model - arrive from the server under
+// `no_set` and get a card of their own.
 
 import { fileKindLabel, modelName } from "./modelShelf";
 
@@ -48,12 +49,16 @@ const COVER_DEPTH = 3;
  * recipe whose checkpoint is gone resolves to its support files alone, and the
  * server lists the file it loaded under `missing`. The head is then that file,
  * with no id, `missing: true` and the workflows where it can be replaced.
+ *
+ * **No base model at all is no head.** A combination of support files or LoRAs
+ * alone is served for *Works with* to read, but a VAE or a LoRA is not what a
+ * set is named after, so it gets null and no card.
  */
 export function headModel(combination) {
   const first = (combination.models ?? [])[0] ?? null;
   if (BASE_KINDS.has(first?.kind)) return first;
   const gone = (combination.missing ?? [])[0];
-  if (!gone) return first;
+  if (!gone) return null;
   return {
     id: null,
     name: gone.name,

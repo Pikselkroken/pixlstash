@@ -767,6 +767,12 @@ describe("a set whose base model is not on the shelf", () => {
     expect(card.kinds).toEqual(["VAE 1", "Text encoder 1"]);
   });
 
+  it("draws no card for a combination with no base model at all", () => {
+    const loose = combination("2,5", [VAE, LORA]);
+    expect(headModel(loose)).toBeNull();
+    expect(setGroups([loose, BASE]).map((g) => g.key)).toEqual(["model:1"]);
+  });
+
   it("leaves a set with a checkpoint on the shelf led by it", () => {
     const both = { ...combination("1,7", [CKPT, FLUX_VAE]), missing: [] };
     expect(headModel(both).id).toBe(CKPT.id);

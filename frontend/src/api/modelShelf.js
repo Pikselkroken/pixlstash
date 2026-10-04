@@ -185,7 +185,8 @@ export async function fetchModelCompanions(ids) {
  * grouping is derived per request from the recipes the hub has read.
  *
  * **Co-occurrence is evidence; its absence is not.** The ids no picture in this
- * library and no stored ComfyUI run used come back under `no_set` rather than being dropped, and a
+ * library and no stored ComfyUI run used beside a base model come back under
+ * `no_set` rather than being dropped, and a
  * member the evidence could only reach through a basename two shelf rows share
  * is flagged `ambiguous` and still listed. Folding combinations into stacks is
  * the CLIENT's (see `utils/workflowSets.js`): the server groups nothing, so the

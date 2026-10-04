@@ -168,7 +168,8 @@ def attach_hand_made(hub, found: dict) -> dict:
 
     Mutates *found* in place and returns it: every combination gains
     ``covered_by`` (the ids of the sets covering it; the combination itself is
-    kept, since the client's *Works with* reads all of them), ``no_set`` loses
+    kept, since the client's *Works with* reads all of them; one whose base
+    model is ``missing`` is covered by no set), ``no_set`` loses
     the on-shelf members of any set, and ``hand_made`` is added, newest first.
     Each set's ``covers`` are cover candidates, like a combination's, and each
     set carries its merge ``offer`` (see :func:`_attach_offers`).
@@ -184,6 +185,10 @@ def attach_hand_made(hub, found: dict) -> dict:
     for combination in found["combinations"]:
         ids = {model["id"] for model in combination["models"]}
         combination["covered_by"] = []
+        if combination.get("missing"):
+            # Its base model is off the shelf, so no set holding its support
+            # files is the set it ran in; it keeps its own card.
+            continue
         for entry in hand_made:
             # Every model of the combination on the set; the set may hold more.
             # `ids` is never empty, so an empty set covers nothing.

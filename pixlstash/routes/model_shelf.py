@@ -793,7 +793,7 @@ class WorkflowSetCombination(BaseModel):
     key: str = Field(
         description=(
             "The member ids, sorted and comma-joined, then `+` and the missing "
-            "base names when there are any."
+            "base names as a JSON list when there are any."
         )
     )
     models: list[WorkflowSetMember] = Field(
@@ -807,7 +807,8 @@ class WorkflowSetCombination(BaseModel):
         description=(
             "Base models (checkpoint or diffusion file) the recipes load that "
             "no shelf row answers to. A combination with no on-shelf base is "
-            "named after these; one with neither is not served. A name the "
+            "named after these; one with neither is listed but is no set. A "
+            "name the "
             "owner replaced with a model fix resolves to the replacement and "
             "is not listed."
         ),
