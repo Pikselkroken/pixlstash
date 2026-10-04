@@ -976,7 +976,12 @@ async function copyWorkflow() {
   }
 }
 
+// A second click while the Save dialog is still coming up would open another.
+let savingWorkflow = false;
+
 async function downloadWorkflow() {
+  if (savingWorkflow) return;
+  savingWorkflow = true;
   try {
     await saveFileAs(
       new Blob([workflowJson.value], { type: "application/json" }),
@@ -988,6 +993,8 @@ async function downloadWorkflow() {
       level: "error",
       text: errorMessage(err, "Could not save the workflow."),
     });
+  } finally {
+    savingWorkflow = false;
   }
 }
 

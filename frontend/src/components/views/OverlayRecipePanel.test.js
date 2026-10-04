@@ -310,6 +310,29 @@ describe("OverlayRecipePanel", () => {
     }
   });
 
+  it("opens one Save dialog however fast Download is pressed", async () => {
+    let answer;
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(() => new Promise((resolve) => (answer = resolve))),
+      completeMediaSaveAs: vi.fn(),
+    };
+    try {
+      const box = await openGraph(render());
+      const download = box
+        .findAll(".recipe-sec-act")
+        .find((b) => b.text().includes("Download"));
+      await download.trigger("click");
+      await download.trigger("click");
+      expect(window.pixlstashDesktop.beginMediaSaveAs).toHaveBeenCalledTimes(1);
+      answer({ canceled: true });
+      await flushPromises();
+      await download.trigger("click");
+      expect(window.pixlstashDesktop.beginMediaSaveAs).toHaveBeenCalledTimes(2);
+    } finally {
+      delete window.pixlstashDesktop;
+    }
+  });
+
   it("makes a model on the shelf a link and one that is not inert", () => {
     const chips = render().findAll(".recipe-chip");
     expect(chips[0].element.tagName).toBe("BUTTON");

@@ -175,8 +175,12 @@ async function exportTheWorkflow() {
   if (!key || busy.value) return;
   busy.value = "workflow";
   exportError.value = "";
+  // Which step failed decides the fallback text: the server's export, or
+  // writing the file the owner picked.
+  let saving = false;
   try {
     const body = await exportWorkflow(key);
+    saving = true;
     const saved = await saveJsonAs(
       body?.workflow || {},
       body?.filename || "workflow.json",
@@ -195,9 +199,12 @@ async function exportTheWorkflow() {
     });
     emit("close");
   } catch (err) {
+    console.warn(`[recipes] could not export workflow ${key}`, err);
     exportError.value = errorMessage(
       err,
-      "Could not export that workflow on its own.",
+      saving
+        ? "Could not save that workflow."
+        : "Could not export that workflow on its own.",
     );
   } finally {
     busy.value = "";

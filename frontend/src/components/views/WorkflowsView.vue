@@ -1228,6 +1228,10 @@ async function saveRename() {
 
 // ── Export, duplicate, delete ─────────────────────────────────────────────
 
+// A second Export while the first is still fetching or in its Save dialog
+// would open another dialog.
+let exporting = false;
+
 /**
  * Save this card as a ComfyUI file somebody else can open.
  *
@@ -1239,7 +1243,16 @@ async function saveRename() {
  */
 async function exportSelected() {
   const card = onlyCard.value;
-  if (!card) return;
+  if (!card || exporting) return;
+  exporting = true;
+  try {
+    await exportCard(card);
+  } finally {
+    exporting = false;
+  }
+}
+
+async function exportCard(card) {
   let body;
   try {
     body = await exportWorkflow(card.id);

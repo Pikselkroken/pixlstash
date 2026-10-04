@@ -155,6 +155,32 @@ describe("ExportRecipeDialog", () => {
     }
   });
 
+  it("blames the save, not the export, when writing the file fails", async () => {
+    const failure = new Error();
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(async () => ({ canceled: false, saveId: "s1" })),
+      completeMediaSaveAs: vi.fn(async () => {
+        throw failure;
+      }),
+      cancelMediaSaveAs: vi.fn(),
+    };
+    try {
+      const wrapper = render();
+      await flushPromises();
+      await wrapper
+        .findAll("button")
+        .find((button) => button.text().includes("Export workflow"))
+        .trigger("click");
+      await flushPromises();
+      expect(wrapper.find("[role=alert]").text()).toBe(
+        "Could not save that workflow.",
+      );
+      expect(wrapper.emitted("close")).toBeFalsy();
+    } finally {
+      delete window.pixlstashDesktop;
+    }
+  });
+
   it("writes nothing until the owner presses Export recipe", async () => {
     const wrapper = render();
     await flushPromises();
