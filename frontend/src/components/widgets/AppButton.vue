@@ -263,8 +263,8 @@ defineExpose({ focus });
   background-image: var(--hover-neutral);
 }
 
-/* Outline - the neutral without a fill, for page surfaces: toolbars, queue
-   rows, cards, in-grid trays. Inside a dialog or popover the neutral is the
+/* Outline - the neutral without a fill, for page surfaces: queue rows, cards,
+   in-grid trays (a toolbar takes AppBarButton). Inside a dialog or popover the neutral is the
    filled `secondary` instead (buttons.md, #1673). */
 .app-btn--outline {
   background: transparent;
