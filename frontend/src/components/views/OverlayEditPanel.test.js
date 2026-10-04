@@ -152,11 +152,22 @@ describe("the Edit tab", () => {
     // Never the tab's own card, even when it was the last one used.
     expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
     await wrapper.find("textarea").setValue("warmer light");
+    // The tab's own stack choice goes with it, explicit false included.
+    await wrapper.find("input[type=checkbox]").setValue(false);
     await rows[1].trigger("click");
     await flush();
     expect(runWorkflowCard).not.toHaveBeenCalled();
+    // As an edit of this picture: the popup reads none of its recipe.
     expect(wrapper.emitted("more-options")).toEqual([
-      [{ pictureId: 7, workflowId: "i2i", prompt: "warmer light" }],
+      [
+        {
+          pictureId: 7,
+          workflowId: "i2i",
+          prompt: "warmer light",
+          edit: true,
+          stack: false,
+        },
+      ],
     ]);
     expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
     // More options… still opens the tab's own card, not the click event.
@@ -164,7 +175,9 @@ describe("the Edit tab", () => {
       b.text().includes("More options"),
     );
     await moreOptions.trigger("click");
-    expect(wrapper.emitted("more-options").at(-1)[0].workflowId).toBe("out");
+    expect(wrapper.emitted("more-options").at(-1)[0]).toEqual(
+      expect.objectContaining({ workflowId: "out", edit: false }),
+    );
   });
 
   it("follows a run the Run popup started for it, as one of its own", async () => {

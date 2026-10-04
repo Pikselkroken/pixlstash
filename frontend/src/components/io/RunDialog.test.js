@@ -1850,6 +1850,20 @@ describe("the pictures a workflow takes", () => {
     expect(runWorkflowCard.mock.calls[0][0].stack).toBe(false);
   });
 
+  it("starts from the caller's stack choice, explicit false included", async () => {
+    // The Edit tab already showed this checkbox; the popup must not re-tick it.
+    preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "selection" })]));
+    const wrapper = await mountRun({
+      kind: "edit",
+      pictureIds: [1],
+      workflowId: KEY,
+      stack: false,
+    });
+    expect(wrapper.find(".rund-box").element.checked).toBe(false);
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].stack).toBe(false);
+  });
+
   it("sends the stack choice the owner made over the default", async () => {
     preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "selection" })]));
     const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowId: KEY });

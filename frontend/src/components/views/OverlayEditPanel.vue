@@ -347,11 +347,12 @@ let choseByHand = false;
 
 function choose(key) {
   pickerOpen.value = false;
-  refocusPicker = true;
   if (fillInPopup.value.has(key)) {
-    onMoreOptions(key);
+    // The Run popup takes focus; handing it back to the picker would steal it.
+    onMoreOptions(key, true);
     return;
   }
+  refocusPicker = true;
   choseByHand = true;
   workflowId.value = key;
 }
@@ -605,12 +606,20 @@ function openInWorkflows() {
   router.push({ name: "workflows", query: { workflow: workflowId.value } });
 }
 
-function onMoreOptions(key = workflowId.value) {
+/**
+ * The Run popup for this picture. *edit* is a card chosen because it needs
+ * another picture: the popup opens as an edit of this one, reading none of its
+ * recipe, as the tab's own Run would. *More options…* keeps the recipe read.
+ */
+function onMoreOptions(key = workflowId.value, edit = false) {
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return;
   emit("more-options", {
     pictureId: id,
     workflowId: key,
+    edit,
+    // The tab's own choice, which the popup would otherwise re-default.
+    stack: stack.value,
     // Trimmed as Run trims it, so a blank box means the same thing on both
     // paths: no instruction.
     prompt: instruction.value.trim(),

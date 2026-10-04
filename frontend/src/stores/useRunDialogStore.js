@@ -38,6 +38,8 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    *                   The picker narrows to the workflows that fit the LoRA
    *                   attached to it, that LoRA starts as an added row, and
    *                   the results go to the person or set.
+   *   stack         - the stack checkbox's starting value, when the caller
+   *                   already showed one; unset, the popup decides.
    *   fromEditTab   - opened from the lightbox's Edit tab, which stays open
    *                   and follows the run itself (see `editRun`).
    */

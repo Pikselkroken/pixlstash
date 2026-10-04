@@ -2675,7 +2675,8 @@ async function load() {
   inputsKey.value = "";
   clearPicks();
   pickerFor.value = null;
-  stackChoice.value = null;
+  // The caller's own checkbox, explicit false included; else the popup decides.
+  stackChoice.value = props.source?.stack ?? null;
   checkpointEdit.value = null;
   clearStages();
   inputsError.value = "";
