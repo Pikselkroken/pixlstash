@@ -27,28 +27,15 @@ export function downloadBlob(blob, filename) {
 }
 
 /**
- * Save a value as a pretty-printed `.json` file.
- *
- * @param {*} content - anything `JSON.stringify` takes.
- * @param {string} filename
- */
-export function downloadJson(content, filename) {
-  downloadBlob(
-    new Blob([JSON.stringify(content, null, 2)], {
-      type: "application/json",
-    }),
-    filename,
-  );
-}
-
-/**
  * Ask where to save `blob`, then write it there.
  *
  * An export is a file the owner means to hand on, so they pick where it goes:
  * a plain download in the desktop app lands in Downloads without a word. The
  * desktop shell's native Save dialog (`beginMediaSaveAs`, the one the lightbox's
- * Save as uses) comes first, then the browser's own picker; a browser with
- * neither gets the plain download, which its own "ask where to save" governs.
+ * Save as uses) asks instead. A browser gets the plain download, which its own
+ * "ask where to save" setting governs: `showSaveFilePicker` is not used because
+ * these exports fetch before saving, and the picker refuses once the click's
+ * user activation has expired.
  *
  * Throws when the write fails; the caller says so.
  *
@@ -76,19 +63,6 @@ export async function saveFileAs(blob, filename) {
       await desktop.cancelMediaSaveAs?.(choice.saveId);
       throw err;
     }
-    return true;
-  }
-  if (typeof window.showSaveFilePicker === "function") {
-    let handle;
-    try {
-      handle = await window.showSaveFilePicker({ suggestedName: filename });
-    } catch (err) {
-      if (err?.name === "AbortError") return false;
-      throw err;
-    }
-    const writable = await handle.createWritable();
-    await writable.write(blob);
-    await writable.close();
     return true;
   }
   downloadBlob(blob, filename);

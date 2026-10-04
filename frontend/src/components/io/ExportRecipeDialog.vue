@@ -150,7 +150,8 @@ watch(payload, async (ready) => {
 });
 
 async function exportTheRecipe() {
-  if (!payload.value) return;
+  if (!payload.value || busy.value) return;
+  busy.value = true;
   exportError.value = "";
   try {
     if (!(await saveJsonAs(payload.value.recipe, payload.value.filename))) {
@@ -160,13 +161,15 @@ async function exportTheRecipe() {
     console.warn(`[recipes] could not save ${payload.value.filename}`, err);
     exportError.value = errorMessage(err, "Could not save that recipe.");
     return;
+  } finally {
+    busy.value = false;
   }
   emit("close");
 }
 
 async function exportTheWorkflow() {
   const key = payload.value?.recipe?.workflow_id;
-  if (!key) return;
+  if (!key || busy.value) return;
   busy.value = true;
   exportError.value = "";
   try {

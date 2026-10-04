@@ -1,6 +1,6 @@
 // An export asks where to save it (the desktop app otherwise drops it in
-// Downloads without a word). The desktop shell's dialog wins, then the
-// browser's picker; cancelling either writes nothing.
+// Downloads without a word). The desktop shell's dialog writes it; a browser
+// downloads it, under its own "ask where to save" setting.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -11,7 +11,6 @@ const blob = () => new Blob(["{}"], { type: "application/json" });
 describe("saveFileAs", () => {
   afterEach(() => {
     delete window.pixlstashDesktop;
-    delete window.showSaveFilePicker;
     vi.restoreAllMocks();
   });
 
@@ -21,13 +20,15 @@ describe("saveFileAs", () => {
       beginMediaSaveAs: vi.fn(async () => ({ canceled: false, saveId: "s1" })),
       completeMediaSaveAs,
     };
-    window.showSaveFilePicker = vi.fn();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
     expect(await saveFileAs(blob(), "w.json")).toBe(true);
     expect(window.pixlstashDesktop.beginMediaSaveAs).toHaveBeenCalledWith(
       "w.json",
     );
-    expect(completeMediaSaveAs).toHaveBeenCalledWith("s1", expect.anything());
-    expect(window.showSaveFilePicker).not.toHaveBeenCalled();
+    const [saveId, bytes] = completeMediaSaveAs.mock.calls[0];
+    expect(saveId).toBe("s1");
+    expect(new TextDecoder().decode(bytes)).toBe("{}");
+    expect(click).not.toHaveBeenCalled();
   });
 
   it("writes nothing when the desktop dialog is cancelled", async () => {
@@ -51,21 +52,16 @@ describe("saveFileAs", () => {
     expect(cancelMediaSaveAs).toHaveBeenCalledWith("s1");
   });
 
-  it("uses the browser picker, and a cancel there is not an error", async () => {
-    const write = vi.fn();
-    const close = vi.fn();
-    window.showSaveFilePicker = vi.fn(async () => ({
-      createWritable: async () => ({ write, close }),
-    }));
+  it("downloads in a browser, with no desktop shell", async () => {
+    global.URL.createObjectURL = vi.fn(() => "blob:x");
+    global.URL.revokeObjectURL = vi.fn();
+    const names = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function record() {
+        names.push(this.download);
+      },
+    );
     expect(await saveFileAs(blob(), "w.json")).toBe(true);
-    expect(window.showSaveFilePicker).toHaveBeenCalledWith({
-      suggestedName: "w.json",
-    });
-    expect(close).toHaveBeenCalled();
-
-    window.showSaveFilePicker = vi.fn(async () => {
-      throw new DOMException("cancelled", "AbortError");
-    });
-    expect(await saveFileAs(blob(), "w.json")).toBe(false);
+    expect(names).toEqual(["w.json"]);
   });
 });

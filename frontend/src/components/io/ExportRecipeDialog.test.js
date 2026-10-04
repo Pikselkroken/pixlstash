@@ -108,6 +108,29 @@ describe("ExportRecipeDialog", () => {
     expect(said).toContain("1 LoRA slot");
   });
 
+  it("stays open and says nothing when the Save dialog is cancelled", async () => {
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(async () => ({ canceled: true })),
+      completeMediaSaveAs: vi.fn(),
+    };
+    try {
+      const wrapper = render();
+      await flushPromises();
+      await wrapper
+        .findAll("button")
+        .find((button) => button.text().includes("Export workflow"))
+        .trigger("click");
+      await flushPromises();
+      expect(window.pixlstashDesktop.beginMediaSaveAs).toHaveBeenCalledWith(
+        "cinematic-portrait.json",
+      );
+      expect(wrapper.emitted("close")).toBeFalsy();
+      expect(useNoticeStore().notices).toEqual([]);
+    } finally {
+      delete window.pixlstashDesktop;
+    }
+  });
+
   it("writes nothing until the owner presses Export recipe", async () => {
     const wrapper = render();
     await flushPromises();
