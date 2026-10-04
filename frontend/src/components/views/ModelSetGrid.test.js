@@ -2502,19 +2502,28 @@ describe("hand-made sets (#1520)", () => {
     it("puts a lasting offer on the card that opens the tray on its strip", async () => {
       const { wrapper, store } = await mountOffer();
       const card = wrapper.find('[data-testid="model-set-card"]');
-      expect(card.find('[data-testid="merge-offer"]').text()).toContain(
-        "1204 pictures need 2 more",
+      const ask = card.find('[data-testid="set-offer"]');
+      expect(ask.text()).toContain(
+        "1204 pictures used this with 2 models the set does not have.",
       );
-      expect(card.text()).toContain("+2");
-      expect(card.attributes("aria-label")).toContain("merge offered");
+      expect(ask.text()).not.toMatch(/merge/i);
+      // Several are not answered blind on the card: no Add, a Review.
+      expect(ask.find('[data-testid="set-offer-add"]').exists()).toBe(false);
+      expect(card.attributes("aria-label")).toContain(
+        "1204 pictures used this with 2 models the set does not have. Answer in the set's tray or menu",
+      );
 
-      await card.find('[data-testid="merge-offer"]').trigger("click");
+      await ask.find('[data-testid="set-offer-review"]').trigger("click");
       await new Promise((resolve) => setTimeout(resolve, 0));
       await wrapper.vm.$nextTick();
       expect(store.openSetKey).toBe("hand:10");
       const strip = wrapper.find('[data-testid="merge-offer-strip"]');
       expect(strip.attributes("tabindex")).toBe("0");
-      expect(strip.text()).toContain("Merge, add 2");
+      expect(strip.text()).toContain(
+        "1204 pictures used this with 2 models the set does not have.",
+      );
+      expect(strip.text()).toContain("Add all 2");
+      expect(strip.text()).not.toMatch(/merge/i);
       // The ghosts stand in the slots they would land in, with their counts.
       const ghosts = wrapper.findAll(".mss__tile--ghost");
       expect(ghosts.map((g) => g.attributes("data-key"))).toEqual([
@@ -2522,6 +2531,106 @@ describe("hand-made sets (#1520)", () => {
         `g:${GHOST_OTHER.sha256}`,
       ]);
       expect(ghosts[0].text()).toContain("812 pictures");
+    });
+
+    it("adds one offered model from the card, with a receipt and an Undo", async () => {
+      addWorkflowSetMembers.mockResolvedValue({
+        set: handSet(10, [SET_CKPT], { picture_count: 812 }),
+        added: [GHOST_LORA.sha256],
+      });
+      const { wrapper, store } = await mountOffer(
+        { offer: { ...OFFER, models: [GHOST_LORA] } },
+        { attach: true },
+      );
+      const operations = useOperationStore();
+      const card = wrapper.find('[data-testid="model-set-card"]');
+      const ask = card.find('[data-testid="set-offer"]');
+      expect(ask.text()).toContain(
+        "1204 pictures ran this with a model the set does not have. Add it?",
+      );
+      expect(ask.text()).toContain("LoRA · filmgrain xl");
+      expect(ask.text()).toContain("Not this one");
+      expect(card.attributes("aria-label")).toContain(
+        "the set does not have. LoRA filmgrain xl. Add it?",
+      );
+
+      // A double click is one answer: the second press finds the first in flight.
+      const add = ask.find('[data-testid="set-offer-add"]');
+      await add.trigger("click");
+      await add.trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(addWorkflowSetMembers).toHaveBeenCalledTimes(1);
+      await wrapper.vm.$nextTick();
+
+      expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
+        { model_id: 3, slot: "lora" },
+      ]);
+      expect(operations.receipt.summary).toContain("812 pictures joined it");
+      // Answered on the card: no tray opened, and focus back on the card.
+      expect(store.openSetKey).not.toBe("hand:10");
+      expect(document.activeElement?.dataset.key).toBe("hand:10");
+      await operations.takeLocalReceiptAction();
+      expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
+        GHOST_LORA.sha256,
+      ]);
+      wrapper.unmount();
+    });
+
+    it("keeps the set separate from the card with Not this one", async () => {
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        previous: [],
+      });
+      const { wrapper, store } = await mountOffer({
+        offer: { ...OFFER, models: [GHOST_LORA] },
+      });
+      // Reading the question is not a click on the card.
+      await wrapper.find(".msc__ask-q").trigger("click");
+      expect([...store.selectedSetIds]).toEqual([]);
+
+      await wrapper.find('[data-testid="set-offer-no"]').trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+        GHOST_LORA.sha256,
+      ]);
+      expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+      expect(useOperationStore().receipt.summary).toContain(
+        'Kept "Portrait kit" separate from 1204 pictures',
+      );
+      expect([...store.selectedSetIds]).toEqual([]);
+    });
+
+    it("counts a recipe-only offer in recipes, on the strip and its Not these", async () => {
+      const { wrapper, store } = await mountOffer({
+        offer: { ...OFFER, picture_count: 0 },
+      });
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+      expect(strip.text()).toContain("6 recipes used this");
+      expect(strip.text()).toContain("brings those recipes into this set");
+      const no = strip
+        .findAllComponents({ name: "AppButton" })
+        .find((button) => button.text() === "Not these");
+      expect(no.props("tooltip")).toBe(
+        "Keep this set separate from those recipes. The set's menu can suggest them again.",
+      );
+    });
+
+    it("keeps several offered models out at once with Not these", async () => {
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        previous: [],
+      });
+      const { wrapper } = await mountOffer();
+      const no = wrapper.find('[data-testid="set-offer-no"]');
+      expect(no.text()).toBe("Not these");
+      await no.trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
     });
 
     it("merges on Enter at the strip, with a receipt that counts who joined and an Undo", async () => {
@@ -2681,7 +2790,7 @@ describe("hand-made sets (#1520)", () => {
         declined: [GHOST_LORA.sha256],
         kept_separate: 812,
       });
-      expect(wrapper.find('[data-testid="merge-offer"]').exists()).toBe(false);
+      expect(wrapper.find('[data-testid="set-offer"]').exists()).toBe(false);
       store.toggleSet("hand:10");
       await wrapper.vm.$nextTick();
 

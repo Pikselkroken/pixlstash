@@ -126,8 +126,9 @@
       </div>
     </div>
 
-    <!-- The merge offer (#1523): lasting, until the owner merges or keeps the
-         set separate. A cursor stop ahead of the slots, so Enter merges. -->
+    <!-- The offer (#1523): lasting, until the owner adds the models or keeps
+         the set separate. A cursor stop ahead of the slots, so Enter adds. In
+         the card's words, so the card and the tray ask one question. -->
     <div
       v-if="set.offer"
       :id="`${panelId}-row-offer`"
@@ -135,7 +136,7 @@
       :class="{ 'mss__offer--cur': cursorKey === 'offer' }"
       role="row"
       aria-level="2"
-      :aria-label="`${offerLead}. ${offerNote} Enter merges.`"
+      :aria-label="`${offerLead} ${offerNote} Enter adds ${set.offer.models.length === 1 ? 'it' : 'them'}.`"
       :tabindex="cursorKey === 'offer' ? 0 : -1"
       data-key="offer"
       data-testid="merge-offer-strip"
@@ -164,17 +165,21 @@
           variant="ghost"
           size="sm"
           tabindex="-1"
-          tooltip="Keep this set separate from those pictures. The set's menu can offer the merge again."
+          :tooltip="`Keep this set separate from ${offerThose}. The set's menu can suggest them again.`"
           @click.stop="emit('keep-separate')"
-          >Keep separate</AppButton
+          >{{ set.offer.models.length === 1 ? "Not this one" : "Not these" }}</AppButton
         >
         <AppButton
           variant="primary"
           size="sm"
-          icon-left="table-arrow-down"
+          icon-left="plus"
           tabindex="-1"
           @click.stop="emit('merge')"
-          >Merge, add {{ set.offer.models.length }}</AppButton
+          >{{
+            set.offer.models.length === 1
+              ? "Add to set"
+              : `Add all ${set.offer.models.length}`
+          }}</AppButton
         >
       </div>
     </div>
@@ -188,10 +193,10 @@
         <span>{{
           set.kept_separate
             ? `Kept separate from ${pictureCount(set.kept_separate)}.`
-            : "Some models are kept out of this set's merge offer."
+            : "Some suggested models are kept out of this set."
         }}</span>
         <AppButton variant="ghost" size="sm" @click="emit('offer-again')"
-          >Offer again</AppButton
+          >Suggest again</AppButton
         >
       </div>
     </div>
@@ -350,6 +355,7 @@ import { VIcon } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
 import {
+  offerQuestion,
   pictureCount,
   recipeCount,
   setSlots,
@@ -494,20 +500,22 @@ function markOf(member) {
   };
 }
 
-/** The strip's first line: which pictures, of which file. */
+/** The strip's first line: the card's own statement of the offer. */
 const offerLead = computed(() => {
-  const offer = props.set.offer;
-  if (!offer) return "";
-  const who = offer.picture_count
-    ? `${pictureCount(offer.picture_count)} more`
-    : recipeCount(offer.recipes);
-  const n = offer.models.length;
-  return `${who} of ${offer.head_name} used the ${n === 1 ? "dashed model" : `${n} dashed models`} below`;
+  const question = offerQuestion(props.set);
+  return question ? `${question.who}${question.rest}` : "";
 });
+
+/** What the offer is counted in: pictures here, or recipes when none is. */
+const offerThose = computed(() =>
+  props.set.offer?.picture_count ? "those pictures" : "those recipes",
+);
 
 const offerNote = computed(() => {
   const n = props.set.offer?.models.length ?? 0;
-  return `Adding ${n === 1 ? "it" : `all ${n}`} brings them into this set.`;
+  return n === 1
+    ? `It is dashed below. Adding it brings ${offerThose.value} into this set.`
+    : `They are dashed below. Adding all ${n} brings ${offerThose.value} into this set.`;
 });
 
 /** "812 pictures", or the recipes when none of its pictures is here. */
