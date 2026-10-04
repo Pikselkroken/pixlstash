@@ -334,12 +334,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   /**
    * Re-read just these cards, after a ComfyUI run filed new pictures on them.
    *
-   * Swapped in place, so the rest of the grid keeps its objects and its
-   * thumbnails do not reload. Anything this cannot do honestly falls back to
-   * `invalidate`: an id the grid does not draw (a one-off that just crossed
-   * the threshold), a full read already on the wire, more cards than a
-   * whole-grid read costs (each detail read is one on the server), or a
-   * refused read.
+   * Swapped in place, so the rest of the grid keeps its objects and is not
+   * re-rendered. Not cheaper on the server: each detail read is a whole-grid
+   * read there, which is why more than three ids re-read the grid once
+   * instead. Also falls back to `invalidate` for an id the grid does not draw
+   * (a one-off that just crossed the threshold), a full read already on the
+   * wire, or a refused read.
    */
   async function refreshCards(ids) {
     if (!loaded.value) return;

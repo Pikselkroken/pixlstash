@@ -261,6 +261,9 @@ class ComfyUIExtractionTask(BaseTask):
                     topology, structural, instance, seed, run_workflow_id = (
                         scanned_workflows[pid]
                     )
+                    # A revisit (a migration's rescan) moves no card's covers,
+                    # and announcing it would re-read the grid per batch.
+                    first_filing = db_pic.workflow_instance_hash is None
                     # The manual workflow its ComfyUI run was tagged with. A
                     # value already there is PixlStash's own run's, and stays.
                     if run_workflow_id and db_pic.run_workflow_id is None:
@@ -276,7 +279,7 @@ class ComfyUIExtractionTask(BaseTask):
                         db_pic.workflow_instance_hash = instance
                     # Set last: it is the marker that the other three are final.
                     db_pic.workflow_hash_version = HASH_VERSION
-                    if db_pic.workflow_structural_hash is not None:
+                    if first_filing and db_pic.workflow_structural_hash is not None:
                         filed.append(
                             (db_pic.run_workflow_id, db_pic.workflow_structural_hash)
                         )

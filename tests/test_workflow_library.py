@@ -1713,6 +1713,15 @@ def test_the_result_names_the_workflow_each_picture_landed_on(store):
     assert expected is not None
     assert result["workflow_ids"] == sorted([expected, ran])
 
+    # A revisit (a migration's rescan) moves no covers and announces nothing.
+    def reset(session):
+        for pid in (auto_id, manual_id):
+            session.get(Picture, pid).workflow_hash_version = None
+        session.commit()
+
+    store.vault.run_task(reset)
+    assert run_extraction(store, [auto_id, manual_id])["workflow_ids"] == []
+
 
 def test_the_finder_announces_the_workflows_a_batch_filed_pictures_on(store):
     """``workflows_changed`` with reason ``pictures``, and nothing for a failure."""

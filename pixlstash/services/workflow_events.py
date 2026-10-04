@@ -3,8 +3,10 @@
 One emitter, because there are several places that change a workflow and they
 must agree about the envelope: the workflow writes (``routes/workflows.py``),
 a workflow file being imported or dropped in the
-watched inbox (``routes/comfyui.py``, ``Server``), and a saved recipe being
-written (``routes/recipes.py``).
+watched inbox (``routes/comfyui.py``, ``Server``), a saved recipe being
+written (``routes/recipes.py``), and the background passes: the base-model
+family pass (``WorkflowCardBackfillFinder``) and the ComfyUI extraction filing
+new pictures onto workflows (``MissingComfyUIExtractionFinder``).
 
 **It is a "look again" signal and never a workflow.** Everything a workflow
 shows - its counts, its cover strip, its rank - is computed per request across
