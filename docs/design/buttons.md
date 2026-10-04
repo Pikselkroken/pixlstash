@@ -32,7 +32,7 @@ screenshot as evidence for or against a row. The **Open** rows are not built.
 | Chrome height 32px | **Approved** 2026-09-12 |
 | Two dialects, and the reclassification of the rest | **Approved** 2026-09-12 |
 | `AppButton` replaces `v-btn` in all dialogs | **Approved** 2026-09-12 |
-| Outlined sites folding into the filled neutral | **Open.** Recommended. |
+| Outlined sites folding into the filled neutral | **Approved** 2026-10-04 |
 | An `on-dark` context on both dialects | **Approved** 2026-10-04 (#1674) |
 | One field height, `--control-h`, everywhere in the shell | **Approved** 2026-09-12 |
 | The label inside the field retired outright | **Approved** 2026-09-12 |
@@ -95,7 +95,7 @@ by a line below.
 | A raw value equal to a token | Partly | Font size, radius and spacing done: 101 raw `padding` / `margin` / `gap` values equal to a `--space-*` step now spell it, and `styles/designDrift.test.js` holds all three. **Left:** 48 offsets (`top` / `left` / `right` / `bottom` / `inset`) equal to a step, in 15 files, not swept. 52 raw colours in 14 files, nearly all white-on-photo and black scrims in the review feature and `DedupCompareDialog`; none equals a token, so each is a mapping decision onto `--scrim-photo*`, not a spelling fix. 50 raw 24 / 28 / 32px widths and heights in 22 files, which are `--control-h*` only where the element is a control; not sorted site by site |
 | The 16px dialog gutter, `gap` spacing | Partly | Two dialogs stacked a margin on the body's `gap`: Works with (its sections are now groups) and the workflow-set rename note. Nothing outside `AppDialog` restyles its body, header or footer, which `styles/designDrift.test.js` holds. Settings keeps its own two-pane padding inside the flush body. **Left:** three hand-rolled modals that are not `AppDialog` and so sit off the gutter: the review feature's new-review dialog (`.rs-dialog`, 20px padding, 14px gap, a 480px width), its abort confirm (`.rs-abort`, 18px) and its keyboard help (`.rs-keys`, 20px). Each is a migration to `AppDialog`, not a padding edit |
 | The pill progress track | Done | Every track is `--radius-pill`; the two `v-progress-linear`s take `rounded="pill"` (held by `styles/designDrift.test.js`) and every custom track already wore it. Two named exceptions: the shelf's storage band meter is flat-ended by design (#893), and the layout dialog's native `<progress>` is drawn by the platform |
-| Outlined sites folding into the filled neutral (Open) | Not built | 4 `variant="outlined"` sites remain |
+| Outlined sites folding into the filled neutral | Done | The 33 `AppButton` sites that used `outline` (31 attributes, two of them the import and export popovers' secondaries, 2 `focused ? 'primary' : 'outline'` verdicts) are `secondary`, and the `outline` variant is gone from `AppButton` (#1673). A verdict verb stays `primary` on the focused row only. The delete dialog's "Delete unprotected" took `danger` instead, as "Deletes bytes" says: neutral, it read as a second Cancel. The `variant="outlined"` left under `frontend/src` is on `v-select` fields, not buttons |
 | Selection-pill verbs at `--control-h-bar` | Done | Every verb in `SelectionBar.vue` is an `AppBarButton` (`.bar-btn`, `--control-h-bar`); the icon-only ones draw 24px, a labelled one 18px. On a coarse pointer they grow to `--bar-height` (48px). `--selbar-height: 34px` in `ImageGrid.css` is the grid's offset under the 36px toolbar band, not a control height, and stays |
 | An `on-dark` context on both dialects | Done | An `on-dark` prop on `AppButton` and `AppBarButton`. On it: the lightbox's Recipe and Edit panes, the notice dismiss on a dark card, the progress card's abort, and the model-set card's join offer (three hand-rolled buttons gone). **Left:** the review overlay's `.rs-*` family and the lightbox's own chrome are hand-rolled `<button>`s, not either component, so they are migrations, not a prop to add |
 | Icons get no scale: a component owns its own icon slot | **Approved** 2026-09-13 |
@@ -215,7 +215,7 @@ Material dialect this system replaces.
 | Role | Today's prop | Fill | Label | For |
 |---|---|---|---|---|
 | Key action | `primary` | `accent` | `accent-on` (pure white) | The one thing the surface exists to do. One per surface. |
-| Neutral | `secondary` | `cancel-button` | `cancel-button-text` | Cancel, Close, Copy, and everything currently outlined or tonal. |
+| Neutral | `secondary` | `cancel-button` | `cancel-button-text` | Cancel, Close, Copy, and every former outlined or tonal button. |
 | Destructive | `danger` | `error` | `on-error` | Deletes bytes. Never a dialog's default focus. |
 | Quiet | `ghost` | transparent | `on-surface` at 0.7 | Tertiary actions, icon-only affordances, help tips. |
 
@@ -1211,7 +1211,7 @@ there, nobody would report it.
   box-shadow. Once `v-btn` leaves, that exclusion goes.
 - **Disabled loses the grayscale filter.** `App.css` fades `.v-btn--disabled`
   to 0.35 with a 30% grayscale; `AppButton` uses the 0.38 token and no filter.
-- **Eleven outlined buttons become filled neutral,** pending that decision.
+- **The outlined buttons become filled neutral.** Done: 33 sites by the time it was approved.
 - **Popover actions shrink 36 to 28,** and the selection verbs 34 to 32.
 
 ### What gets deleted, which is what pays for the work

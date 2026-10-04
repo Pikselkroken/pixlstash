@@ -70,7 +70,6 @@
              compresses to its arrow, which needs no label. -->
         <AppButton
           v-if="!store.showingMixed"
-          variant="outline"
           :icon-left="store.showingDecided ? 'arrow-left' : 'history'"
           class="dq-bar-action"
           :class="{
@@ -97,7 +96,6 @@
              the app that has to stay trusted. -->
         <AppButton
           v-if="!store.showingDecided"
-          variant="outline"
           :icon-left="store.showingMixed ? 'arrow-left' : 'alert-outline'"
           class="dq-bar-action"
           :class="{
@@ -211,7 +209,6 @@
                the name empty (WCAG 4.1.2). -->
           <AppButton
             ref="tierButtonEl"
-            variant="outline"
             icon-left="filter-outline"
             class="dq-bar-action"
             :tooltip="tierLabel"
@@ -360,7 +357,6 @@
       <div v-else-if="store.mixedError" class="dq-state" role="alert">
         Could not check the stacks. Nothing has changed.
         <AppButton
-          variant="outline"
           icon-left="refresh"
           @click="store.loadMixedStacks()"
           >Try again</AppButton
@@ -459,7 +455,6 @@
         </div>
         <AppButton
           v-if="store.hasMoreMixed"
-          variant="outline"
           icon-left="chevron-down"
           class="mixed-more"
           :disabled="store.mixedLoading"
@@ -482,7 +477,6 @@
           decides how strict that is.
         </p>
         <AppButton
-          variant="outline"
           icon-left="arrow-left"
           @click="onToggleMixed"
           >Back to review</AppButton
@@ -501,7 +495,6 @@
     >
       Could not confirm the duplicate queue. Nothing has been marked clear.
       <AppButton
-        variant="outline"
         icon-left="refresh"
         @click="store.loadFirstPage()"
         >Try again</AppButton
@@ -648,7 +641,6 @@
         this one - and every decision can be reviewed and cleared until you do.
       </p>
       <AppButton
-        variant="outline"
         icon-left="arrow-left"
         @click="onToggleDecided"
         >Back to review</AppButton
@@ -668,7 +660,7 @@
       <!-- Always offered: decisions are SERVER state, remembered across
            sessions, so the way to them must not depend on this session's
            tally. An empty Decided page explains itself. -->
-      <AppButton variant="outline" icon-left="history" @click="onToggleDecided"
+      <AppButton icon-left="history" @click="onToggleDecided"
         >Review decided groups</AppButton
       >
 
@@ -685,7 +677,6 @@
            push, so it is reloadable and Back returns to the queue. -->
       <AppButton
         v-if="hasLiveStacks"
-        variant="outline"
         icon-left="layers-outline"
         @click="onReviewStacks"
         >Review your stacks</AppButton

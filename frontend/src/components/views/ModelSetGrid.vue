@@ -211,7 +211,6 @@
           cannot see.
         </p>
         <AppButton
-          variant="outline"
           size="sm"
           icon-left="format-list-bulleted"
           @click="store.setView({ groupBy: 'none' })"

@@ -205,6 +205,22 @@ describe("design drift", () => {
     ).toEqual([]);
   });
 
+  // Four roles, no outline (buttons.md, "Roles"). An unknown variant has no
+  // rule in AppButton, so it would render as a bare label with no fill. Reads
+  // quoted literals, plain or inside a `:variant` expression; a variant held in
+  // a variable or a `v-bind` object is not seen.
+  it("gives AppButton one of its four variants", () => {
+    expect(
+      hits(/<AppButton\b(?:[^>"']|"[^"]*"|'[^']*')*>/g).flatMap((hit) =>
+        [...hit.matchAll(/\svariant="([^"]*)"|:variant="([^"]*)"/g)]
+          .flatMap((m) => (m[1] ? [m[1]] : m[2].match(/'[^']*'/g) || []))
+          .map((v) => v.replace(/'/g, ""))
+          .filter((v) => !["primary", "secondary", "danger", "ghost"].includes(v))
+          .map((v) => `${hit.split(":")[0]}: ${v}`),
+      ),
+    ).toEqual([]);
+  });
+
   // A layer picks a rung, not a number (visual-language.md §14), and not a
   // rung plus or minus one either. Above --z-drawer that includes "be an
   // overlay": `StackLayer` puts a hand-placed layer on Vuetify's stack instead
