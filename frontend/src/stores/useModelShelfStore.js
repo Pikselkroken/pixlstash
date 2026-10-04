@@ -1096,23 +1096,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     loading.value = true;
     error.value = "";
     try {
-      const requests = [];
-      if (filters.adapters) requests.push(listAdapters());
-      if (filters.checkpoints) requests.push(listCheckpoints());
-      if (filters.unclassified) {
-        requests.push(listAdapters({ fileKind: "unknown" }));
-      }
-      // The engines block: PixlStash's own taggers and scorers, the
-      // InsightFace packs and every HuggingFace repo in the cache. Same
-      // route, same shape, one more `file_kind`.
-      if (filters.engines) requests.push(listAdapters({ fileKind: "engine" }));
-      // Two requests for one checkbox: the route takes a single `file_kind`,
-      // and these two kinds are one thing to a reader deciding what to keep.
-      if (filters.support) {
-        requests.push(listAdapters({ fileKind: "vae" }));
-        requests.push(listAdapters({ fileKind: "text_encoder" }));
-      }
-      const results = await Promise.all(requests);
+      const results = await Promise.all(
+        blockRequests(BLOCKS.filter((block) => filters[block])),
+      );
       if (startedAt !== epoch) return;
       const refreshed = new Set(BLOCKS.filter((block) => filters[block]));
       rows.value = [
@@ -1145,6 +1131,72 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // re-requests every ticked block anyway.
     } finally {
       if (startedAt === epoch) loading.value = false;
+    }
+  }
+
+  /**
+   * The requests for some blocks: one per block, two for `support`.
+   *
+   * @param {Array<string>} blocks - `BLOCKS` entries.
+   */
+  function blockRequests(blocks) {
+    const requests = [];
+    if (blocks.includes("adapters")) requests.push(listAdapters());
+    if (blocks.includes("checkpoints")) requests.push(listCheckpoints());
+    if (blocks.includes("unclassified")) {
+      requests.push(listAdapters({ fileKind: "unknown" }));
+    }
+    // The engines block: PixlStash's own taggers and scorers, the
+    // InsightFace packs and every HuggingFace repo in the cache. Same
+    // route, same shape, one more `file_kind`.
+    if (blocks.includes("engines")) {
+      requests.push(listAdapters({ fileKind: "engine" }));
+    }
+    // Two requests for one checkbox: the route takes a single `file_kind`,
+    // and these two kinds are one thing to a reader deciding what to keep.
+    if (blocks.includes("support")) {
+      requests.push(listAdapters({ fileKind: "vae" }));
+      requests.push(listAdapters({ fileKind: "text_encoder" }));
+    }
+    return requests;
+  }
+
+  /**
+   * Fetch the blocks the Models rail lists that `Show` has left unticked.
+   *
+   * The rail lists every model a set slot takes, whatever Show says, and
+   * `rows` is everything known rather than the shown set, so the missing
+   * blocks are merged in exactly as `fetchRows` merges its own. A block ticked
+   * while this is on the wire belongs to `fetchRows`, and is not overwritten.
+   */
+  async function ensureRailBlocks() {
+    const wanted = ["adapters", "checkpoints", "unclassified", "support"];
+    const known = new Set(rows.value.map(blockOf));
+    const missing = wanted.filter(
+      (block) => !filters[block] && !known.has(block),
+    );
+    if (!missing.length) return;
+    try {
+      const results = (await Promise.all(blockRequests(missing))).flat();
+      const mine = new Set(missing.filter((block) => !filters[block]));
+      const present = new Set(rows.value.map(blockOf));
+      rows.value = [
+        ...rows.value,
+        ...results.filter(
+          (row) => mine.has(blockOf(row)) && !present.has(blockOf(row)),
+        ),
+      ];
+    } catch (err) {
+      console.warn("[ModelShelf] the Models rail could not read every block", {
+        missing,
+        err,
+      });
+      useNoticeStore().push({
+        level: "error",
+        text:
+          errorDetail(err) ||
+          "Some models could not be read, so the Models rail is missing them.",
+      });
     }
   }
 
@@ -3311,6 +3363,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError,
     setsLoaded,
     loadWorkflowSets,
+    ensureRailBlocks,
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,

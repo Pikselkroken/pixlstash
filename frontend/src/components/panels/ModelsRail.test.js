@@ -25,12 +25,13 @@ const fetchWorkflowSets = vi.fn();
 const addWorkflowSetMembers = vi.fn();
 const removeWorkflowSetMembers = vi.fn();
 const listAdapters = vi.fn();
+const listCheckpoints = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
   listAdapters: (...args) =>
     args[0]?.fileKind ? Promise.resolve([]) : listAdapters(...args),
-  listCheckpoints: vi.fn().mockResolvedValue([]),
+  listCheckpoints: (...args) => listCheckpoints(...args),
   listBaseModelCompletions: vi.fn().mockResolvedValue([]),
   editModels: vi.fn(),
   forgetModels: vi.fn(),
@@ -148,6 +149,7 @@ beforeEach(() => {
   addWorkflowSetMembers.mockReset();
   removeWorkflowSetMembers.mockReset();
   listAdapters.mockReset().mockResolvedValue([]);
+  listCheckpoints.mockReset().mockResolvedValue([]);
   fetchWorkflowSets
     .mockReset()
     .mockResolvedValue({ combinations: [], no_set: [], hand_made: [] });
@@ -200,6 +202,62 @@ describe("what the rail lists", () => {
     expect(store.railFitsSetId).toBe(10);
     // The set's own checkpoint is held, so Fits leaves it out.
     expect(option(wrapper, "RealVis")).toBeFalsy();
+  });
+});
+
+describe("what it knows before it says it", () => {
+  it("lists a kind Show has unticked: the rail is every model, not the shown ones", async () => {
+    // Checkpoints come from their own route, which Show's unticked box never
+    // asks; only the rail does.
+    listCheckpoints.mockResolvedValue([ROWS[0]]);
+    const store = useModelShelfStore();
+    await store.setFilters({ checkpoints: false });
+    const { wrapper } = await mountRail({ rows: ROWS.slice(1) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    expect(option(wrapper, "RealVis")).toBeTruthy();
+    // And the shelf's own shown rows still leave it out.
+    expect(store.visibleRows.some((r) => r.id === 1)).toBe(false);
+  });
+
+  it("says nothing about where a model is until the sets are read", async () => {
+    listAdapters.mockResolvedValue(ROWS);
+    fetchWorkflowSets.mockReturnValue(new Promise(() => {}));
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    useSidebarStore().setModelsRailOpen(true);
+    const wrapper = mount(ModelsRail, { global: { stubs } });
+    await wrapper.vm.$nextTick();
+    expect(option(wrapper, "Soft").text()).not.toContain("In no set yet");
+    expect(wrapper.text()).toContain("Reading your sets");
+    expect(
+      wrapper.find('[data-testid="mrail-loose"]').attributes("disabled"),
+    ).toBeDefined();
+  });
+
+  it("offers a retry when the sets cannot be read, rather than calling them empty", async () => {
+    listAdapters.mockResolvedValue(ROWS);
+    fetchWorkflowSets.mockRejectedValue(new Error("boom"));
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    useSidebarStore().setModelsRailOpen(true);
+    const wrapper = mount(ModelsRail, { global: { stubs } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    expect(option(wrapper, "Soft").text()).not.toContain("In no set yet");
+    const error = wrapper.find('[data-testid="mrail-sets-error"]');
+    expect(error.exists()).toBe(true);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [],
+    });
+    await error.find("button").trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    expect(option(wrapper, "Soft").text()).toContain("In no set yet");
   });
 });
 
@@ -290,6 +348,68 @@ describe("adding", () => {
     expect(removeWorkflowSetMembers).toHaveBeenCalledTimes(1);
     expect(new Set(removeWorkflowSetMembers.mock.calls[0][1])).toEqual(
       new Set([shaOf(5), shaOf(3)]),
+    );
+  });
+
+  it("covers every add in some Undo when two sets' writes land out of order", async () => {
+    const settle = {};
+    addWorkflowSetMembers.mockImplementation(
+      (id, members) =>
+        new Promise((resolve) => {
+          settle[id] = () =>
+            resolve({
+              set: handSet(id, []),
+              added: members.map((m) => shaOf(m.model_id)),
+            });
+        }),
+    );
+    const held = {
+      10: [member(1, "RealVisXL_v5", "checkpoint")],
+      11: [member(9, "Other_ckpt", "checkpoint")],
+    };
+    const { wrapper, store } = await mountRail({
+      handMade: [handSet(10, held[10]), handSet(11, held[11])],
+      open: "hand:10",
+    });
+    // Every refetch serves both sets holding everything asked for so far.
+    fetchWorkflowSets.mockImplementation(() =>
+      Promise.resolve({
+        combinations: [],
+        no_set: [],
+        hand_made: [
+          handSet(10, [...held[10], member(5, "Soft_Light", "lora")]),
+          handSet(11, [...held[11], member(3, "FilmGrain_XL", "lora")]),
+        ],
+      }),
+    );
+    const spy = vi.spyOn(store, "announceAdded");
+    // Set 10 through the row's Add, set 11 through Add to set….
+    await option(wrapper, "Soft").find('[data-testid="mrail-add"]').trigger("click");
+    await option(wrapper, "FilmGrain").trigger("contextmenu");
+    const menuItems = () => wrapper.findAll(".mrail-menu .ctx-item");
+    await menuItems()
+      .find((b) => b.text().includes("Add to set"))
+      .trigger("click");
+    await menuItems()
+      .find((b) => b.text().includes("Other"))
+      .trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Set 11 lands first, then set 10.
+    settle[11]();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    settle[10]();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.toggleSet("hand:10");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const announced = spy.mock.calls.map(([set, added]) => [
+      set.id,
+      added.map((m) => m.model_id),
+    ]);
+    expect(announced).toEqual(
+      expect.arrayContaining([
+        [11, [3]],
+        [10, [5]],
+      ]),
     );
   });
 

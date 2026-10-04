@@ -39,6 +39,7 @@
             :class="{ 'mrail-chip--on': looseOnly }"
             type="button"
             :aria-pressed="looseOnly ? 'true' : 'false'"
+            :disabled="!setsKnown"
             data-testid="mrail-loose"
             @click="looseOnly = !looseOnly"
           >
@@ -49,6 +50,24 @@
           </button>
         </div>
       </div>
+
+      <p
+        v-if="store.setsError"
+        class="mrail-empty"
+        role="alert"
+        data-testid="mrail-sets-error"
+      >
+        Could not read your sets, so where each model is cannot be shown.
+        <AppButton
+          variant="ghost"
+          size="sm"
+          @click="store.loadWorkflowSets({ force: true })"
+          >Retry</AppButton
+        >
+      </p>
+      <p v-else-if="!store.setsLoaded" class="mrail-empty">
+        Reading your sets…
+      </p>
 
       <p v-if="!listed.length" class="mrail-empty">
         No models on the shelf yet.
@@ -351,8 +370,16 @@ const tasksStore = useTasksStore();
 const route = useRoute();
 
 // The sets say where each model already is. The store's guard makes a repeat
-// of the grid's own read free.
+// of the grid's own read free. The rail lists every model a slot takes, so the
+// blocks Show has unticked are read too.
 store.loadWorkflowSets();
+store.ensureRailBlocks();
+
+/**
+ * Whether the sets have been read. Until they have, nothing may say "In no
+ * set yet": an unread answer is not an empty one.
+ */
+const setsKnown = computed(() => store.setsLoaded && !store.setsError);
 
 const tab = ref("models");
 watch(
@@ -497,7 +524,7 @@ const shown = computed(() => {
       (row) => keep.has(row.id) || addedHere.value.has(row.id),
     );
   }
-  if (looseOnly.value) {
+  if (looseOnly.value && setsKnown.value) {
     rows = rows.filter(
       (row) => !row.sha256 || !setsBySha.value.has(row.sha256),
     );
@@ -586,6 +613,7 @@ function addLabel(row) {
 
 /** Where a model already is, leaving out the set it is being added to. */
 function whereLine(row, { after = false } = {}) {
+  if (!setsKnown.value) return "";
   const names = (setsBySha.value.get(row.sha256) ?? []).filter(
     (name) => !targetSet.value || name !== targetName.value,
   );
@@ -885,7 +913,6 @@ async function addRows(set, rows, { ask = true } = {}) {
     slot: defaultSlot(row.file_kind),
   }));
   if (ask && !(await store.confirmSecondCheckpoint(set, members))) return;
-  if (run && run.setId !== set.id) endRun();
   pending.value = new Set([...pending.value, ...fresh.map((row) => row.id)]);
   let result;
   try {
@@ -911,6 +938,9 @@ async function addRows(set, rows, { ask = true } = {}) {
       ...added.map((member) => member.model_id),
     ]);
   }
+  // Decided after the write, not before it: two adds to two sets can both be
+  // on the wire, and whichever lands second must not join the other's run.
+  if (run && run.setId !== set.id) endRun();
   if (!run) run = { setId: set.id, added: [], raised: 0, timer: 0 };
   run.added.push(...added);
   clearTimeout(run.timer);
@@ -1117,8 +1147,13 @@ function onDragStart(row, event) {
   cursor: pointer;
 }
 
-.mrail-chip:hover {
+.mrail-chip:hover:not(:disabled) {
   background: var(--hover-wash);
+}
+
+.mrail-chip:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
 }
 
 .mrail-chip--on {

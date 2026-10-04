@@ -5733,7 +5733,12 @@ the first time a hand-made set opens while the rail is closed.
 - **What it lists.** Every shelf row some set slot takes (`railListed`), under
   the set panel's slot headings, each saying where it already is ("In no set
   yet", "In Night city", "In 2 of your sets"). Picking a model already in
-  another set is ordinary. The tab shows the count.
+  another set is ordinary. The tab shows the count. Every means every:
+  `store.ensureRailBlocks()` reads the blocks Show has unticked into `rows`
+  (which is everything known, not the shown set), so the shelf's own list is
+  unchanged. Until the sets are read nothing says where a model is and *In no
+  set yet* is disabled; a failed read says so with Retry rather than calling
+  every model loose.
 - **Two filters, never applied for you.** *Fits <set>* (`setFits` in
   `utils/workflowSets.js`: not held, a kind some slot takes, the set's base
   model, or used beside its checkpoint, which ranks first with the picture
