@@ -27,7 +27,11 @@
   </div>
 
   <!-- The card's context menu: right-click, the Menu key or Shift+F10 on a
-       missing-base card. The full inventory, which the pill is a shortcut into. -->
+       missing-base card. The shelf's own verb list in its own order, which the
+       pill is a shortcut into: Replace leads, Copy filename copies the missing
+       names, and the verbs that write the checkpoint's shelf row are shown
+       disabled with the reason, as the file menu shows a verb that does not
+       apply, rather than vanishing. -->
   <v-menu
     v-model="contextOpen"
     :target="contextAt"
@@ -41,16 +45,26 @@
       tabindex="-1"
       @keydown="onMenuKeydown"
     >
-      <button
-        class="ctx-item"
-        type="button"
-        role="menuitem"
-        data-verb="replace-missing"
-        @click="verb('replace')"
-      >
-        <v-icon class="ctx-icon">mdi-file-replace-outline</v-icon>
-        <span class="ctx-label-text">Replace…</span>
-      </button>
+      <template v-for="(entry, index) in MENU" :key="index">
+        <div v-if="entry === SEP" class="ctx-sep"></div>
+        <button
+          v-else
+          class="ctx-item"
+          :class="{ 'ctx-item--disabled': !entry.verb, 'ctx-item--danger': entry.danger }"
+          type="button"
+          role="menuitem"
+          :disabled="!entry.verb"
+          :data-verb="entry.verb || undefined"
+          @click="entry.verb && verb(entry.verb)"
+        >
+          <Tooltip v-if="!entry.verb" :text="NO_ROW" activator="parent" />
+          <v-icon class="ctx-icon">{{ entry.icon }}</v-icon>
+          <span class="ctx-label-text">{{
+            typeof entry.label === "function" ? entry.label() : entry.label
+          }}</span>
+          <span v-if="entry.kbd" class="ctx-shortcut">{{ entry.kbd }}</span>
+        </button>
+      </template>
     </div>
   </v-menu>
 </template>
@@ -64,6 +78,7 @@ import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -71,6 +86,37 @@ import Tooltip from "../widgets/Tooltip.vue";
 const emit = defineEmits(["replace"]);
 
 const store = useModelShelfStore();
+
+const SEP = "sep";
+const NO_ROW =
+  "Its checkpoint is not on your shelf, so there is no file for this. Replace it first.";
+const several = () => new Set(store.selectedMissing.flatMap((h) => h.names)).size > 1;
+/**
+ * The file menu's verbs in its order (`ShelfSelectionBar`'s `VerbMenu`).
+ * `verb: null` is a verb that writes the checkpoint's shelf row, which a
+ * missing checkpoint does not have.
+ */
+const MENU = [
+  { icon: "mdi-file-replace-outline", verb: "replace", label: () => (several() ? "Replace missing models…" : "Replace missing model…") },
+  SEP,
+  { icon: "mdi-pencil-outline", verb: null, label: "Rename", kbd: "F2" },
+  { icon: "mdi-image-outline", verb: null, label: "Set thumbnail…" },
+  SEP,
+  { icon: "mdi-cube-outline", verb: null, label: "Set base model…" },
+  { icon: "mdi-shape-outline", verb: null, label: "Set kind…" },
+  { icon: "mdi-account-plus", verb: null, label: "Assign to person" },
+  { icon: "mdi-folder-plus", verb: null, label: "Assign to set" },
+  { icon: "mdi-layers-outline", verb: null, label: "Stack with selection" },
+  { icon: "mdi-folder-move-outline", verb: null, label: "Move to…" },
+  SEP,
+  { icon: "mdi-folder-open-outline", verb: null, label: "Open in file manager" },
+  { icon: "mdi-connection", verb: null, label: "Works with…" },
+  { icon: "mdi-layers-plus", verb: null, label: "New workflow set with this checkpoint" },
+  { icon: "mdi-content-copy", verb: "copy-filenames", label: () => (several() ? "Copy filenames" : "Copy filename") },
+  SEP,
+  { icon: "mdi-playlist-remove", verb: null, label: "Remove from shelf" },
+  { icon: "mdi-delete-outline", verb: null, label: "Delete", kbd: "Del", danger: true },
+];
 
 const contextOpen = ref(false);
 const contextAt = ref([0, 0]);
@@ -83,7 +129,27 @@ const countLabel = computed(() => {
 
 function verb(name) {
   contextOpen.value = false;
-  emit(name);
+  if (name === "copy-filenames") copyFilenames();
+  else emit(name);
+}
+
+/** The missing files' names, as the file menu's Copy filename copies a row's. */
+async function copyFilenames() {
+  const names = [...new Set(store.selectedMissing.flatMap((head) => head.names))];
+  const notices = useNoticeStore();
+  if (!names.length) return;
+  try {
+    await navigator.clipboard.writeText(names.join("\n"));
+    notices.push({
+      level: "success",
+      text: names.length === 1 ? `Copied ${names[0]}.` : `Copied ${names.length} filenames.`,
+    });
+  } catch (err) {
+    notices.push({
+      level: "error",
+      text: `Could not reach the clipboard: ${err?.message || err}`,
+    });
+  }
 }
 
 /**

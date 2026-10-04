@@ -1688,8 +1688,10 @@ proves ran together, with a model free to appear in more than one.
   shelf row for a file verb, so it gets its own pill
   (`MissingSetSelectionBar`) whose one verb, *Replace*, opens
   `io/ReplaceMissingDialog.vue`. As the Model Shelf design has it, the card's
-  context menu (right-click, Menu key) is the full inventory and holds the
-  same *Replace…*; the pill is a shortcut into it. A one-line banner over the
+  context menu (right-click, Menu key) is the full inventory: the file menu's
+  verbs in its order, led by *Replace missing model…*, with *Copy filename*
+  copying the missing names and every verb that writes the checkpoint's shelf
+  row listed disabled with the reason; the pill is a shortcut into it. A one-line banner over the
   grid, "N sets are missing their checkpoint · Select them", is the design's
   selection shortcut (`selectAllMissing`), not a second verb; dismissed, it
   returns when the count changes. Same rules as the hand-made sets: Ctrl+click
