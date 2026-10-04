@@ -491,6 +491,42 @@ describe("a refusal the popup offers to fix", () => {
     ]);
   });
 
+  it("lets the owner's own sampler pick win over the replacement", async () => {
+    preflightWorkflowRun
+      .mockResolvedValueOnce({
+        ok: false,
+        runs: 0,
+        groups: [
+          {
+            workflow_id: KEY,
+            reasons: [
+              {
+                code: "missing_choices",
+                choices: [
+                  {
+                    node_id: "3",
+                    field: "sampler_name",
+                    value: "res_2s",
+                    options: ["dpmpp_2m", "euler"],
+                    replacement: "euler",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+      .mockResolvedValue({ ok: true, runs: 1, groups: [] });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.choiceFixes).toHaveLength(1);
+
+    wrapper.vm.setValue(def("Sampler", "sampler_name", "res_2s"), "dpmpp_2m");
+    await flushPromises();
+
+    expect(wrapper.vm.choiceFixes).toEqual([]);
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].choices).toBeUndefined();
+  });
+
   it("keeps a refusal the replacement did not clear, rather than asking for ever", async () => {
     const missing = {
       code: "missing_choices",

@@ -12495,15 +12495,19 @@ def test_a_skip_is_not_undone_by_the_saved_recipes_loras(chained):
     ), graph
 
 
-def test_a_skip_on_a_run_of_several_workflows_is_refused(runnable):
-    """A node id means one loader on one graph; across cards it could be any."""
+@pytest.mark.parametrize(
+    "by_node",
+    [
+        {"skip_loras": [{"node_id": "2"}]},
+        {"choices": [{"node_id": "3", "field": "sampler_name", "value": "euler"}]},
+    ],
+)
+def test_a_skip_on_a_run_of_several_workflows_is_refused(runnable, by_node):
+    """A node id means one node on one graph; across cards it could be any."""
     second = _seed_second_runnable_card(runnable.server)
     r = runnable.owner.post(
         f"{API}/workflows/run/preflight",
-        json={
-            "picture_ids": [runnable.picture_id, second],
-            "skip_loras": [{"node_id": "2"}],
-        },
+        json={"picture_ids": [runnable.picture_id, second], **by_node},
     )
     assert r.status_code == 400, r.text
     assert "several" in r.json()["detail"]

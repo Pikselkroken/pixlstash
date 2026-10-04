@@ -1367,6 +1367,15 @@ function coerce(field, raw) {
 
 function setValue(field, value) {
   const key = address(field);
+  // The owner's own pick for a sampler or scheduler: a replacement offered
+  // for it would otherwise win on the server and override it unsaid. Asked
+  // again, so a pick this ComfyUI still lacks is offered afresh.
+  if (choiceFixes.value.some((fix) => fix.field === field.input_name)) {
+    choiceFixes.value = choiceFixes.value.filter(
+      (fix) => fix.field !== field.input_name,
+    );
+    void runPreflight();
+  }
   // Not a value: the field goes back to what it started at rather than
   // recording a zero nobody typed.
   if (value === undefined || value === baseOf(field)) {

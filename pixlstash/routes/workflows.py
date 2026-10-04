@@ -4829,15 +4829,17 @@ def create_router(server) -> APIRouter:
             # that chose it: "run this workflow over what I selected".
             pictures = [pid for _, ids, _ in groups for pid in ids]
             groups = [(recipe.base_card, pictures, [])]
-        if body.skip_loras and len({key for key, _, _ in groups if key}) > 1:
+        if (body.skip_loras or body.choices) and len(
+            {key for key, _, _ in groups if key}
+        ) > 1:
             # A skip names a loader by its node id, which only means one thing
             # in one graph: across cards it could skip an unrelated LoRA and
             # report it as the owner's choice.
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "skip_loras names loaders by node id, which only identifies "
-                    "a loader on one workflow; this run spans several. Run one "
+                    "skip_loras and choices name nodes by id, which only "
+                    "identifies a node on one workflow; this run spans several. Run one "
                     "workflow at a time, or name it as target."
                 ),
             )
