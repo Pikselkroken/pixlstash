@@ -59,8 +59,7 @@ import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   // primary (amber accent, the key action) | secondary (neutral) |
-  // danger (error) | ghost (transparent). The outlined sites folded into
-  // secondary (buttons.md).
+  // outline (bordered, no fill) | danger (error) | ghost (transparent).
   // Amber acts, olive selects: there is no olive button.
   variant: { type: String, default: "secondary" },
   size: { type: String, default: "md" }, // md | sm
@@ -262,6 +261,18 @@ defineExpose({ focus });
 }
 .app-btn--secondary:not(:disabled):not([aria-disabled="true"]):hover {
   background-image: var(--hover-neutral);
+}
+
+/* Outline - the neutral without a fill, for page surfaces: toolbars, queue
+   rows, cards, in-grid trays. Inside a dialog or popover the neutral is the
+   filled `secondary` instead (buttons.md, #1673). */
+.app-btn--outline {
+  background: transparent;
+  color: rgb(var(--v-theme-on-surface));
+  border-color: rgb(var(--v-theme-border));
+}
+.app-btn--outline:not(:disabled):not([aria-disabled="true"]):hover {
+  background: var(--hover-wash);
 }
 
 /* Danger: destructive. `on-error`, not a hardcoded #fff. Both themes author

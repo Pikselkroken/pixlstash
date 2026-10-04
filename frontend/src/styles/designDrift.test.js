@@ -205,19 +205,33 @@ describe("design drift", () => {
     ).toEqual([]);
   });
 
-  // Four roles, no outline (buttons.md, "Roles"). An unknown variant has no
-  // rule in AppButton, so it would render as a bare label with no fill. Reads
-  // quoted literals, plain or inside a `:variant` expression; a variant held in
-  // a variable or a `v-bind` object is not seen.
-  it("gives AppButton one of its four variants", () => {
-    expect(
-      hits(/<AppButton\b(?:[^>"']|"[^"]*"|'[^']*')*>/g).flatMap((hit) =>
+  // Every AppButton variant, as quoted literals: plain, or inside a `:variant`
+  // expression. A variant held in a variable or a `v-bind` object is not seen.
+  function appButtonVariants(only) {
+    return hits(/<AppButton\b(?:[^>"']|"[^"]*"|'[^']*')*>/g, only).flatMap(
+      (hit) =>
         [...hit.matchAll(/\svariant="([^"]*)"|:variant="([^"]*)"/g)]
           .flatMap((m) => (m[1] ? [m[1]] : m[2].match(/'[^']*'/g) || []))
-          .map((v) => v.replace(/'/g, ""))
-          .filter((v) => !["primary", "secondary", "danger", "ghost"].includes(v))
-          .map((v) => `${hit.split(":")[0]}: ${v}`),
-      ),
+          .map((v) => `${hit.split(":")[0]}: ${v.replace(/'/g, "")}`),
+    );
+  }
+
+  // An unknown variant has no rule in AppButton, so it would render as a bare
+  // label with no fill.
+  it("gives AppButton one of its variants", () => {
+    const known = ["primary", "secondary", "outline", "danger", "ghost"];
+    expect(
+      appButtonVariants().filter((hit) => !known.includes(hit.split(": ")[1])),
+    ).toEqual([]);
+  });
+
+  // Outline is for page surfaces; inside a dialog or a popover (`.tbm`) the
+  // neutral is the filled `secondary` (buttons.md, #1673). Read per file.
+  it("keeps the outline button out of dialogs and popovers", () => {
+    expect(
+      appButtonVariants(({ text }) =>
+        /<AppDialog\b|class="tbm[\s"]/.test(text),
+      ).filter((hit) => hit.endsWith(": outline")),
     ).toEqual([]);
   });
 

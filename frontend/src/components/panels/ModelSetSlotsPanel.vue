@@ -298,6 +298,7 @@
                   ghostCount(item.ghost)
                 }}</span>
                 <AppButton
+                  variant="outline"
                   size="sm"
                   tabindex="-1"
                   :tooltip="`Add ${item.ghost.name} to this set`"

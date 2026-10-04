@@ -108,6 +108,7 @@
            rows (or an older backend) serve no decided_at: no cell, no dash. -->
       <span v-if="decidedStamp" class="gdecided-at">{{ decidedStamp }}</span>
       <AppButton
+        variant="outline"
         icon-left="restore"
         data-testid="dedup-clear-decision"
         :disabled="busy || readOnly"
@@ -133,7 +134,7 @@
            machine-readable set (the chips are aria-hidden, so this is the
            only channel that announces the keys at all). -->
       <AppButton
-        :variant="focused ? 'primary' : 'secondary'"
+        :variant="focused ? 'primary' : 'outline'"
         icon-left="layers-plus"
         data-testid="dedup-stack"
         :tabindex="focused ? 0 : -1"
@@ -170,6 +171,7 @@
         <kbd v-if="showsVerdictKeys" aria-hidden="true">Enter</kbd>
       </AppButton>
       <AppButton
+        variant="outline"
         icon-left="call-split"
         data-testid="dedup-keep-separate"
         :tabindex="focused ? 0 : -1"

@@ -76,6 +76,7 @@
         >No pictures yet</span
       >
       <AppButton
+        variant="outline"
         size="sm"
         icon-left="play"
         tabindex="-1"

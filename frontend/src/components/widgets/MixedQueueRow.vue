@@ -88,7 +88,7 @@
       <Tooltip v-if="!readOnly" :text="lockNote ? lockTitle : primaryTitle">
         <template #activator="{ props: tipProps }">
           <AppButton
-            :variant="focused ? 'primary' : 'secondary'"
+            :variant="focused ? 'primary' : 'outline'"
             :icon-left="plan.icon"
             data-testid="mixed-resolve"
             :tabindex="focused ? 0 : -1"
@@ -119,6 +119,7 @@
            twelve rows at once. -->
       <AppButton
         v-if="!readOnly"
+        variant="outline"
         icon-left="check"
         data-testid="mixed-keep"
         :tabindex="focused ? 0 : -1"
