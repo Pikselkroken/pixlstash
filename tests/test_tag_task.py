@@ -598,7 +598,10 @@ def _face_crop_box(tmp_path, name, size, bbox, target=512, face_scale=1.4):
         {},
         face_scale,
     )
-    assert built is not None and built[3] in ("face", "upscaled_face")
+    expected_kind = "face"
+    if face_scale and built[1].size[0] < target:
+        expected_kind = "upscaled_face"
+    assert built is not None and built[3] == expected_kind
     crop = built[1]
     r, g, b = crop.getpixel((0, 0))
     x0, y0 = (b // 16) * 256 + r, (b % 16) * 256 + g
@@ -708,18 +711,28 @@ def test_the_tagging_pass_honours_the_whole_face_crop_setting(
 
 
 @pytest.mark.parametrize(
-    "bbox, whole_face, expected",
+    "bbox, whole_face, expected, size",
     [
-        ([500, 300, 560, 360], True, "upscaled_face"),  # 84px square < 512
-        ([200, 100, 600, 500], True, "face"),  # 560px square, not resized up
-        ([500, 300, 547, 347], True, "small_face"),  # 47px: under the minimum
-        ([500, 300, 548, 348], True, "upscaled_face"),  # 48px: just at it
-        ([500, 300, 540, 340], False, "face"),  # fixed window: unchanged
+        # A 60px face's 84px square is resized up to 512.
+        ([500, 300, 560, 360], True, "upscaled_face", (1024, 768)),
+        # A 400px face's 560px square is not.
+        ([200, 100, 600, 500], True, "face", (1024, 768)),
+        # 47px: under the minimum. 48px: just at it.
+        ([500, 300, 547, 347], True, "small_face", (1024, 768)),
+        ([500, 300, 548, 348], True, "upscaled_face", (1024, 768)),
+        # The fixed window keeps today's behaviour whatever the face size.
+        ([500, 300, 540, 340], False, "face", (1024, 768)),
+        # 1.4 x 366 = 512.4 rounds to exactly the target: not resized up.
+        ([300, 200, 666, 566], True, "face", (1024, 768)),
+        # 1.4 x 365 = 511: one pixel short, so it is resized up.
+        ([300, 200, 665, 565], True, "upscaled_face", (1024, 768)),
+        # A big face in a 400px picture shrinks to the short side: magnified.
+        ([100, 50, 500, 350], True, "upscaled_face", (600, 400)),
     ],
 )
-def test_a_face_crop_reports_its_kind(tmp_path, bbox, whole_face, expected):
+def test_a_face_crop_reports_its_kind(tmp_path, bbox, whole_face, expected, size):
     task = _task_for(_FakeDb(str(tmp_path)))
-    pic = Picture(id=1, file_path=str(_png(tmp_path, "kind.png", (1024, 768))))
+    pic = Picture(id=1, file_path=str(_png(tmp_path, "kind.png", size)))
     target = 512 if whole_face else 320
 
     built = task._build_quality_crop(

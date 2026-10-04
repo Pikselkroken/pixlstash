@@ -71,6 +71,8 @@ MIN_FACE_CROP_PX = 48
 # learned from close-up crops, and leaves "blocky" to the full pass. A face too
 # small to judge takes the centre crop and strips the full pass's face tags too:
 # a face too small for a 512 crop is too small in the downscaled full image.
+# Stripping is skipped when another model ran the full pass and reported
+# confidences, as for every crop kind (see the merge in `_tag_pictures_batch`).
 CROP_TAGS_BY_KIND = {
     "face": (QUALITY_CROP_TAG_WHITELIST, QUALITY_CROP_TAG_WHITELIST),
     "upscaled_face": (FACE_QUALITY_CROP_TAGS, FACE_QUALITY_CROP_TAGS),
@@ -430,9 +432,9 @@ class TagTask(BaseTask):
                         file_path,
                         "upscaled_face" if upscaled else "face",
                     )
-            # No face detected (or one too small to judge): fall back to a centre crop so whole-image quality
-            # defects (blockiness, blur, jpeg artifacts) still get a high-
-            # resolution pass instead of relying only on the downscaled full-image
+            # No face detected, or one too small to judge: fall back to a centre
+            # crop so whole-image quality defects (blockiness, blur, jpeg
+            # artifacts) still get a high-resolution pass instead of relying only on the downscaled full-image
             # pass. A zero-size box at the image centre expands to a target-sized
             # square, so the crop is judged at its native resolution.
             centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]

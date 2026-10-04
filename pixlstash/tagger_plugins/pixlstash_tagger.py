@@ -54,8 +54,8 @@ QUALITY_CROP_TAG_WHITELIST = frozenset(
         "flux chin",
     }
 )
-# The subset of the whitelist that only makes sense on a face. When no face is found
-# the quality pass falls back to a centre crop, which contains no face - judging these
+# The subset of the whitelist that only makes sense on a face. When no face is found,
+# or only one too small to judge, the quality pass falls back to a centre crop, which contains no face - judging these
 # anomalies from it would be meaningless, so they are excluded there.
 FACE_QUALITY_CROP_TAGS = frozenset(
     {
