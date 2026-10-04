@@ -1714,7 +1714,8 @@ proves ran together, with a model free to appear in more than one.
 - **The models with no set get a card too**, dashed, last, and outside the
   treegrid — it is not a set, and inside the grid it would be the last thing the
   arrow keys walk into. Its copy states the narrow fact and not the wide one:
-  `no_set` means no KEPT PICTURE IN THIS LIBRARY was made with them, which is
+  `no_set` means no KEPT PICTURE IN THIS LIBRARY was made with them beside a
+  base model (a combination of support files or LoRAs alone gets no card), which is
   not "no recipe names them" (a recipe on the hub may, from another library or
   from pictures since deleted) and is emphatically not a verdict about what they
   work with. The engines are excluded server-side, because no generation graph

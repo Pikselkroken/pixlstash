@@ -66,6 +66,49 @@
       </div>
     </div>
 
+    <!-- The base model these pictures were made with is not on the shelf.
+         Replacing it is a workflow's model fix, so the note links there; once
+         the fix loads a shelf model, the server files these recipes under that
+         model and this card folds into its set. -->
+    <div
+      v-if="missing"
+      class="msp__note msp__note--missing"
+      role="row"
+      aria-level="2"
+      data-testid="model-set-missing"
+    >
+      <div role="gridcell">
+        <v-icon size="16">mdi-alert-outline</v-icon>
+        <span
+          >Made with
+          <template v-for="(file, i) in missing.names" :key="file"
+            >{{ i ? (i === missing.names.length - 1 ? " and " : ", ") : ""
+            }}<strong>{{ file }}</strong></template
+          >, {{ missing.names.length === 1 ? "which is" : "which are" }} not on
+          your shelf.
+          <template v-if="missing.workflowIds.length === 1">
+            Replace it in
+            <router-link
+              :to="workflowLink(missing.workflowIds[0])"
+              class="msp__link"
+              >the workflow that loads it</router-link
+            >
+            and these pictures join that model's set.
+          </template>
+          <template v-else-if="missing.workflowIds.length">
+            Replace it in each workflow that loads it
+            <template v-for="(id, i) in missing.workflowIds" :key="id"
+              >{{ i ? " · " : " (" }}<router-link
+                :to="workflowLink(id)"
+                class="msp__link"
+                >workflow {{ i + 1 }}</router-link
+              ></template
+            >) and these pictures join that model's set.
+          </template>
+        </span>
+      </div>
+    </div>
+
     <!-- Grid. `presentation`, so the member rows below are exposed to the rowgroup
          above rather than to an unroled div, which would break the chain a
          treegrid needs: rowgroup owns rows, rows own gridcells. -->
@@ -250,6 +293,11 @@ const props = defineProps({
   panelId: { type: String, required: true },
   /** The group's name, as its card carries it. */
   name: { type: String, default: "" },
+  /**
+   * `{name, names, workflowIds}` when the group is named after a base model the shelf
+   * does not hold (see `headModel`), else null.
+   */
+  missing: { type: Object, default: null },
   /** The group's members, the head first (see `setGroups`). */
   members: { type: Array, default: () => [] },
   /** `"grid"` | `"list"` - how to draw them. */
@@ -275,6 +323,11 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close", "view", "pick", "select", "menu"]);
+
+/** The Workflows screen with one workflow open, where its model fix is made. */
+function workflowLink(id) {
+  return { name: "workflows", query: { workflow: id } };
+}
 
 function isSelected(member) {
   return props.selectedIds.has(member.id);
@@ -400,6 +453,19 @@ const notchStyle = computed(() => {
 .msp__note .v-icon {
   flex-shrink: 0;
   color: rgb(var(--v-theme-surface-info));
+}
+
+.msp__note--missing > [role="gridcell"] {
+  background: rgba(var(--v-theme-warning), 0.16);
+}
+
+.msp__note--missing .v-icon {
+  color: rgb(var(--v-theme-surface-warning));
+}
+
+.msp__link {
+  color: inherit;
+  text-decoration: underline;
 }
 
 /* The SAME column count as the grid above, taken from `--wf-columns` rather than

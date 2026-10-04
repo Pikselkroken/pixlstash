@@ -9050,6 +9050,32 @@ band can only put a row in one place.
   (the rest), and second place is what keeps such a set named after its model
   rather than after whichever VAE sorted first. It is a ranking, not a claim
   about what the file is.
+- **A base model off the shelf is named, not dropped (`_missing_bases`).** A
+  recipe whose checkpoint or diffusion file no shelf row answers to resolves to
+  its VAE and encoders alone, which would name the set after the VAE. The names
+  its base-model widgets (`CHECKPOINT_WIDGETS` minus the shelf loader's
+  `checkpoint_id`) load and the shelf cannot resolve go on the combination as
+  `missing: [{name, workflow_ids}]`, and they are part of its grouping key, so
+  two recipes on different missing checkpoints stay two combinations. The
+  client names such a set after the missing file and links each workflow, where
+  its model fix (`PUT /workflows/{id}/model-fix`) is made; the workflow ids come
+  from `workflow_card_reads.variant_workflows`, never the emptied
+  `workflow_group_member`. A fix answers first: it is stored on the workflow's
+  base topology and read per WORKFLOW, so a missing name the workflow's
+  `checkpoint` fix replaced resolves to the replacement for every recipe in it,
+  and the two cards fold into one. Only the grid reads fixes: they are the
+  owner's word about what the workflow loads now, not evidence of what ran, so
+  `fetch_companions` keeps the bare resolution. A recipe that resolves a base
+  model anyway (an A1111 recipe by digest, a refiner beside a present
+  checkpoint) reports nothing missing, so its combination does not split.
+- **A combination with no base model at all is listed but is no set.** Neither
+  a checkpoint/`unknown` member nor a `missing` name: a VAE, an encoder or a
+  LoRA is not what a set is named after, so `headModel` gives it no head and
+  the grid draws no card. It stays in `combinations` because *Works with* reads
+  every one. `no_set` is read off the combinations WITH a base, which is why it
+  means "not used *with a base model*" rather than "not used". A combination
+  with `missing` is never `covered_by` a hand-made set: its base is not the
+  set's, whatever support files they share.
 - **A cover is served as `{picture_id, version}`, never as a URL.** An
   `<img src>` never reaches the client's Axios interceptor, so a path built in
   this route would arrive with no API base and no share token and the browser

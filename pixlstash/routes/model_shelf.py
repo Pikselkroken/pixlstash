@@ -772,17 +772,46 @@ class WorkflowSetCover(BaseModel):
     )
 
 
+class WorkflowSetMissingBase(BaseModel):
+    """A base model a combination's recipes load that the shelf does not hold."""
+
+    name: str = Field(description="The file name the recipes give, lowercased.")
+    workflow_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The workflows whose recipes load it: where it is replaced "
+            "(`PUT /workflows/{workflow_id}/model-fix`)."
+        ),
+    )
+
+
 class WorkflowSetCombination(BaseModel):
     """One set of files a picture proves ran together."""
 
     model_config = ConfigDict(extra="allow")
 
-    key: str = Field(description="The member ids, sorted and comma-joined.")
+    key: str = Field(
+        description=(
+            "The member ids, sorted and comma-joined, then `+` and the missing "
+            "base names as a JSON list when there are any."
+        )
+    )
     models: list[WorkflowSetMember] = Field(
         description=(
             "Every member, the file the set is named after first: checkpoint, "
             "then unclassified, then VAE, text encoder, adapter, engine."
         )
+    )
+    missing: list[WorkflowSetMissingBase] = Field(
+        default_factory=list,
+        description=(
+            "Base models (checkpoint or diffusion file) the recipes load that "
+            "no shelf row answers to. A combination with no on-shelf base is "
+            "named after these; one with neither is listed but is no set. A "
+            "name the "
+            "owner replaced with a model fix resolves to the replacement and "
+            "is not listed."
+        ),
     )
     recipes: int = Field(
         description=(
@@ -1081,8 +1110,9 @@ class WorkflowSetsResponse(BaseModel):
         description=(
             "Ids that are in none of the combinations above, which is a "
             "narrower statement than it looks: it means **no kept picture in "
-            "this library was made with them and no stored ComfyUI run used "
-            "them**. A recipe on the hub may name "
+            "this library and no stored ComfyUI run used them with a base "
+            "model** (a checkpoint or diffusion file, on the shelf or named "
+            "by the recipe). A recipe on the hub may name "
             "one - from another library, or from pictures since deleted - and "
             "this says nothing about that. **Not a verdict** either way: it "
             "rules nothing out about what the file works with. Engines are "
@@ -1895,7 +1925,9 @@ def create_router(server) -> APIRouter:
         summary="Which models have actually run together",
         description=(
             "One entry per **combination**: the exact set of shelf models one "
-            "or more recipes bound together, with the kept pictures they made. "
+            "or more recipes bound together, plus `missing`, the base models "
+            "they load that the shelf does not hold (so `models` may be empty), "
+            "with the kept pictures they made. "
             "A model appears in every combination it has run in, so membership "
             "overlaps and is stored nowhere - the evidence is a self-join over "
             "`workflow_recipe_asset`, which is read here and nowhere written, "
@@ -1904,8 +1936,10 @@ def create_router(server) -> APIRouter:
             "**Co-occurrence is evidence; its absence is not.** Two models in "
             "one recipe proves they ran together. Two models never seen "
             "together proves nothing, so nothing is withheld for lacking a "
-            "pairing and the ids no recipe names come back under `no_set` "
-            "rather than being dropped. A member the evidence could only reach "
+            "pairing. A combination with no base model, on the shelf or "
+            "missing, is still listed but is no set, so the ids in no "
+            "combination WITH a base come back under `no_set` rather than "
+            "being dropped - an id can be in both. A member the evidence could only reach "
             "by a basename two shelf rows share is flagged `ambiguous` and "
             "still listed.\n\n"
             "Pictures are scoped to the active library, unlike "
@@ -1927,6 +1961,10 @@ def create_router(server) -> APIRouter:
                     key=combination["key"],
                     models=[
                         WorkflowSetMember(**member) for member in combination["models"]
+                    ],
+                    missing=[
+                        WorkflowSetMissingBase(**entry)
+                        for entry in combination["missing"]
                     ],
                     recipes=combination["recipes"],
                     history_runs=combination["history_runs"],

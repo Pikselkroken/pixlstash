@@ -79,6 +79,10 @@ const globalOpts = {
       Tooltip: {
         template: "<span><slot name='activator' :props='{}' /><slot /></span>",
       },
+      RouterLink: {
+        props: ["to"],
+        template: "<a :data-workflow='to.query.workflow'><slot /></a>",
+      },
     },
   },
 };
@@ -180,6 +184,69 @@ beforeEach(() => {
 });
 
 describe("the cards", () => {
+  it("keeps a missing checkpoint's card when Show hides its support files", async () => {
+    const { wrapper, store } = await mountGrid({
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        {
+          ...combination('2+["gone.sft"]', [VAE]),
+          missing: [{ name: "gone.sft", workflow_ids: [] }],
+        },
+      ],
+    });
+    // Show unticks the support files, the VAE with them.
+    await store.setFilters({ support: false });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.findAll('[data-testid="model-set-card"]')).toHaveLength(1);
+  });
+
+  it("draws a set with only a missing checkpoint, and opens its fix note", async () => {
+    // An all-in-one checkpoint off the shelf: nothing the shelf holds, so no
+    // member for `Show` to filter on and none for the tray to anchor on.
+    const { wrapper, store } = await mountGrid({
+      combinations: [
+        {
+          ...combination('+["aio.safetensors"]', []),
+          missing: [{ name: "aio.safetensors", workflow_ids: ["auto:x"] }],
+        },
+      ],
+    });
+
+    expect(wrapper.find('[data-testid="model-set-card"]').text()).toContain(
+      "aio",
+    );
+    store.toggleSet("missing:aio.safetensors");
+    await wrapper.vm.$nextTick();
+    const note = wrapper.find('[data-testid="model-set-missing"]');
+    expect(note.exists()).toBe(true);
+    expect(note.find("a").attributes("data-workflow")).toBe("auto:x");
+  });
+
+  it("names a set whose base model is gone after it, and links to its fix", async () => {
+    const { wrapper, store } = await mountGrid({
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        {
+          ...combination("2+flux1-dev.sft", [VAE]),
+          missing: [{ name: "flux1-dev.sft", workflow_ids: ["auto:a"] }],
+        },
+      ],
+    });
+
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.text()).toContain("flux1 dev");
+    expect(card.text()).toContain("Missing");
+    expect(card.text()).not.toContain("sdxl_vae");
+    expect(card.attributes("aria-label")).toContain("base model not on shelf");
+
+    store.toggleSet("missing:flux1-dev.sft");
+    await wrapper.vm.$nextTick();
+    const note = wrapper.find('[data-testid="model-set-missing"]');
+    expect(note.text()).toContain("flux1-dev.sft");
+    expect(note.find("a").attributes("data-workflow")).toBe("auto:a");
+  });
+
   it("draws one card per base model, named after it", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
@@ -193,7 +260,7 @@ describe("the cards", () => {
 
     const cards = wrapper.findAll('[data-testid="model-set-card"]');
     expect(cards).toHaveLength(1);
-    expect(cards[0].text()).toContain("realvisXL_v5");
+    expect(cards[0].text()).toContain("realvisXL v5");
     // The per-kind tally of everything else, and the facts summed over both.
     expect(cards[0].text()).toContain("VAE 1");
     expect(cards[0].text()).toContain("LoRA 1");
@@ -519,7 +586,9 @@ describe("the cards", () => {
             { pictures: 1 },
           ),
           combination("1,2", [CKPT, VAE], { pictures: 9 }),
-          combination("3x", [LORA], { pictures: 5 }),
+          combination("3x", [member(3, "filmgrain_xl", "checkpoint")], {
+            pictures: 5,
+          }),
         ],
       });
       // The third card in the row is the one whose tray is open.
@@ -632,7 +701,9 @@ describe("the models no recipe names", () => {
     expect(ghost.text()).toContain("1 model");
     // The NARROW claim, and no more: `no_set` means no kept picture here was
     // made with them, which is not "no recipe names them" and is not a verdict.
-    expect(ghost.text()).toContain("No kept picture in this library was made");
+    expect(ghost.text()).toContain(
+      "No kept picture in this library and no recorded ComfyUI run used",
+    );
     expect(ghost.text()).toContain(
       "nothing here rules out what they work with",
     );
@@ -1233,7 +1304,7 @@ describe("hand-made sets (#1520)", () => {
     const names = wrapper
       .findAll('[data-testid="model-set-card"]')
       .map((card) => card.attributes("aria-label").split(",")[0]);
-    expect(names).toEqual(["realvisXL v5", "juggernautXL_v9"]);
+    expect(names).toEqual(["realvisXL v5", "juggernautXL v9"]);
   });
 
   it("selects the SET on a hand-made card, never a file, and deletes it with Delete and an Undo", async () => {
