@@ -27,12 +27,12 @@ export class GridPage {
     this.sortDirectionButton = page.locator('.gb-sort-panel .tbm-ghost').first()
     this.viewMenuButton = page.locator('button[aria-label="View options"]').first()
     this.columnsSlider = page.locator('.gb-columns-slider')
-    // Expand/Collapse-all live in the View popover as .tbm-action buttons.
+    // Expand/Collapse-all live in the View popover as AppButtons.
     this.expandAllStacksButton = page
-      .locator('.tbm-action', { hasText: 'Expand all' })
+      .locator('.app-btn', { hasText: 'Expand all' })
       .first()
     this.collapseAllStacksButton = page
-      .locator('.tbm-action', { hasText: 'Collapse all' })
+      .locator('.app-btn', { hasText: 'Collapse all' })
       .first()
     // Search popover (.gb-search-panel) opened from the toolbar search icon.
     this.searchOverlay = page.locator('.gb-search-panel')

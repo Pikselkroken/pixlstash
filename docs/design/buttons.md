@@ -57,7 +57,7 @@ screenshot as evidence for or against a row. The **Open** rows are not built.
 | Option rows take no fill: a leading radio on every row, olive when selected, words in `--text` | **Approved** 2026-09-23 |
 | Option rows draw no option icon: the radio is the row's one glyph | **Approved** 2026-09-24 |
 | Segmented track: trough, inset ring, concentric corners | **Approved** 2026-09-12 |
-| Popovers adopting the 28px control | **Open.** Recommended. |
+| Popovers adopting the 28px control | **Approved** 2026-10-04 |
 | Menus: one surface, one 32px row, one hover wash | **Approved** 2026-09-12 |
 | `.tbm` is a panel, not a menu, and keeps `--radius-lg` | **Approved** 2026-09-12 |
 | Vuetify's `v-list` leaves, as `v-btn` and `v-text-field` do | **Approved** 2026-09-12 |
@@ -86,6 +86,7 @@ by a line below.
 | Hues: `surface-*` foregrounds, amber acts / olive selects, `primary_green` retired, `--accent-on` white | Done | #1411; no `primary_green` site left; `on-accent` is `#ffffff` in both themes |
 | Focus ring token, ink hover wash | Done | `--focus-stroke` / `--focus-ring-inset`; `--hover-wash` in 105 places |
 | `Segmented` and `OptionRows` | Done | 11 and 6 users |
+| Popovers on the 28px control | Done | `.tbm-action` deleted, its 5 sites are `AppButton` (#1675). `.tbm-btn`, `.tbm-toggle` and `.tbm-ghost` are `--control-h` at `--radius-sm`; `.tbm-seg-btn` is `--control-h-sm`, so its track is 30px |
 | Menus on one 32px row | Done | `styles/context-menu.css` rows at `--control-h-bar` |
 | All 44 dialogs on `AppDialog`, four widths | Done | 44 `AppDialog` users, no bare `v-dialog`; `--dialog-w-sm` to `--dialog-w-xl` |
 | One `Tooltip` surface, `HelpTip` its preset, the `tooltip` prop | Done | `HelpTip.vue` renders `Tooltip`; `AppBarButton` takes `tooltip` |

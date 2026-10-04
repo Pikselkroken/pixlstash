@@ -76,7 +76,7 @@ describe("TbExportPanel export-to-folder (#291)", () => {
   it("the plain Export button still emits confirm-export, not confirm-export-folder", async () => {
     const wrapper = mountPanel();
 
-    await wrapper.get(".tbm-action--primary").trigger("click");
+    await wrapper.get(".app-btn--primary").trigger("click");
     await flushPromises();
 
     expect(wrapper.emitted("confirm-export")).toHaveLength(1);

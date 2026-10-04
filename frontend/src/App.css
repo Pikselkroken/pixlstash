@@ -647,7 +647,7 @@ kbd {
 }
 .tbm-btn--compact {
   flex: 0 0 auto;
-  min-height: 30px;
+  min-height: var(--control-h);
   padding: 0 var(--space-4);
 }
 
@@ -661,14 +661,14 @@ kbd {
   /* Allow the toggle (a grid item) to shrink to its track so a long label
      ellipsizes instead of overflowing the column and skewing the padding. */
   min-width: 0;
-  min-height: 34px;
+  min-height: var(--control-h);
   padding: 0 var(--space-3);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   text-align: left;
   color: rgb(var(--v-theme-on-panel));
   border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   transition:
     background var(--dur-1) var(--ease-standard),
     color var(--dur-1) var(--ease-standard),
@@ -740,13 +740,13 @@ kbd {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 36px;
+  min-height: var(--control-h);
   padding: 0 var(--space-3);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-panel));
   border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),
@@ -780,7 +780,7 @@ kbd {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 30px;
+  min-height: var(--control-h-sm);
   padding: 0 var(--space-3);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
@@ -865,53 +865,6 @@ kbd {
   box-sizing: border-box;
 }
 
-/* ── Solid action button (primary / secondary) ────────────────────────────── */
-.tbm-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  min-height: 36px;
-  padding: 0 var(--space-4);
-  font-family: var(--font-ui);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  border-radius: var(--radius-md);
-  white-space: nowrap;
-  transition: background var(--dur-1) var(--ease-standard);
-}
-.tbm-action--primary:not(:disabled):hover {
-  background-image: var(--hover-shade);
-}
-.tbm-action--secondary:not(:disabled):hover,
-.tbm-action--outline:not(:disabled):hover {
-  background: var(--hover-wash);
-}
-.tbm-action:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: default;
-}
-.tbm-action--primary {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
-}
-.tbm-action--secondary {
-  background: rgba(var(--v-theme-on-panel), 0.08);
-  color: rgb(var(--v-theme-on-panel));
-}
-.tbm-action--outline {
-  border: 1px solid rgb(var(--v-theme-border));
-  color: rgb(var(--v-theme-on-panel));
-}
-.tbm-action--lg {
-  min-height: 42px;
-  padding: 0 var(--space-5);
-  font-size: var(--text-base);
-}
-.tbm-action--full {
-  width: 100%;
-}
-
 /* ── Field (label + control stacked) ──────────────────────────────────────── */
 .tbm-field {
   display: block;
@@ -973,12 +926,12 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 30px;
+  min-height: var(--control-h);
   padding: 0 var(--space-3);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-panel), 0.75);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   transition:
     background var(--dur-1) var(--ease-standard),

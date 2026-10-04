@@ -296,26 +296,22 @@
             <div class="tbm-section">
               <span class="tbm-label">Stacks</span>
               <div class="tbm-btngroup">
-                <button
-                  class="tbm-action tbm-action--secondary"
-                  type="button"
-                  style="flex: 1"
+                <AppButton
+                  class="gb-stacks-btn"
+                  icon-left="arrow-expand-vertical"
                   :disabled="gbExpandAllStacksDisabled"
                   @click="emit('expand-all-stacks')"
                 >
-                  <v-icon size="16">mdi-arrow-expand-vertical</v-icon>
                   Expand all
-                </button>
-                <button
-                  class="tbm-action tbm-action--secondary"
-                  type="button"
-                  style="flex: 1"
+                </AppButton>
+                <AppButton
+                  class="gb-stacks-btn"
+                  icon-left="arrow-collapse-vertical"
                   :disabled="gbCollapseAllStacksDisabled"
                   @click="emit('collapse-all-stacks')"
                 >
-                  <v-icon size="16">mdi-arrow-collapse-vertical</v-icon>
                   Collapse all
-                </button>
+                </AppButton>
               </div>
             </div>
 
@@ -1323,6 +1319,10 @@ const gbCollapseAllStacksDisabled = computed(
 .gb-view-panel {
   width: 264px;
   max-width: 92vw;
+}
+
+.gb-stacks-btn {
+  flex: 1;
 }
 
 .gb-size-section {
