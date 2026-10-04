@@ -451,7 +451,7 @@ const facts = computed(() => {
   const pictures = Number(props.set.picture_count) || 0;
   return [
     madeLabel(props.set.created_at),
-    pictures ? pictureCount(pictures) : "no picture yet",
+    pictures ? pictureCount(pictures) : "no pictures yet",
     count === 1 ? "1 model" : `${count} models`,
   ]
     .filter(Boolean)

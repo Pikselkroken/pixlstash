@@ -38,7 +38,7 @@
         >{{ card.pictures.toLocaleString() }}
       </span>
     </div>
-    <!-- A hand-made set with no picture yet: its checkpoint's own mark, or a
+    <!-- A hand-made set with no pictures yet: its checkpoint's own mark, or a
          dashed empty cover while it has none. -->
     <div
       v-else-if="card.handMade"
