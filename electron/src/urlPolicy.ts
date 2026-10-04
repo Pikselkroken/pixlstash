@@ -232,10 +232,11 @@ export function isAllowedNavigation(
 
 /**
  * A workflow id, as `?pixlstash_workflow=` carries it: `auto:` and the core
- * hash for an automatic group, or the uuid hex a merge or split minted. The
- * backend's `_WORKFLOW_ID_RE` is the same rule.
+ * hash for an automatic group, or `manual:` and the uuid hex of a manual
+ * workflow. The backend's `WORKFLOW_ID_PATTERN`
+ * (`pixlstash/utils/workflow_ids.py`) is the same rule.
  */
-const WORKFLOW_ID_RE = /^(?:auto:[0-9a-f]{64}|[0-9a-f]{32})$/;
+const WORKFLOW_ID_RE = /^(?:auto:[0-9a-f]{64}|manual:[0-9a-f]{32})$/;
 
 /**
  * The URL `desktop:openComfyui` may hand to the OS browser, or `null`.
