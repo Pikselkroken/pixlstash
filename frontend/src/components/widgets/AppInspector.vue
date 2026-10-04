@@ -47,10 +47,6 @@
             >{{ tab.icon }}</v-icon
           >
           {{ tab.label }}
-          <!-- How many things the tab holds (the Models rail's shelf count). -->
-          <span v-if="tab.count != null" class="inspector-tab-count num">{{
-            tab.count.toLocaleString()
-          }}</span>
           <!-- `busy` is the tab's own live-work light: the Tasks tab wears it
                while anything is running, in every inspector that offers the
                tab, so the behaviour cannot drift between the two. -->
@@ -81,8 +77,7 @@ defineProps({
   /** The accessible name of the pane ("Stats", "Inspector"). */
   label: { type: String, required: true },
   /**
-   * `[{ value, label, icon?, count?, disabled?, tooltip?, busy?, busyTooltip? }]`.
-   * `count` is drawn after the label, in the label's voice but untracked.
+   * `[{ value, label, icon?, disabled?, tooltip?, busy?, busyTooltip? }]`.
    * `busy` pulses the tab's icon and adds an accent dot beside its label;
    * `busyTooltip` then replaces `tooltip` as the button's description.
    */
@@ -224,11 +219,6 @@ const emit = defineEmits(["update:modelValue"]);
 .inspector-tab--active {
   color: var(--active-text);
   border-bottom-color: var(--active-bar);
-}
-
-.inspector-tab-count {
-  letter-spacing: normal;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* Dimmed rather than removed: the pane keeps its shape. */

@@ -10,20 +10,12 @@
       [`inspector-edge-tab--nudge-${parity}`]: parity,
     }"
     type="button"
-    :aria-label="
-      name || (label ? `Show inspector: ${label}` : 'Show inspector')
-    "
+    :aria-label="label ? `Show inspector: ${label}` : 'Show inspector'"
     data-testid="inspector-edge-tab"
     @click="emit('open')"
   >
     <v-icon size="16" aria-hidden="true">mdi-chevron-left</v-icon>
     <span v-if="label" class="inspector-edge-tab__label">{{ label }}</span>
-    <span
-      v-else-if="count != null"
-      class="inspector-edge-tab__count num"
-      aria-hidden="true"
-      >{{ count.toLocaleString() }}</span
-    >
   </button>
 </template>
 
@@ -36,13 +28,6 @@ const props = defineProps({
   label: { type: String, default: "" },
   /** A counter the host bumps on each NEW selection; each bump bounces once. */
   nudge: { type: Number, default: 0 },
-  /**
-   * A plain handle's count (the Models rail: every model it can offer), drawn
-   * under the chevron with no selection stripe. Ignored when `label` is set.
-   */
-  count: { type: Number, default: null },
-  /** The accessible name, when "Show inspector" is not what opens. */
-  name: { type: String, default: "" },
 });
 
 const emit = defineEmits(["open"]);
@@ -95,18 +80,6 @@ watch(
   padding: var(--space-3) 0;
   justify-content: flex-start;
   border-left: 3px solid var(--active-bar);
-}
-
-/* A count is a plain handle's: as wide as the plain one, as tall as it needs. */
-.inspector-edge-tab__count {
-  writing-mode: vertical-rl;
-  font-size: var(--text-2xs);
-  line-height: 1;
-}
-
-.inspector-edge-tab:has(.inspector-edge-tab__count) {
-  height: auto;
-  padding: var(--space-3) 0;
 }
 
 .inspector-edge-tab__label {

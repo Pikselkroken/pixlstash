@@ -48,10 +48,10 @@ export class GridPage {
     this.selectionCountLabel = page.locator(
       '.selection-ctx-bar .bar-btn-apply-label',
     )
-    // Statistics sidebar — toggled from the toolbar. Its name is fixed ("Stats
-    // and tasks"; open is `aria-pressed`), and while tasks run it is prefixed
-    // with their count, so match the end of it.
-    this.statsToggle = page.getByRole('button', { name: /Stats and tasks$/ })
+    // Statistics sidebar — toggled from the toolbar. Its title flips with state
+    // ("Show"/"Hide stats sidebar"), so target the (single) chart-bar button by
+    // icon, which is stable across both states.
+    this.statsToggle = page.locator('.bar-btn:has(.mdi-chart-bar)').first()
     this.statsSidebar = page.locator('.stats-sidebar')
     this.statsContent = page.locator('.stats-sidebar .inspector-content')
     this.statsTabs = page.locator('.stats-sidebar .inspector-tab')

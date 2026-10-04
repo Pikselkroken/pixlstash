@@ -114,7 +114,7 @@
         <TbGlobalActions
           separator
           rail="workflows"
-          rail-name="Inspector"
+          rail-name="inspector"
           @open-settings="emit('open-settings')"
         />
       </span>

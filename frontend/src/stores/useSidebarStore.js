@@ -48,27 +48,6 @@ function saveWorkflowInspectorOpen(val) {
   }
 }
 
-// The Models screen's rail (Models | Tasks). Closed on a fresh install and then
-// however the reader left it: it lists the shelf rather than describing a
-// selection, so nothing opens it on the reader's behalf.
-const MODELS_RAIL_KEY = "pixlstash:modelsRailOpen";
-
-function loadModelsRailOpen() {
-  try {
-    return window.localStorage?.getItem(MODELS_RAIL_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function saveModelsRailOpen(val) {
-  try {
-    window.localStorage?.setItem(MODELS_RAIL_KEY, val ? "true" : "false");
-  } catch {
-    // ignore
-  }
-}
-
 // Width: full sidebar vs. narrow icon dock. Set in Settings → Appearance.
 function loadSidebarDocked() {
   try {
@@ -120,7 +99,6 @@ export const useSidebarStore = defineStore("sidebar", () => {
   const autoRevealed = ref(false);
   const statsOpen = ref(loadStatsOpen());
   const workflowInspectorOpen = ref(loadWorkflowInspectorOpen());
-  const modelsRailOpen = ref(loadModelsRailOpen());
   // Bumped by whichever screen owns a selection-describing inspector when its
   // selection changes to something NEW. The closed-inspector edge tab and the
   // rail toggle's glyph both play their one-shot nudge on it. A counter, like
@@ -183,15 +161,6 @@ export const useSidebarStore = defineStore("sidebar", () => {
     saveWorkflowInspectorOpen(workflowInspectorOpen.value);
   }
 
-  function setModelsRailOpen(val) {
-    modelsRailOpen.value = !!val;
-    saveModelsRailOpen(modelsRailOpen.value);
-  }
-
-  function toggleModelsRail() {
-    setModelsRailOpen(!modelsRailOpen.value);
-  }
-
   // A deep link's "show me": opened, not persisted (see `showTasksTab`).
   function openWorkflowInspector() {
     workflowInspectorOpen.value = true;
@@ -213,7 +182,6 @@ export const useSidebarStore = defineStore("sidebar", () => {
   function showTasksTab() {
     statsOpen.value = true;
     workflowInspectorOpen.value = true;
-    modelsRailOpen.value = true;
     tasksTabRequest.value += 1;
   }
 
@@ -232,7 +200,6 @@ export const useSidebarStore = defineStore("sidebar", () => {
     sidebarOverlay,
     statsOpen,
     workflowInspectorOpen,
-    modelsRailOpen,
     inspectorNudge,
     tasksTabRequest,
     sidebarForcedHidden,
@@ -244,8 +211,6 @@ export const useSidebarStore = defineStore("sidebar", () => {
     toggleStats,
     toggleWorkflowInspector,
     openWorkflowInspector,
-    setModelsRailOpen,
-    toggleModelsRail,
     showTasksTab,
     persistSidebarDocked,
   };

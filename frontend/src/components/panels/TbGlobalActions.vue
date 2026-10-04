@@ -6,11 +6,7 @@
     tooltip="Settings"
     @click="emit('open-settings')"
   />
-  <!-- ── Right-rail toggle ─────────────────────────────────────────────── -->
-  <!-- One glyph on every screen, `dock-right`: it says where something will
-       appear, not what is in it, because the rail holds stats on the Library,
-       an inspector on Workflows and models on Models. Open is the pressed
-       state (`active` + `aria-pressed`), never a second glyph. -->
+  <!-- ── Stats toggle ──────────────────────────────────────────────────── -->
   <!-- App-wide activity light (`--busy`): the whole glyph pulses amber
        whenever the task manager has any active work, so background tasks are
        visible without opening the stats sidebar. A corner dot was too subtle
@@ -24,9 +20,8 @@
       'tb-stats-btn--busy': tasksStore.hasActiveTasks,
       [`tb-stats-btn--nudge-${nudgeParity}`]: nudgeParity,
     }"
-    icon="dock-right"
+    icon="chart-bar"
     :active="railOpen"
-    :aria-pressed="railOpen ? 'true' : 'false'"
     :tooltip="statsTitle"
     @click="toggleRail"
   />
@@ -34,7 +29,7 @@
 
 <script setup>
 // The app-wide chrome that must survive a change of destination: Settings and
-// the right-rail toggle. The grid's toolbar and the duplicates queue both
+// the stats sidebar toggle. The grid's toolbar and the duplicates queue both
 // mount this SAME component, which is what keeps the pair pixel-identical in
 // every view - the styles live here, not in either host.
 //
@@ -57,15 +52,14 @@ const props = defineProps({
   // tooltip to `aria-label`). One rail, more than one panel: on the Workflows
   // grid it carries the workflow inspector, so a reader there was offered
   // "Show stats sidebar" for a control that opens the inspector (#1415).
-  // A fixed name with no Show/Hide: `aria-pressed` says which way it is.
-  railName: { type: String, default: "Stats" },
+  railName: { type: String, default: "stats sidebar" },
   // WHICH rail the toggle drives. The Workflows inspector has its own open
   // flag (it defaults open; the stats sidebar defaults closed), so the host
   // says which one is on its screen.
   rail: {
     type: String,
     default: "stats",
-    validator: (value) => ["stats", "workflows", "models"].includes(value),
+    validator: (value) => ["stats", "workflows"].includes(value),
   },
 });
 
@@ -77,14 +71,11 @@ const tasksStore = useTasksStore();
 const railOpen = computed(() =>
   props.rail === "workflows"
     ? sidebarStore.workflowInspectorOpen
-    : props.rail === "models"
-      ? sidebarStore.modelsRailOpen
-      : sidebarStore.statsOpen,
+    : sidebarStore.statsOpen,
 );
 
 function toggleRail() {
   if (props.rail === "workflows") sidebarStore.toggleWorkflowInspector();
-  else if (props.rail === "models") sidebarStore.toggleModelsRail();
   else sidebarStore.toggleStats();
 }
 
@@ -102,12 +93,12 @@ watch(
   },
 );
 
-// Busy leads with the count and keeps the name, so the control is still
-// called what it opens while the pulse is on.
 const statsTitle = computed(() =>
   tasksStore.hasActiveTasks
-    ? `${tasksStore.activeCount} task${tasksStore.activeCount === 1 ? "" : "s"} running · ${props.railName}`
-    : props.railName,
+    ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? "" : "s"} running`
+    : railOpen.value
+      ? `Hide ${props.railName}`
+      : `Show ${props.railName}`,
 );
 </script>
 
