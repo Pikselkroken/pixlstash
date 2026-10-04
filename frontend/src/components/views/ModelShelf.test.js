@@ -212,6 +212,7 @@ const globalOpts = {
       ShelfMoveDialog: true,
       WorkflowSetRenameDialog: true,
       MergeCopiesDialog: true,
+      ReplaceMissingDialog: true,
 
       // Same reason, for the same provider: it wraps `AppDialog`. Its own suite
       // mounts it against the companions payload.

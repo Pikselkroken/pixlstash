@@ -461,3 +461,32 @@ export function cardAccessibleName(card) {
   ];
   return parts.filter(Boolean).join(", ");
 }
+
+/**
+ * Why a missing model has no "Replace with…" (`replacements_reason` of
+ * `GET …/model-swap?replacing=`), in words.
+ */
+export const NO_REPLACEMENT_TEXT = {
+  no_checkpoint:
+    "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
+  none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
+  none_same_base_model:
+    "Nothing on your shelf is known to have this checkpoint's base model, which its LoRAs need.",
+  none_loadable:
+    "What works with this checkpoint is not something this loader can load.",
+  needs_pixlstash_nodes:
+    "What works with this checkpoint needs a PixlStash loader, and ComfyUI-PixlStash is not installed in ComfyUI.",
+  unread: "Could not read what could replace it just now.",
+};
+
+/**
+ * A replacement candidate as a "Replace with…" option reads it.
+ *
+ * `declared`: only the file layout fits; nothing has run with it. `loader`:
+ * the workflow's loader cannot load it, so a run swaps in PixlStash's.
+ */
+export function replacementLabel(model) {
+  return `${model.display_name || model.filename}${
+    model.via === "declared" ? " (untested)" : ""
+  }${model.loader ? " (through a PixlStash loader)" : ""}`;
+}

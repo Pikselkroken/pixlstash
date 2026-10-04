@@ -496,6 +496,7 @@
         @rename="startRenameSelected"
         @set-menu="({ x, y, el }) => setBarRef?.openContextMenu(x, y, el)"
         @rename-set="startRenameSet"
+        @replace-missing="(heads) => (replacingHeads = heads)"
       />
       <p v-else-if="firstRead" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -1441,7 +1442,16 @@
         @keep-separate="store.keepOutOfHandMadeSet(store.selectedSets[0])"
         @offer-again="store.offerMergeAgain(store.selectedSets[0])"
       />
+      <MissingSetSelectionBar
+        v-if="isSetGrid"
+        @replace="replacingHeads = store.selectedMissing"
+      />
     </div>
+    <ReplaceMissingDialog
+      :open="replacingHeads.length > 0"
+      :heads="replacingHeads"
+      @close="replacingHeads = []"
+    />
     <!-- The set receipts (#1573): the grid's own pill, lifted clear of the
          selection pill when both are up. Local receipts only - a library
          action's Undo would revert something this screen cannot show. -->
@@ -1587,6 +1597,8 @@ import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
 import WorkflowSetRenameDialog from "../panels/WorkflowSetRenameDialog.vue";
 import { handMadeName } from "../../utils/workflowSets";
 import WorkflowSetSelectionBar from "../panels/WorkflowSetSelectionBar.vue";
+import MissingSetSelectionBar from "../panels/MissingSetSelectionBar.vue";
+import ReplaceMissingDialog from "../io/ReplaceMissingDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
@@ -2448,6 +2460,18 @@ function onShelfKeydown(event) {
   // it falls through to the FILE confirmation below, so one key never deletes
   // sets unprompted while also arming a file delete. The sets' own pill still
   // deletes them.
+  // Missing-base cards answer Escape only: they have no file for Delete.
+  if (
+    store.selectedMissing.length &&
+    isSetGrid.value &&
+    event.key === "Escape"
+  ) {
+    event.preventDefault();
+    store.clearMissingSelection();
+    store.clearSetSelection();
+    store.clearSelection();
+    return;
+  }
   if (store.selectedSets.length && isSetGrid.value) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -2486,6 +2510,9 @@ onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
 
 const setGridRef = ref(null);
+
+/** The missing-base heads the Replace dialog is open on, `[]` while closed. */
+const replacingHeads = ref([]);
 const setBarRef = ref(null);
 
 // The set receipt sits above whichever selection pill is up, lifted by its

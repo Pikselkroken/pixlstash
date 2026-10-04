@@ -1683,6 +1683,21 @@ proves ran together, with a model free to appear in more than one.
   both. With both held, the Delete KEY opens the file confirmation and leaves
   the sets to their own pill, so one press never deletes sets unprompted while
   arming a file delete.
+- **A card named after a missing base model is selected as itself**, a third
+  selection (`selectedMissingKeys`, its heads `selectedMissing`): it has no
+  shelf row for a file verb, so it gets its own pill
+  (`MissingSetSelectionBar`) whose one verb, *Replace*, opens
+  `io/ReplaceMissingDialog.vue`. Same rules as the hand-made sets: Ctrl+click
+  and Space add, a plain click or Shift-range replaces, select-all takes them,
+  Escape clears, leaving the grid clears. The tray's missing note opens the same
+  dialog (*Replace in all N workflows…*) and names each workflow as the
+  Workflows grid does (`useWorkflowNames`, one `GET /workflows/{id}` per id,
+  cached for the session). The dialog has one row per missing file
+  (`head.workflowsByName`), offers the Workflow tab's own candidates
+  (`GET …/model-swap?replacing=` on the first workflow loading it) and writes
+  the choice to each of them through `PUT …/model-fix`, in turn, listing every
+  refusal by workflow. Manual workflows are never written (a fix re-keys
+  topologies they are not on); the row says to clone them instead.
 - **Rename has no inline field on the grid**, because a name lives on a card and
   the dashed rule under a row is what makes an inline field honest. The verb
   falls through to `ShelfEditDialog`'s `rename`, which already exists for the

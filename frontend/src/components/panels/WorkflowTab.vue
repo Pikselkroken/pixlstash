@@ -869,6 +869,8 @@ import {
   baseModels,
   checkpointUnread,
   modelDisplayName,
+  NO_REPLACEMENT_TEXT,
+  replacementLabel,
 } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
 import { breakableName } from "../../utils/breakableName";
@@ -1271,19 +1273,6 @@ const replacementMissing = computed(
 const replacementsByFile = ref({});
 
 /** Why a missing file has no "Replace with…", as the row says it. */
-const NO_REPLACEMENT_TEXT = {
-  no_checkpoint:
-    "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
-  none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
-  none_same_base_model:
-    "Nothing on your shelf is known to have this checkpoint's base model, which its LoRAs need.",
-  none_loadable:
-    "What works with this checkpoint is not something this loader can load.",
-  needs_pixlstash_nodes:
-    "What works with this checkpoint needs a PixlStash loader, and ComfyUI-PixlStash is not installed in ComfyUI.",
-  unread: "Could not read what could replace it just now.",
-};
-
 /** A "Replace with…" picker's options for one missing file, or `[]`. */
 function replaceOptionsFor(kind, file) {
   const models = replacementsByFile.value[`${kind}:${file}`]?.replacements;
@@ -1292,11 +1281,7 @@ function replaceOptionsFor(kind, file) {
         { value: "", label: "Replace with…" },
         ...models.map((model) => ({
           value: model.filename,
-          // `declared`: only the file layout fits; nothing has run with it.
-          // `loader`: this loader cannot load it, so a run swaps in ours.
-          label: `${model.display_name || model.filename}${
-            model.via === "declared" ? " (untested)" : ""
-          }${model.loader ? " (through a PixlStash loader)" : ""}`,
+          label: replacementLabel(model),
         })),
       ]
     : [];

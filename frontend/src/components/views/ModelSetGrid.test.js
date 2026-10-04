@@ -60,6 +60,12 @@ vi.mock("../../api/modelShelf", () => ({
   setWorkflowSetDeclines: (...args) => setWorkflowSetDeclines(...args),
 }));
 
+const getWorkflowCard = vi.fn();
+vi.mock("../../api/workflows", async (importOriginal) => ({
+  ...(await importOriginal()),
+  getWorkflowCard: (...args) => getWorkflowCard(...args),
+}));
+
 vi.mock("../../api/modelIcons", () => ({
   setModelIcon: vi.fn(),
   clearModelIcons: vi.fn(),
@@ -176,6 +182,7 @@ beforeEach(() => {
   // The grid is mounted without the shelf, which is what declares the host.
   useOperationStore().setLocalReceiptHost(true);
   window.localStorage.clear();
+  getWorkflowCard.mockReset().mockResolvedValue({ card: { name: "" } });
   listAdapters.mockReset().mockResolvedValue([]);
   listSupport.mockReset().mockResolvedValue([]);
   fetchWorkflowSets
@@ -261,6 +268,54 @@ describe("the cards", () => {
     const note = wrapper.find('[data-testid="model-set-missing"]');
     expect(note.text()).toContain("flux1-dev.sft");
     expect(note.find("a").attributes("data-workflow")).toBe("auto:a");
+  });
+
+  it("selects missing-base cards as themselves, with Ctrl and Space", async () => {
+    const { wrapper, store } = await mountGrid({
+      combinations: [
+        {
+          ...combination('+["a.sft"]', []),
+          missing: [{ name: "a.sft", workflow_ids: ["auto:a"] }],
+        },
+        {
+          ...combination('+["b.sft"]', []),
+          missing: [{ name: "b.sft", workflow_ids: ["auto:b"] }],
+        },
+      ],
+    });
+    const rows = () => wrapper.findAll('.msg__row[data-key^="missing:"]');
+    await rows()[0].trigger("click");
+    await rows()[1].trigger("click", { ctrlKey: true });
+    expect([...store.selectedMissingKeys]).toEqual(["missing:a.sft", "missing:b.sft"]);
+    expect(rows().map((r) => r.attributes("aria-selected"))).toEqual(["true", "true"]);
+    expect(store.selectedMissing.map((head) => head.name)).toEqual(["a.sft", "b.sft"]);
+    // Space toggles the card under the cursor, as Ctrl+click does.
+    await rows()[1].trigger("keydown", { key: " " });
+    expect([...store.selectedMissingKeys]).toEqual(["missing:a.sft"]);
+  });
+
+  it("names the workflows in the note and offers to replace in all of them", async () => {
+    getWorkflowCard.mockImplementation(async (id) => ({
+      card: { id, name: id === "auto:n1" ? "Text to Image" : "Upscale" },
+    }));
+    const { wrapper, store } = await mountGrid({
+      combinations: [
+        {
+          ...combination('+["gone.sft"]', []),
+          missing: [{ name: "gone.sft", workflow_ids: ["auto:n1", "auto:n2"] }],
+        },
+      ],
+    });
+    store.toggleSet("missing:gone.sft");
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const note = wrapper.find('[data-testid="model-set-missing"]');
+    expect(note.findAll("a").map((a) => a.text())).toEqual(["Text to Image", "Upscale"]);
+    const replace = note.find('[data-testid="model-set-replace-missing"]');
+    expect(replace.text()).toContain("Replace in all 2 workflows");
+    await replace.trigger("click");
+    const [[heads]] = wrapper.emitted("replace-missing");
+    expect(heads[0].workflowsByName).toEqual({ "gone.sft": ["auto:n1", "auto:n2"] });
   });
 
   it("draws one card per base model, named after it", async () => {
