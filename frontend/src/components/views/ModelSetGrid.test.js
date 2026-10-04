@@ -2832,6 +2832,16 @@ describe("hiding a set from pictures", () => {
     expect(store.setGroups).toHaveLength(1);
   });
 
+  it("keeps the grid and its Show them line when every set is hidden", async () => {
+    const { wrapper } = await mountOneSet();
+    await wrapper.find('[data-testid="set-hide"]').trigger("click");
+    expect(wrapper.text()).not.toContain("No picture in this library");
+    expect(wrapper.find('[data-testid="toggle-hidden-sets"]').exists()).toBe(
+      true,
+    );
+    wrapper.unmount();
+  });
+
   it("hides from the card's button and draws hidden sets on request", async () => {
     const { wrapper } = await mountOneSet();
     await wrapper.find('[data-testid="set-hide"]').trigger("click");

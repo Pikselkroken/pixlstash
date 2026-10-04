@@ -376,8 +376,13 @@ const columns = ref(1);
 const cursorId = ref("");
 const announcement = ref("");
 
+// Hidden sets are out of the grid, not absent: they keep the grid (and its
+// "Show them" line) up rather than claim no picture recorded a model.
 const nothingShown = computed(
-  () => !store.setGroups.length && !store.noSetRows.length,
+  () =>
+    !store.setGroups.length &&
+    !store.noSetRows.length &&
+    !store.hiddenSetCount,
 );
 
 const hasHandMade = computed(() => store.handMadeGroups.length > 0);

@@ -34,6 +34,7 @@ const fetchWorkflowSets = vi.fn();
 const createWorkflowSet = vi.fn();
 const deleteWorkflowSet = vi.fn();
 const setWorkflowSetDeclines = vi.fn();
+const addWorkflowSetMembers = vi.fn();
 const setModelIcon = vi.fn();
 const clearModelIcons = vi.fn();
 
@@ -57,6 +58,7 @@ vi.mock("../api/modelShelf", () => ({
   createWorkflowSet: (...args) => createWorkflowSet(...args),
   deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
   setWorkflowSetDeclines: (...args) => setWorkflowSetDeclines(...args),
+  addWorkflowSetMembers: (...args) => addWorkflowSetMembers(...args),
 }));
 
 const mergeModelCopies = vi.fn();
@@ -3307,6 +3309,94 @@ describe("sets from pictures are hidden, never deleted", () => {
     store.toggleSet("hand:7");
     await flush();
     expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  });
+
+  it("survives a remembered list that is not a list", async () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfHiddenSets",
+      JSON.stringify({ keys: "model:1" }),
+    );
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    expect(store.hiddenSetCount).toBe(0);
+    expect(store.setGroups.map((g) => g.key)).toEqual(["model:1"]);
+  });
+
+  it("decides on the membership after an add still on the wire", async () => {
+    const store = await openOn([handSet(7)]);
+    const extra = member({ id: 3, name: "x.st", kind: "vae" }, "d".repeat(64));
+    let land;
+    addWorkflowSetMembers
+      .mockReset()
+      .mockImplementation(() => new Promise((resolve) => (land = resolve)));
+    const adding = store.addToHandMadeSet(store.handMadeSets[0], [
+      { model_id: 3 },
+    ]);
+    // Closed before the add answers, while the snapshot is still the twin.
+    store.toggleSet("hand:7");
+    await flush();
+    fetchWorkflowSets.mockResolvedValue({
+      ...(await fetchWorkflowSets()),
+      hand_made: [handSet(7, [extra])],
+    });
+    land({ added: ["d".repeat(64)], set: handSet(7, [extra]) });
+    await adding;
+    await flush();
+    await flush();
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  });
+
+  it("never moves the view off a set opened while the swap was deciding", async () => {
+    const store = await openOn([handSet(7), { id: 5, name: "B", members: [] }], [7]);
+    // From A straight to B: A gives way, B stays open and is not swapped.
+    store.toggleSet("hand:5");
+    await flush();
+    await flush();
+    expect(deleteWorkflowSet).toHaveBeenCalledTimes(1);
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(7);
+    expect(store.openSetKey).toBe("hand:5");
+  });
+
+  it("redoes the swap: unhidden and opened again", async () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfHiddenSets",
+      JSON.stringify({ keys: ["model:1"] }),
+    );
+    useOperationStore().setLocalReceiptHost(true);
+    const store = await openOn([handSet(7)]);
+    store.toggleSet("hand:7");
+    await flush();
+    await flush();
+    const restored = handSet(9);
+    createWorkflowSet.mockReset().mockImplementation(async () => {
+      fetchWorkflowSets.mockResolvedValue({
+        combinations: [
+          {
+            key: "1+2",
+            models: [checkpoint, lora],
+            recipes: 2,
+            covers: [],
+            covered_by: [9],
+          },
+        ],
+        no_set: [],
+        hand_made: [restored],
+      });
+      return restored;
+    });
+    const operations = useOperationStore();
+    await operations.takeLocalReceiptAction();
+    // Undone: hidden again, as it was before the swap.
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:modelShelfHiddenSets")),
+    ).toEqual({ keys: ["model:1"] });
+
+    await operations.takeLocalReceiptAction();
+    await flush();
+    expect(deleteWorkflowSet).toHaveBeenLastCalledWith(9);
+    expect(store.hiddenSetCount).toBe(0);
+    expect(store.openSetKey).toBe("model:1");
   });
 
   it("leaves a set alone when another set also covers the twin", async () => {

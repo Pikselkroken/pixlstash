@@ -1673,9 +1673,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /** The keys of the hidden sets from pictures. */
   const hiddenSetKeys = ref(
     new Set(
-      (readStored(HIDDEN_SETS_KEY)?.keys ?? []).filter(
-        (key) => typeof key === "string" && key !== "",
-      ),
+      [readStored(HIDDEN_SETS_KEY)?.keys]
+        .filter(Array.isArray)
+        .flat()
+        .filter((key) => typeof key === "string" && key !== ""),
     ),
   );
 
@@ -2040,14 +2041,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const { receipt, undo, redo, hasUndo, verb, failure, quiet } = options;
     const notices = useNoticeStore();
     let result;
+    const call = write();
+    setWritesInFlight.add(call);
     try {
-      result = await write();
+      result = await call;
     } catch (err) {
       notices.push({
         level: "error",
         text: errorDetail(err) || failure,
       });
       return null;
+    } finally {
+      setWritesInFlight.delete(call);
     }
     await loadWorkflowSets({ force: true });
     if (quiet) return result;
@@ -2155,7 +2160,23 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @param {number} setId
    * @returns {Promise<boolean>} true when the set gave way.
    */
-  async function yieldToTwin(setId) {
+  async function yieldToTwin(setId, { reopen = false } = {}) {
+    if (yielding.has(setId)) return false;
+    yielding.add(setId);
+    try {
+      return await yieldOne(setId, reopen);
+    } finally {
+      yielding.delete(setId);
+    }
+  }
+
+  async function yieldOne(setId, reopen) {
+    // A tray closes the instant it is asked to, with an add or a removal
+    // still on the wire: decide on the membership after it, never before.
+    if (setWritesInFlight.size) {
+      await Promise.allSettled([...setWritesInFlight]);
+      await loadWorkflowSets({ force: true });
+    }
     const set = handMadeSets.value.find((candidate) => candidate.id === setId);
     const twin = automaticTwin(set);
     if (!twin) return false;
@@ -2175,16 +2196,35 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         if (wasHidden) changeHidden([twin.key], true);
         return restored;
       },
-      redo: async (restored) => (await deleteHandMadeSets([restored])) ?? false,
+      // The swap again, checked again: the restored set may have changed since.
+      redo: async (restored) => {
+        if (await yieldToTwin(restored.id, { reopen: true })) return true;
+        useNoticeStore().push({
+          level: "info",
+          text: `"${name}" no longer matches a set from pictures, so it was kept.`,
+        });
+        return false;
+      },
       verb: "twin",
       failure: "The set could not be swapped for the set from pictures.",
     });
     if (!done) return false;
     if (wasHidden) changeHidden([twin.key], false);
-    clearSetSelection();
-    openSetKey.value = twin.key;
+    // Opened only over a closed tray: an owner who has opened another set
+    // since keeps it, and this never moves the view off a hand-made tray -
+    // which the watch below would read as that set being closed too.
+    const over = openSetKey.value;
+    if (!over || (reopen && !over.startsWith("hand:"))) {
+      clearSetSelection();
+      openSetKey.value = twin.key;
+    }
     return true;
   }
+
+  /** Every set write on the wire, which a reconciliation waits out. */
+  const setWritesInFlight = new Set();
+  /** The set ids a `yieldToTwin` is already deciding. */
+  const yielding = new Set();
 
   // Closing a hand-made set's tray - or opening another - is the owner done
   // with it, which is when a re-created set from pictures gives way.

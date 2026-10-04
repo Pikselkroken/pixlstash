@@ -1781,7 +1781,11 @@ the shelf's workflow sets section) and served as `hand_made` on
   exactly a group's, and no other hand-made set also covers that group, the
   hand-made set is deleted, the group is unhidden and opened, and the receipt
   says why. Its Undo recreates the set with its name and kept-out models and
-  hides the group again if it was hidden.
+  hides the group again if it was hidden; Redo runs the swap again, checked
+  again. It waits out any set write still on the wire and refetches before it
+  decides, and it opens the group only over a closed tray (never moving the
+  view off a hand-made tray, which the watch would read as closing that one).
+  Hidden sets count as present for the grid's empty states.
 - **A hand-made card selects the SET; a tray tile selects a FILE.**
   `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
   either kind clears the other; Ctrl+click and select-all hold both (see the
