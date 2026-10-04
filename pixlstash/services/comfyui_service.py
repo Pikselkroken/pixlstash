@@ -234,8 +234,17 @@ def _submit_comfyui_prompt(
     # Strip PixlStash-specific metadata keys before sending to ComfyUI.
     # ComfyUI iterates all top-level entries as nodes and will crash on any
     # non-dict value (e.g. the list stored in "pixlstash_output_nodes").
+    # `is_changed` is ComfyUI's own cache annotation, copied into every prompt
+    # chunk it writes. ComfyUI recomputes it, and an unreadable file leaves it
+    # NaN, which no JSON request can carry: drop it rather than send it back.
     clean_workflow = {
-        k: v for k, v in workflow.items() if not k.startswith("pixlstash_")
+        k: (
+            {key: value for key, value in v.items() if key != "is_changed"}
+            if isinstance(v, dict)
+            else v
+        )
+        for k, v in workflow.items()
+        if not k.startswith("pixlstash_")
     }
     # Do NOT pass the graph under extra_data.extra_pnginfo.workflow: that PNG
     # chunk is where the ComfyUI frontend stores the *UI* node graph, and the
