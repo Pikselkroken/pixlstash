@@ -3038,8 +3038,8 @@ def create_router(server) -> APIRouter:
 
         A PixlStash shelf loader's ``checkpoint_id`` is a shelf row id, not a
         file, so it is read as the file that row names. Where the shelf no
-        longer holds that row, a picture's editor graph may still name the
-        file (:func:`_editor_names_for`); failing both, the shelf's own "gone"
+        longer holds that row, or holds it without a file, a picture's editor
+        graph may still name the file (:func:`_editor_names_for`); failing both, the shelf's own "gone"
         / "unnamed" words stand in. A bare ``77`` reads as a model called 77.
         """
         try:
@@ -3062,8 +3062,12 @@ def create_router(server) -> APIRouter:
         shelf_files = shelf_filenames(
             hub, [value for widget, value in loaded if widget == SHELF_ID_FIELD]
         )
+        # Gone, or still on the shelf but naming no file: either way the
+        # picture's editor graph may be the only thing left that names it.
         lost = [
-            value for value, file in shelf_files.items() if file == SHELF_MODEL_GONE
+            value
+            for value, file in shelf_files.items()
+            if not file or file == SHELF_MODEL_GONE
         ]
         if lost and source.picture_id is not None:
             shelf_files.update(_editor_names_for(source, lost))

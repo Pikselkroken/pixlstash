@@ -7356,14 +7356,26 @@ def test_a_gone_shelf_loader_is_named_by_the_pictures_editor_graph(
         "SDXL/ninth.safetensors",
     ]
 
-    # A picture that will not read at all reads as gone, not as a 500.
+    # A shelf row that is still there but names no file is read the same way.
+    with runnable.server.hub.transaction() as conn:
+        unnamed_id = conn.execute(
+            "INSERT INTO model (file_kind, provenance) VALUES ('checkpoint', 'scanned')"
+        ).lastrowid
+    embedded["9"]["inputs"]["checkpoint_id"] = str(unnamed_id)
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_GONE,
+        "SDXL/ninth.safetensors",
+    ]
+
+    # A picture that will not read at all is not a 500: each loader keeps the
+    # shelf's own word for it.
     def unreadable(server, picture_id):
         raise OSError("test-unreadable")
 
     monkeypatch.setattr(workflows_routes, "_read_embedded_metadata", unreadable)
     assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
         SHELF_MODEL_GONE,
-        SHELF_MODEL_GONE,
+        SHELF_MODEL_UNNAMED,
     ]
 
 
