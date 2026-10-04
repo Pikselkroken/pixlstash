@@ -3347,6 +3347,45 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(deleteWorkflowSet).not.toHaveBeenCalled();
   });
 
+  it("reports a write that throws before it returns a promise", async () => {
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockImplementation(() => {
+      throw new Error("test-sync-failure");
+    });
+    await expect(store.createHandMadeSet({})).resolves.toBeNull();
+    expect(useNoticeStore().notices.at(-1).level).toBe("error");
+  });
+
+  it("waits out a write that starts while it is already waiting", async () => {
+    const store = await openOn([handSet(7)]);
+    const extra = member({ id: 3, name: "x.st", kind: "vae" }, "d".repeat(64));
+    const lands = [];
+    addWorkflowSetMembers
+      .mockReset()
+      .mockImplementation(() => new Promise((resolve) => lands.push(resolve)));
+    const first = store.addToHandMadeSet(store.handMadeSets[0], [
+      { model_id: 2 },
+    ]);
+    store.toggleSet("hand:7");
+    await flush();
+    // A second add starts while the check waits on the first.
+    const second = store.addToHandMadeSet(store.handMadeSets[0], [
+      { model_id: 3 },
+    ]);
+    lands[0]({ added: [], set: handSet(7) });
+    await first;
+    await flush();
+    fetchWorkflowSets.mockResolvedValue({
+      ...(await fetchWorkflowSets()),
+      hand_made: [handSet(7, [extra])],
+    });
+    lands[1]({ added: ["d".repeat(64)], set: handSet(7, [extra]) });
+    await second;
+    await flush();
+    await flush();
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  });
+
   it("never moves the view off a set opened while the swap was deciding", async () => {
     const store = await openOn([handSet(7), { id: 5, name: "B", members: [] }], [7]);
     // From A straight to B: A gives way, B stays open and is not swapped.

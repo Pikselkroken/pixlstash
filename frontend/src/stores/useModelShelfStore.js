@@ -2041,9 +2041,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const { receipt, undo, redo, hasUndo, verb, failure, quiet } = options;
     const notices = useNoticeStore();
     let result;
-    const call = write();
-    setWritesInFlight.add(call);
+    let call;
     try {
+      call = write();
+      setWritesInFlight.add(call);
       result = await call;
     } catch (err) {
       notices.push({
@@ -2052,7 +2053,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       });
       return null;
     } finally {
-      setWritesInFlight.delete(call);
+      if (call) setWritesInFlight.delete(call);
     }
     await loadWorkflowSets({ force: true });
     if (quiet) return result;
@@ -2172,8 +2173,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   async function yieldOne(setId, reopen) {
     // A tray closes the instant it is asked to, with an add or a removal
-    // still on the wire: decide on the membership after it, never before.
-    if (setWritesInFlight.size) {
+    // still on the wire: decide on the membership after it, never before -
+    // including a write that started while this one was being waited out.
+    while (setWritesInFlight.size) {
       await Promise.allSettled([...setWritesInFlight]);
       await loadWorkflowSets({ force: true });
     }
