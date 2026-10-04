@@ -13,7 +13,6 @@ import zipfile
 from PIL import Image, PngImagePlugin
 
 from pixlstash.db_models.picture import Picture, PictureSet
-from pixlstash.inference.cpu_query_encoders import CpuQueryEncodersNotReadyError
 from pixlstash.db_models.picture_set import PictureSetMember
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -922,7 +921,7 @@ class ExportUtils:
             export_tasks[task_id]["status"] = "failed"
             if temp_export_dir is not None:
                 shutil.rmtree(temp_export_dir, ignore_errors=True)
-            ExportUtils._record_failure(export_tasks, task_id, exc)
+            logger.error(f"Export task {task_id} failed: {exc}")
 
     @staticmethod
     def generate_folder_export(server, request, task_id, export_tasks, background_data):
@@ -1008,22 +1007,4 @@ class ExportUtils:
             export_tasks[task_id]["opened"] = opened
         except Exception as exc:
             export_tasks[task_id]["status"] = "failed"
-            ExportUtils._record_failure(export_tasks, task_id, exc)
-
-    @staticmethod
-    def _record_failure(export_tasks, task_id, exc) -> None:
-        """Log why an export failed, and give the owner the reason when it is theirs.
-
-        An export by query whose encoders are still loading has nothing wrong
-        with it and can simply be run again, so the reason goes on the task,
-        where the status route returns it. Anything else is logged with its
-        traceback: the export runs as a background job, so this log line is the
-        only record of what went wrong.
-        """
-        if isinstance(exc, CpuQueryEncodersNotReadyError):
-            export_tasks[task_id]["message"] = str(exc)
-            logger.warning(
-                "Export task %s could not encode its query yet: %s", task_id, exc
-            )
-            return
-        logger.error("Export task %s failed: %s", task_id, exc, exc_info=True)
+            logger.error(f"Export task {task_id} failed: {exc}")

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+import threading
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Iterator
 
 from pixlstash.inference.cpu_query_encoders import build_cpu_query_encoders
 from pixlstash.inference.vram_budget import VramBudget
@@ -117,6 +119,8 @@ class InferenceEngine:
         # inference device while the GPU worker is using it, when using Metal.
         # See inference/cpu_query_encoders.py.
         self.query_encoders = None
+        # One query encode at a time; see query_services.
+        self._query_lock = threading.Lock()
         self.vram_budget = vram_budget
         self.lifecycle = lifecycle
         self.force_cpu = force_cpu
@@ -372,12 +376,11 @@ class InferenceEngine:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Unload all models and release GPU/CPU memory."""
-        # Before the lifecycle call, so the gc.collect() inside it frees their
-        # ~0.7 GB too. (Its trim_process_memory() only acts on Linux, and these
-        # exist only on Macs.)
-        if self.query_encoders is not None:
-            self.query_encoders.unload()
+        """Unload all models and release GPU/CPU memory.
+
+        The CPU query encoders are deliberately kept: they load once, before the
+        engine is published, and go when the engine does (#1774).
+        """
         self.lifecycle.aggressive_unload(
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,
@@ -389,6 +392,29 @@ class InferenceEngine:
     def aggressive_unload(self) -> None:
         """Alias for :meth:`close`."""
         self.close()
+
+    @contextmanager
+    def query_services(self) -> Iterator[tuple]:
+        """Yield ``(clip_service, sbert_service)`` for one search-query encode.
+
+        On Metal these are the CPU copies (:mod:`.cpu_query_encoders`), because
+        a query is encoded on a request thread while the GPU worker uses the
+        device; everywhere else they are the engine's own services.
+
+        One encode at a time, on every host: the query encodes run on request
+        threads and share these service instances, which read their model and
+        tokenizer without a lock once loaded. They used to take turns on the
+        single database writer thread; this lock is that serialisation, without
+        holding the writer.
+
+        Raises:
+            CpuQueryEncodersNotReadyError: The CPU copies failed to load.
+        """
+        with self._query_lock:
+            if self.query_encoders is None:
+                yield self.clip_service, self.sbert_service
+            else:
+                yield self.query_encoders.services()
 
     def safe_idle_unload(self) -> None:
         """Release non-captioning models during idle periods."""
@@ -670,12 +696,9 @@ class InferenceEngine:
         if wd14_threshold is not None:
             wd14_service.set_threshold(wd14_threshold)
 
-        # Metal only, and constructed unloaded: every service here is lazy, so
-        # reading two sets of weights at this point would be the only thing in
-        # create() that costs time - measured at 7.3 s against 0.003 s, because
-        # they would be the first models in the process and pay every import.
-        # The Vault queues the load onto the GPU worker instead, normally from
-        # Vault.ensure_ready.
+        # Metal only, and constructed unloaded like every service here. The
+        # Vault loads them before it publishes the engine (Vault._create_engine);
+        # the CPU spillover engines built on the CPU never get any.
         engine.query_encoders = build_cpu_query_encoders(device)
 
         return engine

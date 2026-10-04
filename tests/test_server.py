@@ -69,7 +69,10 @@ from pixlstash.db_models import (
     TagPrediction,
 )
 import pixlstash.routes.pictures as pictures_routes
-from pixlstash.inference.cpu_query_encoders import CpuQueryEncodersNotReadyError
+from pixlstash.inference.cpu_query_encoders import (
+    LOAD_FAILED_DETAIL,
+    CpuQueryEncodersNotReadyError,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.tag_task import TagTask
 from pixlstash.tasks.task_type import TaskType
@@ -2393,10 +2396,8 @@ def test_text_search_encodes_the_query_off_the_db_writer_thread(
 ):
     """``GET /pictures/search`` encodes its query before queuing the search.
 
-    The search runs on the single DB writer thread. On Metal an encode can wait
-    for its CPU copies to load on the GPU worker, and that worker commits its
-    batches through the same writer, so an encode there stalls every database
-    write until the wait times out.
+    The search runs on the single DB writer thread, so an encode there holds
+    every database write for the length of a model call.
     """
     encodes, searches, writer = _record_query_encoding(server, monkeypatch)
 
@@ -2459,19 +2460,18 @@ def _run_export(server, client, query):
 
 
 @pytest.mark.parametrize("failing", ["sbert", "clip"])
-def test_text_search_answers_503_while_its_encoders_are_not_ready(
+def test_text_search_answers_503_when_its_encoders_failed_to_load(
     server, client, monkeypatch, caplog, failing
 ):
-    """A search whose query cannot be encoded yet is a 503, not a 500, whichever
-    encoder refuses. CLIP refusing after SBERT succeeded is the realistic case:
-    an idle unload landing between the two encodes.
+    """A search whose query cannot be encoded is a 503, not a 500, whichever
+    encoder refuses.
 
     The warning names the reason and leaves the search text out of the log.
     """
-    reason = "Search is still loading its models; try the search again shortly."
+    reason = LOAD_FAILED_DETAIL
 
     def not_ready(text):
-        raise CpuQueryEncodersNotReadyError(reason, worker_running=True)
+        raise CpuQueryEncodersNotReadyError(reason)
 
     if failing == "sbert":
         monkeypatch.setattr(server.vault, "generate_text_embedding", not_ready)
@@ -2496,31 +2496,3 @@ def test_text_search_answers_503_while_its_encoders_are_not_ready(
     ]
     assert any(reason in message for message in warnings), warnings
     assert not any(query in message for message in warnings), warnings
-
-
-@pytest.mark.parametrize("error", ["not_ready", "unexpected"])
-def test_export_by_query_says_why_it_failed(server, client, monkeypatch, caplog, error):
-    """An export is a background job - the request that started it already had
-    its 200 - so it cannot answer 503. When its query cannot be encoded yet it
-    fails with the reason on its status, so the owner can try again; an
-    unexpected error keeps its traceback in the log."""
-    reason = "Search is still loading its models; try the search again shortly."
-
-    def fail(text):
-        if error == "not_ready":
-            raise CpuQueryEncodersNotReadyError(reason, worker_running=True)
-        raise RuntimeError("the encoder exploded")
-
-    monkeypatch.setattr(server.vault, "generate_text_embedding", fail)
-    logger_name = "pixlstash.utils.service.export_utils"
-    with caplog.at_level(logging.WARNING, logger=logger_name):
-        status = _run_export(server, client, "a red bicycle")
-
-    assert status["status"] == "failed", status
-    records = [r for r in caplog.records if r.name == logger_name]
-    assert records, "the failure was not logged"
-    if error == "not_ready":
-        assert status.get("message") == reason, status
-    else:
-        assert "message" not in status, status
-        assert any(r.exc_info for r in records), "the traceback was not logged"

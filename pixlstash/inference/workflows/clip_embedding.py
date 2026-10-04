@@ -78,8 +78,7 @@ class ClipEmbeddingWorkflow:
         worker writes the stored picture embeddings and must keep the
         accelerator; the *query* arrives on a request thread while the worker
         is running, and on Metal that second thread is what crashes the
-        process. Where the engine has no CPU copies this is
-        :meth:`encode_images` with a batch of one.
+        process, so this goes through ``InferenceEngine.query_services``.
 
         Args:
             image: The uploaded ``PIL.Image`` to search with.
@@ -87,15 +86,8 @@ class ClipEmbeddingWorkflow:
         Returns:
             Float32 numpy array of shape ``(1, D)`` or ``None`` on failure.
         """
-        encoders = self._engine.query_encoders
-        if encoders is None:
-            return self.encode_images([image])
-        if encoders.ensure_serving():
-            return encoders.encode_query_image(image)
-        # No GPU worker running - see ``TextEmbeddingWorkflow.encode_query``
-        # for why falling back is safe, and why fallbacks take turns.
-        with encoders.device_fallback():
-            return self.encode_images([image])
+        with self._engine.query_services() as (clip, _sbert):
+            return clip.encode_image_batch([image])
 
     def suggested_batch_size(self) -> int:
         """Return the VRAM-budget-constrained batch size for a CLIP inference pass.

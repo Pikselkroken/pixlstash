@@ -1161,9 +1161,9 @@ def _on_event_loop() -> bool:
 def test_likeness_search_runs_off_the_event_loop(set_env, monkeypatch):
     """The handler is a plain ``def``, so FastAPI runs it on a threadpool worker.
 
-    Its query encode (on Metal, possibly a wait of up to a minute for the CPU
-    encoders), its database reads and its scoring would otherwise block every
-    request the server is handling.
+    Its query encode (which waits its turn behind other searches' encodes), its
+    database reads and its scoring would otherwise block every request the
+    server is handling.
     """
     client, _server, ids, _sets = set_env
     calls = []

@@ -348,14 +348,13 @@ def register_routes(router, server):
             return []
 
         # Encoded here, never inside the database task: the DB writer is one
-        # thread, and on Metal an encode can wait for the CPU encoders to load
-        # on the GPU worker, which commits its own batches through that writer.
+        # thread, and an encode there holds every write for a model call.
         try:
             query_embedding = server.vault.generate_text_embedding(query)
             clip_query_embedding = server.vault.generate_clip_text_embedding(query)
         except CpuQueryEncodersNotReadyError as exc:
-            # 503 rather than a 500: nothing is wrong with the request, the
-            # encoders are still loading (or need a worker that is not running).
+            # 503 rather than a 500: nothing is wrong with the request; the
+            # CPU query encoders failed to load at start-up.
             logger.warning("Text search cannot encode its query yet: %s", exc)
             raise HTTPException(
                 status_code=503,

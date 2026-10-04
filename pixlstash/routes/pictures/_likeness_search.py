@@ -66,9 +66,8 @@ def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
     try:
         embeddings = workflow.encode_query_image(pil_image)
     except CpuQueryEncodersNotReadyError as exc:
-        # Already a 503, but say which 503 it is: "still loading" and "no
-        # worker" need different things from the owner, and the generic
-        # message below would send them looking at CLIP instead.
+        # Already a 503, but say why: the generic message below would send
+        # the owner looking at CLIP rather than at the start-up log.
         logger.warning("likeness-search: cannot encode the query image yet: %s", exc)
         raise HTTPException(
             status_code=503,
@@ -150,7 +149,7 @@ def register_routes(router, server):
         response_model_exclude_none=True,
     )
     # A plain ``def``, so FastAPI runs it on a threadpool worker: the query
-    # encode (on Metal, possibly a wait for the CPU encoders to load), the
+    # encode (which waits its turn behind other searches' encodes), the
     # database reads and the scoring would otherwise block every request.
     def search_by_image_likeness(
         request: Request,

@@ -304,16 +304,12 @@ def register_routes(router, server):
                 "progress": progress,
             }
 
-        response = {
+        return {
             "status": task["status"],
             "total": total,
             "processed": processed,
             "progress": progress,
         }
-        if task.get("message"):
-            # Why a failed export failed, when the owner can act on it.
-            response["message"] = task["message"]
-        return response
 
     @router.get(
         "/pictures/export/download/{task_id}",

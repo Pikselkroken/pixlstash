@@ -731,10 +731,8 @@ class Picture(SQLModel, table=True):
 
         The query embeddings come in as values, not as encoder callables,
         because this runs inside a database task: an encode here would hold the
-        single DB writer thread for the length of a model call - and on Metal
-        for as long as a search waits for its CPU encoders to load, which the
-        GPU worker cannot finish while its own commits queue behind this one.
-        Callers encode on their own thread before queuing the search.
+        single DB writer thread, and every write, for the length of a model
+        call. Callers encode on their own thread before queuing the search.
         ``query_embedding`` is the SBERT embedding compared with
         ``Picture.text_embedding``; ``clip_query_embedding`` the CLIP text
         embedding compared with ``Picture.image_embedding``. ``None`` leaves
