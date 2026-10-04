@@ -1330,9 +1330,10 @@ CREATE TABLE IF NOT EXISTS workflow_variant_family (
 )
 """
 
-# The shelf signature (`workflow_cards.shelf_family_signature`) the last
+# The family signature (`workflow_cards.shelf_family_signature`: the shelf, and
+# the known families of cores holding an unresolved variant) the last
 # successful family pass (`reidentify_families`) ran against: one row at most.
-# A start with the same shelf has nothing new to identify, so it runs no pass.
+# A start with the same signature has nothing new to identify, so it runs no pass.
 _V2_WORKFLOW_FAMILY_PASS = """
 CREATE TABLE IF NOT EXISTS workflow_family_pass (
     signature  TEXT NOT NULL

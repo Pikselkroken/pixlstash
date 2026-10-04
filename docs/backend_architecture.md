@@ -2685,7 +2685,15 @@ older hash version) is read from a stored run. The family is the shelf's
 from an unidentified row's own base-model text and filename, else
 `family_of(identify(filename))`. A model of no known family is its own family,
 spelled by its asset reference (no filename lands in a card row); a loader
-naming no model anywhere is `unresolved`; both are logged. The empty set means
+naming no model anywhere is `unresolved`; both are logged. **An `unresolved`
+loader takes its core's one known family set** (`_sibling_families`): a blank
+shelf id, or one an older hash version nulled with no stored run to read it
+from, is the same graph as its siblings with the value missing, so when every
+other variant of the core whose families are known agrees on one set, and that
+set holds every family the variant's own loaders resolved, and none of them
+loads a model of unknown family (`asset:`), the variant takes it. Two known sets, none, or one missing a family the variant has, leave it
+`unresolved`. It is read when the variant is derived, so it depends on what was
+filed first: a variant adopted while its core had one known set keeps it. The empty set means
 a graph with no base-model loader, never an unresolved value. A workflow
 loading two checkpoints combines only with one of the identical set. Only
 loaders the core keeps count (`core_node_ids`): an orphan loader the prune
@@ -2695,7 +2703,10 @@ mark is.
 **An unknown family is not a dead end.** Once the backfill is drained,
 `WorkflowCardBackfillFinder` hands out a `FamilyReidentifyTask` whenever the
 shelf's base models changed (`shelf_family_signature`: a scan, or the owner
-setting a base model). The signature a pass succeeded against is kept in the
+setting a base model) or the known family sets of a core holding an
+`unresolved` variant did (a sibling filed after it, which the rule above can
+now place; cores with nothing unresolved are left out, so an ordinary import
+arms no pass). The signature a pass succeeded against is kept in the
 hub (`workflow_family_pass`, one row), so a start or library switch with an
 unchanged shelf runs no pass. A pass that moved anything emits
 `workflows_changed` with reason `regrouped` and `renamed: {retired id: heir}`

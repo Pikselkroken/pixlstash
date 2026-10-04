@@ -251,6 +251,22 @@ const globalOpts = {
 };
 
 /** The shape `/adapters` really returns, taken from a fixture probe. */
+/**
+ * A pointer click (`detail` 1) and a right-button press: `trigger` cannot set
+ * either field, jsdom makes them getters. A keyboard click has `detail` 0.
+ */
+async function mouseClick(wrapper) {
+  wrapper.element.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, detail: 1 }),
+  );
+}
+
+async function rightPress(wrapper) {
+  wrapper.element.dispatchEvent(
+    new MouseEvent("pointerdown", { bubbles: true, button: 2 }),
+  );
+}
+
 function adapter(overrides = {}) {
   return {
     id: 1,
@@ -2563,6 +2579,44 @@ describe("focus under folder grouping, where a model is drawn twice", () => {
 
     expect(useModelShelfStore().selectedRows).toHaveLength(1);
     expect(wrapper.findAll(".shelf-row--selected")).toHaveLength(2);
+  });
+});
+
+describe("a click on the list's background", () => {
+  it("clears the selection, and a click on a row does not", async () => {
+    const wrapper = await mountShelf([adapter({ id: 7 }), adapter({ id: 8 })]);
+    const store = useModelShelfStore();
+    await wrapper.findAll(".shelf-row")[0].trigger("click");
+    expect(store.selectedRows).toHaveLength(1);
+
+    // Pressed on a row and released on another (or a text drag out of the
+    // rename field): the click lands on the list, and must not clear.
+    await wrapper.findAll(".shelf-row")[0].trigger("pointerdown");
+    await mouseClick(wrapper.find(".shelf-list"));
+    expect(store.selectedRows).toHaveLength(1);
+
+    // A right-press ends without a click; a keyboard click (detail 0) after a
+    // left one does not count either.
+    await rightPress(wrapper.find(".shelf-list"));
+    await mouseClick(wrapper.find(".shelf-list"));
+    expect(store.selectedRows).toHaveLength(1);
+    await wrapper.find(".shelf-list").trigger("pointerdown");
+    await wrapper.find(".shelf-list").trigger("click");
+    expect(store.selectedRows).toHaveLength(1);
+
+    await wrapper.find(".shelf-list").trigger("pointerdown");
+    await mouseClick(wrapper.find(".shelf-list"));
+    expect(store.selectedRows).toHaveLength(0);
+
+    await wrapper.findAll(".shelf-row")[0].trigger("click");
+    await wrapper.find(".shelf-group").trigger("pointerdown");
+    await mouseClick(wrapper.find(".shelf-group"));
+    expect(store.selectedRows).toHaveLength(0);
+
+    await wrapper.findAll(".shelf-row")[0].trigger("click");
+    await wrapper.find(".shelf-scroll").trigger("pointerdown");
+    await mouseClick(wrapper.find(".shelf-scroll"));
+    expect(store.selectedRows).toHaveLength(0);
   });
 });
 

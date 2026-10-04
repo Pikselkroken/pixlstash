@@ -2174,10 +2174,9 @@ function runBody() {
     // The digits as they were typed. A Number here would round a 64-bit
     // seed into a different one on the way out.
     seed: seedMode.value === "fixed" ? String(seed.value).trim() : null,
-    // Only when something is listening. `App.vue` mounts the grid under
-    // `v-else`, so a run started from the Workflows view has no progress
-    // runner attached, and a `client_id` naming a socket nobody reads makes
-    // the run look followable when it is not.
+    // Only when something is listening: a `client_id` naming a socket nobody
+    // reads makes the run look followable when it is not. Only the grid puts
+    // one in `context`; the Workflows view's runner follows without one.
     client_id: runDialog.hasRunner ? props.context?.client_id || null : null,
   };
   // Exactly one source, which the route checks before it reads anything: a

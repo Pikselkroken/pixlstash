@@ -432,6 +432,7 @@
     <PicturePicker
       :open="thumbnailPickerOpen"
       :subtitle="thumbnailSubject"
+      offer-videos
       @close="thumbnailPickerOpen = false"
       @pick="onThumbnailPicked"
     >
@@ -663,7 +664,14 @@
              It costs the strip nothing: it was sticky only to stay put, and a
              sibling above the scrollport is already put. The two stay aligned
              because both reserve the same scrollbar gutter. -->
-        <div class="shelf-scroll">
+        <div
+          class="shelf-scroll"
+          @pointerdown="
+            pressedBackground =
+              $event.button === 0 && isListBackground($event)
+          "
+          @click="onListBackgroundClick"
+        >
           <!-- The key to the meters, said ONCE for the view rather than once per
                band: it is the same three segments every time, and repeating it
                down the list would cost more room than the meters themselves.
@@ -3367,6 +3375,33 @@ function pickRow(row, event) {
     { ctrl: event.ctrlKey || event.metaKey, shift: event.shiftKey },
     orderedRowIds.value,
   );
+}
+
+/**
+ * A click on the list's background - below the last row, or the gap between
+ * groups - clears the selection, as on the picture grid.
+ *
+ * Decided by where the press STARTED, not by the click's target: a press that
+ * slips from one row to another, or a text drag out of the rename field, fires
+ * its click on a container here, and neither is a click on nothing.
+ * Primary button only, and a click with `detail` 0 (Enter or Space on a
+ * control inside, or a programmatic one) never counts: a press can end
+ * without a click, and its leftover flag must not arm a later keyboard one.
+ */
+let pressedBackground = false;
+
+function isListBackground(event) {
+  const target = event.target;
+  return (
+    target === event.currentTarget ||
+    target.classList.contains("shelf-group") ||
+    target.classList.contains("shelf-list")
+  );
+}
+
+function onListBackgroundClick(event) {
+  if (pressedBackground && event.detail > 0) store.clearSelection();
+  pressedBackground = false;
 }
 
 /**

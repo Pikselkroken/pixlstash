@@ -25,7 +25,14 @@
       </p>
       <AppButton @click="store.resetFilters()">Reset filters</AppButton>
     </div>
-    <div v-else class="msg__scroll">
+    <div
+      v-else
+      class="msg__scroll"
+      @pointerdown="
+        pressedBackground = $event.button === 0 && isBackground($event)
+      "
+      @click="onBackgroundClick"
+    >
       <!-- No evidence to draw, said above a grid that still holds the New
            workflow set tile: making a set by hand is exactly what an owner
            with no recorded pictures can still do (#1520). -->
@@ -813,6 +820,28 @@ function rangeCardHeads(occurrence) {
       .filter((item) => item.occurrence.startsWith("card:"))
       .map((item) => item.id),
   );
+}
+
+/**
+ * A click on the scroller or a gap in the grid clears both selections. Decided
+ * by where the press started: one that slips off a card onto another fires its
+ * click on the grid, and that is a fumbled pick, not a click on nothing.
+ * Primary button only, and a click with `detail` 0 (Enter or Space on a
+ * control inside, or a programmatic one) never counts: a press can end
+ * without a click, and its leftover flag must not arm a later keyboard one.
+ */
+let pressedBackground = false;
+
+function isBackground(event) {
+  return event.target === event.currentTarget || event.target === gridEl.value;
+}
+
+function onBackgroundClick(event) {
+  if (pressedBackground && event.detail > 0) {
+    store.clearSetSelection();
+    store.clearSelection();
+  }
+  pressedBackground = false;
 }
 
 /**

@@ -4813,7 +4813,6 @@ defineExpose({
           class="relocate-destination-input"
         />
         <AppButton
-          variant="outline"
           icon-only
           icon-left="folder-open-outline"
           class="relocate-browse-btn"

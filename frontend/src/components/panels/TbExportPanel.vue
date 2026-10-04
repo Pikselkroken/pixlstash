@@ -137,7 +137,6 @@
       </AppButton>
       <AppButton
         class="tb-export-folder-btn"
-        variant="outline"
         icon-left="folder-download-outline"
         block
         tooltip="Write straight into a folder on this machine, then open it - no ZIP or download step"
