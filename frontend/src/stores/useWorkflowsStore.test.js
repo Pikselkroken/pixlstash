@@ -9,11 +9,9 @@ import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
 const deleteWorkflow = vi.fn();
-const getWorkflowCard = vi.fn();
 vi.mock("../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   deleteWorkflow: (...args) => deleteWorkflow(...args),
-  getWorkflowCard: (...args) => getWorkflowCard(...args),
 }));
 
 import { useWorkflowsStore } from "./useWorkflowsStore";
@@ -368,63 +366,30 @@ describe("onWorkflowsChanged", () => {
   });
 });
 
-describe("onWorkflowsChanged with reason pictures", () => {
-  it("re-reads only the named card and keeps every other object", async () => {
+describe("a re-read keeps the cards that did not change", () => {
+  it("swaps in only the card that changed, and every changed rank", async () => {
     const store = useWorkflowsStore();
     await store.fetchCards();
-    const before = [...store.cards];
-    listWorkflowCards.mockClear();
-    getWorkflowCard.mockReset();
-    const fresh = { ...CARDS[2], picture_count: 91, covers: [{ url: "/new" }] };
-    getWorkflowCard.mockResolvedValue({ card: fresh });
+    const before = new Map(store.cards.map((card) => [card.id, card]));
+    // A ComfyUI run filed a rated picture on the workhorse: its cover and
+    // count moved, and the library mean moved the-stack's rank with it.
+    const fresh = CARDS.map((card) => ({ ...card }));
+    fresh[2] = { ...fresh[2], picture_count: 91, covers: [{ url: "/new" }] };
+    fresh[3] = { ...fresh[3], rank: 4.2 };
+    listWorkflowCards.mockResolvedValue({ cards: fresh, one_offs: 3, hidden: 1 });
 
-    await store.onWorkflowsChanged({ reason: "pictures", keys: ["workhorse"] });
+    store.onWorkflowsChanged({ reason: "pictures", keys: ["workhorse"] });
     await new Promise((resolve) => setTimeout(resolve));
 
-    expect(getWorkflowCard).toHaveBeenCalledWith("workhorse");
-    expect(listWorkflowCards).not.toHaveBeenCalled();
-    expect(store.cards.find((card) => card.id === "workhorse")).toEqual(fresh);
-    for (const card of store.cards.filter((c) => c.id !== "workhorse")) {
-      expect(before).toContain(card);
-    }
-  });
-
-  it("re-reads the whole grid rather than race a refresh still on the wire", async () => {
-    const store = useWorkflowsStore();
-    await store.fetchCards();
-    listWorkflowCards.mockClear();
-    getWorkflowCard.mockReset();
-    let answerOld;
-    getWorkflowCard.mockReturnValueOnce(
-      new Promise((resolve) => {
-        answerOld = resolve;
-      }),
+    const after = new Map(store.cards.map((card) => [card.id, card]));
+    expect(after.get("workhorse")).not.toBe(before.get("workhorse"));
+    expect(after.get("workhorse").picture_count).toBe(91);
+    expect(after.get("the-stack")).not.toBe(before.get("the-stack"));
+    expect(after.get("the-stack").rank).toBe(4.2);
+    expect(after.get("few-but-loved")).toBe(before.get("few-but-loved"));
+    expect(after.get("never-kept-a-picture")).toBe(
+      before.get("never-kept-a-picture"),
     );
-
-    store.onWorkflowsChanged({ reason: "pictures", keys: ["workhorse"] });
-    store.onWorkflowsChanged({ reason: "pictures", keys: ["workhorse"] });
-    await new Promise((resolve) => setTimeout(resolve));
-    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
-
-    // The first read lands late, with older data: it must not be swapped in.
-    answerOld({ card: { ...CARDS[2], picture_count: 1 } });
-    await new Promise((resolve) => setTimeout(resolve));
-    expect(
-      store.cards.find((card) => card.id === "workhorse").picture_count,
-    ).toBe(90);
-  });
-
-  it("re-reads the whole grid for a card it does not draw", async () => {
-    const store = useWorkflowsStore();
-    await store.fetchCards();
-    listWorkflowCards.mockClear();
-    getWorkflowCard.mockReset();
-
-    store.onWorkflowsChanged({ reason: "pictures", keys: ["auto:one-off"] });
-    await Promise.resolve();
-
-    expect(getWorkflowCard).not.toHaveBeenCalled();
-    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
   });
 });
 

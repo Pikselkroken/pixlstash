@@ -266,7 +266,12 @@ class ComfyUIExtractionTask(BaseTask):
                     first_filing = db_pic.workflow_instance_hash is None
                     # The manual workflow its ComfyUI run was tagged with. A
                     # value already there is PixlStash's own run's, and stays.
-                    if run_workflow_id and db_pic.run_workflow_id is None:
+                    # A tag written now files the picture on that workflow even
+                    # without a graph, so it is announced either way.
+                    newly_tagged = bool(
+                        run_workflow_id and db_pic.run_workflow_id is None
+                    )
+                    if newly_tagged:
                         db_pic.run_workflow_id = run_workflow_id
                     # Never replaced by NULL: nothing found this time is a fact
                     # about the read, and the keys came from a read that worked.
@@ -279,7 +284,9 @@ class ComfyUIExtractionTask(BaseTask):
                         db_pic.workflow_instance_hash = instance
                     # Set last: it is the marker that the other three are final.
                     db_pic.workflow_hash_version = HASH_VERSION
-                    if first_filing and db_pic.workflow_structural_hash is not None:
+                    if newly_tagged or (
+                        first_filing and db_pic.workflow_structural_hash is not None
+                    ):
                         filed.append(
                             (db_pic.run_workflow_id, db_pic.workflow_structural_hash)
                         )

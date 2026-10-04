@@ -1632,6 +1632,23 @@ def test_a_comfyui_run_of_a_manual_workflow_is_filed_on_it(store, manual_flow):
     assert picture.workflow_instance_hash == instance_hash(api_graph(TXT2IMG))
 
 
+def test_a_tagged_picture_with_no_graph_still_names_its_workflow(store, manual_flow):
+    """Only the editor chunk: filed on the manual workflow, so it is announced."""
+    name = write_png(
+        Path(store.image_root),
+        "tagged-only.png",
+        workflow=stored_document(store, manual_flow),
+    )
+    picture_id = add_picture(store, name)
+
+    result = run_extraction(store, [picture_id])
+
+    picture = read_picture(store, picture_id)
+    assert picture.run_workflow_id == manual_flow
+    assert picture.workflow_structural_hash is None
+    assert result["workflow_ids"] == [manual_flow]
+
+
 def test_a_tag_this_hub_does_not_hold_files_nothing(store):
     """Another machine's workflow, or one deleted since, is not a filing."""
     tagged = {**ui_workflow(TXT2IMG), "extra": {WORKFLOW_TAG_KEY: "manual:" + "e" * 32}}

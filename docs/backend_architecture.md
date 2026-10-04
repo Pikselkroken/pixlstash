@@ -2695,7 +2695,8 @@ unchanged shelf runs no pass. A pass that moved anything emits
 after a `ComfyUIExtractionTask` batch files pictures: the task's
 `workflow_ids` names the workflow each landed on (its run's manual workflow,
 else `workflow_of_variant` of its recipe), so an open Workflows view redraws
-those cards' covers. `reidentify_families` re-derives every variant whose
+those cards' covers. A migration's rescan of an already-filed picture is left
+out, and a tag written now is included even when the picture has no graph. `reidentify_families` re-derives every variant whose
 set carries an unknown and moves those that now derive fewer: the family row
 is rewritten and the retiring workflow handed on with `_retire_workflow`, the
 same carry data step 8 uses (owner state merged, never dropped; successor,

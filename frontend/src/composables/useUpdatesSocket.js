@@ -492,22 +492,16 @@ export function useUpdatesSocket({
           payload.origin_client_id === wsStore.clientId
         );
         // Debounced as `external_moves_pending` is: the inbox announces one
-        // event per file, and each is a whole-vault grid read. The renames,
-        // the keys and the recipes bump are gathered across the burst, not
-        // dropped; "pictures" (only these cards' covers moved) survives only
-        // if every event in the burst said it.
+        // event per file, and each is a whole-vault grid read. The renames
+        // and the recipes bump are gathered across the burst, not dropped.
         if (!isOwn) {
-          const prev = pendingWorkflowsChange;
           pendingWorkflowsChange = {
             reason:
-              prev?.reason === "recipes"
+              pendingWorkflowsChange?.reason === "recipes"
                 ? "recipes"
-                : prev && payload.reason === "pictures"
-                  ? prev.reason
-                  : payload.reason,
-            keys: [...new Set([...(prev?.keys || []), ...(payload.keys || [])])],
+                : payload.reason,
             renamed: {
-              ...(prev?.renamed || {}),
+              ...(pendingWorkflowsChange?.renamed || {}),
               ...(payload.renamed || {}),
             },
           };

@@ -5,7 +5,6 @@ import {
   cloneWorkflowWithModels,
   deleteWorkflow,
   duplicateWorkflow,
-  getWorkflowCard,
   listWorkflowCards,
   patchWorkflowCard,
 } from "../api/workflows";
@@ -80,6 +79,22 @@ function keepsGhost(card) {
   return (card.ghosts ?? 0) + (card.model_ghosts ?? 0) > 0;
 }
 
+/**
+ * *fresh*, with every card that reads exactly as before kept as its old object.
+ *
+ * So a re-read redraws only the cards that changed - the one a ComfyUI run
+ * just gave a new cover - and Vue leaves the rest of the grid alone. Compared
+ * whole rather than by id: filing a rated picture moves the library's mean
+ * rating, and with it every card's `rank`.
+ */
+function keepUnchanged(previous, fresh) {
+  const before = new Map(previous.map((card) => [card.id, card]));
+  return fresh.map((card) => {
+    const old = before.get(card.id);
+    return old && JSON.stringify(old) === JSON.stringify(card) ? old : card;
+  });
+}
+
 export const useWorkflowsStore = defineStore("workflows", () => {
   const cards = ref([]);
   const oneOffs = ref(0);
@@ -95,9 +110,6 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   // reset must not write its rows, or its cover thumbnail URLs, into the new
   // session's store.
   let epoch = 0;
-  // The epoch a `refreshCards` read is on the wire in, or -1. Keyed to the
-  // epoch so a bump (which discards that read) also ends it.
-  let refreshingEpoch = -1;
 
   /** Selected workflow ids. */
   const selectedKeys = ref([]);
@@ -292,7 +304,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         includeOneOffs: !filters.value.hideOneOffs,
       });
       if (mine !== epoch) return;
-      cards.value = body.cards;
+      cards.value = keepUnchanged(cards.value, body.cards);
       oneOffs.value = body.one_offs;
       hidden.value = body.hidden;
       loaded.value = true;
@@ -332,47 +344,6 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     epoch += 1;
     loading.value = false;
     fetchCards();
-  }
-
-  /**
-   * Re-read just these cards, after a ComfyUI run filed new pictures on them.
-   *
-   * Swapped in place, so the rest of the grid keeps its objects and is not
-   * re-rendered. Not cheaper on the server: each detail read is a whole-grid
-   * read there, which is why more than three ids re-read the grid once
-   * instead. Also falls back to `invalidate` for an id the grid does not draw
-   * (a one-off that just crossed the threshold), a full read or another
-   * refresh already on the wire (whose answer could land after this one's and
-   * write older cards over newer), or a refused read.
-   */
-  async function refreshCards(ids) {
-    if (!loaded.value) return;
-    const drawn = new Set(cards.value.map((card) => card.id));
-    if (
-      loading.value ||
-      refreshingEpoch === epoch ||
-      !ids?.length ||
-      ids.length > 3 ||
-      ids.some((id) => !drawn.has(id))
-    ) {
-      invalidate();
-      return;
-    }
-    const mine = epoch;
-    let fresh;
-    refreshingEpoch = mine;
-    try {
-      fresh = await Promise.all(ids.map((id) => getWorkflowCard(id)));
-    } catch (err) {
-      console.warn("[workflows] could not re-read the changed cards", ids, err);
-      if (mine === epoch) invalidate();
-      return;
-    } finally {
-      if (refreshingEpoch === mine) refreshingEpoch = -1;
-    }
-    if (mine !== epoch) return;
-    const byId = new Map(ids.map((id, i) => [id, fresh[i]?.card]));
-    cards.value = cards.value.map((card) => byId.get(card.id) ?? card);
   }
 
   // ── The selection's own verbs (v1.12 F3, #1455) ───────────────────────
@@ -654,10 +625,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * (reason "regrouped": the shelf identified an unknown base model). The
    * selection follows the rename, so the rail's open card does not 404; an id
    * the grid then does not list drops out of `selectedCards` on its own. The
-   * grid is re-read only if it has been read (`invalidate`). Reason
-   * "pictures" names the only cards that moved, and re-reads just those.
+   * grid is re-read only if it has been read (`invalidate`).
    */
-  function onWorkflowsChanged({ reason, renamed, keys } = {}) {
+  function onWorkflowsChanged({ reason, renamed } = {}) {
     const map = renamed && typeof renamed === "object" ? renamed : {};
     if (Object.keys(map).length && selectedKeys.value.length) {
       selectedKeys.value = [
@@ -665,8 +635,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       ];
     }
     if (reason === "recipes") notedRecipesChanged();
-    if (reason === "pictures") refreshCards(keys);
-    else invalidate();
+    invalidate();
   }
 
   /**

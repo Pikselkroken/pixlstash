@@ -699,38 +699,12 @@ describe("useUpdatesSocket: workflows_changed (#1696)", () => {
     expect(changed).toHaveBeenCalledTimes(1);
     expect(changed.mock.calls[0][0]).toEqual({
       reason: "recipes",
-      keys: [],
       renamed: { "auto:a": "auto:b", "auto:b": "auto:c" },
     });
     // Both halves land: the rename is followed even though the reason the
     // burst carries is "recipes", and the Recipes tab is told.
     expect(store.selectedKeys).toEqual(["auto:c"]);
     expect(store.recipesEpoch).toBe(epoch + 1);
-  });
-
-  it("keeps a burst of pictures as pictures, with every key, and drops it for anything else", async () => {
-    vi.useFakeTimers();
-    connect();
-    const changed = vi.spyOn(useWorkflowsStore(), "onWorkflowsChanged");
-
-    receive({ type: "workflows_changed", reason: "pictures", keys: ["auto:a"], renamed: {} });
-    receive({ type: "workflows_changed", reason: "pictures", keys: ["auto:b", "auto:a"], renamed: {} });
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(changed.mock.calls[0][0]).toEqual({
-      reason: "pictures",
-      keys: ["auto:a", "auto:b"],
-      renamed: {},
-    });
-
-    // Either order: a plain change anywhere in the burst re-reads the grid.
-    receive({ type: "workflows_changed", reason: "changed", keys: [], renamed: {} });
-    receive({ type: "workflows_changed", reason: "pictures", keys: ["auto:a"], renamed: {} });
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(changed.mock.calls[1][0].reason).toBe("changed");
-    receive({ type: "workflows_changed", reason: "pictures", keys: ["auto:a"], renamed: {} });
-    receive({ type: "workflows_changed", reason: "changed", keys: [], renamed: {} });
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(changed.mock.calls[2][0].reason).toBe("changed");
   });
 
   it("skips this tab's own echo", async () => {
