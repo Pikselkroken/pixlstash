@@ -74,6 +74,15 @@ const FILTERS_SCHEMA_VERSION = 1;
 const VIEW_KEY = "pixlstash:modelShelfView";
 
 /**
+ * Where the hidden sets from pictures are remembered, as `{keys: [...]}`.
+ *
+ * A set from pictures is read off the library, so it cannot be deleted - the
+ * next read would draw it again. It can only be hidden, which is a view choice,
+ * so it lives beside the other view choices rather than in the hub.
+ */
+const HIDDEN_SETS_KEY = "pixlstash:modelShelfHiddenSets";
+
+/**
  * Bumped when the shape below changes; a blob from another `v` is discarded.
  *
  * Bumped to 2 for #1438, where `groupBy` changed DEFAULT rather than shape - and
@@ -336,6 +345,9 @@ const SET_RECEIPT_ICONS = {
   delete: "mdi-layers-remove",
   "keep-out": "mdi-call-split",
   "offer-again": "mdi-restore",
+  hide: "mdi-eye-off-outline",
+  unhide: "mdi-eye-outline",
+  twin: "mdi-layers",
 };
 
 /** What each curated column is called in a receipt. */
@@ -1629,12 +1641,104 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * the tray under an open card needs no second lookup and nothing has to
    * re-derive the grouping to answer a question about one member.
    */
-  const setGroupList = computed(() =>
+  const evidenceGroups = computed(() =>
     setGroups(visibleCombinations.value).map((group) => ({
       ...group,
-      card: setCard(group),
+      hidden: hiddenSetKeys.value.has(group.key),
+      card: {
+        ...setCard(group),
+        hidden: hiddenSetKeys.value.has(group.key),
+      },
     })),
   );
+
+  /** The evidence cards drawn: the hidden ones only while Show hidden is on. */
+  const setGroupList = computed(() =>
+    showHiddenSets.value
+      ? evidenceGroups.value
+      : evidenceGroups.value.filter((group) => !group.hidden),
+  );
+
+  /** How many of the sets `Show` leaves on screen are hidden. */
+  const hiddenSetCount = computed(
+    () => evidenceGroups.value.filter((group) => group.hidden).length,
+  );
+
+  // ── Hiding sets from pictures ─────────────────────────────────────────────
+  //
+  // A set from pictures is the library's own reading of its recipes, so there
+  // is nothing to delete: the next read would draw it again. Hide is the verb,
+  // remembered by group key (the base model's id, or a missing one's name).
+
+  /** The keys of the hidden sets from pictures. */
+  const hiddenSetKeys = ref(
+    new Set(
+      (readStored(HIDDEN_SETS_KEY)?.keys ?? []).filter(
+        (key) => typeof key === "string" && key !== "",
+      ),
+    ),
+  );
+
+  /** Draw the hidden sets too, dimmed, so one can be shown again. */
+  const showHiddenSets = ref(false);
+
+  function writeHiddenSets(keys) {
+    hiddenSetKeys.value = keys;
+    writeStored(HIDDEN_SETS_KEY, { keys: [...keys] });
+  }
+
+  function changeHidden(keys, hide) {
+    const next = new Set(hiddenSetKeys.value);
+    for (const key of keys) {
+      if (hide) next.add(key);
+      else next.delete(key);
+    }
+    writeHiddenSets(next);
+    if (hide && !showHiddenSets.value && keys.includes(openSetKey.value)) {
+      openSetKey.value = "";
+    }
+  }
+
+  /**
+   * Hide sets from pictures, with a receipt whose Undo shows them again.
+   *
+   * @param {Array<Object>} groups - entries of `setGroups`.
+   */
+  function hideSets(groups) {
+    const fresh = groups.filter((group) => !hiddenSetKeys.value.has(group.key));
+    if (!fresh.length) return;
+    const keys = fresh.map((group) => group.key);
+    changeHidden(keys, true);
+    raiseSetReceipt(
+      fresh.length === 1
+        ? `Hid the set "${fresh[0].card.name}". No file was touched.`
+        : `Hid ${fresh.length} sets. No file was touched.`,
+      "hide",
+      async () => changeHidden(keys, false),
+      async () => changeHidden(keys, true),
+    );
+  }
+
+  /**
+   * Show hidden sets from pictures again, with a receipt whose Undo hides them.
+   *
+   * @param {Array<Object>} groups - entries of `setGroups`.
+   */
+  function unhideSets(groups) {
+    const keys = groups
+      .map((group) => group.key)
+      .filter((key) => hiddenSetKeys.value.has(key));
+    if (!keys.length) return;
+    changeHidden(keys, false);
+    raiseSetReceipt(
+      keys.length === 1
+        ? `"${groups.find((g) => g.key === keys[0]).card.name}" is shown again.`
+        : `${keys.length} sets are shown again.`,
+      "unhide",
+      async () => changeHidden(keys, true),
+      async () => changeHidden(keys, false),
+    );
+  }
 
   /**
    * The owner's own sets (#1520), newest first, each shaped as the grid draws
@@ -2004,6 +2108,64 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     });
   }
 
+  /**
+   * The set from pictures a hand-made set holds exactly the models of, or null.
+   *
+   * Read from every combination, not only the uncovered ones: the hand-made
+   * set covers its twin's combinations, which is why the twin left the grid.
+   * A member off the shelf rules a match out, since no set from pictures can
+   * hold a file the shelf does not have.
+   */
+  function automaticTwin(set) {
+    const members = set?.members ?? [];
+    if (!members.length || members.some((m) => !m.on_shelf || m.id == null)) {
+      return null;
+    }
+    const ids = new Set(members.map((m) => m.id));
+    return (
+      setGroups(workflowSets.value.combinations).find(
+        (group) =>
+          !group.head?.missing &&
+          group.models.length === ids.size &&
+          group.models.every((model) => ids.has(model.id)),
+      ) ?? null
+    );
+  }
+
+  /**
+   * A hand-made set that re-creates a set from pictures gives way to it.
+   *
+   * The two would be one set drawn twice, so the hand-made one is deleted and
+   * the set from pictures is shown (unhidden, if it was) and opened, with a
+   * receipt that says why. Its Undo brings the hand-made set back.
+   *
+   * @param {number} setId
+   * @returns {Promise<boolean>} true when the set gave way.
+   */
+  async function yieldToTwin(setId) {
+    const set = handMadeSets.value.find((candidate) => candidate.id === setId);
+    const twin = automaticTwin(set);
+    if (!twin) return false;
+    const name = setLabel(set);
+    const twinName = setCard(twin).name;
+    if (hiddenSetKeys.value.has(twin.key)) changeHidden([twin.key], false);
+    const done = await setWrite(() => deleteWorkflowSet(set.id), {
+      receipt: `"${name}" holds the same models as the set from pictures "${twinName}", so that set is shown instead. No file was touched.`,
+      undo: () =>
+        createWorkflowSet({
+          name: set.name ?? null,
+          members: (set.members ?? []).map(memberBack),
+        }),
+      redo: async (restored) => (await deleteHandMadeSets([restored])) ?? false,
+      verb: "twin",
+      failure: "The set could not be swapped for the set from pictures.",
+    });
+    if (!done) return false;
+    clearSetSelection();
+    openSetKey.value = twin.key;
+    return true;
+  }
+
   /** A removed or deleted member, as the create and add routes take it back. */
   function memberBack(member) {
     return { sha256: member.sha256, slot: member.slot, label: member.label };
@@ -2029,6 +2191,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       failure: "The set could not be made.",
     });
     if (created) {
+      if (await yieldToTwin(created.id)) return null;
       clearSelection();
       openSetKey.value = `hand:${created.id}`;
       noteCheckpoint(created.id, created.members ?? []);
@@ -2152,6 +2315,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       },
     );
     if (result?.added?.length) {
+      // A quiet add is the picker's, which checks when it closes.
+      if (!quiet && (await yieldToTwin(set.id))) return result;
       const added = new Set(result.added);
       noteCheckpoint(
         set.id,
@@ -2173,8 +2338,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *   added - in the order they went in.
    * @param {string} noun - the slot's plural, e.g. "LoRAs".
    */
-  function announceAdded(set, added, noun) {
+  async function announceAdded(set, added, noun) {
     if (!added.length) return;
+    if (await yieldToTwin(set.id)) return;
     const what =
       added.length === 1 ? `"${added[0].name}"` : `${added.length} ${noun}`;
     raiseSetReceipt(
@@ -3221,6 +3387,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,
+    hiddenSetCount,
+    showHiddenSets,
+    hideSets,
+    unhideSets,
     setGridModelIds,
     setGridRows,
     screenRows,

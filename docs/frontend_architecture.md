@@ -1761,6 +1761,21 @@ the shelf's workflow sets section) and served as `hand_made` on
   of a set; `visibleCombinations` drops those, so they appear on the set's card
   (its `picture_count` and covers) and not again as evidence. `worksWith` still
   reads the whole payload.
+- **A set from pictures is hidden, never deleted.** It is read off the library,
+  so a delete would only come back on the next read. The card's eye button, or
+  Delete/Backspace on the card (stopped before the shelf's file delete; every
+  selected evidence card goes with it), calls `store.hideSets`, which records
+  the group key (`model:<id>` / `missing:<name>`) under
+  `pixlstash:modelShelfHiddenSets` in `localStorage`. A line under the grid
+  counts the hidden sets and toggles `store.showHiddenSets`, which draws them
+  with `card.hidden` (faded covers, a "Hidden" tag, the eye button to show one
+  again). The file verbs stay on the card's context menu and the bar.
+- **A hand-made set that re-creates a set from pictures gives way to it.**
+  After a create or an add (a quiet picker add checks when the picker closes,
+  in `announceAdded`), `yieldToTwin` compares the set's members with every
+  `setGroups` group over the WHOLE payload. When the on-shelf model ids are
+  exactly a group's, the hand-made set is deleted, the group is unhidden and
+  opened, and the receipt says why; its Undo recreates the set.
 - **A hand-made card selects the SET; a tray tile selects a FILE.**
   `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
   either kind clears the other; Ctrl+click and select-all hold both (see the

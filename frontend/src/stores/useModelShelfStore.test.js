@@ -31,6 +31,8 @@ const forgetModels = vi.fn();
 const deleteModels = vi.fn();
 const setAdapterAttachments = vi.fn();
 const fetchWorkflowSets = vi.fn();
+const createWorkflowSet = vi.fn();
+const deleteWorkflowSet = vi.fn();
 const setModelIcon = vi.fn();
 const clearModelIcons = vi.fn();
 
@@ -51,6 +53,8 @@ vi.mock("../api/modelShelf", () => ({
   deleteModels: (...args) => deleteModels(...args),
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
+  createWorkflowSet: (...args) => createWorkflowSet(...args),
+  deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
 }));
 
 const mergeModelCopies = vi.fn();
@@ -3124,5 +3128,140 @@ describe("the workflow sets", () => {
     store.setView({ groupBy: "none" });
     store.selectVisible();
     expect([...store.selectedIds]).toEqual([1]);
+  });
+});
+
+describe("sets from pictures are hidden, never deleted", () => {
+  const checkpoint = { id: 1, name: "base.st", kind: "checkpoint" };
+  const lora = { id: 2, name: "style.st", kind: "adapter" };
+
+  /** One set from pictures: a checkpoint that ran with one LoRA. */
+  function shelfWithASet(handMade = []) {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), filename: "base.st" }),
+      adapter({ id: 2, sha256: "b".repeat(64), filename: "style.st" }),
+    ]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "1+2",
+          models: [checkpoint, lora],
+          recipes: 2,
+          picture_count: 5,
+          covers: [],
+          // What the server answers once a hand-made set holds both.
+          covered_by: handMade.length ? [handMade[0].id] : [],
+        },
+      ],
+      no_set: [],
+      hand_made: handMade,
+    });
+    return useModelShelfStore();
+  }
+
+  function member(model, sha) {
+    return { ...model, sha256: sha, slot: "checkpoint", on_shelf: true };
+  }
+
+  it("hides a set, remembers it, and draws it again on request", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    const [group] = store.setGroups;
+    expect(group.key).toBe("model:1");
+
+    store.hideSets([group]);
+    expect(store.setGroups).toHaveLength(0);
+    expect(store.hiddenSetCount).toBe(1);
+    expect(
+      JSON.parse(window.localStorage.getItem("pixlstash:modelShelfHiddenSets")),
+    ).toEqual({ keys: ["model:1"] });
+
+    store.showHiddenSets = true;
+    expect(store.setGroups.map((g) => [g.key, g.card.hidden])).toEqual([
+      ["model:1", true],
+    ]);
+
+    store.unhideSets([store.setGroups[0]]);
+    store.showHiddenSets = false;
+    expect(store.setGroups.map((g) => g.key)).toEqual(["model:1"]);
+    expect(store.hiddenSetCount).toBe(0);
+  });
+
+  it("keeps a hidden set hidden in a new session", async () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfHiddenSets",
+      JSON.stringify({ keys: ["model:1"] }),
+    );
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    expect(store.setGroups).toHaveLength(0);
+    expect(store.hiddenSetCount).toBe(1);
+  });
+
+  it("swaps a hand-made re-creation for the set from pictures", async () => {
+    window.localStorage.setItem(
+      "pixlstash:modelShelfHiddenSets",
+      JSON.stringify({ keys: ["model:1"] }),
+    );
+    const made = {
+      id: 7,
+      name: null,
+      members: [member(checkpoint, "a".repeat(64)), member(lora, "b".repeat(64))],
+    };
+    const store = shelfWithASet();
+    await store.fetchRows();
+    createWorkflowSet.mockReset().mockImplementation(async () => {
+      fetchWorkflowSets.mockResolvedValue({
+        ...(await fetchWorkflowSets()),
+        hand_made: [made],
+      });
+      return made;
+    });
+    deleteWorkflowSet.mockReset().mockImplementation(async () => {
+      fetchWorkflowSets.mockResolvedValue({
+        combinations: [
+          { key: "1+2", models: [checkpoint, lora], recipes: 2, covers: [] },
+        ],
+        no_set: [],
+        hand_made: [],
+      });
+      return { deleted: made };
+    });
+
+    const created = await store.createHandMadeSet({ members: [] });
+
+    expect(created).toBeNull();
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(7);
+    expect(store.handMadeSets).toHaveLength(0);
+    // Shown, unhidden, and opened, instead of the hand-made one.
+    expect(store.setGroups.map((g) => g.key)).toEqual(["model:1"]);
+    expect(store.hiddenSetCount).toBe(0);
+    expect(store.openSetKey).toBe("model:1");
+  });
+
+  it("leaves a hand-made set alone when it holds anything else", async () => {
+    const made = {
+      id: 8,
+      name: null,
+      members: [member(checkpoint, "a".repeat(64))],
+    };
+    const store = shelfWithASet();
+    await store.fetchRows();
+    createWorkflowSet.mockReset().mockImplementation(async () => {
+      fetchWorkflowSets.mockResolvedValue({
+        ...(await fetchWorkflowSets()),
+        hand_made: [made],
+      });
+      return made;
+    });
+    deleteWorkflowSet.mockReset();
+
+    const created = await store.createHandMadeSet({ members: [] });
+
+    expect(created).toEqual(made);
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+    expect(store.openSetKey).toBe("hand:8");
   });
 });

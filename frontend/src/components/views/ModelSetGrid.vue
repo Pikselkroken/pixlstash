@@ -180,11 +180,30 @@
                 @offer="openOffer(entry.setId)"
                 @add="answerOffer(entry, true)"
                 @keep-separate="answerOffer(entry, false)"
+                @hide="hideCards(entry)"
+                @unhide="unhideCard(entry)"
               />
             </div>
           </div>
         </template>
       </div>
+
+      <!-- Hidden sets from pictures are out of the grid, not gone: say how
+           many, and let them be drawn again so one can be shown. -->
+      <p v-if="store.hiddenSetCount" class="msg__hidden">
+        <span class="num"
+          >{{ store.hiddenSetCount.toLocaleString() }} hidden
+          {{ store.hiddenSetCount === 1 ? "set" : "sets" }}</span
+        >
+        <AppButton
+          variant="ghost"
+          size="sm"
+          :icon-left="store.showHiddenSets ? 'eye-off-outline' : 'eye-outline'"
+          data-testid="toggle-hidden-sets"
+          @click="store.showHiddenSets = !store.showHiddenSets"
+          >{{ store.showHiddenSets ? "Leave them out" : "Show them" }}</AppButton
+        >
+      </p>
 
       <!-- The models no recipe names, drawn rather than omitted. Outside the
            treegrid: it is not a set, so it is not a row in a grid of sets, and
@@ -887,6 +906,31 @@ function onSlotMenu({ member, event }) {
   ) {
     event.preventDefault();
   }
+}
+
+/** The set-from-pictures group behind a card entry. */
+function groupOf(entry) {
+  return store.setGroups.find((group) => group.key === entry?.key) ?? null;
+}
+
+/**
+ * Hide a set from pictures: every selected evidence card along with this one,
+ * as a Delete on a selection reaches all of it. Never a file.
+ */
+function hideCards(entry) {
+  const picked = flatRows.value.filter(
+    (other) =>
+      other.kind === "card" &&
+      !other.hand &&
+      (other.key === entry.key || cardSelected(other)),
+  );
+  const groups = picked.map(groupOf).filter((group) => group && !group.hidden);
+  store.hideSets(groups);
+}
+
+function unhideCard(entry) {
+  const group = groupOf(entry);
+  if (group) store.unhideSets([group]);
 }
 
 /** Remove from set - the tile's ✕, and the member menu's verb. */
@@ -1759,6 +1803,19 @@ function onHandKey(event, entry) {
     }
     return false;
   }
+  if (entry?.kind === "card" && !entry.hand) {
+    if (event.key !== "Delete" && event.key !== "Backspace") return false;
+    // A set from pictures cannot be deleted, only hidden. Stopped, so the
+    // shelf's file Delete never takes a press aimed at the set for its base
+    // model: the file verbs stay on the menu and the bar.
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) {
+      if (groupOf(entry)?.hidden) unhideCard(entry);
+      else hideCards(entry);
+    }
+    return true;
+  }
   if (!entry?.hand) return false;
   if (event.key === "Delete" || event.key === "Backspace") {
     event.preventDefault();
@@ -1956,6 +2013,15 @@ function onKeyDown(event) {
 /* Dashed, because it is the one card that stands for an absence. Not in the
    grid's own track: a set it is not, and it must not be the last thing the
    arrow keys walk into. */
+.msg__hidden {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
 .msg__ghost {
   display: flex;
   flex-direction: column;

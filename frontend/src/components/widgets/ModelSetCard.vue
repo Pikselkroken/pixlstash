@@ -5,6 +5,7 @@
       'msc--open': expanded,
       'msc--on': selected,
       'msc--hand': card.handMade,
+      'msc--hidden': card.hidden,
     }"
     role="group"
     :aria-label="accessibleName"
@@ -173,6 +174,25 @@
           >{{
           card.kindLabel
         }}</span>
+        <span v-if="card.hidden" class="msc__kind" aria-hidden="true"
+          >Hidden</span
+        >
+        <!-- A set from pictures is read off the library, so it is hidden rather
+             than deleted (the next read would only draw it again). Mouse-only,
+             like the toggle: the grid owns Tab, and Delete on the card hides. -->
+        <AppButton
+          v-if="!card.handMade"
+          class="msc__hide"
+          variant="ghost"
+          size="sm"
+          :icon-left="card.hidden ? 'eye-outline' : 'eye-off-outline'"
+          icon-only
+          tabindex="-1"
+          :tooltip="card.hidden ? 'Show this set again' : 'Hide this set'"
+          data-testid="set-hide"
+          @click.stop="emit(card.hidden ? 'unhide' : 'hide')"
+          @dblclick.stop
+        />
       </div>
       <!-- What SHAPE this set is - one VAE and two encoders, or none at all -
            which is the question a grid is scanned for. -->
@@ -257,7 +277,14 @@ const props = defineProps({
   selected: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["toggle", "offer", "add", "keep-separate"]);
+const emit = defineEmits([
+  "toggle",
+  "offer",
+  "add",
+  "keep-separate",
+  "hide",
+  "unhide",
+]);
 
 /**
  * The URL a browser loads one cover from.
@@ -320,6 +347,7 @@ const accessibleName = computed(() => {
     name,
     props.card.missing ? "base model not on shelf" : kindLabel,
     props.card.fromComfyUI ? "ran in ComfyUI" : null,
+    props.card.hidden ? "hidden" : null,
     kinds.length ? `with ${kinds.join(", ")}` : "nothing else has run with it",
     facts.join(", "),
   ]
@@ -448,6 +476,18 @@ const accessibleName = computed(() => {
    colour, because the difference is provenance, not state. */
 .msc--hand {
   border-style: dashed;
+}
+
+/* Hidden, drawn only while the grid shows hidden sets: the pictures fade, the
+   text does not, so the card stays readable and the "Hidden" tag says why. */
+.msc--hidden .msc__pic {
+  opacity: var(--opacity-disabled);
+}
+
+.msc__hide {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .msc__cover--hand {

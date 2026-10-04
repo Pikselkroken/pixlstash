@@ -2802,3 +2802,48 @@ describe("hand-made sets (#1520)", () => {
     });
   });
 });
+
+describe("hiding a set from pictures", () => {
+  async function mountOneSet() {
+    return mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      combinations: [combination("1+3", [CKPT, LORA])],
+      attach: true,
+    });
+  }
+
+  it("hides on Delete, never reaching the file delete, and Undo shows it again", async () => {
+    const { wrapper, store } = await mountOneSet();
+    const grid = wrapper.find('[role="treegrid"]');
+    // New workflow set → the card.
+    await grid.trigger("keydown", { key: "ArrowRight" });
+    const onWindowKey = vi.fn();
+    window.addEventListener("keydown", onWindowKey);
+    await grid.trigger("keydown", { key: "Delete" });
+    window.removeEventListener("keydown", onWindowKey);
+
+    expect(onWindowKey).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid="model-set-card"]')).toHaveLength(0);
+    expect(wrapper.find(".msg__hidden").text()).toContain("1 hidden set");
+    wrapper.unmount();
+    const operations = useOperationStore();
+    expect(operations.receipt.summary).toContain("Hid the set");
+    await operations.takeLocalReceiptAction();
+    expect(store.setGroups).toHaveLength(1);
+  });
+
+  it("hides from the card's button and draws hidden sets on request", async () => {
+    const { wrapper } = await mountOneSet();
+    await wrapper.find('[data-testid="set-hide"]').trigger("click");
+    expect(wrapper.findAll('[data-testid="model-set-card"]')).toHaveLength(0);
+
+    await wrapper.find('[data-testid="toggle-hidden-sets"]').trigger("click");
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.classes()).toContain("msc--hidden");
+    expect(card.text()).toContain("Hidden");
+
+    await wrapper.find('[data-testid="set-hide"]').trigger("click");
+    expect(card.classes()).not.toContain("msc--hidden");
+    wrapper.unmount();
+  });
+});
