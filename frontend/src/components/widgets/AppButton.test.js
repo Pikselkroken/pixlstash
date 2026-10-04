@@ -144,3 +144,13 @@ describe("AppButton tooltip", () => {
     expect(w.find(".tip").text()).toBe("Writes to disk");
   });
 });
+
+// buttons.md, "The on-dark context": the token swap hangs off this class.
+describe("AppButton on-dark context", () => {
+  it("marks the button only when asked", () => {
+    expect(mountButton().classes()).not.toContain("app-btn--on-dark");
+    expect(mountButton({ onDark: true }).classes()).toContain(
+      "app-btn--on-dark",
+    );
+  });
+});

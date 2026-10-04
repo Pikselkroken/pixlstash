@@ -153,6 +153,7 @@ const hostEl = ref(null);
         <AppBarButton
           icon="close"
           class="notice-dismiss"
+          :on-dark="props.onDark"
           aria-label="Dismiss notification"
           @click="store.dismiss(card.id)"
         />
@@ -359,16 +360,12 @@ const hostEl = ref(null);
 .notice-host--on-dark .notice-action {
   color: rgb(var(--v-theme-on-dark-surface));
 }
+/* Muted at rest (spec §2.5); the `on-dark` bar button's own hover, which
+   outranks this, lifts the dismiss to full ink and brings the wash and ring.
+   The action below is not a button component and restates them. */
 .notice-host--on-dark .notice-count,
 .notice-host--on-dark .notice-dismiss {
   color: rgba(var(--v-theme-on-dark-surface), 0.7);
-}
-/* The bar control paints `toolbar-text`, a theme colour, which is wrong on a
-   card that stays dark in both themes, and so are the theme's hover wash and
-   focus ink. */
-.notice-host--on-dark .notice-dismiss:hover {
-  color: rgb(var(--v-theme-on-dark-surface));
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 .notice-host--on-dark .notice-action:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);

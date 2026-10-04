@@ -128,3 +128,15 @@ describe("AppBarButton", () => {
     expect(w.find(".tip").exists()).toBe(false);
   });
 });
+
+// buttons.md, "The on-dark context": the token swap in App.css hangs off this.
+describe("AppBarButton on-dark context", () => {
+  it("marks the button only when asked", () => {
+    const plain = mount(AppBarButton, { props: { icon: "close" } });
+    expect(plain.find("button").classes()).not.toContain("bar-btn--on-dark");
+    const dark = mount(AppBarButton, {
+      props: { icon: "close", onDark: true },
+    });
+    expect(dark.find("button").classes()).toContain("bar-btn--on-dark");
+  });
+});

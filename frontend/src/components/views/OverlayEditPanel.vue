@@ -19,7 +19,12 @@
         An image-to-image, inpaint or outpaint workflow with one open picture
         input shows up here.
       </p>
-      <AppButton size="sm" block @click="router.push({ name: 'workflows' })">
+      <AppButton
+        size="sm"
+        block
+        on-dark
+        @click="router.push({ name: 'workflows' })"
+      >
         Open Workflows
       </AppButton>
     </div>
@@ -196,6 +201,7 @@
           {{ submitError }}
         </p>
         <AppButton
+          on-dark
           variant="primary"
           size="sm"
           block
