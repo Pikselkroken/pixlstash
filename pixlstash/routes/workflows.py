@@ -1984,6 +1984,15 @@ class SetClonePlan(BaseModel):
             "(the set holds fewer than the graph loads): they keep their file."
         ),
     )
+    maps_cleanly: bool = Field(
+        False,
+        description=(
+            "True when the set's checkpoints, VAEs and text encoders fill the "
+            "graph's loaders of those kinds one for one, whatever the base "
+            "model: no file of the original is left and none of the set's is "
+            "unused. Never true for a set that will not load."
+        ),
+    )
     loaders: list[LoaderDiff]
 
 
@@ -6987,11 +6996,13 @@ def create_router(server) -> APIRouter:
         Each base slot takes the checkpoint :func:`_pair_bases` paired it with
         (*bases*). A VAE or text-encoder
         slot takes the set's file of the same layout (``family``) nobody has
-        taken yet; with no layout to go by, the set's only file of that kind
-        when the graph has only one such slot. A slot the set has nothing for
-        keeps its file. Two slots of a kind are two different files (the
-        slot list merges loaders naming one file), so one set file is never
-        written over both.
+        taken yet. When the set holds exactly as many files of a kind as the
+        graph has slots, every slot takes one, the layout matches first and
+        the rest in order: the set's files go with the set's checkpoint, so a
+        Krea 2 text encoder replaces a Z-Image one whatever their layouts. A
+        slot the set has nothing for keeps its file. Two slots of a kind are
+        two different files (the slot list merges loaders naming one file), so
+        one set file is never written over both.
         """
         of_kind = {
             "vae": [m for m in members if m.file_kind == FILE_VAE],
@@ -7003,30 +7014,42 @@ def create_router(server) -> APIRouter:
         paired = {slot.filename: new for slot, new in bases}
         swaps: dict[str, str] = {}
         taken: set[int] = set()
+        chosen: dict[str, SwapModel] = {}
+        # Layout matches first, so an in-order fill never takes a file a
+        # later slot of its layout needed.
         for _cls, _widget, slot in found:
-            new = None
             if slot.kind in BASE_MODEL_KINDS:
-                new = paired.get(slot.filename)
+                if slot.filename in paired:
+                    chosen[slot.filename] = paired[slot.filename]
             elif slot.kind in of_kind:
                 family = slot.model.family if slot.model else None
-                files = [m for m in of_kind[slot.kind] if m.id not in taken]
-                new = next((m for m in files if family and m.family == family), None)
-                only = of_kind[slot.kind][0] if len(of_kind[slot.kind]) == 1 else None
-                # With no layout to go by on one side or the other: two known
-                # layouts that differ are a mismatch, never a fallback.
-                if (
-                    new is None
-                    and only is not None
-                    and slots_of[slot.kind] == 1
-                    and (family is None or only.family is None)
-                ):
-                    new = only
+                new = next(
+                    (
+                        m
+                        for m in of_kind[slot.kind]
+                        if m.id not in taken and family and m.family == family
+                    ),
+                    None,
+                )
                 if new is not None:
                     taken.add(new.id)
-            if new is not None and normalized_filename(
-                new.filename
-            ) != normalized_filename(slot.filename):
-                swaps[slot.filename] = new.filename
+                    chosen[slot.filename] = new
+        for _cls, _widget, slot in found:
+            kind = slot.kind
+            if (
+                kind in of_kind
+                and slot.filename not in chosen
+                and len(of_kind[kind]) == slots_of[kind]
+            ):
+                # ponytail: in graph order; a dual text encoder of two unknown
+                # layouts may pair crosswise, the dialog's diff shows it.
+                new = next((m for m in of_kind[kind] if m.id not in taken), None)
+                if new is not None:
+                    taken.add(new.id)
+                    chosen[slot.filename] = new
+        for filename, new in chosen.items():
+            if normalized_filename(new.filename) != normalized_filename(filename):
+                swaps[filename] = new.filename
         return swaps
 
     def _wont_load(
@@ -7120,15 +7143,13 @@ def create_router(server) -> APIRouter:
             # Named by the caller, never guessed from the members: a set's
             # checkpoint slot takes a checkpoint or an unclassified diffusion
             # file, and an upscaler beside no checkpoint is no base model.
-            bases = _pair_bases(
-                found,
-                [
-                    models[i]
-                    for i in ask.checkpoint_ids
-                    if i in models
-                    and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
-                ],
-            )
+            set_checkpoints = [
+                models[i]
+                for i in ask.checkpoint_ids
+                if i in models
+                and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
+            ]
+            bases = _pair_bases(found, set_checkpoints)
             # The one the graph's first base slot takes, which `old_base` is
             # read from; else whichever slot was paired.
             checkpoint = next(
@@ -7199,10 +7220,36 @@ def create_router(server) -> APIRouter:
                         installed=row["installed"] if row else None,
                     )
                 )
+            essentials = [
+                slot
+                for _c, _w, slot in found
+                if slot.kind in (*BASE_MODEL_KINDS, "vae", "clip")
+            ]
+            set_files = {
+                normalized_filename(m.filename)
+                for m in (
+                    *set_checkpoints,
+                    *(
+                        m
+                        for m in members
+                        if m.file_kind in (FILE_VAE, FILE_TEXT_ENCODER)
+                    ),
+                )
+            }
+            maps_cleanly = (
+                fit != "wont_load"
+                and len(essentials) == len(set_files)
+                and {
+                    normalized_filename(swaps.get(slot.filename, slot.filename))
+                    for slot in essentials
+                }
+                == set_files
+            )
             plans.append(
                 SetClonePlan(
                     key=ask.key,
                     fit=fit,
+                    maps_cleanly=maps_cleanly,
                     reason=reason,
                     base_model=checkpoint.base_model if checkpoint else None,
                     keeps_loras=keeps,

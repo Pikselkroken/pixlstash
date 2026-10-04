@@ -34,8 +34,8 @@
         </div>
 
         <p v-if="!shownGroups.length && view === 'fits'" class="cos-note">
-          No set on your shelf has this workflow's base model or family.
-          All lists every set.
+          No set on your shelf has this workflow's base model or family, or
+          fills its loaders one for one. All lists every set.
         </p>
 
         <div class="cos-list" role="radiogroup" aria-labelledby="cos-sets-label">
@@ -363,18 +363,25 @@ const chosen = computed(
   () => sets.value.find((set) => set.key === chosenKey.value) ?? null,
 );
 
+/**
+ * Fits this graph: the same base model or family, or a set whose files fill
+ * the graph's checkpoint, VAE and text-encoder loaders one for one
+ * (`maps_cleanly`), whatever its base model.
+ */
+function fits(set) {
+  return (
+    ["same_base_model", "same_family"].includes(set.plan.fit) ||
+    Boolean(set.plan.maps_cleanly)
+  );
+}
+
 const shownGroups = computed(() =>
-  FIT_GROUPS.filter(
-    (group) =>
-      view.value === "all" ||
-      group.id === "same_base_model" ||
-      group.id === "same_family",
-  )
-    .map((group) => ({
-      ...group,
-      sets: sets.value.filter((set) => set.plan.fit === group.id),
-    }))
-    .filter((group) => group.sets.length),
+  FIT_GROUPS.map((group) => ({
+    ...group,
+    sets: sets.value.filter(
+      (set) => set.plan.fit === group.id && (view.value === "all" || fits(set)),
+    ),
+  })).filter((group) => group.sets.length),
 );
 
 /** Every loader of the original's chain, trunk and lanes. */

@@ -10619,8 +10619,8 @@ def test_a_set_vae_replaces_only_the_graph_vae_of_its_layout(cloneable):
     }
 
 
-def test_a_set_vae_of_another_known_layout_is_not_swapped_in(cloneable):
-    """One slot, one set VAE, two known layouts that differ: no fallback."""
+def test_a_set_vae_of_another_layout_replaces_the_graphs_only_one(cloneable):
+    """One slot, one set VAE: the set's VAE goes with its checkpoint."""
     graph = _embedded_export_graph()
     graph["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}}
     cloneable.monkeypatch.setattr(
@@ -10639,14 +10639,29 @@ def test_a_set_vae_of_another_known_layout_is_not_swapped_in(cloneable):
             for filename, family in (
                 ("ae.safetensors", "vae_16ch"),
                 ("wan-video-vae.safetensors", "wan_vae"),
+                ("other-vae.safetensors", "wan_vae"),
             )
         ]
     try:
-        _body, plans = _plans(cloneable, wan=[cloneable.checkpoint_id, ids[1]])
+        _body, plans = _plans(
+            cloneable,
+            wan=[cloneable.checkpoint_id, ids[1]],
+            # Two VAEs for one slot: no fill by order, nothing it could guess.
+            two=[cloneable.checkpoint_id, ids[1], ids[2]],
+            bare=[cloneable.checkpoint_id],
+        )
     finally:
         with hub.transaction() as conn:
             conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in ids])
-    assert plans["wan"]["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+    assert plans["wan"]["swaps"] == {
+        _SHELF_FILENAME: CLONE_CHECKPOINT,
+        "ae.safetensors": "wan-video-vae.safetensors",
+    }
+    assert plans["wan"]["maps_cleanly"] is True
+    assert plans["two"]["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+    assert plans["two"]["maps_cleanly"] is False
+    # The graph's VAE would be left beside another model's checkpoint.
+    assert plans["bare"]["maps_cleanly"] is False
 
 
 def test_two_unknown_base_models_are_not_the_same_one(cloneable):

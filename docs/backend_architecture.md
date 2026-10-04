@@ -9335,8 +9335,12 @@ other loader keeps its class and a file it cannot list is refused as before.
 `POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
 per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
 maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file - and a VAE or
-text-encoder slot the set's untaken file of the same layout (`family`, or the
-set's only one against the graph's only slot of that kind). Two slots of a kind
+text-encoder slot the set's untaken file of the same layout (`family`), and
+when the set holds exactly as many files of a kind as the graph has slots, the
+rest in graph order whatever their layout: a set's files go with its
+checkpoint. `maps_cleanly` says the set's checkpoints, VAEs and text encoders
+fill those loaders one for one, which is what *Fits this graph* lists besides
+the same base model and family. Two slots of a kind
 are two different files, since the slot list merges loaders naming one, so one
 set VAE is never written over a video VAE and an image VAE alike. **LoRAs go only when the
 base model changes**: `keeps_loras` compares `_base_key` of the set's
