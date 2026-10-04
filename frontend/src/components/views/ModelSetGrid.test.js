@@ -1210,7 +1210,8 @@ describe("hand-made sets (#1520)", () => {
     expect(cards[0].text()).not.toContain("Incomplete");
     expect(cards[1].text()).toContain("Incomplete: no checkpoint");
     // The name says what is drawn: the warning, not the facts it replaces.
-    expect(cards[1].attributes("aria-label")).not.toContain("no picture yet");
+    expect(cards[1].attributes("aria-label")).not.toContain("no pictures yet");
+    expect(cards[0].text()).toContain("no pictures yet");
     // Honesty: no recipe count on a hand-made card.
     expect(cards[0].text()).not.toMatch(/recipe/);
   });

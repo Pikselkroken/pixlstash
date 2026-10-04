@@ -568,7 +568,7 @@ export function handMadeCard(set) {
     ),
     facts: [
       members.length === 1 ? "1 model" : `${members.length} models`,
-      pictures ? pictureCount(pictures) : "no picture yet",
+      pictures ? pictureCount(pictures) : "no pictures yet",
       offShelf ? `${offShelf} not on shelf` : null,
     ].filter(Boolean),
     pictures,
