@@ -165,7 +165,7 @@
           variant="ghost"
           size="sm"
           tabindex="-1"
-          tooltip="Keep this set separate from those pictures. The set's menu can suggest them again."
+          :tooltip="`Keep this set separate from ${offerThose}. The set's menu can suggest them again.`"
           @click.stop="emit('keep-separate')"
           >{{ set.offer.models.length === 1 ? "Not this one" : "Not these" }}</AppButton
         >
@@ -506,13 +506,16 @@ const offerLead = computed(() => {
   return question ? `${question.who}${question.rest}` : "";
 });
 
+/** What the offer is counted in: pictures here, or recipes when none is. */
+const offerThose = computed(() =>
+  props.set.offer?.picture_count ? "those pictures" : "those recipes",
+);
+
 const offerNote = computed(() => {
-  const offer = props.set.offer;
-  const n = offer?.models.length ?? 0;
-  const them = offer?.picture_count ? "those pictures" : "those recipes";
+  const n = props.set.offer?.models.length ?? 0;
   return n === 1
-    ? `It is dashed below. Adding it brings ${them} into this set.`
-    : `They are dashed below. Adding all ${n} brings ${them} into this set.`;
+    ? `It is dashed below. Adding it brings ${offerThose.value} into this set.`
+    : `They are dashed below. Adding all ${n} brings ${offerThose.value} into this set.`;
 });
 
 /** "812 pictures", or the recipes when none of its pictures is here. */

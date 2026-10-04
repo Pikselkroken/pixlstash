@@ -2528,6 +2528,23 @@ describe("hand-made sets (#1520)", () => {
       expect([...store.selectedSetIds]).toEqual([]);
     });
 
+    it("counts a recipe-only offer in recipes, on the strip and its Not these", async () => {
+      const { wrapper, store } = await mountOffer({
+        offer: { ...OFFER, picture_count: 0 },
+      });
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+      expect(strip.text()).toContain("6 recipes used this");
+      expect(strip.text()).toContain("brings those recipes into this set");
+      const no = strip
+        .findAllComponents({ name: "AppButton" })
+        .find((button) => button.text() === "Not these");
+      expect(no.props("tooltip")).toBe(
+        "Keep this set separate from those recipes. The set's menu can suggest them again.",
+      );
+    });
+
     it("keeps several offered models out at once with Not these", async () => {
       setWorkflowSetDeclines.mockResolvedValue({
         set: handSet(10, [SET_CKPT]),
