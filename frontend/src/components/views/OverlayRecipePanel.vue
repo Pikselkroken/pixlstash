@@ -265,6 +265,7 @@
                reason `aria-describedby` points at. AppButton already inks both
                spellings the same way. -->
           <AppButton
+            on-dark
             variant="primary"
             size="sm"
             class="recipe-run"
@@ -286,6 +287,7 @@
                a keyboard reader could never reach the sentence that says why
                it is inert. The click is refused in the handler instead. -->
           <AppButton
+            on-dark
             v-if="canSave"
             size="sm"
             block
@@ -309,6 +311,7 @@
             Already kept as “{{ matched.name || "Untitled" }}”.
           </p>
           <AppButton
+            on-dark
             v-if="comfyuiConfigured"
             variant="secondary"
             size="sm"

@@ -34,6 +34,7 @@
       v-if="abortLabel"
       variant="danger"
       block
+      on-dark
       class="progress-overlay__abort"
       @click="emit('abort')"
     >
@@ -268,10 +269,5 @@ const announcement = computed(() => {
   .progress-overlay__abort:not(:disabled):not([aria-disabled="true"]):hover {
   background-color: rgba(var(--v-theme-on-error), 0.28);
   background-image: none;
-}
-
-/* Dark (or red) in both themes: the global ring's width and gap, this ground's ink. */
-.progress-overlay :focus-visible {
-  outline-color: rgb(var(--v-theme-on-dark-surface));
 }
 </style>

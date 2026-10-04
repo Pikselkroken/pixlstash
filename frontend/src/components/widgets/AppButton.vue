@@ -10,6 +10,7 @@
         'app-btn--icon-only': iconOnly,
         'app-btn--loading': loading,
         'app-btn--block': block,
+        'app-btn--on-dark': onDark,
       },
     ]"
     :disabled="disabled || loading"
@@ -66,6 +67,9 @@ const props = defineProps({
   iconOnly: { type: Boolean, default: false },
   // Full width of its container, for a panel-width key action.
   block: { type: Boolean, default: false },
+  // On a ground that stays dark in both themes: the lightbox, a scrim over a
+  // picture, a dark-surface card (docs/design/buttons.md, "The on-dark context").
+  onDark: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   // Pending / in-flight. NOT the same thing as `disabled`: "working", not "not
   // allowed" (visual-language.md §11). Forces the button disabled so a second
@@ -178,6 +182,32 @@ defineExpose({ focus });
 .app-btn--block {
   display: flex;
   width: 100%;
+}
+
+/* ON DARK: the ground stays dark in both themes, so the theme's own values are
+   the light theme's wrong ones there. The context swaps the tokens the variants
+   read rather than repainting each variant: the bright amber (#1413), the
+   dark-surface ink for the quiet and outlined labels, the hover wash and the
+   focus ring. Custom properties holding var() resolve where they are declared,
+   so `--hover-wash`, `--hover-neutral` and `--focus-stroke` are restated here
+   rather than inherited from the theme root. The neutral fill is the ink at
+   16%, which is the dark theme's own `cancel-button` to within a shade. */
+.app-btn--on-dark {
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --v-theme-cancel-button-text: var(--v-theme-on-dark-surface);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --hover-neutral: linear-gradient(
+    rgba(var(--v-theme-on-dark-surface), 0.16),
+    rgba(var(--v-theme-on-dark-surface), 0.16)
+  );
+  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
+}
+.app-btn--on-dark.app-btn--secondary {
+  background-color: rgba(var(--v-theme-on-dark-surface), 0.16);
+}
+.app-btn--on-dark.app-btn--outline {
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.28);
 }
 
 /* Both spellings of "not allowed" fade the same way. `aria-disabled`, not the

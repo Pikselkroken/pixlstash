@@ -16,6 +16,7 @@
         'bar-btn--open': open,
         'bar-btn--danger': danger,
         'bar-btn--loading': loading,
+        'bar-btn--on-dark': onDark,
       },
     ]"
     :disabled="disabled || loading"
@@ -72,6 +73,9 @@ const props = defineProps({
   active: { type: Boolean, default: false },
   open: { type: Boolean, default: false },
   danger: { type: Boolean, default: false },
+  // On a ground that stays dark in both themes (buttons.md, "The on-dark
+  // context"). The paint is in App.css with the rest of `.bar-btn`.
+  onDark: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   // Same pending contract as AppButton: disabled against a second press, the
   // glyph becomes the spinner, and focus comes back when it settles.

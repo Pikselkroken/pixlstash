@@ -33,7 +33,7 @@ screenshot as evidence for or against a row. The **Open** rows are not built.
 | Two dialects, and the reclassification of the rest | **Approved** 2026-09-12 |
 | `AppButton` replaces `v-btn` in all dialogs | **Approved** 2026-09-12 |
 | Outlined sites folding into the filled neutral | **Open.** Recommended. |
-| An `on-dark` context on both dialects | **Open.** Recommended. |
+| An `on-dark` context on both dialects | **Approved** 2026-10-04 (#1674) |
 | One field height, `--control-h`, everywhere in the shell | **Approved** 2026-09-12 |
 | The label inside the field retired outright | **Approved** 2026-09-12 |
 | `--font-mono` on path, hash, port and id fields | **Approved** 2026-09-12 |
@@ -97,7 +97,7 @@ by a line below.
 | The pill progress track | Done | Every track is `--radius-pill`; the two `v-progress-linear`s take `rounded="pill"` (held by `styles/designDrift.test.js`) and every custom track already wore it. Two named exceptions: the shelf's storage band meter is flat-ended by design (#893), and the layout dialog's native `<progress>` is drawn by the platform |
 | Outlined sites folding into the filled neutral (Open) | Not built | 4 `variant="outlined"` sites remain |
 | Selection-pill verbs at `--control-h-bar` | Done | Every verb in `SelectionBar.vue` is an `AppBarButton` (`.bar-btn`, `--control-h-bar`); the icon-only ones draw 24px, a labelled one 18px. On a coarse pointer they grow to `--bar-height` (48px). `--selbar-height: 34px` in `ImageGrid.css` is the grid's offset under the 36px toolbar band, not a control height, and stays |
-| An `on-dark` context on both dialects (Open) | Not built | No such prop on either button |
+| An `on-dark` context on both dialects | Done | An `on-dark` prop on `AppButton` and `AppBarButton`. On it: the lightbox's Recipe and Edit panes, the notice dismiss on a dark card, the progress card's abort, and the model-set card's join offer (three hand-rolled buttons gone). **Left:** the review overlay's `.rs-*` family and the lightbox's own chrome are hand-rolled `<button>`s, not either component, so they are migrations, not a prop to add |
 | Icons get no scale: a component owns its own icon slot | **Approved** 2026-09-13 |
 | A free-standing icon tracks its text; the default is 16px | **Approved** 2026-09-13 |
 | A menu row's two glyph slots are both `--gutter-glyph` | **Approved** 2026-09-13 |
@@ -249,6 +249,31 @@ migration.
 | `--control-h` | A height to reach for, so the next dense control does not pick its own. | 7 |
 
 No `icon-right` is needed: there is no `append-icon` in the codebase.
+
+### The on-dark context
+
+`on-dark` is a prop on both dialects, for a button on a ground that stays dark
+in both themes: the lightbox, a `dark-surface` card, a scrim over a picture.
+It is a context, not a variant: every variant keeps its job and the prop swaps
+the tokens they read. No new values; each one is already the `dark-surface`
+family's.
+
+| Token the variant reads | On dark |
+|---|---|
+| `accent` (key action fill) | `dark-surface-accent`, the bright amber (#1413) |
+| `on-surface` (quiet and outlined labels) | `on-dark-surface` |
+| Neutral fill / label | `on-dark-surface` at 16% / `on-dark-surface`. The wash over the dark theme's ground is its own `cancel-button` to within a shade |
+| Outlined border | `on-dark-surface` at 28% |
+| `toolbar-text` (bar label and glyph) | `on-dark-surface` |
+| `surface-error` (destructive bar verb) | `dark-surface-error` |
+| Active bar glyph (`--selected-ink`) | `dark-surface-primary`, set as a colour because a `v-icon` redeclares the variable on itself |
+| `--hover-wash`, `--hover-neutral` | `on-dark-surface` at 16% |
+| `--focus-stroke` | `on-dark-surface` |
+
+The danger fill needs nothing: `error` with `on-error` is one value in both
+themes. The hover, wash and focus tokens are restated on the button rather
+than inherited, because a custom property holding `var()` resolves where it is
+declared, which is the theme root.
 
 ---
 

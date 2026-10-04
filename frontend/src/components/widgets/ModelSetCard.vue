@@ -108,35 +108,38 @@
         }}</span></span
       >
       <div class="msc__ask-acts">
-        <button
+        <AppButton
           v-if="card.offer.model"
-          class="msc__ask-btn msc__ask-btn--yes"
-          type="button"
+          variant="primary"
+          size="sm"
+          icon-left="plus"
+          on-dark
           tabindex="-1"
           data-testid="set-offer-add"
           @click="emit('add')"
+          >Add to set</AppButton
         >
-          <v-icon size="14">mdi-plus</v-icon>Add to set
-        </button>
-        <button
+        <AppButton
           v-else
-          class="msc__ask-btn msc__ask-btn--yes"
-          type="button"
+          variant="primary"
+          size="sm"
+          icon-left="plus"
+          on-dark
           tabindex="-1"
           data-testid="set-offer-review"
           @click="emit('offer')"
+          >Review {{ card.offer.adds }}…</AppButton
         >
-          <v-icon size="14">mdi-plus</v-icon>Review {{ card.offer.adds }}…
-        </button>
-        <button
-          class="msc__ask-btn"
-          type="button"
+        <AppButton
+          variant="outline"
+          size="sm"
+          on-dark
           tabindex="-1"
           data-testid="set-offer-no"
           @click="emit('keep-separate')"
         >
           {{ card.offer.model ? "Not this one" : "Not these" }}
-        </button>
+        </AppButton>
       </div>
     </div>
 
@@ -533,36 +536,6 @@ const accessibleName = computed(() => {
 .msc__ask-acts {
   display: flex;
   gap: var(--space-3);
-}
-
-.msc__ask-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: var(--control-h-sm);
-  padding: 0 var(--space-3);
-  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.28);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-weight: var(--weight-semibold);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.msc__ask-btn:hover {
-  background: rgba(var(--v-theme-on-dark-surface), 0.16);
-}
-
-.msc__ask-btn--yes {
-  border-color: transparent;
-  background: rgb(var(--v-theme-accent));
-  color: rgb(var(--v-theme-on-accent));
-}
-
-.msc__ask-btn--yes:hover {
-  background-image: var(--hover-shade);
 }
 
 /* The shipped scrim badge: a dark chip over an arbitrary photo. */
