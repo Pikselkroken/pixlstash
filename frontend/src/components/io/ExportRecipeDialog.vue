@@ -44,11 +44,12 @@
     </template>
 
     <template #footer>
-      <AppButton :disabled="busy" @click="emit('close')">Cancel</AppButton>
+      <AppButton :disabled="!!busy" @click="emit('close')">Cancel</AppButton>
       <AppButton
         v-if="payload?.recipe?.workflow_id"
         icon-left="sitemap-outline"
-        :loading="busy"
+        :loading="busy === 'workflow'"
+        :disabled="!!busy"
         @click="exportTheWorkflow"
       >
         Export workflow
@@ -57,7 +58,8 @@
         ref="primaryButton"
         variant="primary"
         icon-left="export"
-        :disabled="!payload || busy"
+        :loading="busy === 'recipe'"
+        :disabled="!payload || !!busy"
         @click="exportTheRecipe"
       >
         Export recipe
@@ -107,7 +109,8 @@ const exportError = ref("");
  * Only that one: exporting the recipe writes a payload this dialog already
  * holds, so it is over within the click and has no in-flight state to show.
  */
-const busy = ref(false);
+/** The export in flight, `"recipe"` or `"workflow"`, or `""` for none. */
+const busy = ref("");
 /** The primary, focused once there is something to agree to. */
 const primaryButton = ref(null);
 
@@ -151,7 +154,7 @@ watch(payload, async (ready) => {
 
 async function exportTheRecipe() {
   if (!payload.value || busy.value) return;
-  busy.value = true;
+  busy.value = "recipe";
   exportError.value = "";
   try {
     if (!(await saveJsonAs(payload.value.recipe, payload.value.filename))) {
@@ -162,7 +165,7 @@ async function exportTheRecipe() {
     exportError.value = errorMessage(err, "Could not save that recipe.");
     return;
   } finally {
-    busy.value = false;
+    busy.value = "";
   }
   emit("close");
 }
@@ -170,7 +173,7 @@ async function exportTheRecipe() {
 async function exportTheWorkflow() {
   const key = payload.value?.recipe?.workflow_id;
   if (!key || busy.value) return;
-  busy.value = true;
+  busy.value = "workflow";
   exportError.value = "";
   try {
     const body = await exportWorkflow(key);
@@ -197,7 +200,7 @@ async function exportTheWorkflow() {
       "Could not export that workflow on its own.",
     );
   } finally {
-    busy.value = false;
+    busy.value = "";
   }
 }
 </script>

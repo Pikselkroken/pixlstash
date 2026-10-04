@@ -131,6 +131,30 @@ describe("ExportRecipeDialog", () => {
     }
   });
 
+  it("shows progress on the export that was pressed, not its neighbour", async () => {
+    let answer;
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(() => new Promise((resolve) => (answer = resolve))),
+      completeMediaSaveAs: vi.fn(),
+    };
+    try {
+      const wrapper = render();
+      await flushPromises();
+      const button = (label) =>
+        wrapper.findAll("button").find((b) => b.text().includes(label));
+      await button("Export recipe").trigger("click");
+      await flushPromises();
+      expect(button("Export recipe").attributes("aria-busy")).toBe("true");
+      expect(button("Export workflow").attributes("aria-busy")).toBeUndefined();
+      expect(button("Export workflow").attributes("disabled")).toBeDefined();
+      answer({ canceled: true });
+      await flushPromises();
+      expect(button("Export recipe").attributes("aria-busy")).toBeUndefined();
+    } finally {
+      delete window.pixlstashDesktop;
+    }
+  });
+
   it("writes nothing until the owner presses Export recipe", async () => {
     const wrapper = render();
     await flushPromises();
