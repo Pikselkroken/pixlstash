@@ -8,7 +8,19 @@
       <span v-if="row.provenance === 'edited'" class="wfdef-prov">Yours</span>
     </span>
     <span class="wfdef-value">
-      <span class="wfdef-text num">{{ row.value }}</span>
+      <!-- Set each run: the box is the field, so it edits the workflow's
+           value, which locking then keeps. Fixed: read-only text. -->
+      <span v-if="fixed" class="wfdef-text num">{{ row.value }}</span>
+      <input
+        v-else
+        class="wfdef-text wfdef-input num"
+        :value="String(row.value)"
+        :aria-label="row.label"
+        :disabled="busy"
+        data-testid="wfdef-input"
+        @change="onChange"
+        @keydown.stop
+      />
       <AppButton
         v-if="row.provenance === 'edited'"
         class="wfdef-reset"
@@ -58,9 +70,37 @@ const props = defineProps({
   busy: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["toggle-pin", "reset"]);
+const emit = defineEmits(["toggle-pin", "reset", "edit"]);
 
 const fixed = computed(() => !props.row.pinned);
+
+/**
+ * The typed text as the value's own type, or undefined when it is not one:
+ * a number field takes a number, a boolean `true`/`false`, a string anything
+ * but empty.
+ */
+function parse(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  if (typeof props.row.value === "number") {
+    const number = Number(trimmed);
+    return Number.isFinite(number) ? number : undefined;
+  }
+  if (typeof props.row.value === "boolean") {
+    return trimmed === "true" ? true : trimmed === "false" ? false : undefined;
+  }
+  return trimmed;
+}
+
+/** On blur or Enter: a new value is emitted, anything else is put back. */
+function onChange(event) {
+  const value = parse(event.target.value);
+  if (value === undefined || value === props.row.value) {
+    event.target.value = String(props.row.value);
+    return;
+  }
+  emit("edit", value);
+}
 </script>
 
 <style scoped>
@@ -110,6 +150,20 @@ const fixed = computed(() => !props.row.pinned);
   border-color: transparent;
   background: none;
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wfdef-value:has(.wfdef-input:focus-visible) {
+  box-shadow: var(--focus-ring-inset);
+}
+
+/* Bare: the value cell above is the field's box. */
+.wfdef-input {
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: inherit;
+  font: inherit;
 }
 
 .wfdef-text {

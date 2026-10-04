@@ -451,6 +451,124 @@ describe("a refusal the popup offers to fix", () => {
     expect(wrapper.vm.canRun).toBe(true);
   });
 
+  it("offers a sampler this ComfyUI lacks a replacement, and runs with it", async () => {
+    const missing = {
+      code: "missing_choices",
+      choices: [
+        {
+          node_id: "3",
+          field: "sampler_name",
+          value: "res_2s",
+          options: ["dpmpp_2m", "euler"],
+          replacement: "euler",
+        },
+      ],
+    };
+    preflightWorkflowRun
+      .mockResolvedValueOnce({
+        ok: false,
+        runs: 0,
+        groups: [{ workflow_id: KEY, reasons: [missing] }],
+      })
+      .mockResolvedValue({ ok: true, runs: 1, groups: [] });
+
+    const wrapper = await mountRun();
+
+    // Re-asked with the replacement, and the row stays once the reason clears.
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(2);
+    expect(preflightWorkflowRun.mock.calls[1][0].choices).toEqual([
+      { node_id: "3", field: "sampler_name", value: "euler" },
+    ]);
+    expect(wrapper.vm.reasons).toEqual([]);
+    expect(wrapper.vm.canRun).toBe(true);
+    const row = wrapper.find("[data-testid='rund-choice']");
+    expect(row.text()).toContain("res_2s is not on this ComfyUI");
+
+    wrapper.vm.choiceFixes[0].chosen = "dpmpp_2m";
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].choices).toEqual([
+      { node_id: "3", field: "sampler_name", value: "dpmpp_2m" },
+    ]);
+  });
+
+  it("lets the owner's own sampler pick win over the replacement", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        defaults: [...card().defaults, def("Sampler", "sampler_name", "res_2s")],
+      }),
+    });
+    preflightWorkflowRun
+      .mockResolvedValueOnce({
+        ok: false,
+        runs: 0,
+        groups: [
+          {
+            workflow_id: KEY,
+            reasons: [
+              {
+                code: "missing_choices",
+                choices: [
+                  {
+                    node_id: "3",
+                    field: "sampler_name",
+                    value: "res_2s",
+                    options: ["dpmpp_2m", "euler"],
+                    replacement: "euler",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      })
+      .mockResolvedValue({ ok: true, runs: 1, groups: [] });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.choiceFixes).toHaveLength(1);
+
+    const sampler = wrapper.vm.defaults.find(
+      (field) => field.input_name === "sampler_name",
+    );
+    // Typed a key at a time: one re-ask, for the whole name.
+    const asks = preflightWorkflowRun.mock.calls.length;
+    wrapper.vm.setValue(sampler, "dpmpp");
+    wrapper.vm.setValue(sampler, "dpmpp_2m");
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await flushPromises();
+    expect(preflightWorkflowRun.mock.calls.length).toBe(asks + 1);
+
+    expect(wrapper.vm.choiceFixes).toEqual([]);
+    const asked = preflightWorkflowRun.mock.calls.at(-1)[0];
+    expect(asked.choices).toBeUndefined();
+    // The re-ask carries the pick, not the missing value it replaced.
+    expect(sentValue(asked, "sampler_name")?.value).toBe("dpmpp_2m");
+  });
+
+  it("keeps a refusal the replacement did not clear, rather than asking for ever", async () => {
+    const missing = {
+      code: "missing_choices",
+      choices: [
+        {
+          node_id: "3",
+          field: "scheduler",
+          value: "bong_tangent",
+          options: ["simple"],
+          replacement: "simple",
+        },
+      ],
+    };
+    preflightWorkflowRun.mockResolvedValue({
+      ok: false,
+      runs: 0,
+      groups: [{ workflow_id: KEY, reasons: [missing] }],
+    });
+
+    const wrapper = await mountRun();
+
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(2);
+    expect(wrapper.vm.reasons).toEqual([missing]);
+    expect(wrapper.vm.canRun).toBe(false);
+  });
+
   it("names a bypassed LoRA without blocking the run it is about (#1463)", async () => {
     // The whole point: the server WILL run this, so the notice must say so
     // before the run rather than leaving the owner to notice the character

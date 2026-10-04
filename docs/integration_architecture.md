@@ -699,7 +699,13 @@ Seven rules the client must not re-derive:
    `pixlstash_nodes: {nodes: [{node_id, class_type, title, why, kind?, id?}]}`,
    `no_save_node`, `no_runnable_source`,
    `lora_not_skippable: {node_id, field, file, message}`,
-   `stage_not_skippable: {stage, message}`.
+   `stage_not_skippable: {stage, message}`,
+   `missing_choices: {choices: [{node_id, class_type, field, value, options,
+   replacement}]}` - a `sampler_name` or `scheduler` this ComfyUI does not
+   list, `replacement` being `euler` / `simple` when listed, else the first
+   option. The body answers it with `choices: [{node_id, field, value}]`,
+   applied after `values` and for that run only; the Run popup offers each as
+   a select and re-asks.
    `picture_input_unfilled` replaced `fixed_input_deleted` in #1457 with the
    same payload shape plus each input's `title` (a slot label is a hash); a client that only knows the old code no longer
    recognises the refusal and must fall back to its generic sentence. It names

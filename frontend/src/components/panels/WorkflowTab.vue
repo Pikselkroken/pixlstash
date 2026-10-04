@@ -610,6 +610,7 @@
               :busy="busy === `default:${row.label}`"
               @toggle-pin="togglePin(row)"
               @reset="resetDefault(row)"
+              @edit="(value) => editDefault(row, value)"
             />
           </template>
           <template v-if="fixedDefaults.length">
@@ -637,6 +638,7 @@
                     :busy="busy === `default:${row.label}`"
                     @toggle-pin="togglePin(row)"
                     @reset="resetDefault(row)"
+                    @edit="(value) => editDefault(row, value)"
                   />
                 </div>
               </details>
@@ -651,6 +653,7 @@
                   :busy="busy === `default:${row.label}`"
                   @toggle-pin="togglePin(row)"
                   @reset="resetDefault(row)"
+                  @edit="(value) => editDefault(row, value)"
                 />
               </template>
               <p class="wftab-note wftab-quiet">
@@ -2237,6 +2240,29 @@ function resetDefault(row) {
       if (stillOn(key)) detail.value = body;
     } catch (err) {
       fail(err, "Could not reset that value.");
+    }
+  });
+}
+
+/**
+ * Set one value as the workflow's own ("Yours"). Whole-set, like a reset:
+ * every other edited value is sent back untouched. Locking afterwards keeps
+ * it, since a fixed parameter runs the workflow's value.
+ */
+function editDefault(row, value) {
+  const key = selectedKey.value;
+  if (!key) return;
+  return queueWrite(`default:${row.label}`, async () => {
+    const rows = defaultsFor(key);
+    if (!rows) return;
+    try {
+      const body = await setWorkflowDefaults(key, [
+        ...editedExcept(rows, row.slot_label, row.input_name),
+        { slot_label: row.slot_label, input_name: row.input_name, value },
+      ]);
+      if (stillOn(key)) detail.value = body;
+    } catch (err) {
+      fail(err, `Could not set ${row.label}.`);
     }
   });
 }

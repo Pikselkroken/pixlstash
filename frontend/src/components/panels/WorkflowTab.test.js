@@ -1773,6 +1773,42 @@ describe("a default's provenance and reset", () => {
     ]);
   });
 
+  it("edits a value set each run, keeping the other edits, and never a fixed one", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [{ ...STEPS, value: 8 }, CFG, SAMPLER] } }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(
+      rowNamed(wrapper, "sampler_name").find("[data-testid='wfdef-input']").exists(),
+    ).toBe(false);
+    const input = rowNamed(wrapper, "steps").find("[data-testid='wfdef-input']");
+    // Not a number: put back, nothing written.
+    await input.setValue("twelve");
+    await flush(wrapper);
+    expect(setWorkflowDefaults).not.toHaveBeenCalled();
+    expect(input.element.value).toBe("8");
+    await input.setValue("12");
+    await flush(wrapper);
+    expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
+      { slot_label: "slot-a", input_name: "cfg", value: "7.5" },
+      { slot_label: "slot-a", input_name: "steps", value: 12 },
+    ]);
+  });
+
+  it("puts the stored value back in the box when the edit is not saved", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: { defaults: [{ ...STEPS, value: 8 }] } }),
+    );
+    setWorkflowDefaults.mockRejectedValue(new Error("refused"));
+    const { wrapper } = await mountWith([KEY]);
+    const input = rowNamed(wrapper, "steps").find("[data-testid='wfdef-input']");
+    await input.setValue("12");
+    await flush(wrapper);
+    await flush(wrapper);
+    expect(setWorkflowDefaults).toHaveBeenCalled();
+    expect(input.element.value).toBe("8");
+  });
+
   it("sets the design's numbers each run and fixes the rest when the card has no choice", async () => {
     getWorkflowCard.mockResolvedValue(
       detail({ card: { defaults: [STEPS, SAMPLER] } }),
