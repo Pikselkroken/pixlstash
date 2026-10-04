@@ -693,6 +693,8 @@ watch(
   () => runDialog.editRun,
   (started) => {
     if (!started) return;
+    // Taken, so nothing stale is left on the store for a later reader.
+    runDialog.editRun = null;
     clearTimeout(resolveTimer);
     // Read by the popup BEFORE it queued the run, as `submit` does here.
     follow(

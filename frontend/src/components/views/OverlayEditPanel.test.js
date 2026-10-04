@@ -193,6 +193,8 @@ describe("the Edit tab", () => {
     await flush();
     expect(wrapper.text()).toContain("Running");
     expect(wrapper.emitted("running")?.at(-1)).toEqual([true]);
+    // Taken off the store once followed.
+    expect(useRunDialogStore().editRun).toBe(null);
   });
 
   it("keeps every card when ComfyUI cannot be asked, or the check fails", async () => {
