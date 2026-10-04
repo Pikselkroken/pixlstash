@@ -1345,6 +1345,8 @@ const checkpointFixNote = computed(() => {
   const fix = checkpointFix.value;
   if (!fix) return "";
   const gone = `${fix.file} is not on this ComfyUI.`;
+  // Nothing to suggest until the replacements are read.
+  if (fix.loading) return gone;
   if (fix.options.length) {
     return fix.narrowed
       ? `${gone} Pick another of the same base model for this run.`
@@ -1354,7 +1356,9 @@ const checkpointFixNote = computed(() => {
     case "none_same_base_model":
       return `${gone} No checkpoint on your model shelf is known to have its base model.`;
     case "none_loadable":
-      return `${gone} None of the same base model on your model shelf can be loaded by this workflow.`;
+      return fix.narrowed
+        ? `${gone} None of the same base model on your model shelf can be loaded by this workflow.`
+        : `${gone} Nothing on your model shelf can be loaded by this workflow.`;
     default:
       return `${gone} Type the name of one it has.`;
   }
@@ -1386,7 +1390,7 @@ async function offerCheckpoints(found, key, token) {
       ),
   );
   if (!missing) return;
-  const fix = { file, options: [], reason: "", narrowed: false };
+  const fix = { file, options: [], reason: "", narrowed: false, loading: true };
   checkpointFix.value = fix;
   const ask = ++checkpointAsk;
   const graphFile = checkpointModel.value.filename || file;
@@ -1416,6 +1420,7 @@ async function offerCheckpoints(found, key, token) {
     options: [...own, ...(answer?.replacements || [])],
     reason: answer?.replacements_reason || "",
     narrowed: Boolean(answer?.replacements_narrowed),
+    loading: false,
   };
 }
 

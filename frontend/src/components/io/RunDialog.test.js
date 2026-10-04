@@ -1474,6 +1474,10 @@ describe("the body it sends", () => {
       let answer;
       readModelSwap.mockReturnValue(new Promise((resolve) => (answer = resolve)));
       const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      // Nothing suggested while the read is out.
+      expect(wrapper.vm.checkpointFixNote).toBe(
+        "realvisXL_v5.safetensors is not on this ComfyUI.",
+      );
       wrapper.vm.setCheckpoint("typed.safetensors");
       answer({ replacements: [{ id: 7, filename: "juggernautXL.safetensors" }] });
       await flushPromises();
@@ -1491,6 +1495,10 @@ describe("the body it sends", () => {
       await flushPromises();
       expect(readModelSwap).toHaveBeenCalledTimes(2);
       expect(wrapper.vm.checkpointFix?.reason).toBe("none_loadable");
+      // Not narrowed, so it names no base model.
+      expect(wrapper.vm.checkpointFixNote).toContain(
+        "Nothing on your model shelf can be loaded by this workflow",
+      );
     });
 
     it("asks nothing for a missing file that is not a base model", async () => {

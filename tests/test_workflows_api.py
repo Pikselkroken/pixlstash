@@ -11315,6 +11315,13 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
     )["id"]
     assert offered("test-vae-fp8.safetensors") == (["test-vae-bf16.safetensors"], None)
     assert asked == [shelf_id], "evidence asked about another checkpoint"
+    assert (
+        cloneable.owner.get(
+            f"{API}/workflows/{RUN_WF}/model-swap",
+            params={"replacing": "test-vae-fp8.safetensors"},
+        ).json()["replacements_narrowed"]
+        is None
+    ), "a VAE offer claimed to say something about base models"
     assert offered("test-t5-fp16.safetensors") == (["test-t5-bf16.safetensors"], None)
     assert offered("test-umt5-q8.gguf") == (
         ["test-t5-bf16.safetensors", "test-t5-q8.gguf"],

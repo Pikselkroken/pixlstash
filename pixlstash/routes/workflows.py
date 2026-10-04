@@ -6746,7 +6746,7 @@ def create_router(server) -> APIRouter:
         index: tuple,
         replacing: str,
         kind: str | None,
-    ) -> tuple[list[ModelFixCandidate], str | None, bool]:
+    ) -> tuple[list[ModelFixCandidate], str | None, bool | None]:
         """What the Workflow tab may offer in place of *replacing*.
 
         Read off the graph a run submits, with the owner's fixes applied, so a
@@ -6770,7 +6770,8 @@ def create_router(server) -> APIRouter:
 
         Returns:
             ``(candidates, reason, narrowed)``, *reason* set only when there
-            are none, *narrowed* when a checkpoint's were held to a base model.
+            are none, *narrowed* whether a checkpoint's were held to a base
+            model (None for any other kind).
 
         Raises:
             HTTPException: 409 when the graph loads *replacing* in no slot a
@@ -6849,7 +6850,7 @@ def create_router(server) -> APIRouter:
                 None,
             )
             if base is None or base.file_kind != FILE_CHECKPOINT:
-                return [], "no_checkpoint", False
+                return [], "no_checkpoint", None
             candidates = [
                 ModelFixCandidate(
                     id=entry["id"],
@@ -6862,7 +6863,7 @@ def create_router(server) -> APIRouter:
         candidates = [
             c for c in candidates if normalized_filename(c.filename) != wanted
         ]
-        narrowed = base_model is not None
+        narrowed = base_model is not None if kind == FILE_CHECKPOINT else None
         if not candidates:
             reason = "none_same_base_model" if base_model else "none_go_with_it"
             return [], reason, narrowed
