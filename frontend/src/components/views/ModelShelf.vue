@@ -665,7 +665,10 @@
              because both reserve the same scrollbar gutter. -->
         <div
           class="shelf-scroll"
-          @pointerdown="pressedBackground = isListBackground($event)"
+          @pointerdown="
+            pressedBackground =
+              $event.button === 0 && isListBackground($event)
+          "
           @click="onListBackgroundClick"
         >
           <!-- The key to the meters, said ONCE for the view rather than once per
@@ -3380,6 +3383,9 @@ function pickRow(row, event) {
  * Decided by where the press STARTED, not by the click's target: a press that
  * slips from one row to another, or a text drag out of the rename field, fires
  * its click on a container here, and neither is a click on nothing.
+ * Primary button only, and a click with `detail` 0 (Enter or Space on a
+ * control inside, or a programmatic one) never counts: a press can end
+ * without a click, and its leftover flag must not arm a later keyboard one.
  */
 let pressedBackground = false;
 
@@ -3392,8 +3398,8 @@ function isListBackground(event) {
   );
 }
 
-function onListBackgroundClick() {
-  if (pressedBackground) store.clearSelection();
+function onListBackgroundClick(event) {
+  if (pressedBackground && event.detail > 0) store.clearSelection();
   pressedBackground = false;
 }
 

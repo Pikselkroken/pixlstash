@@ -257,7 +257,9 @@
       :class="{ 'wfv-scroll--edge-tab': !sidebarStore.workflowInspectorOpen }"
       tabindex="-1"
       @keydown.self="onBackgroundKeyDown"
-      @pointerdown="pressedBackground = isBackground($event.target)"
+      @pointerdown="
+        pressedBackground = $event.button === 0 && isBackground($event.target)
+      "
       @click="onBackgroundClick"
     >
       <!-- One `treegrid` and one tab stop: the cursor roves with the arrow
@@ -882,6 +884,9 @@ function onRowClick(index, event) {
  * Decided by where the press STARTED: a press that slips off one card onto
  * another fires its click on the grid, their common ancestor, and that is a
  * fumbled pick rather than a click on nothing.
+ * Primary button only, and a click with `detail` 0 (Enter or Space on a
+ * control inside, or a programmatic one) never counts: a press can end
+ * without a click, and its leftover flag must not arm a later keyboard one.
  */
 let pressedBackground = false;
 
@@ -889,8 +894,8 @@ function isBackground(target) {
   return target === scrollEl.value || target === gridEl.value;
 }
 
-function onBackgroundClick() {
-  if (pressedBackground) store.clearSelection();
+function onBackgroundClick(event) {
+  if (pressedBackground && event.detail > 0) store.clearSelection();
   pressedBackground = false;
 }
 

@@ -183,6 +183,22 @@ beforeEach(() => {
     .mockResolvedValue({ combinations: [], no_set: [] });
 });
 
+/**
+ * A pointer click (`detail` 1) and a right-button press: `trigger` cannot set
+ * either field, jsdom makes them getters. A keyboard click has `detail` 0.
+ */
+async function mouseClick(wrapper) {
+  wrapper.element.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, detail: 1 }),
+  );
+}
+
+async function rightPress(wrapper) {
+  wrapper.element.dispatchEvent(
+    new MouseEvent("pointerdown", { bubbles: true, button: 2 }),
+  );
+}
+
 describe("the cards", () => {
   it("keeps a missing checkpoint's card when Show hides its support files", async () => {
     const { wrapper, store } = await mountGrid({
@@ -791,16 +807,25 @@ describe("selection and the verbs", () => {
     // Pressed on a card, released elsewhere: the click lands on the grid but
     // is a fumbled pick, not a click on nothing.
     await wrapper.find(".msg__row").trigger("pointerdown");
+    await mouseClick(grid);
+    expect([...store.selectedIds]).toEqual([1]);
+
+    // A right-press ends without a click; a keyboard click (detail 0) after a
+    // left one does not count either.
+    await rightPress(grid);
+    await mouseClick(grid);
+    expect([...store.selectedIds]).toEqual([1]);
+    await grid.trigger("pointerdown");
     await grid.trigger("click");
     expect([...store.selectedIds]).toEqual([1]);
 
     await grid.trigger("pointerdown");
-    await grid.trigger("click");
+    await mouseClick(grid);
     expect([...store.selectedIds]).toEqual([]);
 
     await wrapper.find(".msg__row").trigger("click");
     await wrapper.find(".msg__scroll").trigger("pointerdown");
-    await wrapper.find(".msg__scroll").trigger("click");
+    await mouseClick(wrapper.find(".msg__scroll"));
     expect([...store.selectedIds]).toEqual([]);
   });
 
@@ -1515,6 +1540,22 @@ describe("hand-made sets (#1520)", () => {
     const grid = wrapper.find('[role="treegrid"]');
     await grid.trigger("keydown", { key: "n", repeat: true });
     expect(createWorkflowSet).not.toHaveBeenCalled();
+  });
+
+  it("clears a mixed model and set selection on a click on the background", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.selectFromClick(1, { ctrl: false, shift: false }, [1]);
+    store.selectSet(10, { ctrl: true });
+    expect([...store.selectedSetIds]).toEqual([10]);
+    expect([...store.selectedIds]).toEqual([1]);
+
+    await wrapper.find(".msg__scroll").trigger("pointerdown");
+    await mouseClick(wrapper.find(".msg__scroll"));
+    expect([...store.selectedSetIds]).toEqual([]);
+    expect([...store.selectedIds]).toEqual([]);
   });
 
   it("drops the set selection when the cursor enters a tray, and when the grid is left", async () => {

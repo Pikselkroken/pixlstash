@@ -28,7 +28,9 @@
     <div
       v-else
       class="msg__scroll"
-      @pointerdown="pressedBackground = isBackground($event)"
+      @pointerdown="
+        pressedBackground = $event.button === 0 && isBackground($event)
+      "
       @click="onBackgroundClick"
     >
       <!-- No evidence to draw, said above a grid that still holds the New
@@ -824,6 +826,9 @@ function rangeCardHeads(occurrence) {
  * A click on the scroller or a gap in the grid clears both selections. Decided
  * by where the press started: one that slips off a card onto another fires its
  * click on the grid, and that is a fumbled pick, not a click on nothing.
+ * Primary button only, and a click with `detail` 0 (Enter or Space on a
+ * control inside, or a programmatic one) never counts: a press can end
+ * without a click, and its leftover flag must not arm a later keyboard one.
  */
 let pressedBackground = false;
 
@@ -831,8 +836,8 @@ function isBackground(event) {
   return event.target === event.currentTarget || event.target === gridEl.value;
 }
 
-function onBackgroundClick() {
-  if (pressedBackground) {
+function onBackgroundClick(event) {
+  if (pressedBackground && event.detail > 0) {
     store.clearSetSelection();
     store.clearSelection();
   }
