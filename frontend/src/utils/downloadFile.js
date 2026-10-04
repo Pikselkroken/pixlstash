@@ -40,3 +40,73 @@ export function downloadJson(content, filename) {
     filename,
   );
 }
+
+/**
+ * Ask where to save `blob`, then write it there.
+ *
+ * An export is a file the owner means to hand on, so they pick where it goes:
+ * a plain download in the desktop app lands in Downloads without a word. The
+ * desktop shell's native Save dialog (`beginMediaSaveAs`, the one the lightbox's
+ * Save as uses) comes first, then the browser's own picker; a browser with
+ * neither gets the plain download, which its own "ask where to save" governs.
+ *
+ * Throws when the write fails; the caller says so.
+ *
+ * @param {Blob} blob
+ * @param {string} filename - the name the dialog suggests.
+ * @returns {Promise<boolean>} false when the owner cancelled.
+ */
+export async function saveFileAs(blob, filename) {
+  const desktop = window.pixlstashDesktop;
+  if (desktop?.beginMediaSaveAs && desktop?.completeMediaSaveAs) {
+    const choice = await desktop.beginMediaSaveAs(filename);
+    if (choice?.canceled) return false;
+    if (!choice?.saveId) {
+      throw new Error("The desktop save dialog did not return a save request.");
+    }
+    try {
+      const result = await desktop.completeMediaSaveAs(
+        choice.saveId,
+        await blob.arrayBuffer(),
+      );
+      if (!result?.saved) {
+        throw new Error("The desktop app did not write the file.");
+      }
+    } catch (err) {
+      await desktop.cancelMediaSaveAs?.(choice.saveId);
+      throw err;
+    }
+    return true;
+  }
+  if (typeof window.showSaveFilePicker === "function") {
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: filename });
+    } catch (err) {
+      if (err?.name === "AbortError") return false;
+      throw err;
+    }
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  }
+  downloadBlob(blob, filename);
+  return true;
+}
+
+/**
+ * {@link saveFileAs} for a value written as pretty-printed `.json`.
+ *
+ * @param {*} content - anything `JSON.stringify` takes.
+ * @param {string} filename
+ * @returns {Promise<boolean>} false when the owner cancelled.
+ */
+export function saveJsonAs(content, filename) {
+  return saveFileAs(
+    new Blob([JSON.stringify(content, null, 2)], {
+      type: "application/json",
+    }),
+    filename,
+  );
+}

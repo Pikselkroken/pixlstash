@@ -375,7 +375,7 @@ import { listSavedRecipes } from "../../api/recipes";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
-import { downloadBlob } from "../../utils/downloadFile";
+import { saveFileAs } from "../../utils/downloadFile";
 import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { keepsTheSameLook } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
@@ -973,11 +973,15 @@ async function copyWorkflow() {
   }
 }
 
-function downloadWorkflow() {
-  downloadBlob(
-    new Blob([workflowJson.value], { type: "application/json" }),
-    "comfyui_workflow.json",
-  );
+async function downloadWorkflow() {
+  try {
+    await saveFileAs(
+      new Blob([workflowJson.value], { type: "application/json" }),
+      "comfyui_workflow.json",
+    );
+  } catch (err) {
+    console.warn("Failed to save the workflow JSON:", err);
+  }
 }
 
 async function copyPrompt() {

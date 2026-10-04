@@ -83,7 +83,7 @@ import { exportSavedRecipe } from "../../api/recipes";
 import { exportWorkflow } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorMessage } from "../../utils/apiError";
-import { downloadJson } from "../../utils/downloadFile";
+import { saveJsonAs } from "../../utils/downloadFile";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 
@@ -149,9 +149,18 @@ watch(payload, async (ready) => {
   primaryButton.value?.$el?.focus?.();
 });
 
-function exportTheRecipe() {
+async function exportTheRecipe() {
   if (!payload.value) return;
-  downloadJson(payload.value.recipe, payload.value.filename);
+  exportError.value = "";
+  try {
+    if (!(await saveJsonAs(payload.value.recipe, payload.value.filename))) {
+      return;
+    }
+  } catch (err) {
+    console.warn(`[recipes] could not save ${payload.value.filename}`, err);
+    exportError.value = errorMessage(err, "Could not save that recipe.");
+    return;
+  }
   emit("close");
 }
 
@@ -162,7 +171,12 @@ async function exportTheWorkflow() {
   exportError.value = "";
   try {
     const body = await exportWorkflow(key);
-    downloadJson(body?.workflow || {}, body?.filename || "workflow.json");
+    const saved = await saveJsonAs(
+      body?.workflow || {},
+      body?.filename || "workflow.json",
+    );
+    // Cancelled in the Save dialog: the dialog stays, nothing was written.
+    if (!saved) return;
     // What the scrub took, said out loud. This dialog exists to tell the
     // owner what a file does and does not carry, so the safe alternative
     // cannot be the one that goes out silently.
