@@ -310,10 +310,13 @@ export function readReason(reason) {
     }
     case MISSING_CHOICES: {
       const values = (reason.choices || [])
-        .map((choice) => `${choice.field} ${choice.value}`)
+        .map(
+          (choice) =>
+            `the ${choice.field === "sampler_name" ? "sampler" : choice.field} ${choice.value}`,
+        )
         .join(", ");
       return read(
-        `This ComfyUI does not have ${values}. Pick a replacement in the Run popup, or set another value in the workflow's Parameters.`,
+        `This ComfyUI does not have ${values}. Set another in the workflow's Parameters.`,
       );
     }
     case "missing_nodes": {

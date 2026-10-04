@@ -13,6 +13,7 @@
       <span v-if="fixed" class="wfdef-text num">{{ row.value }}</span>
       <input
         v-else
+        ref="input"
         class="wfdef-text wfdef-input num"
         :value="String(row.value)"
         :aria-label="row.label"
@@ -59,7 +60,7 @@
 // every run uses the workflow's value (fixed). `row.pinned` is "set each run";
 // the stored pin list keeps its shape.
 
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 
 import AppButton from "../widgets/AppButton.vue";
 
@@ -73,6 +74,16 @@ const props = defineProps({
 const emit = defineEmits(["toggle-pin", "reset", "edit"]);
 
 const fixed = computed(() => !props.row.pinned);
+const input = ref(null);
+
+// A write ending shows what was stored: the new value, or on a failed or
+// dropped write the old one, which no re-render would otherwise put back.
+watch(
+  () => props.busy,
+  (busy) => {
+    if (!busy && input.value) input.value.value = String(props.row.value);
+  },
+);
 
 /**
  * The typed text as the value's own type, or undefined when it is not one:
