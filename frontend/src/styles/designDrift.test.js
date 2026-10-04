@@ -205,14 +205,20 @@ describe("design drift", () => {
     ).toEqual([]);
   });
 
-  // Every AppButton variant, as quoted literals: plain, or inside a `:variant`
-  // expression. A variant held in a variable or a `v-bind` object is not seen.
+  // Every AppButton variant, as quoted literals in either quote style: plain,
+  // or inside a `:variant` expression. A variant held in a variable or a `v-bind` object is not seen.
   function appButtonVariants(only) {
     return hits(/<AppButton\b(?:[^>"']|"[^"]*"|'[^']*')*>/g, only).flatMap(
       (hit) =>
-        [...hit.matchAll(/\svariant="([^"]*)"|:variant="([^"]*)"/g)]
-          .flatMap((m) => (m[1] ? [m[1]] : m[2].match(/'[^']*'/g) || []))
-          .map((v) => `${hit.split(":")[0]}: ${v.replace(/'/g, "")}`),
+        [
+          ...hit.matchAll(
+            /\svariant=(?:"([^"]*)"|'([^']*)')|:variant=(?:"([^"]*)"|'([^']*)')/g,
+          ),
+        ]
+          .flatMap((m) =>
+            m[1] ?? m[2] ?? (m[3] ?? m[4]).match(/'[^']*'|"[^"]*"/g) ?? [],
+          )
+          .map((v) => `${hit.split(":")[0]}: ${v.replace(/['"]/g, "")}`),
     );
   }
 
