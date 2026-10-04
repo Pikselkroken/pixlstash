@@ -179,6 +179,22 @@ const flush = async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
+/**
+ * A pointer click (`detail` 1) and a right-button press: `trigger` cannot set
+ * either field, jsdom makes them getters. A keyboard click has `detail` 0.
+ */
+async function mouseClick(wrapper) {
+  wrapper.element.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, detail: 1 }),
+  );
+}
+
+async function rightPress(wrapper) {
+  wrapper.element.dispatchEvent(
+    new MouseEvent("pointerdown", { bubbles: true, button: 2 }),
+  );
+}
+
 const cardKeys = (wrapper) =>
   wrapper.findAll(".wfv-row").map((el) => el.attributes("data-key"));
 
@@ -264,6 +280,42 @@ describe("Escape", () => {
     store.select("b");
     await wrapper.find(".wfv-grid").trigger("keydown", { key: "Escape" });
     expect(store.selectedKeys).toEqual([]);
+  });
+
+  it("a click on the background clears it too, a click on a card does not", async () => {
+    const wrapper = await grid(1008);
+    const store = useWorkflowsStore();
+    store.select("b");
+    await wrapper.find(".wfv-row").trigger("click", { ctrlKey: true });
+    expect(store.selectedKeys).toEqual(["b", "a"]);
+    // A press that slips from one card to another clicks the grid, their
+    // common ancestor: that is a fumbled pick and leaves the selection alone.
+    await wrapper.find(".wfv-row").trigger("pointerdown");
+    await mouseClick(wrapper.find(".wfv-grid"));
+    expect(store.selectedKeys).toEqual(["b", "a"]);
+    // A right-press on the background ends without a click; a later keyboard
+    // click (detail 0) must not find it armed.
+    await rightPress(wrapper.find(".wfv-grid"));
+    await mouseClick(wrapper.find(".wfv-grid"));
+    expect(store.selectedKeys).toEqual(["b", "a"]);
+    await wrapper.find(".wfv-grid").trigger("pointerdown");
+    await wrapper.find(".wfv-grid").trigger("click");
+    expect(store.selectedKeys).toEqual(["b", "a"]);
+    await wrapper.find(".wfv-grid").trigger("pointerdown");
+    await mouseClick(wrapper.find(".wfv-grid"));
+    expect(store.selectedKeys).toEqual([]);
+    store.select("b");
+    await wrapper.find(".wfv-scroll").trigger("pointerdown");
+    await mouseClick(wrapper.find(".wfv-scroll"));
+    expect(store.selectedKeys).toEqual([]);
+    // A background press that never became a click (a scrollbar drag) leaves
+    // nothing armed for the next card click: that click's own press reaches
+    // the scroller first and re-records where it started.
+    store.select("b");
+    await wrapper.find(".wfv-scroll").trigger("pointerdown");
+    await wrapper.find(".wfv-row").trigger("pointerdown");
+    await mouseClick(wrapper.find(".wfv-row"));
+    expect(store.selectedKeys).toEqual(["a"]);
   });
 
   it("the sort popover owns its own Escape", async () => {
