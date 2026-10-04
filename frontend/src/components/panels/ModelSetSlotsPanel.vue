@@ -23,6 +23,17 @@
           <span class="mss__mark">Grouped by you</span>
           <span class="msp__count num">{{ facts }}</span>
           <span class="msp__spacer"></span>
+          <!-- The way to the Models rail from where the need arises: it opens
+               the rail with Fits on this set, which nothing else does. -->
+          <AppButton
+            variant="ghost"
+            size="sm"
+            icon-left="cube-outline"
+            data-testid="models-fit"
+            :tooltip="`Show the shelf models that fit ${name || 'this set'}`"
+            @click="emit('models-fit')"
+            >Models · {{ fitCount }} fit</AppButton
+          >
           <AppButton
             variant="ghost"
             size="sm"
@@ -206,7 +217,15 @@
         v-for="{ slot, items } in slots"
         :key="slot.id"
         class="mss__slot"
+        :class="{
+          'mss__slot--refuse': dragRows && !dragFits(slot),
+          'mss__slot--drop': dropSlot === slot.id,
+        }"
         role="presentation"
+        :data-slot="slot.id"
+        @dragover="onSlotDragOver(slot, $event)"
+        @dragleave="dropSlot === slot.id && (dropSlot = '')"
+        @drop="onSlotDrop(slot, $event)"
       >
         <div class="mss__label" role="presentation">
           <span class="mss__slotname">{{ slot.label }}</span>
@@ -355,6 +374,7 @@ import { VIcon } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
 import {
+  fitsSlot,
   offerQuestion,
   pictureCount,
   recipeCount,
@@ -387,6 +407,10 @@ const props = defineProps({
    * `key` names the offer (set and checkpoint), so a refetch is not a new one.
    */
   baseOffer: { type: Object, default: null },
+  /** How many shelf models fit this set, for Models · N fit. */
+  fitCount: { type: Number, default: 0 },
+  /** The shelf rows a drag from the Models rail carries, else null. */
+  dragRows: { type: Array, default: null },
 });
 
 const emit = defineEmits([
@@ -406,7 +430,46 @@ const emit = defineEmits([
   "add-ghost",
   "offer-again",
   "cursor",
+  // The Models rail (design B): open it with Fits on, and a drop on a slot.
+  "models-fit",
+  "drop-slot",
 ]);
+
+/** The slot a rail drag is over, when every dragged model fits it. */
+const dropSlot = ref("");
+
+watch(
+  () => props.dragRows,
+  (rows) => {
+    if (!rows) dropSlot.value = "";
+  },
+);
+
+/** A slot takes a drop only when every dragged model fits it. */
+function dragFits(slot) {
+  return (props.dragRows ?? []).every((row) => fitsSlot(row, slot));
+}
+
+/**
+ * Accept the drag, or leave it refused: `preventDefault()` is what accepts,
+ * so a slot the models do not fit never calls it. It fades instead.
+ */
+function onSlotDragOver(slot, event) {
+  if (!props.dragRows?.length || !dragFits(slot)) return;
+  event.preventDefault();
+  // The card under the tray must not take this drop as well.
+  event.stopPropagation();
+  event.dataTransfer.dropEffect = "copy";
+  dropSlot.value = slot.id;
+}
+
+function onSlotDrop(slot, event) {
+  if (!props.dragRows?.length || !dragFits(slot)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  dropSlot.value = "";
+  emit("drop-slot", slot.id);
+}
 
 const slots = computed(() => setSlots(props.set));
 
@@ -679,6 +742,17 @@ const notchStyle = computed(() => {
   grid-template-columns: minmax(96px, 12%) minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
+}
+
+/* A rail drag: a slot the models do not fit fades and refuses the drop; the
+   one under the pointer that takes it gets the selection ring. */
+.mss__slot--refuse {
+  opacity: var(--opacity-disabled);
+}
+
+.mss__slot--drop {
+  box-shadow: var(--selection-ring);
+  border-radius: var(--radius-md);
 }
 
 .mss__label {

@@ -81,6 +81,10 @@
             :can-fill-from-set="fillSetItems.length > 0"
             :can-fill-from-pictures="fillPictureItems.length > 0"
             :base-offer="baseOffer"
+            :fit-count="openFitCount"
+            :drag-rows="store.railDrag"
+            @models-fit="showFitsInRail"
+            @drop-slot="(slotId) => dropOnSet(openHand.set, slotId)"
             @set-base="setCheckpointBase"
             @dismiss-base="store.checkpointAdded = null"
             @close="closePanel"
@@ -128,6 +132,7 @@
           <div
             v-else-if="entry.kind === 'new'"
             class="msg__newrow"
+            :class="{ 'msg__row--drop': dropKey === 'new' }"
             role="row"
             aria-level="1"
             aria-label="New workflow set"
@@ -135,6 +140,9 @@
             :tabindex="index === cursorIndex ? 0 : -1"
             data-key="new"
             @click="onNewClick(entry)"
+            @dragover="onRailDragOver('new', $event)"
+            @dragleave="onRailDragLeave('new')"
+            @drop="onRailDrop(entry, $event)"
           >
             <div class="msg__cell" role="gridcell">
               <div class="msg__new" data-testid="new-workflow-set">
@@ -150,6 +158,10 @@
           <div
             v-else-if="entry.kind === 'card'"
             class="msg__row"
+            :class="{
+              'msg__row--drop': dropKey === entry.key,
+              'msg__row--dim': store.railDrag && !entry.hand,
+            }"
             role="row"
             aria-level="1"
             :aria-expanded="String(store.openSetKey === entry.key)"
@@ -175,6 +187,9 @@
             @click="onRowClick(entry, $event)"
             @dblclick="targetOwnsTheGesture($event) || toggle(entry)"
             @contextmenu="onRowMenu(entry, $event)"
+            @dragover="entry.hand && onRailDragOver(entry.key, $event)"
+            @dragleave="onRailDragLeave(entry.key)"
+            @drop="entry.hand && onRailDrop(entry, $event)"
           >
             <div class="msg__cell" role="gridcell">
               <ModelSetCard
@@ -331,6 +346,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import {
   assignmentRing,
@@ -345,6 +361,7 @@ import {
   SET_SLOTS,
   setCheckpoint,
   setCheckpoints,
+  setFits,
   setSlots,
   slotSuggestions,
   witnessCount,
@@ -1334,6 +1351,73 @@ async function keepSeparate(models) {
   settleCursor("");
 }
 
+// ── Drops from the Models rail (design B) ─────────────────────────────────
+//
+// A hand-made card takes each model into the slot its kind goes to, a slot in
+// the open tray takes the models it fits (`ModelSetSlotsPanel` refuses the
+// rest), and New workflow set makes a set holding them. Evidence cards are
+// never targets: they dim for the whole drag. Each drop is one write and one
+// receipt with Undo, the ＋ chooser's own.
+
+const sidebarStore = useSidebarStore();
+
+/** The card or tile the pointer is over with a rail drag, for its outline. */
+const dropKey = ref("");
+
+function onRailDragOver(key, event) {
+  if (!store.railDrag?.length) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+  dropKey.value = key;
+}
+
+function onRailDragLeave(key) {
+  if (dropKey.value === key) dropKey.value = "";
+}
+
+// However the drag ended, nothing stays outlined.
+watch(
+  () => store.railDrag,
+  (rows) => {
+    if (!rows) dropKey.value = "";
+  },
+);
+
+async function onRailDrop(entry, event) {
+  const rows = store.railDrag;
+  if (!rows?.length) return;
+  event.preventDefault();
+  store.railDrag = null;
+  if (entry.kind === "new") {
+    await store.createSetFromRows(rows);
+    return;
+  }
+  const set = store.handMadeSets.find((candidate) => candidate.id === entry.setId);
+  if (set) await store.addRowsToHandMadeSet(set, rows);
+}
+
+/** A drop on one slot of the open tray, already checked to fit it. */
+async function dropOnSet(set, slotId) {
+  const rows = store.railDrag;
+  store.railDrag = null;
+  if (rows?.length) await store.addRowsToHandMadeSet(set, rows, slotId);
+}
+
+/** How many shelf models fit the open set: the tray's Models · N fit. */
+const openFitCount = computed(() =>
+  openHand.value
+    ? setFits(openHand.value.set, store.rows, store.workflowSets.combinations)
+        .rows.length
+    : 0,
+);
+
+/** Models · N fit: the rail, open on its Models tab, with Fits on this set. */
+function showFitsInRail() {
+  if (!openHand.value) return;
+  store.railFitsSetId = openHand.value.set.id;
+  sidebarStore.setModelsRailOpen(true);
+}
+
 /** Exposed so the shelf can open a new set with Fill from pictures ready. */
 function openFill(mode) {
   const button = gridEl.value?.querySelector?.(
@@ -2028,6 +2112,18 @@ function onKeyDown(event) {
 
 .msg__cell {
   border-radius: var(--radius-md);
+}
+
+/* A rail drag (design B): the card or tile under the pointer takes the
+   selection ring, and evidence cards, which never take a drop, fade. */
+.msg__row--drop :deep(.msg__cell > *) {
+  box-shadow: var(--selection-ring);
+  border-radius: var(--radius-md);
+}
+
+.msg__row--dim {
+  opacity: var(--opacity-disabled);
+  transition: opacity var(--dur-1) var(--ease-standard);
 }
 
 .msg__state--inline {

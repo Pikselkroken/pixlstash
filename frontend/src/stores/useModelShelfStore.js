@@ -1,4 +1,11 @@
-import { computed, onScopeDispose, reactive, ref, watch } from "vue";
+import {
+  computed,
+  onScopeDispose,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+} from "vue";
 import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import { mergeModelCopies } from "../api/modelFiles";
@@ -20,6 +27,7 @@ import {
   setWorkflowSetDeclines,
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
+import { useConfirm } from "../composables/useConfirm";
 import { useNoticeStore } from "./useNoticeStore";
 import { useOperationStore } from "./useOperationStore";
 import { errorDetail } from "../utils/apiError";
@@ -42,10 +50,14 @@ import {
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
 import {
+  defaultSlot,
+  handMadeBase,
   handMadeCard,
   handMadeName,
   pictureCount,
+  rowBaseModel,
   setCard,
+  setCheckpoint,
   setGroups,
   worksWith,
 } from "../utils/workflowSets";
@@ -1099,23 +1111,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     loading.value = true;
     error.value = "";
     try {
-      const requests = [];
-      if (filters.adapters) requests.push(listAdapters());
-      if (filters.checkpoints) requests.push(listCheckpoints());
-      if (filters.unclassified) {
-        requests.push(listAdapters({ fileKind: "unknown" }));
-      }
-      // The engines block: PixlStash's own taggers and scorers, the
-      // InsightFace packs and every HuggingFace repo in the cache. Same
-      // route, same shape, one more `file_kind`.
-      if (filters.engines) requests.push(listAdapters({ fileKind: "engine" }));
-      // Two requests for one checkbox: the route takes a single `file_kind`,
-      // and these two kinds are one thing to a reader deciding what to keep.
-      if (filters.support) {
-        requests.push(listAdapters({ fileKind: "vae" }));
-        requests.push(listAdapters({ fileKind: "text_encoder" }));
-      }
-      const results = await Promise.all(requests);
+      const results = await Promise.all(
+        blockRequests(BLOCKS.filter((block) => filters[block])),
+      );
       if (startedAt !== epoch) return;
       const refreshed = new Set(BLOCKS.filter((block) => filters[block]));
       rows.value = [
@@ -1148,6 +1146,72 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // re-requests every ticked block anyway.
     } finally {
       if (startedAt === epoch) loading.value = false;
+    }
+  }
+
+  /**
+   * The requests for some blocks: one per block, two for `support`.
+   *
+   * @param {Array<string>} blocks - `BLOCKS` entries.
+   */
+  function blockRequests(blocks) {
+    const requests = [];
+    if (blocks.includes("adapters")) requests.push(listAdapters());
+    if (blocks.includes("checkpoints")) requests.push(listCheckpoints());
+    if (blocks.includes("unclassified")) {
+      requests.push(listAdapters({ fileKind: "unknown" }));
+    }
+    // The engines block: PixlStash's own taggers and scorers, the
+    // InsightFace packs and every HuggingFace repo in the cache. Same
+    // route, same shape, one more `file_kind`.
+    if (blocks.includes("engines")) {
+      requests.push(listAdapters({ fileKind: "engine" }));
+    }
+    // Two requests for one checkbox: the route takes a single `file_kind`,
+    // and these two kinds are one thing to a reader deciding what to keep.
+    if (blocks.includes("support")) {
+      requests.push(listAdapters({ fileKind: "vae" }));
+      requests.push(listAdapters({ fileKind: "text_encoder" }));
+    }
+    return requests;
+  }
+
+  /**
+   * Fetch the blocks the Models rail lists that `Show` has left unticked.
+   *
+   * The rail lists every model a set slot takes, whatever Show says, and
+   * `rows` is everything known rather than the shown set, so the missing
+   * blocks are merged in exactly as `fetchRows` merges its own. A block ticked
+   * while this is on the wire belongs to `fetchRows`, and is not overwritten.
+   */
+  async function ensureRailBlocks() {
+    const wanted = ["adapters", "checkpoints", "unclassified", "support"];
+    const known = new Set(rows.value.map(blockOf));
+    const missing = wanted.filter(
+      (block) => !filters[block] && !known.has(block),
+    );
+    if (!missing.length) return;
+    try {
+      const results = (await Promise.all(blockRequests(missing))).flat();
+      const mine = new Set(missing.filter((block) => !filters[block]));
+      const present = new Set(rows.value.map(blockOf));
+      rows.value = [
+        ...rows.value,
+        ...results.filter(
+          (row) => mine.has(blockOf(row)) && !present.has(blockOf(row)),
+        ),
+      ];
+    } catch (err) {
+      console.warn("[ModelShelf] the Models rail could not read every block", {
+        missing,
+        err,
+      });
+      useNoticeStore().push({
+        level: "error",
+        text:
+          errorDetail(err) ||
+          "Some models could not be read, so the Models rail is missing them.",
+      });
     }
   }
 
@@ -1551,6 +1615,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** The stack whose member panel is open, by its card key. */
   const openSetKey = ref("");
+
+  /**
+   * The Models rail (design B, a sibling of the shelf in App.vue), as far as
+   * the set grid has to see it: the shelf rows a drag from it carries, while
+   * it is in the air, and the set its *Fits* filter is on, which the set
+   * panel's *Models · N fit* button sets.
+   *
+   * A drag's DATA is unreadable during `dragover`, and the slots have to fade
+   * or not while the pointer is still down, so the rows live here for the
+   * length of the drag rather than in `dataTransfer`.
+   */
+  const railDrag = shallowRef(null);
+  const railFitsSetId = ref(null);
 
   /**
    * Read which models have run together, once.
@@ -2513,6 +2590,72 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       );
     }
     return result;
+  }
+
+  /**
+   * Ask before a set gets a second checkpoint. Nothing does that silently: a
+   * two-model workflow wants one, but a mis-drop of a checkpoint onto a set
+   * looks exactly like it.
+   *
+   * @param {Object} set
+   * @param {Array<{model_id: number, slot: string}>} members - slots resolved.
+   * @returns {Promise<boolean>} whether to go ahead.
+   */
+  async function confirmSecondCheckpoint(set, members) {
+    const current = setCheckpoint(withShelfNames(set));
+    const incoming = members.filter((m) => m.slot === "checkpoint");
+    if (!current || !incoming.length) return true;
+    const byId = new Map(rows.value.map((row) => [row.id, row]));
+    const names = incoming.map(
+      (m) => modelName(byId.get(m.model_id) ?? {}).text || "this checkpoint",
+    );
+    return useConfirm().confirm({
+      title: `Add a second checkpoint to "${setLabel(set)}"?`,
+      message: `It already has ${current.name}. ${names.join(", ")} would go in beside it, as a two-model workflow does.`,
+      confirmLabel: "Add as 2nd",
+    });
+  }
+
+  /**
+   * Shelf rows into a set, from a drop: each to `slotId`, or to the slot its
+   * kind goes to. One write and one receipt with Undo, the ＋ chooser's own.
+   *
+   * @param {Object} set
+   * @param {Array<Object>} models - shelf rows.
+   * @param {string} [slotId]
+   */
+  async function addRowsToHandMadeSet(set, models, slotId = "") {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({
+        model_id: row.id,
+        slot: slotId || defaultSlot(row.file_kind),
+      }));
+    if (!members.length) return null;
+    // The rail's Add to set… fades a set on another base model; a drop on its
+    // card is refused the same way rather than filed by a slip of the hand.
+    const base = handMadeBase(withShelfNames(set));
+    const bases = new Set(models.map(rowBaseModel).filter(Boolean));
+    if (base && bases.size === 1 && !bases.has(base)) {
+      useNoticeStore().push({
+        level: "info",
+        text: `Nothing added: "${setLabel(set)}" is ${base}, and ${
+          models.length === 1 ? "that model is" : "those models are"
+        } ${[...bases][0]}.`,
+      });
+      return null;
+    }
+    if (!(await confirmSecondCheckpoint(set, members))) return null;
+    return addToHandMadeSet(set, members);
+  }
+
+  /** A new set holding these shelf rows, each in its kind's slot. */
+  function createSetFromRows(models) {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({ model_id: row.id, slot: defaultSlot(row.file_kind) }));
+    if (!members.length) return Promise.resolve(null);
+    return createHandMadeSet({ members });
   }
 
   /**
@@ -3513,6 +3656,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsLoading.value = false;
     setsError.value = "";
     openSetKey.value = "";
+    railDrag.value = null;
+    railFitsSetId.value = null;
     selectedSetIds.value = new Set();
     clearMissingSelection();
     checkpointAdded.value = null;
@@ -3581,6 +3726,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError,
     setsLoaded,
     loadWorkflowSets,
+    ensureRailBlocks,
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,
@@ -3611,6 +3757,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     renameHandMadeSet,
     deleteHandMadeSets,
     addToHandMadeSet,
+    addRowsToHandMadeSet,
+    createSetFromRows,
+    confirmSecondCheckpoint,
+    railDrag,
+    railFitsSetId,
     announceAdded,
     removeFromHandMadeSet,
     keepOutOfHandMadeSet,
