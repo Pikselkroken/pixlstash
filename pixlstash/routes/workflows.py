@@ -139,6 +139,7 @@ from pixlstash.services.workflow_card_service import (
     BEST_SCORE,
     EDITED,
     LORA_OFF,
+    SHELF_MODEL_GONE,
     SHELF_MODEL_UNNAMED,
     DefaultRecipe,
     read_grid,
@@ -221,6 +222,7 @@ from pixlstash.services.workflow_library_service import (
 )
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.utils.comfyui_utilities import (
+    find_comfy_workflow,
     iter_model_fields_api,
     loaded_model_widgets,
 )
@@ -3035,8 +3037,10 @@ def create_router(server) -> APIRouter:
         read, which is not the same answer as a graph that loads none.
 
         A PixlStash shelf loader's ``checkpoint_id`` is a shelf row id, not a
-        file, so it is read as the file that row names (or the shelf's own
-        "gone" / "unnamed" words): a bare ``77`` reads as a model called 77.
+        file, so it is read as the file that row names. Where the shelf no
+        longer holds that row, a picture's editor graph may still name the
+        file (:func:`_editor_names_for`); failing both, the shelf's own "gone"
+        / "unnamed" words stand in. A bare ``77`` reads as a model called 77.
         """
         try:
             source, _reason = _source_graph_for(card)
@@ -3058,6 +3062,11 @@ def create_router(server) -> APIRouter:
         shelf_files = shelf_filenames(
             hub, [value for widget, value in loaded if widget == SHELF_ID_FIELD]
         )
+        lost = [
+            value for value, file in shelf_files.items() if file == SHELF_MODEL_GONE
+        ]
+        if lost and source.picture_id is not None:
+            shelf_files.update(_editor_names_for(source, lost))
         # Once per recorded value, before resolving: two gone ids are two
         # loaders, though both read "no longer on the shelf".
         first_widget: dict[str, str] = {}
@@ -3069,6 +3078,51 @@ def create_router(server) -> APIRouter:
             else value
             for value, widget in first_widget.items()
         ]
+
+    def _editor_names_for(source, shelf_ids: list[str]) -> dict[str, str]:
+        """``{shelf id: file}`` from the source picture's editor graph.
+
+        A ComfyUI picture carries two graphs: the API ``prompt`` that ran,
+        which the source is, and the editor ``workflow``. Where a shelf loader
+        stands in the first, the same node in the second can be an ordinary
+        loader that names the file, and that name outlives the shelf row.
+        Paired by node id, which both graphs share; an id no editor node
+        names a file for is left out.
+        """
+        wanted = set(shelf_ids)
+        nodes = {
+            node_id: value
+            for node_id, _cls, widget, value in iter_model_fields_api(
+                source.graph, shelf_ids_as_text=True
+            )
+            if widget == SHELF_ID_FIELD and value in wanted
+        }
+        try:
+            editor = find_comfy_workflow(
+                _read_embedded_metadata(server, source.picture_id)
+            )
+        except HTTPException as exc:
+            logger.info(
+                "Picture %s: could not read its editor graph for the file a "
+                "gone shelf loader named, so it reads as gone: %s",
+                source.picture_id,
+                exc.detail,
+            )
+            return {}
+        found = {}
+        for node in (editor or {}).get("nodes") or []:
+            if not isinstance(node, dict) or str(node.get("id")) not in nodes:
+                continue
+            names = [
+                value
+                for widget, value in loaded_model_widgets(
+                    {"nodes": [node], "links": []}
+                )
+                if widget in CHECKPOINT_WIDGETS and widget != SHELF_ID_FIELD
+            ]
+            if names:
+                found[nodes[str(node["id"])]] = names[0]
+        return found
 
     @router.get(
         "/workflows/{workflow_id}/pictures",

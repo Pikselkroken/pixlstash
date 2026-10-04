@@ -7274,6 +7274,69 @@ def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
     ]
 
 
+def test_a_gone_shelf_loader_is_named_by_the_pictures_editor_graph(
+    runnable, monkeypatch
+):
+    """A picture carries the API graph that ran and the editor graph beside it.
+
+    The shelf row a run's loader named is gone, but the same node in the
+    editor graph is an ordinary loader that still names the file, so that is
+    the name rather than "no longer on the shelf".
+    """
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"] = {
+        "class_type": "PixlStashCheckpointLoader",
+        "inputs": {"checkpoint_id": "987654321"},
+    }
+    editor = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "CheckpointLoaderSimple",
+                "inputs": [],
+                "widgets_values": ["SDXL/original.safetensors"],
+            },
+            {
+                "id": 2,
+                "type": "CheckpointLoaderSimple",
+                "inputs": [],
+                "widgets_values": ["SDXL/another-node.safetensors"],
+            },
+        ],
+        "links": [],
+    }
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (embedded, []),
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_embedded_metadata",
+        lambda server, picture_id: {
+            "png": {"prompt": json.dumps(embedded), "workflow": json.dumps(editor)}
+        },
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_recipe_asset "
+            "WHERE structural_hash = ? AND widget_name = 'ckpt_name'",
+            (RUN_RECIPE,),
+        )
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        "SDXL/original.safetensors"
+    ]
+
+    # An editor graph whose node 1 is the shelf loader too names nothing.
+    editor["nodes"][0] = {
+        "id": 1,
+        "type": "PixlStashCheckpointLoader",
+        "inputs": [{"name": "checkpoint_id", "widget": {"name": "checkpoint_id"}}],
+        "widgets_values": ["987654321"],
+    }
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [SHELF_MODEL_GONE]
+
+
 def _pack_graph(project: str | None = None) -> dict:
     """`_i2i_graph` built on the pack: its picture loader and its saver."""
     graph = _i2i_graph()
