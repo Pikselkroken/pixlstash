@@ -2129,9 +2129,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           !group.head?.missing &&
           group.models.length === ids.size &&
           group.models.every((model) => ids.has(model.id)) &&
-          group.combinations.every((combination) =>
-            (combination.covered_by ?? []).every((id) => id === set.id),
-          ),
+          group.combinations.every((combination) => {
+            // Covered by this set, and by no other: an empty list is a payload
+            // that has not caught up, never a match.
+            const by = combination.covered_by ?? [];
+            return by.length > 0 && by.every((id) => id === set.id);
+          }),
       ) ?? null
     );
   }

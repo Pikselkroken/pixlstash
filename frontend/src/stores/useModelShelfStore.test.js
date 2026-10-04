@@ -3302,6 +3302,13 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(deleteWorkflowSet).not.toHaveBeenCalled();
   });
 
+  it("leaves a set alone until the payload says it covers the twin", async () => {
+    const store = await openOn([handSet(7)], []);
+    store.toggleSet("hand:7");
+    await flush();
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  });
+
   it("leaves a set alone when another set also covers the twin", async () => {
     // Deleting it would not bring the set from pictures back on screen.
     const store = await openOn([handSet(7), handSet(6)]);
