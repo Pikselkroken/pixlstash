@@ -795,7 +795,9 @@ class WorkflowCardDetail(BaseModel):
             "graph spells them (folders included), for a card whose own "
             "`models` name no base model: its name was never recorded or was "
             "forgotten, but the workflow file or a picture's embedded graph "
-            "still says which file it loads. `[]` is a graph that was read and "
+            "still says which file it loads. A PixlStash shelf loader's id is "
+            "served as the file that shelf row names, `(model no longer on the "
+            "shelf)` or `(unnamed shelf model)`. `[]` is a graph that was read and "
             "loads no base model (an upscaler); `null` is one that was not "
             "read - the card names its base model, or has no graph to read."
         ),
@@ -3056,13 +3058,17 @@ def create_router(server) -> APIRouter:
         shelf_files = shelf_filenames(
             hub, [value for widget, value in loaded if widget == SHELF_ID_FIELD]
         )
-        found = []
+        # Once per recorded value, before resolving: two gone ids are two
+        # loaders, though both read "no longer on the shelf".
+        first_widget: dict[str, str] = {}
         for widget, value in loaded:
-            if widget == SHELF_ID_FIELD:
-                value = shelf_files[value] or SHELF_MODEL_UNNAMED
-            if value not in found:
-                found.append(value)
-        return found
+            first_widget.setdefault(value, widget)
+        return [
+            shelf_files[value] or SHELF_MODEL_UNNAMED
+            if widget == SHELF_ID_FIELD
+            else value
+            for value, widget in first_widget.items()
+        ]
 
     @router.get(
         "/workflows/{workflow_id}/pictures",

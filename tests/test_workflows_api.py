@@ -100,6 +100,7 @@ from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     SHELF_MODEL_GONE,
+    SHELF_MODEL_UNNAMED,
     SlotModel,
     WorkflowFigures,
     model_marks,
@@ -7238,6 +7239,11 @@ def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
             "class_type": "PixlStashCheckpointLoader",
             "inputs": {"checkpoint_id": str(model_id)},
         }
+        # A second loader on an id no shelf row holds: still its own entry.
+        instance["9"] = {
+            "class_type": "PixlStashCheckpointLoader",
+            "inputs": {"checkpoint_id": "987654321"},
+        }
         conn.execute(
             "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
             (json.dumps(instance), RUN_INSTANCE),
@@ -7247,11 +7253,24 @@ def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
             "WHERE structural_hash = ? AND widget_name = 'ckpt_name'",
             (RUN_RECIPE,),
         )
-    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [_SHELF_FILENAME]
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        _SHELF_FILENAME,
+        SHELF_MODEL_GONE,
+    ]
+
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET filename = NULL WHERE id = ?", (model_id,))
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_UNNAMED,
+        SHELF_MODEL_GONE,
+    ]
 
     with hub.transaction() as conn:
         conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
-    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [SHELF_MODEL_GONE]
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_GONE,
+        SHELF_MODEL_GONE,
+    ]
 
 
 def _pack_graph(project: str | None = None) -> dict:
