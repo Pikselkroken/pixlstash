@@ -783,6 +783,19 @@ describe("a checkpoint that will not load", () => {
     );
   });
 
+  it("counts two gone shelf loaders as two, though they read alike", async () => {
+    preflightWorkflowRun.mockResolvedValue({ groups: [] });
+    const gone = "(model no longer on the shelf)";
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: unnamed, graph_base_models: [gone, gone] }),
+    );
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    await settle(wrapper);
+    const row = wrapper.find("[data-testid='wftab-row-checkpoint']");
+    expect(row.find(".wftab-label").text()).toBe("Checkpoints");
+    expect(textOf(wrapper)).toContain(`${gone} + ${gone}`);
+  });
+
   it("warns from the card alone while ComfyUI cannot be asked", async () => {
     preflightWorkflowRun.mockRejectedValue(new Error("ComfyUI is down"));
     getWorkflowCard.mockResolvedValue(
