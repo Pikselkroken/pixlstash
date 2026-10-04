@@ -2166,6 +2166,160 @@ def test_a_value_the_stored_document_lost_is_read_from_a_stored_run(hub):
     assert _families(hub, keys) == workflow_cards.UNRESOLVED_FAMILY
 
 
+def _shelf_loader_graph(model_id, preview: bool = False) -> dict:
+    graph = _graph(preview=preview)
+    graph["1"] = _node("PixlStashCheckpointLoader", checkpoint_id=str(model_id))
+    return graph
+
+
+def test_a_shelf_loader_naming_no_model_joins_its_core_s_one_family(hub):
+    """A blank (or pre-#1416, nulled) shelf id is the same graph with the
+    value missing: it joins the workflow its siblings are in, whichever is
+    filed first, and never one of two."""
+    flux = _shelf_model(hub, "Flux1-Dev-FP8.safetensors", "FLUX.1 dev", "e" * 64)
+    named = _workflow(hub, _shelf_loader_graph(flux))
+    assert _workflow(hub, _shelf_loader_graph("")) == named
+
+    # Filed first, it has no sibling yet: the family pass the sibling's
+    # arrival arms moves it.
+    other = HubDatabase(str(hub.path) + ".blank-first")
+    try:
+        flux = _shelf_model(other, "Flux1-Dev-FP8.safetensors", "FLUX.1 dev", "e" * 64)
+        blank = record_api_graph(
+            other, _shelf_loader_graph(""), library_uuid="test-library"
+        )
+        finder = WorkflowCardBackfillFinder(hub=other)
+        assert _family_pass(finder).result["moved"] == 0
+        named = _workflow(other, _shelf_loader_graph(flux))
+        assert workflow_of_variant(other, blank.structural_hash) != named
+        assert _family_pass(finder).result["moved"] == 1
+        assert workflow_of_variant(other, blank.structural_hash) == named
+
+        # Two families on the core is no answer: it stays apart.
+        qwen = _shelf_model(other, "house-model-q.safetensors", "Qwen-Image", "1" * 64)
+        _workflow(other, _shelf_loader_graph(qwen))
+        lone = record_api_graph(
+            other, _shelf_loader_graph("", preview=True), library_uuid="test-library"
+        )
+        assert _families(other, lone) == workflow_cards.UNRESOLVED_FAMILY
+    finally:
+        other.close()
+
+
+def test_a_sibling_set_is_adopted_only_when_known_and_holding_its_own(hub):
+    """An unknown sibling set is no answer, and a loader that did resolve
+    keeps its family: a known Flux refiner never lands in an SDXL workflow."""
+    sdxl = _workflow(hub, _two_checkpoints("sdxl_a.safetensors", "sdxl_b.safetensors"))
+    half_blank = record_api_graph(
+        hub,
+        _two_checkpoints("flux1-dev.safetensors", ""),
+        library_uuid="test-library",
+    )
+    assert _families(hub, half_blank) == "flux1,unresolved"
+    assert workflow_of_variant(hub, half_blank.structural_hash) != sdxl
+    # A loader holding a model of no known family keeps it: no adoption.
+    unidentified = record_api_graph(
+        hub,
+        _two_checkpoints(
+            "house-finetune-v7.safetensors",
+            "",
+        ),
+        library_uuid="test-library",
+    )
+    assert _families(hub, unidentified).endswith(",unresolved")
+    assert _families(hub, unidentified).startswith("asset:")
+    # The half-blank set carries an unknown, so the core's one known set is
+    # still the sdxl pair's, and a wholly blank variant takes it.
+    blank = record_api_graph(hub, _two_checkpoints("", ""), library_uuid="test-library")
+    assert workflow_of_variant(hub, blank.structural_hash) == sdxl
+
+
+def test_the_family_signature_ignores_cores_with_nothing_unresolved(hub):
+    """A new graph shape elsewhere must not re-arm a full family pass."""
+    flux = _shelf_model(hub, "Flux1-Dev-FP8.safetensors", "FLUX.1 dev", "e" * 64)
+    record_api_graph(
+        hub, _shelf_loader_graph("", preview=True), library_uuid="test-library"
+    )
+    before = workflow_cards.shelf_family_signature(hub)
+    _workflow(hub, _two_checkpoints("sdxl_a.safetensors", "sdxl_b.safetensors"))
+    assert workflow_cards.shelf_family_signature(hub) == before
+    _workflow(hub, _shelf_loader_graph(flux))
+    assert workflow_cards.shelf_family_signature(hub) != before
+
+
+def test_a_base_card_naming_no_base_model_is_named_by_its_siblings(hub):
+    """The slot cache and the base card's names come from one variant; a
+    workflow whose other runs name the checkpoint is named after it."""
+    from pixlstash.routes.workflows import _display_name
+
+    flux = _shelf_model(hub, "Flux1-Dev-FP8.safetensors", "FLUX.1 dev", "e" * 64)
+    blank = record_api_graph(hub, _shelf_loader_graph(""), library_uuid="test-library")
+    named = record_api_graph(
+        hub, _shelf_loader_graph(flux), library_uuid="test-library"
+    )
+    card = next(c for c in card_index(hub) if blank.structural_hash in c.variants)
+    assert not [s for s in card.slots if s["widget"] == "checkpoint_id"], (
+        "the topology's slot list was cached off the blank variant"
+    )
+    figure = workflow_card_service.WorkflowFigures(
+        card=replace(card, variants=[blank.structural_hash, named.structural_hash]),
+        workflow=Workflow(card.workflow_key),
+    )
+    workflow_card_service._describe_slots(
+        hub, [figure], asset_names(hub, figure.card.variants)
+    )
+    (model,) = [m for m in figure.models if m.kind == "checkpoint"]
+    assert (model.name, model.filename) == ("Flux1 Dev", str(flux))
+    assert _display_name(figure.card, figure.models) == "Flux1 Dev: Text to Image"
+
+
+def test_the_base_model_most_variants_name_is_the_one_shown(hub):
+    """Two named siblings disagree: the commoner wins, whichever sorts first."""
+    rare = _shelf_model(hub, "aaa-rare.safetensors", "FLUX.1 dev", "a" * 64)
+    common = _shelf_model(hub, "zzz-common.safetensors", "FLUX.1 dev", "c" * 64)
+    blank = record_api_graph(hub, _shelf_loader_graph(""), library_uuid="test-library")
+    variants = [blank.structural_hash] + [
+        record_api_graph(
+            hub,
+            _shelf_loader_graph(model, preview=preview),
+            library_uuid="test-library",
+        ).structural_hash
+        for model, preview in ((rare, False), (common, False), (common, True))
+    ]
+    card = next(c for c in card_index(hub) if blank.structural_hash in c.variants)
+    figure = workflow_card_service.WorkflowFigures(
+        card=replace(card, slots=[], variants=variants),
+        workflow=Workflow(card.workflow_key),
+    )
+    workflow_card_service._describe_slots(hub, [figure], asset_names(hub, variants))
+    assert [m.filename for m in figure.models] == [str(common)]
+
+
+def test_a_shelf_id_and_the_file_it_names_are_one_vote(hub):
+    """`checkpoint_id` and `ckpt_name` naming one file count together, so
+    they outvote a second file named twice."""
+    one = _shelf_model(hub, "zzz-one.safetensors", "FLUX.1 dev", "a" * 64)
+    blank = record_api_graph(hub, _shelf_loader_graph(""), library_uuid="test-library")
+    graphs = [
+        _shelf_loader_graph(one),
+        _graph(ckpt="zzz-one.safetensors"),
+        _graph(ckpt="zzz-one.safetensors", preview=True),
+        _graph(ckpt="bbb-two.safetensors"),
+        _graph(ckpt="bbb-two.safetensors", preview=True),
+    ]
+    variants = [blank.structural_hash] + [
+        record_api_graph(hub, g, library_uuid="test-library").structural_hash
+        for g in graphs
+    ]
+    card = next(c for c in card_index(hub) if blank.structural_hash in c.variants)
+    figure = workflow_card_service.WorkflowFigures(
+        card=replace(card, slots=[], variants=variants),
+        workflow=Workflow(card.workflow_key),
+    )
+    workflow_card_service._describe_slots(hub, [figure], asset_names(hub, variants))
+    assert [m.name for m in figure.models] == ["zzz one"]
+
+
 def test_a_retired_workflow_a_new_variant_lands_in_is_live_again(hub):
     """A family the shelf learned, then forgot (a checkpoint renamed back):
     the id comes back to life and leaves the retired list."""

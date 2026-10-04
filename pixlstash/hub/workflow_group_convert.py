@@ -1238,12 +1238,14 @@ def stranded_workflow_ids(hub, live: set[str], retired: set[str]) -> list[str]:
 
 
 def reidentify_families(hub) -> dict:
-    """Move variants whose unknown base model the shelf has since identified.
+    """Move variants whose unknown base model is now known.
 
     A base model of no known family is a family of its own
     (``workflow_cards.variant_families``), frozen with the variant. Once the
-    shelf knows its family (a scan, or the owner setting the base model),
-    every variant whose family set carries such a key and now derives a set
+    shelf knows its family (a scan, or the owner setting the base model), or
+    a loader naming no model has a core whose other variants now agree on one
+    family set, every variant whose family set carries such a key and now
+    derives a set
     with fewer unknowns is moved: its family row rewritten, and its retiring
     workflow's owner state carried with :func:`_retire_workflow`, as data step
     8 carries it. The core does not change, so ``workflow_core_successor``
@@ -1279,7 +1281,9 @@ def reidentify_families(hub) -> dict:
         found = card_document(hub, card)
         if found is None:
             continue
-        families = variant_families(hub, row["structural_hash"], found[1], shelf)
+        families = variant_families(
+            hub, row["structural_hash"], found[1], shelf, core=row["core_hash"]
+        )
         if _unknowns(families) < _unknowns(row["families"]):
             moves.append((row, families))
     if not moves:
@@ -1351,7 +1355,7 @@ def reidentify_families(hub) -> dict:
                     ],
                 )
                 logger.info(
-                    "Workflow %s keeps variants the shelf has not identified; "
+                    "Workflow %s keeps variants whose family is still unknown; "
                     "its owner state stays and is copied to %s.",
                     old_id,
                     sorted(heirs),
@@ -1360,7 +1364,7 @@ def reidentify_families(hub) -> dict:
                     _carry_group_state(conn, old_id, heir, keep=True)
     logger.info(
         "Base-model families: %d variants moved to the workflow of the family "
-        "the shelf now knows.",
+        "now known for them.",
         len(moves),
     )
     return {
