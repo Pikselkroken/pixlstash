@@ -187,11 +187,30 @@
                 @offer="openOffer(entry.setId)"
                 @add="answerOffer(entry, true)"
                 @keep-separate="answerOffer(entry, false)"
+                @hide="hideCard(entry)"
+                @unhide="unhideCard(entry)"
               />
             </div>
           </div>
         </template>
       </div>
+
+      <!-- Hidden sets from pictures are out of the grid, not gone: say how
+           many, and let them be drawn again so one can be shown. -->
+      <p v-if="store.hiddenSetCount" class="msg__hidden">
+        <span class="num"
+          >{{ store.hiddenSetCount.toLocaleString() }} hidden
+          {{ store.hiddenSetCount === 1 ? "set" : "sets" }}</span
+        >
+        <AppButton
+          variant="ghost"
+          size="sm"
+          :icon-left="store.showHiddenSets ? 'eye-off-outline' : 'eye-outline'"
+          data-testid="toggle-hidden-sets"
+          @click="store.showHiddenSets = !store.showHiddenSets"
+          >{{ store.showHiddenSets ? "Leave them out" : "Show them" }}</AppButton
+        >
+      </p>
 
       <!-- The models no recipe names, drawn rather than omitted. Outside the
            treegrid: it is not a set, so it is not a row in a grid of sets, and
@@ -269,7 +288,9 @@
  * **A card stands for ONE model: the base model it is named after.** That is the
  * whole of what makes this screen safe to act on. The shelf's selection is by
  * `model.id` and carries verbs that destroy bytes, so a card standing for its
- * whole SET would put a shared VAE behind a Delete aimed at a checkpoint. It
+ * whole SET would put a shared VAE behind a Delete aimed at a checkpoint. (The
+ * Delete KEY on a card is the exception: it hides the set from pictures, and
+ * reaches no file.) It
  * stands for its head instead - the file whose name, kind and mark the card
  * already draws - and the other members of the set are selected one at a time in
  * the tray, where each row is one model. An EVIDENCE card never selects a set.
@@ -362,8 +383,13 @@ const columns = ref(1);
 const cursorId = ref("");
 const announcement = ref("");
 
+// Hidden sets are out of the grid, not absent: they keep the grid (and its
+// "Show them" line) up rather than claim no picture recorded a model.
 const nothingShown = computed(
-  () => !store.setGroups.length && !store.noSetRows.length,
+  () =>
+    !store.setGroups.length &&
+    !store.noSetRows.length &&
+    !store.hiddenSetCount,
 );
 
 const hasHandMade = computed(() => store.handMadeGroups.length > 0);
@@ -916,6 +942,22 @@ function onSlotMenu({ member, event }) {
   ) {
     event.preventDefault();
   }
+}
+
+/** The set-from-pictures group behind a card entry. */
+function groupOf(entry) {
+  return store.setGroups.find((group) => group.key === entry?.key) ?? null;
+}
+
+/** Hide one set from pictures. Never a file. */
+function hideCard(entry) {
+  const group = groupOf(entry);
+  if (group) store.hideSets([group]);
+}
+
+function unhideCard(entry) {
+  const group = groupOf(entry);
+  if (group) store.unhideSets([group]);
 }
 
 /** Remove from set - the tile's ✕, and the member menu's verb. */
@@ -1788,6 +1830,20 @@ function onHandKey(event, entry) {
     }
     return false;
   }
+  if (entry?.kind === "card" && !entry.hand) {
+    if (event.key !== "Delete" && event.key !== "Backspace") return false;
+    // A set from pictures cannot be deleted, only hidden: the key is aimed at
+    // the card under the cursor, never a selection. Stopped, so the shelf's
+    // file Delete never takes a press aimed at the set for its base model:
+    // the file verbs stay on the menu and the bar.
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) {
+      if (groupOf(entry)?.hidden) unhideCard(entry);
+      else hideCard(entry);
+    }
+    return true;
+  }
   if (!entry?.hand) return false;
   if (event.key === "Delete" || event.key === "Backspace") {
     event.preventDefault();
@@ -1980,6 +2036,15 @@ function onKeyDown(event) {
   margin: 0 0 var(--space-3);
   font-size: var(--text-md);
   color: rgb(var(--v-theme-on-surface));
+}
+
+.msg__hidden {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-sm);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* Dashed, because it is the one card that stands for an absence. Not in the

@@ -74,6 +74,15 @@ const FILTERS_SCHEMA_VERSION = 1;
 const VIEW_KEY = "pixlstash:modelShelfView";
 
 /**
+ * Where the hidden sets from pictures are remembered, as `{keys: [...]}`.
+ *
+ * A set from pictures is read off the library, so it cannot be deleted - the
+ * next read would draw it again. It can only be hidden, which is a view choice,
+ * so it lives beside the other view choices rather than in the hub.
+ */
+const HIDDEN_SETS_KEY = "pixlstash:modelShelfHiddenSets";
+
+/**
  * Bumped when the shape below changes; a blob from another `v` is discarded.
  *
  * Bumped to 2 for #1438, where `groupBy` changed DEFAULT rather than shape - and
@@ -336,6 +345,9 @@ const SET_RECEIPT_ICONS = {
   delete: "mdi-layers-remove",
   "keep-out": "mdi-call-split",
   "offer-again": "mdi-restore",
+  hide: "mdi-eye-off-outline",
+  unhide: "mdi-eye-outline",
+  twin: "mdi-layers",
 };
 
 /** What each curated column is called in a receipt. */
@@ -1629,12 +1641,110 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * the tray under an open card needs no second lookup and nothing has to
    * re-derive the grouping to answer a question about one member.
    */
-  const setGroupList = computed(() =>
+  const evidenceGroups = computed(() =>
     setGroups(visibleCombinations.value).map((group) => ({
       ...group,
-      card: setCard(group),
+      hidden: hiddenSetKeys.value.has(group.key),
+      card: {
+        ...setCard(group),
+        hidden: hiddenSetKeys.value.has(group.key),
+      },
     })),
   );
+
+  /** The evidence cards drawn: the hidden ones only while Show hidden is on. */
+  const setGroupList = computed(() =>
+    showHiddenSets.value
+      ? evidenceGroups.value
+      : evidenceGroups.value.filter((group) => !group.hidden),
+  );
+
+  /** How many of the sets `Show` leaves on screen are hidden. */
+  const hiddenSetCount = computed(
+    () => evidenceGroups.value.filter((group) => group.hidden).length,
+  );
+
+  // ── Hiding sets from pictures ─────────────────────────────────────────────
+  //
+  // A set from pictures is the library's own reading of its recipes, so there
+  // is nothing to delete: the next read would draw it again. Hide is the verb,
+  // remembered by group key (the base model's id, or a missing one's name).
+
+  /** The keys of the hidden sets from pictures. */
+  const hiddenSetKeys = ref(
+    new Set(
+      [readStored(HIDDEN_SETS_KEY)?.keys]
+        .filter(Array.isArray)
+        .flat()
+        .filter((key) => typeof key === "string" && key !== ""),
+    ),
+  );
+
+  /** Draw the hidden sets too, dimmed, so one can be shown again. */
+  const showHiddenSets = ref(false);
+
+  function writeHiddenSets(keys) {
+    hiddenSetKeys.value = keys;
+    writeStored(HIDDEN_SETS_KEY, { keys: [...keys] });
+  }
+
+  function changeHidden(keys, hide) {
+    const next = new Set(hiddenSetKeys.value);
+    for (const key of keys) {
+      if (hide) next.add(key);
+      else next.delete(key);
+    }
+    writeHiddenSets(next);
+    if (hide && !showHiddenSets.value && keys.includes(openSetKey.value)) {
+      openSetKey.value = "";
+    }
+  }
+
+  /**
+   * Hide sets from pictures, with a receipt whose Undo shows them again.
+   *
+   * @param {Array<Object>} groups - entries of `setGroups`.
+   */
+  function hideSets(groups) {
+    const fresh = groups.filter((group) => !hiddenSetKeys.value.has(group.key));
+    if (!fresh.length) return;
+    const keys = fresh.map((group) => group.key);
+    const wasOpen = keys.includes(openSetKey.value) ? openSetKey.value : "";
+    changeHidden(keys, true);
+    raiseSetReceipt(
+      fresh.length === 1
+        ? `Hid the set "${fresh[0].card.name}". No file was touched.`
+        : `Hid ${fresh.length} sets. No file was touched.`,
+      "hide",
+      async () => {
+        changeHidden(keys, false);
+        // Undo puts back the tray the hide closed, unless another has opened.
+        if (wasOpen && !openSetKey.value) openSetKey.value = wasOpen;
+      },
+      async () => changeHidden(keys, true),
+    );
+  }
+
+  /**
+   * Show hidden sets from pictures again, with a receipt whose Undo hides them.
+   *
+   * @param {Array<Object>} groups - entries of `setGroups`.
+   */
+  function unhideSets(groups) {
+    const keys = groups
+      .map((group) => group.key)
+      .filter((key) => hiddenSetKeys.value.has(key));
+    if (!keys.length) return;
+    changeHidden(keys, false);
+    raiseSetReceipt(
+      keys.length === 1
+        ? `"${groups.find((g) => g.key === keys[0]).card.name}" is shown again.`
+        : `${keys.length} sets are shown again.`,
+      "unhide",
+      async () => changeHidden(keys, true),
+      async () => changeHidden(keys, false),
+    );
+  }
 
   /**
    * The owner's own sets (#1520), newest first, each shaped as the grid draws
@@ -1936,14 +2046,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const { receipt, undo, redo, hasUndo, verb, failure, quiet } = options;
     const notices = useNoticeStore();
     let result;
+    let call;
     try {
-      result = await write();
+      call = write();
+      setWritesInFlight.add(call);
+      result = await call;
     } catch (err) {
       notices.push({
         level: "error",
         text: errorDetail(err) || failure,
       });
       return null;
+    } finally {
+      if (call) setWritesInFlight.delete(call);
     }
     await loadWorkflowSets({ force: true });
     if (quiet) return result;
@@ -2003,6 +2118,139 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       redo: () => redo(undone),
     });
   }
+
+  /**
+   * The set from pictures a hand-made set holds exactly the models of, or null.
+   *
+   * Read from every combination, not only the uncovered ones: the hand-made
+   * set covers its twin's combinations, which is why the twin left the grid.
+   * A member off the shelf rules a match out, since no set from pictures can
+   * hold a file the shelf does not have. So does a twin some OTHER hand-made
+   * set also covers: deleting this one would not bring it back on screen.
+   */
+  function automaticTwin(set) {
+    const members = set?.members ?? [];
+    if (!members.length || members.some((m) => !m.on_shelf || m.id == null)) {
+      return null;
+    }
+    const ids = new Set(members.map((m) => m.id));
+    return (
+      setGroups(workflowSets.value.combinations).find(
+        (group) =>
+          !group.head?.missing &&
+          group.models.length === ids.size &&
+          group.models.every((model) => ids.has(model.id)) &&
+          group.combinations.every((combination) => {
+            // Covered by this set, and by no other: an empty list is a payload
+            // that has not caught up, never a match.
+            const by = combination.covered_by ?? [];
+            return by.length > 0 && by.every((id) => id === set.id);
+          }),
+      ) ?? null
+    );
+  }
+
+  /**
+   * A hand-made set that re-creates a set from pictures gives way to it.
+   *
+   * The two would be one set drawn twice, so the hand-made one is deleted and
+   * the set from pictures is shown (unhidden, if it was) and opened, with a
+   * receipt that says why. Its Undo brings the hand-made set back, kept-out
+   * models included, and hides the twin again if it was hidden.
+   *
+   * Asked when the owner closes the set's tray, never on each add: a set is
+   * built one model at a time, and on the way it routinely passes through a
+   * set from pictures (a checkpoint that only ever ran alone) that it is not
+   * meant to stop at.
+   *
+   * @param {number} setId
+   * @returns {Promise<boolean>} true when the set gave way.
+   */
+  async function yieldToTwin(setId, { reopen = false } = {}) {
+    if (yielding.has(setId)) return false;
+    yielding.add(setId);
+    try {
+      return await yieldOne(setId, reopen);
+    } finally {
+      yielding.delete(setId);
+    }
+  }
+
+  async function yieldOne(setId, reopen) {
+    // A tray closes the instant it is asked to, with an add or a removal
+    // still on the wire: decide on the membership after it, never before -
+    // including a write that started while this one was being waited out.
+    while (setWritesInFlight.size) {
+      await Promise.allSettled([...setWritesInFlight]);
+      await loadWorkflowSets({ force: true });
+    }
+    const set = handMadeSets.value.find((candidate) => candidate.id === setId);
+    const twin = automaticTwin(set);
+    if (!twin) return false;
+    const name = setLabel(set);
+    const twinName = setCard(twin).name;
+    const wasHidden = hiddenSetKeys.value.has(twin.key);
+    const done = await setWrite(() => deleteWorkflowSet(set.id), {
+      receipt: `"${name}" holds the same models as the set from pictures "${twinName}", so that set is shown instead. No file was touched.`,
+      undo: async () => {
+        const restored = await createWorkflowSet({
+          name: set.name ?? null,
+          members: (set.members ?? []).map(memberBack),
+        });
+        if (set.declined?.length) {
+          await setWorkflowSetDeclines(restored.id, set.declined);
+        }
+        if (wasHidden) changeHidden([twin.key], true);
+        return restored;
+      },
+      // The swap again, checked again: the restored set may have changed since.
+      redo: async (restored) => {
+        if (await yieldToTwin(restored.id, { reopen: true })) return true;
+        useNoticeStore().push({
+          level: "info",
+          text: `"${name}" no longer matches a set from pictures, so it was kept.`,
+        });
+        return false;
+      },
+      verb: "twin",
+      failure: "The set could not be swapped for the set from pictures.",
+    });
+    if (!done) return false;
+    if (wasHidden) changeHidden([twin.key], false);
+    // Opened only over a closed tray: an owner who has opened another set
+    // since keeps it, and this never moves the view off a hand-made tray -
+    // which the watch below would read as that set being closed too.
+    const over = openSetKey.value;
+    if (!over || (reopen && !over.startsWith("hand:"))) {
+      clearSetSelection();
+      openSetKey.value = twin.key;
+    }
+    return true;
+  }
+
+  /** Every set write on the wire, which a reconciliation waits out. */
+  const setWritesInFlight = new Set();
+  /** The set ids a `yieldToTwin` is already deciding. */
+  const yielding = new Set();
+
+  // Closing a hand-made set's tray - or opening another - is the owner done
+  // with it, which is when a re-created set from pictures gives way.
+  watch(openSetKey, (_, left) => {
+    if (!left?.startsWith("hand:")) return;
+    const setId = Number(left.slice(5));
+    yieldToTwin(setId).catch((err) => {
+      console.warn("[ModelShelf] checking a set against its twin failed", {
+        setId,
+        err,
+      });
+      useNoticeStore().push({
+        level: "error",
+        text:
+          errorDetail(err) ||
+          "The set could not be checked against the sets from pictures.",
+      });
+    });
+  });
 
   /** A removed or deleted member, as the create and add routes take it back. */
   function memberBack(member) {
@@ -3221,6 +3469,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,
+    hiddenSetCount,
+    showHiddenSets,
+    hideSets,
+    unhideSets,
     setGridModelIds,
     setGridRows,
     screenRows,

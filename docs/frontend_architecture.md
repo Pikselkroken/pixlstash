@@ -1682,7 +1682,8 @@ proves ran together, with a model free to appear in more than one.
   hand-made set; a plain click or a Shift-range replaces both. Escape clears
   both. With both held, the Delete KEY opens the file confirmation and leaves
   the sets to their own pill, so one press never deletes sets unprompted while
-  arming a file delete.
+  arming a file delete. The one exception is the cursor on an evidence card,
+  where the grid takes the key to hide that set (below) and no file is reached.
 - **Rename has no inline field on the grid**, because a name lives on a card and
   the dashed rule under a row is what makes an inline field honest. The verb
   falls through to `ShelfEditDialog`'s `rename`, which already exists for the
@@ -1769,6 +1770,30 @@ the shelf's workflow sets section) and served as `hand_made` on
   of a set; `visibleCombinations` drops those, so they appear on the set's card
   (its `picture_count` and covers) and not again as evidence. `worksWith` still
   reads the whole payload.
+- **A set from pictures is hidden, never deleted.** It is read off the library,
+  so a delete would only come back on the next read. The card's eye button, or
+  Delete/Backspace on the card under the cursor (stopped before the shelf's
+  file delete; it hides that one card, never a selection), calls
+  `store.hideSets`, which records
+  the group key (`model:<id>` / `missing:<name>`) under
+  `pixlstash:modelShelfHiddenSets` in `localStorage`. A line under the grid
+  counts the hidden sets and toggles `store.showHiddenSets`, which draws them
+  with `card.hidden` (faded covers, a "Hidden" tag, the eye button to show one
+  again). The file verbs stay on the card's context menu and the bar.
+- **A hand-made set that re-creates a set from pictures gives way to it.**
+  When the owner closes the set's tray (or opens another card), a watch on
+  `openSetKey` runs `yieldToTwin`, never each add: a set is built one model at
+  a time and passes through groups it is not meant to stop at (a checkpoint
+  that only ever ran alone). It compares the set's members with every
+  `setGroups` group over the WHOLE payload; when the on-shelf model ids are
+  exactly a group's, and no other hand-made set also covers that group, the
+  hand-made set is deleted, the group is unhidden and opened, and the receipt
+  says why. Its Undo recreates the set with its name and kept-out models and
+  hides the group again if it was hidden; Redo runs the swap again, checked
+  again. It waits out any set write still on the wire and refetches before it
+  decides, and it opens the group only over a closed tray (never moving the
+  view off a hand-made tray, which the watch would read as closing that one).
+  Hidden sets count as present for the grid's empty states.
 - **A hand-made card selects the SET; a tray tile selects a FILE.**
   `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
   either kind clears the other; Ctrl+click and select-all hold both (see the
