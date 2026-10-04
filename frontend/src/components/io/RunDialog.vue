@@ -2831,7 +2831,13 @@ async function submit() {
       try {
         beforeIds = (await stackMemberIds(sourceId)).ids;
       } catch (err) {
-        console.warn(`Could not read the stack of picture ${sourceId} before its run:`, err);
+        // Unknown, not just the source: guessing would offer an older stack
+        // member as this run's result.
+        console.warn(
+          `Could not read the stack of picture ${sourceId} before its run, so the Edit tab will not point at a result:`,
+          err,
+        );
+        beforeIds = null;
       }
     }
     const answer = await runWorkflowCard(runBody());

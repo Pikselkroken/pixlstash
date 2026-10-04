@@ -1698,6 +1698,24 @@ describe("the body it sends", () => {
   });
 });
 
+describe("the Edit tab's hand-off when its stack cannot be read", () => {
+  it("says the before-run stack is unknown rather than guessing it", async () => {
+    stackMemberIds.mockRejectedValueOnce(new Error("offline"));
+    const wrapper = await mountRun({
+      kind: "edit",
+      pictureIds: [42],
+      workflowId: KEY,
+      fromEditTab: true,
+      stack: true,
+    });
+    await wrapper.vm.submit();
+    await flushPromises();
+    // Still queued: the stack read is for following the run, not for running it.
+    expect(runWorkflowCard).toHaveBeenCalled();
+    expect(useRunDialogStore().editRun.beforeIds).toBe(null);
+  });
+});
+
 // ── Is this look already kept? (#1480) ─────────────────────────────────────
 //
 // The lightbox's Recipe tab has refused the second identical recipe since F6

@@ -353,6 +353,33 @@ describe("the Edit tab", () => {
     expect(wrapper.emitted("show-picture")).toEqual([[99, 7]]);
   });
 
+  it("points at no result when the popup could not read the stack first", async () => {
+    const stacks = await import("../../api/stacks");
+    const pictures = await import("../../api/pictures");
+    pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
+    // An older member: with the before-run stack unknown it could pass for
+    // the result, so nothing is offered.
+    stacks.listStackPictures.mockResolvedValue([
+      { id: 7 },
+      { id: 50, created_at: "2025-01-01T00:00:00Z" },
+    ]);
+    const wrapper = await mountPanel();
+    useRunDialogStore().editRun = {
+      prompts: [{ prompt_id: "p9" }],
+      pictureId: 7,
+      workflowName: "Relight with reference",
+      instruction: "",
+      stack: true,
+      beforeIds: null,
+    };
+    await flush();
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    await flush();
+    await flush();
+    expect(wrapper.findAll("button").some((b) => b.text() === "Show it")).toBe(false);
+    expect(wrapper.text()).toContain("It has not reached the stack yet");
+  });
+
   it("says so, with no link, when the result never reaches the stack", async () => {
     const pictures = await import("../../api/pictures");
     pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });

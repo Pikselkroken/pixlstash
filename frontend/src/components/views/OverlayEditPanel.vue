@@ -515,6 +515,12 @@ const RESOLVE_DELAY_MS = 1500;
 
 async function resolveResult(current, attempt = 1) {
   if (run.value !== current || !current.stack) return;
+  // The popup could not read the stack before the run, so no member can be
+  // told apart as this run's: say so rather than guess.
+  if (!current.beforeIds) {
+    run.value = { ...current, lookedInVain: true };
+    return;
+  }
   try {
     current.resultId = await findResult(current);
   } catch (err) {
@@ -702,7 +708,7 @@ watch(
       started.workflowName,
       started.instruction,
       started.stack,
-      started.beforeIds || new Set([String(started.pictureId)]),
+      started.beforeIds,
     );
   },
 );
