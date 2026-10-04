@@ -2792,7 +2792,9 @@ async function runPreflight(token = loadToken) {
       return;
     }
     reasons.value = all;
-    void offerCheckpoints(all, askedFor, token);
+    offerCheckpoints(all, askedFor, token).catch((err) =>
+      console.warn(`[run] could not offer checkpoints for ${askedFor}`, err),
+    );
     bypassed.value = (answer?.groups || []).flatMap((group) => [
       ...repairNotices(group),
       ...unplacedNotice(group),
