@@ -5203,6 +5203,15 @@ on painting the pre-rotate image for up to an hour. The token is now
 `"<W>x<H>o<orientation>"` for a rotated picture and unchanged for an unrotated
 one, so backfilling the mirror does not invalidate every thumbnail at once.
 
+**It also ends in a digest of the picture's file: `"<W>x<H>[o<n>]-<digest>"`.**
+SQLite hands a deleted picture's id to the next import, so a new picture the
+size of the one just deleted got that picture's exact URL and the browser
+painted the deleted bitmap in its place. `file_path` is required by the
+function, so every caller (the batch-thumbnail endpoint, the dedup queue, the
+workflow and workflow-set covers via `CoverCandidate.file_path`) passes it.
+Adding it invalidated each browser's thumbnail cache once, which a one-hour
+`max-age` would have done anyway.
+
 **The event names the field: `fields: ["pixels"]`.** The forward rotate and the
 undo/redo restore both stamp it (`_crud.rotate_pictures` and
 `operation_log_service._emit`), for the reason a move does (integration §20.3): the thumbnail URL

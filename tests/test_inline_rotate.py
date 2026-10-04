@@ -626,7 +626,9 @@ def test_a_180_rotate_changes_the_thumbnail_cache_version(client, server):
         picture.thumbnail_height = 240
         session.add(picture)
         session.commit()
-        return ImageUtils.thumbnail_cache_version(320, 240, picture.orientation)
+        return ImageUtils.thumbnail_cache_version(
+            320, 240, picture.orientation, file_path=None
+        )
 
     before = server.vault.db.run_task(_version)
     assert before == "320x240"

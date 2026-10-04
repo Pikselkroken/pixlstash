@@ -939,8 +939,12 @@ def test_workflow_sets_serves_the_whole_card_through_the_route(shelf_env):
         # asks the page origin for a route it does not serve. The client builds it
         # with `pictureThumbnailUrl`, the one place that path is spelled.
         assert [c["picture_id"] for c in card["covers"]] == [best, worst]
+        best_path = shelf_env.server.vault.db.run_task(
+            lambda session: session.get(Picture, best).file_path,
+            priority=DBPriority.IMMEDIATE,
+        )
         assert card["covers"][0]["version"] == ImageUtils.thumbnail_cache_version(
-            320, 240, 1
+            320, 240, 1, file_path=best_path
         )
         assert card["covers"][1]["version"]
         assert "url" not in card["covers"][0]

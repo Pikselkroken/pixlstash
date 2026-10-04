@@ -581,6 +581,7 @@ def register_routes(router, server):
                     getattr(pic, "thumbnail_width", None),
                     getattr(pic, "thumbnail_height", None),
                     getattr(pic, "orientation", None),
+                    file_path=pic.file_path,
                 )
                 thumbnail_url = f"/pictures/thumbnails/{pic.id}.webp?v={v}"
                 # Whole-frame AR-bitmap dimensions and the face-weighted square-crop
