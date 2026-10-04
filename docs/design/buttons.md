@@ -34,7 +34,6 @@ screenshot as evidence for or against a row. The **Open** rows are not built.
 | `AppButton` replaces `v-btn` in all dialogs | **Approved** 2026-09-12 |
 | Outlined sites folding into the filled neutral | **Open.** Recommended. |
 | An `on-dark` context on both dialects | **Open.** Recommended. |
-| Selection-pill verbs 34px down to 32px | **Open, UI/UX gated.** See `design-system-handoff.md` §8. |
 | One field height, `--control-h`, everywhere in the shell | **Approved** 2026-09-12 |
 | The label inside the field retired outright | **Approved** 2026-09-12 |
 | `--font-mono` on path, hash, port and id fields | **Approved** 2026-09-12 |
@@ -96,7 +95,7 @@ by a line below.
 | The 16px dialog gutter, `gap` spacing | Partly | Two dialogs stacked a margin on the body's `gap`: Works with (its sections are now groups) and the workflow-set rename note. Nothing outside `AppDialog` restyles its body, header or footer, which `styles/designDrift.test.js` holds. Settings keeps its own two-pane padding inside the flush body. **Left:** three hand-rolled modals that are not `AppDialog` and so sit off the gutter: the review feature's new-review dialog (`.rs-dialog`, 20px padding, 14px gap, a 480px width), its abort confirm (`.rs-abort`, 18px) and its keyboard help (`.rs-keys`, 20px). Each is a migration to `AppDialog`, not a padding edit |
 | The pill progress track | Done | Every track is `--radius-pill`; the two `v-progress-linear`s take `rounded="pill"` (held by `styles/designDrift.test.js`) and every custom track already wore it. Two named exceptions: the shelf's storage band meter is flat-ended by design (#893), and the layout dialog's native `<progress>` is drawn by the platform |
 | Outlined sites folding into the filled neutral (Open) | Not built | 4 `variant="outlined"` sites remain |
-| Selection-pill verbs 34 to 32px (Open) | Not built | Still 34px |
+| Selection-pill verbs at `--control-h-bar` | Done | Every verb in `SelectionBar.vue` is an `AppBarButton` (`.bar-btn`, `--control-h-bar`); the icon-only ones draw 24px, a labelled one 18px. On a coarse pointer they grow to `--bar-height` (48px). `--selbar-height: 34px` in `ImageGrid.css` is the grid's offset under the 36px toolbar band, not a control height, and stays |
 | An `on-dark` context on both dialects (Open) | Not built | No such prop on either button |
 | Icons get no scale: a component owns its own icon slot | **Approved** 2026-09-13 |
 | A free-standing icon tracks its text; the default is 16px | **Approved** 2026-09-13 |
@@ -1106,7 +1105,7 @@ so the 32px is a pointer target sized to clear WCAG 2.5.8, not a frame.
 One thing moves sideways: a split button holding an icon and a chevron goes
 from 57px to 62px, so a toolbar with three of them is **15px wider**. The
 icon-only buttons are fixed squares and do not move. The selection-pill verbs
-are 34px and the grid's clear button 40px, so 24 fills 71% and 60% there.
+are 32px like the rest.
 
 #### The one exception, stated rather than hidden
 

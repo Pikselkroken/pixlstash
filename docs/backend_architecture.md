@@ -2690,7 +2690,13 @@ setting a base model). The signature a pass succeeded against is kept in the
 hub (`workflow_family_pass`, one row), so a start or library switch with an
 unchanged shelf runs no pass. A pass that moved anything emits
 `workflows_changed` with reason `regrouped` and `renamed: {retired id: heir}`
-(integration §8) through `workflow_events.announce_to_vault`. `reidentify_families` re-derives every variant whose
+(integration §8) through `workflow_events.announce_to_vault`.
+`MissingComfyUIExtractionFinder` announces the same way, reason `pictures`,
+after a `ComfyUIExtractionTask` batch files pictures: the task's
+`workflow_ids` names the workflow each landed on (its run's manual workflow,
+else `workflow_of_variant` of its recipe), so an open Workflows view redraws
+those cards' covers. A migration's rescan of an already-filed picture is left
+out, and a tag written now is included even when the picture has no graph. `reidentify_families` re-derives every variant whose
 set carries an unknown and moves those that now derive fewer: the family row
 is rewritten and the retiring workflow handed on with `_retire_workflow`, the
 same carry data step 8 uses (owner state merged, never dropped; successor,
@@ -9332,6 +9338,16 @@ the loader that will read it; a class ComfyUI lacks lists nothing, so its file
 goes in unchecked and the answer's `loaders` says `installed: false`: **a
 missing node pack warns and never refuses.** GGUF is the one pack known; any
 other loader keeps its class and a file it cannot list is refused as before.
+**The CLIP loaders' `type` follows the new checkpoint.** After the swap the
+clone route sets a CLIP loader's `type` to the one its replaced checkpoint's
+base-model family loads as (`retype_text_encoders`, `CLIP_TYPE_BY_FAMILY`), or
+a Krea 2 clone of a Qwen-Image graph still encodes for Qwen-Image and fails in
+the sampler. An encoder belongs to the base loaders whose sampler or guider its
+prompt meets (the `model` chain beside a conditioning input, never the latent
+stream), so a two-model graph retypes only the replaced model's encoder. The
+replaced loaders are read with the rewrite's own matching (`swap_target`). An
+encoder meeting no replaced loader, or two families, a family missing from the
+map, or a type ComfyUI does not list for that class keeps the graph's own.
 `POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
 per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
 maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file - and a VAE or

@@ -79,6 +79,22 @@ function keepsGhost(card) {
   return (card.ghosts ?? 0) + (card.model_ghosts ?? 0) > 0;
 }
 
+/**
+ * *fresh*, with every card that reads exactly as before kept as its old object.
+ *
+ * So a re-read redraws only the cards that changed - the one a ComfyUI run
+ * just gave a new cover - and Vue leaves the rest of the grid alone. Compared
+ * whole rather than by id: filing a rated picture moves the library's mean
+ * rating, and with it every card's `rank`.
+ */
+function keepUnchanged(previous, fresh) {
+  const before = new Map(previous.map((card) => [card.id, card]));
+  return fresh.map((card) => {
+    const old = before.get(card.id);
+    return old && JSON.stringify(old) === JSON.stringify(card) ? old : card;
+  });
+}
+
 export const useWorkflowsStore = defineStore("workflows", () => {
   const cards = ref([]);
   const oneOffs = ref(0);
@@ -288,7 +304,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         includeOneOffs: !filters.value.hideOneOffs,
       });
       if (mine !== epoch) return;
-      cards.value = body.cards;
+      cards.value = keepUnchanged(cards.value, body.cards);
       oneOffs.value = body.one_offs;
       hidden.value = body.hidden;
       loaded.value = true;

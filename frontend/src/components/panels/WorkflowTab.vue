@@ -63,7 +63,24 @@
 
     <template v-else>
       <div class="inspector-section wftab-head">
-        <p class="wftab-title">{{ card.name }}</p>
+        <!-- Wraps at spaces, then at camelCase / snake_case joins; a chunk
+             still wider than the rail ellipsizes, and the tip has it whole. -->
+        <p class="wftab-title">
+          <Tooltip
+            :text="card.name"
+            activator="parent"
+            :describe="false"
+          /><template
+            v-for="(word, w) in titleWords"
+            :key="w"
+            >{{ w ? " " : ""
+            }}<template v-for="(chunk, c) in word" :key="c"
+              ><wbr v-if="c" /><span class="wftab-chunk">{{
+                chunk
+              }}</span></template
+            ></template
+          >
+        </p>
         <p class="wftab-sub">
           <button
             v-if="card.picture_count"
@@ -851,6 +868,7 @@ import {
   modelDisplayName,
 } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
+import { breakableName } from "../../utils/breakableName";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import AppSelect from "../widgets/AppSelect.vue";
@@ -1018,6 +1036,8 @@ const recipesName = computed(() =>
     ? `${store.selectedKeys.length} workflows selected`
     : card.value?.name || "",
 );
+
+const titleWords = computed(() => breakableName(card.value?.name));
 
 // Plain numbers, as `WorkflowsView`'s own subtitle writes them: the shelf's
 // grouped spelling went with the shelf in F1b, and this screen never used it.
@@ -2542,11 +2562,27 @@ async function checkInstalled(key) {
   text-decoration-thickness: 2px;
 }
 
+/* `contain: inline-size` stops the title's widest piece from widening the
+   rail through any intrinsically sized ancestor; it takes the width it is
+   given and its pieces wrap or ellipsize inside it. */
 .wftab-title {
+  contain: inline-size;
   margin: 0;
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
+}
+
+/* One camelCase / snake_case piece of the title (`breakableName`). Inline-block
+   so a piece wider than the rail ellipsizes on its own line instead of
+   scrolling the inspector sideways. */
+.wftab-chunk {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 /* "N pictures" on the left, the star histogram on the right. */
