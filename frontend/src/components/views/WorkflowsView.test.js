@@ -894,16 +894,13 @@ describe("the app-wide toolbar tail", () => {
 
   // The toggle's tooltip is its accessible name, and the rail on this screen
   // is the workflow inspector, not the stats sidebar it is everywhere else.
-  // A fixed name: open or shut is said by `aria-pressed`, not by Show/Hide.
   it("names the rail it actually opens here", async () => {
     const wrapper = await grid();
     const stats = wrapper.find(".wfv-toolbar .tb-stats-btn");
-    expect(stats.attributes("aria-label")).toBe("Inspector");
-    expect(stats.attributes("aria-pressed")).toBe("true");
+    expect(stats.attributes("aria-label")).toBe("Hide inspector");
     useSidebarStore().workflowInspectorOpen = false;
     await wrapper.vm.$nextTick();
-    expect(stats.attributes("aria-label")).toBe("Inspector");
-    expect(stats.attributes("aria-pressed")).toBe("false");
+    expect(stats.attributes("aria-label")).toBe("Show inspector");
   });
 
   // The emit above is only half of it: App.vue has to listen, and nothing else

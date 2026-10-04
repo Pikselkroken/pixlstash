@@ -969,15 +969,9 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
   compresses to its icon rather than folding — a filter that hides is a
   filter the user forgets.
 - **State travels with the row.** A folded toggle wears `aria-pressed` and
-  the primary-token pressed colour. The right-rail toggle never folds, so its
+  the primary-token pressed colour. The stats toggle never folds, so its
   pulsing amber icon (`prefers-reduced-motion` honoured) keeps background work
   visible at every width.
-- **The right-rail toggle is one glyph on every screen**, `mdi-dock-right`
-  (where something will appear, not what is in it), with open as its pressed
-  state and never a second glyph. Its name is fixed per screen and says what
-  the rail holds: *Stats and tasks*, *Inspector*, *Models and tasks*, *Stats*.
-  Busy, the tooltip leads with the count: *3 tasks running · Models and
-  tasks*.
 
 ### Closed inspector
 
