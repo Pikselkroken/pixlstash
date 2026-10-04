@@ -1390,6 +1390,8 @@ const checkpointFixNote = computed(() => {
       ? `${gone} Pick another of the same base model for this run.`
       : `${gone} Nothing says which base model it was, so every checkpoint this workflow can load is listed: pick one its LoRAs were made for.`;
   }
+  // No `needs_pixlstash_nodes` case: the PixlStash swap loaders are VAE and
+  // text-encoder ones only, so a checkpoint ask never gets that reason.
   switch (fix.reason) {
     case "none_same_base_model":
       return `${gone} No checkpoint on your model shelf is known to have its base model.`;

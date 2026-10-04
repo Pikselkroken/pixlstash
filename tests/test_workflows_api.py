@@ -3210,9 +3210,9 @@ def test_the_cover_strip_is_the_cards_best_three_across_its_variants(workflow_en
     card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     ids = _picture_ids_by_path(workflow_env.server)
     assert _cover_urls(card) == [
-        f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
+        f"/pictures/thumbnails/{ids[name]}.webp"
+        f"?v={ImageUtils.thumbnail_cache_version(None, None, file_path=name)}"
+        for name in ("busy_one.png", "busy_two.png", "busy_three.png")
     ]
 
 
@@ -3280,7 +3280,7 @@ def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
         assert covers[0] == {
             "url": (
                 f"/pictures/thumbnails/{ids['busy_one.png']}.webp"
-                f"?v={ImageUtils.thumbnail_cache_version(384, 561, None)}"
+                f"?v={ImageUtils.thumbnail_cache_version(384, 561, None, file_path='busy_one.png')}"
             ),
             # The picture the cover draws, so a client can open it (#1455).
             "picture_id": ids["busy_one.png"],

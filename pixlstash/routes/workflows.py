@@ -2192,7 +2192,10 @@ def _covers(covers) -> list[WorkflowCover]:
     strip = []
     for cover in covers:
         version = ImageUtils.thumbnail_cache_version(
-            cover.thumbnail_width, cover.thumbnail_height, cover.orientation
+            cover.thumbnail_width,
+            cover.thumbnail_height,
+            cover.orientation,
+            file_path=cover.file_path,
         )
         strip.append(
             WorkflowCover(

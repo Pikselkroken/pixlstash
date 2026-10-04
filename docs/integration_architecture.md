@@ -1650,7 +1650,7 @@ The client used to paper over this with a per-request `?cb=<Date.now()>`, which 
 
 **Contract (both routes, via `pixlstash/utils/http_cache.py`):** the response carries `Cache-Control: private, no-cache` plus a weak `ETag`, and a matching `If-None-Match` is answered with a bodyless `304` that repeats the `ETag` and the policy. So the browser revalidates every time but transfers bytes only when they actually changed. **The frontend must therefore NOT cache-bust these URLs** — `SideBar.fetchCharacterThumbnail` calls `getCharacterThumbnail(id)` with no `cacheBuster`, and re-adding one would restore the download-per-refresh cost the header exists to remove.
 
-Note the contrast with `/pictures/thumbnails/{id}.webp`, which is *content-addressed* (`?v=WxH` changes when the bitmap is regenerated) and may therefore be cached for a while: `private, max-age=3600, must-revalidate`. Stable-URL generated images get `no-cache`; version-tokened ones get a max-age.
+Note the contrast with `/pictures/thumbnails/{id}.webp`, which is *content-addressed* (`?v=WxH-<file digest>` changes when the bitmap is regenerated, and differs for a new picture given a deleted one's id) and may therefore be cached for a while: `private, max-age=3600, must-revalidate`. Stable-URL generated images get `no-cache`; version-tokened ones get a max-age.
 
 ### Watermarking
 
