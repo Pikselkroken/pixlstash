@@ -828,6 +828,8 @@ class ImageUtils:
         thumbnail_width: Optional[int],
         thumbnail_height: Optional[int],
         orientation: Optional[int] = None,
+        *,
+        file_path: Optional[str],
     ) -> str:
         """The ``?v=`` cache-buster for a picture's thumbnail URL.
 
@@ -842,6 +844,13 @@ class ImageUtils:
         On dimensions alone the URL would be identical and the browser would go
         on painting the pre-rotate bitmap for up to an hour.
 
+        **So is the file.** SQLite hands a deleted picture's id to the next
+        import, and a new picture the size of the one deleted gets exactly the
+        URL it had: the browser then paints the deleted picture's bitmap in its
+        place for up to an hour. Every picture has a file of its own, so a
+        digest of its path tells two holders of one id apart. Required, so no
+        caller can leave it out.
+
         Single source of truth on purpose: the batch-thumbnail endpoint and the
         duplicate queue both hand this version to the same frontend cache, and two
         independent copies of the formula would eventually disagree and
@@ -855,18 +864,24 @@ class ImageUtils:
                 same version: an unrotated picture keeps the URL it has always had,
                 so backfilling the mirror does not invalidate every thumbnail in
                 the library at once.
+            file_path: The picture's stored ``file_path``; ``None`` only for a
+                row with no file, which has no thumbnail to serve either.
 
         Returns:
             ``"<width>x<height>"`` for an unrotated picture,
             ``"<width>x<height>o<orientation>"`` for a rotated one, or ``"0"``
-            when either dimension is missing.
+            when either dimension is missing, then ``-<file digest>``.
         """
         if not (thumbnail_width and thumbnail_height):
-            return "0"
-        version = f"{thumbnail_width}x{thumbnail_height}"
-        if orientation and int(orientation) != 1:
-            version = f"{version}o{int(orientation)}"
-        return version
+            version = "0"
+        else:
+            version = f"{thumbnail_width}x{thumbnail_height}"
+            if orientation and int(orientation) != 1:
+                version = f"{version}o{int(orientation)}"
+        if not file_path:
+            return version
+        digest = hashlib.blake2s(file_path.encode("utf-8"), digest_size=4).hexdigest()
+        return f"{version}-{digest}"
 
     @staticmethod
     def calculate_hash_from_bytes(image_bytes: bytes) -> str:

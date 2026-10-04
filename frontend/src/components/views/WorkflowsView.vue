@@ -445,6 +445,7 @@ import {
   useWorkflowsStore,
 } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { saveJsonAs } from "../../utils/downloadFile";
 import FilterStrip from "../panels/FilterStrip.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
@@ -1253,6 +1254,10 @@ async function saveRename() {
 
 // ── Export, duplicate, delete ─────────────────────────────────────────────
 
+// A second Export while the first is still fetching or in its Save dialog
+// would open another dialog.
+let exporting = false;
+
 /**
  * Save this card as a ComfyUI file somebody else can open.
  *
@@ -1264,7 +1269,16 @@ async function saveRename() {
  */
 async function exportSelected() {
   const card = onlyCard.value;
-  if (!card) return;
+  if (!card || exporting) return;
+  exporting = true;
+  try {
+    await exportCard(card);
+  } finally {
+    exporting = false;
+  }
+}
+
+async function exportCard(card) {
   let body;
   try {
     body = await exportWorkflow(card.id);
@@ -1276,26 +1290,22 @@ async function exportSelected() {
     });
     return;
   }
-  const url = URL.createObjectURL(
-    new Blob([JSON.stringify(body.workflow, null, 2)], {
-      type: "application/json",
-    }),
-  );
+  const filename = body.filename || "workflow.json";
   try {
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = body.filename || "workflow.json";
-    link.click();
-  } finally {
-    // Revoked on the next frame, not immediately: the click is queued and a
-    // URL revoked in the same task can be gone before the download starts.
-    requestAnimationFrame(() => URL.revokeObjectURL(url));
+    if (!(await saveJsonAs(body.workflow, filename))) return;
+  } catch (err) {
+    console.warn(`[workflows] could not save ${filename}`, err);
+    notices.push({
+      level: "error",
+      text: errorMessage(err, "That workflow could not be saved."),
+    });
+    return;
   }
   notices.push({
     level: "success",
     text: body.removed?.length
-      ? `Exported ${body.filename}, without: ${body.removed.join(", ")}.`
-      : `Exported ${body.filename}.`,
+      ? `Exported ${filename}, without: ${body.removed.join(", ")}.`
+      : `Exported ${filename}.`,
   });
 }
 

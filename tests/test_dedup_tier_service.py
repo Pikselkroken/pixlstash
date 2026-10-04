@@ -1808,7 +1808,8 @@ def test_a_group_naming_one_member_of_a_four_stack_reports_the_stacks_depth(serv
     # The face is the stack's leader, which is NOT the matched member.
     assert deck["leader_picture_id"] == ids[0]
     assert deck["leader_picture_id"] not in deck["matched_picture_ids"]
-    assert deck["leader_thumbnail_version"] == "1024x768"
+    # The size, then the file: a reused picture id gets a URL of its own.
+    assert deck["leader_thumbnail_version"].startswith("1024x768-")
     assert deck["stackable"] is True
     assert deck["blocked_by_sets"] == []
     # Eager count and leader, LAZY members: the members are never inlined.
@@ -1972,7 +1973,7 @@ def test_stack_members_pages_in_canonical_order(server):
     assert first["stack_id"] == stack_id
     assert first["member_count"] == 5
     assert first["leader_picture_id"] == ids[0]
-    assert first["leader_thumbnail_version"] == "640x480"
+    assert first["leader_thumbnail_version"].startswith("640x480-")
     assert [m["picture_id"] for m in first["members"]] == ids[:2]
     assert [m["position"] for m in first["members"]] == [0, 1]
     assert [m["is_leader"] for m in first["members"]] == [True, False]

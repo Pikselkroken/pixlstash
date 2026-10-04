@@ -373,9 +373,11 @@ import { getPictureWorkflow } from "../../api/comfyui";
 import { listAdapters } from "../../api/modelShelf";
 import { listSavedRecipes } from "../../api/recipes";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { errorMessage } from "../../utils/apiError";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
-import { downloadBlob } from "../../utils/downloadFile";
+import { saveFileAs } from "../../utils/downloadFile";
 import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { keepsTheSameLook } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
@@ -550,6 +552,7 @@ function onUseAsInput() {
 }
 
 const router = useRouter();
+const notices = useNoticeStore();
 /** Input rows whose thumbnail failed to load; see `shownAsPicture`. */
 const unloadable = reactive(new Set());
 
@@ -973,11 +976,26 @@ async function copyWorkflow() {
   }
 }
 
-function downloadWorkflow() {
-  downloadBlob(
-    new Blob([workflowJson.value], { type: "application/json" }),
-    "comfyui_workflow.json",
-  );
+// A second click while the Save dialog is still coming up would open another.
+let savingWorkflow = false;
+
+async function downloadWorkflow() {
+  if (savingWorkflow) return;
+  savingWorkflow = true;
+  try {
+    await saveFileAs(
+      new Blob([workflowJson.value], { type: "application/json" }),
+      "comfyui_workflow.json",
+    );
+  } catch (err) {
+    console.warn("Failed to save the workflow JSON:", err);
+    notices.push({
+      level: "error",
+      text: errorMessage(err, "Could not save the workflow."),
+    });
+  } finally {
+    savingWorkflow = false;
+  }
 }
 
 async function copyPrompt() {

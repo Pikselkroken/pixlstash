@@ -28,6 +28,7 @@ from PIL import Image
 
 from pixlstash.db_models import Face
 from pixlstash.server import Server
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.http_cache import (
     REVALIDATE_CACHE_CONTROL,
     conditional_file_response,
@@ -105,6 +106,33 @@ def test_helper_serves_the_new_bytes_when_the_thumbnail_is_regenerated(tmp_path)
     assert resp.status_code == 200
     assert resp.content == b"\x89PNG\r\n\x1a\n-second-and-longer"
     assert resp.headers["etag"] != stale_etag
+
+
+def test_a_reused_picture_id_gets_a_thumbnail_url_of_its_own():
+    """SQLite gives a deleted picture's id to the next import.
+
+    A new picture the size of the deleted one would otherwise get its exact
+    ``?v=``, and the browser, holding that URL for up to an hour, paints the
+    deleted picture's bitmap in its place. The file tells the two apart.
+    """
+    gone = ImageUtils.thumbnail_cache_version(
+        384, 577, None, file_path="Unassigned/test-gone.png"
+    )
+    new = ImageUtils.thumbnail_cache_version(
+        384, 577, None, file_path="Unassigned/test-new.png"
+    )
+    assert gone != new
+    assert gone.startswith("384x577-")
+    # Stable for one picture, so the browser cache still works.
+    assert gone == ImageUtils.thumbnail_cache_version(
+        384, 577, None, file_path="Unassigned/test-gone.png"
+    )
+    # Before processing too: an unprocessed reuse must not share "0".
+    assert ImageUtils.thumbnail_cache_version(
+        None, None, file_path="Unassigned/test-gone.png"
+    ) != ImageUtils.thumbnail_cache_version(
+        None, None, file_path="Unassigned/test-new.png"
+    )
 
 
 def test_no_etag_when_the_file_cannot_be_stated(tmp_path, caplog):

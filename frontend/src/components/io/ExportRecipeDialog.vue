@@ -44,11 +44,12 @@
     </template>
 
     <template #footer>
-      <AppButton :disabled="busy" @click="emit('close')">Cancel</AppButton>
+      <AppButton :disabled="!!busy" @click="emit('close')">Cancel</AppButton>
       <AppButton
         v-if="payload?.recipe?.workflow_id"
         icon-left="sitemap-outline"
-        :loading="busy"
+        :loading="busy === 'workflow'"
+        :disabled="!!busy"
         @click="exportTheWorkflow"
       >
         Export workflow
@@ -57,7 +58,8 @@
         ref="primaryButton"
         variant="primary"
         icon-left="export"
-        :disabled="!payload || busy"
+        :loading="busy === 'recipe'"
+        :disabled="!payload || !!busy"
         @click="exportTheRecipe"
       >
         Export recipe
@@ -83,7 +85,7 @@ import { exportSavedRecipe } from "../../api/recipes";
 import { exportWorkflow } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorMessage } from "../../utils/apiError";
-import { downloadJson } from "../../utils/downloadFile";
+import { saveJsonAs } from "../../utils/downloadFile";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 
@@ -107,7 +109,8 @@ const exportError = ref("");
  * Only that one: exporting the recipe writes a payload this dialog already
  * holds, so it is over within the click and has no in-flight state to show.
  */
-const busy = ref(false);
+/** The export in flight, `"recipe"` or `"workflow"`, or `""` for none. */
+const busy = ref("");
 /** The primary, focused once there is something to agree to. */
 const primaryButton = ref(null);
 
@@ -149,20 +152,41 @@ watch(payload, async (ready) => {
   primaryButton.value?.$el?.focus?.();
 });
 
-function exportTheRecipe() {
-  if (!payload.value) return;
-  downloadJson(payload.value.recipe, payload.value.filename);
+async function exportTheRecipe() {
+  if (!payload.value || busy.value) return;
+  busy.value = "recipe";
+  exportError.value = "";
+  try {
+    if (!(await saveJsonAs(payload.value.recipe, payload.value.filename))) {
+      return;
+    }
+  } catch (err) {
+    console.warn(`[recipes] could not save ${payload.value.filename}`, err);
+    exportError.value = errorMessage(err, "Could not save that recipe.");
+    return;
+  } finally {
+    busy.value = "";
+  }
   emit("close");
 }
 
 async function exportTheWorkflow() {
   const key = payload.value?.recipe?.workflow_id;
-  if (!key) return;
-  busy.value = true;
+  if (!key || busy.value) return;
+  busy.value = "workflow";
   exportError.value = "";
+  // Which step failed decides the fallback text: the server's export, or
+  // writing the file the owner picked.
+  let saving = false;
   try {
     const body = await exportWorkflow(key);
-    downloadJson(body?.workflow || {}, body?.filename || "workflow.json");
+    saving = true;
+    const saved = await saveJsonAs(
+      body?.workflow || {},
+      body?.filename || "workflow.json",
+    );
+    // Cancelled in the Save dialog: the dialog stays, nothing was written.
+    if (!saved) return;
     // What the scrub took, said out loud. This dialog exists to tell the
     // owner what a file does and does not carry, so the safe alternative
     // cannot be the one that goes out silently.
@@ -175,12 +199,15 @@ async function exportTheWorkflow() {
     });
     emit("close");
   } catch (err) {
+    console.warn(`[recipes] could not export workflow ${key}`, err);
     exportError.value = errorMessage(
       err,
-      "Could not export that workflow on its own.",
+      saving
+        ? "Could not save that workflow."
+        : "Could not export that workflow on its own.",
     );
   } finally {
-    busy.value = false;
+    busy.value = "";
   }
 }
 </script>

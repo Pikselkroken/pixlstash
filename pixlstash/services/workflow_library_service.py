@@ -289,6 +289,9 @@ class CoverCandidate:
     square_crop_x: Optional[int] = None
     square_crop_y: Optional[int] = None
     square_crop_side: Optional[int] = None
+    # The picture's own file, which keys its thumbnail URL as well
+    # (``thumbnail_cache_version``): picture ids are reused after a delete.
+    file_path: Optional[str] = None
     # Made with a model the owner has since replaced in this workflow
     # (``workflow_model_fix``). Set by the workflows grid, never by the query.
     superseded: bool = False
@@ -388,6 +391,7 @@ def variant_cover_candidates(
             Picture.square_crop_x.label("square_crop_x"),
             Picture.square_crop_y.label("square_crop_y"),
             Picture.square_crop_side.label("square_crop_side"),
+            Picture.file_path.label("file_path"),
             func.row_number().over(partition_by=filed, order_by=ordering).label("rank"),
         )
         .where(filed.is_not(None))
@@ -407,6 +411,7 @@ def variant_cover_candidates(
             ranked.c.square_crop_x,
             ranked.c.square_crop_y,
             ranked.c.square_crop_side,
+            ranked.c.file_path,
         ).where(ranked.c.rank <= per_variant)
     ).all()
     return [CoverCandidate(*row) for row in rows]

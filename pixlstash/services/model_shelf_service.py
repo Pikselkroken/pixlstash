@@ -769,13 +769,18 @@ def resolve_recipe_models(
     are models a picture proves ran together. Every recipe the hub holds
     counts, from every library and whether or not its pictures still exist.
 
-    Returns ``(recipe_models, ambiguous, unresolved)``:
+    Returns ``(recipe_models, ambiguous, unresolved, namesakes)``:
 
     * ``recipe_models`` - ``{structural_hash: {model_id, ...}}``, recipes that
       reached no shelf row absent;
     * ``ambiguous`` - per recipe, the models it reached only through a name or
       a digest prefix that several shelf rows answer to, so the membership is
       a guess about which of them;
+    * ``namesakes`` - per recipe, each set of models ONE name or digest
+      prefix reached together: the recipe ran with one of them, so holding any
+      is holding the file it ran with. ``ambiguous`` is their union, which
+      loses that grouping; a name can reach a row through its stored filename
+      or through any copy's basename, so the grouping is the only safe record;
     * ``unresolved`` - recipes naming a digest no shelf row matches while some
       row is still waiting for its hash. The ghost reader's rule
       (``hub/workflows._model_ghost_names``): that row may be the model the
@@ -798,6 +803,7 @@ def resolve_recipe_models(
 
     recipe_models: dict[str, set[int]] = {}
     ambiguous: dict[str, set[int]] = {}
+    namesakes: dict[str, set[frozenset[int]]] = {}
     unresolved: set[str] = set()
     for row in hub.fetchall(
         "SELECT structural_hash, widget_name, normalized_filename "
@@ -810,15 +816,14 @@ def resolve_recipe_models(
             )
             if not matched and not digests_are_complete:
                 unresolved.add(recipe)
-            if len(matched) > 1:
-                ambiguous.setdefault(recipe, set()).update(matched)
         else:
             matched = by_name.get(row["normalized_filename"], set())
-            if len(matched) > 1:
-                ambiguous.setdefault(recipe, set()).update(matched)
+        if len(matched) > 1:
+            ambiguous.setdefault(recipe, set()).update(matched)
+            namesakes.setdefault(recipe, set()).add(frozenset(matched))
         if matched:
             recipe_models.setdefault(recipe, set()).update(matched)
-    return recipe_models, ambiguous, unresolved
+    return recipe_models, ambiguous, unresolved, namesakes
 
 
 def fetch_companions(hub, ids: list[int]) -> dict:
@@ -868,7 +873,7 @@ def fetch_companions(hub, ids: list[int]) -> dict:
             "SELECT id, file_kind, display_name, filename, file_size FROM model"
         )
     }
-    recipe_models, ambiguous, unresolved = resolve_recipe_models(hub)
+    recipe_models, ambiguous, unresolved, _namesakes = resolve_recipe_models(hub)
 
     recipes_of: dict[int, set[str]] = {}
     for recipe, members in recipe_models.items():
@@ -1121,7 +1126,9 @@ def propose_companions(
     target = models.get(checkpoint_id)
     if target is None:
         return proposals
-    recipe_models, ambiguous, _unresolved = resolve_recipe_models(hub, index)
+    recipe_models, ambiguous, _unresolved, _namesakes = resolve_recipe_models(
+        hub, index
+    )
 
     consumers = {
         model_id: row
@@ -1319,7 +1326,7 @@ _BASE_NAME_WIDGETS = tuple(sorted(CHECKPOINT_WIDGETS - {SHELF_ID_FIELD}))
 
 
 def _missing_bases(
-    hub, by_name: dict[str, set[int]], recipe_models, ambiguous
+    hub, by_name: dict[str, set[int]], recipe_models, ambiguous, namesakes
 ) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     """The base models each recipe loads that no shelf row answers to.
 
@@ -1332,7 +1339,8 @@ def _missing_bases(
     **A model fix answers first.** Where the owner replaced the missing name in
     the recipe's workflow (``PUT /workflows/{id}/model-fix``, stored on that
     workflow's base topology), the replacement is added to the recipe's models
-    in *recipe_models* (and to *ambiguous* when its name is shared), so the
+    in *recipe_models* (and to *ambiguous* and *namesakes* when its name is
+    shared), so the
     recipe joins the replacement's combination. This is the owner's word that
     the workflow now loads it, which is why the grid reads it and the delete
     warning (:func:`fetch_companions`) does not.
@@ -1395,6 +1403,7 @@ def _missing_bases(
             recipe_models.setdefault(recipe, set()).update(fixed)
             if len(fixed) > 1:
                 ambiguous.setdefault(recipe, set()).update(fixed)
+                namesakes.setdefault(recipe, set()).add(frozenset(fixed))
             continue
         unresolved.setdefault(recipe, set()).add(name)
 
@@ -1502,8 +1511,10 @@ def fetch_workflow_sets(hub, vault) -> dict:
         and no run-only combination; only the merge offer reads it.
     """
     index = recipe_asset_index(hub)
-    recipe_models, ambiguous, unresolved = resolve_recipe_models(hub, index)
-    missing, missing_workflows = _missing_bases(hub, index[0], recipe_models, ambiguous)
+    recipe_models, ambiguous, unresolved, namesakes = resolve_recipe_models(hub, index)
+    missing, missing_workflows = _missing_bases(
+        hub, index[0], recipe_models, ambiguous, namesakes
+    )
     runs = _history_runs(hub)
     pictures = vault.db.run_immediate_read_task(
         lambda session: (
@@ -1538,6 +1549,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
             "picture_count": 0,
             "covers": [],
             "unsure": set(),
+            "namesakes": set(),
         }
 
     # A recipe whose only base is off the shelf (an all-in-one checkpoint with
@@ -1559,6 +1571,11 @@ def fetch_workflow_sets(hub, vault) -> dict:
         if recipe in unresolved:
             entry["unsure"].update(present)
         entry["unsure"].update(ambiguous.get(recipe, set()) & present)
+        entry["namesakes"].update(
+            group & present
+            for group in namesakes.get(recipe, ())
+            if len(group & present) > 1
+        )
 
     # One witness per exact set, like a recipe: a run counts against the
     # combination its STORED models are, never against every subset of it.
@@ -1598,6 +1615,10 @@ def fetch_workflow_sets(hub, vault) -> dict:
                     }
                     for model_id in ordered
                 ],
+                # Internal, for the merge offer (`model_workflow_sets._lacks`):
+                # each set of members one name reached together. The route
+                # does not serve it.
+                "namesakes": sorted(sorted(group) for group in entry["namesakes"]),
                 "missing": [
                     {
                         "name": missing_name,

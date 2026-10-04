@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
+import { useNoticeStore } from "../../stores/useNoticeStore";
+
 // Mocked rather than given a real router: the panel is mounted alone, and a
 // real one would have to carry every app route to resolve two names.
 const nav = vi.hoisted(() => ({ push: null }));
@@ -279,6 +281,56 @@ describe("OverlayRecipePanel", () => {
         .findAll(".recipe-sec-act")
         .some((b) => b.text().includes("Copy")),
     ).toBe(false);
+  });
+
+  it("says so when the workflow could not be saved", async () => {
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(async () => ({ canceled: false, saveId: "s1" })),
+      completeMediaSaveAs: vi.fn(async () => {
+        throw new Error("Disk full.");
+      }),
+      cancelMediaSaveAs: vi.fn(),
+    };
+    try {
+      const box = await openGraph(render());
+      await box
+        .findAll(".recipe-sec-act")
+        .find((b) => b.text().includes("Download"))
+        .trigger("click");
+      await flushPromises();
+      expect(window.pixlstashDesktop.beginMediaSaveAs).toHaveBeenCalledWith(
+        "comfyui_workflow.json",
+      );
+      const errors = useNoticeStore().notices.filter(
+        (n) => n.level === "error",
+      );
+      expect(errors.map((n) => n.text)).toEqual(["Disk full."]);
+    } finally {
+      delete window.pixlstashDesktop;
+    }
+  });
+
+  it("opens one Save dialog however fast Download is pressed", async () => {
+    let answer;
+    window.pixlstashDesktop = {
+      beginMediaSaveAs: vi.fn(() => new Promise((resolve) => (answer = resolve))),
+      completeMediaSaveAs: vi.fn(),
+    };
+    try {
+      const box = await openGraph(render());
+      const download = box
+        .findAll(".recipe-sec-act")
+        .find((b) => b.text().includes("Download"));
+      await download.trigger("click");
+      await download.trigger("click");
+      expect(window.pixlstashDesktop.beginMediaSaveAs).toHaveBeenCalledTimes(1);
+      answer({ canceled: true });
+      await flushPromises();
+      await download.trigger("click");
+      expect(window.pixlstashDesktop.beginMediaSaveAs).toHaveBeenCalledTimes(2);
+    } finally {
+      delete window.pixlstashDesktop;
+    }
   });
 
   it("makes a model on the shelf a link and one that is not inert", () => {

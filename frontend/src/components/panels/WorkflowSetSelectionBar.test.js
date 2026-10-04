@@ -11,6 +11,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 import WorkflowSetSelectionBar from "./WorkflowSetSelectionBar.vue";
+import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
 const globalOpts = {
   global: {
@@ -48,5 +49,27 @@ describe("WorkflowSetSelectionBar", () => {
     expect(document.activeElement).toBe(card);
     wrapper.unmount();
     card.remove();
+  });
+
+  it("offers Duplicate set for one selected set only", async () => {
+    const store = useModelShelfStore();
+    const set = (id) => ({ id, name: `Set ${id}`, members: [] });
+    store.workflowSets.handMade = [set(10), set(11)];
+    store.selectSet(10);
+    const wrapper = mount(WorkflowSetSelectionBar, globalOpts);
+    await wrapper.vm.$nextTick();
+
+    const button = () => wrapper.find('[data-verb="duplicate-set"]');
+    await button().trigger("click");
+    const item = wrapper
+      .findAll(".ctx-item")
+      .find((row) => row.text().includes("Duplicate set"));
+    await item.trigger("click");
+    expect(wrapper.emitted("duplicate")).toHaveLength(2);
+
+    store.selectSet(11, { ctrl: true });
+    await wrapper.vm.$nextTick();
+    expect(button().attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).not.toContain("Duplicate set");
   });
 });

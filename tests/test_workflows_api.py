@@ -3212,9 +3212,9 @@ def test_the_cover_strip_is_the_cards_best_three_across_its_variants(workflow_en
     card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     ids = _picture_ids_by_path(workflow_env.server)
     assert _cover_urls(card) == [
-        f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
+        f"/pictures/thumbnails/{ids[name]}.webp"
+        f"?v={ImageUtils.thumbnail_cache_version(None, None, file_path=name)}"
+        for name in ("busy_one.png", "busy_two.png", "busy_three.png")
     ]
 
 
@@ -3282,7 +3282,7 @@ def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
         assert covers[0] == {
             "url": (
                 f"/pictures/thumbnails/{ids['busy_one.png']}.webp"
-                f"?v={ImageUtils.thumbnail_cache_version(384, 561, None)}"
+                f"?v={ImageUtils.thumbnail_cache_version(384, 561, None, file_path='busy_one.png')}"
             ),
             # The picture the cover draws, so a client can open it (#1455).
             "picture_id": ids["busy_one.png"],
@@ -10071,6 +10071,11 @@ def test_an_export_carries_no_prompt_no_seed_no_title_and_no_picture_name(export
     payload = r.json()
     graph = payload["workflow"]
     assert payload["source"] == "picture"
+    # Named as the grid names it, model and all (`Model: Text to Image`), not
+    # just the part after the colon.
+    shown = exportable.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"]["name"]
+    assert ": " in shown
+    assert payload["filename"] == f"{shown}.json"
     assert graph["5"]["inputs"]["text"] == ""
     assert graph["6"]["inputs"]["text"] == ""
     assert graph["3"]["inputs"]["seed"] == 0
@@ -11521,6 +11526,13 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
     )["id"]
     assert offered("test-vae-fp8.safetensors") == (["test-vae-bf16.safetensors"], None)
     assert asked == [shelf_id], "evidence asked about another checkpoint"
+    assert (
+        cloneable.owner.get(
+            f"{API}/workflows/{RUN_WF}/model-swap",
+            params={"replacing": "test-vae-fp8.safetensors"},
+        ).json()["replacements_narrowed"]
+        is None
+    ), "a VAE offer claimed to say something about base models"
     assert offered("test-t5-fp16.safetensors") == (["test-t5-bf16.safetensors"], None)
     assert offered("test-umt5-q8.gguf") == (
         ["test-t5-bf16.safetensors", "test-t5-q8.gguf"],
@@ -11701,11 +11713,14 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
 
+    narrowed = []
+
     def offered():
         body = cloneable.owner.get(
             f"{API}/workflows/{RUN_WF}/model-swap",
             params={"replacing": _SHELF_FILENAME},
         ).json()
+        narrowed.append(body["replacements_narrowed"])
         return [c["filename"] for c in body["replacements"]], body[
             "replacements_reason"
         ]
@@ -11720,14 +11735,17 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
         # Nothing says what the missing one was: every checkpoint.
         every = offered()
         assert {CLONE_CHECKPOINT, _REPLACEMENT_FILENAME} <= set(every[0])
+        assert narrowed[-1] is False, "an unnarrowed offer said it was narrowed"
         # Its shelf row does, spelled differently from the candidate's.
         set_base("filename = ?", "SDXL 1.0", _SHELF_FILENAME)
         assert offered() == ([_REPLACEMENT_FILENAME], None)
+        assert narrowed[-1] is True
         # Without it, the graph's LoRA does.
         set_base("filename = ?", None, _SHELF_FILENAME)
         cloneable.graph["2"]["inputs"]["lora_name"] = RUN_ADAPTER_FILENAME
         set_base("sha256 = ?", "FLUX.1 dev", RUN_ADAPTER_DIGEST)
         assert offered() == ([CLONE_CHECKPOINT], None)
+        assert narrowed[-1] is True
         # A base model nothing on the shelf has is said as such.
         set_base("sha256 = ?", "SD 1.5", RUN_ADAPTER_DIGEST)
         assert offered() == ([], "none_same_base_model")
@@ -11743,6 +11761,7 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
             "inputs": {"ckpt_name": CLONE_CHECKPOINT},
         }
         assert offered() == every
+        assert narrowed[-1] is False
     finally:
         set_base("sha256 = ?", None, RUN_ADAPTER_DIGEST)
         set_base("filename = ?", None, _SHELF_FILENAME)

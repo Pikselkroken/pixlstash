@@ -8,13 +8,21 @@ export function ipcBytes(value: unknown): Buffer {
   throw new Error('Media bytes are required.');
 }
 
-export function safeMediaFilename(value: unknown): string {
+export function safeMediaFilename(
+  value: unknown,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const raw = typeof value === 'string' ? basename(value.replace(/\\/g, '/')) : '';
   // Keep the IPC semantic: this is a filename suggestion, never a path.
   // Windows-reserved punctuation is invalid on the strictest supported OS.
+  // A colon is legal elsewhere and is in the names PixlStash generates
+  // ("Krea 2: Text to Image"), so only Windows loses it: on NTFS "a:b" is a
+  // hidden data stream of "a", not a file.
   // eslint is not used for the Electron package; the regex intentionally names controls.
+  const reserved =
+    platform === 'win32' ? /[\u0000-\u001f\u007f<>:"/\\|?*]/g : /[\u0000-\u001f\u007f<>"/\\|?*]/g;
   const cleaned = raw
-    .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, '_')
+    .replace(reserved, '_')
     .replace(/[. ]+$/g, '')
     .trim();
   return (cleaned || 'media').slice(0, 255);

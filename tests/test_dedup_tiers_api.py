@@ -1179,7 +1179,7 @@ def test_every_candidate_carries_a_thumbnail_cache_version():
     try:
         candidates = client.get(GROUPS_URL).json()["groups"][0]["candidates"]
         # Unprocessed pictures report the "0" sentinel rather than omitting it.
-        assert all(c["thumbnail_version"] == "0" for c in candidates)
+        assert all(c["thumbnail_version"].startswith("0-") for c in candidates)
 
         def set_thumbnail(session):
             pic = session.get(Picture, ids[0])
@@ -1187,14 +1187,18 @@ def test_every_candidate_carries_a_thumbnail_cache_version():
             pic.thumbnail_height = 240
             session.add(pic)
             session.commit()
+            return pic.file_path
 
-        _run(server, set_thumbnail)
+        file_path = _run(server, set_thumbnail)
         candidates = client.get(GROUPS_URL).json()["groups"][0]["candidates"]
         version = next(
             c["thumbnail_version"] for c in candidates if c["picture_id"] == ids[0]
         )
         # Exactly the version the batch-thumbnail endpoint puts in its ?v=.
-        assert version == ImageUtils.thumbnail_cache_version(320, 240) == "320x240"
+        assert version == ImageUtils.thumbnail_cache_version(
+            320, 240, file_path=file_path
+        )
+        assert version.startswith("320x240-")
     finally:
         _teardown(temp_dir, server)
 
@@ -2103,11 +2107,12 @@ def test_a_queue_row_carries_the_stack_truth_behind_each_deck():
             "stack_id": stack_id,
             "member_count": 2,
             "leader_picture_id": ids[2],
-            "leader_thumbnail_version": "800x600",
+            "leader_thumbnail_version": deck["leader_thumbnail_version"],
             "matched_picture_ids": [ids[0]],
             "stackable": True,
             "blocked_by_sets": [],
         }
+        assert deck["leader_thumbnail_version"].startswith("800x600-")
         # The loose half of the pair is its own unit and adds no entry.
         assert len(group["stacks"]) == 1
     finally:
@@ -2144,7 +2149,7 @@ def test_the_owner_expands_a_deck_and_a_scoped_token_cannot():
         assert body["stack_id"] == stack_id
         assert body["member_count"] == 2
         assert body["leader_picture_id"] == ids[2]
-        assert body["leader_thumbnail_version"] == "800x600"
+        assert body["leader_thumbnail_version"].startswith("800x600-")
         assert body["stackable"] is True
         assert body["blocked_by_sets"] == []
         assert body["offset"] == 0
@@ -2154,7 +2159,7 @@ def test_the_owner_expands_a_deck_and_a_scoped_token_cannot():
         assert [m["is_leader"] for m in body["members"]] == [True, False]
         # The tile fields are the queue candidate's, so the strip reuses it.
         leader = body["members"][0]
-        assert leader["thumbnail_version"] == "800x600"
+        assert leader["thumbnail_version"] == body["leader_thumbnail_version"]
         assert leader["why"] == []
         assert leader["stackable"] is True
 

@@ -542,10 +542,23 @@
               v-if="checkpointEdited"
               :value="checkpointBase"
               label="Checkpoint"
-              @reset="checkpointEdit = null"
+              @reset="pickCheckpoint(checkpointBase)"
             />
           </span>
+          <!-- A checkpoint this ComfyUI does not have is offered the shelf's
+               of the same base model, so the recipe's LoRAs still fit. -->
+          <AppSelect
+            v-if="checkpointFix?.options.length"
+            :model-value="checkpointValue"
+            label="Checkpoint"
+            hide-label
+            compact
+            :options="checkpointOptions"
+            :disabled="submitting"
+            @update:model-value="pickCheckpoint"
+          />
           <AppInput
+            v-else
             :model-value="checkpointValue"
             aria-label="Checkpoint"
             mono
@@ -553,6 +566,9 @@
             @update:model-value="setCheckpoint"
             @keydown.stop
           />
+          <p v-if="checkpointFix" class="rund-note" data-testid="rund-checkpoint-missing">
+            {{ checkpointFixNote }}
+          </p>
         </div>
 
         <div class="rund-f rund-f--4 rund-more">
@@ -765,6 +781,7 @@ import {
   getWorkflowCard,
   listWorkflowCards,
   preflightWorkflowRun,
+  readModelSwap,
   runWorkflowCard,
   saveFixedWorkflow,
   setWorkflowInputs,
@@ -1265,13 +1282,43 @@ const runsOwnWorkflow = computed(() =>
     : false,
 );
 
-/** The checkpoint the row starts at: the picture's own, else the default's. */
-const checkpointBase = computed(() => {
+/**
+ * The models the owner replaced in this workflow because the original is gone
+ * (`model_fixes` on the detail read, `PUT …/model-fix`): a run loads `now`
+ * wherever the graph names `was`, so the row must show `now`.
+ */
+const modelFixes = ref([]);
+
+/** The owner's saved replacement for checkpoint *file*, or null. */
+function savedReplacement(file) {
+  const key = fileKey(file);
+  if (!key) return null;
+  return (
+    modelFixes.value.find(
+      (fix) => fix.slot_kind === "checkpoint" && fileKey(fix.was) === key,
+    ) || null
+  );
+}
+
+/** *file*, or what a run loads in its place. */
+function inPlaceOf(file) {
+  return savedReplacement(file)?.now || file;
+}
+
+/** The checkpoint the recipe names: the picture's own, else the default's. */
+const checkpointNamed = computed(() => {
   const own = runsOwnWorkflow.value
     ? recipe.value?.settings?.[CHECKPOINT_INPUT]
     : null;
   return String(own || checkpointModel.value?.filename || "");
 });
+/** The owner's saved replacement for that checkpoint, or null. */
+const checkpointReplaced = computed(() => savedReplacement(checkpointNamed.value));
+/**
+ * The checkpoint the row starts at: what the run will load, which is the
+ * saved replacement where the named one is gone.
+ */
+const checkpointBase = computed(() => inPlaceOf(checkpointNamed.value));
 const checkpointValue = computed(() => checkpointEdit.value ?? checkpointBase.value);
 const checkpointEdited = computed(() => checkpointEdit.value !== null);
 
@@ -1294,6 +1341,141 @@ const runModels = computed(() =>
       }))
     : [],
 );
+
+/** ComfyUI's folders for a base model, as `missing_models` names them. */
+const BASE_MODEL_FOLDERS = ["checkpoints", "diffusion_models"];
+
+/**
+ * The checkpoint the pre-flight says this ComfyUI does not have, or the saved
+ * replacement for one that is gone, with what may replace it:
+ * `{file, missing, was, options, reason, narrowed}`, or null. `options` are the
+ * shelf checkpoints this workflow's loader can load, held to the missing one's
+ * base model where anything says which (`narrowed`), so the LoRAs still fit
+ * (`model-swap?replacing=`, the Workflow tab's "Replace with…"); `reason` says
+ * why there are none. Kept once offered, so the picker stays after a pick
+ * clears the reason.
+ */
+const checkpointFix = ref(null);
+/** Bumped per replacement read, so only the latest one's answer lands. */
+let checkpointAsk = 0;
+
+/** The picker's rows: the missing file first, so the row shows what it was. */
+const checkpointOptions = computed(() => {
+  const fix = checkpointFix.value;
+  if (!fix) return [];
+  return [
+    {
+      value: fix.file,
+      label: fix.missing
+        ? `${fix.file} (not on this ComfyUI)`
+        : `${fix.file} (in place of ${fix.was})`,
+    },
+    ...fix.options.map((model) => ({
+      value: model.filename,
+      label: model.display_name || model.filename,
+    })),
+  ];
+});
+
+const checkpointFixNote = computed(() => {
+  const fix = checkpointFix.value;
+  if (!fix) return "";
+  const gone = fix.missing
+    ? `${fix.file} is not on this ComfyUI.`
+    : `${fix.was} is not on this ComfyUI, so this workflow loads ${fix.file} in its place (set in the Workflow tab).`;
+  // Nothing to suggest until the replacements are read.
+  if (fix.loading) return gone;
+  if (fix.options.length) {
+    return fix.narrowed
+      ? `${gone} Pick another of the same base model for this run.`
+      : `${gone} Nothing says which base model it was, so every checkpoint this workflow can load is listed: pick one its LoRAs were made for.`;
+  }
+  // No `needs_pixlstash_nodes` case: the PixlStash swap loaders are VAE and
+  // text-encoder ones only, so a checkpoint ask never gets that reason.
+  switch (fix.reason) {
+    case "none_same_base_model":
+      return `${gone} No checkpoint on your model shelf is known to have its base model.`;
+    case "none_loadable":
+      return fix.narrowed
+        ? `${gone} None of the same base model on your model shelf can be loaded by this workflow.`
+        : `${gone} Nothing on your model shelf can be loaded by this workflow.`;
+    default:
+      return `${gone} Type the name of one it has.`;
+  }
+});
+
+function pickCheckpoint(filename) {
+  setCheckpoint(filename);
+  void runPreflight();
+}
+
+/**
+ * Offer replacements when *found* (a pre-flight's reasons) names the
+ * checkpoint the row started at as missing, or when that checkpoint is the
+ * owner's saved replacement for one that is gone: the run loads it without a
+ * word otherwise, and it may not be the one wanted. Asked once per file: the
+ * server reads the whole shelf to answer.
+ *
+ * The server answers for a file the workflow's graph loads, so a picture's own
+ * checkpoint that is not the graph's is asked about as the graph's file, and
+ * that file, which fits the graph by construction, leads the offer.
+ */
+async function offerCheckpoints(found, key, token) {
+  const file = checkpointBase.value;
+  if (!checkpointModel.value || checkpointFiles.value || !file) return;
+  if (checkpointFix.value?.file === file) return;
+  const missing = found.some(
+    (reason) =>
+      reason?.code === "missing_models" &&
+      (reason.models || []).some(
+        (model) => BASE_MODEL_FOLDERS.includes(model?.folder) && model.file === file,
+      ),
+  );
+  const was = checkpointReplaced.value?.was || "";
+  if (!missing && !was) return;
+  const fix = {
+    file,
+    missing,
+    was,
+    options: [],
+    reason: "",
+    narrowed: false,
+    loading: true,
+  };
+  checkpointFix.value = fix;
+  const ask = ++checkpointAsk;
+  // As the graph names it once the owner's fixes are applied, which is what
+  // the server reads.
+  const graphFile = inPlaceOf(checkpointModel.value.filename || file);
+  const current = () =>
+    token === loadToken && key === activeKey.value && ask === checkpointAsk;
+  let answer;
+  try {
+    answer = await readModelSwap(key, {
+      replacing: graphFile,
+      slotKind: "checkpoint",
+    });
+  } catch (err) {
+    console.warn(`[run] could not read replacements for ${graphFile} on ${key}`, err);
+    // Asked again on the next pre-flight rather than never.
+    if (current()) checkpointFix.value = null;
+    return;
+  }
+  if (!current()) return;
+  // Typed over while the read was out: the owner's name stays in its box.
+  if (checkpointEdit.value !== null) {
+    checkpointFix.value = null;
+    return;
+  }
+  const own = graphFile === file ? [] : [{ filename: graphFile }];
+  checkpointFix.value = {
+    ...fix,
+    options: [...own, ...(answer?.replacements || [])],
+    reason: answer?.replacements_reason || "",
+    narrowed: Boolean(answer?.replacements_narrowed),
+    loading: false,
+  };
+}
 
 /**
  * The optional stages the base graph carries, as the rows draw them. Only the
@@ -2536,10 +2718,13 @@ async function loadCard(key, { keepEdits = false } = {}) {
   if (token !== loadToken) return;
   const next = detail?.card || null;
   pins.value = detail?.pins ?? null;
+  modelFixes.value = detail?.model_fixes ?? [];
   freeError.value = "";
   // Stages are the graph's, so a choice made on one workflow says nothing
   // about another's.
   clearStages();
+  checkpointFix.value = null;
+  checkpointAsk += 1;
   if (!keepEdits) {
     card.value = next;
     fellBack.value = [];
@@ -2609,6 +2794,9 @@ async function runPreflight(token = loadToken) {
       return;
     }
     reasons.value = all;
+    offerCheckpoints(all, askedFor, token).catch((err) =>
+      console.warn(`[run] could not offer checkpoints for ${askedFor}`, err),
+    );
     bypassed.value = (answer?.groups || []).flatMap((group) => [
       ...repairNotices(group),
       ...unplacedNotice(group),
@@ -2659,6 +2847,7 @@ async function load() {
   recipe.value = null;
   card.value = null;
   pins.value = null;
+  modelFixes.value = [];
   freeError.value = "";
   cards.value = [];
   loras.value = [];
@@ -2676,6 +2865,8 @@ async function load() {
   pickerFor.value = null;
   stackChoice.value = null;
   checkpointEdit.value = null;
+  checkpointFix.value = null;
+  checkpointAsk += 1;
   clearStages();
   inputsError.value = "";
   try {

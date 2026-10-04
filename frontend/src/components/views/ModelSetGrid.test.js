@@ -1508,6 +1508,42 @@ describe("hand-made sets (#1520)", () => {
     expect(deleteWorkflowSet).toHaveBeenLastCalledWith(12);
   });
 
+  it("duplicates a set with every member by hash and slot, and opens the copy", async () => {
+    const gone = slotMember(5, "old_lora", "lora", {
+      on_shelf: false,
+      id: null,
+    });
+    const original = handSet(10, [SET_CKPT, SET_VAE, gone], {
+      name: "Portrait kit",
+    });
+    createWorkflowSet.mockResolvedValue(
+      handSet(12, [SET_CKPT, SET_VAE, gone], { name: "Portrait kit copy" }),
+    );
+    deleteWorkflowSet.mockResolvedValue({ deleted: handSet(12, []) });
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      support: [row(2, "sdxl_vae", "vae")],
+      handMade: [original],
+    });
+    const operations = useOperationStore();
+
+    await store.duplicateHandMadeSet(original);
+
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      name: "Portrait kit copy",
+      members: [SET_CKPT, SET_VAE, gone].map((m) => ({
+        sha256: m.sha256,
+        slot: m.slot,
+        label: m.label,
+      })),
+    });
+    expect(store.openSetKey).toBe("hand:12");
+    // Undo takes the copy away, never the original.
+    await operations.takeLocalReceiptAction();
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(12);
+    expect(deleteWorkflowSet).not.toHaveBeenCalledWith(10);
+  });
+
   it("makes a set from the keyboard with N and from the tile", async () => {
     createWorkflowSet.mockResolvedValue(handSet(12, []));
     const { wrapper, store } = await mountGrid({
@@ -2977,5 +3013,60 @@ describe("hand-made sets (#1520)", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, []);
     });
+  });
+});
+
+describe("hiding a set from pictures", () => {
+  async function mountOneSet() {
+    return mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      combinations: [combination("1+3", [CKPT, LORA])],
+      attach: true,
+    });
+  }
+
+  it("hides on Delete, never reaching the file delete, and Undo shows it again", async () => {
+    const { wrapper, store } = await mountOneSet();
+    const grid = wrapper.find('[role="treegrid"]');
+    // New workflow set → the card.
+    await grid.trigger("keydown", { key: "ArrowRight" });
+    const onWindowKey = vi.fn();
+    window.addEventListener("keydown", onWindowKey);
+    await grid.trigger("keydown", { key: "Delete" });
+    window.removeEventListener("keydown", onWindowKey);
+
+    expect(onWindowKey).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-testid="model-set-card"]')).toHaveLength(0);
+    expect(wrapper.find(".msg__hidden").text()).toContain("1 hidden set");
+    wrapper.unmount();
+    const operations = useOperationStore();
+    expect(operations.receipt.summary).toContain("Hid the set");
+    await operations.takeLocalReceiptAction();
+    expect(store.setGroups).toHaveLength(1);
+  });
+
+  it("keeps the grid and its Show them line when every set is hidden", async () => {
+    const { wrapper } = await mountOneSet();
+    await wrapper.find('[data-testid="set-hide"]').trigger("click");
+    expect(wrapper.text()).not.toContain("No picture in this library");
+    expect(wrapper.find('[data-testid="toggle-hidden-sets"]').exists()).toBe(
+      true,
+    );
+    wrapper.unmount();
+  });
+
+  it("hides from the card's button and draws hidden sets on request", async () => {
+    const { wrapper } = await mountOneSet();
+    await wrapper.find('[data-testid="set-hide"]').trigger("click");
+    expect(wrapper.findAll('[data-testid="model-set-card"]')).toHaveLength(0);
+
+    await wrapper.find('[data-testid="toggle-hidden-sets"]').trigger("click");
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.classes()).toContain("msc--hidden");
+    expect(card.text()).toContain("Hidden");
+
+    await wrapper.find('[data-testid="set-hide"]').trigger("click");
+    expect(card.classes()).not.toContain("msc--hidden");
+    wrapper.unmount();
   });
 });

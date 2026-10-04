@@ -26,6 +26,7 @@ const getPictureRecipe = vi.fn();
 const setWorkflowInputs = vi.fn();
 const saveFixedWorkflow = vi.fn();
 const setWorkflowPins = vi.fn();
+const readModelSwap = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -35,6 +36,7 @@ vi.mock("../../api/workflows", () => ({
   setWorkflowInputs: (...args) => setWorkflowInputs(...args),
   saveFixedWorkflow: (...args) => saveFixedWorkflow(...args),
   setWorkflowPins: (...args) => setWorkflowPins(...args),
+  readModelSwap: (...args) => readModelSwap(...args),
   workflowCoverUrl: (cover) => (cover?.url ? `/api/v1${cover.url}` : ""),
 }));
 vi.mock("../../api/comfyui", () => ({
@@ -1332,6 +1334,228 @@ describe("the body it sends", () => {
     ]);
     // Never twice: the ckpt_name widget is not also sent as a value.
     expect(sentValue(body, "ckpt_name")).toBeUndefined();
+  });
+
+  describe("a checkpoint this ComfyUI does not have", () => {
+    const address = "core:CheckpointLoader/ckpt_name";
+    const missing = (folder = "checkpoints") => ({
+      ok: false,
+      runs: 1,
+      groups: [
+        {
+          reasons: [
+            { code: "missing_models", models: [{ file: "realvisXL_v5.safetensors", folder }] },
+          ],
+        },
+      ],
+    });
+
+    beforeEach(() => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({
+          default_recipe: {
+            models: [{ address, kind: "checkpoint", filename: "realvisXL_v5.safetensors" }],
+            loras: [],
+            values: [],
+            stages: {},
+          },
+        }),
+      });
+    });
+
+    it("offers the shelf's of the same base model and runs the one picked", async () => {
+      preflightWorkflowRun.mockResolvedValueOnce(missing());
+      readModelSwap.mockResolvedValue({
+        replacements: [
+          { id: 7, filename: "juggernautXL.safetensors", display_name: "Juggernaut XL" },
+        ],
+        replacements_reason: null,
+        replacements_narrowed: true,
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+
+      expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+        replacing: "realvisXL_v5.safetensors",
+        slotKind: "checkpoint",
+      });
+      expect(wrapper.vm.checkpointOptions.map((o) => o.value)).toEqual([
+        "realvisXL_v5.safetensors",
+        "juggernautXL.safetensors",
+      ]);
+      expect(wrapper.find("[aria-label='Checkpoint']").exists()).toBe(false);
+      expect(wrapper.find("[data-testid='rund-checkpoint-missing']").text()).toContain(
+        "Pick another of the same base model",
+      );
+
+      wrapper.vm.pickCheckpoint("juggernautXL.safetensors");
+      await flushPromises();
+      // Kept once offered: the pick cleared the reason, not the picker.
+      expect(wrapper.vm.checkpointOptions).toHaveLength(2);
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0].models).toEqual([
+        { address, filename: "juggernautXL.safetensors" },
+      ]);
+    });
+
+    it("says why when nothing fits, and keeps the text box", async () => {
+      preflightWorkflowRun.mockResolvedValueOnce(missing());
+      readModelSwap.mockResolvedValue({
+        replacements: [],
+        replacements_reason: "none_same_base_model",
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(wrapper.find("[aria-label='Checkpoint']").exists()).toBe(true);
+      expect(wrapper.find("[data-testid='rund-checkpoint-missing']").text()).toContain(
+        "No checkpoint on your model shelf is known to have its base model",
+      );
+      // Asked once per file, however often the pre-flight says it again.
+      preflightWorkflowRun.mockResolvedValueOnce(missing());
+      await wrapper.vm.runPreflight();
+      await flushPromises();
+      expect(readModelSwap).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks about a picture's own checkpoint as the graph's, and offers that", async () => {
+      // The picture ran another file than the graph loads: the server answers
+      // only for the graph's file, which itself fits and leads the offer.
+      getPictureRecipe.mockResolvedValue({
+        available: true,
+        workflow_id: KEY,
+        positive_prompt: "a rainy tram platform",
+        seed_text: "1",
+        settings: { ckpt_name: "picture_own.safetensors" },
+        lora_slots: [],
+      });
+      preflightWorkflowRun.mockResolvedValueOnce({
+        ok: false,
+        runs: 1,
+        groups: [
+          {
+            reasons: [
+              {
+                code: "missing_models",
+                models: [{ file: "picture_own.safetensors", folder: "diffusion_models" }],
+              },
+            ],
+          },
+        ],
+      });
+      readModelSwap.mockResolvedValue({
+        replacements: [{ id: 7, filename: "juggernautXL.safetensors" }],
+        replacements_narrowed: true,
+      });
+      const wrapper = await mountRun();
+      expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+        replacing: "realvisXL_v5.safetensors",
+        slotKind: "checkpoint",
+      });
+      expect(wrapper.vm.checkpointOptions.map((o) => o.value)).toEqual([
+        "picture_own.safetensors",
+        "realvisXL_v5.safetensors",
+        "juggernautXL.safetensors",
+      ]);
+    });
+
+    it("does not claim a base model when nothing narrowed the offer", async () => {
+      preflightWorkflowRun.mockResolvedValueOnce(missing());
+      readModelSwap.mockResolvedValue({
+        replacements: [{ id: 7, filename: "sd15.safetensors" }],
+        replacements_narrowed: false,
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      const note = wrapper.find("[data-testid='rund-checkpoint-missing']").text();
+      expect(note).toContain("Nothing says which base model it was");
+      expect(note).not.toContain("same base model");
+    });
+
+    it("leaves a name typed during the read in its box", async () => {
+      preflightWorkflowRun.mockResolvedValueOnce(missing());
+      let answer;
+      readModelSwap.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      // Nothing suggested while the read is out.
+      expect(wrapper.vm.checkpointFixNote).toBe(
+        "realvisXL_v5.safetensors is not on this ComfyUI.",
+      );
+      wrapper.vm.setCheckpoint("typed.safetensors");
+      answer({ replacements: [{ id: 7, filename: "juggernautXL.safetensors" }] });
+      await flushPromises();
+      expect(wrapper.vm.checkpointFix).toBeNull();
+      expect(wrapper.find("[aria-label='Checkpoint']").exists()).toBe(true);
+    });
+
+    it("asks again after a read that failed", async () => {
+      preflightWorkflowRun.mockResolvedValue(missing());
+      readModelSwap.mockRejectedValueOnce(new Error("offline"));
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(wrapper.vm.checkpointFix).toBeNull();
+      readModelSwap.mockResolvedValue({ replacements: [], replacements_reason: "none_loadable" });
+      await wrapper.vm.runPreflight();
+      await flushPromises();
+      expect(readModelSwap).toHaveBeenCalledTimes(2);
+      expect(wrapper.vm.checkpointFix?.reason).toBe("none_loadable");
+      // Not narrowed, so it names no base model.
+      expect(wrapper.vm.checkpointFixNote).toContain(
+        "Nothing on your model shelf can be loaded by this workflow",
+      );
+    });
+
+    it("shows and offers to change the saved replacement for a gone checkpoint", async () => {
+      // The Workflow tab replaced the gone file: every run loads `now`, so
+      // the pre-flight finds nothing missing and the row must not name `was`.
+      getWorkflowCard.mockResolvedValue({
+        card: card({
+          default_recipe: {
+            models: [{ address, kind: "checkpoint", filename: "realvisXL_v5.safetensors" }],
+            loras: [],
+            values: [],
+            stages: {},
+          },
+        }),
+        model_fixes: [
+          {
+            slot_label: "CheckpointLoader/ckpt_name",
+            was: "RealVisXL_V5.safetensors",
+            now: "juggernautXL.safetensors",
+            slot_kind: "checkpoint",
+          },
+        ],
+      });
+      readModelSwap.mockResolvedValue({
+        replacements: [{ id: 8, filename: "dreamshaperXL.safetensors" }],
+        replacements_narrowed: true,
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+
+      expect(wrapper.vm.checkpointValue).toBe("juggernautXL.safetensors");
+      expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+        replacing: "juggernautXL.safetensors",
+        slotKind: "checkpoint",
+      });
+      expect(wrapper.vm.checkpointOptions).toEqual([
+        {
+          value: "juggernautXL.safetensors",
+          label: "juggernautXL.safetensors (in place of RealVisXL_V5.safetensors)",
+        },
+        { value: "dreamshaperXL.safetensors", label: "dreamshaperXL.safetensors" },
+      ]);
+      expect(wrapper.vm.checkpointFixNote).toContain(
+        "RealVisXL_V5.safetensors is not on this ComfyUI, so this workflow loads juggernautXL.safetensors in its place",
+      );
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0].models).toEqual([
+        { address, filename: "juggernautXL.safetensors" },
+      ]);
+    });
+
+    it("asks nothing for a missing file that is not a base model", async () => {
+      preflightWorkflowRun.mockResolvedValueOnce(missing("loras"));
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(readModelSwap).not.toHaveBeenCalled();
+      expect(wrapper.find("[data-testid='rund-checkpoint-missing']").exists()).toBe(false);
+    });
   });
 
   it("lists two different checkpoints read-only and runs them as stored", async () => {

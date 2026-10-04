@@ -1206,7 +1206,10 @@ def _cover_strip(covers) -> list[WorkflowSetCover]:
         WorkflowSetCover(
             picture_id=cover.picture_id,
             version=ImageUtils.thumbnail_cache_version(
-                cover.thumbnail_width, cover.thumbnail_height, cover.orientation
+                cover.thumbnail_width,
+                cover.thumbnail_height,
+                cover.orientation,
+                file_path=cover.file_path,
             ),
         )
         for cover in covers
