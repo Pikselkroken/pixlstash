@@ -2934,8 +2934,11 @@ def test_object_info_requests_arriving_together_share_one_get(monkeypatch):
     ]
     for caller in callers:
         caller.start()
-    while not asked:
+    for _ in range(500):
+        if asked:
+            break
         time.sleep(0.01)
+    assert asked, "the object_info GET never started"
     # The other callers arrive while the one GET is still out.
     time.sleep(0.2)
     release.set()
@@ -2947,3 +2950,41 @@ def test_object_info_requests_arriving_together_share_one_get(monkeypatch):
     # Nothing outlives the GET: the next caller asks ComfyUI again.
     service.fetch_object_info("http://c")
     assert len(asked) == 2
+
+
+def test_a_shutdown_signal_in_the_shared_get_reaches_waiters_as_a_failure(
+    monkeypatch,
+):
+    import threading
+    import time
+
+    import pixlstash.services.comfyui_recipe_service as service
+
+    release = threading.Event()
+
+    def interrupted_get(url, timeout=None):
+        release.wait(5)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(service.requests, "get", interrupted_get)
+    seen = {}
+
+    def call(name):
+        try:
+            service.fetch_object_info("http://c")
+        except BaseException as exc:  # noqa: BLE001 - the type is the assertion
+            seen[name] = type(exc)
+
+    owner = threading.Thread(target=call, args=("owner",))
+    owner.start()
+    for _ in range(500):
+        if service._object_info_inflight:
+            break
+        time.sleep(0.01)
+    waiter = threading.Thread(target=call, args=("waiter",))
+    waiter.start()
+    time.sleep(0.2)
+    release.set()
+    owner.join(5)
+    waiter.join(5)
+    assert seen == {"owner": KeyboardInterrupt, "waiter": RuntimeError}

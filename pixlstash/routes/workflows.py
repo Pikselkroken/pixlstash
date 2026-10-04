@@ -111,6 +111,7 @@ from pixlstash.services.comfyui_recipe_service import (
     listed_as,
     listed_options,
     live_lora_targets,
+    live_node_ids,
     lora_display_name,
     model_filename_fields,
     plan_loader_rewrites,
@@ -197,7 +198,6 @@ from pixlstash.services.workflow_hash import (
     SECRET_FIELD_RE,
     SHELF_ID_FIELD,
     WorkflowGraphError,
-    is_link,
     normalized_filename,
     structural_document,
 )
@@ -4205,6 +4205,7 @@ def create_router(server) -> APIRouter:
         graph: dict,
         addressed: bool,
         bindings: list | None = None,
+        object_info: dict | None = None,
     ) -> list[CardInput]:
         """The picture inputs in *graph*, with the workflow's stored setup over them.
 
@@ -4221,7 +4222,11 @@ def create_router(server) -> APIRouter:
             else []
         )
         try:
-            inputs = card_input_modes(graph, _on_graph_labels(graph, stored))
+            inputs = card_input_modes(
+                graph,
+                _on_graph_labels(graph, stored),
+                live_node_ids(graph, object_info) if object_info else None,
+            )
         except WorkflowGraphError as exc:
             if addressed:
                 raise HTTPException(
@@ -4313,15 +4318,6 @@ def create_router(server) -> APIRouter:
             for item in preflight.get("missing_input_images") or []
             if item
         }
-        # ComfyUI never runs a loader nothing reads, so leaving one open is
-        # no refusal: an unwired second Load Image is an optional input.
-        read = {
-            str(value[0])
-            for node in graph.values()
-            if isinstance(node, dict)
-            for value in (node.get("inputs") or {}).values()
-            if is_link(value)
-        }
         described: list[RunPictureInput] = []
         feeds: list[Feed] = []
         unfilled: list[dict] = []
@@ -4346,8 +4342,6 @@ def create_router(server) -> APIRouter:
                     # rather than filled somewhere else, which would be a run
                     # that never read the picture it was given.
                     how = None
-            elif not read.intersection(item.node_ids):
-                how = "graph"
             elif (
                 not (item.mode == "fixed" and item.pixel_sha)
                 # A PixlStash picture loader's own ids are frozen, and empty
@@ -4967,7 +4961,12 @@ def create_router(server) -> APIRouter:
             # keeps every other node's id - so the fill below still finds its
             # nodes in the graph the bypass left.
             card_inputs = _card_inputs(
-                hub, group.workflow_id, graph, bool(requested), source.bindings
+                hub,
+                group.workflow_id,
+                graph,
+                bool(requested),
+                source.bindings,
+                object_info,
             )
             reached_inputs = True
             addressed.update(item.address for item in card_inputs)

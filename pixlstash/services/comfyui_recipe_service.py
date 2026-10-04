@@ -225,7 +225,11 @@ def fetch_object_info(base_url: str) -> dict:
         try:
             text = _get_object_info_text(base_url)
         except BaseException as exc:
-            mine.set_exception(exc)
+            # Every waiter is released, but a shutdown signal is this thread's
+            # own: the others are told the fetch failed, not interrupted.
+            mine.set_exception(
+                exc if isinstance(exc, Exception) else RuntimeError(repr(exc))
+            )
             raise
         else:
             mine.set_result(text)
@@ -1450,7 +1454,7 @@ def _live_graph(graph: dict, object_info: dict) -> dict:
     read as a second model or a second chain. A graph whose ``object_info``
     names no output node is returned whole: nothing says what is dead.
     """
-    live = _live_ids(graph, object_info)
+    live = live_node_ids(graph, object_info)
     if live is None:
         return graph
     dead = sorted(set(map(str, graph)) - live)
@@ -1469,7 +1473,7 @@ def live_lora_targets(prompt_graph: dict, object_info: dict | None) -> list[dict
     :func:`_live_graph` reads it.
     """
     targets = detect_lora_targets(prompt_graph)
-    live = _live_ids(prompt_graph or {}, object_info) if object_info else None
+    live = live_node_ids(prompt_graph or {}, object_info) if object_info else None
     if live is None:
         return targets
     return [target for target in targets if str(target["node_id"]) in live]
@@ -1485,7 +1489,7 @@ def _output_ids(graph: dict, object_info: dict) -> list[str]:
     ]
 
 
-def _live_ids(graph: dict, object_info: dict) -> set[str] | None:
+def live_node_ids(graph: dict, object_info: dict) -> set[str] | None:
     """The ids of the nodes some output reads, or ``None`` when none is known.
 
     ``None`` rather than every id: a graph whose ``object_info`` names no
@@ -2073,7 +2077,7 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
     from pixlstash.services.workflow_identity import SEED_VARIANCE, node_groups
 
     graph = deepcopy(prompt_graph)
-    live_before = _live_ids(graph, object_info)
+    live_before = live_node_ids(graph, object_info)
     in_stage = {
         node_id
         for node_id, node_group in node_groups(reduce_api_graph(graph)).items()
@@ -2163,7 +2167,7 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
         changes.append(
             {"node_id": node_id, "class_type": class_type, "action": "bypassed"}
         )
-    live_after = _live_ids(graph, object_info)
+    live_after = live_node_ids(graph, object_info)
     if live_before is not None and live_after is not None:
         for node_id in sorted(live_before - live_after, key=_node_order_key):
             if node_id in graph:

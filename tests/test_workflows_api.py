@@ -7720,15 +7720,31 @@ def test_a_dead_pin_is_empty_even_when_the_graphs_own_file_is_live(i2i):
     assert i2i.uploads == [] and i2i.submitted == []
 
 
-def test_a_loader_nothing_reads_is_never_an_unfilled_input(i2i):
-    """ComfyUI never runs an unwired loader, so its open slot refuses nothing."""
+def test_a_loader_no_output_reads_is_not_an_input(i2i, monkeypatch):
+    """ComfyUI runs only what an output reads, so a loader outside that is
+    neither offered the selection nor refused as unfilled (#1765 review)."""
+    info = json.loads(json.dumps(I2I_OBJECT_INFO))
+    info.setdefault("SaveImage", {})["output_node"] = True
+    info["ImageInvert"] = {"input": {"required": {"image": ["IMAGE"]}}}
+    monkeypatch.setattr(workflows_routes, "_read_object_info", lambda url: (info, None))
     i2i.graph = _i2i_graph()
+    # Unwired, and sorting before the real input: it must not take the
+    # selection from it. The real input's own file is empty, so only the
+    # selection can fill it.
+    i2i.graph["0"] = {"class_type": "LoadImage", "inputs": {"image": ""}}
+    i2i.graph["5"]["inputs"]["image"] = ""
+    # Wired, but into a branch no output reads.
     i2i.graph["6"] = {"class_type": "LoadImage", "inputs": {"image": ""}}
+    i2i.graph["7"] = {"class_type": "ImageInvert", "inputs": {"image": ["6", 0]}}
     subject = _add_picture(i2i.server, i2i.tmp_path, "subject-1.png")
     payload = _preflight(i2i.owner, picture_ids=[subject], target=RUN_WF)
-    assert "picture_input_unfilled" not in _reasons(payload), payload
-    # The positive control: wired in, the same empty slot refuses.
-    i2i.graph["3"]["inputs"]["positive"] = ["6", 0]
+    assert payload["groups"][0]["reasons"] == [], payload
+    inputs = payload["groups"][0]["picture_inputs"]
+    assert [(item["title"], item["fill"]) for item in inputs] == [
+        ("LoadImage", "selection")
+    ], inputs
+    # The positive control: read by the sampler, the same empty slot refuses.
+    i2i.graph["3"]["inputs"]["positive"] = ["7", 0]
     payload = _preflight(i2i.owner, picture_ids=[subject], target=RUN_WF)
     assert "picture_input_unfilled" in _reasons(payload), payload
 
@@ -7758,7 +7774,7 @@ def test_a_duplicate_import_does_not_move_what_a_pin_resolves_to(i2i):
 def test_a_graph_that_will_not_reduce_is_a_400_only_when_an_input_is_named(
     i2i, monkeypatch
 ):
-    def broken(graph, stored):
+    def broken(graph, stored, live=None):
         raise WorkflowGraphError("no usable node")
 
     monkeypatch.setattr(workflows_routes, "card_input_modes", broken)
