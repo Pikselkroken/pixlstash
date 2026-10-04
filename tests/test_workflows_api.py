@@ -7720,6 +7720,19 @@ def test_a_dead_pin_is_empty_even_when_the_graphs_own_file_is_live(i2i):
     assert i2i.uploads == [] and i2i.submitted == []
 
 
+def test_a_loader_nothing_reads_is_never_an_unfilled_input(i2i):
+    """ComfyUI never runs an unwired loader, so its open slot refuses nothing."""
+    i2i.graph = _i2i_graph()
+    i2i.graph["6"] = {"class_type": "LoadImage", "inputs": {"image": ""}}
+    subject = _add_picture(i2i.server, i2i.tmp_path, "subject-1.png")
+    payload = _preflight(i2i.owner, picture_ids=[subject], target=RUN_WF)
+    assert "picture_input_unfilled" not in _reasons(payload), payload
+    # The positive control: wired in, the same empty slot refuses.
+    i2i.graph["3"]["inputs"]["positive"] = ["6", 0]
+    payload = _preflight(i2i.owner, picture_ids=[subject], target=RUN_WF)
+    assert "picture_input_unfilled" in _reasons(payload), payload
+
+
 def test_a_duplicate_import_does_not_move_what_a_pin_resolves_to(i2i):
     """The OLDEST kept copy, so a pin feeds the same picture every run."""
     first = _add_picture(i2i.server, i2i.tmp_path, "a.png", _h("shared pixels"))

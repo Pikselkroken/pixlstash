@@ -131,6 +131,31 @@ describe("the Edit tab", () => {
     });
   });
 
+  it("keeps a card missing only a picture, and hands its Run to the popup", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "i2i"
+              ? [{ code: "picture_input_unfilled", inputs: [] }]
+              : [{ code: "missing_models", models: [] }],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+    expect(rows).toEqual(["Relight, Image to Image"]);
+    const run = wrapper.find("button.run");
+    expect(run.text()).toContain("Pick pictures");
+    await wrapper.find("textarea").setValue("warmer light");
+    await run.trigger("click");
+    await flush();
+    expect(runWorkflowCard).not.toHaveBeenCalled();
+    expect(wrapper.emitted("more-options")?.at(-1)).toEqual([
+      { pictureId: 7, workflowId: "i2i", prompt: "warmer light" },
+    ]);
+  });
+
   it("keeps every card when ComfyUI cannot be asked, or the check fails", async () => {
     preflightWorkflowRun.mockImplementation(async ({ target }) => {
       if (target === "out") throw new Error("offline");

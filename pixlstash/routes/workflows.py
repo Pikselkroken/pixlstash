@@ -197,6 +197,7 @@ from pixlstash.services.workflow_hash import (
     SECRET_FIELD_RE,
     SHELF_ID_FIELD,
     WorkflowGraphError,
+    is_link,
     normalized_filename,
     structural_document,
 )
@@ -4312,6 +4313,15 @@ def create_router(server) -> APIRouter:
             for item in preflight.get("missing_input_images") or []
             if item
         }
+        # ComfyUI never runs a loader nothing reads, so leaving one open is
+        # no refusal: an unwired second Load Image is an optional input.
+        read = {
+            str(value[0])
+            for node in graph.values()
+            if isinstance(node, dict)
+            for value in (node.get("inputs") or {}).values()
+            if is_link(value)
+        }
         described: list[RunPictureInput] = []
         feeds: list[Feed] = []
         unfilled: list[dict] = []
@@ -4336,6 +4346,8 @@ def create_router(server) -> APIRouter:
                     # rather than filled somewhere else, which would be a run
                     # that never read the picture it was given.
                     how = None
+            elif not read.intersection(item.node_ids):
+                how = "graph"
             elif (
                 not (item.mode == "fixed" and item.pixel_sha)
                 # A PixlStash picture loader's own ids are frozen, and empty

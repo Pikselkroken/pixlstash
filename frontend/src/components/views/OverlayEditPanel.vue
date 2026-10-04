@@ -209,7 +209,7 @@
           @click="submit"
         >
           <v-icon v-if="!submitting" size="16">mdi-play</v-icon>
-          Run edit
+          {{ needsPictures ? "Pick pictures…" : "Run edit" }}
         </AppButton>
         <div class="edit-foot-row">
           <button type="button" class="edit-link" @click="onMoreOptions">
@@ -238,8 +238,9 @@
  *
  * **Only cards that would run.** Each edit card is pre-flighted against the
  * open picture, the same question Run asks, and one that answers with a reason
- * is dropped: a missing node or model, two open picture inputs, a UI-format
- * file. A node the server replaces (a seed node) or a LoRA it bypasses is not
+ * is dropped: a missing node or model, a UI-format file. A card whose only
+ * reason is an open picture input (a reference beside the open picture) stays,
+ * and its Run opens the Run popup, which can fill it. A node the server replaces (a seed node) or a LoRA it bypasses is not
  * a reason, so those cards stay. A ComfyUI that cannot be asked (not set up,
  * not running) is no verdict on any one card, so every card stays and the run
  * says why; so does a card whose pre-flight itself failed.
@@ -267,7 +268,11 @@ import { listStackPictures } from "../../api/stacks";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
-import { UNCHECKED_CODES, readReason } from "../../utils/runReasons";
+import {
+  PICTURE_INPUT_UNFILLED,
+  UNCHECKED_CODES,
+  readReason,
+} from "../../utils/runReasons";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
 import { withRef } from "../../utils/withRef";
 import { selectNewestStackMember } from "../../utils/stack";
@@ -301,6 +306,8 @@ const libraries = useLibrariesStore();
 const cards = ref([]);
 // Edit cards the pre-flight turned away, so the empty state can say so.
 const unrunnable = ref(0);
+// Cards that run once the Run popup fills their other picture inputs.
+const fillInPopup = ref(new Set());
 const loaded = ref(false);
 const loading = ref(false);
 const loadError = ref("");
@@ -328,6 +335,7 @@ let refocusPicker = false;
 const chosenCard = computed(
   () => cards.value.find((card) => card.id === workflowId.value) || null,
 );
+const needsPictures = computed(() => fillInPopup.value.has(workflowId.value));
 
 // Whether the reader has picked a card by hand since the list loaded, which the
 // late library key below must not overrule.
@@ -420,6 +428,9 @@ async function loadCards() {
     const edits = all.filter((card) => EDIT_TYPES.has(card.type));
     const runs = await Promise.all(edits.map(wouldRun));
     cards.value = edits.filter((_, index) => runs[index]);
+    fillInPopup.value = new Set(
+      edits.filter((_, index) => runs[index] === FILL).map((card) => card.id),
+    );
     unrunnable.value = edits.length - cards.value.length;
     rememberedKey.value = readRemembered();
     const known = cards.value.some((card) => card.id === rememberedKey.value);
@@ -437,7 +448,12 @@ async function loadCards() {
   }
 }
 
-/** False only when the pre-flight names a reason this card cannot run. */
+const FILL = "fill";
+
+/**
+ * True when the card runs on the open picture, `FILL` when the pre-flight's
+ * only objection is a picture input the Run popup can fill, false otherwise.
+ */
 async function wouldRun(card) {
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return true;
@@ -446,9 +462,13 @@ async function wouldRun(card) {
       picture_ids: [id],
       target: card.id,
     });
-    return (answer?.groups || [])
+    const reasons = (answer?.groups || [])
       .flatMap((group) => group.reasons || [])
-      .every((reason) => UNCHECKED_CODES.includes(reason.code));
+      .filter((reason) => !UNCHECKED_CODES.includes(reason.code));
+    if (!reasons.length) return true;
+    return reasons.every((reason) => reason.code === PICTURE_INPUT_UNFILLED)
+      ? FILL
+      : false;
   } catch (err) {
     console.warn(`Could not pre-flight ${card.id} for the Edit tab:`, err);
     return true;
@@ -589,6 +609,7 @@ async function submit() {
   const id = Number(props.pictureId);
   if (submitting.value || !workflowId.value) return;
   if (!Number.isFinite(id) || id <= 0) return;
+  if (needsPictures.value) return onMoreOptions();
   submitting.value = true;
   submitError.value = "";
   clearTimeout(resolveTimer);
