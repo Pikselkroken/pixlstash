@@ -842,8 +842,9 @@ const pending = ref(new Set());
 
 /**
  * `{setId, added: [{model_id, slot, sha256, name}], raised, timer}` or null.
- * `raised` is how many of `added` the receipt on screen already counts, so a
- * run that ends after its pause raises nothing twice.
+ * `raised` is the digests the receipt on screen already counts: a run raises
+ * again only for a model that receipt does not cover, so ending a run after
+ * its pause, or after some of it was taken out, raises nothing twice.
  */
 let run = null;
 
@@ -861,8 +862,8 @@ function raiseRun() {
   if (!set) return;
   const held = new Set((set.members ?? []).map((member) => member.sha256));
   run.added = run.added.filter((member) => held.has(member.sha256));
-  if (!run.added.length || run.raised === run.added.length) return;
-  run.raised = run.added.length;
+  if (run.added.every((member) => run.raised.has(member.sha256))) return;
+  run.raised = new Set(run.added.map((member) => member.sha256));
   const slots = new Set(run.added.map((member) => member.slot));
   const noun =
     slots.size === 1
@@ -941,7 +942,7 @@ async function addRows(set, rows, { ask = true } = {}) {
   // Decided after the write, not before it: two adds to two sets can both be
   // on the wire, and whichever lands second must not join the other's run.
   if (run && run.setId !== set.id) endRun();
-  if (!run) run = { setId: set.id, added: [], raised: 0, timer: 0 };
+  if (!run) run = { setId: set.id, added: [], raised: new Set(), timer: 0 };
   run.added.push(...added);
   clearTimeout(run.timer);
   run.timer = setTimeout(raiseRun, RUN_PAUSE_MS);

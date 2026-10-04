@@ -351,6 +351,67 @@ describe("adding", () => {
     );
   });
 
+  it.each([
+    ["raises again for a new add after some of the run is gone", false],
+    ["never re-raises what is left of a run when it ends", true],
+  ])("%s", async (_, endRunAfterRemoval) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const ckpt = member(1, "RealVisXL_v5", "checkpoint");
+    let held = [ckpt];
+    addWorkflowSetMembers.mockImplementation((id, members) => {
+      held = [
+        ...held,
+        ...members.map((m) => member(m.model_id, `m${m.model_id}`, m.slot)),
+      ];
+      return Promise.resolve({
+        set: handSet(10, held),
+        added: members.map((m) => shaOf(m.model_id)),
+      });
+    });
+    const serve = () =>
+      Promise.resolve({
+        combinations: [],
+        no_set: [],
+        hand_made: [handSet(10, held)],
+      });
+    const { wrapper, store } = await mountRail({
+      rows: [...ROWS, row(13, "Rim_Light")],
+      handMade: [handSet(10, held)],
+      open: "hand:10",
+    });
+    fetchWorkflowSets.mockImplementation(serve);
+    const spy = vi.spyOn(store, "announceAdded");
+    const add = async (name) => {
+      await option(wrapper, name)
+        .find('[data-testid="mrail-add"]')
+        .trigger("click");
+      await vi.advanceTimersByTimeAsync(10);
+    };
+    await add("Soft");
+    await add("FilmGrain");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // One of the run is taken off the set elsewhere (the tray's ✕).
+    held = held.filter((m) => m.id !== 3);
+    await store.loadWorkflowSets({ force: true });
+    await vi.advanceTimersByTimeAsync(2000);
+    if (endRunAfterRemoval) {
+      // Ending the run now must not re-announce the one that is left.
+      store.toggleSet("hand:10");
+      await vi.advanceTimersByTimeAsync(10);
+      expect(spy).toHaveBeenCalledTimes(1);
+      return;
+    }
+    // A new add in the same run is announced, with what the set still holds.
+    await add("Rim");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls[1][1].map((m) => m.model_id)).toEqual([5, 13]);
+    store.toggleSet("hand:10");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
   it("covers every add in some Undo when two sets' writes land out of order", async () => {
     const settle = {};
     addWorkflowSetMembers.mockImplementation(
