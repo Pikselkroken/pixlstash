@@ -492,6 +492,11 @@ describe("a refusal the popup offers to fix", () => {
   });
 
   it("lets the owner's own sampler pick win over the replacement", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        defaults: [...card().defaults, def("Sampler", "sampler_name", "res_2s")],
+      }),
+    });
     preflightWorkflowRun
       .mockResolvedValueOnce({
         ok: false,
@@ -520,11 +525,17 @@ describe("a refusal the popup offers to fix", () => {
     const wrapper = await mountRun();
     expect(wrapper.vm.choiceFixes).toHaveLength(1);
 
-    wrapper.vm.setValue(def("Sampler", "sampler_name", "res_2s"), "dpmpp_2m");
+    wrapper.vm.setValue(
+      wrapper.vm.defaults.find((field) => field.input_name === "sampler_name"),
+      "dpmpp_2m",
+    );
     await flushPromises();
 
     expect(wrapper.vm.choiceFixes).toEqual([]);
-    expect(preflightWorkflowRun.mock.calls.at(-1)[0].choices).toBeUndefined();
+    const asked = preflightWorkflowRun.mock.calls.at(-1)[0];
+    expect(asked.choices).toBeUndefined();
+    // The re-ask carries the pick, not the missing value it replaced.
+    expect(sentValue(asked, "sampler_name")?.value).toBe("dpmpp_2m");
   });
 
   it("keeps a refusal the replacement did not clear, rather than asking for ever", async () => {

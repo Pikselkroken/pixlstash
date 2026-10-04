@@ -152,7 +152,7 @@ function onChange(event) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wfdef-value:focus-within {
+.wfdef-value:has(.wfdef-input:focus-visible) {
   box-shadow: var(--focus-ring-inset);
 }
 
