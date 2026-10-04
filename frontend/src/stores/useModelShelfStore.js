@@ -1628,6 +1628,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const railDrag = shallowRef(null);
   const railOver = ref("");
+  /** What the drag carries, in words: one model's name, or how many. */
+  const railDragWhat = computed(() => {
+    const dragged = railDrag.value ?? [];
+    return dragged.length === 1
+      ? modelName(dragged[0]).text || dragged[0].filename
+      : `${dragged.length} models`;
+  });
   const railFitsSetId = ref(null);
 
   /**
@@ -2635,14 +2642,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (!members.length) return null;
     // The card already refused this during the drag; this is the same rule
     // stated where the write happens.
-    const refusal = railDropRefusal(set, models);
-    if (refusal) {
-      useNoticeStore().push({
-        level: "info",
-        text: `Nothing added to "${setLabel(set)}": ${refusal}.`,
-      });
-      return null;
-    }
+    if (railDropRefusal(set, models)) return null;
     if (!(await confirmSecondCheckpoint(set, members))) return null;
     return addToHandMadeSet(set, members);
   }
@@ -3784,6 +3784,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     confirmSecondCheckpoint,
     railDrag,
     railOver,
+    railDragWhat,
     railFitsSetId,
     announceAdded,
     removeFromHandMadeSet,

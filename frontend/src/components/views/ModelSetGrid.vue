@@ -1397,13 +1397,6 @@ const dropKey = computed(() =>
   railTargets.value.has(store.railOver) ? store.railOver : "",
 );
 
-/** What the drag carries, in words: one model's name, or how many. */
-const railDragWhat = computed(() => {
-  const rows = store.railDrag ?? [];
-  if (rows.length === 1) return modelName(rows[0]).text || rows[0].filename;
-  return `${rows.length} models`;
-});
-
 /**
  * Every target of the drag in the air, by row key: `{label, refused}`, where
  * `refused` is why a hand-made set will not take it (the card then refuses the
@@ -1417,14 +1410,14 @@ const railTargets = computed(() => {
   for (const entry of flatRows.value) {
     if (entry.kind === "new") {
       targets.set("new", {
-        label: `New set with ${railDragWhat.value}`,
+        label: `New set with ${store.railDragWhat}`,
         refused: "",
       });
     } else if (entry.kind === "card" && entry.hand) {
       const set = setsById.get(entry.setId);
       if (!set) continue;
       targets.set(entry.key, {
-        label: `Add ${railDragWhat.value}`,
+        label: `Add ${store.railDragWhat}`,
         refused: store.railDropRefusal(set, rows),
       });
     }

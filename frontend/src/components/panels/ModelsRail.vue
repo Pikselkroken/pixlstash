@@ -185,7 +185,7 @@
           data-testid="mrail-drag-hint"
         >
           <v-icon size="14" aria-hidden="true">mdi-cursor-move</v-icon>
-          Drop {{ dragWhat }} on a set with a dashed rim.
+          Drop {{ store.railDragWhat }} on a set with a dashed rim.
         </p>
         <p v-else-if="footNote" class="mrail-foot-hint" role="status">
           {{ footNote }}
@@ -216,7 +216,6 @@
             ><kbd class="mrail-kbd" aria-hidden="true">⏎</kbd></AppButton
           >
           <AppBarButton
-            ref="moreBtn"
             icon="dots-horizontal"
             tooltip="More for the selected models"
             :disabled="!actionRows.length"
@@ -316,7 +315,7 @@
        refuses the drop it goes neutral, with the refusal glyph. -->
   <Teleport to="body">
     <div
-      v-show="ghostShown"
+      v-show="store.railDrag"
       ref="ghostEl"
       class="mrail-ghost"
       :class="{ 'mrail-ghost--refused': overRefused }"
@@ -324,7 +323,7 @@
       data-testid="mrail-ghost"
     >
       <v-icon size="16">{{ overRefused ? "mdi-cancel" : "mdi-plus" }}</v-icon>
-      <span class="mrail-ghost-text">{{ dragWhat }}</span>
+      <span class="mrail-ghost-text">{{ store.railDragWhat }}</span>
       <span v-if="dragNote" class="mrail-ghost-note">· {{ dragNote }}</span>
     </div>
   </Teleport>
@@ -902,11 +901,12 @@ function raiseRun() {
 }
 
 watch(
-  [() => store.openSetKey, tab, () => sidebarStore.modelsRailOpen],
-  () => endRun(),
-);
-watch(
-  () => store.railFitsSetId,
+  [
+    () => store.openSetKey,
+    tab,
+    () => sidebarStore.modelsRailOpen,
+    () => store.railFitsSetId,
+  ],
   () => endRun(),
 );
 onBeforeUnmount(() => endRun());
@@ -992,7 +992,6 @@ const menuOpen = ref(false);
 const menuAt = ref([0, 0]);
 const menuView = ref("main");
 const menuEl = ref(null);
-const moreBtn = ref(null);
 let menuReturn = null;
 
 function openMenu(x, y, row) {
@@ -1056,14 +1055,20 @@ async function menuNewSet() {
   await store.createSetFromRows(hashedActionRows.value);
 }
 
+/** The one slot every action row goes to, or null when they differ. */
+const actionSlot = computed(() => {
+  const kinds = new Set(
+    hashedActionRows.value.map((row) => defaultSlot(row.file_kind)),
+  );
+  return kinds.size === 1 ? SET_SLOTS.find((s) => kinds.has(s.id)) : null;
+});
+
 const addSetsHeading = computed(() => {
   const rows = hashedActionRows.value;
-  const kinds = new Set(rows.map((row) => defaultSlot(row.file_kind)));
-  const slot = kinds.size === 1 ? SET_SLOTS.find((s) => kinds.has(s.id)) : null;
   const what =
     rows.length === 1
       ? nameOf(rows[0])
-      : `${rows.length} ${slot?.noun ?? "models"}`;
+      : `${rows.length} ${actionSlot.value?.noun ?? "models"}`;
   return `Add ${what} to`;
 });
 
@@ -1073,15 +1078,13 @@ const addSetsHeading = computed(() => {
  */
 const setChoices = computed(() => {
   const rows = hashedActionRows.value;
-  const kinds = new Set(rows.map((row) => defaultSlot(row.file_kind)));
-  const slot = kinds.size === 1 ? SET_SLOTS.find((s) => kinds.has(s.id)) : null;
   return store.handMadeSets.map((set) => {
     const held = new Set((set.members ?? []).map((member) => member.sha256));
     const already = rows.filter((row) => held.has(row.sha256)).length;
     const refused = store.railDropRefusal(set, rows);
     const detail = already
       ? `${already} already in it`
-      : `→ ${slot?.label ?? "their slots"}`;
+      : `→ ${actionSlot.value?.label ?? "their slots"}`;
     return { set, name: handMadeName(set), refused, detail };
   });
 });
@@ -1099,14 +1102,13 @@ const setChoices = computed(() => {
 
 /** How far the pointer moves before a press becomes a drag. */
 const DRAG_START_PX = 4;
-/** How close to a scroll container's edge a drag scrolls it, and how fast. */
+/** How close to the set grid's edge a drag scrolls it, and how fast. */
 const EDGE_PX = 48;
 const EDGE_SPEED_PX = 18;
 /** How far right of the pointer's tip the pill starts. */
 const GHOST_GAP_PX = 4;
 
 const ghostEl = ref(null);
-const ghostShown = ref(false);
 /** What the pill adds after the name: models left behind for their hash. */
 const dragNote = ref("");
 /** Why the target under the pointer refuses the drop, else "". */
@@ -1117,11 +1119,6 @@ const dragIds = computed(
   () => new Set((store.railDrag ?? []).map((row) => row.id)),
 );
 
-/** What the drag carries, in words: one model's name, or how many. */
-const dragWhat = computed(() => {
-  const rows = store.railDrag ?? [];
-  return rows.length === 1 ? nameOf(rows[0]) : `${rows.length} models`;
-});
 
 function draggable(row) {
   return Boolean(row.sha256) && onSetAxis.value;
@@ -1141,7 +1138,7 @@ function onRowPointerDown(row, event) {
   press = { row, x: event.clientX, y: event.clientY };
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", onPointerUp);
-  window.addEventListener("pointercancel", cancelDrag);
+  window.addEventListener("pointercancel", endDrag);
   window.addEventListener("keydown", onDragKeydown, true);
 }
 
@@ -1182,7 +1179,6 @@ function startDrag() {
   dragNote.value = hashing ? `${hashing} still hashing, left out` : "";
   store.railDrag = rows;
   dragging = true;
-  ghostShown.value = true;
   document.documentElement.classList.add("rail-dragging");
   edgeFrame = requestAnimationFrame(edgeScroll);
   // The targets mark themselves only once they have rendered this drag; until
@@ -1217,31 +1213,25 @@ function findTarget() {
 }
 
 /**
- * Scroll whatever the pointer is near the edge of, as the browser's own drag
- * did: a set further down the grid is otherwise out of reach.
+ * Scroll the set grid when the pointer nears its top or bottom edge, as the
+ * browser's own drag did: a set further down is otherwise out of reach. Every
+ * drop target lives in it.
  */
 function edgeScroll() {
   if (!dragging) return;
-  let el = document.elementFromPoint?.(point.x, point.y) ?? null;
-  while (el && el !== document.body) {
-    const { overflowY } = getComputedStyle(el);
-    if (/(auto|scroll)/.test(overflowY) && el.scrollHeight > el.clientHeight) {
-      const box = el.getBoundingClientRect();
-      const top = point.y - box.top;
-      const bottom = box.bottom - point.y;
-      const step =
-        top < EDGE_PX
-          ? -EDGE_SPEED_PX * (1 - top / EDGE_PX)
-          : bottom < EDGE_PX
-            ? EDGE_SPEED_PX * (1 - bottom / EDGE_PX)
-            : 0;
-      if (step) {
-        el.scrollTop += step;
-        findTarget();
-      }
-      break;
-    }
-    el = el.parentElement;
+  const grid = document.querySelector(".msg__scroll");
+  const box = grid?.getBoundingClientRect();
+  const top = box ? point.y - box.top : EDGE_PX;
+  const bottom = box ? box.bottom - point.y : EDGE_PX;
+  const step =
+    top < EDGE_PX
+      ? -EDGE_SPEED_PX * (1 - top / EDGE_PX)
+      : bottom < EDGE_PX
+        ? EDGE_SPEED_PX * (1 - bottom / EDGE_PX)
+        : 0;
+  if (step) {
+    grid.scrollTop += step;
+    findTarget();
   }
   edgeFrame = requestAnimationFrame(edgeScroll);
 }
@@ -1271,17 +1261,13 @@ function onDragKeydown(event) {
   // Escape puts the models back; it must not also clear a selection.
   event.stopPropagation();
   event.preventDefault();
-  cancelDrag();
-}
-
-function cancelDrag() {
   endDrag();
 }
 
 function endDrag() {
   window.removeEventListener("pointermove", onPointerMove);
   window.removeEventListener("pointerup", onPointerUp);
-  window.removeEventListener("pointercancel", cancelDrag);
+  window.removeEventListener("pointercancel", endDrag);
   window.removeEventListener("keydown", onDragKeydown, true);
   cancelAnimationFrame(edgeFrame);
   document.documentElement.classList.remove(
@@ -1291,7 +1277,6 @@ function endDrag() {
   press = null;
   overEl = null;
   overRefused.value = "";
-  ghostShown.value = false;
   if (dragging) {
     dragging = false;
     store.railDrag = null;
