@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 10
+CURRENT_DATA_VERSION = 11
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -2123,6 +2123,14 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     )
 
                     rederive_cores_v3(conn)
+                if data_version < 11:
+                    # "+ N References" counts pictures, not ReferenceLatent
+                    # nodes: a cached count is re-derived by the variant
+                    # finder, which picks up a NULL `traits`.
+                    conn.execute(
+                        "UPDATE workflow_topology_core SET traits = NULL "
+                        "WHERE traits LIKE '%references:%'"
+                    )
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.

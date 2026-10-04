@@ -879,6 +879,36 @@ def test_traits_say_what_the_core_does_that_the_type_cannot():
         _doc(_graph(face_detailer=True, extra={**zeroed, **into_stage}))
     ) == ("references:1",)
 
+    # A Flux 2 edit: each picture is a reference on both prompts, and the
+    # edited one is a reference too. One picture beside it is one reference,
+    # not four nodes' worth; the edited picture alone is none.
+    edit = {
+        "L1": _node("LoadImage", image="a.png"),
+        "L2": _node("LoadImage", image="b.png"),
+        "E1": _node("VAEEncode", pixels=["L1", 0], vae=["1", 2]),
+        "E2": _node("VAEEncode", pixels=["L2", 0], vae=["1", 2]),
+        "P1": _node("ReferenceLatent", conditioning=["2", 0], latent=["E1", 0]),
+        "P2": _node("ReferenceLatent", conditioning=["P1", 0], latent=["E2", 0]),
+        "N1": _node("ReferenceLatent", conditioning=["3", 0], latent=["E1", 0]),
+        "N2": _node("ReferenceLatent", conditioning=["N1", 0], latent=["E2", 0]),
+        "5": _node(
+            "KSampler",
+            model=["1", 0],
+            positive=["P2", 0],
+            negative=["N2", 0],
+            latent_image=["4", 0],
+            seed=1,
+        ),
+    }
+    assert graph_traits(_doc(_graph(extra={**zeroed, **edit}))) == ("references:1",)
+    alone = {
+        **edit,
+        "P2": _node("ReferenceLatent", conditioning=["P1", 0], latent=["E1", 0]),
+        "N2": _node("ReferenceLatent", conditioning=["N1", 0], latent=["E1", 0]),
+    }
+    del alone["L2"], alone["E2"]
+    assert graph_traits(_doc(_graph(extra={**zeroed, **alone}))) == ()
+
 
 def test_a_loader_on_its_own_is_not_the_graph_doing_the_thing():
     """Narrower than the strip, and deliberately so.
