@@ -82,12 +82,15 @@
          the ordinary members add, with its receipt and Undo. Several open the
          tray to review, since three files added blind is a bigger claim.
          Mouse-only: the grid owns Tab, and the keyboard answers through the
-         tray and the set's menu, so the card's name carries the question. -->
+         tray and the set's menu, so the card's name carries the question.
+         Its clicks stop here: reading the question must not select the set. -->
     <div
       v-if="card.offer"
       class="msc__ask"
       aria-hidden="true"
       data-testid="set-offer"
+      @click.stop
+      @dblclick.stop
     >
       <p class="msc__ask-q">
         <strong>{{ card.offer.who }}</strong>{{ card.offer.rest
@@ -277,10 +280,10 @@ const kindChips = computed(() =>
 const offerName = computed(() => {
   const offer = props.card.offer;
   if (!offer) return null;
-  const model = offer.model
-    ? ` ${[offer.model.kind, offer.model.name].filter(Boolean).join(" ")}.`
-    : "";
-  return `${offer.text}${model} Answer in the set's tray or menu`;
+  const statement = `${offer.who}${offer.rest}`;
+  if (!offer.model) return `${statement} Answer in the set's tray or menu`;
+  const model = [offer.model.kind, offer.model.name].filter(Boolean).join(" ");
+  return `${statement} ${model}. Add it? Answer in the set's tray or menu`;
 });
 
 // "+N" is not a control, so this is the only place a screen reader hears the

@@ -2478,10 +2478,16 @@ describe("hand-made sets (#1520)", () => {
       );
       expect(ask.text()).toContain("LoRA · filmgrain xl");
       expect(ask.text()).toContain("Not this one");
-      expect(card.attributes("aria-label")).toContain("LoRA filmgrain xl.");
+      expect(card.attributes("aria-label")).toContain(
+        "the set does not have. LoRA filmgrain xl. Add it?",
+      );
 
-      await ask.find('[data-testid="set-offer-add"]').trigger("click");
+      // A double click is one answer: the second press finds the first in flight.
+      const add = ask.find('[data-testid="set-offer-add"]');
+      await add.trigger("click");
+      await add.trigger("click");
       await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(addWorkflowSetMembers).toHaveBeenCalledTimes(1);
       await wrapper.vm.$nextTick();
 
       expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
@@ -2503,15 +2509,39 @@ describe("hand-made sets (#1520)", () => {
         set: handSet(10, [SET_CKPT]),
         previous: [],
       });
-      const { wrapper } = await mountOffer({
+      const { wrapper, store } = await mountOffer({
         offer: { ...OFFER, models: [GHOST_LORA] },
       });
+      // Reading the question is not a click on the card.
+      await wrapper.find(".msc__ask-q").trigger("click");
+      expect([...store.selectedSetIds]).toEqual([]);
+
       await wrapper.find('[data-testid="set-offer-no"]').trigger("click");
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
         GHOST_LORA.sha256,
       ]);
       expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+      expect(useOperationStore().receipt.summary).toContain(
+        'Kept "Portrait kit" separate from 1204 pictures',
+      );
+      expect([...store.selectedSetIds]).toEqual([]);
+    });
+
+    it("keeps several offered models out at once with Not these", async () => {
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        previous: [],
+      });
+      const { wrapper } = await mountOffer();
+      const no = wrapper.find('[data-testid="set-offer-no"]');
+      expect(no.text()).toBe("Not these");
+      await no.trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
     });
 
     it("merges on Enter at the strip, with a receipt that counts who joined and an Undo", async () => {

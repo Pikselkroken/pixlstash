@@ -335,7 +335,7 @@ const SET_RECEIPT_ICONS = {
   rename: "mdi-pencil-outline",
   delete: "mdi-layers-remove",
   "keep-out": "mdi-call-split",
-  "offer-again": "mdi-table-arrow-down",
+  "offer-again": "mdi-restore",
 };
 
 /** What each curated column is called in a receipt. */

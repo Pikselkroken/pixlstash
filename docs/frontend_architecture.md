@@ -1859,7 +1859,7 @@ the shelf's workflow sets section) and served as `hand_made` on
   stores the kept-out list whole, so the store queues those writes and applies
   each as a delta to the latest list: an older Undo never drops a newer one. With models kept
   out and no offer left, the tray shows "Kept separate from N pictures ·
-  Offer again". The set's menu carries Review models to add… (the grid's
+  Suggest again". The set's menu carries Review models to add… (the grid's
   exposed `openOffer`), Keep separate and Suggest the models again.
 
 #### `WorkflowsView.vue` (`views/`), v1.12 F1a

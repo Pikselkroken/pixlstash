@@ -159,7 +159,7 @@
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
             @click="onRowClick(entry, $event)"
-            @dblclick="toggle(entry)"
+            @dblclick="targetOwnsTheGesture($event) || toggle(entry)"
             @contextmenu="onRowMenu(entry, $event)"
           >
             <div class="msg__cell" role="gridcell">
@@ -1167,7 +1167,7 @@ function settleCursor(key) {
   if (first >= 0) moveCursor(first);
 }
 
-/** Merge, add all - or one ghost's Add, which lands the cursor on its tile. */
+/** The strip's Add all - or one ghost's Add, which lands the cursor on its tile. */
 async function mergeOffer(models) {
   const set = openHand.value?.set;
   const adding = models ?? set?.offer?.models ?? [];
@@ -1180,6 +1180,9 @@ async function mergeOffer(models) {
   settleCursor(adding.length === 1 ? `m:${adding[0].sha256}` : "");
 }
 
+/** Sets whose card answer is still being written. */
+const answering = new Set();
+
 /**
  * The card's own answer to a one-model offer: Add to set, or Not this one
  * (Keep separate). The panel goes with the answer, taking the clicked button
@@ -1187,15 +1190,22 @@ async function mergeOffer(models) {
  */
 async function answerOffer(entry, add) {
   const set = store.handMadeSets.find((candidate) => candidate.id === entry.setId);
-  if (!set?.offer) return;
-  if (add) {
-    await store.addToHandMadeSet(
-      set,
-      set.offer.models.map((model) => ({ model_id: model.id, slot: model.slot })),
-      { joined: true },
-    );
-  } else {
-    await store.keepOutOfHandMadeSet(set);
+  // The offer stays drawn until the write's refetch lands: a second click
+  // meanwhile is the same answer, not a second write.
+  if (!set?.offer || answering.has(set.id)) return;
+  answering.add(set.id);
+  try {
+    if (add) {
+      await store.addToHandMadeSet(
+        set,
+        set.offer.models.map((model) => ({ model_id: model.id, slot: model.slot })),
+        { joined: true },
+      );
+    } else {
+      await store.keepOutOfHandMadeSet(set);
+    }
+  } finally {
+    answering.delete(set.id);
   }
   const at = flatRows.value.findIndex((row) => row.id === entry.id);
   if (at >= 0) moveCursor(at);

@@ -165,7 +165,7 @@
           variant="ghost"
           size="sm"
           tabindex="-1"
-          tooltip="Keep this set separate from those pictures. The set's menu can offer them again."
+          tooltip="Keep this set separate from those pictures. The set's menu can suggest them again."
           @click.stop="emit('keep-separate')"
           >{{ set.offer.models.length === 1 ? "Not this one" : "Not these" }}</AppButton
         >
@@ -196,7 +196,7 @@
             : "Some suggested models are kept out of this set."
         }}</span>
         <AppButton variant="ghost" size="sm" @click="emit('offer-again')"
-          >Offer again</AppButton
+          >Suggest again</AppButton
         >
       </div>
     </div>

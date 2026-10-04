@@ -94,7 +94,7 @@
         role="menuitem"
         @click="verb('offer-again')"
       >
-        <v-icon class="ctx-icon">mdi-table-arrow-down</v-icon>
+        <v-icon class="ctx-icon">mdi-restore</v-icon>
         <span class="ctx-label-text">Suggest the models again</span>
       </button>
       <button
