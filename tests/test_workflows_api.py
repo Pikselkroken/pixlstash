@@ -7336,6 +7336,10 @@ def test_a_gone_shelf_loader_is_named_by_the_pictures_editor_graph(
     }
     assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [SHELF_MODEL_GONE]
 
+    # A malformed one is not a 500: the loader just reads as gone.
+    editor["nodes"][0] = {"id": 1, "type": "CheckpointLoaderSimple", "inputs": 7}
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [SHELF_MODEL_GONE]
+
 
 def _pack_graph(project: str | None = None) -> dict:
     """`_i2i_graph` built on the pack: its picture loader and its saver."""

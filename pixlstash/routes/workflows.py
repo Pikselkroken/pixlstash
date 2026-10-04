@@ -3110,18 +3110,30 @@ def create_router(server) -> APIRouter:
             )
             return {}
         found = {}
-        for node in (editor or {}).get("nodes") or []:
-            if not isinstance(node, dict) or str(node.get("id")) not in nodes:
-                continue
-            names = [
-                value
-                for widget, value in loaded_model_widgets(
-                    {"nodes": [node], "links": []}
-                )
-                if widget in CHECKPOINT_WIDGETS and widget != SHELF_ID_FIELD
-            ]
-            if names:
-                found[nodes[str(node["id"])]] = names[0]
+        try:
+            for node in (editor or {}).get("nodes") or []:
+                if not isinstance(node, dict) or str(node.get("id")) not in nodes:
+                    continue
+                names = [
+                    value
+                    for widget, value in loaded_model_widgets(
+                        {"nodes": [node], "links": []}
+                    )
+                    if widget in CHECKPOINT_WIDGETS and widget != SHELF_ID_FIELD
+                ]
+                if names:
+                    found[nodes[str(node["id"])]] = names[0]
+        except Exception as exc:
+            # The reader indexes into whatever the file holds, so a malformed
+            # editor graph raises something other than a ValueError
+            # (`_manual_model_widgets` guards the same reader the same way).
+            logger.warning(
+                "Picture %s: its editor graph will not read for the file a gone "
+                "shelf loader named, so it reads as gone: %s",
+                source.picture_id,
+                exc,
+            )
+            return {}
         return found
 
     @router.get(
