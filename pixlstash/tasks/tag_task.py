@@ -62,22 +62,20 @@ FACE_CROP_SCALE = 1.4
 # up.
 MIN_FACE_CROP_PX = 48
 
-# What each kind of quality crop does to the full pass's tags, as
-# ``(owned, stripped)``: the crop may add and boost the `owned` tags, and
-# replaces the full pass's `stripped` tags with its own verdict on them.
+# The tags each kind of quality crop owns: it replaces the full pass's verdict
+# on them with its own, and boosts their confidences.
 #
 # An upscaled face crop is soft and smeared, so its "blocky" describes the
 # resize, not the picture (#1747): it keeps the face tags, which the tagger
 # learned from close-up crops, and leaves "blocky" to the full pass. A face too
-# small to judge takes the centre crop and strips the full pass's face tags too:
-# a face too small for a 512 crop is too small in the downscaled full image.
-# Stripping is skipped when another model ran the full pass and reported
-# confidences, as for every crop kind (see the merge in `_tag_pictures_batch`).
+# small to judge takes the centre crop, and the merge in `_tag_pictures_batch`
+# also strips the full pass's face tags from it: a face too small for a 512
+# crop is too small in the downscaled full image.
 CROP_TAGS_BY_KIND = {
-    "face": (QUALITY_CROP_TAG_WHITELIST, QUALITY_CROP_TAG_WHITELIST),
-    "upscaled_face": (FACE_QUALITY_CROP_TAGS, FACE_QUALITY_CROP_TAGS),
-    "centre": (CENTRE_CROP_TAG_WHITELIST, CENTRE_CROP_TAG_WHITELIST),
-    "small_face": (CENTRE_CROP_TAG_WHITELIST, QUALITY_CROP_TAG_WHITELIST),
+    "face": QUALITY_CROP_TAG_WHITELIST,
+    "upscaled_face": FACE_QUALITY_CROP_TAGS,
+    "centre": CENTRE_CROP_TAG_WHITELIST,
+    "small_face": CENTRE_CROP_TAG_WHITELIST,
 }
 
 
@@ -1058,7 +1056,7 @@ class TagTask(BaseTask):
                         # The crop's authoritative tag set depends on its kind; see
                         # `CROP_TAGS_BY_KIND`.
                         whitelist_by_path = {
-                            path: CROP_TAGS_BY_KIND[kind][0]
+                            path: CROP_TAGS_BY_KIND[kind]
                             for path, kind in crop_kind_by_path.items()
                         }
                         # Accumulate quality tags found across all crops per picture path,
@@ -1075,8 +1073,7 @@ class TagTask(BaseTask):
                         # if the full-image pass produced them, then add only what the
                         # crop confirmed.  Applies to every picture that produced a crop -
                         # the largest face when one was found, otherwise the centre-crop
-                        # fallback (which leaves face tags from the full-image pass alone,
-                        # unless a face was found too small to judge).
+                        # fallback (which leaves face tags from the full-image pass alone).
                         #
                         # "Ground truth" is an argument about RESOLUTION and it
                         # stands on its own - a 448 px crop really does judge
@@ -1092,13 +1089,14 @@ class TagTask(BaseTask):
                         # so its full pass writes no prediction rows and the
                         # strip stays exactly as shipped; a plugin that does
                         # report them keeps its output.
+                        may_strip = crop_is_full_pass_model or not full_scores_by_path
                         for path, crop_quality in quality_tags_by_path.items():
                             if path not in tag_results:
                                 continue
-                            stripped = CROP_TAGS_BY_KIND[crop_kind_by_path[path]][1]
-                            if crop_is_full_pass_model or not full_scores_by_path:
+                            allowed = whitelist_by_path[path]
+                            if may_strip:
                                 kept = [
-                                    t for t in tag_results[path] if t not in stripped
+                                    t for t in tag_results[path] if t not in allowed
                                 ]
                             else:
                                 kept = list(tag_results[path])
@@ -1109,6 +1107,21 @@ class TagTask(BaseTask):
                                 logger.debug(
                                     "Quality crop tags for %s: %s", path, crop_quality
                                 )
+                        # A face too small to judge loses the full pass's face
+                        # tags whatever its centre crop found, so not in the loop
+                        # above: `tag_quality_crops` omits a crop it tagged
+                        # nothing on (#1747).
+                        for path, kind in crop_kind_by_path.items():
+                            if (
+                                kind == "small_face"
+                                and may_strip
+                                and path in tag_results
+                            ):
+                                tag_results[path] = [
+                                    t
+                                    for t in tag_results[path]
+                                    if t not in FACE_QUALITY_CROP_TAGS
+                                ]
                         # Boost prediction scores using crop confidence, limited to the
                         # tags the crop is allowed to own (centre crops don't boost face
                         # tags).

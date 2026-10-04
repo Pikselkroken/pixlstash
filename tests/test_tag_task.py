@@ -774,10 +774,9 @@ class _OwnTaggerWorkflow(_PluginWorkflow):
         if out_raw_scores is not None:
             for key, _crop in items:
                 out_raw_scores[key] = dict(self.crop_scores)
-        return {
-            key: [t for t, c in self.crop_scores.items() if c >= 0.5]
-            for key, _crop in items
-        }
+        # Like the real tagger, a crop with no tag found is left out.
+        found = [t for t, c in self.crop_scores.items() if c >= 0.5]
+        return {key: found for key, _crop in items if found}
 
 
 def _run_with_face(tmp_path, bbox, full_scores, crop_scores):
@@ -843,3 +842,16 @@ def test_a_face_too_small_to_judge_gets_no_face_tags(tmp_path):
     assert not applied & FACE_QUALITY_CROP_TAGS, applied
     assert "blocky" in applied, "the native centre crop still owns blocky"
     assert "person" in applied
+
+
+def test_a_face_too_small_to_judge_loses_face_tags_when_its_crop_finds_nothing(
+    tmp_path,
+):
+    """`tag_quality_crops` omits a crop it found no tag on; strip regardless."""
+    applied, _scores = _run_with_face(
+        tmp_path,
+        [500, 300, 540, 340],
+        {"person": 0.9, "malformed eyes": 0.8, "blocky": 0.1},
+        {"blocky": 0.1},
+    )
+    assert applied == {"person"}, applied
