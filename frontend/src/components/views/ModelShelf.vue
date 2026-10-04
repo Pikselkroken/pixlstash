@@ -486,7 +486,7 @@
            second verb: Replace lives on the pill and the card's menu, and
            replacing one is the same operation as replacing twelve. -->
       <p
-        v-if="isSetGrid && missingCount && missingDismissed !== missingCount"
+        v-if="isSetGrid && missingCount && !missingDismissed"
         class="shelf-banner"
         data-testid="shelf-missing-banner"
       >
@@ -505,7 +505,7 @@
           icon="close"
           tooltip="Dismiss"
           aria-label="Dismiss the missing checkpoint notice"
-          @click="missingDismissed = missingCount"
+          @click="dismissedMissing = new Set(store.missingSetKeys)"
         />
       </p>
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
@@ -2543,8 +2543,12 @@ const setGridRef = ref(null);
 const replacingHeads = ref([]);
 const missingBarRef = ref(null);
 const missingCount = computed(() => store.missingSetKeys.length);
-// The count it was dismissed at: a NEW missing set brings the banner back.
-const missingDismissed = ref(0);
+// The sets it was dismissed over: a missing set not among them brings the
+// banner back, which a count would not (fix one, lose another).
+const dismissedMissing = ref(new Set());
+const missingDismissed = computed(() =>
+  store.missingSetKeys.every((key) => dismissedMissing.value.has(key)),
+);
 const setBarRef = ref(null);
 
 // The set receipt sits above whichever selection pill is up, lifted by its

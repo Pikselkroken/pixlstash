@@ -117,7 +117,7 @@ const applying = ref(false);
 /** `{name, id, message}` per workflow that refused its fix. */
 const failures = ref([]);
 let token = 0;
-/** `name\u0000id` of every write that landed since the dialog opened: a retry skips them. */
+/** `name\u0000now\u0000id` of every write that landed since the dialog opened: a retry skips them, and a changed choice is a new write. */
 const succeeded = reactive(new Set());
 // Bumped by a credential change: a loop of writes started under the old one
 // stops before its next request, and does not reload the cleared shelf.
@@ -134,7 +134,7 @@ onScopeDispose(() => unsubscribe());
 // hand focus back to: the control that opened it is remembered instead.
 let invoker = null;
 
-const writeKey = (write) => `${write.name}\u0000${write.id}`;
+const writeKey = (write) => `${write.name}\u0000${write.now}\u0000${write.id}`;
 
 /** Each `{name, now, id}` an Apply would write, less what already landed. */
 const writes = computed(() =>

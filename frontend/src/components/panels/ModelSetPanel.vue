@@ -86,19 +86,34 @@
             }}<strong>{{ file }}</strong></template
           >, {{ missing.names.length === 1 ? "which is" : "which are" }} not on
           your shelf.
-          <template v-if="missing.workflowIds.length">
+          <template v-if="fixableIds.length">
             {{
-              missing.workflowIds.length === 1
+              fixableIds.length === 1
                 ? "It is loaded by"
                 : "It is loaded by these workflows:"
             }}
-            <template v-for="(id, i) in missing.workflowIds" :key="id"
+            <template v-for="(id, i) in fixableIds" :key="id"
               >{{ i ? " · " : " " }}<router-link
                 :to="workflowLink(id)"
                 class="msp__link"
                 >{{ nameOf(id) || `workflow ${i + 1}` }}</router-link
               ></template
             >. Replace it and these pictures join that model's set.
+          </template>
+          <template v-if="manualIds.length">
+            {{
+              manualIds.length === 1
+                ? "A manual workflow loads it"
+                : "Manual workflows load it"
+            }}{{ fixableIds.length ? " too" : "" }}:
+            <template v-for="(id, i) in manualIds" :key="id"
+              >{{ i ? " · " : "" }}<router-link
+                :to="workflowLink(id)"
+                class="msp__link"
+                >{{ nameOf(id) || `manual workflow ${i + 1}` }}</router-link
+              ></template
+            >; clone {{ manualIds.length === 1 ? "it" : "them" }} with other
+            models to change that.
           </template>
         </span>
         <AppButton
@@ -349,6 +364,9 @@ const { nameOf } = useWorkflowNames();
  */
 const fixableIds = computed(() =>
   (props.missing?.workflowIds ?? []).filter((id) => !id.startsWith("manual:")),
+);
+const manualIds = computed(() =>
+  (props.missing?.workflowIds ?? []).filter((id) => id.startsWith("manual:")),
 );
 
 /** The Workflows screen with one workflow open, where its model fix is made. */

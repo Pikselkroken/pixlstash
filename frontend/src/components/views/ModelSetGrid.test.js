@@ -350,6 +350,11 @@ describe("the cards", () => {
     await wrapper.vm.$nextTick();
     const replace = () => wrapper.find('[data-testid="model-set-replace-missing"]');
     expect(replace().text()).toBe("Replace…");
+    // The manual one is named apart, as cloned rather than replaced.
+    const note = wrapper.find('[data-testid="model-set-missing"]').text();
+    expect(note).toMatch(/It is loaded by\s+\S/);
+    expect(note).toContain("A manual workflow loads it too:");
+    expect(note).toContain("clone it with other models");
     store.toggleSet("missing:solo.sft");
     await wrapper.vm.$nextTick();
     expect(replace().exists()).toBe(false);

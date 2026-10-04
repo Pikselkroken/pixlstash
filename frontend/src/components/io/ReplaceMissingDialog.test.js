@@ -107,6 +107,31 @@ describe("ReplaceMissingDialog", () => {
     ]);
   });
 
+  it("writes a changed choice again to workflows that took the old one", async () => {
+    readModelSwap.mockResolvedValue({
+      replacements: [
+        { id: 9, filename: "new.sft", display_name: "New" },
+        { id: 8, filename: "other.sft", display_name: "Other" },
+      ],
+    });
+    setWorkflowModelFix
+      .mockRejectedValueOnce({ response: { data: { detail: "Busy." } } })
+      .mockResolvedValue({});
+    const wrapper = await mountDialog();
+    await wrapper.find("select").setValue("new.sft");
+    await applyButton(wrapper).trigger("click");
+    await flushPromises();
+    await wrapper.find("select").setValue("other.sft");
+    await applyButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(
+      setWorkflowModelFix.mock.calls.slice(2).map(([id, fix]) => [id, fix.now]),
+    ).toEqual([
+      ["auto:a", "other.sft"],
+      ["auto:b", "other.sft"],
+    ]);
+  });
+
   it("stops writing and closes when the credential changes mid-run", async () => {
     setWorkflowModelFix.mockImplementationOnce(async () => {
       notifySessionReset();

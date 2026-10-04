@@ -1016,6 +1016,10 @@ describe("refetching after an edit", () => {
     expect([...store.selectedMissingKeys]).toEqual(["missing:a.sft", "missing:b.sft"]);
     await banner().find('[aria-label="Dismiss the missing checkpoint notice"]').trigger("click");
     expect(banner().exists()).toBe(false);
+    // One fixed, another gone missing: the count is unchanged, the banner back.
+    store.workflowSets = { ...store.workflowSets, combinations: [gone("a.sft"), gone("c.sft")] };
+    await wrapper.vm.$nextTick();
+    expect(banner().exists()).toBe(true);
   });
 
   it("says it is reading, not 'no models', while Reset refetches an empty view", async () => {
