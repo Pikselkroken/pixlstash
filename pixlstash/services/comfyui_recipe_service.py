@@ -943,6 +943,147 @@ def apply_loader_rewrites(prompt_graph: dict, rewrites: list[dict]) -> None:
         node["class_type"] = rewrite["now"]
 
 
+# The CLIP loader `type` a base model family's text encoder loads as, in
+# ComfyUI's spelling. A family missing here keeps the graph's own type; a type
+# a loader class does not list (`flux` on a single CLIPLoader) is skipped.
+CLIP_TYPE_BY_FAMILY = {
+    "chroma": "chroma",
+    "flux1": "flux",
+    "flux2": "flux2",
+    "hidream": "hidream",
+    "hunyuan_image": "hunyuan_image",
+    "krea2": "krea2",
+    "ltxv": "ltxv",
+    "lumina": "lumina2",
+    "pixart": "pixart",
+    "qwen": "qwen_image",
+    "sd35": "sd3",
+    "wan": "wan",
+}
+# The inputs a prompt reaches a sampler or guider through, and the ones a CLIP
+# reaches its encode node through. Never the picture or latent stream, which
+# crosses from one model's branch into another's in a two-model graph.
+_CONDITIONING_INPUTS = ("positive", "negative", "conditioning")
+
+
+def swap_target(value: str, swaps: dict[str, str]) -> str | None:
+    """The file *swaps* puts where a loader names *value*, or ``None``.
+
+    By :func:`apply_filename_swap`'s own matching, so a caller reading which
+    file a swap loads agrees with the rewrite on every spelling.
+    """
+    key = _swap_key(value, swaps)
+    return swaps[key] if key is not None else None
+
+
+def _model_root(graph: dict, link) -> str | None:
+    """The node a ``model`` link's chain starts at: its loader."""
+    seen: set[str] = set()
+    while is_link(link) and str(link[0]) not in seen:
+        node_id = str(link[0])
+        seen.add(node_id)
+        node = graph.get(node_id) or graph.get(link[0])
+        if not isinstance(node, dict):
+            return None
+        upstream = (node.get("inputs") or {}).get("model")
+        if not is_link(upstream):
+            return node_id
+        link = upstream
+    return None
+
+
+def _prompt_encoders(graph: dict, link) -> set[str]:
+    """Every CLIP loader whose prompt feeds a conditioning *link*."""
+    found: set[str] = set()
+    stack = [link]
+    seen: set[str] = set()
+    while stack:
+        current = stack.pop()
+        if not is_link(current) or str(current[0]) in seen:
+            continue
+        node_id = str(current[0])
+        seen.add(node_id)
+        node = graph.get(node_id) or graph.get(current[0])
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs") or {}
+        if isinstance(inputs.get("type"), str) and any(
+            f.startswith("clip_name")
+            for f in model_filename_fields(node.get("class_type", ""))
+        ):
+            found.add(node_id)
+            continue
+        stack.extend(
+            value
+            for name, value in inputs.items()
+            if name == "clip" or name.startswith(_CONDITIONING_INPUTS)
+        )
+    return found
+
+
+def retype_text_encoders(
+    prompt_graph: dict, families: dict[str, str], object_info: dict | None = None
+) -> list[dict]:
+    """Give each CLIP loader the ``type`` its replaced base model loads as.
+
+    A clone onto another base model swaps the files but the loader's ``type``
+    still names the old model, and ComfyUI then encodes the prompt for it
+    (a Krea 2 clone of a Qwen-Image graph fails in the sampler). An encoder
+    belongs to the base loaders whose sampler or guider its prompt meets (the
+    ``model`` input's chain beside a conditioning input's), so a two-model
+    graph retypes only the replaced model's encoder. One that meets no
+    replaced loader, or loaders of two families, keeps its type; so does one
+    whose new ``type`` ComfyUI does not list for its class.
+
+    Args:
+        families: A replaced base loader's node id -> the family of the file
+            it now loads.
+
+    Returns:
+        One ``{node_id, class_type, was, now}`` per loader rewritten.
+    """
+    owners: dict[str, set[str]] = {}
+    for node in prompt_graph.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict) or not is_link(inputs.get("model")):
+            continue
+        root = _model_root(prompt_graph, inputs["model"])
+        if root is None:
+            continue
+        for name, value in inputs.items():
+            if name.startswith(_CONDITIONING_INPUTS):
+                for encoder in _prompt_encoders(prompt_graph, value):
+                    owners.setdefault(encoder, set()).add(root)
+    rewritten = []
+    for node_id, roots in owners.items():
+        node = prompt_graph.get(node_id)
+        if node is None:
+            continue
+        family = {families.get(root) for root in roots}
+        now = CLIP_TYPE_BY_FAMILY.get(family.pop() or "") if len(family) == 1 else None
+        class_type = node.get("class_type", "")
+        inputs = node["inputs"]
+        was = inputs["type"]
+        if now is None or was == now:
+            continue
+        options = listed_options(object_info, class_type, "type")
+        if options and now not in options:
+            logger.warning(
+                "Clone keeps CLIP type %r on node %s (%s): ComfyUI does not list "
+                "%r for it, so the text encoder may load for the old model",
+                was,
+                node_id,
+                class_type,
+                now,
+            )
+            continue
+        inputs["type"] = now
+        rewritten.append(
+            {"node_id": node_id, "class_type": class_type, "was": was, "now": now}
+        )
+    return rewritten
+
+
 def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     """Find every patchable seed input in *prompt_graph*.
 

@@ -115,6 +115,8 @@ from pixlstash.services.comfyui_recipe_service import (
     plan_lora_insertion,
     read_lora_chain,
     read_lora_chain_untyped,
+    retype_text_encoders,
+    swap_target,
     swap_to_adapter_loader,
 )
 from pixlstash.services.comfyui_service import (
@@ -7281,6 +7283,8 @@ def create_router(server) -> APIRouter:
                     apply_lora_chain(graph, plan, object_info)
                 except LookupError as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Read before the swap: the base slot is found by the file it names now.
+        families = _swapped_in_families(hub, graph, body.swaps)
         loaders, swapped, unswapped = _swap_files(graph, body.swaps, object_info)
         if not swapped and not unswapped and not chain_changed:
             raise HTTPException(
@@ -7302,6 +7306,15 @@ def create_router(server) -> APIRouter:
                     + "; ".join(f"{u['now']} ({u['reason']})" for u in unswapped)
                 ),
             )
+        for row in retype_text_encoders(graph, families, object_info):
+            logger.info(
+                "Clone of workflow %s loads its text encoder on node %s as %r, "
+                "not %r, for the checkpoint it now feeds",
+                workflow_id,
+                row["node_id"],
+                row["now"],
+                row["was"],
+            )
         # A manual workflow of its own, whatever changed: it never joins the
         # original's automatic workflow, even where only filenames moved.
         name, landed = _store_copy(
@@ -7322,6 +7335,27 @@ def create_router(server) -> APIRouter:
             loaders=loaders,
             verified=all(entry["verified"] for entry in swapped),
         )
+
+    def _swapped_in_families(hub, graph: dict, swaps: dict[str, str]) -> dict[str, str]:
+        """Each base loader *swaps* replaces a file of -> the new file's family.
+
+        Matched as the rewrite matches (``swap_target``). A loader is left out
+        when the shelf holds no single row of the new file's name, or that row
+        has no known base model.
+        """
+        models = _swap_models(hub)
+        by_name = recipe_asset_index(hub)[0]
+        families: dict[str, str] = {}
+        for node_id, class_type, widget, value in iter_model_fields_api(graph):
+            if slot_kind(widget) not in BASE_MODEL_KINDS:
+                continue
+            new = swap_target(value, swaps)
+            ids = by_name.get(normalized_filename(new), set()) if new else set()
+            model = models.get(next(iter(ids))) if len(ids) == 1 else None
+            family = family_of(model.base_model) if model else None
+            if family:
+                families[str(node_id)] = family
+        return families
 
     def _swap_files(
         graph: dict, swaps: dict[str, str], object_info: dict | None
