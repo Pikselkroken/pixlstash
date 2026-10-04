@@ -4605,6 +4605,25 @@ describe("Delete", () => {
     });
   });
 
+  // The Models rail beside the shelf has a selection of its own: Delete
+  // pressed there must not reach the shelf's, which the reader cannot see.
+  it("is not the shelf's when pressed in the Models rail", async () => {
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const rail = document.createElement("div");
+    rail.className = "mrail";
+    document.body.appendChild(rail);
+    rail.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchModelCompanions).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(useModelShelfStore().selectedIds.size).toBe(1);
+    rail.remove();
+    wrapper.unmount();
+  });
+
   it("says in the prompt what the delete leaves behind", async () => {
     // #1314: the question is asked for exactly the ids the call will send,
     // and its answer is in front of the reader before they agree.

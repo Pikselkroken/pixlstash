@@ -462,6 +462,11 @@ watch(fitsSet, (set) => {
   }
 });
 
+// Any later change of filter is a new answer, and the note was about the old.
+watch([looseOnly, needle], () => {
+  footNote.value = "";
+});
+
 /**
  * What the reader added while Fits was on. Those rows would leave the list the
  * moment the set holds them; they keep their place, with a check, until the
@@ -807,7 +812,11 @@ function typeAhead(key) {
 /** Rows whose add is still on the wire: a second press waits for it. */
 const pending = ref(new Set());
 
-/** `{setId, added: [{model_id, slot, sha256, name}], timer}` or null. */
+/**
+ * `{setId, added: [{model_id, slot, sha256, name}], raised, timer}` or null.
+ * `raised` is how many of `added` the receipt on screen already counts, so a
+ * run that ends after its pause raises nothing twice.
+ */
 let run = null;
 
 function endRun() {
@@ -824,7 +833,8 @@ function raiseRun() {
   if (!set) return;
   const held = new Set((set.members ?? []).map((member) => member.sha256));
   run.added = run.added.filter((member) => held.has(member.sha256));
-  if (!run.added.length) return;
+  if (!run.added.length || run.raised === run.added.length) return;
+  run.raised = run.added.length;
   const slots = new Set(run.added.map((member) => member.slot));
   const noun =
     slots.size === 1
@@ -842,6 +852,19 @@ watch(
   () => endRun(),
 );
 onBeforeUnmount(() => endRun());
+
+// A drag whose source row left the DOM mid-flight never sees its `dragend`,
+// so the window's own end of every drag clears it too, as does leaving.
+function clearDrag() {
+  store.railDrag = null;
+}
+window.addEventListener("dragend", clearDrag, true);
+window.addEventListener("drop", clearDrag);
+onBeforeUnmount(() => {
+  window.removeEventListener("dragend", clearDrag, true);
+  window.removeEventListener("drop", clearDrag);
+  clearDrag();
+});
 
 /**
  * Add shelf rows to a set, quietly, as part of the current run.
@@ -888,7 +911,7 @@ async function addRows(set, rows, { ask = true } = {}) {
       ...added.map((member) => member.model_id),
     ]);
   }
-  if (!run) run = { setId: set.id, added: [], timer: 0 };
+  if (!run) run = { setId: set.id, added: [], raised: 0, timer: 0 };
   run.added.push(...added);
   clearTimeout(run.timer);
   run.timer = setTimeout(raiseRun, RUN_PAUSE_MS);
@@ -908,9 +931,10 @@ async function addSelection() {
   if (!targetSet.value) return;
   const rows = addableSelection.value;
   if (!rows.length) return;
+  // Only the row's own *Add as 2nd* has said it; Enter and the footer ask.
   if (rows.length === 1 && rows[0].id === cursorId.value) {
-    await addFromRow(rows[0]);
-    return;
+    const next = flat.value[flat.value.indexOf(rows[0]) + 1];
+    if (next) moveTo(next);
   }
   await addRows(targetSet.value, rows);
 }

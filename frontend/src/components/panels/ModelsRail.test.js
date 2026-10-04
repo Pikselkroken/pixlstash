@@ -276,17 +276,21 @@ describe("adding", () => {
     expect(operations.receipt?.summary).toMatch(
       /^Added 2 LoRAs to "RealVisXL v5"/,
     );
+    // Added rows stay where they were, with a check.
+    expect(
+      option(wrapper, "Soft").find('[data-testid="mrail-in-set"]').exists(),
+    ).toBe(true);
+    // Ending the run after its receipt is up raises no second one.
+    const shown = operations.receipt;
+    useModelShelfStore().toggleSet("hand:10");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(operations.receipt).toBe(shown);
     removeWorkflowSetMembers.mockResolvedValue({ removed: [] });
     await operations.takeLocalReceiptAction();
     expect(removeWorkflowSetMembers).toHaveBeenCalledTimes(1);
     expect(new Set(removeWorkflowSetMembers.mock.calls[0][1])).toEqual(
       new Set([shaOf(5), shaOf(3)]),
     );
-    // Added rows stay where they were, with a check.
-    await wrapper.vm.$nextTick();
-    expect(
-      option(wrapper, "Soft").find('[data-testid="mrail-in-set"]').exists(),
-    ).toBe(true);
   });
 
   it("offers a checkpoint into a set that has one as a second, by name", async () => {
@@ -348,5 +352,53 @@ describe("dropping on the set grid", () => {
       [10, [{ model_id: 5, slot: "lora" }]],
     ]);
     expect(store.railDrag).toBe(null);
+  });
+
+  it("never takes a drop on an evidence card, and dims it for the drag", async () => {
+    const ckpt = { id: 1, name: "RealVisXL_v5", kind: "checkpoint" };
+    const lora = { id: 3, name: "FilmGrain_XL", kind: "adapter" };
+    listAdapters.mockResolvedValue(ROWS);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "1+3",
+          models: [ckpt, lora],
+          recipes: 1,
+          history_runs: 0,
+          picture_count: 1,
+          covers: [],
+        },
+      ],
+      no_set: [],
+      hand_made: [],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    const grid = mount(ModelSetGrid, { global: { stubs } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await grid.vm.$nextTick();
+    store.railDrag = [store.rows.find((r) => r.id === 5)];
+    await grid.vm.$nextTick();
+    const card = grid.find(".msg__row");
+    expect(card.classes()).toContain("msg__row--dim");
+    const dataTransfer = { dropEffect: "" };
+    await card.trigger("dragover", { dataTransfer });
+    expect(dataTransfer.dropEffect).toBe("");
+    await card.trigger("drop", { dataTransfer });
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+  });
+
+  it("refuses a drop on a set of another base model, as the menu does", async () => {
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([
+      row(5, "Soft_Light", "adapter", { base_model: "SD 1.5" }),
+    ]);
+    await store.fetchRows();
+    const sdxl = handSet(10, [
+      { ...member(1, "RealVisXL_v5", "checkpoint"), base_model: "SDXL" },
+    ]);
+    await store.addRowsToHandMadeSet(sdxl, store.rows);
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
   });
 });

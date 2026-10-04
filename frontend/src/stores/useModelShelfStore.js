@@ -51,9 +51,11 @@ import {
 } from "../utils/modelShelf";
 import {
   defaultSlot,
+  handMadeBase,
   handMadeCard,
   handMadeName,
   pictureCount,
+  rowBaseModel,
   setCard,
   setCheckpoint,
   setGroups,
@@ -2224,6 +2226,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         slot: slotId || defaultSlot(row.file_kind),
       }));
     if (!members.length) return null;
+    // The rail's Add to set… fades a set on another base model; a drop on its
+    // card is refused the same way rather than filed by a slip of the hand.
+    const base = handMadeBase(withShelfNames(set));
+    const bases = new Set(models.map(rowBaseModel).filter(Boolean));
+    if (base && bases.size === 1 && !bases.has(base)) {
+      useNoticeStore().push({
+        level: "info",
+        text: `Nothing added: "${setLabel(set)}" is ${base}, and ${
+          models.length === 1 ? "that model is" : "those models are"
+        } ${[...bases][0]}.`,
+      });
+      return null;
+    }
     if (!(await confirmSecondCheckpoint(set, members))) return null;
     return addToHandMadeSet(set, members);
   }

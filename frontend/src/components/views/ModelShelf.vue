@@ -2369,6 +2369,10 @@ function shelfOwnsTheKey(event) {
   // confirmation for rows the reader cannot see and `Escape` would silently
   // clear a selection they did not know they still had.
   if (!isShelfTab.value) return false;
+  // The Models rail sits beside the shelf with a selection of its own, and
+  // none of the shelf's keys may reach through it: Delete there would delete
+  // the shelf's (unseen) selection, and Escape would clear it.
+  if (event?.target?.closest?.(".mrail")) return false;
   // The set grid is NOT excluded, and the reason it once was has gone with the
   // card standing for a whole set: every selectable thing on that screen is one
   // model, the bar floats over it, and `selectVisible` answers the grid's own
