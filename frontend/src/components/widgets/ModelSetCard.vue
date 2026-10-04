@@ -77,22 +77,65 @@
       </template>
       <span v-else class="msc__empty-line">No picture to show</span>
     </div>
-    <!-- The lasting merge offer (#1523): on the cover until the owner merges
-         or keeps the set separate. Opens the tray on its offer strip. Not a
-         tab stop: the grid owns Tab, and the keyboard reaches the offer
-         through the tray and the set's menu. -->
-    <button
+    <!-- The lasting offer (#1523), asked as a question on the cover's foot
+         until the owner answers it. One model is answered here: Add to set is
+         the ordinary members add, with its receipt and Undo. Several open the
+         tray to review, since three files added blind is a bigger claim.
+         Mouse-only: the grid owns Tab, and the keyboard answers through the
+         tray and the set's menu, so the card's name carries the question. -->
+    <div
       v-if="card.offer"
-      class="msc__offer"
-      type="button"
-      tabindex="-1"
+      class="msc__ask"
       aria-hidden="true"
-      data-testid="merge-offer"
-      @click="emit('offer')"
+      data-testid="set-offer"
     >
-      <span class="msc__offer-text">{{ card.offer.text }}</span>
-      <span class="msc__offer-go">Merge…</span>
-    </button>
+      <p class="msc__ask-q">
+        <strong>{{ card.offer.who }}</strong>{{ card.offer.rest
+        }}<template v-if="card.offer.model"> Add it?</template>
+      </p>
+      <span
+        v-if="card.offer.model"
+        class="msc__ask-model"
+        :title="card.offer.model.name"
+        ><v-icon size="12">mdi-cube-outline</v-icon
+        ><span class="msc__ask-name">{{
+          [card.offer.model.kind, card.offer.model.name]
+            .filter(Boolean)
+            .join(" · ")
+        }}</span></span
+      >
+      <div class="msc__ask-acts">
+        <button
+          v-if="card.offer.model"
+          class="msc__ask-btn msc__ask-btn--yes"
+          type="button"
+          tabindex="-1"
+          data-testid="set-offer-add"
+          @click="emit('add')"
+        >
+          <v-icon size="14">mdi-plus</v-icon>Add to set
+        </button>
+        <button
+          v-else
+          class="msc__ask-btn msc__ask-btn--yes"
+          type="button"
+          tabindex="-1"
+          data-testid="set-offer-review"
+          @click="emit('offer')"
+        >
+          <v-icon size="14">mdi-plus</v-icon>Review {{ card.offer.adds }}…
+        </button>
+        <button
+          class="msc__ask-btn"
+          type="button"
+          tabindex="-1"
+          data-testid="set-offer-no"
+          @click="emit('keep-separate')"
+        >
+          {{ card.offer.model ? "Not this one" : "Not these" }}
+        </button>
+      </div>
+    </div>
 
     <!-- The visible rows are hidden from assistive tech: the card's own label
          already reads all of them, including what "+N" clipped. -->
@@ -203,7 +246,7 @@ const props = defineProps({
   selected: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["toggle", "offer"]);
+const emit = defineEmits(["toggle", "offer", "add", "keep-separate"]);
 
 /**
  * The URL a browser loads one cover from.
@@ -221,17 +264,24 @@ function coverSrc(cover) {
 }
 
 /** Row 2: the per-kind tally of everything else in the set. */
-const kindChips = computed(() => [
-  ...props.card.kinds.map((entry, i) => ({
+const kindChips = computed(() =>
+  props.card.kinds.map((entry, i) => ({
     key: `kind-${i}`,
     label: entry,
     icon: "cube-outline",
   })),
-  // What a merge would add, dashed like the ghosts in the tray (#1523).
-  ...(props.card.offer
-    ? [{ key: "offer", label: `+${props.card.offer.adds}`, dashed: true }]
-    : []),
-]);
+);
+
+// The cover's question, read in full: its buttons are off the tab order, so
+// the name says where the keyboard answers it.
+const offerName = computed(() => {
+  const offer = props.card.offer;
+  if (!offer) return null;
+  const model = offer.model
+    ? ` ${[offer.model.kind, offer.model.name].filter(Boolean).join(" ")}.`
+    : "";
+  return `${offer.text}${model} Answer in the set's tray or menu`;
+});
 
 // "+N" is not a control, so this is the only place a screen reader hears the
 // chips a narrow card clipped - and the only place it hears the whole set.
@@ -250,9 +300,7 @@ const accessibleName = computed(() => {
       kinds.length ? `with ${kinds.join(", ")}` : "nothing else in it yet",
       // What is drawn: an incomplete card shows its warning in place of facts.
       incomplete ? null : facts.join(", "),
-      props.card.offer
-        ? `merge offered: ${props.card.offer.text}, in the set's menu`
-        : null,
+      offerName.value,
     ]
       .filter(Boolean)
       .join(", ");
@@ -423,46 +471,90 @@ const accessibleName = computed(() => {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-/* The merge offer: the scrim badge's pill, stretched along the cover's foot.
-   Placed on the card rather than inside the cover so both hand-made covers
-   (pictures or the checkpoint's mark) carry it from one element. */
-.msc__offer {
+/* The offer's question panel: a dark band across the cover's foot, dark in
+   both themes like the scrim badges above it. Placed on the card rather than
+   inside the cover so both hand-made covers (pictures or the checkpoint's mark)
+   carry it from one element. */
+.msc__ask {
   position: absolute;
-  left: var(--space-3);
-  right: var(--space-3);
-  bottom: calc(var(--msc-meta-h) + var(--space-3));
+  left: 0;
+  right: 0;
+  bottom: var(--msc-meta-h);
   z-index: var(--z-raised);
   display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-top: 1px solid rgba(var(--v-theme-on-dark-surface), 0.12);
+  background: rgba(var(--v-theme-dark-surface), 0.95);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-xs);
+}
+
+.msc__ask-q {
+  margin: 0;
+  line-height: var(--leading-snug);
+}
+
+.msc__ask-q strong {
+  font-weight: var(--weight-bold);
+}
+
+/* The model itself, dashed like its ghost tile in the tray. */
+.msc__ask-model {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--space-2);
+  max-width: 100%;
+  box-sizing: border-box;
+  height: var(--tag-h-xs);
+  padding: 0 var(--space-3);
+  border: 1px dashed rgb(var(--v-theme-dark-surface-accent));
+  border-radius: var(--radius-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.msc__ask-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.msc__ask-acts {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.msc__ask-btn {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--control-h-sm);
-  padding: 0 var(--space-1) 0 var(--space-3);
-  border: 0;
-  border-radius: var(--radius-pill);
-  background: var(--scrim-photo-strong);
-  color: rgb(var(--v-theme-on-dark-surface));
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid rgba(var(--v-theme-on-dark-surface), 0.28);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
   font: inherit;
-  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
   cursor: pointer;
 }
 
-.msc__offer-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-align: start;
-  text-overflow: ellipsis;
+.msc__ask-btn:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
 }
 
-.msc__offer-go {
-  flex-shrink: 0;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-pill);
+.msc__ask-btn--yes {
+  border-color: transparent;
   background: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));
-  line-height: var(--tag-h-xs);
+}
+
+.msc__ask-btn--yes:hover {
+  background-image: var(--hover-shade);
 }
 
 /* The shipped scrim badge: a dark chip over an arbitrary photo. */

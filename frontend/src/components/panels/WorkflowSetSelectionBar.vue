@@ -74,8 +74,8 @@
           role="menuitem"
           @click="verb('merge-offer')"
         >
-          <v-icon class="ctx-icon">mdi-table-arrow-down</v-icon>
-          <span class="ctx-label-text">Merge with the pictures' set…</span>
+          <v-icon class="ctx-icon">mdi-plus</v-icon>
+          <span class="ctx-label-text">Review models to add…</span>
         </button>
         <button
           class="ctx-item"
@@ -95,7 +95,7 @@
         @click="verb('offer-again')"
       >
         <v-icon class="ctx-icon">mdi-table-arrow-down</v-icon>
-        <span class="ctx-label-text">Offer the merge again</span>
+        <span class="ctx-label-text">Suggest the models again</span>
       </button>
       <button
         class="ctx-item"

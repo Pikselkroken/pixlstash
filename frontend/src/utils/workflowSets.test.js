@@ -9,7 +9,7 @@ import {
   headModel,
   rowBaseModel,
   kindCounts,
-  offerText,
+  offerQuestion,
   setCard,
   setGroups,
   setName,
@@ -688,11 +688,35 @@ describe("hand-made sets (#1520)", () => {
       ["other", ["add:other"]],
     ]);
     // No picture in this library: counted in recipes instead.
-    expect(offerText(incomplete)).toBe("2 recipes need 2 more");
     expect(handMadeCard(incomplete).offer).toEqual({
       adds: 2,
-      text: "2 recipes need 2 more",
+      who: "2 recipes",
+      rest: " used this with 2 models the set does not have.",
+      text: "2 recipes used this with 2 models the set does not have.",
+      model: null,
     });
+  });
+
+  it("asks about one offered model by kind and name (#1523)", () => {
+    const set = {
+      offer: {
+        picture_count: 0,
+        recipes: 1,
+        models: [{ id: 5, sha256: "h5", slot: "lora", kind: "adapter", name: "detailTweakerXL" }],
+      },
+    };
+    // The set is short a model; the recipe needs nothing.
+    expect(offerQuestion(set)).toEqual({
+      adds: 1,
+      who: "1 recipe",
+      rest: " ran this with a model the set does not have.",
+      text: "1 recipe ran this with a model the set does not have. Add it?",
+      model: { kind: "LoRA", name: "detailTweakerXL" },
+    });
+    expect(offerQuestion({ offer: { ...set.offer, picture_count: 1204 } }).who).toBe(
+      "1204 pictures",
+    );
+    expect(offerQuestion({})).toBeNull();
   });
 
   it("compares base models the way the server fills a member's", () => {

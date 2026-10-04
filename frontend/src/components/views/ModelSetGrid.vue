@@ -174,6 +174,8 @@
                 :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
                 @toggle="store.toggleSet(entry.key)"
                 @offer="openOffer(entry.setId)"
+                @add="answerOffer(entry, true)"
+                @keep-separate="answerOffer(entry, false)"
               />
             </div>
           </div>
@@ -1143,8 +1145,8 @@ function moveToKey(key) {
 }
 
 /**
- * Open a set's tray with the cursor on its offer strip: the card's lozenge,
- * and Merge with the pictures' set… in the set's menu.
+ * Open a set's tray with the cursor on its offer strip: the card's Review N…,
+ * and Review models to add… in the set's menu.
  */
 async function openOffer(setId) {
   const key = `hand:${setId}`;
@@ -1176,6 +1178,27 @@ async function mergeOffer(models) {
     { joined: true },
   );
   settleCursor(adding.length === 1 ? `m:${adding[0].sha256}` : "");
+}
+
+/**
+ * The card's own answer to a one-model offer: Add to set, or Not this one
+ * (Keep separate). The panel goes with the answer, taking the clicked button
+ * with it, so the cursor lands on the card rather than leaving focus on <body>.
+ */
+async function answerOffer(entry, add) {
+  const set = store.handMadeSets.find((candidate) => candidate.id === entry.setId);
+  if (!set?.offer) return;
+  if (add) {
+    await store.addToHandMadeSet(
+      set,
+      set.offer.models.map((model) => ({ model_id: model.id, slot: model.slot })),
+      { joined: true },
+    );
+  } else {
+    await store.keepOutOfHandMadeSet(set);
+  }
+  const at = flatRows.value.findIndex((row) => row.id === entry.id);
+  if (at >= 0) moveCursor(at);
 }
 
 /** Keep separate: the whole offer, or one ghost (Delete on it). */

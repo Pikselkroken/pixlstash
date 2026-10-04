@@ -2239,10 +2239,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /** Forget every Keep separate on a set, so its merge offer comes back. */
   function offerMergeAgain(set) {
     return setWrite(() => changeDeclines(set.id, { clear: true }), {
-      receipt: `The merge is offered again on "${setLabel(set)}".`,
+      receipt: `The suggested models are offered again on "${setLabel(set)}".`,
       undo: ({ previous }) => changeDeclines(set.id, { add: previous }),
       verb: "offer-again",
-      failure: "The merge could not be offered again.",
+      failure: "The suggested models could not be offered again.",
     });
   }
 

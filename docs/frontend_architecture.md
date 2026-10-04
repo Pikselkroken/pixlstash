@@ -1837,10 +1837,17 @@ the shelf's workflow sets section) and served as `hand_made` on
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.
 - **The merge offer is ghosts in the tray (#1523).** A set the server gives an
-  `offer` wears it on the card (a lasting "N pictures need K more · Merge…"
-  pill over the cover, and a dashed `+K` chip) until the owner merges or keeps
-  it separate: nothing is a toast, nothing is one-time. The pill opens the tray
-  with the cursor on the **offer strip**, a `kind: "slot"` entry keyed `offer`
+  `offer` wears it on the card as a lasting question panel across the cover's
+  foot (`offerQuestion`: "1 recipe ran this with a model the set does not
+  have. Add it?") until the owner adds or keeps it separate: nothing is a
+  toast, nothing is one-time. The word "merge" is never shown: the button adds
+  files to the set. With **one** model the panel names it (kind · name) and is
+  answered in place: *Add to set* is `addToHandMadeSet` with `joined`, *Not
+  this one* is Keep separate, and the cursor lands back on the card. With
+  **several**, *Review N…* opens the tray with the cursor on the **offer
+  strip**, which repeats the card's sentence. The panel's buttons are
+  mouse-only (the grid owns Tab); the card's accessible name carries the
+  question. The strip is a `kind: "slot"` entry keyed `offer`
   with `slotIndex: -1`, so Up/Down walk through it. `setSlots` adds each offered
   model as a **ghost** tile (`g:<sha256>`, dashed, faded mark, picture count,
   Add) in the slot it would land in, before the ＋; a checkpoint ghost takes the
@@ -1852,8 +1859,8 @@ the shelf's workflow sets section) and served as `hand_made` on
   stores the kept-out list whole, so the store queues those writes and applies
   each as a delta to the latest list: an older Undo never drops a newer one. With models kept
   out and no offer left, the tray shows "Kept separate from N pictures ·
-  Offer again". The set's menu carries Merge with the pictures' set… (the
-  grid's exposed `openOffer`), Keep separate and Offer the merge again.
+  Offer again". The set's menu carries Review models to add… (the grid's
+  exposed `openOffer`), Keep separate and Suggest the models again.
 
 #### `WorkflowsView.vue` (`views/`), v1.12 F1a
 

@@ -580,24 +580,43 @@ export function handMadeCard(set) {
     // A checkpoint kept by hash whose file has left the shelf: the cover says
     // so, and so must the card's accessible name.
     checkpointOffShelf: Boolean(checkpoint && !checkpoint.on_shelf),
-    offer: set.offer ? { adds: set.offer.models.length, text: offerText(set) } : null,
+    offer: offerQuestion(set),
     size: members.length,
   };
 }
 
 /**
- * The merge offer in a few words (#1523): "1 204 pictures need 3 more". Counted
- * in recipes when none of those pictures is in this library, since the offer
- * reads every library's recipes.
+ * The offer (#1523) as the question the card asks: "1 recipe ran this with a
+ * model the set does not have. Add it?". The subject is the pictures, and the
+ * shortfall is the set's - the recipe needs nothing. Counted in recipes when
+ * none of those pictures is in this library, since the offer reads every
+ * library's recipes. With one model the card names it, so it can be answered
+ * in place; with several it says how many, and the tray reviews them.
+ *
+ * `who` and `rest` are the statement, for the card to embolden its subject and
+ * the tray to repeat; `text` is the whole question.
+ *
+ * @returns {{adds: number, who: string, rest: string, text: string,
+ *   model: {kind: string, name: string}|null}|null}
  */
-export function offerText(set) {
+export function offerQuestion(set) {
   const offer = set?.offer;
-  if (!offer) return "";
+  if (!offer) return null;
   const adds = offer.models.length;
   const who = offer.picture_count
     ? pictureCount(offer.picture_count)
     : recipeCount(offer.recipes);
-  return `${who} need ${adds} more`;
+  const one = adds === 1 ? offer.models[0] : null;
+  const rest = one
+    ? " ran this with a model the set does not have."
+    : ` used this with ${adds} models the set does not have.`;
+  return {
+    adds,
+    who,
+    rest,
+    text: `${who}${rest}${one ? " Add it?" : ""}`,
+    model: one ? { kind: memberKindLabel(one), name: one.name } : null,
+  };
 }
 
 /**
