@@ -2392,7 +2392,11 @@ output reads is not counted** (`workflow_identity.live_slots`): a leftover
 branch wired into nothing never runs, the LoRA chain already ignores it, and a
 default naming its LoRA showed a row Edit LoRAs could not reach or remove (a
 clone onto another model keeps the old model's dead branch). The LoRA summary
-reads the same way.
+reads the same way, and a run matches the recipe's LoRAs to live slots only
+(`live_lora_targets`, by ComfyUI's `output_node`; every slot when ComfyUI does
+not answer), so the free-slot fill never puts one in a loader that never runs.
+Offline, dead is `_prune`'s sink-name rule, which can call a branch ending in an
+output node it does not recognise dead where ComfyUI would not.
 `workflow_group_default` edits replace what they name (`EDITED`); a `lora:`
 edit holding `off` takes a LoRA out.
 

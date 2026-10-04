@@ -108,6 +108,7 @@ from pixlstash.services.comfyui_recipe_service import (
     insert_adapter,
     listed_as,
     listed_options,
+    live_lora_targets,
     lora_display_name,
     model_filename_fields,
     plan_loader_rewrites,
@@ -4943,7 +4944,9 @@ def create_router(server) -> APIRouter:
             # BEFORE the skip: matched after it, the LoRA a skipped loader held
             # moved on to the next free slot and replaced a LoRA the owner had
             # not named, while the notice still said it was skipped.
-            slots_before_skip = detect_lora_targets(graph)
+            # Live loaders only: a recipe LoRA put in a loader no output reads
+            # would be reported placed and never run.
+            slots_before_skip = live_lora_targets(graph, object_info)
             # The slots the owner asked this run to go without, next: before
             # the saved recipe's LoRAs are applied, before the missing-LoRA
             # bypass and before `judge`, so the graph judged is the graph

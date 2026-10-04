@@ -1282,6 +1282,22 @@ def _live_graph(graph: dict, object_info: dict) -> dict:
     return {node_id: node for node_id, node in graph.items() if str(node_id) in live}
 
 
+def live_lora_targets(prompt_graph: dict, object_info: dict | None) -> list[dict]:
+    """:func:`detect_lora_targets` without the loaders no output reads.
+
+    A run matching a recipe's LoRAs to slots must not fill a leftover loader
+    wired into nothing (a clone keeps the old model's dead branch): ComfyUI
+    never runs it, so the LoRA would be reported placed and do nothing. Every
+    slot when ComfyUI did not answer or names no output node, as
+    :func:`_live_graph` reads it.
+    """
+    targets = detect_lora_targets(prompt_graph)
+    live = _live_ids(prompt_graph or {}, object_info) if object_info else None
+    if live is None:
+        return targets
+    return [target for target in targets if str(target["node_id"]) in live]
+
+
 def _output_ids(graph: dict, object_info: dict) -> list[str]:
     """The ids of *graph*'s output nodes, as ``object_info`` marks them."""
     return [
