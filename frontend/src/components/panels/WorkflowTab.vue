@@ -1132,11 +1132,15 @@ const checkpointLabels = computed(() => {
   return [...new Set(found)];
 });
 const checkpointLabel = computed(() => checkpointLabels.value.join(" + "));
-/** How many base models the row prints, whichever source it prints from. */
+/**
+ * How many base models the row prints, whichever source it prints from. The
+ * graph's list is one entry per loaded file already, and two shelf ids the
+ * shelf no longer holds are two entries reading alike.
+ */
 const checkpointCount = computed(
   () =>
     checkpointLabels.value.length ||
-    new Set(detail.value?.graph_base_models ?? []).size,
+    (detail.value?.graph_base_models ?? []).length,
 );
 
 const checkpointIsUnread = computed(() =>

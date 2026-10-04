@@ -99,6 +99,8 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
+    SHELF_MODEL_GONE,
+    SHELF_MODEL_UNNAMED,
     SlotModel,
     WorkflowFigures,
     model_marks,
@@ -7218,6 +7220,163 @@ def test_a_pack_checkpoint_loader_is_refused_outside_a_stored_file(runnable):
         "5": "per_hub_checkpoint",
         "6": "no_policy",
     }, payload
+
+
+def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
+    """A card with no base-model name falls back to the graph a run submits.
+
+    A PixlStash loader there holds a shelf row id, so the Workflow tab read
+    `77` as the checkpoint's name; it gets the file that row names, and says
+    so when the shelf no longer holds it.
+    """
+    hub = runnable.server.hub
+    model_id = hub.fetchone(
+        "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )["id"]
+    with hub.transaction() as conn:
+        instance = json.loads(json.dumps(RUN_DOCUMENT))
+        instance["1"] = {
+            "class_type": "PixlStashCheckpointLoader",
+            "inputs": {"checkpoint_id": str(model_id)},
+        }
+        # A second loader on an id no shelf row holds: still its own entry.
+        # Spelled as a JSON number, which the node runs just the same.
+        instance["9"] = {
+            "class_type": "PixlStashCheckpointLoader",
+            "inputs": {"checkpoint_id": 987654321},
+        }
+        conn.execute(
+            "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
+            (json.dumps(instance), RUN_INSTANCE),
+        )
+        conn.execute(
+            "DELETE FROM workflow_recipe_asset "
+            "WHERE structural_hash = ? AND widget_name = 'ckpt_name'",
+            (RUN_RECIPE,),
+        )
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        _SHELF_FILENAME,
+        SHELF_MODEL_GONE,
+    ]
+
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET filename = NULL WHERE id = ?", (model_id,))
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_UNNAMED,
+        SHELF_MODEL_GONE,
+    ]
+
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE id = ?", (model_id,))
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_GONE,
+        SHELF_MODEL_GONE,
+    ]
+
+
+def test_a_gone_shelf_loader_is_named_by_the_pictures_editor_graph(
+    runnable, monkeypatch
+):
+    """A picture carries the API graph that ran and the editor graph beside it.
+
+    The shelf row a run's loader named is gone, but the same node in the
+    editor graph is an ordinary loader that still names the file, so that is
+    the name rather than "no longer on the shelf".
+    """
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"] = {
+        "class_type": "PixlStashCheckpointLoader",
+        "inputs": {"checkpoint_id": "987654321"},
+    }
+    editor = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "CheckpointLoaderSimple",
+                "inputs": [],
+                "widgets_values": ["SDXL/original.safetensors"],
+            },
+            {
+                "id": 2,
+                "type": "CheckpointLoaderSimple",
+                "inputs": [],
+                "widgets_values": ["SDXL/another-node.safetensors"],
+            },
+        ],
+        "links": [],
+    }
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (embedded, []),
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_embedded_metadata",
+        lambda server, picture_id: {
+            "png": {"prompt": json.dumps(embedded), "workflow": json.dumps(editor)}
+        },
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_recipe_asset "
+            "WHERE structural_hash = ? AND widget_name = 'ckpt_name'",
+            (RUN_RECIPE,),
+        )
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        "SDXL/original.safetensors"
+    ]
+
+    # An editor graph whose node 1 is the shelf loader too names nothing.
+    editor["nodes"][0] = {
+        "id": 1,
+        "type": "PixlStashCheckpointLoader",
+        "inputs": [{"name": "checkpoint_id", "widget": {"name": "checkpoint_id"}}],
+        "widgets_values": ["987654321"],
+    }
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [SHELF_MODEL_GONE]
+
+    # A malformed node is not a 500, and loses only its own name: a second
+    # gone loader whose editor node reads is still named.
+    editor["nodes"][0] = {"id": 1, "type": "CheckpointLoaderSimple", "inputs": 7}
+    embedded["9"] = {
+        "class_type": "PixlStashCheckpointLoader",
+        "inputs": {"checkpoint_id": "987654322"},
+    }
+    editor["nodes"].append(
+        {
+            "id": 9,
+            "type": "CheckpointLoaderSimple",
+            "inputs": [],
+            "widgets_values": ["SDXL/ninth.safetensors"],
+        }
+    )
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_GONE,
+        "SDXL/ninth.safetensors",
+    ]
+
+    # A shelf row that is still there but names no file is read the same way.
+    with runnable.server.hub.transaction() as conn:
+        unnamed_id = conn.execute(
+            "INSERT INTO model (file_kind, provenance) VALUES ('checkpoint', 'scanned')"
+        ).lastrowid
+    embedded["9"]["inputs"]["checkpoint_id"] = str(unnamed_id)
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_GONE,
+        "SDXL/ninth.safetensors",
+    ]
+
+    # A picture that will not read at all is not a 500: each loader keeps the
+    # shelf's own word for it.
+    def unreadable(server, picture_id):
+        raise OSError("test-unreadable")
+
+    monkeypatch.setattr(workflows_routes, "_read_embedded_metadata", unreadable)
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_GONE,
+        SHELF_MODEL_UNNAMED,
+    ]
 
 
 def _pack_graph(project: str | None = None) -> dict:

@@ -201,6 +201,34 @@ def test_loaded_model_widgets_says_nothing_rather_than_guessing() -> None:
     assert loaded_model_widgets([]) == []
 
 
+def test_loaded_model_widgets_reads_a_numeric_shelf_id() -> None:
+    """The shelf loader runs `str(checkpoint_id)`, so `77` is the id `"77"`."""
+    api = {
+        "1": {
+            "class_type": "PixlStashCheckpointLoader",
+            "inputs": {"checkpoint_id": 77},
+        }
+    }
+    ui = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "PixlStashCheckpointLoader",
+                "inputs": [
+                    {"name": "checkpoint_id", "widget": {"name": "checkpoint_id"}}
+                ],
+                "widgets_values": [77],
+            }
+        ],
+        "links": [],
+    }
+    assert loaded_model_widgets(api) == [("checkpoint_id", "77")]
+    assert loaded_model_widgets(ui) == [("checkpoint_id", "77")]
+    # A boolean is not an id.
+    api["1"]["inputs"]["checkpoint_id"] = True
+    assert loaded_model_widgets(api) == []
+
+
 @pytest.mark.parametrize("workflow_file", _workflow_files(), ids=lambda p: p.name)
 def test_extract_comfy_workflow_info(workflow_file: pathlib.Path) -> None:
     """Smoke test: top-level extraction runs without errors and returns expected keys."""

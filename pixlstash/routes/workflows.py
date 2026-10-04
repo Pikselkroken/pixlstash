@@ -139,6 +139,8 @@ from pixlstash.services.workflow_card_service import (
     BEST_SCORE,
     EDITED,
     LORA_OFF,
+    SHELF_MODEL_GONE,
+    SHELF_MODEL_UNNAMED,
     DefaultRecipe,
     read_grid,
     slot_kind,
@@ -220,6 +222,7 @@ from pixlstash.services.workflow_library_service import (
 )
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.utils.comfyui_utilities import (
+    find_comfy_workflow,
     iter_model_fields_api,
     loaded_model_widgets,
 )
@@ -794,7 +797,9 @@ class WorkflowCardDetail(BaseModel):
             "graph spells them (folders included), for a card whose own "
             "`models` name no base model: its name was never recorded or was "
             "forgotten, but the workflow file or a picture's embedded graph "
-            "still says which file it loads. `[]` is a graph that was read and "
+            "still says which file it loads. A PixlStash shelf loader's id is "
+            "served as the file that shelf row names, `(model no longer on the "
+            "shelf)` or `(unnamed shelf model)`. `[]` is a graph that was read and "
             "loads no base model (an upscaler); `null` is one that was not "
             "read - the card names its base model, or has no graph to read."
         ),
@@ -2803,7 +2808,7 @@ def create_router(server) -> APIRouter:
         graph_models = (
             None
             if _base_model_slots(figure.models) or figure.base is None
-            else _graph_base_models(figure.base)
+            else _graph_base_models(hub, figure.base)
         )
         return WorkflowCardDetail(
             card=_entry(figure, recipe, _display_names(grid.figures)),
@@ -3019,7 +3024,7 @@ def create_router(server) -> APIRouter:
                 exc,
             )
 
-    def _graph_base_models(card) -> list[str] | None:
+    def _graph_base_models(hub, card) -> list[str] | None:
         """The base-model files the card's runnable graph names, in order.
 
         Read off the same source a run would submit (:func:`_source_graph_for`:
@@ -3030,6 +3035,12 @@ def create_router(server) -> APIRouter:
         back as :data:`~run_service.FORGOTTEN_MODEL` and is left out: it names
         nothing a person could look for. ``None`` when there is no graph to
         read, which is not the same answer as a graph that loads none.
+
+        A PixlStash shelf loader's ``checkpoint_id`` is a shelf row id, not a
+        file, so it is read as the file that row names. Where the shelf no
+        longer holds that row, or holds it without a file, a picture's editor
+        graph may still name the file (:func:`_editor_names_for`); failing both, the shelf's own "gone"
+        / "unnamed" words stand in. A bare ``77`` reads as a model called 77.
         """
         try:
             source, _reason = _source_graph_for(card)
@@ -3043,14 +3054,94 @@ def create_router(server) -> APIRouter:
             return None
         if source is None:
             return None
-        found = []
-        for widget, value in loaded_model_widgets(source.graph):
-            if (
-                widget in CHECKPOINT_WIDGETS
-                and value != run_service.FORGOTTEN_MODEL
-                and value not in found
-            ):
-                found.append(value)
+        loaded = [
+            (widget, value)
+            for widget, value in loaded_model_widgets(source.graph)
+            if widget in CHECKPOINT_WIDGETS and value != run_service.FORGOTTEN_MODEL
+        ]
+        shelf_files = shelf_filenames(
+            hub, [value for widget, value in loaded if widget == SHELF_ID_FIELD]
+        )
+        # Gone, or still on the shelf but naming no file: either way the
+        # picture's editor graph may be the only thing left that names it.
+        lost = [
+            value
+            for value, file in shelf_files.items()
+            if not file or file == SHELF_MODEL_GONE
+        ]
+        if lost and source.picture_id is not None:
+            shelf_files.update(_editor_names_for(source, lost))
+        # Once per recorded value, before resolving: two gone ids are two
+        # loaders, though both read "no longer on the shelf".
+        first_widget: dict[str, str] = {}
+        for widget, value in loaded:
+            first_widget.setdefault(value, widget)
+        return [
+            shelf_files.get(value, SHELF_MODEL_GONE) or SHELF_MODEL_UNNAMED
+            if widget == SHELF_ID_FIELD
+            else value
+            for value, widget in first_widget.items()
+        ]
+
+    def _editor_names_for(source, shelf_ids: list[str]) -> dict[str, str]:
+        """``{shelf id: file}`` from the source picture's editor graph.
+
+        A ComfyUI picture carries two graphs: the API ``prompt`` that ran,
+        which the source is, and the editor ``workflow``. Where a shelf loader
+        stands in the first, the same node in the second can be an ordinary
+        loader that names the file, and that name outlives the shelf row.
+        Paired by node id, which both graphs share; an id no editor node
+        names a file for is left out.
+        """
+        wanted = set(shelf_ids)
+        nodes = {
+            node_id: value
+            for node_id, _cls, widget, value in iter_model_fields_api(
+                source.graph, shelf_ids_as_text=True
+            )
+            if widget == SHELF_ID_FIELD and value in wanted
+        }
+        try:
+            editor = find_comfy_workflow(
+                _read_embedded_metadata(server, source.picture_id)
+            )
+        except (HTTPException, OSError, ValueError) as exc:
+            # `_read_embedded_metadata` raises only HTTPException today; the
+            # other two keep this a "gone" rather than a 500 if that changes.
+            logger.info(
+                "Picture %s: could not read its editor graph for the file a "
+                "gone shelf loader named, so it reads as gone: %s",
+                source.picture_id,
+                getattr(exc, "detail", exc),
+            )
+            return {}
+        found = {}
+        for node in (editor or {}).get("nodes") or []:
+            if not isinstance(node, dict) or str(node.get("id")) not in nodes:
+                continue
+            try:
+                names = [
+                    value
+                    for widget, value in loaded_model_widgets(
+                        {"nodes": [node], "links": []}
+                    )
+                    if widget in CHECKPOINT_WIDGETS and widget != SHELF_ID_FIELD
+                ]
+            except Exception as exc:
+                # The reader indexes into whatever the file holds, so a
+                # malformed node raises something other than a ValueError
+                # (`_manual_model_widgets` guards the same reader the same
+                # way). Only this node's name is lost.
+                logger.warning(
+                    "Picture %s: editor node %s will not read for the file a "
+                    "gone shelf loader named, so it reads as gone: %s",
+                    source.picture_id,
+                    node.get("id"),
+                    exc,
+                )
+                continue
+            if names:
+                found[nodes[str(node["id"])]] = names[0]
         return found
 
     @router.get(
