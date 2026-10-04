@@ -9865,6 +9865,11 @@ def test_an_export_carries_no_prompt_no_seed_no_title_and_no_picture_name(export
     payload = r.json()
     graph = payload["workflow"]
     assert payload["source"] == "picture"
+    # Named as the grid names it, model and all (`Model: Text to Image`), not
+    # just the part after the colon.
+    shown = exportable.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"]["name"]
+    assert ": " in shown
+    assert payload["filename"] == f"{shown}.json"
     assert graph["5"]["inputs"]["text"] == ""
     assert graph["6"]["inputs"]["text"] == ""
     assert graph["3"]["inputs"]["seed"] == 0
