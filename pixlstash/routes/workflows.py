@@ -3101,12 +3101,14 @@ def create_router(server) -> APIRouter:
             editor = find_comfy_workflow(
                 _read_embedded_metadata(server, source.picture_id)
             )
-        except HTTPException as exc:
+        except (HTTPException, OSError, ValueError) as exc:
+            # `_read_embedded_metadata` raises only HTTPException today; the
+            # other two keep this a "gone" rather than a 500 if that changes.
             logger.info(
                 "Picture %s: could not read its editor graph for the file a "
                 "gone shelf loader named, so it reads as gone: %s",
                 source.picture_id,
-                exc.detail,
+                getattr(exc, "detail", exc),
             )
             return {}
         found = {}

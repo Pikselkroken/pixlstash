@@ -7356,6 +7356,16 @@ def test_a_gone_shelf_loader_is_named_by_the_pictures_editor_graph(
         "SDXL/ninth.safetensors",
     ]
 
+    # A picture that will not read at all reads as gone, not as a 500.
+    def unreadable(server, picture_id):
+        raise OSError("test-unreadable")
+
+    monkeypatch.setattr(workflows_routes, "_read_embedded_metadata", unreadable)
+    assert _detail(runnable.owner, RUN_WF)["graph_base_models"] == [
+        SHELF_MODEL_GONE,
+        SHELF_MODEL_GONE,
+    ]
+
 
 def _pack_graph(project: str | None = None) -> dict:
     """`_i2i_graph` built on the pack: its picture loader and its saver."""
