@@ -37,6 +37,7 @@ from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.inference.engine import InferenceEngine
 from pixlstash.tagger_plugins.pixlstash_tagger import (
     CENTRE_CROP_TAG_WHITELIST,
+    FACE_QUALITY_CROP_TAGS,
     QUALITY_CROP_TAG_WHITELIST,
 )
 from pixlstash.pixl_logging import get_logger
@@ -54,6 +55,28 @@ _VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"
 # A face's quality crop is this multiple of its box's long side, so the chin,
 # hairline and both eyes are in the window however large the face is (#1648).
 FACE_CROP_SCALE = 1.4
+
+# Faces whose box long side is below this get no face crop: at 1.4x and a 512
+# resize they are magnified 10x or more, and face tags would be judged on blur
+# (#1747). Applies to the face-sized crop only; the fixed window is not resized
+# up.
+MIN_FACE_CROP_PX = 48
+
+# What each kind of quality crop does to the full pass's tags, as
+# ``(owned, stripped)``: the crop may add and boost the `owned` tags, and
+# replaces the full pass's `stripped` tags with its own verdict on them.
+#
+# An upscaled face crop is soft and smeared, so its "blocky" describes the
+# resize, not the picture (#1747): it keeps the face tags, which the tagger
+# learned from close-up crops, and leaves "blocky" to the full pass. A face too
+# small to judge takes the centre crop and strips the full pass's face tags too:
+# a face too small for a 512 crop is too small in the downscaled full image.
+CROP_TAGS_BY_KIND = {
+    "face": (QUALITY_CROP_TAG_WHITELIST, QUALITY_CROP_TAG_WHITELIST),
+    "upscaled_face": (FACE_QUALITY_CROP_TAGS, FACE_QUALITY_CROP_TAGS),
+    "centre": (CENTRE_CROP_TAG_WHITELIST, CENTRE_CROP_TAG_WHITELIST),
+    "small_face": (CENTRE_CROP_TAG_WHITELIST, QUALITY_CROP_TAG_WHITELIST),
+}
 
 
 def _is_transient_load_error(exc: BaseException) -> bool:
@@ -331,9 +354,11 @@ class TagTask(BaseTask):
                 `whole_face_crop` setting turned off).
 
         Returns:
-            ``(key, crop, file_path, is_centre_crop)``, or **None** when this
-            picture cannot contribute a crop. `is_centre_crop` marks the faceless
-            fallback, which is judged against the reduced whitelist.
+            ``(key, crop, file_path, kind)``, or **None** when this picture
+            cannot contribute a crop. `kind` is a `CROP_TAGS_BY_KIND` key:
+            ``"face"``; ``"upscaled_face"``, a face-sized square smaller than
+            `target`; ``"centre"``, the faceless fallback; or ``"small_face"``,
+            the same fallback for a face under `MIN_FACE_CROP_PX`.
 
         **Never raises**, and that is the point of it being a separate method.
         Everything here runs on data the caller does not control: `Face.bbox` is
@@ -393,22 +418,27 @@ class TagTask(BaseTask):
                     raise ValueError(
                         f"face bbox {largest_face.bbox} lies outside the {w}x{h} frame"
                     )
-                side = face_scale * long_side if face_scale else target
-                expanded = expand_bbox_to_square(largest_face.bbox, w, h, side)
-                return (
-                    f"{file_path}#face{largest_face.id}",
-                    img.crop(expanded),
-                    file_path,
-                    False,
-                )
-            # No face detected: fall back to a centre crop so whole-image quality
+                if not (face_scale and long_side < MIN_FACE_CROP_PX):
+                    side = face_scale * long_side if face_scale else target
+                    expanded = expand_bbox_to_square(largest_face.bbox, w, h, side)
+                    # Short of `target` means the tagger resizes it up. True of
+                    # a large face in a picture under 512 too: still magnified.
+                    upscaled = face_scale and expanded[2] - expanded[0] < target
+                    return (
+                        f"{file_path}#face{largest_face.id}",
+                        img.crop(expanded),
+                        file_path,
+                        "upscaled_face" if upscaled else "face",
+                    )
+            # No face detected (or one too small to judge): fall back to a centre crop so whole-image quality
             # defects (blockiness, blur, jpeg artifacts) still get a high-
             # resolution pass instead of relying only on the downscaled full-image
             # pass. A zero-size box at the image centre expands to a target-sized
             # square, so the crop is judged at its native resolution.
             centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
             expanded = expand_bbox_to_square(centre_bbox, w, h, target)
-            return f"{file_path}#centre", img.crop(expanded), file_path, True
+            kind = "small_face" if valid_faces else "centre"
+            return f"{file_path}#centre", img.crop(expanded), file_path, kind
         except Exception as exc:
             logger.warning(
                 "Could not build the quality crop for picture %s (%s): %s",
@@ -991,9 +1021,8 @@ class TagTask(BaseTask):
                     )
                     quality_items = []
                     key_to_path = {}
-                    # Paths whose crop is the faceless centre-crop fallback; these are
-                    # judged against the reduced CENTRE_CROP_TAG_WHITELIST (no face tags).
-                    centre_crop_paths: set = set()
+                    # Path -> the `CROP_TAGS_BY_KIND` key of the crop built for it.
+                    crop_kind_by_path: dict = {}
                     # CPU work, and it sits between the two GPU timers: PIL
                     # crops and resizes, plus a decode for any picture the
                     # preload missed.
@@ -1008,11 +1037,10 @@ class TagTask(BaseTask):
                         )
                         if built is None:
                             continue
-                        key, crop, file_path, is_centre_crop = built
+                        key, crop, file_path, kind = built
                         quality_items.append((key, crop))
                         key_to_path[key] = file_path
-                        if is_centre_crop:
-                            centre_crop_paths.add(file_path)
+                        crop_kind_by_path[file_path] = kind
                     crop_build_s = time.perf_counter() - crop_build_start
                     if quality_items:
                         # Single GPU pass: get quality tags AND raw scores for predictions.
@@ -1025,16 +1053,11 @@ class TagTask(BaseTask):
                             else None,
                         )
                         crop_inference_s = time.perf_counter() - crop_inf_start
-                        # The crop's authoritative tag set depends on its type: a face
-                        # crop owns the full whitelist; the faceless centre-crop fallback
-                        # owns only the non-face quality tags.
+                        # The crop's authoritative tag set depends on its kind; see
+                        # `CROP_TAGS_BY_KIND`.
                         whitelist_by_path = {
-                            path: (
-                                CENTRE_CROP_TAG_WHITELIST
-                                if path in centre_crop_paths
-                                else QUALITY_CROP_TAG_WHITELIST
-                            )
-                            for path in key_to_path.values()
+                            path: CROP_TAGS_BY_KIND[kind][0]
+                            for path, kind in crop_kind_by_path.items()
                         }
                         # Accumulate quality tags found across all crops per picture path,
                         # keeping only those the crop is allowed to own.
@@ -1050,7 +1073,8 @@ class TagTask(BaseTask):
                         # if the full-image pass produced them, then add only what the
                         # crop confirmed.  Applies to every picture that produced a crop -
                         # the largest face when one was found, otherwise the centre-crop
-                        # fallback (which leaves face tags from the full-image pass alone).
+                        # fallback (which leaves face tags from the full-image pass alone,
+                        # unless a face was found too small to judge).
                         #
                         # "Ground truth" is an argument about RESOLUTION and it
                         # stands on its own - a 448 px crop really does judge
@@ -1069,10 +1093,10 @@ class TagTask(BaseTask):
                         for path, crop_quality in quality_tags_by_path.items():
                             if path not in tag_results:
                                 continue
-                            allowed = whitelist_by_path[path]
+                            stripped = CROP_TAGS_BY_KIND[crop_kind_by_path[path]][1]
                             if crop_is_full_pass_model or not full_scores_by_path:
                                 kept = [
-                                    t for t in tag_results[path] if t not in allowed
+                                    t for t in tag_results[path] if t not in stripped
                                 ]
                             else:
                                 kept = list(tag_results[path])
