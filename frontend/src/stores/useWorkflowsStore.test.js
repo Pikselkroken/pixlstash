@@ -389,6 +389,31 @@ describe("onWorkflowsChanged with reason pictures", () => {
     }
   });
 
+  it("re-reads the whole grid rather than race a refresh still on the wire", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    listWorkflowCards.mockClear();
+    getWorkflowCard.mockReset();
+    let answerOld;
+    getWorkflowCard.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerOld = resolve;
+      }),
+    );
+
+    store.onWorkflowsChanged({ reason: "pictures", keys: ["workhorse"] });
+    store.onWorkflowsChanged({ reason: "pictures", keys: ["workhorse"] });
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(listWorkflowCards).toHaveBeenCalledTimes(1);
+
+    // The first read lands late, with older data: it must not be swapped in.
+    answerOld({ card: { ...CARDS[2], picture_count: 1 } });
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(
+      store.cards.find((card) => card.id === "workhorse").picture_count,
+    ).toBe(90);
+  });
+
   it("re-reads the whole grid for a card it does not draw", async () => {
     const store = useWorkflowsStore();
     await store.fetchCards();
