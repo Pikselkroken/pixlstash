@@ -55,6 +55,7 @@ vi.mock("../../api/modelIcons", () => ({
 import ModelsRail from "./ModelsRail.vue";
 import ModelSetGrid from "../views/ModelSetGrid.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 
@@ -410,6 +411,21 @@ describe("adding", () => {
     store.toggleSet("hand:10");
     await vi.advanceTimersByTimeAsync(10);
     expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a failed add as an error notice and frees the row for another try", async () => {
+    addWorkflowSetMembers.mockRejectedValue(new Error("boom"));
+    const { wrapper } = await mountRail({
+      handMade: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
+      open: "hand:10",
+    });
+    await option(wrapper, "Soft").find('[data-testid="mrail-add"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    expect(useNoticeStore().notices.some((n) => n.level === "error")).toBe(true);
+    const add = option(wrapper, "Soft").find('[data-testid="mrail-add"]');
+    expect(add.attributes("disabled")).toBeUndefined();
+    expect(useOperationStore().receipt).toBe(null);
   });
 
   it("covers every add in some Undo when two sets' writes land out of order", async () => {
