@@ -542,7 +542,7 @@
               v-if="checkpointEdited"
               :value="checkpointBase"
               label="Checkpoint"
-              @reset="checkpointEdit = null"
+              @reset="pickCheckpoint(checkpointBase)"
             />
           </span>
           <!-- A checkpoint this ComfyUI does not have is offered the shelf's
@@ -800,7 +800,6 @@ import {
   MISSING_CHOICES,
   PICTURE_INPUT_UNFILLED,
   LORAS_BYPASSED,
-  PIXLSTASH_PACK_INSTALL,
   reasonsBlock,
   STAGE_LABELS,
   repairNotices,
@@ -1318,13 +1317,16 @@ const BASE_MODEL_FOLDERS = ["checkpoints", "diffusion_models"];
 
 /**
  * The checkpoint the pre-flight says this ComfyUI does not have, with what may
- * replace it: `{file, options, reason}`, or null. `options` are the shelf
- * checkpoints of the missing one's base model that this workflow's loader can
- * load (`model-swap?replacing=`, the Workflow tab's "Replace with…"), so the
- * recipe's LoRAs still fit; `reason` says why there are none. Kept once
- * offered, so the picker stays after a pick clears the reason.
+ * replace it: `{file, options, reason, narrowed}`, or null. `options` are the
+ * shelf checkpoints this workflow's loader can load, held to the missing one's
+ * base model where anything says which (`narrowed`), so the LoRAs still fit
+ * (`model-swap?replacing=`, the Workflow tab's "Replace with…"); `reason` says
+ * why there are none. Kept once offered, so the picker stays after a pick
+ * clears the reason.
  */
 const checkpointFix = ref(null);
+/** Bumped per replacement read, so only the latest one's answer lands. */
+let checkpointAsk = 0;
 
 /** The picker's rows: the missing file first, so the row shows what it was. */
 const checkpointOptions = computed(() => {
@@ -1344,15 +1346,15 @@ const checkpointFixNote = computed(() => {
   if (!fix) return "";
   const gone = `${fix.file} is not on this ComfyUI.`;
   if (fix.options.length) {
-    return `${gone} Pick another of the same base model for this run.`;
+    return fix.narrowed
+      ? `${gone} Pick another of the same base model for this run.`
+      : `${gone} Nothing says which base model it was, so every checkpoint this workflow can load is listed: pick one its LoRAs were made for.`;
   }
   switch (fix.reason) {
     case "none_same_base_model":
       return `${gone} No checkpoint on your model shelf is known to have its base model.`;
     case "none_loadable":
       return `${gone} None of the same base model on your model shelf can be loaded by this workflow.`;
-    case "needs_pixlstash_nodes":
-      return `${gone} One of the same base model could load through ComfyUI-PixlStash. ${PIXLSTASH_PACK_INSTALL}`;
     default:
       return `${gone} Type the name of one it has.`;
   }
@@ -1367,8 +1369,12 @@ function pickCheckpoint(filename) {
  * Offer replacements when *found* (a pre-flight's reasons) names the
  * checkpoint the row started at as missing. Asked once per file: the server
  * reads the whole shelf to answer.
+ *
+ * The server answers for a file the workflow's graph loads, so a picture's own
+ * checkpoint that is not the graph's is asked about as the graph's file, and
+ * that file, which fits the graph by construction, leads the offer.
  */
-async function offerCheckpoints(found, key) {
+async function offerCheckpoints(found, key, token) {
   const file = checkpointBase.value;
   if (!checkpointModel.value || checkpointFiles.value || !file) return;
   if (checkpointFix.value?.file === file) return;
@@ -1380,20 +1386,36 @@ async function offerCheckpoints(found, key) {
       ),
   );
   if (!missing) return;
-  checkpointFix.value = { file, options: [], reason: "" };
+  const fix = { file, options: [], reason: "", narrowed: false };
+  checkpointFix.value = fix;
+  const ask = ++checkpointAsk;
+  const graphFile = checkpointModel.value.filename || file;
+  const current = () =>
+    token === loadToken && key === activeKey.value && ask === checkpointAsk;
   let answer;
   try {
-    answer = await readModelSwap(key, { replacing: file, slotKind: "checkpoint" });
+    answer = await readModelSwap(key, {
+      replacing: graphFile,
+      slotKind: "checkpoint",
+    });
   } catch (err) {
-    // The row keeps its text box, and the note still says the file is gone.
-    console.warn(`[run] could not read replacements for ${file} on ${key}`, err);
+    console.warn(`[run] could not read replacements for ${graphFile} on ${key}`, err);
+    // Asked again on the next pre-flight rather than never.
+    if (current()) checkpointFix.value = null;
     return;
   }
-  if (key !== activeKey.value || checkpointFix.value?.file !== file) return;
+  if (!current()) return;
+  // Typed over while the read was out: the owner's name stays in its box.
+  if (checkpointEdit.value !== null) {
+    checkpointFix.value = null;
+    return;
+  }
+  const own = graphFile === file ? [] : [{ filename: graphFile }];
   checkpointFix.value = {
-    file,
-    options: answer?.replacements || [],
+    ...fix,
+    options: [...own, ...(answer?.replacements || [])],
     reason: answer?.replacements_reason || "",
+    narrowed: Boolean(answer?.replacements_narrowed),
   };
 }
 
@@ -2643,6 +2665,7 @@ async function loadCard(key, { keepEdits = false } = {}) {
   // about another's.
   clearStages();
   checkpointFix.value = null;
+  checkpointAsk += 1;
   if (!keepEdits) {
     card.value = next;
     fellBack.value = [];
@@ -2712,7 +2735,7 @@ async function runPreflight(token = loadToken) {
       return;
     }
     reasons.value = all;
-    void offerCheckpoints(all, askedFor);
+    void offerCheckpoints(all, askedFor, token);
     bypassed.value = (answer?.groups || []).flatMap((group) => [
       ...repairNotices(group),
       ...unplacedNotice(group),
@@ -2781,6 +2804,7 @@ async function load() {
   stackChoice.value = null;
   checkpointEdit.value = null;
   checkpointFix.value = null;
+  checkpointAsk += 1;
   clearStages();
   inputsError.value = "";
   try {

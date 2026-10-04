@@ -11495,11 +11495,14 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
 
+    narrowed = []
+
     def offered():
         body = cloneable.owner.get(
             f"{API}/workflows/{RUN_WF}/model-swap",
             params={"replacing": _SHELF_FILENAME},
         ).json()
+        narrowed.append(body["replacements_narrowed"])
         return [c["filename"] for c in body["replacements"]], body[
             "replacements_reason"
         ]
@@ -11514,14 +11517,17 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
         # Nothing says what the missing one was: every checkpoint.
         every = offered()
         assert {CLONE_CHECKPOINT, _REPLACEMENT_FILENAME} <= set(every[0])
+        assert narrowed[-1] is False, "an unnarrowed offer said it was narrowed"
         # Its shelf row does, spelled differently from the candidate's.
         set_base("filename = ?", "SDXL 1.0", _SHELF_FILENAME)
         assert offered() == ([_REPLACEMENT_FILENAME], None)
+        assert narrowed[-1] is True
         # Without it, the graph's LoRA does.
         set_base("filename = ?", None, _SHELF_FILENAME)
         cloneable.graph["2"]["inputs"]["lora_name"] = RUN_ADAPTER_FILENAME
         set_base("sha256 = ?", "FLUX.1 dev", RUN_ADAPTER_DIGEST)
         assert offered() == ([CLONE_CHECKPOINT], None)
+        assert narrowed[-1] is True
         # A base model nothing on the shelf has is said as such.
         set_base("sha256 = ?", "SD 1.5", RUN_ADAPTER_DIGEST)
         assert offered() == ([], "none_same_base_model")
@@ -11537,6 +11543,7 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
             "inputs": {"ckpt_name": CLONE_CHECKPOINT},
         }
         assert offered() == every
+        assert narrowed[-1] is False
     finally:
         set_base("sha256 = ?", None, RUN_ADAPTER_DIGEST)
         set_base("filename = ?", None, _SHELF_FILENAME)

@@ -1850,6 +1850,14 @@ class ModelSwapOptions(BaseModel):
             "type when it does not."
         ),
     )
+    replacements_narrowed: bool | None = Field(
+        None,
+        description=(
+            "Only with `?replacing=` a checkpoint: true when `replacements` "
+            "were held to the missing one's base model, false when nothing "
+            "said which it was and every loadable checkpoint is offered."
+        ),
+    )
     replacements_reason: (
         Literal[
             "no_checkpoint",
@@ -6738,7 +6746,7 @@ def create_router(server) -> APIRouter:
         index: tuple,
         replacing: str,
         kind: str | None,
-    ) -> tuple[list[ModelFixCandidate], str | None]:
+    ) -> tuple[list[ModelFixCandidate], str | None, bool]:
         """What the Workflow tab may offer in place of *replacing*.
 
         Read off the graph a run submits, with the owner's fixes applied, so a
@@ -6761,7 +6769,8 @@ def create_router(server) -> APIRouter:
           (``run_service.plan_pixlstash_swap``, #1605), marked ``loader``.
 
         Returns:
-            ``(candidates, reason)``, *reason* set only when there are none.
+            ``(candidates, reason, narrowed)``, *reason* set only when there
+            are none, *narrowed* when a checkpoint's were held to a base model.
 
         Raises:
             HTTPException: 409 when the graph loads *replacing* in no slot a
@@ -6840,7 +6849,7 @@ def create_router(server) -> APIRouter:
                 None,
             )
             if base is None or base.file_kind != FILE_CHECKPOINT:
-                return [], "no_checkpoint"
+                return [], "no_checkpoint", False
             candidates = [
                 ModelFixCandidate(
                     id=entry["id"],
@@ -6853,8 +6862,10 @@ def create_router(server) -> APIRouter:
         candidates = [
             c for c in candidates if normalized_filename(c.filename) != wanted
         ]
+        narrowed = base_model is not None
         if not candidates:
-            return [], "none_same_base_model" if base_model else "none_go_with_it"
+            reason = "none_same_base_model" if base_model else "none_go_with_it"
+            return [], reason, narrowed
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
 
         def loadable(candidates, info, log=True):
@@ -6901,15 +6912,15 @@ def create_router(server) -> APIRouter:
 
         found = loadable(candidates, object_info)
         if found:
-            return found, None
+            return found, None, narrowed
         pack = [cls for cls, _widgets in run_service.PIXLSTASH_SWAP_LOADERS.values()]
         if object_info is not None and any(cls not in object_info for cls in pack):
             # Would installing ComfyUI-PixlStash make one loadable in EVERY
             # loader naming the file? Asked by the same filter, pack declared.
             with_pack = {**{cls: {} for cls in pack}, **object_info}
             if loadable(candidates, with_pack, log=False):
-                return [], "needs_pixlstash_nodes"
-        return [], "none_loadable"
+                return [], "needs_pixlstash_nodes", narrowed
+        return [], "none_loadable", narrowed
 
     @router.get(
         "/workflows/{workflow_id}/model-swap",
@@ -6961,7 +6972,11 @@ def create_router(server) -> APIRouter:
         )
         if replacing is not None:
             # The Workflow tab's "Replace with…", not the clone dialog.
-            options.replacements, options.replacements_reason = _fix_replacements(
+            (
+                options.replacements,
+                options.replacements_reason,
+                options.replacements_narrowed,
+            ) = _fix_replacements(
                 request,
                 card,
                 deepcopy(source.graph),
