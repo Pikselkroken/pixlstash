@@ -5807,6 +5807,7 @@ def test_outputs_comfyui_dropped_at_validation_reach_the_import(runnable):
     deadline = time.monotonic() + 5
     while not importing and time.monotonic() < deadline:
         time.sleep(0.01)  # the import runs on a thread of its own
+    assert importing, "the import thread never received the run"
     assert importing[0]["rejected"] == (
         "KSamplerAdvanced (node 94): sampler_name: 'res_2s' not in []"
     )

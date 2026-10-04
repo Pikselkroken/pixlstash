@@ -860,6 +860,8 @@ function handleComfyuiRun(payload) {
       comfyuiFailedPromptMessages.get(failedEarly),
     );
   }
+  // Consumed: `markComfyuiPromptFailed` re-records it, and nothing needs it now.
+  for (const id of ids) comfyuiFailedPromptMessages.delete(id);
 }
 
 // Promote backend ComfyUI failure progress events into the ComfyUI runner banner
