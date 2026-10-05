@@ -65,6 +65,10 @@ class TextEmbeddingWorkflow:
     def encode_query(self, query: str) -> list:
         """Generate a SBERT embedding for a free-form query string.
 
+        Through ``InferenceEngine.query_services``: on Metal that is the CPU
+        copies, because this runs on the thread handling the search while the
+        GPU worker is busy, and two threads on Metal take the process down.
+
         Args:
             query: Search query.  Lower-cased before encoding.
 
@@ -74,10 +78,13 @@ class TextEmbeddingWorkflow:
         """
         if not query:
             return []
-        return self._engine.sbert_service.encode([query.lower()])
+        with self._engine.query_services() as (_clip, sbert):
+            return sbert.encode([query.lower()])
 
     def encode_clip_query(self, query: str) -> Optional[np.ndarray]:
         """Generate a CLIP text embedding for a free-form query string.
+
+        Off the inference device on Metal; see :meth:`encode_query`.
 
         Args:
             query: Search query.
@@ -85,7 +92,8 @@ class TextEmbeddingWorkflow:
         Returns:
             A normalised ``np.ndarray`` (shape ``[D]``) or ``None`` on failure.
         """
-        return self._engine.clip_service.encode_text(query)
+        with self._engine.query_services() as (clip, _sbert):
+            return clip.encode_text(query)
 
     @staticmethod
     def _flatten_texts(texts: dict) -> list[str]:

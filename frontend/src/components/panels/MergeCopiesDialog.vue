@@ -95,7 +95,7 @@ import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import { mergeModelCopies } from "../../api/modelFiles";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { trashName } from "../../utils/modelShelf";
+import { copyPath, trashName } from "../../utils/modelShelf";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -140,16 +140,6 @@ const chosen = computed(() =>
 );
 
 const checking = computed(() => pending.value !== null);
-
-/** One copy's path, joined the way the shelf's tooltips join one. */
-function copyPath(copy) {
-  const folder = String(copy?.folder_path || "");
-  const relpath = String(copy?.relpath || "");
-  const windows = folder.includes("\\") && !folder.includes("/");
-  const sep = windows ? "\\" : "/";
-  const tail = windows ? relpath.replace(/\//g, "\\") : relpath;
-  return `${folder.replace(/[/\\]+$/, "")}${sep}${tail.replace(/^[/\\]+/, "")}`;
-}
 
 /**
  * What the reader has to know before agreeing, in ComfyUI's own words.

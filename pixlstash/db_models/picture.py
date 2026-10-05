@@ -695,8 +695,8 @@ class Picture(SQLModel, table=True):
         session: Session,
         query: str,
         query_words: List[str],
-        text_to_embedding: callable,
-        clip_text_to_embedding: callable = None,
+        query_embedding: Optional[np.ndarray],
+        clip_query_embedding: Optional[np.ndarray] = None,
         fuzzy_weight: float = 0.5,
         embedding_weight: float = 0.5,
         text_match_weight: float = 0.0,
@@ -728,30 +728,32 @@ class Picture(SQLModel, table=True):
         word appears in it (``ocr_text_match``), and nothing otherwise, so a
         picture full of words gains nothing on searches its words do not answer.
         The search route passes ``database.OCR_TEXT_MATCH_WEIGHT``.
+
+        The query embeddings come in as values, not as encoder callables,
+        because this runs inside a database task: an encode here would hold the
+        single DB writer thread, and every write, for the length of a model
+        call. Callers encode on their own thread before queuing the search.
+        ``query_embedding`` is the SBERT embedding compared with
+        ``Picture.text_embedding``; ``clip_query_embedding`` the CLIP text
+        embedding compared with ``Picture.image_embedding``. ``None`` leaves
+        that half out of the score.
         """
         if candidate_ids is not None and not candidate_ids:
             return []
         # Imported lazily to avoid a circular import (predicate_filter imports Picture).
         from pixlstash.utils.query.predicate_filter import PredicateFilter
 
-        # 1. Generate SBERT embedding for tag search (Text-to-Text)
-        query_embedding = text_to_embedding(query)
+        # 1. SBERT embedding for tag search (Text-to-Text)
         if query_embedding is None:
             logger.warning("Semantic search: Failed to generate SBERT embedding.")
             query_embedding_bytes = None
         else:
             query_embedding_bytes = query_embedding.tobytes()
 
-        # 2. Generate CLIP embedding for visual search (Text-to-Image)
-        if clip_text_to_embedding:
-            clip_query_embedding = clip_text_to_embedding(query)
-            clip_query_embedding_bytes = (
-                clip_query_embedding.tobytes()
-                if clip_query_embedding is not None
-                else None
-            )
-        else:
-            clip_query_embedding_bytes = None
+        # 2. CLIP embedding for visual search (Text-to-Image)
+        clip_query_embedding_bytes = (
+            clip_query_embedding.tobytes() if clip_query_embedding is not None else None
+        )
 
         logger.debug(
             f"Performing semantic search for query='{query}' and query_words={query_words} with fuzzy_weight={fuzzy_weight}, embedding_weight={embedding_weight}"
@@ -900,7 +902,9 @@ class Picture(SQLModel, table=True):
                 lines.append(
                     f"{idx:>4} {pic_id:>6} {float(combined_score):>9.4f} {float(fuzzy_val):>7.4f} {float(embed_val):>7.4f} {float(min_tag_val):>8.4f}"
                 )
-            logger.info(
+            # DEBUG, not INFO: this carries the search text, which has no
+            # business in the log at the default level.
+            logger.debug(
                 "Semantic search score breakdown (top %d) query=%r:\n%s",
                 len(top_rows),
                 query,

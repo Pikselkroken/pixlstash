@@ -1065,49 +1065,23 @@
               ? true
               : selectionStore.isAllPicturesActive
           "
-          :suggest-kind="setSuggestSet ? 'set' : 'person'"
-          :threshold="
-            faceSearchCharacter
-              ? faceSearchThreshold
-              : setSuggestSet
-                ? setSuggestThreshold
-                : null
-          "
-          :threshold-min="
-            setSuggestSet ? SET_SUGGEST_FETCH_FLOOR : FACE_SEARCH_FETCH_FLOOR
-          "
-          :threshold-max="
-            setSuggestSet ? SET_SUGGEST_MAX_THRESHOLD : FACE_SEARCH_MAX_THRESHOLD
-          "
-          :min-refs="setSuggestSet ? setSuggestMinTags : faceSearchMinRefs"
-          :reference-count="
-            setSuggestSet ? setSuggestTagCount : faceSearchRefCount
-          "
+          :suggest-kind="suggestBar.kind"
+          :threshold="suggestBar.threshold"
+          :threshold-min="suggestBar.thresholdMin"
+          :threshold-max="suggestBar.thresholdMax"
+          :min-refs="suggestBar.minRefs"
+          :reference-count="suggestBar.referenceCount"
           :assign-target="faceSearchCharacter?.name ?? setSuggestSet?.name ?? null"
-          :assign-count="
-            setSuggestSet ? setSuggestAddIds.length : faceSearchAssignIds.length
-          "
+          :assign-count="suggestBar.assignCount"
           :assign-from-selection="faceSearchAssignFromSelection"
           :assign-busy="faceSearchAssignBusy || setSuggestAddBusy"
           :owns-escape="!showSelectionBar"
           :text-match-count="textMatchCount"
           :text-matches-only="searchStore.textMatchesOnly"
           @update:text-matches-only="handleTextMatchesOnly"
-          @update:min-refs="
-            setSuggestSet
-              ? handleSetSuggestMinTags($event)
-              : handleFaceSearchMinRefs($event)
-          "
-          @update:threshold="
-            setSuggestSet
-              ? handleSetSuggestThreshold($event)
-              : handleFaceSearchThreshold($event)
-          "
-          @assign="
-            setSuggestSet
-              ? handleAddSetSuggestions()
-              : handleAssignFaceSearchResults()
-          "
+          @update:min-refs="suggestBar.setMin"
+          @update:threshold="suggestBar.setThreshold"
+          @assign="suggestBar.assign()"
           @search-all="emit('search-all')"
           @clear="clearSearchQuery"
         />
@@ -1234,7 +1208,7 @@ import {
 } from "../../utils/setSuggestionCut.js";
 import {
   squareCropParams,
-  squareCropImgStyle,
+  cropImgStyle,
   squareCropBboxRect,
   coverBboxRect,
 } from "../../utils/squareCrop.js";
@@ -1575,49 +1549,73 @@ const overlayCtxLockReason = computed(() =>
 const reverseImageSearchPictureIds = ref([]);
 const faceLikenessSearchFaceId = ref(null);
 // ── "Suggest more pictures of <person>" (#636) ────────────────────────────────
-// The person whose reference faces are the active query, or null. Distinct from
+// The person whose reference faces are the active query. Distinct from
 // `selectionStore.selectedCharacter`: this search deliberately runs across the whole
 // library, so it must not be mistaken for a character-scoped view.
-const faceSearchCharacter = ref(null); // { id, name }
-// The cut applied to the ranked list. Starts at the same value the backend's
-// SourceFaceLikenessTask already treats as "same person, safe to inherit a
-// character automatically" - a second, UI-local number would drift from it.
+// The cut starts at the same value the backend's SourceFaceLikenessTask already
+// treats as "same person, safe to inherit a character automatically" - a
+// second, UI-local number would drift from it.
 const FACE_SEARCH_DEFAULT_THRESHOLD = 0.7;
 // The fetch floor. Pictures below it are never fetched, so the slider cannot be
 // dragged under it without a refetch; that is why it is also the slider's min.
 const FACE_SEARCH_FETCH_FLOOR = 0.5;
 const FACE_SEARCH_MAX_THRESHOLD = 0.95;
-const faceSearchThreshold = ref(FACE_SEARCH_DEFAULT_THRESHOLD);
-// How many of the person's reference faces must clear that cut. Defaults to 1,
-// which is the behaviour the backend's `combine=max` gives on its own, so the
-// knob starts where the search has always been and only ever tightens.
-const faceSearchMinRefs = ref(1);
-// { characterId, matches: [{picture_id, likeness, face_id, reference_likeness}],
-// rowsById }: the whole ranked list plus its picture rows, so re-cutting it on
-// either knob is free.
-const faceSearchRanked = ref(null);
-// The view the search was armed from. A view change drops the search (below),
-// and this is what keeps the arming click itself from counting as one.
-const faceSearchArmedView = ref(null);
-const faceSearchAssignBusy = ref(false);
+// ranked: { characterId, matches: [{picture_id, likeness, face_id,
+// reference_likeness}], rowsById }. The second knob is how many reference faces
+// must clear the cut; it starts at 1, which is the behaviour the backend's
+// `combine=max` gives on its own, so it only ever tightens.
+const faceSuggest = suggestSearch({
+  key: "characterId",
+  threshold: FACE_SEARCH_DEFAULT_THRESHOLD,
+  minFloor: 1,
+  cut: cutFaceSuggestions,
+  countOf: referenceFaceCount,
+  phase: "character-face-search-request",
+  noticeKey: "character-face-search-load",
+  unnamed: "this person",
+});
+const {
+  subject: faceSearchCharacter,
+  ranked: faceSearchRanked,
+  threshold: faceSearchThreshold,
+  min: faceSearchMinRefs,
+  busy: faceSearchAssignBusy,
+  matches: faceSearchMatches,
+  assignIds: faceSearchAssignIds,
+  clear: clearCharacterFaceSearch,
+} = faceSuggest;
 // ── "Suggest more pictures for <set>" (#1489) ─────────────────────────────────
-// The same shape as the person search above, over the set's centroid instead
-// of reference faces. Library-wide, like that one, so it is not a set view.
-const setSuggestSet = ref(null); // { id, name }
+// The same shape over the set's centroid instead of reference faces.
+// Library-wide, like that one, so it is not a set view.
 // The fetch floor is zero: cosine-to-centroid has no universal "same thing"
 // value, so the useful range is unknown until the set's cohesion comes back.
 const SET_SUGGEST_FETCH_FLOOR = 0;
 const SET_SUGGEST_MAX_THRESHOLD = 1;
-// Null until the ranked list arrives; then seated at the set's cohesion (the
-// median similarity of its own members to their centroid) by the fetch.
-const setSuggestThreshold = ref(null);
-// Signature tags a suggestion must carry. Zero: off until reached for.
-const setSuggestMinTags = ref(0);
-// { setId, matches: [{picture_id, likeness, cohesion, tags_matched,
-// tags_total}], rowsById }
-const setSuggestRanked = ref(null);
-const setSuggestArmedView = ref(null);
-const setSuggestAddBusy = ref(false);
+// ranked: { setId, matches: [{picture_id, likeness, cohesion, tags_matched,
+// tags_total}], rowsById }. The threshold is null until the ranked list
+// arrives, then seated at the set's cohesion (the median similarity of its own
+// members to their centroid) by the fetch. The second knob is the signature
+// tags a suggestion must carry: zero, off until reached for.
+const setSuggest = suggestSearch({
+  key: "setId",
+  threshold: null,
+  minFloor: 0,
+  cut: cutSetSuggestions,
+  countOf: signatureTagCount,
+  phase: "set-suggest-search-request",
+  noticeKey: "set-suggest-search-load",
+  unnamed: "this set",
+});
+const {
+  subject: setSuggestSet,
+  ranked: setSuggestRanked,
+  threshold: setSuggestThreshold,
+  min: setSuggestMinTags,
+  busy: setSuggestAddBusy,
+  matches: setSuggestMatches,
+  assignIds: setSuggestAddIds,
+  clear: clearSetSuggestSearch,
+} = setSuggest;
 // The last text search's response, { key, query, rows }: each row carries
 // `text_match`, so the result pill's "In text" switch can narrow the grid
 // without searching again.
@@ -1687,9 +1685,7 @@ const impossibleSnackbarText = ref("");
 const lastImpossibleRemoved = ref([]);
 
 async function handleClearImpossibleTags() {
-  const pictureIds = selectedImageIds.value
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const pictureIds = selectedPictureIds();
   const filters = Array.isArray(filterStore.impossibleSources)
     ? filterStore.impossibleSources
     : [];
@@ -1841,9 +1837,7 @@ function handleTagsApplied(payload) {
 }
 
 async function handleAutoTag({ model } = {}) {
-  const ids = selectedImageIds.value
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const ids = selectedPictureIds();
   if (!ids.length || !props.backendUrl) return;
   if (!(await confirmRetag(ids.length))) return;
   try {
@@ -1858,9 +1852,7 @@ async function handleAutoTag({ model } = {}) {
 }
 
 async function handleGenerateDescription({ model } = {}) {
-  const ids = selectedImageIds.value
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const ids = selectedPictureIds();
   if (!ids.length || !props.backendUrl) return;
   try {
     // One request marks the whole selection; each finished caption arrives
@@ -2094,9 +2086,7 @@ function openRunForPicture(pictureId) {
  * client that cannot see a card.
  */
 async function makeMoreLikeSelection() {
-  const ids = selectedImageIds.value
-    .map((id) => Number(getPictureId(id)))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const ids = selectedPictureIds();
   if (!ids.length || isReadOnly.value || decidingMakeMore) return;
   // One look-ahead at a time. The menu closes on the click, so a double press
   // or the entry fired from both menus would otherwise start two pre-flights -
@@ -2151,11 +2141,7 @@ function openRunWithWorkflowPicker(ids) {
 
 /** "Run a workflow on these…", from either grid menu. */
 function runWorkflowOnSelection() {
-  openRunWithWorkflowPicker(
-    selectedImageIds.value
-      .map((id) => Number(getPictureId(id)))
-      .filter((id) => Number.isFinite(id) && id > 0),
-  );
+  openRunWithWorkflowPicker(selectedPictureIds());
 }
 
 /** The built-in workflow "Edit with ComfyUI…" runs: Flux.2 Klein image edit. */
@@ -2170,9 +2156,7 @@ const EDIT_WORKFLOW = "Flux2-Klein-Image-Edit.json";
  * fetched on each gesture; the route is idempotent and answers the one filed.
  */
 async function editSelectionWithComfyui() {
-  const ids = selectedImageIds.value
-    .map((id) => Number(getPictureId(id)))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const ids = selectedPictureIds();
   if (isReadOnly.value || !ids.length) return;
   let workflowId;
   try {
@@ -2888,7 +2872,7 @@ function isSquareCropActive(img) {
 // Inline <img> style for the sprite crop, or null → CSS object-fit:cover.
 function getSquareCropImgStyle(img) {
   if (isJustifiedMode.value || isVideo(img)) return null;
-  return squareCropImgStyle(img);
+  return cropImgStyle(img);
 }
 
 // Helper to calculate face/detection bbox overlay style. Square-crop mode maps
@@ -4899,16 +4883,17 @@ const searchResultsActive = computed(
 const searchStatus = computed(() => {
   const total = allGridImages.value.length;
 
-  if (faceSearchCharacter.value) {
-    // Just "N matches". The person is named twice over already, on the Assign
-    // button and by the sidebar row the search was armed from, and this label
-    // sat in front of the two sliders and a bulk-write button in a pill that
-    // has to fit them all without wrapping.
-    const n = faceSearchMatches.value.length;
-    return { count: n, label: n === 1 ? "match" : "matches" };
-  }
-  if (setSuggestSet.value) {
-    const n = setSuggestMatches.value.length;
+  // Just "N matches" for a suggestion search. The person or set is named
+  // twice over already, on the Assign button and by the sidebar row the search
+  // was armed from, and this label sat in front of the two sliders and a
+  // bulk-write button in a pill that has to fit them all without wrapping.
+  const suggested = faceSearchCharacter.value
+    ? faceSearchMatches.value
+    : setSuggestSet.value
+      ? setSuggestMatches.value
+      : null;
+  if (suggested) {
+    const n = suggested.length;
     return { count: n, label: n === 1 ? "match" : "matches" };
   }
   if (faceLikenessSearchFaceId.value) {
@@ -5069,11 +5054,7 @@ const keepCoverOnlyLockReason = computed(() =>
 );
 
 const selectedExpandedCount = computed(() => {
-  const selectedSet = new Set(
-    selectedImageIds.value
-      .map((id) => Number(id))
-      .filter((id) => Number.isFinite(id) && id > 0),
-  );
+  const selectedSet = new Set(selectedPictureIds());
   const visibleIds = new Set(
     allGridImages.value
       .map((img) => Number(img?.id))
@@ -5665,6 +5646,13 @@ const {
   onFaceBboxDragStart,
   clearSelection,
 } = useMultiSelect();
+
+/** The selection as numeric picture ids, anything that is not one dropped. */
+function selectedPictureIds() {
+  return selectedImageIds.value
+    .map(Number)
+    .filter((id) => Number.isFinite(id) && id > 0);
+}
 
 // The Run popups are mounted in App.vue, outside the grid: they read the view
 // context a run's output is filed into, and the progress runner, from here.
@@ -8138,9 +8126,9 @@ defineExpose({
   // Lets the sidebar's person context menu arm the character-scoped face search
   // ("Suggest more pictures of <person>", #636). Same Tier-3 route as
   // confirmEmptyScrapheap above: sidebar → App.vue → this grid.
-  suggestPicturesForCharacter: handleSuggestPicturesForCharacter,
+  suggestPicturesForCharacter: faceSuggest.arm,
   // The set twin, from the sidebar's set context menu (#1489).
-  suggestPicturesForSet: handleSuggestPicturesForSet,
+  suggestPicturesForSet: setSuggest.arm,
 });
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
@@ -8659,24 +8647,6 @@ function resetFaceAndImageSearches() {
   clearSetSuggestSearch();
 }
 
-/** Forget the set suggestion search, its cached ranked list and both knobs. */
-function clearSetSuggestSearch() {
-  setSuggestSet.value = null;
-  setSuggestRanked.value = null;
-  setSuggestThreshold.value = null;
-  setSuggestMinTags.value = 0;
-  setSuggestArmedView.value = null;
-}
-
-/** Forget the character search, its cached ranked list and both its knobs. */
-function clearCharacterFaceSearch() {
-  faceSearchCharacter.value = null;
-  faceSearchRanked.value = null;
-  faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
-  faceSearchMinRefs.value = 1;
-  faceSearchArmedView.value = null;
-}
-
 function clearSearchQuery() {
   resetFaceAndImageSearches();
   emit("clear-search", "");
@@ -8710,133 +8680,199 @@ function handleFindSimilarFaces(faceId) {
 }
 
 /**
- * Move the suggestion threshold.
+ * One "Suggest more pictures" search: the person one (#636) or the set one
+ * (#1489). They differ only in these arguments.
  *
- * The ref is set synchronously so the count in the bar tracks the drag, while
- * the grid rebuild is debounced: it costs no network call (the ranked list and
- * its rows are cached) but it does re-render the virtual grid, and doing that on
- * every pointer sample would stutter. 200ms is under the ~250ms at which a
- * response stops reading as immediate.
+ * `ranked` caches the whole ranked list and its picture rows against the
+ * subject, so re-cutting it on either knob is free. `armedView` is the view the
+ * search was armed from: a view change drops the search, and this is what keeps
+ * the arming click itself from counting as one.
  *
- * @param {number} value - the new cut, 0-1.
+ * @param {Object} options
+ * @param {string} options.key - the subject's id field in `ranked`.
+ * @param {?number} options.threshold - the strength cut it starts at.
+ * @param {number} options.minFloor - the second knob's lowest value.
+ * @param {Function} options.cut - the cut it shares with the grid rebuild.
+ * @param {Function} options.countOf - what the second knob counts up to.
+ * @param {string} options.phase - `gridFetchPhase` of a failed first fetch.
+ * @param {string} options.noticeKey - that failure's notice key.
+ * @param {string} options.unnamed - the subject's name when it has none.
  */
-function handleFaceSearchThreshold(value) {
-  const next = Number(value);
-  if (!Number.isFinite(next)) return;
-  faceSearchThreshold.value = next;
-  debouncedFaceSearchRecut();
-}
+function suggestSearch({
+  key,
+  threshold: startThreshold,
+  minFloor,
+  cut,
+  countOf,
+  phase,
+  noticeKey,
+  unnamed,
+}) {
+  const subject = ref(null); // { id, name }
+  const ranked = ref(null);
+  const threshold = ref(startThreshold);
+  const min = ref(minFloor);
+  const armedView = ref(null);
+  const busy = ref(false);
 
-/**
- * Move the reference-agreement floor: how many of the person's reference faces
- * must clear the strength cut.
- *
- * Same shape as the threshold above, and for the same reason: it re-cuts the
- * cached ranked list, so it costs no network call and must not stutter the grid.
- * Clamped against the reference count because that count only arrives with the
- * ranked list, so a stale higher value would otherwise empty the results.
- *
- * @param {number} value - references that must agree, 1..N.
- */
-function handleFaceSearchMinRefs(value) {
-  const next = Math.round(Number(value));
-  if (!Number.isFinite(next)) return;
-  const ceiling = Math.max(1, faceSearchRefCount.value || 1);
-  faceSearchMinRefs.value = Math.min(ceiling, Math.max(1, next));
-  debouncedFaceSearchRecut();
-}
+  /** The cached matches when they are this subject's, else null. */
+  const cached = () =>
+    ranked.value && subject.value && ranked.value[key] === subject.value.id
+      ? ranked.value.matches
+      : null;
 
-const debouncedFaceSearchRecut = debounce(() => {
-  if (!faceSearchCharacter.value) return;
-  fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
-}, 200);
-
-/**
- * Arm "Suggest more pictures of <person>" from the sidebar's person menu (#636).
- *
- * @param {{id: number|string, name: string}} character
- */
-function handleSuggestPicturesForCharacter(character) {
-  const id = character?.id;
-  if (id == null) return;
-  reverseImageSearchPictureIds.value = [];
-  faceLikenessSearchFaceId.value = null;
-  clearSetSuggestSearch();
-  faceSearchRanked.value = null;
-  faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
-  faceSearchMinRefs.value = 1;
-  faceSearchCharacter.value = { id, name: character.name ?? "this person" };
-  // Snapshot the view this was armed from. Opening the person's context menu can
-  // itself select that person, so "the view changed" has to mean "changed from
-  // where the search started", not "a selection watcher fired". Otherwise the
-  // clear below cancels the search the click just asked for.
-  faceSearchArmedView.value = {
-    character: selectionStore.selectedCharacter,
-    set: selectionStore.selectedSet,
-  };
-  emit("clear-search", "");
-  // The clear-search emit bumps gridVersion, but that watcher throttles itself
-  // to one refresh per 1200ms - and this search is the direct result of a click,
-  // so it must not be the one that gets dropped. Fetching here as well is safe:
-  // the two calls share a fetch key and the second de-dups against the first.
-  nextTick(() => {
-    void (async () => {
-      const outcome = await fetchAllGridImages({ force: true });
-      if (
-        faceSearchCharacter.value?.id === id &&
-        outcome?.error?.gridFetchPhase === "character-face-search-request"
-      ) {
-        const failure = outcome.error;
-        clearCharacterFaceSearch();
-        await fetchAllGridImages({ force: true });
-        noticeStore.error(
-          `Couldn't load suggestions for ${character.name ?? "this person"}. ${errorDetail(failure)}`,
-          { key: "character-face-search-load" },
-        );
-        return;
-      }
-      updateVisibleThumbnails();
-    })();
-  });
-}
-
-// Every match surviving both knobs. Computed from the cached ranked list rather
-// than from `allGridImages`, so the count in the bar tracks the sliders
-// immediately while the grid rebuild debounces behind it. Shares its cut with
-// the rebuild (`utils/faceSuggestionCut.js`) so the two cannot drift.
-const faceSearchMatches = computed(() => {
-  const cached = faceSearchRanked.value;
-  if (!cached || !faceSearchCharacter.value) return [];
-  if (cached.characterId !== faceSearchCharacter.value.id) return [];
-  return cutFaceSuggestions(
-    cached.matches,
-    faceSearchThreshold.value ?? 0,
-    faceSearchMinRefs.value,
+  // Every match surviving both knobs. Computed from the cached ranked list
+  // rather than from `allGridImages`, so the count in the bar tracks the
+  // sliders immediately while the grid rebuild debounces behind it.
+  const matches = computed(() =>
+    cached() ? cut(cached(), threshold.value ?? 0, min.value) : [],
   );
-});
 
-// How many reference faces the query carried. 0 when the ranked list is not in
-// yet or the server did not send the per-reference rows. The agreement slider
-// then has nothing to offer and the panel drops it rather than show a control
-// whose only position is its minimum.
-const faceSearchRefCount = computed(() => {
-  const cached = faceSearchRanked.value;
-  if (!cached || !faceSearchCharacter.value) return 0;
-  if (cached.characterId !== faceSearchCharacter.value.id) return 0;
-  return referenceFaceCount(cached.matches);
-});
+  // What the second knob counts up to. 0 when the ranked list is not in yet,
+  // and the panel then drops that slider rather than show a control whose only
+  // position is its minimum.
+  const count = computed(() => (cached() ? countOf(cached()) : 0));
 
-// Selection wins over the threshold: a button that ignored an explicit
-// selection of twelve to write forty-one would be the error, not the shortcut.
+  // Selection wins over the threshold: a button that ignored an explicit
+  // selection of twelve to write forty-one would be the error, not the shortcut.
+  const assignIds = computed(() =>
+    selectedImageIds.value.length > 0
+      ? selectedImageIds.value.slice()
+      : matches.value.map((m) => m.picture_id),
+  );
+
+  // Neither knob costs a network call (the ranked list and its rows are
+  // cached), but the rebuild re-renders the virtual grid, and doing that on
+  // every pointer sample would stutter. 200ms is under the ~250ms at which a
+  // response stops reading as immediate.
+  const recut = debounce(() => {
+    if (!subject.value) return;
+    fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
+  }, 200);
+
+  /** Forget the search, its cached ranked list and both knobs. */
+  function clear() {
+    subject.value = null;
+    ranked.value = null;
+    threshold.value = startThreshold;
+    min.value = minFloor;
+    armedView.value = null;
+  }
+
+  /** Move the strength cut, 0-1. The ref is set now so the count tracks the drag. */
+  function setThreshold(value) {
+    const next = Number(value);
+    if (!Number.isFinite(next)) return;
+    threshold.value = next;
+    recut();
+  }
+
+  /**
+   * Move the second knob, clamped against `count`: that only arrives with the
+   * ranked list, so a stale higher value would otherwise empty the results.
+   */
+  function setMin(value) {
+    const next = Math.round(Number(value));
+    if (!Number.isFinite(next)) return;
+    const ceiling = Math.max(minFloor, count.value || minFloor);
+    min.value = Math.min(ceiling, Math.max(minFloor, next));
+    recut();
+  }
+
+  /**
+   * Arm the search from the sidebar's context menu.
+   *
+   * @param {{id: number|string, name: string}} target
+   */
+  function arm(target) {
+    const id = target?.id;
+    if (id == null) return;
+    const name = target.name ?? unnamed;
+    resetFaceAndImageSearches();
+    subject.value = { id, name };
+    // Snapshot the view this was armed from. Opening the sidebar's context menu
+    // can itself select that subject, so "the view changed" has to mean
+    // "changed from where the search started", not "a selection watcher
+    // fired". Otherwise the view-change clear cancels the search the click
+    // just asked for.
+    armedView.value = {
+      character: selectionStore.selectedCharacter,
+      set: selectionStore.selectedSet,
+    };
+    emit("clear-search", "");
+    // The clear-search emit bumps gridVersion, but that watcher throttles
+    // itself to one refresh per 1200ms - and this search is the direct result
+    // of a click, so it must not be the one that gets dropped. Fetching here as
+    // well is safe: the two calls share a fetch key and the second de-dups
+    // against the first.
+    nextTick(() => {
+      void (async () => {
+        const outcome = await fetchAllGridImages({ force: true });
+        if (
+          subject.value?.id === id &&
+          outcome?.error?.gridFetchPhase === phase
+        ) {
+          const failure = outcome.error;
+          clear();
+          await fetchAllGridImages({ force: true });
+          noticeStore.error(
+            `Couldn't load suggestions for ${name}. ${errorDetail(failure)}`,
+            { key: noticeKey },
+          );
+          return;
+        }
+        updateVisibleThumbnails();
+      })();
+    });
+  }
+
+  /** Drop the search when the view is no longer the one it was armed from. */
+  function dropOnViewChange(character, set) {
+    const armed = armedView.value;
+    if (!subject.value) return;
+    if (armed && armed.character === character && armed.set === set) return;
+    clear();
+  }
+
+  return {
+    subject,
+    ranked,
+    threshold,
+    min,
+    busy,
+    matches,
+    count,
+    assignIds,
+    clear,
+    setThreshold,
+    setMin,
+    arm,
+    dropOnViewChange,
+  };
+}
+
+// Selection wins over the threshold, for both searches (`assignIds`).
 const faceSearchAssignFromSelection = computed(
   () => selectedImageIds.value.length > 0,
 );
 
-const faceSearchAssignIds = computed(() =>
-  faceSearchAssignFromSelection.value
-    ? selectedImageIds.value.slice()
-    : faceSearchMatches.value.map((m) => m.picture_id),
-);
+// What the result bar shows and drives: whichever suggestion search is armed.
+const suggestBar = computed(() => {
+  const forSet = Boolean(setSuggestSet.value);
+  const search = forSet ? setSuggest : faceSuggest;
+  return {
+    kind: forSet ? "set" : "person",
+    threshold: search.subject.value ? search.threshold.value : null,
+    thresholdMin: forSet ? SET_SUGGEST_FETCH_FLOOR : FACE_SEARCH_FETCH_FLOOR,
+    thresholdMax: forSet ? SET_SUGGEST_MAX_THRESHOLD : FACE_SEARCH_MAX_THRESHOLD,
+    minRefs: search.min.value,
+    referenceCount: search.count.value,
+    assignCount: search.assignIds.value.length,
+    setMin: search.setMin,
+    setThreshold: search.setThreshold,
+    assign: forSet ? handleAddSetSuggestions : handleAssignFaceSearchResults,
+  };
+});
 
 /**
  * Assign the suggested (or selected) pictures to the searched person.
@@ -8914,108 +8950,6 @@ async function handleAssignFaceSearchResults() {
     faceSearchAssignBusy.value = false;
   }
 }
-
-/**
- * Move the set suggestion's strength cut. Same debounce as the person search:
- * it re-cuts the cached list, so it costs no network call.
- *
- * @param {number} value - the new cut, 0-1.
- */
-function handleSetSuggestThreshold(value) {
-  const next = Number(value);
-  if (!Number.isFinite(next)) return;
-  setSuggestThreshold.value = next;
-  debouncedSetSuggestRecut();
-}
-
-/**
- * Move the tags-in-common floor, clamped to the set's signature-tag count.
- *
- * @param {number} value - signature tags a suggestion must carry, 0..N.
- */
-function handleSetSuggestMinTags(value) {
-  const next = Math.round(Number(value));
-  if (!Number.isFinite(next)) return;
-  setSuggestMinTags.value = Math.min(
-    setSuggestTagCount.value,
-    Math.max(0, next),
-  );
-  debouncedSetSuggestRecut();
-}
-
-const debouncedSetSuggestRecut = debounce(() => {
-  if (!setSuggestSet.value) return;
-  fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
-}, 200);
-
-/**
- * Arm "Suggest more pictures for <set>" from the sidebar's set menu (#1489).
- *
- * @param {{id: number|string, name: string}} pictureSet
- */
-function handleSuggestPicturesForSet(pictureSet) {
-  const id = pictureSet?.id;
-  if (id == null) return;
-  const name = pictureSet.name ?? "this set";
-  reverseImageSearchPictureIds.value = [];
-  faceLikenessSearchFaceId.value = null;
-  clearCharacterFaceSearch();
-  clearSetSuggestSearch();
-  setSuggestSet.value = { id, name };
-  // Snapshot the view it was armed from; see handleSuggestPicturesForCharacter.
-  setSuggestArmedView.value = {
-    character: selectionStore.selectedCharacter,
-    set: selectionStore.selectedSet,
-  };
-  emit("clear-search", "");
-  nextTick(() => {
-    void (async () => {
-      const outcome = await fetchAllGridImages({ force: true });
-      if (
-        setSuggestSet.value?.id === id &&
-        outcome?.error?.gridFetchPhase === "set-suggest-search-request"
-      ) {
-        const failure = outcome.error;
-        clearSetSuggestSearch();
-        await fetchAllGridImages({ force: true });
-        noticeStore.error(
-          `Couldn't load suggestions for ${name}. ${errorDetail(failure)}`,
-          { key: "set-suggest-search-load" },
-        );
-        return;
-      }
-      updateVisibleThumbnails();
-    })();
-  });
-}
-
-// Every match surviving both knobs, from the cached list so the count in the
-// bar tracks the sliders while the grid rebuild debounces behind it. Shares
-// its cut with the rebuild (`utils/setSuggestionCut.js`).
-const setSuggestMatches = computed(() => {
-  const cached = setSuggestRanked.value;
-  if (!cached || !setSuggestSet.value) return [];
-  if (cached.setId !== setSuggestSet.value.id) return [];
-  return cutSetSuggestions(
-    cached.matches,
-    setSuggestThreshold.value ?? 0,
-    setSuggestMinTags.value,
-  );
-});
-
-const setSuggestTagCount = computed(() => {
-  const cached = setSuggestRanked.value;
-  if (!cached || !setSuggestSet.value) return 0;
-  if (cached.setId !== setSuggestSet.value.id) return 0;
-  return signatureTagCount(cached.matches);
-});
-
-// Selection wins over the cut, as for the person search.
-const setSuggestAddIds = computed(() =>
-  faceSearchAssignFromSelection.value
-    ? selectedImageIds.value.slice()
-    : setSuggestMatches.value.map((m) => m.picture_id),
-);
 
 /**
  * Add the suggested (or selected) pictures to the set in ONE bulk call, so the
@@ -9097,20 +9031,8 @@ function dropSearchesForViewChange(character, set) {
   // Compared against the armed-from view rather than fired on any change:
   // opening the sidebar's person menu can itself select that person, and that
   // selection lands around the same click that arms the search.
-  if (setSuggestSet.value) {
-    const armedSet = setSuggestArmedView.value;
-    if (
-      !armedSet ||
-      armedSet.character !== character ||
-      armedSet.set !== set
-    ) {
-      clearSetSuggestSearch();
-    }
-  }
-  if (!faceSearchCharacter.value) return;
-  const armed = faceSearchArmedView.value;
-  if (armed && armed.character === character && armed.set === set) return;
-  clearCharacterFaceSearch();
+  setSuggest.dropOnViewChange(character, set);
+  faceSuggest.dropOnViewChange(character, set);
 }
 
 function handleEmptyStateReset() {

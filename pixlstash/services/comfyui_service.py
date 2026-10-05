@@ -552,26 +552,6 @@ def swap_pixlstash_savers(workflow: dict) -> list[str]:
     return swapped
 
 
-def graph_has_pixlstash_saver(workflow: dict) -> bool:
-    """True when *workflow* ends in a node that imports into the vault itself.
-
-    Such a graph needs no ``filename_prefix`` tagging to be stacked: the saver
-    reports the picture ids it created and ``_process_comfyui_outputs`` adopts
-    them directly.
-
-    **No production caller since #1410** - it was the exemption from the
-    filename tagging above, so it went dead with it - but
-    ``tests/test_comfyui_pixlstash_saver.py`` exercises it directly, so it is
-    covered behaviour rather than dead code. Delete the test with it if it goes.
-    """
-    if not isinstance(workflow, dict):
-        return False
-    return any(
-        isinstance(node, dict) and node.get("class_type") in PIXLSTASH_SAVER_CLASSES
-        for node in workflow.values()
-    )
-
-
 def _fetch_comfyui_history(base_url: str, prompt_id: str) -> dict:
     try:
         response = requests.get(

@@ -28,7 +28,7 @@ import threading
 from concurrent.futures import Future
 from copy import deepcopy
 from graphlib import CycleError, TopologicalSorter
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import requests
 
@@ -36,6 +36,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     is_link,
+    normalized_filename,
     reduce_api_graph,
 )
 
@@ -675,16 +676,6 @@ def detect_model_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     return preflight_prompt(prompt_graph, object_info)["missing_models"]
 
 
-def _alias_key(value: str) -> str:
-    """One loader value as :func:`model_name_aliases` keys its map.
-
-    Its keys are ``workflow_hash.normalized_filename`` - a **lowercased**
-    basename - so a lookup that merely unified separators would miss every
-    mixed-case filename, which is most of them.
-    """
-    return _normalize_filename(value).rsplit("/", 1)[-1].lower()
-
-
 def apply_model_swap(
     prompt_graph: dict,
     targets: list[dict],
@@ -734,11 +725,9 @@ def apply_model_swap(
         options = _combo_options(object_info.get(node.get("class_type")), field)
         if not options:
             continue
-        # Folded to match `model_name_aliases`' keys, which are
-        # `normalized_filename` - LOWERCASE. Looking up the graph's own
-        # spelling instead finds nothing for any name with a capital in
-        # it, which is most real model filenames.
-        candidates = aliases.get(_alias_key(value)) or ()
+        # The key function `model_name_aliases` uses, which LOWERCASES: the
+        # graph's own spelling finds nothing for any name with a capital in it.
+        candidates = aliases.get(normalized_filename(value)) or ()
         for candidate in candidates:
             # The OPTION, not the candidate: `_match_option` accepts a candidate
             # whose separators merely normalize onto an advertised entry, and
@@ -1728,15 +1717,7 @@ def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
     ]
     # Numeric where the id is a number, so the owner-facing sentence reads
     # #3 before #10; a subgraph id ("75:83") keeps its place after them.
-    rewires.sort(
-        key=lambda r: (
-            r["type"],
-            0 if r["node_id"].isdigit() else 1,
-            int(r["node_id"]) if r["node_id"].isdigit() else 0,
-            r["node_id"],
-            r["field"],
-        )
-    )
+    rewires.sort(key=lambda r: (r["type"], _node_order_key(r["node_id"]), r["field"]))
     return {
         "model": model,
         "clip": clip,
@@ -1806,7 +1787,7 @@ def _inserted_loader(
 def insert_adapter(
     prompt_graph: dict,
     plan: dict,
-    adapter: Optional[dict],
+    adapter: dict,
     object_info: dict,
 ) -> dict:
     """Add a LoRA loader carrying *adapter* to *prompt_graph*, as *plan* says.
@@ -1820,13 +1801,7 @@ def insert_adapter(
     Args:
         prompt_graph: The graph to mutate in place.
         plan: The output of :func:`plan_lora_insertion` for this graph.
-        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`, or
-            ``None`` to add the loader **without choosing a LoRA**: ComfyUI's
-            own loader, wired in and left at its widget defaults exactly as
-            dropping the node in ComfyUI would leave it. That is what
-            ``POST /workflows/{key}/insert-lora-loader`` writes into a stored
-            file, so the workflow has a slot to swap from then on. No adapter
-            means no digest loader either - nothing has a digest to resolve.
+        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`.
         object_info: The map the plan was made with.
 
     Returns:
@@ -1837,22 +1812,7 @@ def insert_adapter(
             the graph has diverged from the plan.
     """
     clip = plan.get("clip")
-    if adapter is None:
-        loader = "LoraLoader" if clip is not None else "LoraLoaderModelOnly"
-        if loader not in object_info:
-            raise LookupError(f"This ComfyUI has no {loader} node.")
-        if not _combo_options(object_info[loader], "lora_name"):
-            # The same check `_inserted_loader` makes below, for the same
-            # reason: with no options `_widget_defaults` yields no `lora_name`
-            # key at all, so the copy would be written and answered 201 and
-            # then refused by ComfyUI on a missing required input — after the
-            # owner was told it was ready to pick a LoRA in.
-            raise LookupError(
-                f"This ComfyUI does not say which LoRA files {loader} can load."
-            )
-        field = value = None
-    else:
-        loader, field, value = _inserted_loader(adapter, object_info, clip is not None)
+    loader, field, value = _inserted_loader(adapter, object_info, clip is not None)
     spec = object_info.get(loader) or {}
     outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
     sources = {"MODEL": plan["model"], "CLIP": clip}
@@ -1888,8 +1848,7 @@ def insert_adapter(
         max((int(k) for k in prompt_graph if str(k).isdigit()), default=0) + 1
     )
     inputs = _widget_defaults(spec)
-    if field is not None:
-        inputs[field] = value
+    inputs[field] = value
     inputs["model"] = [plan["model"]["node_id"], plan["model"]["output"]]
     if clip:
         inputs["clip"] = [clip["node_id"], clip["output"]]

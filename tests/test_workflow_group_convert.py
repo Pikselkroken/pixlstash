@@ -1834,10 +1834,20 @@ def test_a_recipe_whose_card_became_no_workflow_is_left_and_deferred(run_env):
     )
 
 
-def test_a_busy_vault_leaves_its_recipes_eligible(run_env):
-    """A lock surfacing through SQLAlchemy is transient, like a busy hub's
-    sqlite3 one: the batch is handed out again rather than deferred for the
-    session."""
+@pytest.mark.parametrize(
+    "locked",
+    [
+        sqlite3.OperationalError("database is locked"),
+        SQLAlchemyOperationalError(
+            "SELECT", {}, sqlite3.OperationalError("database is locked")
+        ),
+    ],
+    ids=["busy hub", "busy vault"],
+)
+def test_a_busy_database_leaves_its_recipes_eligible(run_env, locked):
+    """A lock is transient whichever database raised it - the hub's raw sqlite3
+    one or the vault's through SQLAlchemy: the batch is handed out again rather
+    than deferred for the session."""
     server = run_env.server
 
     def seed(session):
@@ -1850,12 +1860,7 @@ def test_a_busy_vault_leaves_its_recipes_eligible(run_env):
     recipe_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
     finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
     task = finder.find_task()
-    finder.on_task_complete(
-        task,
-        SQLAlchemyOperationalError(
-            "SELECT", {}, sqlite3.OperationalError("database is locked")
-        ),
-    )
+    finder.on_task_complete(task, locked)
     again = finder.find_task()
     assert again is not None and again.params["recipe_ids"] == [recipe_id]
 

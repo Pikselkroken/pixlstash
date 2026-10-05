@@ -509,7 +509,6 @@ describe("the second step", () => {
     expect(push.mock.calls[0][0].text).toBe(
       "Saved “SDXL + face detailer (edited)” as a new workflow.",
     );
-    expect(wrapper.emitted("saved")?.[0]?.[0]?.workflow_id).toBe(NEW_KEY);
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 

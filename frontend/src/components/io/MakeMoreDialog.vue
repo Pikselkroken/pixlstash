@@ -34,7 +34,7 @@
             v-for="id in group.picture_ids.slice(0, 2)"
             :key="id"
             class="mmd-thumb"
-            :src="thumbUrl(id)"
+            :src="pictureThumbnailUrl(id)"
             alt=""
           />
         </span>
@@ -43,8 +43,7 @@
           <span class="mmd-sub">{{ subOf(group) }}</span>
         </span>
         <span class="mmd-count">
-          {{ group.picture_ids.length }}
-          {{ group.picture_ids.length === 1 ? "picture" : "pictures" }}
+          {{ pictureCount(group.picture_ids.length) }}
         </span>
       </div>
 
@@ -143,6 +142,7 @@ import {
 } from "../../api/workflows";
 import { errorMessage } from "../../utils/apiError";
 import { BLOCKS_BATCH, repairNotices } from "../../utils/runReasons";
+import { pictureCount } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -222,7 +222,7 @@ const overRunCap = computed(() => totalRuns.value > MAX_RUNS);
 /** A missing model stops the WHOLE batch, mixed or not — as the server does. */
 const missingModels = computed(() =>
   groups.value.some((group) =>
-    (group.reasons || []).some((reason) => reason.code === BLOCKS_BATCH),
+    group.reasons.some((reason) => reason.code === BLOCKS_BATCH),
   ),
 );
 const blocker = computed(() => {
@@ -238,7 +238,7 @@ const canRun = computed(() => !submitting.value && !blocker.value);
 
 /** Whether anything on screen is a refusal rather than a notice. */
 const anyRefusal = computed(() =>
-  groups.value.some((group) => (group.reasons || []).length),
+  groups.value.some((group) => group.reasons.length),
 );
 
 /**
@@ -251,17 +251,13 @@ const anyRefusal = computed(() =>
  */
 const blockedReasons = computed(() =>
   groups.value.flatMap((group) =>
-    [...(group.reasons || []), ...repairNotices(group)].map((reason) => ({
+    [...group.reasons, ...repairNotices(group)].map((reason) => ({
       key: group.workflow_id || group.picture_ids.join(","),
       subject: nameOf(group),
       reason,
     })),
   ),
 );
-
-function thumbUrl(id) {
-  return pictureThumbnailUrl(id);
-}
 
 function nameOf(group) {
   if (!group.workflow_id) return "No workflow";
@@ -294,6 +290,15 @@ function runBody() {
   return body;
 }
 
+/** An answer's groups, each with its picture ids and reasons as lists. */
+function groupsOf(answer) {
+  return (answer?.groups || []).map((group) => ({
+    ...group,
+    picture_ids: group.picture_ids || [],
+    reasons: group.reasons || [],
+  }));
+}
+
 /** Bumped per open, so a slower earlier read cannot write over a later one. */
 let loadToken = 0;
 /** Whether the caller's handed-over pre-flight has been spent. */
@@ -317,11 +322,7 @@ async function load() {
     ]);
     reused = true;
     if (!mine()) return;
-    groups.value = (answer?.groups || []).map((group) => ({
-      ...group,
-      picture_ids: group.picture_ids || [],
-      reasons: group.reasons || [],
-    }));
+    groups.value = groupsOf(answer);
     names.value = Object.fromEntries(
       (library.cards || []).map((row) => [row.id, row.name]),
     );
@@ -347,11 +348,7 @@ async function submit() {
     const answer = await runWorkflowCard(runBody());
     const prompts = Array.isArray(answer?.prompts) ? answer.prompts : [];
     if (!prompts.length) {
-      groups.value = (answer?.groups || []).map((group) => ({
-        ...group,
-        picture_ids: group.picture_ids || [],
-        reasons: group.reasons || [],
-      }));
+      groups.value = groupsOf(answer);
       submitError.value = "Nothing was queued; see the reason below.";
       return;
     }

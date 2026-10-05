@@ -33,12 +33,7 @@
           </button>
         </div>
         <div class="tm-comfy-bar">
-          <div
-            class="tm-comfy-fill"
-            :style="{
-              width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
-            }"
-          ></div>
+          <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
         </div>
         <div class="tm-comfy-message">{{ entry.run.message }}</div>
       </div>
@@ -82,12 +77,7 @@
           </button>
         </div>
         <div class="tm-comfy-bar">
-          <div
-            class="tm-comfy-fill"
-            :style="{
-              width: `${Math.min(100, Math.max(0, Math.round(entry.run.percent)))}%`,
-            }"
-          ></div>
+          <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
         </div>
         <div class="tm-comfy-message">{{ entry.run.message }}</div>
       </div>
@@ -347,6 +337,11 @@ function tmFormatLabel(key, label) {
     return tmToTitleWords(label);
   }
   return tmFallbackWorkerLabel(key);
+}
+
+/** A ComfyUI or import run's bar fill, as a CSS width clamped to 0-100%. */
+function barWidth(run) {
+  return `${Math.min(100, Math.max(0, Math.round(run.percent)))}%`;
 }
 
 function tmFormatProgress(snapshot) {

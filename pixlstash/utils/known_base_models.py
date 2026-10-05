@@ -563,11 +563,6 @@ def _scored(key: str, cutoff: float) -> list[tuple[float, str]]:
     return sorted(((r, c) for c, r in best.items()), key=lambda hit: -hit[0])
 
 
-def _close(key: str, cutoff: float, limit: int) -> list[str]:
-    """Canonical labels an alias of which is within edit distance of *key*."""
-    return [canonical for _ratio, canonical in _scored(key, cutoff)[:limit]]
-
-
 def _stem(filename: str) -> str:
     """A filename without its directory and extension."""
     base = re.split(r"[\\/]", filename)[-1]
@@ -590,7 +585,8 @@ def suggest(raw: Optional[str], limit: int = 5) -> list[str]:
     if key in _ALIAS_INDEX:
         return []
     hits = _contained(key, 1)[:limit]
-    for canonical in _close(key, _SUGGEST_CUTOFF, limit):
+    # Then labels an alias of which is within edit distance of *key*.
+    for _ratio, canonical in _scored(key, _SUGGEST_CUTOFF)[:limit]:
         if canonical not in hits:
             hits.append(canonical)
     return hits[:limit]

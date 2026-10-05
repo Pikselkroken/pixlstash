@@ -12,6 +12,8 @@
 // the tests pin, so a server that stops sending `cover_score` degrades to a
 // correct preselection rather than to none.
 
+import { pictureCount } from "./workflowSets";
+
 /**
  * Megapixels of a candidate, from whichever shape the record carries.
  * @param {Object} candidate
@@ -442,9 +444,9 @@ export function unitCompositionLabel(units) {
   const list = units ?? [];
   const decks = list.filter((unit) => unit.kind === "deck");
   const loose = list.length - decks.length;
-  if (!decks.length) return `${loose} ${loose === 1 ? "picture" : "pictures"}`;
+  if (!decks.length) return `${pictureCount(loose)}`;
   const parts = decks.map((deck) => `stack of ${deck.depth}`);
-  if (loose) parts.push(`${loose} ${loose === 1 ? "picture" : "pictures"}`);
+  if (loose) parts.push(`${pictureCount(loose)}`);
   const sentence = parts.join(" + ");
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }
@@ -480,7 +482,7 @@ export function stackVerdictLabel(units) {
     // the header's composition still carries it.
     if (loose > 0) {
       return {
-        full: `${merge} + ${loose} ${loose === 1 ? "picture" : "pictures"}`,
+        full: `${merge} + ${pictureCount(loose)}`,
         mid: merge,
         short: "Merge",
         degrades: true,

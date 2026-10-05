@@ -333,7 +333,6 @@
        they press the button, and an unmounted one costs no reads. -->
   <SaveRecipeDialog
     v-if="saveOpen"
-    :open="saveOpen"
     :workflow-id="recipe?.workflowId || ''"
     :prompt="recipe?.positive_prompt || ''"
     :negative="recipe?.negativePrompt || ''"
@@ -377,7 +376,8 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorMessage } from "../../utils/apiError";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
-import { saveFileAs } from "../../utils/downloadFile";
+import { saveJsonAs } from "../../utils/downloadFile";
+import { formatStrength } from "../../utils/loraChain";
 import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { keepsTheSameLook } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
@@ -509,15 +509,6 @@ const useAsInputReason = computed(() =>
 );
 
 /**
- * Where each button's `aria-describedby` points.
- *
- * The two refusals coincide on a read-only session and diverge everywhere
- * else - a read-only reader looking at an A1111 picture is told two different
- * things, one per button. One sentence is rendered once and shared when they
- * agree; when they differ each button gets its own, so neither is described by
- * a sentence about the other.
- */
-/**
  * What describes the Run button, refusal AND reasons.
  *
  * `aria-describedby` takes a list, and shipping only the sentence gives a
@@ -532,6 +523,15 @@ const runDescribedBy = computed(() => {
     : runReasonId;
 });
 
+/**
+ * Where the Use as input button's `aria-describedby` points.
+ *
+ * The two refusals coincide on a read-only session and diverge everywhere
+ * else - a read-only reader looking at an A1111 picture is told two different
+ * things, one per button. One sentence is rendered once and shared when they
+ * agree; when they differ each button gets its own, so neither is described by
+ * a sentence about the other.
+ */
 const inputReasonIsOwn = computed(
   () => !!useAsInputReason.value && useAsInputReason.value !== runReason.value,
 );
@@ -740,15 +740,6 @@ function modelLabel(model) {
 }
 
 /**
- * The design's rows, in its order, from whatever the graph actually set.
- *
- * `Sampler` and `Size` are each two graph settings written as one value
- * ("euler · sgm", "832×1216"), which is how the design draws them and how
- * ComfyUI users say them. A setting the graph does not carry is left out
- * entirely; Seed and Negative are the exception and say "none", because their
- * absence is a fact about the recipe worth reading.
- */
-/**
  * The design's Settings block, from the one settings reading the app has.
  *
  * `extract_recipe_extras` returns `{field: value}` - the FIRST node naming a
@@ -770,18 +761,10 @@ const SETTING_LABELS = {
   size: "Size",
 };
 
-// Drawn in this order when present; anything else follows, in the order the
-// backend listed it, so a field nobody has mapped is still shown.
-const SETTING_ORDER = [
-  "steps",
-  "cfg",
-  "cfg_scale",
-  "guidance",
-  "sampler_name",
-  "sampler",
-  "scheduler",
-  "denoise",
-];
+// Drawn in the labels' order when present; anything else follows, in the
+// order the backend listed it, so a field nobody has mapped is still shown.
+// `size` is one of the rest: it follows the width × height row.
+const SETTING_ORDER = Object.keys(SETTING_LABELS).filter((f) => f !== "size");
 
 const settingRows = computed(() => {
   const recipe = props.recipe;
@@ -851,11 +834,6 @@ function format(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") return String(Number(value.toFixed(4)));
   return String(value);
-}
-
-/** Two decimals, the way every LoRA strength in the app is written. */
-function formatStrength(strength) {
-  return Number(strength).toFixed(2);
 }
 
 const runTooltip = computed(
@@ -960,15 +938,9 @@ async function onWorkflowToggle(event) {
   }
 }
 
-const workflowJson = computed(() => stringify(graph.value?.workflow));
-
-function stringify(value) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
+const workflowJson = computed(() =>
+  JSON.stringify(graph.value?.workflow, null, 2),
+);
 
 async function copyWorkflow() {
   if (!(await copyText(workflowJson.value))) {
@@ -983,10 +955,7 @@ async function downloadWorkflow() {
   if (savingWorkflow) return;
   savingWorkflow = true;
   try {
-    await saveFileAs(
-      new Blob([workflowJson.value], { type: "application/json" }),
-      "comfyui_workflow.json",
-    );
+    await saveJsonAs(graph.value?.workflow, "comfyui_workflow.json");
   } catch (err) {
     console.warn("Failed to save the workflow JSON:", err);
     notices.push({

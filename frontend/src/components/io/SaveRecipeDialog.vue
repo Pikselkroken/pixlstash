@@ -1,6 +1,6 @@
 <template>
   <AppDialog
-    :open="open"
+    open
     title="Save as recipe"
     size="md"
     @close="emit('close')"
@@ -233,7 +233,7 @@
  * reading exactly the same thing as the first, with nothing to tell them
  * apart and no undo.
  */
-import { computed, nextTick, reactive, ref, useId, watch } from "vue";
+import { computed, reactive, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
@@ -247,6 +247,7 @@ import { useConfirm } from "../../composables/useConfirm";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -254,7 +255,6 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 
 const props = defineProps({
-  open: { type: Boolean, default: false },
   /** The workflow the recipe is filed under (#1623: a workflow id). */
   workflowId: { type: String, default: "" },
   /**
@@ -331,7 +331,7 @@ const existingPending = ref(false);
 /** The last name this dialog put in the box itself, as opposed to the owner. */
 let proposed = "";
 
-/** Row id -> taken off this recipe. Reset each time the dialog opens. */
+/** Row id -> taken off this recipe. */
 const removedLoras = reactive({});
 /** The flagged row the question is about, or null. */
 const asking = ref(null);
@@ -430,44 +430,30 @@ const rows = computed(() => {
   return out;
 });
 
-/**
- * Start every row checked except the seed, each time the dialog opens.
- *
- * Keyed on `open` rather than on `rows`, so a row arriving late (the card read
- * that names an override) cannot re-tick something the owner just cleared.
- */
+// Every caller mounts this dialog per save (`v-if`), so it starts fresh.
+// The card's name lands here when the caller had none to suggest; it arrives
+// with the read below, which is why this is not the only writer.
+propose();
+
+// Every row starts checked except the seed. A row that appears later (a late
+// card read) gets its default then, and never re-ticks one the owner cleared.
 watch(
-  () => props.open,
-  (isOpen) => {
-    if (!isOpen) return;
-    saveError.value = "";
-    // The card's name lands here when the caller had none to suggest; it
-    // arrives with the read below, which is why this is not the only writer.
-    propose();
-    for (const key of Object.keys(kept)) delete kept[key];
-    for (const row of rows.value) kept[row.id] = row.id !== "seed";
-    for (const key of Object.keys(removedLoras)) delete removedLoras[key];
-    asking.value = null;
-    takeOut.value = "";
+  rows,
+  (list) => {
+    for (const row of list) {
+      if (!(row.id in kept)) kept[row.id] = row.id !== "seed";
+    }
   },
   { immediate: true },
 );
 
-// A row that appears after the open (a late card read) still needs a default,
-// and the seed's is off.
-watch(rows, (list) => {
-  for (const row of list) {
-    if (!(row.id in kept)) kept[row.id] = row.id !== "seed";
-  }
-});
-
 watch(
-  () => [props.open, props.workflowId],
+  () => props.workflowId,
   async () => {
     workflowName.value = "";
     existing.value = [];
-    existingPending.value = Boolean(props.open && props.workflowId);
-    if (!props.open || !props.workflowId) return;
+    existingPending.value = Boolean(props.workflowId);
+    if (!props.workflowId) return;
     const wanted = props.workflowId;
     void getWorkflowCard(wanted)
       .then((body) => {
@@ -528,12 +514,8 @@ function say(message) {
   liveMessage.value = message;
 }
 
-async function focusLora(rowId, which) {
-  await nextTick();
-  const el = document.querySelector(
-    `[data-lora="${rowId}"] [data-focus="${which}"]`,
-  );
-  el?.focus?.();
+function focusLora(rowId, which) {
+  return focusLater(`[data-lora="${rowId}"] [data-focus="${which}"]`);
 }
 
 /**
@@ -550,6 +532,11 @@ async function removeLora(row) {
     takeOut.value = "";
     return;
   }
+  await strike(row);
+}
+
+/** Take a row off this recipe, say so, and put focus on its Restore. */
+async function strike(row) {
   removedLoras[row.id] = true;
   say(`${row.stem} taken off this recipe. Restore is on the same row.`);
   await focusLora(row.id, "restore");
@@ -583,9 +570,7 @@ async function answerTakeOut() {
   if (takeOut.value === "recipe") {
     asking.value = null;
     takeOut.value = "";
-    removedLoras[row.id] = true;
-    say(`${row.stem} taken off this recipe. Restore is on the same row.`);
-    await focusLora(row.id, "restore");
+    await strike(row);
     return;
   }
   asking.value = null;
@@ -618,13 +603,6 @@ async function creditOf(recipeId) {
   }
 }
 
-/** A row's strength, or 1 when it has none: a 0 is a strength, not a gap. */
-function strengthOr1(value) {
-  if (value === null || value === undefined || value === "") return 1;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 1;
-}
-
 /** What the recipe keeps, in the shape both the POST and the PATCH take. */
 function body() {
   return {
@@ -638,7 +616,8 @@ function body() {
       .map((row) => ({
         filename: row.filename,
         sha256: row.sha256 || null,
-        strength: strengthOr1(row.strength),
+        // `loraRows` already made a missing strength 1.
+        strength: row.strength,
       })),
     overrides: Object.fromEntries(
       props.overrides

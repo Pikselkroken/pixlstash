@@ -17,7 +17,7 @@ from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict
 from send2trash import TrashPermissionError, send2trash
 
-from typing import Any, Optional
+from typing import Optional
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
@@ -40,6 +40,7 @@ from pixlstash.hub.workflows import (
     input_modes_by_workflow,
     replace_parameter_pins,
 )
+from pixlstash.routes._helpers import require_hub
 from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_UNKNOWN
 from pixlstash.utils.comfyui_utilities import (
     collect_seed_inputs,
@@ -1382,38 +1383,6 @@ def _editor_graph_topology(rebuilt: dict | None, editor_graph: dict) -> str | No
         return None
 
 
-def _describe_preflight_failure(preflight: dict) -> str:
-    """Turn a failed pre-flight into a sentence naming what to go and fix.
-
-    The three buckets get three different sentences on purpose: a missing node
-    pack, a missing model file and a missing input image send the user to three
-    different places, and collapsing them into "something is missing" is the
-    difference between an actionable message and a support ticket.
-    """
-    parts: list[str] = []
-    classes = preflight.get("missing_node_classes") or []
-    if classes:
-        parts.append("missing node types: " + ", ".join(str(c) for c in classes))
-    models = [
-        str(item.get("value")) for item in preflight.get("missing_models") or [] if item
-    ]
-    if models:
-        parts.append("missing models: " + ", ".join(models))
-    inputs = [
-        str(item.get("value"))
-        for item in preflight.get("missing_input_images") or []
-        if item
-    ]
-    if inputs:
-        parts.append(
-            "the source image this recipe loads is no longer in ComfyUI's input "
-            "folder: " + ", ".join(inputs)
-        )
-    if not parts:
-        return "This recipe cannot run on your ComfyUI."
-    return "Your ComfyUI cannot run this recipe - " + "; ".join(parts) + "."
-
-
 # How long a fetched `/object_info` map may be reused, and by whom. It is
 # several megabytes on an install with a few node packs, so the one caller that
 # asks as fast as a person presses an arrow key - converting the editor graph
@@ -1527,14 +1496,6 @@ class ComfyUILoraInsertionResponse(BaseModel):
 
     plan: Optional[dict] = None
     reason: Optional[str] = None
-
-
-class ComfyUIWorkflowLoraInsertionResponse(ComfyUILoraInsertionResponse):
-    """A saved workflow's LoRA insertion; ``has_lora_loader`` needs none."""
-
-    workflow: str
-    # None for a UI-format file: whether it has a loader cannot be read from it.
-    has_lora_loader: Optional[bool] = False
 
 
 class ComfyUIWorkflowCardResponse(BaseModel):
@@ -1717,19 +1678,6 @@ class ComfyUIRecipeModelSlot(BaseModel):
     # path as `model_id` and is absent for a scoped token.
     display_name: Optional[str] = None
     verified: bool = False
-
-
-class ComfyUIRecipeSetting(BaseModel):
-    """One sampler setting of the recipe: ``steps``, ``cfg``, ``width``…"""
-
-    # No `extra="allow"` here, unlike its siblings in this module. This route
-    # varies its answer by credential, so the model is a disclosure boundary: a
-    # key some future version of the service starts returning must be declared
-    # here before it reaches anybody, rather than passing through unread.
-
-    label: str
-    value: Any = None
-    node: Optional[str] = None
 
 
 class ComfyUIRecipeInput(BaseModel):
@@ -2137,60 +2085,6 @@ def create_router(server) -> APIRouter:
             "name": trash_user_workflow(getattr(server, "hub", None), workflow_name),
         }
 
-    def _load_stored_workflow(workflow_name: str) -> tuple[str, str, dict]:
-        """``(on-disk name, path, document)`` of a stored workflow, or raise 4xx."""
-        name = _normalize_workflow_name(workflow_name)
-        if not name:
-            raise HTTPException(status_code=400, detail="workflow_name is required")
-        path, _source = _resolve_workflow_path(name)
-        if not path:
-            raise HTTPException(status_code=404, detail="Workflow not found")
-        try:
-            document = runnable_document(path, _load_workflow_json(path))
-        except Exception as exc:
-            logger.warning("Failed to read workflow %s: %s", path, exc)
-            raise HTTPException(
-                status_code=422, detail="This workflow's graph could not be read."
-            ) from exc
-        return _on_disk_name(path), path, document
-
-    @router.get(
-        "/comfyui/workflows/{workflow_name}/lora-insertion",
-        summary="Where a LoRA loader would be added to a workflow",
-        description=(
-            "For a saved workflow with no LoRA loader: the model (and CLIP) "
-            "source a loader would take and every input it would rewire, typed "
-            "from ComfyUI's object_info, so the owner sees the change before a "
-            "run sends insert_lora_loader. plan is null and reason says why "
-            "when no loader can be added; has_lora_loader is true, with neither, "
-            "when the workflow already has one to swap, and null for a "
-            "UI-format file, which may have one PixlStash cannot read."
-        ),
-        response_model=ComfyUIWorkflowLoraInsertionResponse,
-    )
-    def get_comfyui_workflow_lora_insertion(request: Request, workflow_name: str):
-        name, _path, document = _load_stored_workflow(workflow_name)
-        graph = api_graph(document)
-        if graph is not None and detect_lora_targets(graph):
-            return {"workflow": name, "has_lora_loader": True}
-        if graph is None:
-            # Not `false`: a UI-format file may well have a loader, and saying
-            # it has none would be the claim _resolve_lora_swap declines to
-            # make. Unknown, with the reason.
-            return {
-                "workflow": name,
-                "has_lora_loader": None,
-                **_describe_lora_insertion(None, None, None),
-            }
-        object_info, error = None, None
-        if graph is not None:
-            comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
-            object_info, error = _read_object_info(comfyui_url)
-        return {
-            "workflow": name,
-            **_describe_lora_insertion(graph, object_info, error),
-        }
-
     @router.get(
         "/comfyui/pixlstash-node",
         summary="Whether ComfyUI can open a PixlStash workflow",
@@ -2225,11 +2119,7 @@ def create_router(server) -> APIRouter:
         },
     )
     def card_for_comfyui_workflow(request: Request, workflow_name: str):
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503, detail="The workflow library is not open."
-            )
+        hub = require_hub(server, "The workflow library is not open.")
         name = _normalize_workflow_name(workflow_name)
         path = _builtin_path(name)
         if path is None:
@@ -2316,11 +2206,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="workflow must be a JSON object"
             )
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503, detail="The workflow library is not open."
-            )
+        hub = require_hub(server, "The workflow library is not open.")
         try:
             workflow_id = store_manual_workflow(hub, _stem(name), workflow, "import")
         except WorkflowFileTooLarge as exc:
@@ -2386,11 +2272,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="output must be an API-format graph"
             )
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503, detail="The workflow library is not open."
-            )
+        hub = require_hub(server, "The workflow library is not open.")
         name = _stem(payload.get("name") or "workflow")
         try:
             migrated, _ = workflow_bindings.migrate_placeholders(workflow)
@@ -2443,12 +2325,9 @@ def create_router(server) -> APIRouter:
         response_model=ComfyUIWorkflowPullStartResponse,
     )
     def pull_comfyui_workflows(request: Request):
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503,
-                detail="The workflow library is not open, so nothing can be pulled.",
-            )
+        hub = require_hub(
+            server, "The workflow library is not open, so nothing can be pulled."
+        )
         comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
         origin_client_id = getattr(request.state, "origin_client_id", None)
 

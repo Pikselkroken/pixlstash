@@ -90,7 +90,10 @@ import { useWorkflowNames } from "../../composables/useWorkflowNames";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { errorMessage } from "../../utils/apiError";
 import { onSessionReset } from "../../utils/apiClient";
-import { NO_REPLACEMENT_TEXT, replacementLabel } from "../../utils/workflowCard";
+import {
+  NO_REPLACEMENT_TEXT,
+  replacementOptions,
+} from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppSelect from "../widgets/AppSelect.vue";
@@ -200,16 +203,7 @@ async function load() {
           slotKind: "checkpoint",
         });
         if (mine !== token) return;
-        const models = body.replacements ?? [];
-        row.options = models.length
-          ? [
-              { value: "", label: "Replace with…" },
-              ...models.map((model) => ({
-                value: model.filename,
-                label: replacementLabel(model),
-              })),
-            ]
-          : [];
+        row.options = replacementOptions(body.replacements);
         row.reason =
           NO_REPLACEMENT_TEXT[body.replacements_reason] ||
           "Nothing on your shelf can replace it.";

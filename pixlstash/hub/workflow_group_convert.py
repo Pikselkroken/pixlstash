@@ -33,7 +33,7 @@ import sqlite3
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from pixlstash.hub.workflow_card_reads import (
     AUTO_STACK_PREFIX,
@@ -258,7 +258,8 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
     members: dict[str, list[Card]] = {}
     for key, workflow_id in workflow_of.items():
         members.setdefault(workflow_id, []).append(by_key[key])
-    labels = _LabelCache(hub)
+    # Per topology, ``{slot label: core label or None}`` from one stored graph.
+    labels: dict[str, Optional[dict[str, Optional[str]]]] = {}
     for workflow_id, group in sorted(members.items()):
         # The cover first: stack position 0, else most variants, then the key.
         stack_id = stack_of_group.get(workflow_id, workflow_id)
@@ -646,6 +647,75 @@ def rewritten_address(
     return None
 
 
+def _move_topologies(
+    conn: sqlite3.Connection,
+    topologies,
+    move: Callable[[str], Optional[tuple]],
+    rule: str,
+    unmoved: str,
+) -> tuple[dict, dict, dict, dict, dict, dict]:
+    """Run *move* on each topology in a savepoint; :func:`_retire_all`'s maps.
+
+    *move* returns ``(label map, stage slots, new core, [(card, old id, new id,
+    variants)])``, ``None`` when no stored graph reduces. The result is
+    ``(heirs_of, topologies_of, labels_of, stage_slots_of, new_of_card,
+    core_of_heir)``, in :func:`_retire_all`'s argument order.
+
+    Shared by data steps 8 and 10. This runs at hub open inside the
+    data-version transaction, so an uncaught error would refuse the hub on
+    every start (`convert_card_state` guards the same way). A topology whose
+    move returns ``None`` or raises is rolled back, logged and restamped from
+    *rule* to *unmoved*: tried once, so the step is not re-run on every open,
+    and not current either, so the card backfill still picks it up.
+    """
+    heirs_of: dict[str, Counter] = {}  # old id -> {new id: variants}
+    topologies_of: dict[str, set[str]] = {}
+    labels_of: dict[str, dict[str, Optional[str]]] = {}
+    stage_slots_of: dict[str, dict[str, str]] = {}
+    new_of_card: dict[str, dict[str, str]] = {}  # old id -> {card: new id}
+    core_of_heir: dict[str, str] = {}
+    for topology_hash in sorted(topologies):
+        conn.execute("SAVEPOINT rederive_topology")
+        try:
+            result = move(topology_hash)
+            conn.execute("RELEASE rederive_topology")
+        except sqlite3.Error:
+            # The hub itself (disk full, I/O): the whole step rolls back and
+            # retries on the next open, rather than restamping the topology.
+            raise
+        except Exception as exc:
+            conn.execute("ROLLBACK TO rederive_topology")
+            conn.execute("RELEASE rederive_topology")
+            logger.error(
+                "Topology %s failed to move off core rule %s (%s: %s); it stays "
+                "there until the card backfill re-derives it, and owner state on "
+                "its workflows is not carried from it.",
+                topology_hash,
+                rule,
+                type(exc).__name__,
+                exc,
+            )
+            result = None
+        if result is None:
+            conn.execute(
+                "UPDATE workflow_topology_core SET core_version = ? "
+                "WHERE topology_hash = ? AND core_version = ?",
+                (unmoved, topology_hash, rule),
+            )
+            continue
+        labels, stage_slots, new_core, moves = result
+        labels_of[topology_hash] = labels
+        stage_slots_of[topology_hash] = stage_slots
+        for workflow_key, old_id, new_id, variants in moves:
+            topologies_of.setdefault(old_id, set()).add(topology_hash)
+            heirs_of.setdefault(old_id, Counter())[new_id] += variants
+            # Per old id: a card's variants of other families are in other
+            # workflows and go to other heirs, so one heir per card.
+            new_of_card.setdefault(old_id, {})[workflow_key] = new_id
+            core_of_heir[new_id] = new_core
+    return heirs_of, topologies_of, labels_of, stage_slots_of, new_of_card, core_of_heir
+
+
 def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> int:
     """Put every v1 topology on the live core rule, its workflow's state with it.
 
@@ -706,83 +776,26 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
         }
     if not todo:
         return 0
-    heirs_of: dict[str, Counter] = {}  # old id -> {new id: variants}
-    topologies_of: dict[str, set[str]] = {}
-    new_of_card: dict[str, dict[str, str]] = {}  # old id -> {card: new id}
-    core_of_heir: dict[str, str] = {}
-    stage_slots_of: dict[str, dict[str, str]] = {}
-    labels_of: dict[str, dict[str, Optional[str]]] = {}
     shelf: list = []  # one shelf index for the whole step
-    for topology_hash in sorted(todo):
-        # A savepoint per topology: this runs at hub open inside the
-        # data-version transaction, so an uncaught error would refuse the hub
-        # on every start (`convert_card_state` guards the same way).
-        conn.execute("SAVEPOINT rederive_topology")
-        try:
-            moved = _rederive_topology(
-                conn,
-                hub,
-                topology_hash,
-                cards_of.get(topology_hash, []),
-                v1_rows,
-                shelf,
-            )
-            conn.execute("RELEASE rederive_topology")
-        except sqlite3.Error:
-            # The hub itself (disk full, I/O): the whole step rolls back and
-            # retries on the next open, rather than restamping the topology.
-            raise
-        except Exception as exc:
-            conn.execute("ROLLBACK TO rederive_topology")
-            conn.execute("RELEASE rederive_topology")
-            logger.error(
-                "Topology %s failed to move off core rule v1 (%s: %s); it stays on "
-                "v1 until the card backfill re-derives it, and owner state on its "
-                "v1 workflow is not carried from it.",
-                topology_hash,
-                type(exc).__name__,
-                exc,
-            )
-            moved = None
-        if moved is None:
-            # Tried once: off the v1 stamp, or `_has_old_cores` re-runs this
-            # step on every open forever. Not current either, so the card
-            # backfill still picks it up.
-            conn.execute(
-                "UPDATE workflow_topology_core SET core_version = ? "
-                "WHERE topology_hash = ? AND core_version = ?",
-                (_CORE_RULE_V1_UNMOVED, topology_hash, _CORE_RULE_V1),
-            )
-            continue
-        old_id, labels, stage_slots, card_heirs, new_core = moved
-        stage_slots_of[topology_hash] = stage_slots
-        labels_of[topology_hash] = labels
-        topologies_of.setdefault(old_id, set()).add(topology_hash)
-        heirs = heirs_of.setdefault(old_id, Counter())
-        for workflow_key, new_id, variants in card_heirs:
-            new_of_card.setdefault(old_id, {})[workflow_key] = new_id
-            core_of_heir[new_id] = new_core
-            heirs[new_id] += variants
-
-    _retire_all(
+    moved = _move_topologies(
         conn,
-        hub,
-        heirs_of,
-        topologies_of,
-        labels_of,
-        stage_slots_of,
-        new_of_card,
-        core_of_heir,
+        todo,
+        lambda topology_hash: _rederive_topology(
+            conn, hub, topology_hash, cards_of.get(topology_hash, []), v1_rows, shelf
+        ),
+        _CORE_RULE_V1,
+        _CORE_RULE_V1_UNMOVED,
     )
-    moved = sum(len(t) for t in topologies_of.values())
+    heirs_of, labels_of = moved[0], moved[2]
+    _retire_all(conn, hub, *moved)
     logger.info(
         "Core rule v1 to %s: %d topologies re-derived; %d workflows become %d.",
         CORE_VERSION,
-        moved,
+        len(labels_of),
         len(heirs_of),
         len({h for heirs in heirs_of.values() for h in heirs}),
     )
-    return moved
+    return len(labels_of)
 
 
 def rederive_cores_v3(conn: sqlite3.Connection) -> int:
@@ -818,56 +831,20 @@ def rederive_cores_v3(conn: sqlite3.Connection) -> int:
     for card in card_index(hub):
         if not card.manual and card.topology_hash in v2_rows:
             cards_of.setdefault(card.topology_hash, []).append(card)
-    heirs_of: dict[str, Counter] = {}  # old id -> {new id: variants}
-    topologies_of: dict[str, set[str]] = {}
-    new_of_card: dict[str, dict[str, str]] = {}  # old id -> {card: new id}
-    core_of_heir: dict[str, str] = {}
-    stage_slots_of: dict[str, dict[str, str]] = {}
-    labels_of: dict[str, dict[str, Optional[str]]] = {}
-    for topology_hash in sorted(v2_rows):
-        conn.execute("SAVEPOINT rederive_topology")
-        try:
-            moved = _rederive_topology_v3(
-                conn,
-                hub,
-                topology_hash,
-                cards_of.get(topology_hash, []),
-                v2_rows[topology_hash],
-            )
-            conn.execute("RELEASE rederive_topology")
-        except sqlite3.Error:
-            raise
-        except Exception as exc:
-            conn.execute("ROLLBACK TO rederive_topology")
-            conn.execute("RELEASE rederive_topology")
-            logger.error(
-                "Topology %s failed to move to core rule v3 (%s: %s); it stays on "
-                "v2 until the card backfill re-derives it, and owner state on its "
-                "v2 workflows is not carried from it.",
-                topology_hash,
-                type(exc).__name__,
-                exc,
-            )
-            moved = None
-        if moved is None:
-            conn.execute(
-                "UPDATE workflow_topology_core SET core_version = ? "
-                "WHERE topology_hash = ? AND core_version = ?",
-                (_CORE_RULE_V2_UNMOVED, topology_hash, _CORE_RULE_V2),
-            )
-            continue
-        labels, stage_slots, new_core, moves = moved
-        stage_slots_of[topology_hash] = stage_slots
-        labels_of[topology_hash] = labels
-        for workflow_key, old_id, new_id in moves:
-            topologies_of.setdefault(old_id, set()).add(topology_hash)
-            heirs_of.setdefault(old_id, Counter())[new_id] += 1
-            # Per old id: a card's variants of other families are in other
-            # workflows and go to other heirs. One old id is one family set
-            # on one core, so one heir per card.
-            new_of_card.setdefault(old_id, {})[workflow_key] = new_id
-            core_of_heir[new_id] = new_core
-
+    moved = _move_topologies(
+        conn,
+        v2_rows,
+        lambda topology_hash: _rederive_topology_v3(
+            conn,
+            hub,
+            topology_hash,
+            cards_of.get(topology_hash, []),
+            v2_rows[topology_hash],
+        ),
+        _CORE_RULE_V2,
+        _CORE_RULE_V2_UNMOVED,
+    )
+    heirs_of, labels_of = moved[0], moved[2]
     live = {w.workflow_id for w in workflow_index(hub)}
     for old_id in sorted(heirs_of.keys() & live):
         # Some variant of it kept its core (only where v3 is not a function of
@@ -878,17 +855,7 @@ def rederive_cores_v3(conn: sqlite3.Connection) -> int:
             old_id,
             dict(heirs_of.pop(old_id)),
         )
-    _retire_all(
-        conn,
-        hub,
-        heirs_of,
-        topologies_of,
-        labels_of,
-        stage_slots_of,
-        new_of_card,
-        core_of_heir,
-        own_slots=True,
-    )
+    _retire_all(conn, hub, *moved, own_slots=True)
     logger.info(
         "Core rule v3: %d topologies re-derived; %d workflows merge into %d.",
         len(labels_of),
@@ -904,11 +871,11 @@ def _rederive_topology_v3(
     topology_hash: str,
     cards: list[Card],
     old_core: str,
-) -> Optional[tuple[dict, dict, str, list[tuple[str, str, str]]]]:
+) -> Optional[tuple[dict, dict, str, list[tuple[str, str, str, int]]]]:
     """Write one topology's v3 row; ``None`` when no stored graph reduces.
 
-    Returns ``(label map, stage slots, v3 core, [(card, old id, new id)])``,
-    one entry per variant whose id changes.
+    Returns :func:`_move_topologies`' shape, one move per variant whose id
+    changes.
     """
     found = next(filter(None, (card_document(hub, c) for c in cards)), None)
     if found is None:
@@ -958,7 +925,7 @@ def _rederive_topology_v3(
             new_id = auto_workflow_id(new_core, families)
             if old_id == new_id:
                 continue
-            moves.append((card.workflow_key, old_id, new_id))
+            moves.append((card.workflow_key, old_id, new_id, 1))
             conn.execute(
                 "INSERT OR IGNORE INTO workflow_core_successor "
                 "(topology_hash, old_workflow_id, new_workflow_id, label_map) "
@@ -1071,11 +1038,10 @@ def _rederive_topology(
     cards: list[Card],
     v1_rows: dict[str, str],
     shelf: list,
-) -> Optional[tuple[str, dict, dict, list[tuple[str, str, int]], str]]:
+) -> Optional[tuple[dict, dict, str, list[tuple[str, str, str, int]]]]:
     """Write one topology's v2 rows; ``None`` when no stored graph reduces.
 
-    Returns ``(old workflow id, label map, stage slots, [(card, new id,
-    variants)], v2 core)`` for :func:`rederive_cores` to retire the old id with.
+    Returns :func:`_move_topologies`' shape, one move per card off the v1 id.
     """
     documents = {c.workflow_key: card_document(hub, c) for c in cards}
     found = next(filter(None, documents.values()), None)
@@ -1101,7 +1067,7 @@ def _rederive_topology(
     labels, stage_slots = core_label_maps(document)
     _cache_topology(conn, topology_hash, document, slots(document), new_core)
     old_id = f"{AUTO_STACK_PREFIX}{old_core}"
-    card_heirs = []
+    moves = []
     for card in cards:
         # One family set per card: its key holds its base models. A card
         # none of whose own variants reduces gets none, never another
@@ -1133,14 +1099,14 @@ def _rederive_topology(
             [(variant, families) for variant in card.variants],
         )
         new_id = auto_workflow_id(new_core, families)
-        card_heirs.append((card.workflow_key, new_id, len(card.variants)))
+        moves.append((card.workflow_key, old_id, new_id, len(card.variants)))
         conn.execute(
             "INSERT OR IGNORE INTO workflow_core_successor "
             "(topology_hash, old_workflow_id, new_workflow_id, label_map) "
             "VALUES (?, ?, ?, ?)",
             (topology_hash, old_id, new_id, json.dumps(labels, sort_keys=True)),
         )
-    return old_id, labels, stage_slots, card_heirs, new_core
+    return labels, stage_slots, new_core, moves
 
 
 def _retire_workflow(
@@ -1709,20 +1675,6 @@ def card_document(hub, card: Card) -> Optional[tuple[str, dict]]:
     return None
 
 
-class _LabelCache:
-    """Per topology, ``{slot label: core label or None}`` from one stored graph."""
-
-    def __init__(self, hub) -> None:
-        self._hub = hub
-        self._maps: dict[str, Optional[dict[str, Optional[str]]]] = {}
-
-    def of(self, card: Card) -> Optional[dict[str, Optional[str]]]:
-        if card.topology_hash not in self._maps:
-            found = card_document(self._hub, card)
-            self._maps[card.topology_hash] = label_map(found[1]) if found else None
-        return self._maps[card.topology_hash]
-
-
 def label_map(document: dict) -> dict[str, Optional[str]]:
     """Each slot label of *document*'s topology, to its core label (``None``: a stage)."""
     core = core_node_labels(document, strip_loras=STRIP_LORAS_FOR_STACKS)
@@ -1812,7 +1764,7 @@ def _convert_workflow(
     workflow_id: str,
     group: list[Card],
     base_topology: str,
-    labels: _LabelCache,
+    labels: dict[str, Optional[dict[str, Optional[str]]]],
     core: str,
 ) -> None:
     """Write one workflow's attributes, defaults, pins and inputs. Cover first.
@@ -1869,8 +1821,15 @@ def _convert_workflow(
         wrote.append("attributes")
 
     def address(card: Card, slot_label: str, input_name: str, what: str, value):
+        if card.topology_hash not in labels:
+            document = card_document(hub, card)
+            labels[card.topology_hash] = label_map(document[1]) if document else None
         found = translate(
-            labels.of(card), card.topology_hash, base_topology, slot_label, input_name
+            labels[card.topology_hash],
+            card.topology_hash,
+            base_topology,
+            slot_label,
+            input_name,
         )
         if found is None:
             logger.warning(

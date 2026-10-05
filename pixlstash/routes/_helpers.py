@@ -1,9 +1,6 @@
-"""Shared route helpers: typed require_*_or_404 lookups.
+"""Shared route helpers. Import these instead of duplicating an inline guard."""
 
-Each helper performs a session.get() and raises HTTPException(404) if the row
-does not exist.  Import these instead of duplicating the inline guard pattern.
-"""
-
+from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from pixlstash.db_models import (
@@ -74,3 +71,19 @@ def picture_referenced_by_project(
         return True
 
     return False
+
+
+def require_hub(
+    server,
+    detail: str = "No hub is attached, so this machine has no workflow library.",
+):
+    """The server's hub, or a 503 saying *detail*.
+
+    A vault opened without a hub has no workflow library at all: a
+    configuration state rather than a fault, so it is said instead of raising
+    an AttributeError out of a read.
+    """
+    hub = getattr(server, "hub", None)
+    if hub is None:
+        raise HTTPException(status_code=503, detail=detail)
+    return hub

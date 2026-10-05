@@ -97,17 +97,6 @@ def vram_limited_batch_cap(
     return max(1, int((task_budget_mb - base_mb) / max(1, per_item_mb)))
 
 
-#: Words that make an "out of memory" message a *device* one. Without one of
-#: these the phrase is ambiguous: ``sqlite3.OperationalError: out of memory``
-#: (SQLITE_NOMEM) says it too, and treating that as transient GPU pressure
-#: would retry a task that has nothing to do with the GPU.
-#:
-#: ``mps`` and ``metal`` are here because Apple's two OOM messages carry neither
-#: "cuda" nor "gpu", so every MPS OOM was being classified as a permanent
-#: failure: torch says ``MPS backend out of memory (MPS allocated: …)`` and the
-#: driver says ``kIOGPUCommandBufferCallbackErrorOutOfMemory``.
-_DEVICE_WORDS = ALL_DEVICE_ERROR_WORDS
-
 #: Metal's command-buffer failure, which is the *driver* running out rather
 #: than torch's allocator. It says "OutOfMemory" as one word and never says
 #: "out of memory", so the phrase check below cannot see it.
@@ -158,7 +147,11 @@ def is_vram_oom(error: BaseException) -> bool:
         # as transient as torch's.
         if "failed to allocate memory for requested buffer" in message:
             return True
-        if "out of memory" in message and any(w in message for w in _DEVICE_WORDS):
+        # A device word, or SQLite's SQLITE_NOMEM "out of memory" would read as
+        # transient GPU pressure. Apple's OOMs say "mps"/"metal", never "gpu".
+        if "out of memory" in message and any(
+            w in message for w in ALL_DEVICE_ERROR_WORDS
+        ):
             return True
         current = current.__cause__ or current.__context__
     return False

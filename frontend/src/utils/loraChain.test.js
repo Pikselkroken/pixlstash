@@ -4,6 +4,7 @@ import {
   chainEntries,
   countChanges,
   editLorasRoute,
+  formatStrength,
   loraBase,
   loraStem,
   movesBetween,
@@ -13,9 +14,16 @@ describe("loraChain", () => {
   it("names a file by its stem, and compares it case-folded without a folder", () => {
     expect(loraStem("sub/Hairstyle-V3.safetensors")).toBe("Hairstyle-V3");
     expect(loraStem("sub\\no-extension")).toBe("no-extension");
+    expect(loraStem("a\\b/c.v2.safetensors")).toBe("c.v2");
     expect(loraBase("loras/Hairstyle-V3.safetensors")).toBe(
       "hairstyle-v3.safetensors",
     );
+  });
+
+  it("writes a strength to two decimals, and none at all when there is none", () => {
+    expect(formatStrength(0.8)).toBe("0.80");
+    expect(formatStrength("1")).toBe("1.00");
+    expect([null, undefined, "abc"].map(formatStrength)).toEqual(["", "", ""]);
   });
 
   it("counts a neighbour swap as one move, not two", () => {

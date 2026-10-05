@@ -65,43 +65,25 @@
         Add this <code>-v</code> mount to your
         <code>docker run</code> command:
       </div>
-      <div class="editor-docker-snippet-wrap">
-        <code class="editor-docker-snippet">{{
-          dockerMountSnippet
-        }}</code>
-        <AppButton
-          size="sm"
-          icon-only
-          icon-left="content-copy"
-          class="editor-copy-btn"
-          tooltip="Copy mount line"
-          @click="
-            copyToClipboard(dockerMountSnippet, 'Mount line copied.')
-          "
-        />
-      </div>
+      <DockerSnippet
+        :text="dockerMountSnippet"
+        tooltip="Copy mount line"
+        @copy="copyToClipboard(dockerMountSnippet, 'Mount line copied.')"
+      />
       <div class="editor-docker-title">Container restart helpers</div>
       <div class="editor-docker-note editor-docker-note--muted">
         This removes the old container, not the image.
       </div>
-      <div class="editor-docker-snippet-wrap">
-        <code class="editor-docker-snippet">{{
-          dockerRemoveContainerSnippet
-        }}</code>
-        <AppButton
-          size="sm"
-          icon-only
-          icon-left="content-copy"
-          class="editor-copy-btn"
-          tooltip="Copy remove-container command"
-          @click="
-            copyToClipboard(
-              dockerRemoveContainerSnippet,
-              'Remove-container command copied.',
-            )
-          "
-        />
-      </div>
+      <DockerSnippet
+        :text="dockerRemoveContainerSnippet"
+        tooltip="Copy remove-container command"
+        @copy="
+          copyToClipboard(
+            dockerRemoveContainerSnippet,
+            'Remove-container command copied.',
+          )
+        "
+      />
       <div class="editor-docker-note">
         Full restart command (uses your local folder mapping):
       </div>
@@ -111,25 +93,14 @@
       >
         Existing reference and import folder mounts are included.
       </div>
-      <div class="editor-docker-snippet-wrap">
-        <code
-          class="editor-docker-snippet editor-docker-snippet--full"
-          >{{ dockerRestartCommandSnippet }}</code
-        >
-        <AppButton
-          size="sm"
-          icon-only
-          icon-left="content-copy"
-          class="editor-copy-btn"
-          tooltip="Copy full restart command"
-          @click="
-            copyToClipboard(
-              dockerRestartCommandSnippet,
-              'Restart command copied.',
-            )
-          "
-        />
-      </div>
+      <DockerSnippet
+        :text="dockerRestartCommandSnippet"
+        tooltip="Copy full restart command"
+        full
+        @copy="
+          copyToClipboard(dockerRestartCommandSnippet, 'Restart command copied.')
+        "
+      />
 
       <div v-if="copyStatus" class="editor-copy-status">
         {{ copyStatus }}
@@ -206,24 +177,16 @@
       <div class="editor-docker-note">
         Copy this if you need to restart with the current folder mounts.
       </div>
-      <div class="editor-docker-snippet-wrap">
-        <code class="editor-docker-snippet">{{
-          dockerRemoveContainerSnippet
-        }}</code>
-        <AppButton
-          size="sm"
-          icon-only
-          icon-left="content-copy"
-          class="editor-copy-btn"
-          tooltip="Copy remove-container command"
-          @click="
-            copyToClipboard(
-              dockerRemoveContainerSnippet,
-              'Remove-container command copied.',
-            )
-          "
-        />
-      </div>
+      <DockerSnippet
+        :text="dockerRemoveContainerSnippet"
+        tooltip="Copy remove-container command"
+        @copy="
+          copyToClipboard(
+            dockerRemoveContainerSnippet,
+            'Remove-container command copied.',
+          )
+        "
+      />
       <div
         v-if="hasExistingMounts"
         class="editor-docker-note editor-docker-note--muted"
@@ -236,24 +199,17 @@
           <code>/absolute/host/path/for-*</code> placeholder values.
         </template>
       </div>
-      <div class="editor-docker-snippet-wrap">
-        <code class="editor-docker-snippet editor-docker-snippet--full">{{
-          dockerEditRestartCommandSnippet
-        }}</code>
-        <AppButton
-          size="sm"
-          icon-only
-          icon-left="content-copy"
-          class="editor-copy-btn"
-          tooltip="Copy full restart command"
-          @click="
-            copyToClipboard(
-              dockerEditRestartCommandSnippet,
-              'Restart command copied.',
-            )
-          "
-        />
-      </div>
+      <DockerSnippet
+        :text="dockerEditRestartCommandSnippet"
+        tooltip="Copy full restart command"
+        full
+        @copy="
+          copyToClipboard(
+            dockerEditRestartCommandSnippet,
+            'Restart command copied.',
+          )
+        "
+      />
     </div>
 
     <!-- Display label -->
@@ -471,6 +427,7 @@ import FolderBrowser from "./FolderBrowser.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import DockerSnippet from "./DockerSnippet.vue";
 import Segmented from "../widgets/Segmented.vue";
 import { errorDetail } from "../../utils/apiError";
 
@@ -1118,35 +1075,6 @@ async function copyToClipboard(value, successMessage) {
 
 .editor-docker-note--muted {
   opacity: 0.65;
-}
-
-.editor-docker-snippet-wrap {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-}
-
-.editor-docker-snippet {
-  flex: 1;
-  display: block;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-dark-surface), 0.55);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  overflow: auto hidden;
-}
-
-.editor-docker-snippet--full {
-  white-space: pre-wrap;
-  overflow: auto;
-  line-height: 1.35;
-}
-
-.editor-copy-btn {
-  flex-shrink: 0;
-  margin-top: var(--space-1);
 }
 
 .editor-copy-status {

@@ -284,7 +284,7 @@ def collect_ghost_candidates_in_session(
 
 
 def surviving_instance_hashes_in_session(
-    session: Session, instance_hashes: list[str]
+    session: Session, instance_hashes: list[str], *, include_deleted: bool = False
 ) -> set[str]:
     """Which of these instance hashes a SURVIVING picture still carries.
 
@@ -296,37 +296,22 @@ def surviving_instance_hashes_in_session(
     ghost alive on the strength of a picture that is itself on its way out. This
     matches the workflow counts, which exclude the scrapheap for the same reason
     (§B3).
+
+    ``include_deleted=True`` counts the Scrapheap too: the instance row's cover,
+    which is deliberately wider than a ghost's. A scrapheaped picture can be
+    restored, and its scanned marker is set, so an instance row destroyed under
+    it would never be written again.
     """
     surviving: set[str] = set()
     for batch in chunked(instance_hashes):
-        rows = session.exec(
-            select(Picture.workflow_instance_hash)
-            .where(Picture.workflow_instance_hash.in_(batch))
-            .where(Picture.deleted.is_(False))
-            .distinct()
-        ).all()
+        query = select(Picture.workflow_instance_hash).where(
+            Picture.workflow_instance_hash.in_(batch)
+        )
+        if not include_deleted:
+            query = query.where(Picture.deleted.is_(False))
+        rows = session.exec(query.distinct()).all()
         surviving.update(value for value in rows if value)
     return surviving
-
-
-def held_instance_hashes_in_session(
-    session: Session, instance_hashes: list[str]
-) -> set[str]:
-    """Which of these instance hashes ANY picture row still carries, Scrapheap too.
-
-    The instance row's cover, which is deliberately wider than a ghost's. A
-    scrapheaped picture can be restored, and its scanned marker is set, so an
-    instance row destroyed under it would never be written again.
-    """
-    held: set[str] = set()
-    for batch in chunked(instance_hashes):
-        rows = session.exec(
-            select(Picture.workflow_instance_hash)
-            .where(Picture.workflow_instance_hash.in_(batch))
-            .distinct()
-        ).all()
-        held.update(value for value in rows if value)
-    return held
 
 
 def _thumbnail_bytes(image_root: str, file_path: Optional[str]) -> Optional[bytes]:
@@ -462,7 +447,9 @@ def drain_ghost_cascade(
         ).all()
         hashes = [row.instance_hash for row in rows]
         surviving = surviving_instance_hashes_in_session(session, hashes)
-        held = held_instance_hashes_in_session(session, hashes)
+        held = surviving_instance_hashes_in_session(
+            session, hashes, include_deleted=True
+        )
         return hashes, surviving, held, (rows[-1].seq if rows else None)
 
     hashes, surviving, held, last_seq = vault_db.run_immediate_read_task(read)

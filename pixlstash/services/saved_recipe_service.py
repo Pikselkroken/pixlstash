@@ -272,30 +272,12 @@ def workflow_keys_in_session(session: Session) -> dict[int, str]:
     return {recipe_id: workflow_key for recipe_id, workflow_key in rows}
 
 
-def counts_by_workflow_key(session: Session) -> dict[str, int]:
-    """How many saved recipes each card holds, for the whole library at once.
-
-    One ``GROUP BY`` rather than a read per card: the Workflows grid needs the
-    number on every card it draws, and asking per card would be an N+1 over the
-    one table this module owns. Keys with no recipe are absent rather than
-    present with a zero, so the caller reads a missing key as none.
-
-    Served by ``ix_savedrecipe_workflow_key``.
-    """
-    rows = session.exec(
-        select(SavedRecipe.workflow_key, func.count(SavedRecipe.id)).group_by(
-            SavedRecipe.workflow_key
-        )
-    ).all()
-    return {workflow_key: count for workflow_key, count in rows}
-
-
 def counts_by_workflow_id(session: Session) -> dict[str, int]:
     """How many saved recipes each workflow holds, for the whole library.
 
-    The workflow grid's number (#1623), one ``GROUP BY`` like
-    :func:`counts_by_workflow_key`. Recipes the vault conversion has not
-    reached yet are on no workflow and are not counted.
+    The workflow grid's number (#1623), one ``GROUP BY`` rather than a read per
+    card. Recipes the vault conversion has not reached yet are on no workflow
+    and are not counted.
     """
     rows = session.exec(
         select(SavedRecipe.workflow_id, func.count(SavedRecipe.id))
@@ -303,27 +285,6 @@ def counts_by_workflow_id(session: Session) -> dict[str, int]:
         .group_by(SavedRecipe.workflow_id)
     ).all()
     return {workflow_id: count for workflow_id, count in rows}
-
-
-def rehome_in_session(session: Session, old_ids: list[str], new_id: str) -> int:
-    """Move every recipe of these workflows onto *new_id*; how many moved.
-
-    For a merge (#1623): the workflows it folds away stop existing, and a
-    recipe left naming one would list nowhere and run nowhere. Authored rows,
-    so they follow rather than go.
-    """
-    moved = 0
-    for chunk in chunked([old for old in old_ids if old != new_id]):
-        rows = session.exec(
-            select(SavedRecipe).where(SavedRecipe.workflow_id.in_(chunk))
-        ).all()
-        for row in rows:
-            row.workflow_id = new_id
-            session.add(row)
-        moved += len(rows)
-    if moved:
-        session.commit()
-    return moved
 
 
 def credit_groups_in_session(
@@ -687,15 +648,6 @@ def rekey_recipes(vault, moved: dict[str, list[str]]) -> int:
     if not moved:
         return 0
     return vault.db.run_task(rekey_in_session, moved)
-
-
-def rehome_recipes(vault, old_ids: list[str], new_id: str) -> int:
-    """Follow a merge: recipes of *old_ids* move to *new_id*.
-
-    A vault write after the hub's, like :func:`rekey_recipes`, and for the
-    same reason not in its transaction.
-    """
-    return vault.db.run_task(rehome_in_session, old_ids, new_id)
 
 
 def read_in_session(session: Session, recipe_id: int) -> Optional[SavedRecipe]:

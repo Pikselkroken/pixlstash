@@ -317,7 +317,7 @@
  * Nothing here closes the menu - every change lands on the strip at once - so
  * the way out is Esc, a click outside, or the funnel (the v-menu owns those).
  */
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import FilterChecklistMenu from "./FilterChecklistMenu.vue";
 import FilterTagField from "./FilterTagField.vue";
@@ -327,6 +327,7 @@ import { listComfyuiLoras, listComfyuiModels } from "../../api/pictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { PIL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../../utils/media.js";
+import { useCascadeMenu } from "../../composables/useCascadeMenu";
 import {
   filterParams,
   useFilterCounts,
@@ -422,11 +423,31 @@ const PICK_ONE = {
 
 const STAR_ROWS = [0, 1, 2, 3, 4, 5];
 
-const sub = ref(null);
-const subTop = ref(0);
-const rootRef = ref(null);
-const subRef = ref(null);
-const rowRefs = reactive({});
+// `backToRow` is also a deliberate pick in a pick-one submenu (not an arrow
+// browsing it): that is done with the submenu. Score keeps its menu: it has
+// two groups to set.
+const {
+  sub,
+  subTop,
+  rootRef,
+  subRef,
+  rowRefs,
+  openKind,
+  toggle,
+  backToRow,
+  onLeft,
+} = useCascadeMenu(
+  () => props.open,
+  // Into the body, never the header's Clear. The checklist and confidence
+  // menus focus their own search field once they mount.
+  (submenu) => {
+    const body = submenu?.querySelector(".tbm-section");
+    const target =
+      body?.querySelector('[role="radio"][tabindex="0"]') ??
+      body?.querySelector("input:not([disabled]), button:not([disabled])");
+    target?.focus();
+  },
+);
 const submenuId = "filter-submenu";
 
 const { count, reset } = useFilterCounts(() => props.countBaseQuery);
@@ -472,60 +493,6 @@ function rowValue(kind) {
   return n || "";
 }
 
-function openKind(kind) {
-  sub.value = kind;
-  const row = rowRefs[kind];
-  const rowTop = row ? Math.max(0, row.offsetTop - 8) : 0;
-  subTop.value = rowTop;
-  nextTick(() => {
-    // Line the submenu up with its row, but no lower than keeps its bottom
-    // level with the root menu's: a tall submenu (Score) hanging below the
-    // root made the whole cascade too tall and the menu jumped up over the
-    // toolbar to fit.
-    const rootHeight = rootRef.value?.offsetHeight ?? 0;
-    const subHeight = subRef.value?.offsetHeight ?? 0;
-    subTop.value = Math.max(0, Math.min(rowTop, rootHeight - subHeight));
-    // Into the body, never the header's Clear. The checklist and confidence
-    // menus focus their own search field once they mount.
-    const body = subRef.value?.querySelector(".tbm-section");
-    const target =
-      body?.querySelector('[role="radio"][tabindex="0"]') ??
-      body?.querySelector("input:not([disabled]), button:not([disabled])");
-    target?.focus();
-  });
-}
-
-function toggle(kind) {
-  if (sub.value === kind) sub.value = null;
-  else openKind(kind);
-}
-
-// Left arrow inside a submenu returns to its row, unless it is moving a caret
-// or a chip's threshold. Caught in the capture phase so a radio group's own
-// arrow handling never sees it and changes the pick instead.
-function onLeft(event) {
-  const target = event.target;
-  const field = target?.tagName === "INPUT" ? target : null;
-  if (
-    !sub.value ||
-    target?.tagName === "SELECT" ||
-    (field && (field.selectionStart || field.selectionEnd))
-  ) {
-    return;
-  }
-  if (!subRef.value?.contains(target)) return;
-  event.preventDefault();
-  event.stopPropagation();
-  backToRow();
-}
-
-// A deliberate pick in a pick-one submenu (not an arrow browsing it) is done
-// with that submenu. Score keeps its menu: it has two groups to set.
-function backToRow() {
-  rowRefs[sub.value]?.focus();
-  sub.value = null;
-}
-
 function clearAll() {
   for (const chip of chips.value) chip.remove();
 }
@@ -533,12 +500,9 @@ function clearAll() {
 watch(
   () => props.open,
   (isOpen) => {
-    if (isOpen) {
-      reset();
-      loadLists();
-    } else {
-      sub.value = null;
-    }
+    if (!isOpen) return;
+    reset();
+    loadLists();
   },
   { immediate: true },
 );
@@ -653,18 +617,10 @@ const loraNames = ref([]);
 
 // /tags counts span the pictures this session may see, not the current view:
 // one request for the whole vocabulary rather than one per tag.
-const modelItems = computed(() =>
-  modelNames.value.map((m) => ({
-    value: m.value,
-    label: m.name || modelLabel(m.value),
-  })),
-);
-const loraItems = computed(() =>
-  loraNames.value.map((m) => ({
-    value: m.value,
-    label: m.name || modelLabel(m.value),
-  })),
-);
+const asItems = (names) =>
+  names.map((m) => ({ value: m.value, label: m.name || modelLabel(m.value) }));
+const modelItems = computed(() => asItems(modelNames.value));
+const loraItems = computed(() => asItems(loraNames.value));
 
 async function loadLists() {
   try {

@@ -26,6 +26,7 @@ import json
 import random
 import shutil
 import tempfile
+import threading
 import time
 import tomllib
 from types import SimpleNamespace
@@ -68,6 +69,10 @@ from pixlstash.db_models import (
     TagPrediction,
 )
 import pixlstash.routes.pictures as pictures_routes
+from pixlstash.inference.cpu_query_encoders import (
+    LOAD_FAILED_DETAIL,
+    CpuQueryEncodersNotReadyError,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.tag_task import TagTask
 from pixlstash.tasks.task_type import TaskType
@@ -2330,3 +2335,164 @@ def test_semantic_search(server, client, request):
         _check_semantic_search_regression(
             regression_path, regression_payload, device_tag
         )
+
+
+def _record_query_encoding(server, monkeypatch):
+    """Replace the query encoders and ``Picture.semantic_search`` with spies.
+
+    Each fake encoder records the text it was given and the thread it ran on,
+    and returns an array of its own, so a test can check both where the encode
+    happened and that its result is what reached ``semantic_search``.
+
+    Returns:
+        ``(encodes, searches, writer)``: ``encodes`` collects
+        ``(encoder, text, thread, embedding)`` per encode, ``searches`` the
+        keyword arguments of each ``semantic_search`` call, and ``writer`` is
+        the database writer thread no encode may run on.
+    """
+    writer = server.vault.db._task_worker
+    assert writer is not None and writer.is_alive(), "no live DB writer thread"
+    encodes = []
+    searches = []
+
+    def fake_text_embedding(text):
+        embedding = np.full(384, 0.5, dtype=np.float32)
+        encodes.append(("sbert", text, threading.current_thread(), embedding))
+        return embedding
+
+    def fake_clip_text_embedding(text):
+        embedding = np.full(512, 0.25, dtype=np.float32)
+        encodes.append(("clip", text, threading.current_thread(), embedding))
+        return embedding
+
+    real_semantic_search = Picture.semantic_search
+
+    def spy_semantic_search(cls, session, *args, **kwargs):
+        searches.append(kwargs)
+        return real_semantic_search(session, *args, **kwargs)
+
+    monkeypatch.setattr(server.vault, "generate_text_embedding", fake_text_embedding)
+    monkeypatch.setattr(
+        server.vault, "generate_clip_text_embedding", fake_clip_text_embedding
+    )
+    monkeypatch.setattr(Picture, "semantic_search", classmethod(spy_semantic_search))
+
+    # Positive control for the thread identity: an encode made inside a
+    # database task records ``writer``, so the ``is not writer`` checks in the
+    # tests can fail.
+    server.vault.db.run_task(
+        lambda session: server.vault.generate_text_embedding("control")
+    )
+    _, _, control_thread, _ = encodes.pop()
+    assert control_thread is writer, (
+        f"an encode inside a database task ran on {control_thread!r}, not on "
+        f"the DB writer {writer!r}"
+    )
+    return encodes, searches, writer
+
+
+def test_text_search_encodes_the_query_off_the_db_writer_thread(
+    server, client, monkeypatch
+):
+    """``GET /pictures/search`` encodes its query before queuing the search.
+
+    The search runs on the single DB writer thread, so an encode there holds
+    every database write for the length of a model call.
+    """
+    encodes, searches, writer = _record_query_encoding(server, monkeypatch)
+
+    resp = client.get(
+        "/pictures/search", params={"query": "a red bicycle", "threshold": 0.0}
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert [(name, text) for name, text, _, _ in encodes] == [
+        ("sbert", "a red bicycle"),
+        ("clip", "a red bicycle"),
+    ], "search must encode the query once per encoder, SBERT first"
+    for name, _, thread, _ in encodes:
+        assert thread is not writer, (
+            f"the {name} query encode ran on the DB writer thread"
+        )
+    assert len(searches) == 1, searches
+    assert searches[0]["query_embedding"] is encodes[0][3]
+    assert searches[0]["clip_query_embedding"] is encodes[1][3]
+
+
+def test_export_by_query_encodes_the_query_off_the_db_writer_thread(
+    server, client, monkeypatch
+):
+    """``GET /pictures/export?query=`` encodes its query before queuing the search.
+
+    Export by query uses only the SBERT encoder, on ``"A photo of " + query``.
+    """
+    encodes, searches, writer = _record_query_encoding(server, monkeypatch)
+
+    _run_export(server, client, "a red bicycle")
+
+    assert [(name, text) for name, text, _, _ in encodes] == [
+        ("sbert", "A photo of a red bicycle"),
+    ], "export must encode 'A photo of <query>' once, with SBERT only"
+    assert encodes[0][2] is not writer, (
+        "the export query encode ran on the DB writer thread"
+    )
+    assert len(searches) == 1, searches
+    assert searches[0]["query_embedding"] is encodes[0][3]
+    assert searches[0].get("clip_query_embedding") is None
+
+
+def _run_export(server, client, query):
+    """Start an export by *query*, wait for it to settle and return its status."""
+    resp = client.get("/pictures/export", params={"query": query})
+    assert resp.status_code == 200, resp.text
+    task_id = resp.json()["task_id"]
+    try:
+        deadline = time.monotonic() + 30
+        while True:
+            status = client.get("/pictures/export/status", params={"task_id": task_id})
+            assert status.status_code == 200, status.text
+            if status.json()["status"] != "in_progress":
+                return status.json()
+            assert time.monotonic() < deadline, "export did not finish within 30 s"
+            time.sleep(0.1)
+    finally:
+        server.export_tasks.pop(task_id, None)
+
+
+@pytest.mark.parametrize("failing", ["sbert", "clip"])
+def test_text_search_answers_503_when_its_encoders_failed_to_load(
+    server, client, monkeypatch, caplog, failing
+):
+    """A search whose query cannot be encoded is a 503, not a 500, whichever
+    encoder refuses.
+
+    The warning names the reason and leaves the search text out of the log.
+    """
+    reason = LOAD_FAILED_DETAIL
+
+    def not_ready(text):
+        raise CpuQueryEncodersNotReadyError(reason)
+
+    if failing == "sbert":
+        monkeypatch.setattr(server.vault, "generate_text_embedding", not_ready)
+    else:
+        monkeypatch.setattr(
+            server.vault,
+            "generate_text_embedding",
+            lambda text: np.full(384, 0.5, dtype=np.float32),
+        )
+        monkeypatch.setattr(server.vault, "generate_clip_text_embedding", not_ready)
+    query = "private holiday snaps"
+    with caplog.at_level(logging.WARNING, logger="pixlstash.routes.pictures._search"):
+        resp = client.get("/pictures/search", params={"query": query})
+
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"] == reason
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "pixlstash.routes.pictures._search"
+        and r.levelno == logging.WARNING
+    ]
+    assert any(reason in message for message in warnings), warnings
+    assert not any(query in message for message in warnings), warnings

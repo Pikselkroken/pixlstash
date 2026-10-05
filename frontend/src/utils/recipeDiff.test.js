@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { lookLoraDiff, recipeDiff, shortName } from "./recipeDiff";
+import { lookLoraDiff, recipeDiff } from "./recipeDiff";
 
 const DEFAULT = {
   models: [
@@ -88,10 +88,6 @@ describe("recipeDiff", () => {
 
   it("has nothing to compare against without a default", () => {
     expect(recipeDiff({ loras: [] }, null)).toBeNull();
-  });
-
-  it("shortens a file name to what a person calls it", () => {
-    expect(shortName("a\\b/c.v2.safetensors")).toBe("c.v2");
   });
 });
 

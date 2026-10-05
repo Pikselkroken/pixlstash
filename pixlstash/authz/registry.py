@@ -1466,10 +1466,6 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Delete workflow; DELETE blocked for READ tokens; owner only",
     ),
-    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"): RoutePolicy(
-        _OWNER,
-        justification="LoRA loader insertion; reaches the owner's ComfyUI; owner only",
-    ),
     ("POST", "/api/v1/comfyui/workflows/{workflow_name}/card"): RoutePolicy(
         _OWNER,
         justification="File a stored workflow on its Workflows card and return the key; writes the hub like the import beside it; owner only",
@@ -1744,16 +1740,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # picture in the vault, so it hands out whole-library counts AND the
     # picture ids of every workflow's cover strip; the detail adds the default
     # recipe the owner's best pictures were made with, read out of stored
-    # instance documents; and the hub read beside them returns the model
-    # filenames a graph names, which on a real shelf name people. A picture-,
-    # set- or project-scoped token holding any of it would learn the size of
-    # the whole library, one workflow at a time, which is the whole-library
-    # disclosure class §16 exists for. Nothing here is a host path or a host
+    # instance documents. A picture-, set- or project-scoped token holding any
+    # of it would learn the size of the whole library, one workflow at a time,
+    # which is the whole-library disclosure class §16 exists for. Nothing here is a host path or a host
     # capability, so none of it climbs to the §16.3 tier; nothing here mutates.
     ("GET", "/api/v1/workflows"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/{workflow_id}"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/{workflow_id}/pictures"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"): RoutePolicy(_OWNER),
     # The workflow writes (#1623). OWNER_ONLY throughout and, unlike the reads
     # above it, this tier is not even a judgement about disclosure: every one
     # of them is the owner editing their own library - what a workflow is
@@ -1814,10 +1807,6 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"): RoutePolicy(
         _OWNER,
         justification="Write a copy of a workflow's graph to disk; POST blocked for READ tokens; owner only",
-    ),
-    ("POST", "/api/v1/workflows/{workflow_id}/insert-lora-loader"): RoutePolicy(
-        _OWNER,
-        justification="Write a copy of a workflow's graph with a LoRA loader added; POST blocked for READ tokens; owner only",
     ),
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"): RoutePolicy(
         _OWNER,

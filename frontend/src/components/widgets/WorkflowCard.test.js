@@ -152,17 +152,25 @@ function tokens() {
   return values;
 }
 
-/** The card's own stylesheet, comments stripped. */
+/** The card's stylesheets, the shared one first, comments stripped. */
 const styleBlock = () =>
-  read("./WorkflowCard.vue")
-    .split("<style scoped>")[1]
-    .replace(/\/\*[\s\S]*?\*\//g, "");
+  (
+    read("./cardCover.css") +
+    read("./WorkflowCard.vue").split("<style scoped>")[1]
+  ).replace(/\/\*[\s\S]*?\*\//g, "");
+
+/** A rule's selectors, a selector list split into its members. */
+const selectorsOf = (block) =>
+  block
+    .split("{")[0]
+    .split(",")
+    .map((s) => s.trim());
 
 /** Every selector in the card's stylesheet that matches `pattern`. */
 function selectorsMatching(pattern) {
   return styleBlock()
     .split("}")
-    .map((block) => block.split("{")[0].trim())
+    .flatMap(selectorsOf)
     .filter((selector) => pattern.test(selector));
 }
 
@@ -171,7 +179,7 @@ function rule(selector) {
   const css = styleBlock();
   const body = css
     .split("}")
-    .find((r) => r.split("{")[0].trim() === selector)
+    .find((r) => selectorsOf(r).includes(selector))
     ?.split("{")[1];
   expect(body, selector).toBeTruthy();
   return Object.fromEntries(

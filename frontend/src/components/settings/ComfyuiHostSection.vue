@@ -103,31 +103,13 @@ function openComfyuiConfigDialog() {
 }
 
 async function saveComfyuiUrl() {
-  comfyuiUrlLoading.value = true;
-  comfyuiUrlError.value = "";
-  comfyuiUrlSuccess.value = "";
   const host = String(comfyuiEditHost.value || "").trim();
   const port = String(comfyuiEditPort.value || "").trim();
   // Empty host is treated as "not configured" - save null.
-  if (!host) {
-    try {
-      await patchUserConfig({ comfyui_url: null });
-      comfyuiHost.value = "";
-      comfyuiPort.value = "";
-      checkPixlstashPack();
-      useFilterStore().comfyuiUrl = "";
-      emit("update:comfyui-configured", false);
-      comfyuiConfigDialogOpen.value = false;
-    } catch (e) {
-      comfyuiUrlError.value =
-        errorDetail(e) ||
-        e?.message ||
-        "Failed to update ComfyUI URL.";
-    } finally {
-      comfyuiUrlLoading.value = false;
-    }
-    return;
-  }
+  if (!host) return clearComfyuiUrl();
+  comfyuiUrlLoading.value = true;
+  comfyuiUrlError.value = "";
+  comfyuiUrlSuccess.value = "";
   const portNumber = Number(port);
   if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) {
     comfyuiUrlError.value = "Port must be between 1 and 65535.";

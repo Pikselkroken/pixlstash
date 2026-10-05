@@ -55,8 +55,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, useSlots, watch } from "vue";
+import { computed, ref, useSlots } from "vue";
 import { VIcon } from "vuetify/components";
+import { useRefocusAfterLoading } from "../../utils/dom";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
@@ -92,20 +93,7 @@ const iconName = computed(() =>
 );
 
 const rootEl = ref(null);
-let refocusWhenDone = false;
-
-watch(
-  () => props.loading,
-  (isLoading) => {
-    if (isLoading) {
-      refocusWhenDone = rootEl.value === document.activeElement;
-      return;
-    }
-    if (!refocusWhenDone) return;
-    refocusWhenDone = false;
-    nextTick(() => rootEl.value?.focus());
-  },
-);
+useRefocusAfterLoading(() => props.loading, rootEl);
 
 function focus() {
   rootEl.value?.focus();

@@ -147,7 +147,7 @@
           tooltip="More…"
         />
       </template>
-      <VerbMenu v-bind="verbHandlers" />
+      <VerbMenu />
     </v-menu>
   </div>
 
@@ -162,7 +162,7 @@
     origin="top start"
     :offset="2"
   >
-    <VerbMenu v-bind="verbHandlers" />
+    <VerbMenu />
   </v-menu>
 </template>
 
@@ -211,12 +211,6 @@ const store = useWorkflowsStore();
 // button is — the same job the `Esc` cap next to Clear does. Read once at
 // setup: the platform cannot change under a mounted component.
 const selectAllHint = formatKeyHint(selectAllKeyHint());
-
-/** Fire a verb and shut whichever surface it was pressed on. */
-function onVerb(verb) {
-  countMenuOpen.value = false;
-  emit(verb);
-}
 
 const countMenuOpen = ref(false);
 const moreMenuOpen = ref(false);
@@ -456,33 +450,14 @@ const cloneTitle = computed(() =>
     : "Select one workflow to clone it",
 );
 
-/**
- * Everything `VerbMenu` needs, in one object, so the two mounts of it cannot
- * drift apart. Passed with `v-bind` rather than listed twice in the template.
- */
-const verbHandlers = computed(() => ({
-  single: single.value,
-  coverOpenable: coverOpenable.value,
-  coverOpenLabel: openTarget.value.label,
-  coverOpenTitle: openTarget.value.title,
-  runnable: runnable.value,
-  runTitle: runTitle.value,
-  renameTitle: renameTitle.value,
-  hideLabel: allHidden.value ? "Unhide" : "Hide",
-  hideTitle: hideTitle.value,
-  exportTitle: exportTitle.value,
-  duplicateTitle: duplicateTitle.value,
-  cloneTitle: cloneTitle.value,
-  deletable: deletable.value,
-  deleteTitle: deleteTitle.value,
-  onVerb: (verb, arg) => {
-    contextOpen.value = false;
-    moreMenuOpen.value = false;
-    if (verb === "hide") emit("hide", allHidden.value);
-    else if (arg !== undefined) emit(verb, arg);
-    else emit(verb);
-  },
-}));
+/** Fire a verb and shut whichever surface it was pressed on. */
+function onVerb(verb) {
+  countMenuOpen.value = false;
+  contextOpen.value = false;
+  moreMenuOpen.value = false;
+  if (verb === "hide") emit("hide", allHidden.value);
+  else emit(verb);
+}
 
 /**
  * The verb list itself, as a render function rather than a second `.vue` file.
@@ -495,7 +470,7 @@ const verbHandlers = computed(() => ({
  * The order is the design's: what running the card does, then what naming
  * does, then the three that make a copy, then the one that destroys.
  */
-const VerbMenu = (props) => {
+const VerbMenu = () => {
   /**
    * One row.
    *
@@ -515,7 +490,7 @@ const VerbMenu = (props) => {
    * That is why the full inventory — the one surface that can always state its
    * refusal — is a right-click away from every one of them.
    */
-  const item = (icon, label, { verb, on, disabled, title, kbd, danger } = {}) =>
+  const item = (icon, label, { verb, disabled, title, kbd, danger } = {}) =>
     h(
       "button",
       {
@@ -534,7 +509,9 @@ const VerbMenu = (props) => {
         // that a divergence, which is the opposite of what #403 was about.
         "data-verb": verb,
         "aria-disabled": disabled ? "true" : undefined,
-        onClick: disabled ? (event) => event.preventDefault() : on,
+        onClick: disabled
+          ? (event) => event.preventDefault()
+          : () => onVerb(verb),
       },
       [
         title ? h(Tooltip, { text: title, activator: "parent" }) : null,
@@ -569,35 +546,29 @@ const VerbMenu = (props) => {
       // action on a shipped surface could be performed by pointer alone
       // (WCAG 2.1.1) — and this menu calls itself the full inventory, which
       // was not true while it left one verb out.
-      item("mdi-image-outline", props.coverOpenLabel, {
+      item("mdi-image-outline", openTarget.value.label, {
         verb: "open-cover",
-        on: () => props.onVerb("open-cover"),
-        disabled: !props.coverOpenable,
-        title: props.coverOpenTitle,
+        disabled: !coverOpenable.value,
+        title: openTarget.value.title,
       }),
       item("mdi-play", "Run…", {
         verb: "run",
-        on: () => props.onVerb("run"),
-        disabled: !props.runnable,
-        title: props.runTitle,
+        disabled: !runnable.value,
+        title: runTitle.value,
       }),
       sep(),
       item("mdi-pencil-outline", "Rename", {
         verb: "rename",
-        on: () => props.onVerb("rename"),
-        disabled: !props.single,
-        title: props.renameTitle,
+        disabled: !single.value,
+        title: renameTitle.value,
         kbd: "F2",
       }),
       item(
-        props.hideLabel === "Unhide"
-          ? "mdi-eye-outline"
-          : "mdi-eye-off-outline",
-        props.hideLabel,
+        allHidden.value ? "mdi-eye-outline" : "mdi-eye-off-outline",
+        allHidden.value ? "Unhide" : "Hide",
         {
           verb: "hide",
-          on: () => props.onVerb("hide"),
-          title: props.hideTitle,
+          title: hideTitle.value,
         },
       ),
       sep(),
@@ -607,29 +578,25 @@ const VerbMenu = (props) => {
       // row's clothes.
       item("mdi-tray-arrow-down", "Export…", {
         verb: "export",
-        on: () => props.onVerb("export"),
-        disabled: !props.single,
-        title: props.exportTitle,
+        disabled: !single.value,
+        title: exportTitle.value,
       }),
       item("mdi-content-duplicate", "Duplicate", {
         verb: "duplicate",
-        on: () => props.onVerb("duplicate"),
-        disabled: !props.single,
-        title: props.duplicateTitle,
+        disabled: !single.value,
+        title: duplicateTitle.value,
       }),
       // One clone row: per-file picking is the dialog's "Pick files myself".
       item("mdi-swap-horizontal", "Clone onto a workflow set…", {
         verb: "clone-onto-set",
-        on: () => props.onVerb("clone-onto-set"),
-        disabled: !props.single,
-        title: props.cloneTitle,
+        disabled: !single.value,
+        title: cloneTitle.value,
       }),
       sep(),
       item("mdi-delete-outline", "Delete…", {
         verb: "delete",
-        on: () => props.onVerb("delete"),
-        disabled: !props.deletable,
-        title: props.deleteTitle,
+        disabled: !deletable.value,
+        title: deleteTitle.value,
         kbd: "Del",
         danger: true,
       }),

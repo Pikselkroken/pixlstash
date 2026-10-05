@@ -681,41 +681,6 @@ def assets_for_topology_recipes(
     return grouped
 
 
-def topology_exists(hub: HubDatabase, topology_hash: str) -> bool:
-    """Whether this hub has heard of a topology at all.
-
-    **No production caller since #1410**, and kept rather than deleted with its
-    route: it is the content-address lookup the retired variants route
-    made, and ``tests/test_workflow_io.py`` exercises it directly, so it is
-    covered behaviour
-    rather than dead code. Delete the test with it if it goes.
-    """
-    return (
-        hub.fetchone(
-            "SELECT 1 FROM workflow_topology WHERE topology_hash = ?",
-            (topology_hash,),
-        )
-        is not None
-    )
-
-
-def recipe_exists(hub: HubDatabase, structural_hash: str) -> bool:
-    """Whether this hub has heard of a recipe at all.
-
-    Asked separately from :func:`get_document` so an unreadable stored document
-    is not reported as an unknown workflow: the first is a fault worth a 500 and
-    a log line, the second is the ordinary answer for a hash from another
-    machine.
-    """
-    return (
-        hub.fetchone(
-            "SELECT 1 FROM workflow_recipe WHERE structural_hash = ?",
-            (structural_hash,),
-        )
-        is not None
-    )
-
-
 # ---------------------------------------------------------------------------
 # Picture ghosts — the thumbnail and prompt a destroyed picture leaves behind
 # ---------------------------------------------------------------------------

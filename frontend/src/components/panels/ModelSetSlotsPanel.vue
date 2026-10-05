@@ -277,6 +277,15 @@
                   item.member.name
                 }}</span>
                 <span
+                  v-if="quantBadge(item.member.quant)"
+                  class="mss__quant"
+                  aria-hidden="true"
+                  ><Tooltip
+                    :text="quantBadge(item.member.quant).title"
+                    activator="parent"
+                  />{{ quantBadge(item.member.quant).label }}</span
+                >
+                <span
                   v-if="!item.member.on_shelf"
                   class="mss__gone"
                   aria-hidden="true"
@@ -321,6 +330,15 @@
                 <span class="mss__tilename" aria-hidden="true">{{
                   item.ghost.name
                 }}</span>
+                <span
+                  v-if="quantBadge(item.ghost.quant)"
+                  class="mss__quant"
+                  aria-hidden="true"
+                  ><Tooltip
+                    :text="quantBadge(item.ghost.quant).title"
+                    activator="parent"
+                  />{{ quantBadge(item.ghost.quant).label }}</span
+                >
                 <span class="mss__ghostcount num" aria-hidden="true">{{
                   ghostCount(item.ghost)
                 }}</span>
@@ -328,7 +346,7 @@
                   variant="outline"
                   size="sm"
                   tabindex="-1"
-                  :tooltip="`Add ${item.ghost.name} to this set`"
+                  :tooltip="`Add ${withQuant(item.ghost)} to this set`"
                   @click.stop="emit('add-ghost', item.ghost)"
                   >Add</AppButton
                 >
@@ -381,6 +399,7 @@ import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { quantBadge } from "../../utils/modelShelf";
 import {
   fitsSlot,
   offerQuestion,
@@ -391,6 +410,7 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   panelId: { type: String, required: true },
@@ -584,12 +604,17 @@ function ghostCount(ghost) {
 }
 
 function ghostName(ghost, slot) {
-  return `${ghost.name}, ${slot.label}, offered: used in ${ghostCount(ghost)}. Enter adds it, Delete keeps it out.`;
+  return `${withQuant(ghost)}, ${slot.label}, offered: used in ${ghostCount(ghost)}. Enter adds it, Delete keeps it out.`;
+}
+
+/** A name with the precision `modelName` took out of it, for a spoken label. */
+function withQuant(model) {
+  return [model.name, quantBadge(model.quant)?.label].filter(Boolean).join(" ");
 }
 
 function tileName(member, slot) {
   return [
-    member.name,
+    withQuant(member),
     slot.label,
     member.on_shelf ? member.base_model : "not on shelf, kept by its hash",
   ]
@@ -927,6 +952,16 @@ const notchStyle = computed(() => {
 
 .mss__ghostmark {
   opacity: var(--opacity-disabled);
+}
+
+/* The precision the name to its left has lost: what tells a set's BF16 file
+   from the FP8 one it is offered. Mono, as the shelf row's quant chip is; no
+   border, since the tile already carries a bordered base-model pill. */
+.mss__quant {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
 .mss__ghostcount {

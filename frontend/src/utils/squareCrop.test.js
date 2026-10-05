@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   squareCropParams,
-  squareCropImgStyle,
   squareCropBboxRect,
   coverBboxRect,
   cropRectForRatio,
@@ -50,10 +49,10 @@ describe("squareCropParams", () => {
   });
 });
 
-describe("squareCropImgStyle", () => {
+describe("cropImgStyle, square", () => {
   it("scales and translates a landscape bitmap so the crop fills the cell", () => {
     // 800x600, side 600, crop at x=120. scale = S/side; img width = tw/side.
-    const style = squareCropImgStyle({
+    const style = cropImgStyle({
       thumbnail_width: 800,
       thumbnail_height: 600,
       square_crop_x: 120,
@@ -72,7 +71,7 @@ describe("squareCropImgStyle", () => {
 
   it("scales and translates a portrait bitmap (top-anchored crop)", () => {
     // 500x900, side 500, crop at y=200.
-    const style = squareCropImgStyle({
+    const style = cropImgStyle({
       thumbnail_width: 500,
       thumbnail_height: 900,
       square_crop_x: 0,
@@ -89,7 +88,7 @@ describe("squareCropImgStyle", () => {
 
   it("returns null (fallback to CSS cover) when crop fields are null", () => {
     expect(
-      squareCropImgStyle({
+      cropImgStyle({
         thumbnail_width: 800,
         thumbnail_height: 600,
         square_crop_x: null,

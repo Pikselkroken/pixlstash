@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import os
 
@@ -10,6 +11,7 @@ from pixlstash.server import Server
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import Tag
+from pixlstash.routes.pictures import _likeness_search as _likeness_search_module
 from pixlstash.scoring.character_likeness import count_pictures_by_character_likeness
 from pixlstash.services import search_query_service
 from pixlstash.tasks import TaskType
@@ -1145,3 +1147,52 @@ def test_likeness_search_by_set_survives_mixed_embedding_widths(set_env):
     returned = [row["picture_id"] for row in resp.json()]
     assert ids["near"] in returned
     assert ids["odd"] not in returned
+
+
+def _on_event_loop() -> bool:
+    """Whether the calling thread is running an asyncio event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def test_likeness_search_runs_off_the_event_loop(set_env, monkeypatch):
+    """The handler is a plain ``def``, so FastAPI runs it on a threadpool worker.
+
+    Its query encode (which waits its turn behind other searches' encodes), its
+    database reads and its scoring would otherwise block every request the
+    server is handling.
+    """
+    client, _server, ids, _sets = set_env
+    calls = []
+
+    def spy_encode(server, pil_image):
+        calls.append(("encode", _on_event_loop()))
+        # The +x unit vector the set members are seeded around.
+        return np.array([1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32)
+
+    real_fetch = search_query_service.fetch_candidate_clip_embeddings
+
+    def spy_fetch(*args, **kwargs):
+        calls.append(("fetch", _on_event_loop()))
+        return real_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(_likeness_search_module, "_encode_query_image", spy_encode)
+    monkeypatch.setattr(
+        search_query_service, "fetch_candidate_clip_embeddings", spy_fetch
+    )
+    resp = client.post(
+        f"{API_PREFIX}/pictures/likeness-search",
+        params={"top_n": 500},
+        files=[("files", ("query.png", random_images[0], "image/png"))],
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert [name for name, _ in calls] == ["encode", "fetch"], calls
+    assert calls == [("encode", False), ("fetch", False)], "work ran on the event loop"
+    # The spy's vector is what the ranking used: m1 is exactly +x.
+    rows = resp.json()
+    assert rows[0]["picture_id"] == ids["m1"], rows[:3]
+    assert rows[0]["likeness"] == pytest.approx(1.0, abs=1e-3), rows[0]

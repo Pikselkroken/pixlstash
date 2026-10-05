@@ -75,10 +75,9 @@ import { readLibraryFolder } from './setup/ReadLibraryFolder';
 import { overlayStateFor, runFirstRunSetup } from './setup/RunSetup';
 import { prepareLegacyIdentity } from './setup/LegacyIdentityPreparation';
 import {
+  argsAfter,
   cliCommandHint,
   launcherPath,
-  parseCliArgs,
-  parseMcpArgs,
   shimBlocked,
   shimInstalled,
   shimPath,
@@ -1906,39 +1905,16 @@ function registerIpc(): void {
  * on destructive verbs; piping would hang that prompt with nothing shown.
  */
 function runCli(args: string[]): void {
-  // No window is coming, so keep Chromium's GPU process out of it entirely. It
-  // otherwise starts anyway and writes driver-probe noise ("MESA-LOADER: failed
-  // to open dri...") to the terminal *after* the CLI's own output.
-  app.disableHardwareAcceleration();
-  // Same reason, macOS side: drop the regular-app activation policy so this run
-  // leaves no dock tile behind. Typed `Dock | undefined`, so the optional call
-  // is the platform check - unlike app.setActivationPolicy, which the typings
-  // declare unconditionally but which does not exist off macOS.
-  app.dock?.hide();
   const declared = declaredCliCommand();
-  // Same interpreter and import path the backend gets, so a dev run drives this
-  // checkout's code and the CLI branch is exercisable without the bundled env.
-  const env: NodeJS.ProcessEnv = { ...backendEnv() };
-  if (declared) env.PIXLSTASH_CLI_COMMAND = declared;
-  const child = spawn(
-    backendInterpreter(),
+  // So the CLI's own usage lines, errors and "add one with:" hints name the
+  // command the user actually typed instead of the `pixlstash-cli` console
+  // script, which no desktop install puts on PATH. Undefined in a dev run,
+  // where we have no runnable command to name (see declaredCliCommand).
+  runPython(
     ['-m', 'pixlstash.cli', '--hub', hubPath(), ...args],
-    {
-      stdio: 'inherit',
-      // So the CLI's own usage lines, errors and "add one with:" hints name the
-      // command the user actually typed instead of the `pixlstash-cli` console
-      // script, which no desktop install puts on PATH. Undefined in a dev run,
-      // where we have no runnable command to name (see declaredCliCommand).
-      env,
-    },
+    'CLI',
+    declared ? { PIXLSTASH_CLI_COMMAND: declared } : {},
   );
-  // 3 is the CLI's own "hub unavailable" code; a runtime we cannot even launch
-  // is the same class of failure from the caller's side.
-  child.on('error', (e) => {
-    console.error(`Could not run the PixlStash CLI: ${e.message}`);
-    app.exit(3);
-  });
-  child.on('exit', (code, signal) => app.exit(signal ? 1 : (code ?? 1)));
 }
 
 /**
@@ -1956,24 +1932,45 @@ function runCli(args: string[]): void {
  * the app but its interpreter.
  */
 function runMcp(args: string[]): void {
+  runPython(['-m', 'pixlstash.mcp_server', ...args], 'MCP server');
+}
+
+/**
+ * Run `argv` on the backend's interpreter in place of the app, windowless, and
+ * exit with its status. `label` names it in the one error this prints.
+ */
+function runPython(
+  argv: string[],
+  label: string,
+  extraEnv: NodeJS.ProcessEnv = {},
+): void {
+  // No window is coming, so keep Chromium's GPU process out of it entirely. It
+  // otherwise starts anyway and writes driver-probe noise ("MESA-LOADER: failed
+  // to open dri...") to the terminal *after* the child's own output.
   app.disableHardwareAcceleration();
+  // Same reason, macOS side: drop the regular-app activation policy so this run
+  // leaves no dock tile behind. Typed `Dock | undefined`, so the optional call
+  // is the platform check - unlike app.setActivationPolicy, which the typings
+  // declare unconditionally but which does not exist off macOS.
   app.dock?.hide();
-  const env: NodeJS.ProcessEnv = { ...backendEnv() };
-  const child = spawn(
-    backendInterpreter(),
-    ['-m', 'pixlstash.mcp_server', ...args],
-    { stdio: 'inherit', env },
-  );
+  // Same interpreter and import path the backend gets, so a dev run drives this
+  // checkout's code and either branch is exercisable without the bundled env.
+  const child = spawn(backendInterpreter(), argv, {
+    stdio: 'inherit',
+    env: { ...backendEnv(), ...extraEnv },
+  });
+  // 3 is the CLI's own "hub unavailable" code; a runtime we cannot even launch
+  // is the same class of failure from the caller's side. stderr, never stdout:
+  // an MCP client is parsing stdout as JSON-RPC.
   child.on('error', (e) => {
-    // stderr, never stdout: the client is parsing stdout as JSON-RPC.
-    console.error(`Could not run the PixlStash MCP server: ${e.message}`);
+    console.error(`Could not run the PixlStash ${label}: ${e.message}`);
     app.exit(3);
   });
   child.on('exit', (code, signal) => app.exit(signal ? 1 : (code ?? 1)));
 }
 
-const cliArgs = parseCliArgs(process.argv);
-const mcpArgs = cliArgs === null ? parseMcpArgs(process.argv) : null;
+const cliArgs = argsAfter('cli', process.argv);
+const mcpArgs = cliArgs === null ? argsAfter('mcp', process.argv) : null;
 const gotLock = cliArgs === null && mcpArgs === null && app.requestSingleInstanceLock();
 if (cliArgs !== null) {
   runCli(cliArgs);

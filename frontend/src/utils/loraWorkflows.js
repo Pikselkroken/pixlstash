@@ -106,15 +106,13 @@ export function workflowFit(card, lora, paired = new Set()) {
  */
 export function fitWorkflows(cards, lora, handMade) {
   const paired = pairedCheckpoints(handMade, lora?.sha256);
-  const fits = (cards || []).map((card, index) => ({
-    ...workflowFit(card, lora, paired),
-    index,
-  }));
+  const fits = (cards || []).map((card) => workflowFit(card, lora, paired));
   const score = (entry) => (entry.paired ? 2 : 0) + (entry.usedBefore ? 1 : 0);
+  // `sort` is stable, so ties keep the server's order.
   const ranked = (fit) =>
     fits
       .filter((entry) => entry.fit === fit)
-      .sort((a, b) => score(b) - score(a) || a.index - b.index);
+      .sort((a, b) => score(b) - score(a));
   return {
     match: ranked("match"),
     unknown: ranked("unknown"),

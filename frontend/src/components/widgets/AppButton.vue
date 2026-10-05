@@ -53,8 +53,9 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { VIcon } from "vuetify/components";
+import { useRefocusAfterLoading } from "../../utils/dom";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
@@ -107,23 +108,7 @@ const keyShortcut = computed(() =>
 );
 
 const rootEl = ref(null);
-let refocusWhenDone = false;
-
-// A natively-disabled button cannot hold focus, so the browser drops focus to
-// <body>, stranding a keyboard user who would have to tab all the way back to
-// where they were once the request settles.
-watch(
-  () => props.loading,
-  (isLoading) => {
-    if (isLoading) {
-      refocusWhenDone = rootEl.value === document.activeElement;
-      return;
-    }
-    if (!refocusWhenDone) return;
-    refocusWhenDone = false;
-    nextTick(() => rootEl.value?.focus());
-  },
-);
+useRefocusAfterLoading(() => props.loading, rootEl);
 
 /**
  * Put the keyboard on this button.
