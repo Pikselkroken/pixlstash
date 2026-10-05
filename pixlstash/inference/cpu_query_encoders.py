@@ -78,7 +78,10 @@ def build_cpu_query_encoders(device) -> Optional["CpuQueryEncoders"]:
     """
     if normalise_device(device) != MPS:
         return None
-    return CpuQueryEncoders.create()
+    from pixlstash.tagger_plugins.clip_service import ClipService
+    from pixlstash.tagger_plugins.sbert import SBertService
+
+    return CpuQueryEncoders(ClipService(device=CPU), SBertService(device=CPU))
 
 
 class CpuQueryEncoders:
@@ -92,18 +95,6 @@ class CpuQueryEncoders:
     def __init__(self, clip_service, sbert_service) -> None:
         self._clip_service = clip_service
         self._sbert_service = sbert_service
-
-    @classmethod
-    def create(cls) -> "CpuQueryEncoders":
-        """Build both CPU copies without loading their weights.
-
-        Returns:
-            An instance whose models load on :meth:`load`.
-        """
-        from pixlstash.tagger_plugins.clip_service import ClipService
-        from pixlstash.tagger_plugins.sbert import SBertService
-
-        return cls(ClipService(device=CPU), SBertService(device=CPU))
 
     def is_loaded(self) -> bool:
         """Whether **both** copies hold a model.

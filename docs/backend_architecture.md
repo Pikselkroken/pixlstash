@@ -1612,38 +1612,13 @@ because several routes put a load on Metal whatever PixlStash chose;
 `device_map="auto"` on a Mac is one. A value already in the environment is the
 owner's and is kept, with a warning when transformers would read it as false.
 
-**Searching.** A query is encoded on a request thread — text search and export
-by query before their database task, likeness search on a threadpool worker —
-while the GPU worker runs the embedding and tagging batches. So on Metal, and
-only on Metal, `InferenceEngine.create` also builds
-`inference/cpu_query_encoders.CpuQueryEncoders`: the same classes, weights and
-preprocessing on the `cpu` device, about 0.7 GB. Every query encode goes through
-`InferenceEngine.query_services()`, which yields those copies on Metal and the
-engine's own CLIP and SBERT everywhere else; `TextEmbeddingWorkflow.encode_query`
-/ `encode_clip_query` and `ClipEmbeddingWorkflow.encode_query_image` are its
-callers. The worker's own `encode`/`encode_images` deliberately do **not** use
-it — moving those to the CPU would take the whole library's indexing off the
-GPU.
-
-**The copies load once, before the engine is published, and stay.**
-`Vault._create_engine` (from `ensure_ready` and the lazy build in
-`get_worker_future`) builds the engine, loads the copies, and only then is the
-engine assigned to `Vault._engine`. The planner's model finders queue nothing
-while `_engine` is `None`, so the load never runs beside another model load,
-which would race transformers' and accelerate's *imports* — even at boot, where
-`Server.__init__` has started the planner before `app` calls `ensure_ready`.
-The cost is a few seconds of start-up on a Mac (the copies are the first models
-in the process and pay the cold imports), and the copies stay resident even
-with "keep models in memory" off: `engine.close()` and the idle sweep leave
-them, and they go with the engine (#1774 tracks unloading them). If either copy
-fails to load, every search answers 503 rather than fall back to the Metal
-services, because that fallback is the crash.
-
-`query_services()` also lets **one query encode run at a time**, on every host.
-The query encodes run on request threads and share one pair of service
-instances, which read their model and tokenizer without a lock once loaded;
-they used to take turns on the single DB writer, and the lock is that
-serialisation without holding the writer.
+**Searching.** On Metal only, search queries are encoded on CPU copies of CLIP
+and SBERT (`inference/cpu_query_encoders.py`), loaded in
+`Vault._create_engine` before the engine is assigned to `Vault._engine` and kept
+resident (#1774). Every query encode goes through
+`InferenceEngine.query_services()`, which also lets one run at a time on every
+host. The full reasoning and its costs are in that document, under "Searching:
+the CPU copies".
 
 #### "VRAM" on unified memory
 
