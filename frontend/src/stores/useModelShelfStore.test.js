@@ -3234,6 +3234,62 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(store.hiddenSetCount).toBe(1);
   });
 
+  it("keeps the precision a member's and an offered model's name has lost", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), filename: "Qwen3VL_4b_bf16.st", display_name: null, quant: "bf16" }),
+      adapter({ id: 2, sha256: "b".repeat(64), filename: "Qwen3VL_4b_fp8_scaled.st", display_name: null, quant: "fp8" }),
+    ]);
+    const encoder = { name: "x", kind: "text_encoder", slot: "text_encoder" };
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [
+        {
+          id: 7,
+          name: null,
+          declined: [],
+          members: [
+            { ...encoder, id: 1, sha256: "a".repeat(64), on_shelf: true },
+            {
+              ...encoder,
+              id: null,
+              sha256: "c".repeat(64),
+              on_shelf: false,
+              label: "Qwen3VL_4b_Q4_K_M.gguf",
+            },
+            {
+              ...encoder,
+              id: null,
+              sha256: "d".repeat(64),
+              on_shelf: false,
+              label: "RealVis fp16",
+            },
+          ],
+          offer: {
+            head_id: 1,
+            head_name: "x",
+            models: [{ ...encoder, id: 2, sha256: "b".repeat(64) }],
+          },
+        },
+      ],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    const [set] = store.handMadeSets;
+    // One name three times over: the quant is all that tells them apart.
+    expect(set.members.map((m) => [m.name, m.quant])).toEqual([
+      ["Qwen3VL 4b", "bf16"],
+      ["Qwen3VL 4b", "q4_k_m"],
+      // A label that is no filename is kept whole, so it gets no badge too.
+      ["RealVis fp16", null],
+    ]);
+    expect(set.offer.models.map((m) => [m.name, m.quant])).toEqual([
+      ["Qwen3VL 4b", "fp8"],
+    ]);
+  });
+
   /** A hand-made set; `extra` adds members beyond the twin's two. */
   function handSet(id, extra = [], others = {}) {
     return {

@@ -41,6 +41,7 @@ import {
   compareGroups,
   defaultSortDirection,
   deriveModelName,
+  quantFromFilename,
   fileKindLabel,
   locationState,
   presentCopies,
@@ -1846,6 +1847,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * run through the same `deriveModelName` the shelf uses. Every set this store
    * hands out or names in a receipt goes through here, so one name is shown
    * everywhere.
+   *
+   * `modelName` drops the precision from a filename, so each member and each
+   * offered model also carries the row's `quant`: a set holding the BF16 file
+   * and offered the FP8 one otherwise shows two tiles reading the same name.
    */
   function withShelfNames(set) {
     if (!set) return set;
@@ -1863,15 +1868,23 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         models: (set.offer.models ?? []).map((model) => ({
           ...model,
           name: shelfName(model),
+          quant: byId.get(model.id)?.quant ?? null,
         })),
       },
       members: (set.members ?? []).map((member) => {
         const row = member.id != null ? byId.get(member.id) : null;
         const kept = member.label || member.name || "";
+        // Only a filename is rewritten; a label kept verbatim keeps its quant.
+        const isFile = /\.[a-z0-9]{2,12}$/i.test(kept);
         const name = row
           ? modelName(row).text || member.name
-          : (/\.[a-z0-9]{2,12}$/i.test(kept) && deriveModelName(kept)) || kept;
-        return { ...member, name: name || member.name };
+          : (isFile && deriveModelName(kept)) || kept;
+        const quant = isFile ? quantFromFilename(kept) : null;
+        return {
+          ...member,
+          name: name || member.name,
+          quant: row ? (row.quant ?? null) : quant,
+        };
       }),
     };
   }

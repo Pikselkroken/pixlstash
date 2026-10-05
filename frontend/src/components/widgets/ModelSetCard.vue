@@ -100,10 +100,14 @@
       <span
         v-if="card.offer.model"
         class="msc__ask-model"
-        :title="card.offer.model.name"
+        :title="
+          [card.offer.model.name, card.offer.model.quant]
+            .filter(Boolean)
+            .join(' ')
+        "
         ><v-icon size="12">mdi-cube-outline</v-icon
         ><span class="msc__ask-name">{{
-          [card.offer.model.kind, card.offer.model.name]
+          [card.offer.model.kind, card.offer.model.name, card.offer.model.quant]
             .filter(Boolean)
             .join(" · ")
         }}</span></span
@@ -317,7 +321,9 @@ const offerName = computed(() => {
   if (!offer) return null;
   const statement = `${offer.who}${offer.rest}`;
   if (!offer.model) return `${statement} Answer in the set's tray or menu`;
-  const model = [offer.model.kind, offer.model.name].filter(Boolean).join(" ");
+  const model = [offer.model.kind, offer.model.name, offer.model.quant]
+    .filter(Boolean)
+    .join(" ");
   return `${statement} ${model}. Add it? Answer in the set's tray or menu`;
 });
 

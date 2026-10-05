@@ -1881,7 +1881,10 @@ the shelf's workflow sets section) and served as `hand_made` on
   filename; `store.handMadeSets` re-resolves each through the shelf's own
   `modelName` (or `deriveModelName` on the kept label, off the shelf), so a set
   named after its checkpoint never reads `….safetensors`, and receipts go
-  through the same `withShelfNames`. The chooser is `--dialog-w-sm` wide and
+  through the same `withShelfNames`. Those names drop the precision, so
+  `withShelfNames` also gives each member and each offered model the row's
+  `quant`, and the tray tile and the card's offer chip draw it (`quantBadge`):
+  it is what tells a set's BF16 file from the FP8 one it is offered. The chooser is `--dialog-w-sm` wide and
   every name in it ellipsizes, so no set name can run out of it.
 - **Every set write is `setWrite` in the store:** the call, a full refetch
   (coverage moves with membership), and a receipt whose Undo is the inverse call
@@ -1909,7 +1912,7 @@ the shelf's workflow sets section) and served as `hand_made` on
   foot (`offerQuestion`: "1 recipe ran this with a model the set does not
   have. Add it?") until the owner adds or keeps it separate: nothing is a
   toast, nothing is one-time. The word "merge" is never shown: the button adds
-  files to the set. With **one** model the panel names it (kind · name) and is
+  files to the set. With **one** model the panel names it (kind · name · precision) and is
   answered in place: *Add to set* is `addToHandMadeSet` with `joined`, *Not
   this one* is Keep separate, and the cursor lands back on the card. With
   **several**, *Review N…* opens the tray with the cursor on the **offer
