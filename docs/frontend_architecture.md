@@ -4465,6 +4465,10 @@ line, the tray list's name, a hand-made set's tile name - where a member that
 has left the shelf has no path and shows the hash alone. A tray member whose
 shelf row is not loaded (its block unticked in Show) carries no hash on the
 wire, so it gets no tooltip rather than a false "not read yet".
+The tooltip is not the hash's only home: the file menu's *Copy SHA-256*
+(`ShelfSelectionBar`, beside *Copy filename*) puts the selection's hashes on
+the clipboard, which is the route a keyboard has and the only one that yields
+the characters. It is disabled with its reason when nothing selected is hashed.
 
 - **Every copy, not the first.** A model registered in two folders is one row,
   and naming one of its homes would read as naming its only one.

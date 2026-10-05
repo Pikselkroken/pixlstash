@@ -538,6 +538,35 @@ describe("the delete verb", () => {
   });
 });
 
+describe("Copy SHA-256", () => {
+  // The hash is in the file line's tooltip; this is its route for a keyboard
+  // and for anyone who needs the characters rather than a look at them.
+  const item = (wrapper) =>
+    wrapper.findAll(".ctx-item").find((mi) => mi.text().includes("SHA-256"));
+
+  it("puts every selected model's whole hash on the clipboard", async () => {
+    const writeText = vi.fn().mockResolvedValue();
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      selectRows([row(1, "present"), row(2, "present")]);
+      const wrapper = mount(ShelfSelectionBar, globalOpts);
+      await item(wrapper).trigger("click");
+      expect(writeText).toHaveBeenCalledWith(
+        `${"1".repeat(64)}\n${"2".repeat(64)}`,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("is refused, with the reason, for a checkpoint not hashed yet", () => {
+    selectRows([row(1, "present", { sha256: null })]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper).attributes("disabled")).toBeDefined();
+    expect(tip(item(wrapper))).toBe("Not hashed yet");
+  });
+});
+
 describe("Open in file manager", () => {
   // The verb acts on the machine PixlStash runs on rather than on the library,
   // so what this file can assert is the gate and the emit: whether the item is

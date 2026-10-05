@@ -865,8 +865,25 @@ const openTitle = computed(() =>
  * result: pressing it twice because nothing happened is how a reader ends up
  * unsure whether it worked at all.
  */
-async function copyFilenames() {
-  const names = store.selectedRows.map((row) => row.filename).filter(Boolean);
+function copyFilenames() {
+  return copyLines(
+    store.selectedRows.map((row) => row.filename).filter(Boolean),
+    "filenames",
+  );
+}
+
+/**
+ * The hashes the selection has, for Copy SHA-256.
+ *
+ * The hash is what sets and recipes are matched by, and the file line's
+ * tooltip shows it - but a tooltip is never a fact's only home, and nobody can
+ * select text out of one. A checkpoint not hashed yet has none to give.
+ */
+const selectedHashes = computed(() =>
+  store.selectedRows.map((row) => row.sha256).filter(Boolean),
+);
+
+async function copyLines(names, plural) {
   const notices = useNoticeStore();
   if (!names.length) return;
   try {
@@ -876,7 +893,7 @@ async function copyFilenames() {
       text:
         names.length === 1
           ? `Copied ${names[0]}.`
-          : `Copied ${names.length} filenames.`,
+          : `Copied ${names.length} ${plural}.`,
     });
   } catch (err) {
     // Denied permission, an insecure origin, or a browser that has no
@@ -937,6 +954,7 @@ const verbHandlers = computed(() => ({
   mergeTitle: mergeTitle.value,
   openable: openable.value,
   openTitle: openTitle.value,
+  hashed: selectedHashes.value.length > 0,
   forgettable: forgettable.value.length > 0,
   forgetTitle: forgetTitle.value,
   deletable: deletable.value.length > 0,
@@ -946,6 +964,8 @@ const verbHandlers = computed(() => ({
     contextOpen.value = false;
     moreMenuOpen.value = false;
     if (verb === "copy-filenames") copyFilenames();
+    else if (verb === "copy-sha256")
+      copyLines(selectedHashes.value, "SHA-256 hashes");
     // The gesture decides, not the tracked key state: `shiftHeld` drives the
     // label and nothing else, so a stale one can never turn a trash into an
     // unlink.
@@ -1123,6 +1143,11 @@ const VerbMenu = (props) => {
       props.single ? "Copy filename" : "Copy filenames",
       { on: () => props.onVerb("copy-filenames") },
     ),
+    item("mdi-fingerprint", "Copy SHA-256", {
+      on: () => props.onVerb("copy-sha256"),
+      disabled: !props.hashed,
+      title: props.hashed ? "" : "Not hashed yet",
+    }),
     sep(),
     // NOT the danger treatment: removing a model whose file is already gone
     // destroys a row, not bytes. The one below it does destroy bytes, which is
