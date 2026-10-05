@@ -128,7 +128,6 @@ function render(props = {}) {
         SaveRecipeDialog: {
           name: "SaveRecipeDialog",
           props: [
-            "open",
             "workflowId",
             "prompt",
             "negative",

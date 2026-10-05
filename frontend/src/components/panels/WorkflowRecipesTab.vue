@@ -96,7 +96,7 @@
             <Tooltip text="Open the picture" activator="parent" :describe="false" />
             <img
               class="wfrt-thumb"
-              :src="thumbnail(recipe.source_picture_id)"
+              :src="pictureThumbnailUrl(recipe.source_picture_id)"
               alt=""
               loading="lazy"
               decoding="async"
@@ -276,7 +276,7 @@
               <Tooltip text="Open the picture" activator="parent" :describe="false" />
               <img
                 class="wfrt-thumb"
-                :src="thumbnail(look.cover_picture_id)"
+                :src="pictureThumbnailUrl(look.cover_picture_id)"
                 alt=""
                 loading="lazy"
                 decoding="async"
@@ -336,7 +336,7 @@
 
           <div class="wfrt-bot">
             <span class="wfrt-facts">{{
-              lookDiffs[look.key] ? "" : picturesLabel(look.pictures)
+              lookDiffs[look.key] ? "" : pictureCount(look.pictures)
             }}</span>
             <AppButton
               v-if="!look.saved"
@@ -372,7 +372,6 @@
 
     <SaveRecipeDialog
       v-if="savingSource"
-      :open="Boolean(savingSource)"
       :workflow-id="savingSource.workflowId"
       :prompt="savingSource.prompt"
       :negative="savingSource.negative"
@@ -439,6 +438,7 @@ import { loraKey, promptKey } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
 import { withRef } from "../../utils/withRef";
+import { pictureCount } from "../../utils/workflowSets";
 import ExportRecipeDialog from "../io/ExportRecipeDialog.vue";
 import MakeDefaultsDialog from "../io/MakeDefaultsDialog.vue";
 import SaveRecipeDialog from "../io/SaveRecipeDialog.vue";
@@ -535,15 +535,6 @@ const subtitle = computed(() => {
   return parts.join(" · ");
 });
 
-/** "31 pictures", the way the saved half writes it. */
-function picturesLabel(count) {
-  return `${count} ${count === 1 ? "picture" : "pictures"}`;
-}
-
-function thumbnail(pictureId) {
-  return pictureThumbnailUrl(pictureId);
-}
-
 // ── The diff line (#1653 §1.3) ──────────────────────────────────────────────
 
 /** Several workflows selected: each card is diffed against its own. */
@@ -621,7 +612,7 @@ const lookDiffs = computed(() => {
     const lora = base.wait ? [base.wait] : lookLoraDiff(look, base.recipe);
     if (!lora) continue;
     const segments = lora.length ? lora : [{ parts: [{ text: "Default LoRAs" }], text: "Default LoRAs" }];
-    out[look.key] = finish([...segments, quiet(picturesLabel(look.pictures))]);
+    out[look.key] = finish([...segments, quiet(pictureCount(look.pictures))]);
   }
   return out;
 });

@@ -333,7 +333,6 @@
        they press the button, and an unmounted one costs no reads. -->
   <SaveRecipeDialog
     v-if="saveOpen"
-    :open="saveOpen"
     :workflow-id="recipe?.workflowId || ''"
     :prompt="recipe?.positive_prompt || ''"
     :negative="recipe?.negativePrompt || ''"
@@ -377,7 +376,8 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorMessage } from "../../utils/apiError";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
-import { saveFileAs } from "../../utils/downloadFile";
+import { saveJsonAs } from "../../utils/downloadFile";
+import { formatStrength } from "../../utils/loraChain";
 import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { keepsTheSameLook } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
@@ -761,18 +761,10 @@ const SETTING_LABELS = {
   size: "Size",
 };
 
-// Drawn in this order when present; anything else follows, in the order the
-// backend listed it, so a field nobody has mapped is still shown.
-const SETTING_ORDER = [
-  "steps",
-  "cfg",
-  "cfg_scale",
-  "guidance",
-  "sampler_name",
-  "sampler",
-  "scheduler",
-  "denoise",
-];
+// Drawn in the labels' order when present; anything else follows, in the
+// order the backend listed it, so a field nobody has mapped is still shown.
+// `size` is one of the rest: it follows the width × height row.
+const SETTING_ORDER = Object.keys(SETTING_LABELS).filter((f) => f !== "size");
 
 const settingRows = computed(() => {
   const recipe = props.recipe;
@@ -842,11 +834,6 @@ function format(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") return String(Number(value.toFixed(4)));
   return String(value);
-}
-
-/** Two decimals, the way every LoRA strength in the app is written. */
-function formatStrength(strength) {
-  return Number(strength).toFixed(2);
 }
 
 const runTooltip = computed(
@@ -951,15 +938,9 @@ async function onWorkflowToggle(event) {
   }
 }
 
-const workflowJson = computed(() => stringify(graph.value?.workflow));
-
-function stringify(value) {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
+const workflowJson = computed(() =>
+  JSON.stringify(graph.value?.workflow, null, 2),
+);
 
 async function copyWorkflow() {
   if (!(await copyText(workflowJson.value))) {
@@ -974,10 +955,7 @@ async function downloadWorkflow() {
   if (savingWorkflow) return;
   savingWorkflow = true;
   try {
-    await saveFileAs(
-      new Blob([workflowJson.value], { type: "application/json" }),
-      "comfyui_workflow.json",
-    );
+    await saveJsonAs(graph.value?.workflow, "comfyui_workflow.json");
   } catch (err) {
     console.warn("Failed to save the workflow JSON:", err);
     notices.push({

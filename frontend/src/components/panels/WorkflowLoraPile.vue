@@ -42,8 +42,7 @@
         <span class="wfpile-title">Also used</span>
         <span class="wfpile-quiet"
           >{{ count }} {{ count === 1 ? "LoRA" : "LoRAs" }} across
-          {{ summary.pictures }}
-          {{ summary.pictures === 1 ? "picture" : "pictures" }}</span
+          {{ pictureCount(summary.pictures) }}</span
         >
       </div>
       <ul class="wfpile-rows">
@@ -93,7 +92,7 @@
               v-if="row.asset && row.pictures"
               variant="ghost"
               size="sm"
-              :aria-label="`Show the ${row.pictures} ${row.pictures === 1 ? 'picture' : 'pictures'} made with ${label(row)}`"
+              :aria-label="`Show the ${pictureCount(row.pictures)} made with ${label(row)}`"
               @click="show(row)"
             >
               Show {{ row.pictures }}
@@ -116,6 +115,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VMenu } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { pictureCount } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
@@ -156,13 +156,9 @@ function label(row) {
   return row.name || "A LoRA whose name was forgotten";
 }
 
-function pictures(n) {
-  return `${n} ${n === 1 ? "picture" : "pictures"}`;
-}
-
 function meta(row) {
   return [
-    pictures(row.pictures),
+    pictureCount(row.pictures),
     row.asset && row.asset === props.summary?.cover_asset ? "cover" : "",
   ]
     .filter(Boolean)

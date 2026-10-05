@@ -117,6 +117,7 @@ import { VIcon } from "vuetify/components";
 import { readModelSwap } from "../../api/workflows";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { loraBase } from "../../utils/loraChain";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -161,16 +162,6 @@ const cloneError = ref("");
 // orphan it and leave the dialog stuck on "Reading…".
 let readSeq = 0;
 let openSeq = 0;
-
-/** A filename as two spellings of one file compare: basename, case folded. */
-function same(a, b) {
-  const fold = (value) =>
-    String(value || "")
-      .toLowerCase()
-      .split(/[\\/]/)
-      .pop();
-  return fold(a) === fold(b);
-}
 
 function modelLabel(model) {
   return model.display_name || model.filename;
@@ -389,7 +380,7 @@ watch(
           // may name it under a folder the shelf row does not carry.
           const resolved = shelf.find((model) => model.id === slot.model?.id);
           const named = shelf.filter((model) =>
-            same(model.filename, slot.filename),
+            loraBase(model.filename) === loraBase(slot.filename),
           );
           // The row the server resolved the file to, else the one shelf file
           // of that basename; two of them is not an answer.

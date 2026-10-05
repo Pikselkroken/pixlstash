@@ -47,7 +47,6 @@ const KEY = `auto:${"a".repeat(64)}`;
 function open(props = {}) {
   return mount(SaveRecipeDialog, {
     props: {
-      open: true,
       workflowId: KEY,
       suggestedName: "Cinematic portrait",
       prompt: "cinematic portrait of a rainy tram platform",
@@ -523,7 +522,6 @@ describe("SaveRecipeDialog's LoRA rows", () => {
   function openRows() {
     return mount(SaveRecipeDialog, {
       props: {
-        open: true,
         workflowId: KEY,
         suggestedName: "Rainy tram platform",
         prompt: "a rainy tram platform",
@@ -599,7 +597,6 @@ describe("SaveRecipeDialog's LoRA rows", () => {
   it("saves a strength of 0 as 0, not as 1", async () => {
     const wrapper = mount(SaveRecipeDialog, {
       props: {
-        open: true,
         workflowId: KEY,
         suggestedName: "Rainy tram platform",
         prompt: "a rainy tram platform",

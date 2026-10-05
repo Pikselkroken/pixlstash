@@ -349,7 +349,7 @@
  * first. *Done* emits `done` with the rows and the chain body and writes
  * nothing; the clone dialog sends that body with its one write.
  */
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { listAdapters } from "../../api/modelShelf";
@@ -357,10 +357,15 @@ import { getLoraChain, saveLoraChain } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
-import { rowBaseModel } from "../../utils/workflowSets";
+import { focusLater } from "../../utils/dom";
+import {
+  pictureCount as countPictures,
+  rowBaseModel,
+} from "../../utils/workflowSets";
 import {
   chainEntries,
   countChanges,
+  formatStrength,
   loraBase,
   loraStem,
 } from "../../utils/loraChain";
@@ -432,10 +437,7 @@ let loadToken = 0;
 const editable = computed(() => Boolean(chain.value?.editable));
 const refusal = computed(() => chain.value?.refusal || "");
 
-const picturesLabel = computed(() => {
-  const count = Number(props.pictureCount) || 0;
-  return `${count} ${count === 1 ? "picture" : "pictures"}`;
-});
+const picturesLabel = computed(() => countPictures(props.pictureCount));
 
 /** One lane per pass when the model forks; empty for a straight chain. */
 const lanes = computed(() => chain.value?.lanes || []);
@@ -480,7 +482,7 @@ const effectiveRows = computed(() =>
     ...row,
     strength: !row.hasStrength
       ? null
-      : row.strengthText === fmt(row.readStrength)
+      : row.strengthText === formatStrength(row.readStrength)
         ? row.readStrength
         : Number(row.strengthText),
   })),
@@ -776,11 +778,6 @@ function strengthInvalid(row) {
   return !text || !Number.isFinite(value) || value < -10 || value > 10;
 }
 
-function fmt(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number.toFixed(2) : "";
-}
-
 /** One row of the list, from one loader of the chain as read in *lane*. */
 function rowOf(loader, lane = null) {
   const hasStrength = loader.strength !== null && loader.strength !== undefined;
@@ -794,7 +791,7 @@ function rowOf(loader, lane = null) {
     sha256: loader.sha256 || "",
     onShelf: Boolean(loader.on_shelf),
     hasStrength,
-    strengthText: hasStrength ? fmt(loader.strength) : "",
+    strengthText: hasStrength ? formatStrength(loader.strength) : "",
     // The value as read, so a field left alone saves 0.855 and not the 0.86
     // it displays: re-weighting a loader nobody touched is a change the
     // owner did not make.
@@ -810,12 +807,8 @@ function say(message) {
 }
 
 /** Focus one control of one row once the list has re-rendered. */
-async function focusRow(rowId, which) {
-  await nextTick();
-  const el = listEl.value?.querySelector(
-    `[data-row="${rowId}"] [data-focus="${which}"]`,
-  );
-  el?.focus?.();
+function focusRow(rowId, which) {
+  return focusLater(`[data-row="${rowId}"] [data-focus="${which}"]`, listEl);
 }
 
 async function load() {
@@ -958,17 +951,14 @@ async function add(lane = null) {
     sha256: "",
     onShelf: true,
     hasStrength: true,
-    strengthText: fmt(1),
+    strengthText: formatStrength(1),
     deleted: false,
     isNew: true,
     lane,
   };
   rows.value = [...rows.value, row];
   say(`A new row is at ${positions.value[row.id]}. Pick a LoRA for it.`);
-  await nextTick();
-  listEl.value
-    ?.querySelector(`[data-row="${row.id}"] select`)
-    ?.focus?.();
+  await focusLater(`[data-row="${row.id}"] select`, listEl);
 }
 
 function pick(row, sha256) {

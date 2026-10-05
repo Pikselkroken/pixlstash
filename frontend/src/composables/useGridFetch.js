@@ -218,9 +218,9 @@ export function useGridFetch(
       comfyuiLoraFilter: filterStore.comfyuiLoraFilter ?? [],
       // Changes which pictures the grid shows, so an unforced fetch must not
       // early-return as a no-op against the previous state's key.
-      workflowFilter: workflowFilterParams(filterStore.workflowFilter)
-        .map(([name, value]) => `${name}=${value}`)
-        .join("&"),
+      workflowFilter: new URLSearchParams(
+        workflowFilterParams(filterStore.workflowFilter),
+      ).toString(),
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
       filePathPrefixFilter: filePathPrefixFilter.value ?? null,
       importSourceFolderFilter: importSourceFolderFilter.value ?? null,
@@ -431,11 +431,9 @@ export function useGridFetch(
     (filterStore.comfyuiLoraFilter || []).forEach((l) =>
       params.append("comfyui_lora", l),
     );
-    for (const [name, value] of workflowFilterParams(
-      filterStore.workflowFilter,
-    )) {
-      params.append(name, value);
-    }
+    workflowFilterParams(filterStore.workflowFilter).forEach(([name, value]) =>
+      params.append(name, value),
+    );
     if (filterStore.minScoreFilter != null) {
       params.append("min_score", filterStore.minScoreFilter);
     }
@@ -557,11 +555,9 @@ export function useGridFetch(
     (filterStore.comfyuiLoraFilter || []).forEach((l) =>
       params.append("comfyui_lora", l),
     );
-    for (const [name, value] of workflowFilterParams(
-      filterStore.workflowFilter,
-    )) {
-      params.append(name, value);
-    }
+    workflowFilterParams(filterStore.workflowFilter).forEach(([name, value]) =>
+      params.append(name, value),
+    );
     if (filterStore.minScoreFilter != null) {
       params.append("min_score", filterStore.minScoreFilter);
     }
@@ -695,6 +691,37 @@ export function useGridFetch(
     }
     const requestId = Date.now();
     fetchAllGridImages.lastRequestId = requestId;
+    // A suggestion search's ranked list and its picture rows, cached in
+    // `cache` against the subject `id` (under `key`) so neither slider costs a
+    // round trip; only a new subject or a force refetches. Null when a newer
+    // fetch overtook this one.
+    async function rankedWithRows(cache, key, id, search, phase) {
+      const cached = cache?.value;
+      if (!force && cached?.[key] === id && cached.matches)
+        return cached.matches;
+      let raw;
+      try {
+        raw = await search(id);
+      } catch (error) {
+        error.gridFetchPhase = phase;
+        throw error;
+      }
+      if (fetchAllGridImages.lastRequestId !== requestId) return null;
+      const ranked = Array.isArray(raw) ? raw : [];
+      const rowsById = {};
+      if (ranked.length) {
+        const rows = await listPicturesByIds(
+          ranked.map((r) => r.picture_id),
+          { fields: "grid" },
+        );
+        if (fetchAllGridImages.lastRequestId !== requestId) return null;
+        for (const pic of Array.isArray(rows) ? rows : []) {
+          rowsById[pic.id] = pic;
+        }
+      }
+      if (cache) cache.value = { [key]: id, matches: ranked, rowsById };
+      return ranked;
+    }
     try {
       let images = [];
 
@@ -756,48 +783,17 @@ export function useGridFetch(
         // different combine mode: a server-side k-of-n would put a round trip
         // under a drag. Only a change of character (or an explicit force)
         // refetches.
-        const character = faceSearchCharacter.value;
-        const cached = faceSearchRanked?.value;
-        let ranked =
-          !force && cached?.characterId === character.id
-            ? cached.matches
-            : null;
+        const ranked = await rankedWithRows(
+          faceSearchRanked,
+          "characterId",
+          faceSearchCharacter.value.id,
+          characterFaceSearch,
+          "character-face-search-request",
+        );
         if (!ranked) {
-          let raw;
-          try {
-            raw = await characterFaceSearch(character.id);
-          } catch (error) {
-            error.gridFetchPhase = "character-face-search-request";
-            throw error;
-          }
-          if (fetchAllGridImages.lastRequestId !== requestId) {
-            if (isSortedFetch && options?.showProgress === true)
-              completeSmartScoreProgress(loadId, 0, false);
-            return;
-          }
-          ranked = Array.isArray(raw) ? raw : [];
-          const rowsById = {};
-          if (ranked.length) {
-            const rows = await listPicturesByIds(
-              ranked.map((r) => r.picture_id),
-              { fields: "grid" },
-            );
-            if (fetchAllGridImages.lastRequestId !== requestId) {
-              if (isSortedFetch && options?.showProgress === true)
-                completeSmartScoreProgress(loadId, 0, false);
-              return;
-            }
-            for (const pic of Array.isArray(rows) ? rows : []) {
-              rowsById[pic.id] = pic;
-            }
-          }
-          if (faceSearchRanked) {
-            faceSearchRanked.value = {
-              characterId: character.id,
-              matches: ranked,
-              rowsById,
-            };
-          }
+          if (isSortedFetch && options?.showProgress === true)
+            completeSmartScoreProgress(loadId, 0, false);
+          return;
         }
         const rowsById = faceSearchRanked?.value?.rowsById ?? {};
         images = cutFaceSuggestions(
@@ -812,62 +808,33 @@ export function useGridFetch(
         // "Suggest more pictures for <set>" (#1489): the same cached-ranked-list
         // shape as the person search above, so neither slider costs a round
         // trip. Only a change of set (or an explicit force) refetches.
-        const pictureSet = setSuggestSet.value;
-        const cached = setSuggestRanked?.value;
-        let ranked =
-          !force && cached?.setId === pictureSet.id ? cached.matches : null;
+        const ranked = await rankedWithRows(
+          setSuggestRanked,
+          "setId",
+          setSuggestSet.value.id,
+          setLikenessSearch,
+          "set-suggest-search-request",
+        );
         if (!ranked) {
-          let raw;
-          try {
-            raw = await setLikenessSearch(pictureSet.id);
-          } catch (error) {
-            error.gridFetchPhase = "set-suggest-search-request";
-            throw error;
-          }
-          if (fetchAllGridImages.lastRequestId !== requestId) {
-            if (isSortedFetch && options?.showProgress === true)
-              completeSmartScoreProgress(loadId, 0, false);
-            return;
-          }
-          ranked = Array.isArray(raw) ? raw : [];
-          const rowsById = {};
-          if (ranked.length) {
-            const rows = await listPicturesByIds(
-              ranked.map((r) => r.picture_id),
-              { fields: "grid" },
-            );
-            if (fetchAllGridImages.lastRequestId !== requestId) {
-              if (isSortedFetch && options?.showProgress === true)
-                completeSmartScoreProgress(loadId, 0, false);
-              return;
-            }
-            for (const pic of Array.isArray(rows) ? rows : []) {
-              rowsById[pic.id] = pic;
-            }
-          }
-          if (setSuggestRanked) {
-            setSuggestRanked.value = {
-              setId: pictureSet.id,
-              matches: ranked,
-              rowsById,
-            };
-          }
-          // Seat the strength slider at the set's own cohesion the first time
-          // the list arrives: no fixed default suits both a tight photoshoot
-          // and a loose theme. Floored, so the seat never lands above the
-          // set's own median. A one-picture set has no cohesion and takes the
-          // fixed fallback. A refetch keeps whatever the user dragged to.
-          if (
-            setSuggestThreshold &&
-            setSuggestThreshold.value == null &&
-            ranked.length
-          ) {
-            const cohesion = setCohesion(ranked);
-            setSuggestThreshold.value =
-              cohesion != null
-                ? Math.floor(cohesion * 100) / 100
-                : SET_SUGGEST_FALLBACK_THRESHOLD;
-          }
+          if (isSortedFetch && options?.showProgress === true)
+            completeSmartScoreProgress(loadId, 0, false);
+          return;
+        }
+        // Seat the strength slider at the set's own cohesion the first time
+        // the list arrives: no fixed default suits both a tight photoshoot
+        // and a loose theme. Floored, so the seat never lands above the
+        // set's own median. A one-picture set has no cohesion and takes the
+        // fixed fallback. A refetch keeps whatever the user dragged to.
+        if (
+          setSuggestThreshold &&
+          setSuggestThreshold.value == null &&
+          ranked.length
+        ) {
+          const cohesion = setCohesion(ranked);
+          setSuggestThreshold.value =
+            cohesion != null
+              ? Math.floor(cohesion * 100) / 100
+              : SET_SUGGEST_FALLBACK_THRESHOLD;
         }
         const rowsById = setSuggestRanked?.value?.rowsById ?? {};
         images = cutSetSuggestions(
@@ -1169,11 +1136,9 @@ export function useGridFetch(
           _filterP.append("comfyui_lora", l),
         );
         // Filter params: one workflow's pictures (F7)
-        for (const [name, value] of workflowFilterParams(
-          filterStore.workflowFilter,
-        )) {
-          _filterP.set(name, value);
-        }
+        workflowFilterParams(filterStore.workflowFilter).forEach(
+          ([name, value]) => _filterP.set(name, value),
+        );
         // Filter params: tag filters
         (filterStore.tagFilter || []).forEach((t) => _filterP.append("tag", t));
         (filterStore.tagRejectedFilter || []).forEach((t) =>

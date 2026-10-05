@@ -1220,6 +1220,28 @@ function copyStateNote(state) {
 }
 
 /**
+ * One copy's full path: its registered folder and its relpath.
+ *
+ * The separator is taken from the registered folder rather than assumed, and a
+ * Windows folder takes the relpath's separators with it: the two halves come
+ * from different places (`model_folder.path` as registered, `relpath` as the
+ * scanner wrote it), so joining them without a rule is how a path comes back
+ * half-slashed. A POSIX folder leaves the relpath alone, where a backslash is a
+ * legal character in a filename rather than a separator.
+ *
+ * @param {{folder_path: string, relpath: string}} copy
+ * @returns {string}
+ */
+export function copyPath(copy) {
+  const folder = String(copy?.folder_path || "");
+  const relpath = String(copy?.relpath || "");
+  const windows = folder.includes("\\") && !folder.includes("/");
+  const sep = windows ? "\\" : "/";
+  const tail = windows ? relpath.replace(/\//g, "\\") : relpath;
+  return `${folder.replace(/[/\\]+$/, "")}${sep}${tail.replace(/^[/\\]+/, "")}`;
+}
+
+/**
  * Where a row's copies sit, one path per line, each saying what is there.
  *
  * The folder is only on screen under `groupBy: 'folder'`, where the header
@@ -1233,14 +1255,7 @@ function copyStateNote(state) {
  * naming one of its homes would read as naming its only one. Under `folder` the
  * store hands this ONE copy, because that draw stands for one copy.
  *
- * The separator is taken from the registered folder rather than assumed, and a
- * Windows folder takes the relpath's separators with it: the two halves come
- * from different places (`model_folder.path` as registered, `relpath` as the
- * scanner wrote it), so joining them without a rule is how a path comes back
- * half-slashed. A POSIX folder leaves the relpath alone, where a backslash is a
- * legal character in a filename rather than a separator.
- *
- * A copy missing either half is skipped rather than half-named: both are
+ * Each path is {@link copyPath}'s. A copy missing either half is skipped rather than half-named: both are
  * NOT NULL on the wire, so this is a broken row, and `a.st` on its own answers
  * "where is this file" with the one thing that is not a location.
  *
@@ -1251,13 +1266,8 @@ function copyStateNote(state) {
 export function copyPathsTitle(locations) {
   return (Array.isArray(locations) ? locations : [])
     .map((loc) => {
-      const folder = String(loc?.folder_path || "");
-      const relpath = String(loc?.relpath || "");
-      if (!folder || !relpath) return "";
-      const windows = folder.includes("\\") && !folder.includes("/");
-      const sep = windows ? "\\" : "/";
-      const tail = windows ? relpath.replace(/\//g, "\\") : relpath;
-      const path = `${folder.replace(/[/\\]+$/, "")}${sep}${tail.replace(/^[/\\]+/, "")}`;
+      if (!loc?.folder_path || !loc?.relpath) return "";
+      const path = copyPath(loc);
       const note = copyStateNote(loc?.state);
       return note ? `${path} · ${note}` : path;
     })

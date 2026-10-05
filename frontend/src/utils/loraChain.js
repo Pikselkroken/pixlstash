@@ -46,6 +46,19 @@ export function loraBase(filename) {
 }
 
 /**
+ * A LoRA strength as the app writes it: two decimals, `""` when there is none.
+ *
+ * @param {?(number|string)} value
+ * @returns {string}
+ */
+export function formatStrength(value) {
+  const number = Number(value);
+  return value === null || value === undefined || !Number.isFinite(number)
+    ? ""
+    : number.toFixed(2);
+}
+
+/**
  * Where "The workflow" in Save-as-recipe sends the owner.
  *
  * `/workflows?workflow=<id>&edit=loras&drop_lora=<filename>`: the workflow selected,

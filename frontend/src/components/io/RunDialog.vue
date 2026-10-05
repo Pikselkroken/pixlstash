@@ -1,6 +1,6 @@
 <template>
   <AppDialog
-    :open="open"
+    open
     size="lg"
     :title="title"
     :subtitle="subtitle"
@@ -118,7 +118,7 @@
                 v-for="id in pictureIds.slice(0, 4)"
                 :key="id"
                 class="rund-in-cell"
-                :src="thumbUrl(id)"
+                :src="pictureThumbnailUrl(id)"
                 alt=""
               />
             </span>
@@ -146,7 +146,7 @@
               <img
                 v-if="input.picture_id"
                 class="rund-in-img"
-                :src="thumbUrl(input.picture_id)"
+                :src="pictureThumbnailUrl(input.picture_id)"
                 alt=""
               />
               <v-icon v-else size="24">mdi-image-plus-outline</v-icon>
@@ -723,7 +723,6 @@
        already the densest surface in the app. -->
   <SaveRecipeDialog
     v-if="saveOpen"
-    :open="saveOpen"
     :workflow-id="activeKey"
     :models="checkpointEdited ? runModels : null"
     :suggested-name="card?.name || ''"
@@ -792,7 +791,8 @@ import {
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
-import { editLorasRoute, loraStem } from "../../utils/loraChain";
+import { focusLater } from "../../utils/dom";
+import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
 import { fitWorkflows } from "../../utils/loraWorkflows";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { setEachRun } from "../../utils/workflowPins";
@@ -818,11 +818,10 @@ import RunReasonNotice from "./RunReasonNotice.vue";
 import RunResetChip from "./RunResetChip.vue";
 
 const props = defineProps({
-  open: { type: Boolean, default: false },
   /**
    * `{kind, pictureIds, workflowId, pickWorkflow, name, coverUrl}` - see
-   * `useRunDialogStore`. Replaced rather than mutated, so a new source is one
-   * watcher tick and never a half-swapped form.
+   * `useRunDialogStore`. Read once: a new source is a new popup, which App.vue
+   * mounts fresh by keying it on `runOpened`.
    */
   source: { type: Object, default: null },
   /** `{client_id, set_id, project_id, character_id}` from the grid. */
@@ -1227,7 +1226,7 @@ const sourceName = computed(
  */
 const coverUrl = computed(() => {
   if (props.source?.coverUrl) return props.source.coverUrl;
-  if (isEdit.value && pictureIds.value.length) return thumbUrl(pictureIds.value[0]);
+  if (isEdit.value && pictureIds.value.length) return pictureThumbnailUrl(pictureIds.value[0]);
   const cover = card.value?.covers?.[0];
   return cover ? workflowCoverUrl(cover) : "";
 });
@@ -1292,11 +1291,11 @@ const modelFixes = ref([]);
 
 /** The owner's saved replacement for checkpoint *file*, or null. */
 function savedReplacement(file) {
-  const key = fileKey(file);
+  const key = loraBase(file);
   if (!key) return null;
   return (
     modelFixes.value.find(
-      (fix) => fix.slot_kind === "checkpoint" && fileKey(fix.was) === key,
+      (fix) => fix.slot_kind === "checkpoint" && loraBase(fix.was) === key,
     ) || null
   );
 }
@@ -2113,10 +2112,6 @@ const stack = computed({
   },
 });
 
-function thumbUrl(id) {
-  return pictureThumbnailUrl(id);
-}
-
 /**
  * What a row is called. A loader with no title of its own is called by its
  * class, and two of those side by side would read as one input twice, so a
@@ -2162,10 +2157,8 @@ function openPicker(input) {
  * Put focus back on a row after a gesture that removed the control holding it
  * (the clear, the move), so a keyboard user is not dropped to the page.
  */
-async function focusRow(key) {
-  await nextTick();
-  const tile = document.querySelector(`[data-input="${key}"]`);
-  if (tile) tile.focus();
+function focusRow(key) {
+  return focusLater(`[data-input="${key}"]`);
 }
 
 function clearPicks() {
@@ -2521,15 +2514,6 @@ function strengthOr1(value) {
   return Number.isFinite(number) ? number : 1;
 }
 
-/** A file as it is compared across the popup and the pre-flight. */
-function fileKey(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .split(/[\\/]/)
-    .pop();
-}
-
 /**
  * The files the last pre-flight says the run leaves out on its own, because
  * this ComfyUI does not have them (`bypassed_loras`, `requested: false`).
@@ -2540,7 +2524,7 @@ const bypassedFiles = computed(
       bypassed.value
         .filter((note) => note.code === LORAS_BYPASSED)
         .flatMap((note) => note.models || [])
-        .map((model) => fileKey(model?.file)),
+        .map((model) => loraBase(model?.file)),
     ),
 );
 
@@ -2563,7 +2547,7 @@ function rowName(row) {
  */
 function loraFlag(row) {
   if (row.added || row.skipped) return "";
-  const file = fileKey(row.graphValue);
+  const file = loraBase(row.graphValue);
   if (file && bypassedFiles.value.has(file)) {
     return "Not on this ComfyUI. The run leaves this loader out.";
   }
@@ -2576,12 +2560,8 @@ function loraFlag(row) {
 /** What the LoRA rows' live region is saying, or "". */
 const loraLive = ref("");
 
-async function focusLoraRow(key, which) {
-  await nextTick();
-  const el = document.querySelector(
-    `[data-lora="${key}"] [data-focus="${which}"]`,
-  );
-  el?.focus?.();
+function focusLoraRow(key, which) {
+  return focusLater(`[data-lora="${key}"] [data-focus="${which}"]`);
 }
 
 /**
@@ -2837,40 +2817,10 @@ async function runPreflight(token = loadToken) {
 async function load() {
   const token = (loadToken += 1);
   const mine = () => token === loadToken;
+  // Everything else starts empty: App.vue mounts a fresh popup per source.
   loading.value = true;
-  loadFailed.value = "";
-  submitError.value = "";
-  reasons.value = [];
-  choiceFixes.value = [];
-  fellBack.value = [];
-  for (const key of Object.keys(edits)) delete edits[key];
-  for (const key of Object.keys(editedLabels)) delete editedLabels[key];
-  recipe.value = null;
-  card.value = null;
-  pins.value = null;
-  modelFixes.value = [];
-  freeError.value = "";
-  cards.value = [];
-  loras.value = [];
-  addedLoras.value = [];
-  changedNodes.value = false;
-  fixedNote.value = "";
-  attachedLoras.value = [];
-  handMadeSets.value = [];
-  count.value = 1;
-  seedMode.value = "new";
-  saveOpen.value = false;
-  pictureInputs.value = [];
-  inputsKey.value = "";
-  clearPicks();
-  pickerFor.value = null;
   // The caller's own checkbox, explicit false included; else the popup decides.
   stackChoice.value = props.source?.stack ?? null;
-  checkpointEdit.value = null;
-  checkpointFix.value = null;
-  checkpointAsk += 1;
-  clearStages();
-  inputsError.value = "";
   try {
     if (props.source?.pickWorkflow) {
       cards.value = (await listWorkflowCards()).cards;
@@ -3065,13 +3015,7 @@ async function submit() {
   }
 }
 
-watch(
-  () => [props.open, props.source],
-  ([open]) => {
-    if (open) void load();
-  },
-  { immediate: true },
-);
+void load();
 </script>
 
 <style scoped>

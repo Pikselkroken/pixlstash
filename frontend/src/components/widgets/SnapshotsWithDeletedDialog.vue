@@ -1,6 +1,7 @@
 <script setup>
 import { kindChipColor, relativeDate } from "../../utils/snapshots";
 import { formatUserDate } from "../../utils/utils";
+import { pictureCount } from "../../utils/workflowSets";
 import AppButton from "./AppButton.vue";
 import Tooltip from "./Tooltip.vue";
 import AppDialog from "./AppDialog.vue";
@@ -54,8 +55,7 @@ const emit = defineEmits(["update:modelValue", "update:dontShowAgain"]);
               activator="parent"
             />
             {{ relativeDate(snap.created_at) }} ·
-            {{ snap.matched_count }}
-            {{ snap.matched_count === 1 ? "picture" : "pictures" }}
+            {{ pictureCount(snap.matched_count) }}
           </div>
         </div>
       </li>

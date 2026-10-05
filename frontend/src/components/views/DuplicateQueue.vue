@@ -795,6 +795,7 @@ import {
   partialStackSentence,
   mixedStackPrimary,
 } from "../../utils/dedup";
+import { pictureCount } from "../../utils/workflowSets";
 import { createDedupKeyHandler } from "../../composables/useDedupQueueKeyboard";
 import { useDedupRowExpansion } from "../../composables/useDedupRowExpansion";
 import { useMixedStackQueue } from "../../composables/useMixedStackQueue";
@@ -2431,8 +2432,8 @@ async function onResolveMixed(stack) {
   forgetMixedRow(stackId);
   const moved = result.split_picture_ids?.length ?? 0;
   announcement.value = result.stack_dissolved
-    ? `Freed ${moved} ${moved === 1 ? "picture" : "pictures"} and removed the stack. Nothing was deleted, and Ctrl+Z restores it.`
-    : `Took ${moved} ${moved === 1 ? "picture" : "pictures"} out of the stack. Nothing was deleted, and Ctrl+Z puts ${moved === 1 ? "it" : "them"} back.`;
+    ? `Freed ${pictureCount(moved)} and removed the stack. Nothing was deleted, and Ctrl+Z restores it.`
+    : `Took ${pictureCount(moved)} out of the stack. Nothing was deleted, and Ctrl+Z puts ${moved === 1 ? "it" : "them"} back.`;
 }
 
 /**
