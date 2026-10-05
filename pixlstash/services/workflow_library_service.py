@@ -21,7 +21,7 @@ from typing import Optional, Sequence
 
 import json
 
-from sqlalchemy import and_, case, func, nullslast, or_, text
+from sqlalchemy import and_, case, func, nullslast, text
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Character, Picture, PictureSet, Project
@@ -36,21 +36,6 @@ class WorkflowActivity:
 
     pictures: int
     last_used: Optional[datetime]
-
-
-@dataclass(frozen=True)
-class ScanProgress:
-    """How far the ComfyUI extraction pass has read.
-
-    The Workflows view has to say which of three states an empty list is in --
-    not looked yet, looking, or looked and there is genuinely nothing -- and it
-    cannot tell them apart from the list alone. ``scanned`` counts pictures
-    carrying a ``workflow_hash_version``, which the extraction task writes for
-    every picture it reads whether or not that picture held a workflow.
-    """
-
-    pictures: int
-    scanned: int
 
 
 # When a workflow was last used. ``created_at`` is the picture's own date and is
@@ -80,29 +65,6 @@ def _activity(session: Session, column) -> dict[str, WorkflowActivity]:
     }
 
 
-def topology_activity(session: Session) -> dict[str, WorkflowActivity]:
-    """What each topology accounts for, **vault-wide**.
-
-    Served by ``ix_picture_workflow_topology_hash``.
-
-    **These counts are unscoped and must not be returned to a scoped token as
-    they stand.** They read every non-deleted picture in the vault, so a route
-    exposing them to a picture-, set- or project-scoped token would disclose the
-    size of the whole library -- the deny-by-default rule in
-    ``docs/backend_architecture.md`` §16 exists because that class of omission
-    has recurred here. ``GET /workflows`` is declared ``OWNER_ONLY`` for exactly
-    this reason. A caller that needs a scoped answer adds the narrowing
-    parameter then, against a real policy.
-
-    **No production caller since #1410**, and kept rather than deleted with its
-    route: the per-topology count is the vault half the retired list
-    merged, and ``tests/test_workflow_library.py`` exercises it directly, so it
-    is covered behaviour
-    rather than dead code. Delete the test with it if it goes.
-    """
-    return _activity(session, Picture.workflow_topology_hash)
-
-
 def recipe_activity(
     session: Session, structural_hashes: list[str]
 ) -> dict[str, WorkflowActivity]:
@@ -130,8 +92,12 @@ def recipe_activity(
 def recipe_picture_counts(session: Session) -> dict[str, int]:
     """How many kept pictures each recipe made, **vault-wide**.
 
-    Unscoped, like :func:`topology_activity`, and served only to owner routes
-    for the same reason.
+    **Unscoped, and must not be returned to a scoped token as it stands.** It
+    reads every non-deleted picture in the vault, so a picture-, set- or
+    project-scoped token holding it would learn the size of the whole library;
+    the deny-by-default rule in ``docs/backend_architecture.md`` §16 exists
+    because that class of omission has recurred here. Served only to owner
+    routes.
     """
     return {
         key: activity.pictures
@@ -139,36 +105,6 @@ def recipe_picture_counts(session: Session) -> dict[str, int]:
             session, Picture.workflow_structural_hash
         ).items()
     }
-
-
-def scan_progress(session: Session) -> ScanProgress:
-    """How many kept pictures exist, and how many have been read for a workflow.
-
-    **No production caller since #1410**, and kept rather than deleted with its
-    route: the three near-empty states it distinguishes went with
-    ``WorkflowScan``, and ``tests/test_workflow_library.py`` exercises it
-    directly, so it is covered behaviour
-    rather than dead code. Delete the test with it if it goes.
-    """
-    pictures, scanned = session.exec(
-        select(
-            func.count(Picture.id),
-            # A picture with keys has been read, even while migration 0118's
-            # backfill has cleared its marker to record how it was made.
-            func.count(
-                case(
-                    (
-                        or_(
-                            Picture.workflow_hash_version.is_not(None),
-                            Picture.workflow_instance_hash.is_not(None),
-                        ),
-                        1,
-                    )
-                )
-            ),
-        ).where(Picture.deleted.is_(False))
-    ).one()
-    return ScanProgress(pictures=pictures or 0, scanned=scanned or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -330,8 +266,8 @@ def variant_activity(
     """One ``GROUP BY`` variant (or live manual workflow) over every kept picture.
 
     Served by ``ix_picture_workflow_structural_hash``. **Unscoped, like
-    :func:`topology_activity`**, and served only to owner routes for the same
-    reason: it reads every non-deleted picture in the vault, so a scoped token
+    :func:`recipe_picture_counts`**, and served only to owner routes for the
+    same reason: it reads every non-deleted picture in the vault, so a scoped token
     holding the result would learn the size of the whole library one workflow
     at a time. *live* is the hub's manual workflow ids (:func:`_filed_as`).
     """

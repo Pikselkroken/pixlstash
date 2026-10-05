@@ -36,7 +36,6 @@ from pixlstash.services.workflow_io import (
 SELECTION = "selection"
 PICKER = "picker"
 FIXED = "fixed"
-MODES = (SELECTION, PICKER, FIXED)
 
 # How one input of a run was answered, in the order :func:`resolve_fills` asks.
 FILL_REQUEST = "request"
@@ -355,51 +354,3 @@ def resolve_fills(
         index = open_at[0]
         fills[index] = InputFill(fills[index].input, FILL_SELECTION)
     return fills
-
-
-def validate_requested_modes(
-    picture_inputs: dict[str, str], requested: object
-) -> list[tuple[str, str, Optional[int]]]:
-    """Check a setup sent by a client, returning ``(node_id, mode, picture_id)``.
-
-    Every detected input must be named exactly once, so a stale client cannot
-    leave an input it did not know about behind. A Fixed input without a
-    ``picture_id`` keeps the picture already stored for it; the caller checks
-    there is one.
-
-    Raises:
-        ValueError: The setup is malformed, names the wrong inputs, holds more
-            than one Selection, or has a picture_id that is not an integer.
-
-    **No production caller since #1410**, and kept rather than deleted with its
-    route: the mode rules are still what a card's own inputs write, and
-    ``tests/test_workflow_io.py`` exercises it directly, so it is covered
-    behaviour
-    rather than dead code. Delete the test with it if it goes.
-    """
-    if not isinstance(requested, list):
-        raise ValueError("inputs must be a list")
-    result = []
-    for item in requested:
-        if not isinstance(item, dict):
-            raise ValueError("each input must be an object")
-        node_id, mode = item.get("node_id"), item.get("mode")
-        if not isinstance(node_id, str):
-            raise ValueError("each input needs a node_id")
-        if mode not in MODES:
-            raise ValueError(f"mode must be one of {', '.join(MODES)}")
-        picture_id = item.get("picture_id") if mode == FIXED else None
-        if picture_id is not None and (
-            isinstance(picture_id, bool) or not isinstance(picture_id, int)
-        ):
-            raise ValueError(f"picture_id of input {node_id} must be an integer")
-        result.append((node_id, mode, picture_id))
-    named = [node_id for node_id, _, _ in result]
-    if sorted(named) != sorted(picture_inputs):
-        raise ValueError(
-            "inputs must name each picture input exactly once: "
-            + ", ".join(picture_inputs)
-        )
-    if sum(mode == SELECTION for _, mode, _ in result) > 1:
-        raise ValueError("at most one input can be filled by the selection")
-    return result
