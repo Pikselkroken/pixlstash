@@ -24,6 +24,7 @@ import {
   copyPathsTitle,
   dateColumnKey,
   quantBadge,
+  quantFromFilename,
   modelDate,
   withEmptyFolders,
   cleanAssetName,
@@ -102,7 +103,7 @@ describe("deriveModelName", () => {
   });
 });
 
-// (filename, the name a row shows).
+// (filename, the name a row shows, the canonical quant id or null).
 //
 // **Mirrors `QUANT_VOCABULARY` in `tests/test_model_file_classification.py`
 // case for case.** That is what the parity guarantee between the two halves
@@ -110,34 +111,34 @@ describe("deriveModelName", () => {
 // is served them from there, so a vocabulary the two disagree about is two
 // spellings of one model, a screen apart.
 const QUANT_VOCABULARY = [
-  ["model_fp32.safetensors", "model"],
-  ["model_f32.safetensors", "model"],
-  ["model_fp16.safetensors", "model"],
-  ["z_image_turbo_bf16.safetensors", "z image turbo"],
-  ["t5xxl_fp8_e4m3fn.safetensors", "t5xxl"],
-  ["clip_l_fp8_e5m2.safetensors", "clip l"],
-  ["model_fp8.safetensors", "model"],
-  ["flux_nvfp4_awq.safetensors", "flux"],
-  ["model_nf4.safetensors", "model"],
-  ["model_int8.safetensors", "model"],
-  ["model_i4.safetensors", "model"],
-  ["flux1-dev-Q4_K_M.gguf", "flux1 dev"],
-  ["Qwen_Image-Q6_K.gguf", "Qwen Image"],
-  ["flux_q8_0.gguf", "flux"],
-  ["flux1-dev-IQ4_XS.gguf", "flux1 dev"],
-  ["flux1-dev-IQ3_M.gguf", "flux1 dev"],
-  ["Qwen-Image-IQ2_XXS.gguf", "Qwen Image"],
-  ["Qwen_Image-Q3_K_XL.gguf", "Qwen Image"],
-  ["flux_iq4_nl.gguf", "flux"],
-  ["model-TQ1_0.gguf", "model"],
-  ["model-TQ2_0.gguf", "model"],
-  ["model-MXFP4.gguf", "model"],
-  ["umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5 xxl"],
-  ["model-step00004500-fp16.safetensors", "model"],
+  ["model_fp32.safetensors", "model", "fp32"],
+  ["model_f32.safetensors", "model", "fp32"],
+  ["model_fp16.safetensors", "model", "fp16"],
+  ["z_image_turbo_bf16.safetensors", "z image turbo", "bf16"],
+  ["t5xxl_fp8_e4m3fn.safetensors", "t5xxl", "fp8_e4m3"],
+  ["clip_l_fp8_e5m2.safetensors", "clip l", "fp8_e5m2"],
+  ["model_fp8.safetensors", "model", "fp8"],
+  ["flux_nvfp4_awq.safetensors", "flux", "nvfp4"],
+  ["model_nf4.safetensors", "model", "nf4"],
+  ["model_int8.safetensors", "model", "int8"],
+  ["model_i4.safetensors", "model", "int4"],
+  ["flux1-dev-Q4_K_M.gguf", "flux1 dev", "q4_k_m"],
+  ["Qwen_Image-Q6_K.gguf", "Qwen Image", "q6_k"],
+  ["flux_q8_0.gguf", "flux", "q8_0"],
+  ["flux1-dev-IQ4_XS.gguf", "flux1 dev", "iq4_xs"],
+  ["flux1-dev-IQ3_M.gguf", "flux1 dev", "iq3_m"],
+  ["Qwen-Image-IQ2_XXS.gguf", "Qwen Image", "iq2_xxs"],
+  ["Qwen_Image-Q3_K_XL.gguf", "Qwen Image", "q3_k_xl"],
+  ["flux_iq4_nl.gguf", "flux", "iq4_nl"],
+  ["model-TQ1_0.gguf", "model", "tq1_0"],
+  ["model-TQ2_0.gguf", "model", "tq2_0"],
+  ["model-MXFP4.gguf", "model", "mxfp4"],
+  ["umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5 xxl", "fp8_e4m3"],
+  ["model-step00004500-fp16.safetensors", "model", "fp16"],
   // Mixed case, because every shelf fixture in this repo is lowercase and a
   // case-folding bug in the lookup would otherwise pass the whole suite.
-  ["Flux1-Dev-FP8_E4M3FN.safetensors", "Flux1 Dev"],
-  ["Clementine_BF16.safetensors", "Clementine"],
+  ["Flux1-Dev-FP8_E4M3FN.safetensors", "Flux1 Dev", "fp8_e4m3"],
+  ["Clementine_BF16.safetensors", "Clementine", "bf16"],
 ];
 
 // Names that must come back untouched: `scaled`, `fast`, `m`, `l`, `1` and `0`
@@ -154,14 +155,16 @@ const QUANT_NON_VOCABULARY = [
 ];
 
 describe("the quant postfix", () => {
-  it.each(QUANT_VOCABULARY)("%s reads as %s", (filename, name) => {
+  it.each(QUANT_VOCABULARY)("%s reads as %s", (filename, name, quant) => {
     expect(deriveModelName(filename)).toBe(name);
+    expect(quantFromFilename(filename)).toBe(quant);
   });
 
   it.each(QUANT_NON_VOCABULARY)("%s keeps its name", (filename, name) => {
     // Without the "at least one real quant token" guard,
     // `some_model_scaled` silently becomes `some model`.
     expect(deriveModelName(filename)).toBe(name);
+    expect(quantFromFilename(filename)).toBe(null);
   });
 
   it("falls back to the filename when the name was only a quant", () => {
