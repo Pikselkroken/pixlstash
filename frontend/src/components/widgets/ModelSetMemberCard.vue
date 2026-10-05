@@ -47,9 +47,10 @@
         <span v-if="member.head" class="msm__pill">Names this set</span>
       </div>
       <span v-if="member.filename" class="msm__file"
-        ><Tooltip :text="fileTitle" activator="parent" />{{
-          member.filename
-        }}</span
+        ><Tooltip
+          :text="modelFileTitle(shelfMark?.row ?? member)"
+          activator="parent"
+        />{{ member.filename }}</span
       >
       <div class="msm__line">
         <span v-if="member.kindLabel" class="msm__kind">{{
@@ -141,11 +142,6 @@ const initials = computed(() =>
 );
 
 const size = computed(() => formatModelSize(props.member.file_size));
-
-// The shelf row knows where the file is; the member alone still knows its hash.
-const fileTitle = computed(() =>
-  modelFileTitle(props.shelfMark?.row ?? props.member),
-);
 
 const evidence = computed(() => evidenceLine(props.member));
 

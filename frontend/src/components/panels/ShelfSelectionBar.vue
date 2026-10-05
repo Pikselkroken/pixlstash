@@ -855,24 +855,6 @@ const openTitle = computed(() =>
 );
 
 /**
- * Put the selection's filenames on the clipboard.
- *
- * The other verb in the design's context menu the shelf can answer without a
- * new route: the names are already on the rows. It is also the answer to "I need
- * this in a ComfyUI node", which is why it is worth a line at all.
- *
- * A notice rather than silence, because a clipboard write has no visible
- * result: pressing it twice because nothing happened is how a reader ends up
- * unsure whether it worked at all.
- */
-function copyFilenames() {
-  return copyLines(
-    store.selectedRows.map((row) => row.filename).filter(Boolean),
-    "filenames",
-  );
-}
-
-/**
  * The hashes the selection has, for Copy SHA-256.
  *
  * The hash is what sets and recipes are matched by, and the file line's
@@ -883,6 +865,17 @@ const selectedHashes = computed(() =>
   store.selectedRows.map((row) => row.sha256).filter(Boolean),
 );
 
+/**
+ * Put one line per selected model on the clipboard: its filename, or its hash.
+ *
+ * Filenames are the other verb in the design's context menu the shelf can
+ * answer without a new route: the names are already on the rows. It is also the
+ * answer to "I need this in a ComfyUI node", which is why it is worth a line.
+ *
+ * A notice rather than silence, because a clipboard write has no visible
+ * result: pressing it twice because nothing happened is how a reader ends up
+ * unsure whether it worked at all.
+ */
 async function copyLines(names, plural) {
   const notices = useNoticeStore();
   if (!names.length) return;
@@ -963,7 +956,11 @@ const verbHandlers = computed(() => ({
   onVerb: (verb, event) => {
     contextOpen.value = false;
     moreMenuOpen.value = false;
-    if (verb === "copy-filenames") copyFilenames();
+    if (verb === "copy-filenames")
+      copyLines(
+        store.selectedRows.map((row) => row.filename).filter(Boolean),
+        "filenames",
+      );
     else if (verb === "copy-sha256")
       copyLines(selectedHashes.value, "SHA-256 hashes");
     // The gesture decides, not the tracked key state: `shiftHeld` drives the
