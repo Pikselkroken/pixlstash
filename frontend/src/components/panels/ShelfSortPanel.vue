@@ -46,7 +46,13 @@
          segments sharing one 420px track put "Workflow set" and "Base model"
          into permanent ellipsis, and `Segmented`'s own contract is two to five
          SHORT options; Sort by, in this same panel, has used two-column
-         OptionRows for its five keys all along. -->
+         OptionRows for its five keys all along.
+
+         `pick` is a deliberate choice, on the current row too, and never an
+         arrow key, so the host can close on it without closing under somebody
+         walking the rows. Folder is not reported: it opens a further choice
+         below, and the menu must stay up for it (the toolbar's sort menu does
+         the same for a sort that needs a parameter). -->
     <div v-if="showsGroup" class="tbm-section">
       <span class="tbm-label">Group by</span>
       <OptionRows
@@ -55,6 +61,7 @@
         :columns="2"
         aria-label="Group by"
         @update:model-value="(key) => store.setView({ groupBy: key })"
+        @pick="(key) => key !== 'folder' && emit('group-picked')"
       />
     </div>
 
@@ -102,6 +109,8 @@ const props = defineProps({
   /** `"sort"`, `"group"`, or `"all"` for both in one panel. */
   section: { type: String, default: "all" },
 });
+
+const emit = defineEmits(["group-picked"]);
 
 const store = useModelShelfStore();
 const view = store.view;

@@ -5844,3 +5844,21 @@ describe("the set grid is what the shelf opens on", () => {
     expect(wrapper.find(".ww-stub").text()).toBe("handed-up.st");
   });
 });
+
+describe("the Group by menu", () => {
+  it("closes once a grouping is picked, and hands focus back to its button", async () => {
+    const wrapper = await mountShelf([adapter()], [], [], {
+      attachTo: document.body,
+    });
+    wrapper.vm.groupMenuOpen = true;
+
+    const group = wrapper.findComponent({ name: "ShelfSortPanel" });
+    expect(group.props("section")).toBe("group");
+    group.vm.$emit("group-picked");
+
+    expect(wrapper.vm.groupMenuOpen).toBe(false);
+    expect(document.activeElement).toBe(wrapper.vm.groupButtonRef.el);
+    expect(document.activeElement.tagName).toBe("BUTTON");
+    wrapper.unmount();
+  });
+});
