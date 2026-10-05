@@ -508,7 +508,6 @@ class Florence2Service:
         prompt: Optional[str] = None,
         max_new_tokens: int = 1024,
         max_dim: int = 1024,
-        _retry_on_cpu: bool = True,
     ) -> dict:
         """Detect objects in a batch of still images.
 
@@ -529,19 +528,12 @@ class Florence2Service:
             prompt: Optional phrase to ground. Empty/None → dense ``<OD>``.
             max_new_tokens: Generation cap; detection token strings are long.
             max_dim: Longest side (px) each image is resized to before inference.
-            _retry_on_cpu: When True, retry once on CPU after a CUDA error.
 
         Returns:
             ``{path: [(label, [x1, y1, x2, y2], score_or_None), ...]}``.  Paths
             that fail to load are omitted; ``score`` is ``None`` for detectors
             (like Florence ``<OD>``/grounding) that emit no per-box confidence.
         """
-        import torch
-
-        if self._model is None:
-            logger.error("Florence-2 model is not initialised")
-            return {}
-
         phrase = (prompt or "").strip()
         if phrase:
             # Open-vocabulary detection is the right task for a bare class-style
@@ -554,87 +546,27 @@ class Florence2Service:
         else:
             task_token = "<OD>"
             text_prompt = task_token
-
-        try:
-            # (path, fed_image, (orig_w, orig_h)) - fed_image is the resized
-            # copy handed to the processor; orig size drives box dequantisation.
-            valid_items = []
-            for image_path in image_paths:
-                try:
-                    image = Image.open(image_path).convert("RGB")
-                    orig_size = (image.width, image.height)
-                    fed_image = _resize_to_max_dim(image, max_dim=max_dim)
-                    valid_items.append((image_path, fed_image, orig_size))
-                except Exception as image_error:
-                    logger.error(
-                        "Florence-2 failed to load image for detection %s: %s",
-                        image_path,
-                        image_error,
-                    )
-
-            if not valid_items:
-                return {}
-
-            images = [img for _, img, _ in valid_items]
-            inputs = self._processor(
-                text=[text_prompt] * len(images),
-                images=images,
-                return_tensors="pt",
-                padding=True,
-            )
-            inputs = _move_inputs_to_device(inputs, self._model_device, self._dtype)
-
-            with torch.inference_mode():
-                generated_ids = self._model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs["pixel_values"],
-                    max_new_tokens=max_new_tokens,
-                    early_stopping=False,
-                    do_sample=False,
-                    # Beam search (Florence-2's reference default) over greedy:
-                    # detection is emitted as a sequence of location tokens, and
-                    # a single greedy path drops/duplicates boxes far more than
-                    # beams do. Keep do_sample=False so runs stay repeatable.
-                    num_beams=3,
-                    pad_token_id=self._processor.tokenizer.pad_token_id,
-                )
-            generated_texts = self._processor.batch_decode(
-                generated_ids, skip_special_tokens=False
-            )
-
-            detections: dict = {}
-            for (image_path, _, orig_size), generated_text in zip(
-                valid_items, generated_texts
-            ):
-                detections[image_path] = self._parse_detections(
-                    generated_text, task_token, orig_size
-                )
-            return detections
-
-        except Exception as e:
-            if _retry_on_cpu and self._is_cuda_error(e):
-                logger.warning(
-                    "Florence-2 detection failed on GPU (%s); retrying on CPU.", e
-                )
-                if self._reload_on_cpu(cause=e):
-                    return self.detect_objects(
-                        image_paths,
-                        prompt=prompt,
-                        max_new_tokens=max_new_tokens,
-                        max_dim=max_dim,
-                        _retry_on_cpu=False,
-                    )
-
-            logger.error("Florence-2 detection failed: %s", e)
-            logger.debug(traceback.format_exc())
-            return {}
+        return self._run_batch(
+            image_paths,
+            text_prompt,
+            # The original size: it drives box dequantisation.
+            lambda text, original, _fed: self._parse_detections(
+                text, task_token, original
+            ),
+            what="detection",
+            # Beam search (Florence-2's reference default) over greedy:
+            # detection is emitted as a sequence of location tokens, and a
+            # single greedy path drops/duplicates boxes far more than beams do.
+            num_beams=3,
+            max_new_tokens=max_new_tokens,
+            max_dim=max_dim,
+        )
 
     def read_text(
         self,
         image_paths: list,
         max_new_tokens: int = 1024,
         max_dim: int = 1024,
-        _retry_on_cpu: bool = True,
     ) -> dict:
         """Read the text in a batch of still images, with a box per word.
 
@@ -645,97 +577,129 @@ class Florence2Service:
             image_paths: Still-image file paths.
             max_new_tokens: Generation cap; a dense page needs many tokens.
             max_dim: Longest side (px) each image is resized to first.
-            _retry_on_cpu: When True, retry once on CPU after a CUDA error.
 
         Returns:
             ``{path: lines}`` as :func:`_words_from_ocr_regions` returns them.
             Paths that fail to load or read are omitted.
         """
+        task_token = "<OCR_WITH_REGION>"
+
+        def parse(text: str, _original, fed: tuple) -> list:
+            # Boxes come back in the size handed over here; they are stored
+            # as fractions, so the resized size is the right one.
+            parsed = self._processor.post_process_generation(
+                text, task=task_token, image_size=fed
+            ).get(task_token, {})
+            return _words_from_ocr_regions(
+                parsed.get("quad_boxes"), parsed.get("labels"), fed
+            )
+
+        return self._run_batch(
+            image_paths,
+            task_token,
+            parse,
+            what="text reading",
+            num_beams=FLORENCE_OCR_NUM_BEAMS,
+            max_new_tokens=max_new_tokens,
+            max_dim=max_dim,
+            exif_transpose=True,
+            # Out of memory is the task runner's to retry once VRAM is freed;
+            # falling back to CPU here would move captioning there too.
+            raise_oom=True,
+        )
+
+    def _run_batch(
+        self,
+        image_paths: list,
+        text_prompt: str,
+        parse: Callable[[str, tuple, tuple], object],
+        *,
+        what: str,
+        num_beams: int,
+        max_new_tokens: int,
+        max_dim: int,
+        exif_transpose: bool = False,
+        raise_oom: bool = False,
+    ) -> dict:
+        """Run one Florence-2 task over a batch of still images.
+
+        Returns ``{path: parse(generated text, original size, fed size)}``; a
+        path that fails to load is omitted, and a failed batch is ``{}`` after
+        one retry on CPU when the failure was CUDA's.
+        """
         import torch
 
-        if self._model is None:
-            logger.error("Florence-2 model is not initialised")
-            return {}
-
-        task_token = "<OCR_WITH_REGION>"
-        try:
-            valid_items = []
-            for image_path in image_paths:
-                try:
-                    image = ImageOps.exif_transpose(Image.open(image_path)).convert(
-                        "RGB"
-                    )
-                    valid_items.append(
-                        (image_path, _resize_to_max_dim(image, max_dim=max_dim))
-                    )
-                except Exception as image_error:
-                    logger.error(
-                        "Florence-2 failed to load image for text reading %s: %s",
-                        image_path,
-                        image_error,
-                    )
-            if not valid_items:
+        retry_on_cpu = True
+        while True:
+            if self._model is None:
+                logger.error("Florence-2 model is not initialised")
                 return {}
+            try:
+                # (path, original size, fed image) - the fed image is the
+                # resized copy handed to the processor.
+                valid_items = []
+                for image_path in image_paths:
+                    try:
+                        image = Image.open(image_path)
+                        if exif_transpose:
+                            image = ImageOps.exif_transpose(image)
+                        image = image.convert("RGB")
+                        fed = _resize_to_max_dim(image, max_dim)
+                        valid_items.append((image_path, image.size, fed))
+                    except Exception as image_error:
+                        logger.error(
+                            "Florence-2 failed to load image for %s %s: %s",
+                            what,
+                            image_path,
+                            image_error,
+                        )
+                if not valid_items:
+                    return {}
 
-            images = [img for _, img in valid_items]
-            inputs = self._processor(
-                text=[task_token] * len(images),
-                images=images,
-                return_tensors="pt",
-                padding=True,
-            )
-            inputs = _move_inputs_to_device(inputs, self._model_device, self._dtype)
-            with torch.inference_mode():
-                generated_ids = self._model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs["pixel_values"],
-                    max_new_tokens=max_new_tokens,
-                    early_stopping=False,
-                    do_sample=False,
-                    num_beams=FLORENCE_OCR_NUM_BEAMS,
-                    pad_token_id=self._processor.tokenizer.pad_token_id,
+                images = [fed for _, _, fed in valid_items]
+                inputs = self._processor(
+                    text=[text_prompt] * len(images),
+                    images=images,
+                    return_tensors="pt",
+                    padding=True,
                 )
-            generated_texts = self._processor.batch_decode(
-                generated_ids, skip_special_tokens=False
-            )
-
-            texts: dict = {}
-            for (image_path, image), generated_text in zip(
-                valid_items, generated_texts
-            ):
-                # Boxes come back in the size handed over here; they are stored
-                # as fractions, so the resized size is the right one.
-                parsed = self._processor.post_process_generation(
-                    generated_text, task=task_token, image_size=image.size
-                ).get(task_token, {})
-                texts[image_path] = _words_from_ocr_regions(
-                    parsed.get("quad_boxes"), parsed.get("labels"), image.size
-                )
-            return texts
-
-        except Exception as e:
-            if is_vram_oom(e):
-                # Out of memory is the task runner's to retry once VRAM is freed;
-                # falling back to CPU here would move captioning there too.
-                raise
-            if _retry_on_cpu and self._is_cuda_error(e):
-                logger.warning(
-                    "Florence-2 text reading failed on GPU (%s); retrying on CPU.", e
-                )
-                if self._reload_on_cpu(cause=e):
-                    return self.read_text(
-                        image_paths,
+                inputs = _move_inputs_to_device(inputs, self._model_device, self._dtype)
+                with torch.inference_mode():
+                    generated_ids = self._model.generate(
+                        input_ids=inputs["input_ids"],
+                        pixel_values=inputs["pixel_values"],
                         max_new_tokens=max_new_tokens,
-                        max_dim=max_dim,
-                        _retry_on_cpu=False,
+                        early_stopping=False,
+                        # Keep do_sample=False so runs stay repeatable.
+                        do_sample=False,
+                        num_beams=num_beams,
+                        pad_token_id=self._processor.tokenizer.pad_token_id,
                     )
-            logger.error(
-                "Florence-2 text reading failed for %d image(s): %s",
-                len(image_paths),
-                e,
-            )
-            logger.debug(traceback.format_exc())
-            return {}
+                generated_texts = self._processor.batch_decode(
+                    generated_ids, skip_special_tokens=False
+                )
+                return {
+                    path: parse(text, original, fed.size)
+                    for (path, original, fed), text in zip(valid_items, generated_texts)
+                }
+            except Exception as e:
+                if raise_oom and is_vram_oom(e):
+                    raise
+                if retry_on_cpu and self._is_cuda_error(e):
+                    retry_on_cpu = False
+                    logger.warning(
+                        "Florence-2 %s failed on GPU (%s); retrying on CPU.", what, e
+                    )
+                    if self._reload_on_cpu(cause=e):
+                        continue
+                logger.error(
+                    "Florence-2 %s failed for %d image(s): %s",
+                    what,
+                    len(image_paths),
+                    e,
+                )
+                logger.debug(traceback.format_exc())
+                return {}
 
     # ------------------------------------------------------------------
     # Private helpers
