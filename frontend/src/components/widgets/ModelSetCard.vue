@@ -100,17 +100,9 @@
       <span
         v-if="card.offer.model"
         class="msc__ask-model"
-        :title="
-          [card.offer.model.name, card.offer.model.quant]
-            .filter(Boolean)
-            .join(' ')
-        "
+        :title="offerChip"
         ><v-icon size="12">mdi-cube-outline</v-icon
-        ><span class="msc__ask-name">{{
-          [card.offer.model.kind, card.offer.model.name, card.offer.model.quant]
-            .filter(Boolean)
-            .join(" · ")
-        }}</span></span
+        ><span class="msc__ask-name">{{ offerChip }}</span></span
       >
       <div class="msc__ask-acts">
         <AppButton
@@ -316,6 +308,14 @@ const kindChips = computed(() =>
 
 // The cover's question, read in full: its buttons are off the tab order, so
 // the name says where the keyboard answers it.
+/** The one offered model as the chip prints it; its title reveals it clipped. */
+const offerChip = computed(() => {
+  const model = props.card.offer?.model;
+  return model
+    ? [model.kind, model.name, model.quant].filter(Boolean).join(" · ")
+    : "";
+});
+
 const offerName = computed(() => {
   const offer = props.card.offer;
   if (!offer) return null;
