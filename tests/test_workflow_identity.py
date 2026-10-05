@@ -977,6 +977,13 @@ def test_a_video_from_a_start_frame_is_video_not_img2img():
     assert workflow_type(_doc(graph)) == "video"
 
 
+def test_a_lora_wired_around_keeps_the_core_hash():
+    cover = _graph(loras=("alice.safetensors",))
+    member = _graph(loras=("alice.safetensors",), preview=True)
+    member["5"]["inputs"]["model"] = ["1", 0]  # the LoRA no longer reaches the sampler
+    assert core_hash(_doc(cover)) == core_hash(_doc(member))
+
+
 def test_every_slot_in_a_long_lora_chain_has_its_own_label():
     loras = tuple(f"style_{i}.safetensors" for i in range(12))
     labels = [s.label for s in slots(_doc(_graph(loras=loras))) if s.is_lora]
