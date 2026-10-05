@@ -115,20 +115,8 @@ export const MISSING_CHOICES = "missing_choices";
 
 /** One value per `fix`, so a caller switches on a constant and not on prose. */
 export const FIX_SETTINGS = "settings";
-export const FIX_RETRY = "retry";
 export const FIX_DROP_LORA = "drop-lora";
 export const FIX_EDIT_LORAS = "edit-loras";
-
-/**
- * Codes whose fix happens somewhere ELSE, so the popup has to be able to
- * re-ask once it has been done.
- *
- * Settings opens on top of this popup and nothing tells the popup when it
- * closes, so without a Retry of its own `comfyui_not_configured` stayed on
- * screen — and the Run button stayed blocked — after the address had been set,
- * with closing and reopening (and losing the form) the only way out.
- */
-export const RETRYABLE_CODES = ["comfyui_not_configured", "comfyui_unreachable"];
 
 function names(list, key) {
   return (list || [])
@@ -168,7 +156,9 @@ export function readReason(reason) {
     fix,
     files,
     blocking,
-    retry: RETRYABLE_CODES.includes(code),
+    // Settings opens over the popup and nothing tells it when it closes, so a
+    // code fixed somewhere else needs a Retry of its own to re-ask.
+    retry: UNCHECKED_CODES.includes(code),
   });
   switch (code) {
     case LORAS_BYPASSED: {
@@ -298,7 +288,7 @@ export function readReason(reason) {
         FIX_SETTINGS,
       );
     case "comfyui_unreachable":
-      return read("ComfyUI did not answer, so its graph could not be checked.", FIX_RETRY);
+      return read("ComfyUI did not answer, so its graph could not be checked.");
     case "missing_models": {
       const files = (reason.models || []).filter(Boolean);
       const count = files.length;

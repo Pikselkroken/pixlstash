@@ -20,12 +20,15 @@ Two rules govern everything here:
 
 from __future__ import annotations
 
+import json
 import math
 import random
 import re
+import threading
+from concurrent.futures import Future
 from copy import deepcopy
 from graphlib import CycleError, TopologicalSorter
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import requests
 
@@ -33,12 +36,17 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     is_link,
+    normalized_filename,
     reduce_api_graph,
 )
 
 logger = get_logger(__name__)
 
 OBJECT_INFO_TIMEOUT_S = 15.0
+# The /object_info GETs in flight, by URL: a request arriving while one is out
+# waits for that answer instead of asking ComfyUI again (see fetch_object_info).
+_object_info_inflight: dict[str, Future] = {}
+_object_info_inflight_lock = threading.Lock()
 
 # ComfyUI's own seed ceiling for the core sampler nodes. Note this is 64-bit,
 # NOT the 32-bit limit the t2i endpoint validates against: the shipped
@@ -190,6 +198,13 @@ def model_filename_fields(class_type: str) -> tuple[str, ...]:
 def fetch_object_info(base_url: str) -> dict:
     """Return ComfyUI's ``GET /object_info`` map, keyed by node class name.
 
+    **Requests arriving together share one GET.** ComfyUI builds the map per
+    request and serially, so the Edit tab's pre-flights (one per card, six at a
+    time from a browser) cost six builds of a multi-megabyte answer in a row.
+    Nothing outlives the GET: a request after it finishes asks ComfyUI again,
+    so the answer is still what ComfyUI has now. Each caller parses its own
+    copy, because callers edit the map they are handed.
+
     Args:
         base_url: The ComfyUI base URL, without a trailing slash.
 
@@ -201,6 +216,43 @@ def fetch_object_info(base_url: str) -> dict:
             that is not a JSON object. The caller turns this into an
             *unchecked* pre-flight rather than a failure.
     """
+    with _object_info_inflight_lock:
+        shared = _object_info_inflight.get(base_url)
+        if shared is None:
+            mine = _object_info_inflight[base_url] = Future()
+    if shared is not None:
+        text = shared.result()
+    else:
+        try:
+            text = _get_object_info_text(base_url)
+        except BaseException as exc:
+            # Every waiter is released, but a shutdown signal is this thread's
+            # own: the others are told the fetch failed, not interrupted.
+            mine.set_exception(
+                exc if isinstance(exc, Exception) else RuntimeError(repr(exc))
+            )
+            raise
+        else:
+            mine.set_result(text)
+        finally:
+            with _object_info_inflight_lock:
+                _object_info_inflight.pop(base_url, None)
+    try:
+        payload = json.loads(text)
+    except ValueError as exc:
+        logger.warning("ComfyUI object_info returned invalid JSON from %s", base_url)
+        raise RuntimeError("ComfyUI returned invalid JSON for /object_info") from exc
+    if not isinstance(payload, dict):
+        logger.warning(
+            "ComfyUI object_info returned %s, expected an object",
+            type(payload).__name__,
+        )
+        raise RuntimeError("ComfyUI returned an unexpected /object_info shape")
+    return payload
+
+
+def _get_object_info_text(base_url: str) -> str:
+    """The body of one ``GET /object_info``, unparsed."""
     url = f"{base_url}/object_info"
     try:
         response = requests.get(url, timeout=OBJECT_INFO_TIMEOUT_S)
@@ -216,18 +268,7 @@ def fetch_object_info(base_url: str) -> dict:
             detail,
         )
         raise RuntimeError(f"ComfyUI answered {response.status_code} for /object_info")
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        logger.warning("ComfyUI object_info returned invalid JSON from %s", url)
-        raise RuntimeError("ComfyUI returned invalid JSON for /object_info") from exc
-    if not isinstance(payload, dict):
-        logger.warning(
-            "ComfyUI object_info returned %s, expected an object",
-            type(payload).__name__,
-        )
-        raise RuntimeError("ComfyUI returned an unexpected /object_info shape")
-    return payload
+    return response.text
 
 
 def find_input_spec(node_spec: Any, field: str) -> tuple[Any, dict] | None:
@@ -635,16 +676,6 @@ def detect_model_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     return preflight_prompt(prompt_graph, object_info)["missing_models"]
 
 
-def _alias_key(value: str) -> str:
-    """One loader value as :func:`model_name_aliases` keys its map.
-
-    Its keys are ``workflow_hash.normalized_filename`` - a **lowercased**
-    basename - so a lookup that merely unified separators would miss every
-    mixed-case filename, which is most of them.
-    """
-    return _normalize_filename(value).rsplit("/", 1)[-1].lower()
-
-
 def apply_model_swap(
     prompt_graph: dict,
     targets: list[dict],
@@ -694,11 +725,9 @@ def apply_model_swap(
         options = _combo_options(object_info.get(node.get("class_type")), field)
         if not options:
             continue
-        # Folded to match `model_name_aliases`' keys, which are
-        # `normalized_filename` - LOWERCASE. Looking up the graph's own
-        # spelling instead finds nothing for any name with a capital in
-        # it, which is most real model filenames.
-        candidates = aliases.get(_alias_key(value)) or ()
+        # The key function `model_name_aliases` uses, which LOWERCASES: the
+        # graph's own spelling finds nothing for any name with a capital in it.
+        candidates = aliases.get(normalized_filename(value)) or ()
         for candidate in candidates:
             # The OPTION, not the candidate: `_match_option` accepts a candidate
             # whose separators merely normalize onto an advertised entry, and
@@ -1414,7 +1443,7 @@ def _live_graph(graph: dict, object_info: dict) -> dict:
     read as a second model or a second chain. A graph whose ``object_info``
     names no output node is returned whole: nothing says what is dead.
     """
-    live = _live_ids(graph, object_info)
+    live = live_node_ids(graph, object_info)
     if live is None:
         return graph
     dead = sorted(set(map(str, graph)) - live)
@@ -1433,7 +1462,7 @@ def live_lora_targets(prompt_graph: dict, object_info: dict | None) -> list[dict
     :func:`_live_graph` reads it.
     """
     targets = detect_lora_targets(prompt_graph)
-    live = _live_ids(prompt_graph or {}, object_info) if object_info else None
+    live = live_node_ids(prompt_graph or {}, object_info) if object_info else None
     if live is None:
         return targets
     return [target for target in targets if str(target["node_id"]) in live]
@@ -1449,7 +1478,7 @@ def _output_ids(graph: dict, object_info: dict) -> list[str]:
     ]
 
 
-def _live_ids(graph: dict, object_info: dict) -> set[str] | None:
+def live_node_ids(graph: dict, object_info: dict) -> set[str] | None:
     """The ids of the nodes some output reads, or ``None`` when none is known.
 
     ``None`` rather than every id: a graph whose ``object_info`` names no
@@ -1688,15 +1717,7 @@ def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
     ]
     # Numeric where the id is a number, so the owner-facing sentence reads
     # #3 before #10; a subgraph id ("75:83") keeps its place after them.
-    rewires.sort(
-        key=lambda r: (
-            r["type"],
-            0 if r["node_id"].isdigit() else 1,
-            int(r["node_id"]) if r["node_id"].isdigit() else 0,
-            r["node_id"],
-            r["field"],
-        )
-    )
+    rewires.sort(key=lambda r: (r["type"], _node_order_key(r["node_id"]), r["field"]))
     return {
         "model": model,
         "clip": clip,
@@ -1766,7 +1787,7 @@ def _inserted_loader(
 def insert_adapter(
     prompt_graph: dict,
     plan: dict,
-    adapter: Optional[dict],
+    adapter: dict,
     object_info: dict,
 ) -> dict:
     """Add a LoRA loader carrying *adapter* to *prompt_graph*, as *plan* says.
@@ -1780,13 +1801,7 @@ def insert_adapter(
     Args:
         prompt_graph: The graph to mutate in place.
         plan: The output of :func:`plan_lora_insertion` for this graph.
-        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`, or
-            ``None`` to add the loader **without choosing a LoRA**: ComfyUI's
-            own loader, wired in and left at its widget defaults exactly as
-            dropping the node in ComfyUI would leave it. That is what
-            ``POST /workflows/{key}/insert-lora-loader`` writes into a stored
-            file, so the workflow has a slot to swap from then on. No adapter
-            means no digest loader either - nothing has a digest to resolve.
+        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`.
         object_info: The map the plan was made with.
 
     Returns:
@@ -1797,22 +1812,7 @@ def insert_adapter(
             the graph has diverged from the plan.
     """
     clip = plan.get("clip")
-    if adapter is None:
-        loader = "LoraLoader" if clip is not None else "LoraLoaderModelOnly"
-        if loader not in object_info:
-            raise LookupError(f"This ComfyUI has no {loader} node.")
-        if not _combo_options(object_info[loader], "lora_name"):
-            # The same check `_inserted_loader` makes below, for the same
-            # reason: with no options `_widget_defaults` yields no `lora_name`
-            # key at all, so the copy would be written and answered 201 and
-            # then refused by ComfyUI on a missing required input — after the
-            # owner was told it was ready to pick a LoRA in.
-            raise LookupError(
-                f"This ComfyUI does not say which LoRA files {loader} can load."
-            )
-        field = value = None
-    else:
-        loader, field, value = _inserted_loader(adapter, object_info, clip is not None)
+    loader, field, value = _inserted_loader(adapter, object_info, clip is not None)
     spec = object_info.get(loader) or {}
     outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
     sources = {"MODEL": plan["model"], "CLIP": clip}
@@ -1848,8 +1848,7 @@ def insert_adapter(
         max((int(k) for k in prompt_graph if str(k).isdigit()), default=0) + 1
     )
     inputs = _widget_defaults(spec)
-    if field is not None:
-        inputs[field] = value
+    inputs[field] = value
     inputs["model"] = [plan["model"]["node_id"], plan["model"]["output"]]
     if clip:
         inputs["clip"] = [clip["node_id"], clip["output"]]
@@ -2037,7 +2036,7 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
     from pixlstash.services.workflow_identity import SEED_VARIANCE, node_groups
 
     graph = deepcopy(prompt_graph)
-    live_before = _live_ids(graph, object_info)
+    live_before = live_node_ids(graph, object_info)
     in_stage = {
         node_id
         for node_id, node_group in node_groups(reduce_api_graph(graph)).items()
@@ -2127,7 +2126,7 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
         changes.append(
             {"node_id": node_id, "class_type": class_type, "action": "bypassed"}
         )
-    live_after = _live_ids(graph, object_info)
+    live_after = live_node_ids(graph, object_info)
     if live_before is not None and live_after is not None:
         for node_id in sorted(live_before - live_after, key=_node_order_key):
             if node_id in graph:

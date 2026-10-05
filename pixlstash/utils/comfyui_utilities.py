@@ -596,7 +596,12 @@ def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     if not isinstance(workflow, dict):
         return []
     if is_api_format(workflow):
-        return _loaded_model_widgets_api(workflow)
+        return [
+            (widget, value)
+            for _id, _cls, widget, value in iter_model_fields_api(
+                workflow, shelf_ids_as_text=True
+            )
+        ]
     return _loaded_model_widgets_ui(workflow)
 
 
@@ -706,15 +711,6 @@ def iter_model_fields_api(workflow: dict, *, shelf_ids_as_text: bool = False):
                 value = _shelf_id_text(widget, value)
             if isinstance(value, str) and value:
                 yield node_id, class_type, widget, value
-
-
-def _loaded_model_widgets_api(workflow: dict) -> list[tuple[str, str]]:
-    return [
-        (widget, value)
-        for _id, _cls, widget, value in iter_model_fields_api(
-            workflow, shelf_ids_as_text=True
-        )
-    ]
 
 
 def extract_recipe_extras(workflow: dict) -> dict:

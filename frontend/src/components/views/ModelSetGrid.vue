@@ -81,6 +81,12 @@
             :can-fill-from-set="fillSetItems.length > 0"
             :can-fill-from-pictures="fillPictureItems.length > 0"
             :base-offer="baseOffer"
+            :fit-count="openFitCount"
+            :drag-rows="store.railDrag"
+            :drag-over="store.railOver"
+            :drag-refused="railTargets.get(store.openSetKey)?.refused ?? ''"
+            @models-fit="showFitsInRail"
+            @drop-slot="(slotId) => dropOnSet(openHand.set, slotId)"
             @set-base="setCheckpointBase"
             @dismiss-base="store.checkpointAdded = null"
             @close="closePanel"
@@ -119,6 +125,7 @@
             @pick="openWorksWith"
             @select="onMemberClick"
             @menu="onMemberMenu"
+            @replace-missing="(head) => emit('replace-missing', [head])"
           />
 
           <!-- The way in to a hand-made set, first because the grid leads with
@@ -133,7 +140,9 @@
             aria-keyshortcuts="N"
             :tabindex="index === cursorIndex ? 0 : -1"
             data-key="new"
+            :data-rail-drop="railTargets.has('new') ? 'new' : undefined"
             @click="onNewClick(entry)"
+            @rail-drop="onRailDrop(entry)"
           >
             <div class="msg__cell" role="gridcell">
               <div class="msg__new" data-testid="new-workflow-set">
@@ -143,12 +152,29 @@
                 >
                 <kbd class="msg__kbd" aria-hidden="true">N</kbd>
               </div>
+              <span
+                v-if="railTargets.has('new')"
+                class="msg__drop"
+                :class="{
+                  'msg__drop--over': dropKey === 'new',
+                  'msg__drop--refused': railTargets.get('new').refused,
+                }"
+                aria-hidden="true"
+                data-testid="rail-drop-mark"
+                ><span class="msg__drop-label">{{
+                  railTargets.get('new').refused || railTargets.get('new').label
+                }}</span></span
+              >
             </div>
           </div>
 
           <div
             v-else-if="entry.kind === 'card'"
             class="msg__row"
+            :class="{
+              'msg__row--dim': store.railDrag && !entry.hand,
+              'msg__row--refused': railTargets.get(entry.key)?.refused,
+            }"
             role="row"
             aria-level="1"
             :aria-expanded="String(store.openSetKey === entry.key)"
@@ -163,15 +189,20 @@
             :aria-selected="
               entry.hand
                 ? String(store.selectedSetIds.has(entry.setId))
-                : selectable(entry.headId)
-                  ? String(cardSelected(entry))
-                  : undefined
+                : entry.missingKey
+                  ? String(store.selectedMissingKeys.has(entry.missingKey))
+                  : selectable(entry.headId)
+                    ? String(cardSelected(entry))
+                    : undefined
             "
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
             @click="onRowClick(entry, $event)"
             @dblclick="targetOwnsTheGesture($event) || toggle(entry)"
             @contextmenu="onRowMenu(entry, $event)"
+            :data-rail-drop="railTargets.has(entry.key) ? entry.key : undefined"
+            :data-rail-refused="railTargets.get(entry.key)?.refused || undefined"
+            @rail-drop="onRailDrop(entry)"
           >
             <div class="msg__cell" role="gridcell">
               <ModelSetCard
@@ -180,7 +211,9 @@
                 :selected="
                   entry.hand
                     ? store.selectedSetIds.has(entry.setId)
-                    : cardSelected(entry)
+                    : entry.missingKey
+                      ? store.selectedMissingKeys.has(entry.missingKey)
+                      : cardSelected(entry)
                 "
                 :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
                 @toggle="store.toggleSet(entry.key)"
@@ -190,6 +223,19 @@
                 @hide="hideCard(entry)"
                 @unhide="unhideCard(entry)"
               />
+              <span
+                v-if="railTargets.has(entry.key)"
+                class="msg__drop"
+                :class="{
+                  'msg__drop--over': dropKey === entry.key,
+                  'msg__drop--refused': railTargets.get(entry.key).refused,
+                }"
+                aria-hidden="true"
+                data-testid="rail-drop-mark"
+                ><span class="msg__drop-label">{{
+                  railTargets.get(entry.key).refused || railTargets.get(entry.key).label
+                }}</span></span
+              >
             </div>
           </div>
         </template>
@@ -326,6 +372,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import {
   assignmentRing,
@@ -340,6 +387,7 @@ import {
   SET_SLOTS,
   setCheckpoint,
   setCheckpoints,
+  setFits,
   setSlots,
   slotSuggestions,
   witnessCount,
@@ -370,6 +418,8 @@ const emit = defineEmits([
   "rename",
   "set-menu",
   "rename-set",
+  "replace-missing",
+  "missing-menu",
 ]);
 
 const store = useModelShelfStore();
@@ -513,6 +563,9 @@ const flatRows = computed(() => {
     card: group.card,
     // The model the card IS, which is what a selection or a verb is aimed at.
     headId: group.head?.id ?? null,
+    // Named after a file the shelf does not hold: no row to select, so the
+    // card is selected as itself, for Replace (`selectedMissingKeys`).
+    missingKey: group.head?.missing ? group.key : null,
     cardIndex: hand.length + cardIndex,
   }));
   const cards = [{ kind: "new", id: "new", key: "new" }, ...hand, ...evidence];
@@ -883,7 +936,29 @@ function onRowClick(entry, event) {
     selectSetEntry(entry, event);
     return;
   }
+  if (entry.missingKey) {
+    selectMissingEntry(entry, event);
+    return;
+  }
   selectEntry(entry, event);
+}
+
+/** The missing-base card keys in drawn order, which a Shift-range spans. */
+const orderedMissingKeys = computed(() =>
+  flatRows.value
+    .filter((entry) => entry.kind === "card" && entry.missingKey)
+    .map((entry) => entry.missingKey),
+);
+
+function selectMissingEntry(entry, event = {}) {
+  store.selectMissing(
+    entry.missingKey,
+    {
+      ctrl: Boolean(event.ctrlKey || event.metaKey),
+      shift: Boolean(event.shiftKey),
+    },
+    orderedMissingKeys.value,
+  );
 }
 
 // ── Hand-made sets (#1520) ────────────────────────────────────────────────
@@ -1302,6 +1377,93 @@ async function keepSeparate(models) {
   settleCursor("");
 }
 
+// ── Drops from the Models rail (design B) ─────────────────────────────────
+//
+// A hand-made card takes each model into the slot its kind goes to, a slot in
+// the open tray takes the models it fits (`ModelSetSlotsPanel` refuses the
+// rest), and New workflow set makes a set holding them. Evidence cards are
+// never targets: they dim for the whole drag. Each drop is one write and one
+// receipt with Undo, the ＋ chooser's own.
+//
+// Every target says so from the moment the drag starts, not only under the
+// pointer. The drag is the rail's own pointer drag (see `ModelsRail.vue`):
+// targets carry `data-rail-drop`, light up from `store.railOver`, and take
+// the drop as a `rail-drop` event.
+
+const sidebarStore = useSidebarStore();
+
+/** The card or tile the pointer is over with a rail drag, by row key. */
+const dropKey = computed(() =>
+  railTargets.value.has(store.railOver) ? store.railOver : "",
+);
+
+/**
+ * Every target of the drag in the air, by row key: `{label, refused}`, where
+ * `refused` is why a hand-made set will not take it (the card then refuses the
+ * drop and says why under the pointer). Empty while nothing is dragged.
+ */
+const railTargets = computed(() => {
+  const rows = store.railDrag;
+  const targets = new Map();
+  if (!rows?.length) return targets;
+  const setsById = new Map(store.handMadeSets.map((set) => [set.id, set]));
+  for (const entry of flatRows.value) {
+    if (entry.kind === "new") {
+      targets.set("new", {
+        label: `New set with ${store.railDragWhat}`,
+        refused: "",
+      });
+    } else if (entry.kind === "card" && entry.hand) {
+      const set = setsById.get(entry.setId);
+      if (!set) continue;
+      targets.set(entry.key, {
+        label: `Add ${store.railDragWhat}`,
+        refused: store.railDropRefusal(set, rows),
+      });
+    }
+  }
+  return targets;
+});
+
+/**
+ * A drop handed over by the rail (`rail-drop`). The rail only hands it to a
+ * target that does not refuse it; the check is repeated where the write is.
+ */
+async function onRailDrop(entry) {
+  const rows = store.railDrag;
+  const target = railTargets.value.get(entry.kind === "new" ? "new" : entry.key);
+  if (!rows?.length || !target || target.refused) return;
+  store.railDrag = null;
+  if (entry.kind === "new") {
+    await store.createSetFromRows(rows);
+    return;
+  }
+  const set = store.handMadeSets.find((candidate) => candidate.id === entry.setId);
+  if (set) await store.addRowsToHandMadeSet(set, rows);
+}
+
+/** A drop on one slot of the open tray, already checked to fit it. */
+async function dropOnSet(set, slotId) {
+  const rows = store.railDrag;
+  store.railDrag = null;
+  if (rows?.length) await store.addRowsToHandMadeSet(set, rows, slotId);
+}
+
+/** How many shelf models fit the open set: the tray's Models · N fit. */
+const openFitCount = computed(() =>
+  openHand.value
+    ? setFits(openHand.value.set, store.rows, store.workflowSets.combinations)
+        .rows.length
+    : 0,
+);
+
+/** Models · N fit: the rail, open on its Models tab, with Fits on this set. */
+function showFitsInRail() {
+  if (!openHand.value) return;
+  store.railFitsSetId = openHand.value.set.id;
+  sidebarStore.setModelsRailOpen(true);
+}
+
 /** Exposed so the shelf can open a new set with Fill from pictures ready. */
 function openFill(mode) {
   const button = gridEl.value?.querySelector?.(
@@ -1471,6 +1633,12 @@ defineExpose({ openFill, openOffer });
  * is open, and the occurrence decides whether its card lights.
  */
 function openMenu(entry, x, y) {
+  // A missing-base card's menu is its own pill's: Replace is its verb.
+  if (entry?.kind === "card" && entry.missingKey) {
+    if (!store.selectedMissingKeys.has(entry.missingKey)) selectMissingEntry(entry);
+    emit("missing-menu", { x, y, el: rowElement(entry) });
+    return true;
+  }
   const id = modelIdOf(entry);
   if (!selectable(id)) return false;
   if (!store.isSelected(id)) selectEntry(entry, {});
@@ -1904,6 +2072,11 @@ function onKeyDown(event) {
       // Refused before it is swallowed: a row with no shelf model behind it has
       // no answer to Space, and `preventDefault` on a press nothing then handles
       // takes the page's own scroll away for nothing.
+      if (entry?.kind === "card" && entry.missingKey) {
+        event.preventDefault();
+        selectMissingEntry(entry, { ctrlKey: true });
+        return;
+      }
       if (!selectable(modelIdOf(entry))) return;
       event.preventDefault();
       selectCursor({ ctrlKey: true });
@@ -1984,7 +2157,78 @@ function onKeyDown(event) {
 }
 
 .msg__cell {
+  position: relative;
   border-radius: var(--radius-md);
+}
+
+/* A rail drag (design B). Every target wears a dashed rim for the whole drag;
+   the one under the pointer fills with the active wash, solid rim, and says
+   what the drop does. An OVERLAY over the card rather than a ring on it, for
+   the reason `ModelSetCard`'s selection mark records: an inset shadow paints
+   under the cover's opaque pictures. A refused set keeps a neutral rim and
+   says why, hatched like the sidebar's refused rows. Evidence cards, never
+   targets, fade. */
+.msg__drop {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  border: var(--focus-width) dashed var(--active-bar);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+  transition: background var(--dur-1) var(--ease-standard);
+}
+
+.msg__drop--over {
+  border-style: solid;
+  background: var(--active-wash);
+  box-shadow: var(--selection-ring);
+}
+
+.msg__drop--refused {
+  border-color: rgba(var(--v-theme-on-surface), 0.24);
+}
+
+.msg__drop--refused.msg__drop--over {
+  background: repeating-linear-gradient(
+    45deg,
+    transparent 0 var(--space-2),
+    rgba(var(--v-theme-border), 0.45) var(--space-2) var(--space-3)
+  );
+  box-shadow: none;
+}
+
+.msg__drop-label {
+  display: none;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-3);
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-surface));
+  box-shadow: var(--elevation-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-surface));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg__drop--over .msg__drop-label {
+  display: block;
+}
+
+/* A hand-made set that refuses the drag fades like an evidence card, all but
+   its mark, which has to stay legible to say why under the pointer. */
+.msg__row--refused .msg__cell > :not(.msg__drop) {
+  opacity: var(--opacity-disabled);
+}
+
+.msg__row--dim {
+  opacity: var(--opacity-disabled);
+  transition: opacity var(--dur-1) var(--ease-standard);
 }
 
 .msg__state--inline {

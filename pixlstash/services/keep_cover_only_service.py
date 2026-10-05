@@ -301,9 +301,6 @@ class StackPlan:
             "skip_reason": self.skip_reason,
             "locked_sets": [dict(entry) for entry in self.locked_sets],
             "lost_characters": [dict(entry) for entry in self.lost_characters],
-            "staying_picture_ids": {
-                reason: list(ids) for reason, ids in self.staying_copies.items()
-            },
         }
 
 
@@ -987,7 +984,7 @@ def preview_in_session(
         # stacks that are eligible or have nothing reproducible. A stack skipped
         # for a locked set was never judged copy by copy; one skipped for a
         # character link was, but it does not change at all, so its copies are
-        # named in its own row rather than in this total. The mutation scopes
+        # left out of this total. The mutation scopes
         # `pictures_staying` identically.
         **{
             f"pictures_staying_{reason}": sum(

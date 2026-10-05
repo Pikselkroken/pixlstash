@@ -1,7 +1,6 @@
 """Find instance hashes picture rows gave up, for the covered-ghost cascade."""
 
-import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
@@ -29,8 +28,6 @@ class GhostCascadeFinder(BaseTaskFinder):
 
     Attributes:
         _vault: The owning Vault.
-        _last_check_at: Monotonic timestamp of the last check, or ``None`` when
-            no check has happened yet.
     """
 
     def __init__(self, vault: "Vault") -> None:
@@ -42,19 +39,13 @@ class GhostCascadeFinder(BaseTaskFinder):
         """
         super().__init__()
         self._vault = vault
-        self._last_check_at: Optional[float] = None
 
     def finder_name(self) -> str:
         return "GhostCascadeFinder"
 
     def find_task(self):
-        now_mono = time.monotonic()
-        if (
-            self._last_check_at is not None
-            and now_mono - self._last_check_at < _CHECK_INTERVAL_S
-        ):
+        if not self._due(_CHECK_INTERVAL_S):
             return None
-        self._last_check_at = now_mono
 
         outstanding = self._vault.db.run_immediate_read_task(
             lambda session: session.execute(

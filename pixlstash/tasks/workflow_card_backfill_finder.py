@@ -15,7 +15,7 @@ from pixlstash.hub.workflow_cards import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_events import announce_to_vault
 from pixlstash.task_runner import TaskCancelledError
-from pixlstash.tasks.base_task_finder import BaseTaskFinder
+from pixlstash.tasks.base_task_finder import BaseDeferringFinder
 from pixlstash.tasks.workflow_card_backfill_task import (
     FamilyReidentifyTask,
     WorkflowCardBackfillTask,
@@ -24,7 +24,7 @@ from pixlstash.tasks.workflow_card_backfill_task import (
 logger = get_logger(__name__)
 
 
-class WorkflowCardBackfillFinder(BaseTaskFinder):
+class WorkflowCardBackfillFinder(BaseDeferringFinder):
     """Hand out variants whose card is missing or keyed by a superseded rule.
 
     This is the whole once-only-ness of the backfill, and it is why the pass
@@ -39,7 +39,15 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
     A variant the task could not key is *deferred* for the life of the process
     rather than handed out again: a stored document does not change by itself,
     so without that a single unkeyable graph keeps the planner awake forever.
+    Cancelled or a busy hub stays eligible: the hub is shared with a second
+    process under a 5 s timeout, and deriving a card is cheap to retry, so
+    retiring fifty variants until the next restart over a lock is the wrong
+    trade - unlike the checkpoint hasher, where a retry is 24 GB of reading.
     """
+
+    _IDS_PARAM = "structural_hashes"
+    _TRANSIENT = (TaskCancelledError, sqlite3.OperationalError)
+    _WHAT = "Workflow card backfill"
 
     def __init__(self, hub: HubDatabase, vault=None) -> None:
         """Initialise the finder.
@@ -53,11 +61,6 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
         super().__init__()
         self._hub = hub
         self._vault = vault
-        self._deferred: set[str] = set()
-        # Handed out and not yet reported. The planner frees the inflight slot
-        # before it tells the finder how the task went, so without this the
-        # identical batch can be issued twice (see MissingCheckpointHashFinder).
-        self._handed_out: set[str] = set()
         # The shelf's base models (and the known families of cores holding an
         # unresolved variant) as of the last family pass: only a change can
         # identify an unknown family. Persisted in the hub, so a start (or a
@@ -86,17 +89,12 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
         return variant_counts(self._hub)
 
     def find_task(self):
-        skip = self._deferred | self._handed_out
-        batch = [
-            structural_hash
-            for structural_hash in unidentified_variants(
-                self._hub, WorkflowCardBackfillTask.BATCH_SIZE + len(skip)
-            )
-            if structural_hash not in skip
-        ][: WorkflowCardBackfillTask.BATCH_SIZE]
+        batch = self._take(
+            lambda limit: unidentified_variants(self._hub, limit),
+            WorkflowCardBackfillTask.BATCH_SIZE,
+        )
         if not batch:
             return self._reidentify_task()
-        self._handed_out.update(batch)
         return WorkflowCardBackfillTask(hub=self._hub, structural_hashes=batch)
 
     def _reidentify_task(self):
@@ -158,40 +156,7 @@ class WorkflowCardBackfillFinder(BaseTaskFinder):
                 error,
             )
             return
-        hashes = (getattr(task, "params", None) or {}).get("structural_hashes") or []
-        self._handed_out.difference_update(hashes)
-        if isinstance(error, TaskCancelledError):
-            # Never ran, so nothing was learned about these rows: a planner stop
-            # or a queue drain must not strand them.
-            logger.debug(
-                "Workflow card backfill was cancelled before it ran: %s. Those "
-                "variants stay eligible.",
-                error,
-            )
-            return
-        if isinstance(error, sqlite3.OperationalError):
-            # A busy hub, not a bad document. The hub is shared with a second
-            # process under a 5 s timeout, and deriving a card is cheap to
-            # retry, so retiring fifty variants until the next restart over a
-            # lock is the wrong trade - unlike the checkpoint hasher this is
-            # modelled on, where a retry is 24 GB of reading.
-            logger.warning(
-                "Workflow card backfill could not reach the hub for %d "
-                "variants: %s. They stay eligible.",
-                len(hashes),
-                error,
-            )
-            return
-        if error is not None:
-            logger.warning(
-                "Workflow card backfill failed for %d variants: %s. Deferring "
-                "them for the rest of this session.",
-                len(hashes),
-                error,
-            )
-            self._deferred.update(hashes)
-            return
-        self._deferred.update((getattr(task, "result", None) or {}).get("deferred", []))
+        super().on_task_complete(task, error)
 
     def _family_pass_done(self, task: FamilyReidentifyTask) -> None:
         """Remember the shelf the pass ran against, and announce what it moved."""

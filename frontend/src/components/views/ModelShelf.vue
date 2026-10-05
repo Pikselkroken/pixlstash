@@ -18,7 +18,7 @@
       is named for the date it shows. Every column but Name begins with a handle
       that resizes it: Left and Right move the edge, Home and End take it to its
       widest and narrowest, Enter puts it back. The bar ends in the app-wide
-      controls: Settings and the stats sidebar toggle. Nothing on this screen
+      controls: Settings and the Models and tasks toggle. Nothing on this screen
       can be undone. A ring around a model's mark says who it is assigned to. A
       name in italics has not been given one. A row that stands for a training
       run says how many files it holds; Right and Left open and close it.
@@ -406,7 +406,11 @@
              alone cannot separate identical icon buttons into "this view's
              controls" and "the app's". -->
         <span class="bar-separator" aria-hidden="true"></span>
-        <TbGlobalActions @open-settings="emit('open-settings')" />
+        <TbGlobalActions
+          rail="models"
+          rail-name="Models and tasks"
+          @open-settings="emit('open-settings')"
+        />
       </div>
     </div>
 
@@ -461,6 +465,17 @@
       <!-- The visible half of the same statement. `inert` on the wrapper is
            what actually stops the interaction; this is what says so. -->
       <div v-if="moves.running" class="shelf-dim" aria-hidden="true"></div>
+      <!-- The closed Models rail's handle (design B): a plain tab with the
+           count, no selection stripe. It moves at most once a session, the
+           first time a hand-made set is opened while the rail is closed. -->
+      <InspectorEdgeTab
+        v-if="!sidebarStore.modelsRailOpen"
+        :count="railCount"
+        :name="`Show models (${railCount.toLocaleString()})`"
+        :nudge="railNudge"
+        data-testid="models-rail-handle"
+        @open="sidebarStore.setModelsRailOpen(true)"
+      />
       <!-- An unplugged drive states its scope ONCE, here, rather than through
            300 rows each carrying the same mark. The rows still take the offline
            treatment - that is what tells one row from its neighbour - but the
@@ -482,6 +497,32 @@
           @click="offlineDismissed = true"
         />
       </p>
+      <!-- Sets whose checkpoint is gone, said once. A selection shortcut, not a
+           second verb: Replace lives on the pill and the card's menu, and
+           replacing one is the same operation as replacing twelve. -->
+      <p
+        v-if="isSetGrid && missingCount && !missingDismissed"
+        class="shelf-banner"
+        data-testid="shelf-missing-banner"
+      >
+        <v-icon size="16">mdi-file-alert-outline</v-icon>
+        <span class="shelf-banner-text"
+          ><b>{{
+            missingCount === 1
+              ? "1 set is missing its checkpoint"
+              : `${missingCount} sets are missing their checkpoint`
+          }}</b>
+          · not on your shelf; replace it in the workflows that load it</span
+        >
+        <AppButton size="sm" @click="store.selectAllMissing()">Select them</AppButton>
+        <span class="shelf-spacer"></span>
+        <AppBarButton
+          icon="close"
+          tooltip="Dismiss"
+          aria-label="Dismiss the missing checkpoint notice"
+          @click="dismissedMissing = new Set(store.missingSetKeys)"
+        />
+      </p>
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
@@ -496,6 +537,8 @@
         @rename="startRenameSelected"
         @set-menu="({ x, y, el }) => setBarRef?.openContextMenu(x, y, el)"
         @rename-set="startRenameSet"
+        @replace-missing="(heads) => (replacingHeads = heads)"
+        @missing-menu="({ x, y, el }) => missingBarRef?.openContextMenu(x, y, el)"
       />
       <p v-else-if="firstRead" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -1442,7 +1485,17 @@
         @keep-separate="store.keepOutOfHandMadeSet(store.selectedSets[0])"
         @offer-again="store.offerMergeAgain(store.selectedSets[0])"
       />
+      <MissingSetSelectionBar
+        v-if="isSetGrid"
+        ref="missingBarRef"
+        @replace="replacingHeads = store.selectedMissing"
+      />
     </div>
+    <ReplaceMissingDialog
+      :open="replacingHeads.length > 0"
+      :heads="replacingHeads"
+      @close="replacingHeads = []"
+    />
     <!-- The set receipts (#1573): the grid's own pill, lifted clear of the
          selection pill when both are up. Local receipts only - a library
          action's Undo would revert something this screen cannot show. -->
@@ -1570,6 +1623,12 @@
   </div>
 </template>
 
+<script>
+// The closed Models rail's one nudge a session, across remounts of the shelf
+// (see `railNudge`).
+let railNudged = false;
+</script>
+
 <script setup>
 import { withRef } from "../../utils/withRef.js";
 import {
@@ -1586,8 +1645,10 @@ import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
 import WorkflowSetRenameDialog from "../panels/WorkflowSetRenameDialog.vue";
-import { handMadeName } from "../../utils/workflowSets";
+import { handMadeName, railListed } from "../../utils/workflowSets";
 import WorkflowSetSelectionBar from "../panels/WorkflowSetSelectionBar.vue";
+import MissingSetSelectionBar from "../panels/MissingSetSelectionBar.vue";
+import ReplaceMissingDialog from "../io/ReplaceMissingDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
@@ -1595,6 +1656,7 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import ModelSetGrid from "./ModelSetGrid.vue";
+import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import ActionReceipt from "../widgets/ActionReceipt.vue";
 import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
@@ -1686,6 +1748,24 @@ const moves = useModelMovesStore();
 // owns the key before it clears anything. See `onShelfEscape`.
 const reviewSessionsStore = useReviewSessionsStore();
 const sidebarStore = useSidebarStore();
+
+/** Every model the Models rail can offer: what its closed handle counts. */
+const railCount = computed(() => store.rows.filter(railListed).length);
+
+// One nudge of the closed rail's handle per session, never a glyph flash (the
+// toolbar glyph is busy showing tasks): the first hand-made set opened while
+// the rail is closed. Module-level so a remount of the shelf is not a new
+// session.
+const railNudge = ref(0);
+watch(
+  () => store.openSetKey,
+  (key) => {
+    if (railNudged || sidebarStore.modelsRailOpen) return;
+    if (!key?.startsWith("hand:")) return;
+    railNudged = true;
+    railNudge.value += 1;
+  },
+);
 // The date column is stamped in the reader's own format, through the same
 // `formatUserDate(iso, dateFormat)` pattern every other timestamp in the app
 // uses.
@@ -2338,6 +2418,10 @@ function shelfOwnsTheKey(event) {
   // confirmation for rows the reader cannot see and `Escape` would silently
   // clear a selection they did not know they still had.
   if (!isShelfTab.value) return false;
+  // The Models rail sits beside the shelf with a selection of its own, and
+  // none of the shelf's keys may reach through it: Delete there would delete
+  // the shelf's (unseen) selection, and Escape would clear it.
+  if (event?.target?.closest?.(".mrail")) return false;
   // The set grid is NOT excluded, and the reason it once was has gone with the
   // card standing for a whole set: every selectable thing on that screen is one
   // model, the bar floats over it, and `selectVisible` answers the grid's own
@@ -2450,6 +2534,18 @@ function onShelfKeydown(event) {
   // sets unprompted while also arming a file delete. The sets' own pill still
   // deletes them. (With the cursor on a set from pictures, the grid has
   // already taken Delete to hide that set; it never arrives here.)
+  // Missing-base cards answer Escape only: they have no file for Delete.
+  if (
+    store.selectedMissing.length &&
+    isSetGrid.value &&
+    event.key === "Escape"
+  ) {
+    event.preventDefault();
+    store.clearMissingSelection();
+    store.clearSetSelection();
+    store.clearSelection();
+    return;
+  }
   if (store.selectedSets.length && isSetGrid.value) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -2488,6 +2584,17 @@ onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
 
 const setGridRef = ref(null);
+
+/** The missing-base heads the Replace dialog is open on, `[]` while closed. */
+const replacingHeads = ref([]);
+const missingBarRef = ref(null);
+const missingCount = computed(() => store.missingSetKeys.length);
+// The sets it was dismissed over: a missing set not among them brings the
+// banner back, which a count would not (fix one, lose another).
+const dismissedMissing = ref(new Set());
+const missingDismissed = computed(() =>
+  store.missingSetKeys.every((key) => dismissedMissing.value.has(key)),
+);
 const setBarRef = ref(null);
 
 // The set receipt sits above whichever selection pill is up, lifted by its
@@ -4589,11 +4696,15 @@ onMounted(() => {
 // than gating the empty state on `loaded`: the view is still on screen and its
 // job is to show the shelf, so a blank body would be a second wrong answer.
 // The store cannot do this itself: session-reset handlers run BEFORE the new
-// credential is installed, whereas this pre-flush watcher runs after.
+// credential is installed, whereas this pre-flush watcher runs after. The
+// sets go with the rows, and the set grid and the Models rail asked for them
+// only as they mounted, so they are read again here too.
 watch(
   () => store.loaded,
   (isLoaded) => {
-    if (!isLoaded) store.fetchRows();
+    if (isLoaded) return;
+    store.fetchRows();
+    store.loadWorkflowSets();
   },
 );
 </script>
@@ -4944,6 +5055,10 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.shelf-banner b {
+  font-weight: var(--weight-semibold);
 }
 
 /* ── Drive bands ───────────────────────────────────────────────────────────

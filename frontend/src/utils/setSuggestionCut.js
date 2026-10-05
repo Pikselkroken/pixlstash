@@ -29,11 +29,7 @@ export const SET_SUGGEST_FALLBACK_THRESHOLD = 0.75;
  * @returns {number}
  */
 export function signatureTagCount(matches) {
-  if (!Array.isArray(matches)) return 0;
-  for (const match of matches) {
-    if (Number.isFinite(match?.tags_total)) return match.tags_total;
-  }
-  return 0;
+  return firstFinite(matches, "tags_total") ?? 0;
 }
 
 /**
@@ -44,11 +40,13 @@ export function signatureTagCount(matches) {
  * @returns {number|null}
  */
 export function setCohesion(matches) {
+  return firstFinite(matches, "cohesion");
+}
+
+/** The first finite `field` among the matches, or null. */
+function firstFinite(matches, field) {
   if (!Array.isArray(matches)) return null;
-  for (const match of matches) {
-    if (Number.isFinite(match?.cohesion)) return match.cohesion;
-  }
-  return null;
+  return matches.find((m) => Number.isFinite(m?.[field]))?.[field] ?? null;
 }
 
 /**

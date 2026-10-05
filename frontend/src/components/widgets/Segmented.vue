@@ -2,10 +2,9 @@
   <div
     role="radiogroup"
     class="seg"
-    :class="[`seg--${variant}`, { 'seg--full': full, 'seg--disabled': disabled }]"
+    :class="[`seg--${variant}`, { 'seg--full': full }]"
     :aria-label="ariaLabel || undefined"
     :aria-orientation="orientation === 'horizontal' ? 'horizontal' : undefined"
-    :aria-disabled="disabled ? 'true' : undefined"
     @keydown="onKeydown"
   >
     <button
@@ -17,31 +16,22 @@
       :class="{ 'seg__opt--on': o.id === modelValue }"
       :aria-checked="o.id === modelValue ? 'true' : 'false'"
       :tabindex="o.id === tabStop ? 0 : -1"
-      :disabled="disabled || o.disabled"
-      :aria-label="variant === 'icon' ? o.title || o.label : undefined"
+      :disabled="o.disabled"
       :data-testid="o.testid"
       @click="select(o)"
     >
-      <!-- An icon-only option's name is its tip as well (buttons.md,
-           "Tooltips"): one string, so the two cannot drift. -->
-      <Tooltip
-        v-if="variant === 'icon'"
-        :text="o.title || o.label"
-        activator="parent"
-        :describe="false"
-      />
       <span v-if="variant === 'stacked'" class="seg__media">
         <slot name="media" :option="o">
           <v-icon v-if="o.icon" size="24">{{ iconName(o.icon) }}</v-icon>
         </slot>
       </span>
       <v-icon
-        v-else-if="(variant === 'icon' || variant === 'icon-label') && o.icon"
+        v-else-if="variant === 'icon-label' && o.icon"
         size="16"
         class="seg__icon"
         >{{ iconName(o.icon) }}</v-icon
       >
-      <span v-if="variant !== 'icon'" class="seg__label">{{ o.label }}</span>
+      <span class="seg__label">{{ o.label }}</span>
     </button>
   </div>
 </template>
@@ -60,18 +50,16 @@
  */
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
-import Tooltip from "./Tooltip.vue";
 import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 
 const props = defineProps({
-  // [{ id, label, icon?, title?, disabled?, testid? }]
+  // [{ id, label, icon?, disabled?, testid? }]
   options: { type: Array, required: true },
   modelValue: { type: [String, Number, Boolean, null], default: null },
-  // label | icon-label | icon | stacked
+  // label | icon-label | stacked
   variant: { type: String, default: "label" },
   // Segments share the track's width equally.
   full: { type: Boolean, default: false },
-  disabled: { type: Boolean, default: false },
   ariaLabel: { type: String, default: "" },
   // both | horizontal. Horizontal leaves Up/Down to the container.
   orientation: { type: String, default: "both" },
@@ -89,13 +77,12 @@ function iconName(icon) {
 }
 
 function select(option) {
-  if (props.disabled || option.disabled) return;
+  if (option.disabled) return;
   if (option.id !== props.modelValue) emit("update:modelValue", option.id);
   emit("pick", option.id);
 }
 
 function onKeydown(event) {
-  if (props.disabled) return;
   const id = arrowStep(
     event,
     props.options,
@@ -122,10 +109,6 @@ function onKeydown(event) {
 .seg--full {
   display: flex;
   width: 100%;
-}
-
-.seg--disabled {
-  opacity: var(--opacity-disabled);
 }
 
 .seg__opt {
@@ -162,12 +145,8 @@ function onKeydown(event) {
 }
 
 .seg__opt:disabled {
-  cursor: not-allowed;
-}
-
-/* One unavailable option fades on its own; a disabled group fades as a whole. */
-.seg:not(.seg--disabled) .seg__opt:disabled {
   opacity: var(--opacity-disabled);
+  cursor: not-allowed;
 }
 
 .seg__opt:not(:disabled):not(.seg__opt--on):hover {
@@ -185,12 +164,6 @@ function onKeydown(event) {
 
 .seg__opt--on:not(:disabled):hover {
   background-image: var(--hover-shade);
-}
-
-.seg--icon .seg__opt {
-  width: var(--control-h-bar);
-  min-width: var(--control-h-bar);
-  padding: 0;
 }
 
 .seg--stacked .seg__opt {

@@ -469,8 +469,6 @@ function onKeydown(event) {
     submit();
   }
 }
-
-defineExpose({ expand });
 </script>
 
 <style scoped>

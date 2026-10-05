@@ -513,6 +513,23 @@ class TestFinder:
             "the finder re-issued a batch whose result had not come back yet"
         )
 
+    def test_a_failed_batch_is_deferred_before_it_is_released(self, hub, tmp_path):
+        # The planner can run find_task the instant the batch is let go.
+        register(hub, write_model(tmp_path / "a.safetensors"))
+        finder = MissingCheckpointHashFinder(hub)
+        task = finder.find_task()
+        reissued = []
+
+        class Released(set):
+            def difference_update(self, ids):
+                super().difference_update(ids)
+                reissued.append(finder.find_task())
+
+        finder._handed_out = Released(finder._handed_out)
+        finder.on_task_complete(task, RuntimeError("hub went away"))
+
+        assert reissued == [None]
+
     def test_the_batch_is_released_once_its_result_is_in(self, hub, tmp_path):
         # The positive control: holding rows back forever would strand a
         # checkpoint whose hash simply has not been written yet, which is

@@ -24,7 +24,7 @@
 // names - or names only beside no base model - arrive from the server under
 // `no_set` and get a card of their own.
 
-import { fileKindLabel, modelName } from "./modelShelf";
+import { fileKindLabel, modelName, quantBadge } from "./modelShelf";
 
 /** The kinds a set is named after, as the server's `_SET_BASE_KINDS`. */
 const BASE_KINDS = new Set(["checkpoint", "unknown"]);
@@ -72,6 +72,10 @@ export function headModel(combination) {
     workflowIds: [
       ...new Set(missing.flatMap((entry) => entry.workflow_ids ?? [])),
     ].sort(),
+    // Per file, because a fix replaces one file in the workflows loading it.
+    workflowsByName: Object.fromEntries(
+      missing.map((entry) => [entry.name, [...(entry.workflow_ids ?? [])].sort()]),
+    ),
   };
 }
 
@@ -125,6 +129,11 @@ export function setGroups(combinations) {
       group.head.workflowIds = [
         ...new Set([...group.head.workflowIds, ...head.workflowIds]),
       ].sort();
+      for (const [name, ids] of Object.entries(head.workflowsByName)) {
+        group.head.workflowsByName[name] = [
+          ...new Set([...(group.head.workflowsByName[name] ?? []), ...ids]),
+        ].sort();
+      }
     }
     if (!group) {
       group = {
@@ -674,7 +683,7 @@ export function handMadeCard(set) {
  * the tray to repeat; `text` is the whole question.
  *
  * @returns {{adds: number, who: string, rest: string, text: string,
- *   model: {kind: string, name: string}|null}|null}
+ *   model: {kind: string, name: string, quant?: string}|null}|null}
  */
 export function offerQuestion(set) {
   const offer = set?.offer;
@@ -692,7 +701,14 @@ export function offerQuestion(set) {
     who,
     rest,
     text: `${who}${rest}${one ? " Add it?" : ""}`,
-    model: one ? { kind: memberKindLabel(one), name: one.name } : null,
+    model: one
+      ? {
+          kind: memberKindLabel(one),
+          name: one.name,
+          // The name has lost its precision; the set may hold its other quant.
+          quant: quantBadge(one.quant)?.label,
+        }
+      : null,
   };
 }
 
@@ -700,7 +716,7 @@ export function offerQuestion(set) {
  * Does this shelf row belong in this slot's picker? Engines never do: no slot
  * lists `engine`. A row still waiting for its hash cannot be kept by hash yet.
  */
-function fitsSlot(row, slot) {
+export function fitsSlot(row, slot) {
   return Boolean(row?.sha256) && slot.kinds.includes(row?.file_kind);
 }
 
@@ -863,6 +879,40 @@ export function slotSuggestions({
     .filter(Boolean)
     .map((section) => ({ ...section, total: section.items.length }))
     .concat(heldSection);
+}
+
+/** Whether the Models rail lists a shelf row: any kind some slot takes. */
+export function railListed(row) {
+  return SET_SLOTS.some((slot) => slot.kinds.includes(row?.file_kind));
+}
+
+/**
+ * What the Models rail's *Fits <set>* filter keeps, evidence first (design B).
+ *
+ * Every shelf model the set does not hold that some slot takes, narrowed to the
+ * set's base model once its checkpoint names one. A model pictures or ComfyUI
+ * runs used beside one of the set's checkpoints fits whatever its base model
+ * says, since that is the strongest evidence there is, and it carries the
+ * picture count the rail gives as the reason. With no checkpoint there is
+ * nothing to narrow by, so everything not held fits. A model still waiting for
+ * its hash is kept: the rail lists it, disabled, with the reason.
+ *
+ * @returns {{rows: Array<Object>, evidence: Map<number, Object>}} `rows` in
+ *   shelf order; `evidence` is `model.id` → its `worksWith` companion entry.
+ */
+export function setFits(set, rows, combinations) {
+  const held = new Set((set?.members ?? []).map((m) => m.sha256));
+  const base = handMadeBase(set);
+  const evidence = new Map(
+    checkpointCompanions(set, combinations).map((c) => [c.id, c]),
+  );
+  const fits = (rows ?? []).filter(
+    (row) =>
+      railListed(row) &&
+      !(row.sha256 && held.has(row.sha256)) &&
+      (!base || evidence.has(row.id) || rowBaseModel(row) === base),
+  );
+  return { rows: fits, evidence };
 }
 
 /**

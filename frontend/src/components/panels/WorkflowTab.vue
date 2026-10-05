@@ -609,8 +609,8 @@
               :row="row"
               :busy="busy === `default:${row.label}`"
               @toggle-pin="togglePin(row)"
-              @reset="resetDefault(row)"
-              @edit="(value) => editDefault(row, value)"
+              @reset="writeDefault(row)"
+              @edit="(value) => writeDefault(row, { value })"
             />
           </template>
           <template v-if="fixedDefaults.length">
@@ -637,8 +637,8 @@
                     :row="row"
                     :busy="busy === `default:${row.label}`"
                     @toggle-pin="togglePin(row)"
-                    @reset="resetDefault(row)"
-                    @edit="(value) => editDefault(row, value)"
+                    @reset="writeDefault(row)"
+                    @edit="(value) => writeDefault(row, { value })"
                   />
                 </div>
               </details>
@@ -652,8 +652,8 @@
                   :row="row"
                   :busy="busy === `default:${row.label}`"
                   @toggle-pin="togglePin(row)"
-                  @reset="resetDefault(row)"
-                  @edit="(value) => editDefault(row, value)"
+                  @reset="writeDefault(row)"
+                  @edit="(value) => writeDefault(row, { value })"
                 />
               </template>
               <p class="wftab-note wftab-quiet">
@@ -861,7 +861,12 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { modelLabel } from "../../utils/filterChips";
-import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
+import {
+  EDIT_LORAS,
+  formatStrength,
+  loraBase,
+  loraStem,
+} from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
 import { PIXLSTASH_PACK_URL, STAGE_LABELS } from "../../utils/runReasons";
 import {
@@ -869,8 +874,11 @@ import {
   baseModels,
   checkpointUnread,
   modelDisplayName,
+  NO_REPLACEMENT_TEXT,
+  replacementOptions,
 } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
+import { pictureCount } from "../../utils/workflowSets";
 import { breakableName } from "../../utils/breakableName";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
@@ -1046,10 +1054,7 @@ const titleWords = computed(() => breakableName(card.value?.name));
 // grouped spelling went with the shelf in F1b, and this screen never used it.
 // Split from its prefix so the figure alone is F7's *Show all N pictures*
 // link, and the words that place the card stay text.
-const picturesLabel = computed(() => {
-  const count = card.value?.picture_count ?? 0;
-  return `${count} ${count === 1 ? "picture" : "pictures"}`;
-});
+const picturesLabel = computed(() => pictureCount(card.value?.picture_count));
 
 // All three read the MODEL SHELF's name where it has one, the same preference
 // the card's name row was built from, so the panel and the row do not describe
@@ -1254,10 +1259,8 @@ const checkpointFix = computed(
 const replacementMissing = computed(
   () =>
     Boolean(checkpointFix.value) &&
-    missingBaseFiles.value.some(
-      (file) =>
-        fileName(file).toLowerCase() ===
-        fileName(checkpointFix.value.now).toLowerCase(),
+    missingBaseFiles.value.some((file) =>
+      sameFile(file, checkpointFix.value.now),
     ),
 );
 
@@ -1271,35 +1274,11 @@ const replacementMissing = computed(
 const replacementsByFile = ref({});
 
 /** Why a missing file has no "Replace with…", as the row says it. */
-const NO_REPLACEMENT_TEXT = {
-  no_checkpoint:
-    "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
-  none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
-  none_same_base_model:
-    "Nothing on your shelf is known to have this checkpoint's base model, which its LoRAs need.",
-  none_loadable:
-    "What works with this checkpoint is not something this loader can load.",
-  needs_pixlstash_nodes:
-    "What works with this checkpoint needs a PixlStash loader, and ComfyUI-PixlStash is not installed in ComfyUI.",
-  unread: "Could not read what could replace it just now.",
-};
-
 /** A "Replace with…" picker's options for one missing file, or `[]`. */
 function replaceOptionsFor(kind, file) {
-  const models = replacementsByFile.value[`${kind}:${file}`]?.replacements;
-  return models?.length
-    ? [
-        { value: "", label: "Replace with…" },
-        ...models.map((model) => ({
-          value: model.filename,
-          // `declared`: only the file layout fits; nothing has run with it.
-          // `loader`: this loader cannot load it, so a run swaps in ours.
-          label: `${model.display_name || model.filename}${
-            model.via === "declared" ? " (untested)" : ""
-          }${model.loader ? " (through a PixlStash loader)" : ""}`,
-        })),
-      ]
-    : [];
+  return replacementOptions(
+    replacementsByFile.value[`${kind}:${file}`]?.replacements,
+  );
 }
 
 const replaceOptions = computed(() =>
@@ -1327,7 +1306,7 @@ const checkpointNoReplacement = computed(() => {
 
 /** Whether two recorded values name one file, whatever their folders. */
 function sameFile(a, b) {
-  return fileName(a).toLowerCase() === fileName(b).toLowerCase();
+  return loraBase(a) === loraBase(b);
 }
 
 /**
@@ -1459,7 +1438,6 @@ const chainLoaders = computed(() =>
     ...(chain.value?.loaders ?? []),
     ...(chain.value?.lanes ?? []).flatMap((lane) => lane.loaders ?? []),
   ].map((loader) => {
-    const strength = Number(loader.strength);
     return {
       id: String(loader.node_id),
       node_id: String(loader.node_id),
@@ -1471,12 +1449,7 @@ const chainLoaders = computed(() =>
         ? loader.name || loraStem(loader.filename)
         : String(loader.filename || loader.name || "").split(/[\\/]/).pop(),
       on_shelf: Boolean(loader.on_shelf),
-      strengthText:
-        loader.strength === null || loader.strength === undefined
-          ? "—"
-          : Number.isFinite(strength)
-            ? strength.toFixed(2)
-            : "—",
+      strengthText: formatStrength(loader.strength) || "—",
     };
   }),
 );
@@ -1664,32 +1637,25 @@ const usingChain = computed(
     !(defaultRecipe.value?.loras ?? []).length,
 );
 
-/** The summary's LoRAs by the shelf digest they resolve to, where they do. */
-const summaryByDigest = computed(() => {
+/** The summary's LoRAs by one of their fields, and whether each is everywhere. */
+function summaryBy(field) {
   const uses = new Map();
-  for (const use of summary.value?.shared ?? []) {
-    if (use.sha256) uses.set(digestOf(use.sha256), { use, everywhere: true });
-  }
-  for (const use of summary.value?.varying ?? []) {
-    if (use.sha256) uses.set(digestOf(use.sha256), { use, everywhere: false });
+  for (const [list, everywhere] of [
+    [summary.value?.shared, true],
+    [summary.value?.varying, false],
+  ]) {
+    for (const use of list ?? []) {
+      if (use[field]) uses.set(digestOf(use[field]), { use, everywhere });
+    }
   }
   return uses;
-});
+}
 
-/**
- * The summary's LoRAs by their `asset:` reference (a hash of the file's NAME,
- * as the stored graphs name it), and whether each is in every picture.
- */
-const summaryUses = computed(() => {
-  const uses = new Map();
-  for (const use of summary.value?.shared ?? []) {
-    uses.set(digestOf(use.asset), { use, everywhere: true });
-  }
-  for (const use of summary.value?.varying ?? []) {
-    uses.set(digestOf(use.asset), { use, everywhere: false });
-  }
-  return uses;
-});
+/** By the shelf digest they resolve to, where they do. */
+const summaryByDigest = computed(() => summaryBy("sha256"));
+
+/** By their `asset:` reference: a hash of the file's NAME, as graphs name it. */
+const summaryUses = computed(() => summaryBy("asset"));
 
 /** The asset references of the default recipe's LoRAs, which ALSO USED leaves out. */
 const defaultAssets = computed(
@@ -1727,7 +1693,6 @@ const defaultLoras = computed(() => {
       (digest ? summaryByDigest.value.get(digest) : null);
     const loader = digest ? byDigest.get(digest) : null;
     const edited = lora.provenance === "edited";
-    const strength = Number(lora.strength);
     let coverage = "";
     if (total && found && !found.everywhere && found.use.pictures) {
       coverage = `in ${found.use.pictures} of ${total}`;
@@ -1744,12 +1709,7 @@ const defaultLoras = computed(() => {
         (lora.filename ? loraStem(lora.filename) : "") ||
         "A LoRA whose name was forgotten",
       on_shelf: found ? Boolean(found.use.on_shelf) : (loader?.on_shelf ?? true),
-      strengthText:
-        lora.strength === null || lora.strength === undefined
-          ? ""
-          : Number.isFinite(strength)
-            ? strength.toFixed(2)
-            : "",
+      strengthText: formatStrength(lora.strength),
       edited,
       coverage,
       show:
@@ -1846,7 +1806,7 @@ const pileNote = computed(() => {
 
 /** A *Show N*'s accessible name, as the pile's own says it. */
 function showLabel(count, value) {
-  return `Show the ${count} ${count === 1 ? "picture" : "pictures"} in ${
+  return `Show the ${pictureCount(count)} in ${
     card.value?.name || "this workflow"
   } made with ${value}`;
 }
@@ -2226,13 +2186,15 @@ function editedExcept(rows, slotLabel, inputName) {
 }
 
 /**
- * Put a value back to what the pictures say.
+ * Set one value as the workflow's own ("Yours") when `edit` is `{value}`, or
+ * put it back to what the pictures say when there is no `edit`.
  *
  * The route replaces the whole override set, so this sends every other edited
  * value back untouched; sending only the survivors of a filter is the same
- * request and is what makes "reset one" possible at all.
+ * request and is what makes "reset one" possible at all. Locking afterwards
+ * keeps a set value, since a fixed parameter runs the workflow's value.
  */
-function resetDefault(row) {
+function writeDefault(row, edit = null) {
   const key = selectedKey.value;
   if (!key) return;
   return queueWrite(`default:${row.label}`, async () => {
@@ -2240,33 +2202,20 @@ function resetDefault(row) {
     if (!rows) return;
     try {
       const kept = editedExcept(rows, row.slot_label, row.input_name);
+      if (edit) {
+        kept.push({
+          slot_label: row.slot_label,
+          input_name: row.input_name,
+          value: edit.value,
+        });
+      }
       const body = await setWorkflowDefaults(key, kept);
       if (stillOn(key)) detail.value = body;
     } catch (err) {
-      fail(err, "Could not reset that value.");
-    }
-  });
-}
-
-/**
- * Set one value as the workflow's own ("Yours"). Whole-set, like a reset:
- * every other edited value is sent back untouched. Locking afterwards keeps
- * it, since a fixed parameter runs the workflow's value.
- */
-function editDefault(row, value) {
-  const key = selectedKey.value;
-  if (!key) return;
-  return queueWrite(`default:${row.label}`, async () => {
-    const rows = defaultsFor(key);
-    if (!rows) return;
-    try {
-      const body = await setWorkflowDefaults(key, [
-        ...editedExcept(rows, row.slot_label, row.input_name),
-        { slot_label: row.slot_label, input_name: row.input_name, value },
-      ]);
-      if (stillOn(key)) detail.value = body;
-    } catch (err) {
-      fail(err, `Could not set ${row.label}.`);
+      fail(
+        err,
+        edit ? `Could not set ${row.label}.` : "Could not reset that value.",
+      );
     }
   });
 }

@@ -12,6 +12,8 @@
 // model shelf could not digest, so a saved recipe never matched the picture it
 // was saved from and the same look could be kept over and over.
 
+import { loraBase } from "./loraChain";
+
 /**
  * The comparable form of a prompt: stripped, and absent is the empty one.
  *
@@ -48,7 +50,7 @@ export function loraKey(entries) {
   return (entries || [])
     .map((entry) => (typeof entry === "string" ? entry : entry?.filename))
     .filter((name) => typeof name === "string" && name)
-    .map((name) => name.trim().toLowerCase().split(/[\\/]/).pop())
+    .map(loraBase)
     .sort()
     .join("\u0000");
 }
@@ -109,11 +111,7 @@ export function wouldDuplicate(recipe, save) {
 function extrasKey(side) {
   const strengths = (side?.loras || [])
     .map((lora) => [
-      String(lora?.filename || "")
-        .trim()
-        .toLowerCase()
-        .split(/[\\/]/)
-        .pop(),
+      loraBase(lora?.filename),
       Number(lora?.strength ?? 1),
     ])
     .sort();

@@ -114,7 +114,7 @@
         <TbGlobalActions
           separator
           rail="workflows"
-          rail-name="inspector"
+          rail-name="Inspector"
           @open-settings="emit('open-settings')"
         />
       </span>
@@ -1198,13 +1198,6 @@ function focusCursorRow() {
   nextTick(() => rowElement(entry)?.focus());
 }
 
-/**
- * Open whichever picture the menu's open row named.
- *
- * The bar decides which that is — the tile the right-click landed on, else
- * the card's cover — so this takes the answer rather than recomputing it,
- * which is what keeps the row's label and what it opens the same thing.
- */
 // The Recipes tab's thumbnails, which live outside this view (see the store).
 watch(
   () => store.pictureToOpen,
@@ -1215,6 +1208,13 @@ watch(
   },
 );
 
+/**
+ * Open whichever picture the menu's open row named.
+ *
+ * The bar decides which that is — the tile the right-click landed on, else
+ * the card's cover — so this takes the answer rather than recomputing it,
+ * which is what keeps the row's label and what it opens the same thing.
+ */
 function openCoverPicture() {
   const id = selBarRef.value?.openTarget?.id;
   if (id != null) openPicture(id);

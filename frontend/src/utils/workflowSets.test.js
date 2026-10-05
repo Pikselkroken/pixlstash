@@ -745,6 +745,17 @@ describe("hand-made sets (#1520)", () => {
     expect(offerQuestion({})).toBeNull();
   });
 
+  it("says the offered model's precision, which its name has lost", () => {
+    const offer = {
+      picture_count: 50,
+      recipes: 1,
+      models: [
+        { id: 6, sha256: "h6", slot: "text_encoder", kind: "text_encoder", name: "qwen3vl 4b", quant: "fp8_e4m3" },
+      ],
+    };
+    expect(offerQuestion({ offer }).model.quant).toBe("FP8");
+  });
+
   it("compares base models the way the server fills a member's", () => {
     // A fuzzy guess is not the base model; the folded raw label is.
     expect(
@@ -805,6 +816,9 @@ describe("a set whose base model is not on the shelf", () => {
     ]);
     expect(groups.map((g) => g.key)).toEqual(["missing:flux1-dev.sft"]);
     expect(groups[0].head.workflowIds).toEqual(["auto:a", "auto:b"]);
+    expect(groups[0].head.workflowsByName).toEqual({
+      "flux1-dev.sft": ["auto:a", "auto:b"],
+    });
     // Every on-shelf file is a member; the missing head is not one of them.
     expect(new Set(groups[0].models.map((m) => m.id))).toEqual(new Set([7, 8]));
   });
@@ -829,6 +843,11 @@ describe("a set whose base model is not on the shelf", () => {
     expect(group.key).toBe("missing:high.safetensors");
     expect(group.head.names).toEqual(["high.safetensors", "low.safetensors"]);
     expect(group.head.workflowIds).toEqual(["auto:h", "auto:l"]);
+    // Per file too: a fix replaces one file in the workflows loading IT.
+    expect(group.head.workflowsByName).toEqual({
+      "high.safetensors": ["auto:h"],
+      "low.safetensors": ["auto:l"],
+    });
   });
 
   it("draws no card for a combination with no base model at all", () => {

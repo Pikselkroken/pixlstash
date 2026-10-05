@@ -326,8 +326,8 @@ def live_slots(document: dict) -> list[Slot]:
 def _slots(nodes: dict[str, ReducedNode]) -> list[Slot]:
     """:func:`slots` over an already-reduced document.
 
-    Split out because ``differs_by`` needs both, and reducing the same document
-    twice per comparison was a third of the card grid's cost.
+    Split out so :func:`live_slots` can prune the nodes it has already reduced
+    rather than reduce the document twice.
     """
     labels = node_labels(drop_widgets(nodes), rounds=None)
     found = []
@@ -594,9 +594,8 @@ _LOADER_CLASS_RE = re.compile(r"(Loader|DetectorProvider)$")
 def special_groups(document: dict) -> tuple[str, ...]:
     """Which of :data:`SPECIAL_GROUPS` this document actually DOES.
 
-    The same classification ``core_hash`` strips and ``differs_by`` chips, asked
-    of one graph on its own rather than of a pair: a lone card has no cover to
-    differ from, and what a card *has* is what its name is allowed to say.
+    The same classification ``core_hash`` strips, asked of one graph on its
+    own: what a card *has* is what its name is allowed to say.
 
     **Narrower than the strip, deliberately.** Over-inclusion is free when the
     answer is which nodes to remove and costly when it is a sentence printed on
@@ -699,7 +698,31 @@ def reduced_traits(
     if any(_negative_is_prompted(core, node) for node in core.values()):
         present.add(NEGATIVE_PROMPT)
     traits = [trait for trait in TRAITS if trait in present]
-    references = sum(n.class_type == "ReferenceLatent" for n in core.values())
+    # Pictures, not ReferenceLatent nodes: a Flux 2 edit feeds each picture
+    # through two of them (positive and negative), so counting nodes said "4
+    # References" of one picture and one reference. The picture being edited
+    # is a reference there too, and "Image to Image" already names it, so the
+    # count is the pictures beside it. A graph with no loader has only its
+    # distinct reference latents to count.
+    referencing = [n for n in core.values() if n.class_type == "ReferenceLatent"]
+    loaders = sum(is_picture_loader(n.class_type) for n in core.values())
+    references = (
+        loaders - 1
+        if referencing and loaders
+        else len(
+            {
+                next(
+                    (
+                        (source, slot)
+                        for name, source, slot in n.inputs
+                        if name == "latent"
+                    ),
+                    id(n),
+                )
+                for n in referencing
+            }
+        )
+    )
     if references:
         traits.append(f"{REFERENCES_PREFIX}{references}")
     return tuple(traits)
@@ -1004,15 +1027,6 @@ def _canonical_class(class_type: str, v3: bool = True) -> str:
     return _CANONICAL_LOADERS.get(class_type, class_type)
 
 
-def _stripped_key(
-    nodes: dict[str, ReducedNode],
-    strip: Collection[str],
-    *,
-    keep_widgets: bool = False,
-) -> str:
-    return graph_key(_strip(nodes, strip, keep_widgets=keep_widgets))
-
-
 def _strip(
     nodes: dict[str, ReducedNode],
     strip: Collection[str],
@@ -1121,262 +1135,3 @@ def _fed_by_picture(node_id: str, nodes: dict[str, ReducedNode]) -> bool:
             return True
         stack.extend(source for _, source, _ in nodes[current].inputs)
     return False
-
-
-def differs_by(
-    cover_document: dict,
-    member_document: dict,
-    *,
-    upscale_factor: Optional[float] = None,
-) -> list[str]:
-    """How a stack member differs from the stack's cover, as card chips.
-
-    Chips: ``+ face detailer`` / ``− face detailer``, ``+ upscale`` (``+
-    upscale 2×`` when the member's factor is known) / ``− upscale``, ``other
-    checkpoint`` / ``other models``, ``plumbing only``, and ``N nodes differ``
-    for everything this taxonomy does not classify. Empty only when the two
-    documents are the same graph with the same models in the same places.
-
-    **"plumbing only" is never a guess.** It is returned only when every
-    differing node is plumbing and the two graphs are identical once plumbing
-    is stepped through: same wiring, and every asset, LoRAs included, on the
-    same loader. A wrong one invites hiding a workflow that really is
-    different.
-    """
-    return differs_by_reduced(
-        reduce_stored_document(cover_document),
-        reduce_stored_document(member_document),
-        upscale_factor=upscale_factor,
-    )
-
-
-def reduce_stored_document(document: dict) -> dict[str, ReducedNode]:
-    """A stored document's reduction, for a caller comparing one against many.
-
-    Raises:
-        WorkflowGraphError: The document is a raw graph rather than a stored
-            one, or holds no usable node.
-    """
-    return _reduce(document)
-
-
-def differs_by_reduced(
-    cover_nodes: dict[str, ReducedNode],
-    member_nodes: dict[str, ReducedNode],
-    *,
-    upscale_factor: Optional[float] = None,
-) -> list[str]:
-    """:func:`differs_by` over reductions the caller already holds.
-
-    Split out for the reason :func:`_slots` was: a stack compares every member
-    against ONE cover, so reducing that cover once per member is most of what
-    describing a stack costs, and it grows with the stack rather than with the
-    library.
-    """
-    return [
-        difference.chip
-        for difference in differences_reduced(
-            cover_nodes, member_nodes, upscale_factor=upscale_factor
-        )
-    ]
-
-
-@dataclass(frozen=True)
-class Difference:
-    """One ``differs_by`` chip and what it stands for (#1597).
-
-    ``detail`` spells out an ``N nodes differ`` chip: the node classes added
-    and removed, or that the same nodes load other models or are wired
-    differently. It is ``None`` on every other chip.
-
-    ``cover_assets`` and ``member_assets`` are set on ``other checkpoint`` /
-    ``other models``: the non-LoRA models only the cover loads and only the
-    member loads, as the stored document's asset references, base models first.
-    Readable names live only in ``workflow_recipe_asset``, so turning them into
-    words is the caller's.
-
-    **No settings.** A stored document nulls every parameter (steps, cfg, a
-    seed alike), and a card is many recipes with many settings, so there is no
-    one "steps 20 -> 28" for a card to state.
-    """
-
-    chip: str
-    detail: Optional[str] = None
-    cover_assets: tuple[str, ...] = ()
-    member_assets: tuple[str, ...] = ()
-
-
-def differences_reduced(
-    cover_nodes: dict[str, ReducedNode],
-    member_nodes: dict[str, ReducedNode],
-    *,
-    upscale_factor: Optional[float] = None,
-) -> list[Difference]:
-    """:func:`differs_by_reduced` with what each chip stands for."""
-    cover = _class_counts(cover_nodes)
-    member = _class_counts(member_nodes)
-    added, removed = member - cover, cover - member
-
-    def count(counter: Counter, group: Optional[str]) -> int:
-        return sum(n for (_, g), n in counter.items() if g == group)
-
-    chips: list[Difference] = []
-    # The groups whose class changes the "N nodes differ" chip counts, so its
-    # detail names exactly the nodes it counted.
-    unclassified_groups: set[Optional[str]] = {LORA, None}
-    # A step one side lacks brings its own models (an upscaler, a detector);
-    # they are that step's chip, not "other models".
-    chipped: set[str] = set()
-    for group, label in (
-        (FACE_DETAILER, "face detailer"),
-        (UPSCALE, "upscale"),
-        (SEED_VARIANCE, "seed variance"),
-    ):
-        plus, minus = count(added, group), count(removed, group)
-        if plus or minus:
-            chipped.add(group)
-        if plus and minus:
-            unclassified_groups.add(group)
-        elif plus:
-            factor = (
-                f" {upscale_factor:g}×" if group == UPSCALE and upscale_factor else ""
-            )
-            chips.append(Difference(f"+ {label}{factor}"))
-        elif minus:
-            chips.append(Difference(f"− {label}"))
-
-    cover_slots = _slots_outside(cover_nodes, chipped)
-    member_slots = _slots_outside(member_nodes, chipped)
-    cover_models = _assets(cover_slots, lora=False)
-    member_models = _assets(member_slots, lora=False)
-    if cover_models != member_models:
-        checkpoint = _assets(cover_slots, lora=False, widgets=CHECKPOINT_WIDGETS)
-        chip = (
-            "other checkpoint"
-            if checkpoint
-            != _assets(member_slots, lora=False, widgets=CHECKPOINT_WIDGETS)
-            else "other models"
-        )
-        chips.append(
-            Difference(
-                chip,
-                cover_assets=_changed_assets(cover_models - member_models),
-                member_assets=_changed_assets(member_models - cover_models),
-            )
-        )
-
-    plumbing = count(added, PLUMBING) + count(removed, PLUMBING)
-    unclassified = sum(
-        count(counter, group)
-        for counter in (added, removed)
-        for group in unclassified_groups
-    )
-    if (
-        plumbing
-        and not chips
-        and not unclassified
-        and _stripped_key(cover_nodes, {PLUMBING}, keep_widgets=True)
-        == _stripped_key(member_nodes, {PLUMBING}, keep_widgets=True)
-    ):
-        return [Difference("plumbing only")]
-    unclassified += plumbing
-    unclassified_groups.add(PLUMBING)
-    detail = _class_changes(added, removed, unclassified_groups)
-    if not chips and not unclassified:
-        # Same classes and the same models overall, but not on the same
-        # loaders (a base and a refiner swapped) or not wired the same way.
-        # Never [] for graphs that are not the same.
-        unclassified, detail = _nodes_differing(cover_nodes, member_nodes)
-    if unclassified:
-        chips.append(
-            Difference(
-                "1 node differs"
-                if unclassified == 1
-                else f"{unclassified} nodes differ",
-                detail=detail,
-            )
-        )
-    return chips
-
-
-def _class_changes(
-    added: Counter, removed: Counter, groups: Collection[Optional[str]]
-) -> str:
-    """``+ ImageScaleBy · − LoraLoaderModelOnly ×2`` for the counted groups."""
-    parts = [
-        f"{sign} {cls}" + (f" ×{n}" if n > 1 else "")
-        for sign, counter in (("+", added), ("−", removed))
-        for (cls, group), n in sorted(counter.items(), key=lambda kv: kv[0][0])
-        if group in groups
-    ]
-    return " · ".join(parts)
-
-
-def _changed_assets(changed: Counter) -> tuple[str, ...]:
-    """The asset references in *changed*, base models first, then by widget."""
-    return tuple(
-        asset
-        for widget, asset in sorted(
-            changed, key=lambda wa: (wa[0] not in CHECKPOINT_WIDGETS, wa)
-        )
-    )
-
-
-def _nodes_differing(
-    cover_nodes: dict[str, ReducedNode], member_nodes: dict[str, ReducedNode]
-) -> tuple[int, Optional[str]]:
-    """How many nodes differ when no class does, and how they differ."""
-    if graph_key(cover_nodes) == graph_key(member_nodes):
-        return 0, None
-    cover = Counter((n.class_type, n.widgets) for n in cover_nodes.values())
-    member = Counter((n.class_type, n.widgets) for n in member_nodes.values())
-    # Wiring alone can differ with every node descriptor equal; that is still
-    # at least one node that differs.
-    count = max(sum((cover - member).values()), sum((member - cover).values()), 1)
-    moved = sorted(
-        {
-            f"{cls}: other {'picture' if _names_pictures(cls, widgets) else 'model'}"
-            for cls, widgets in (cover - member) + (member - cover)
-        }
-    )
-    if moved:
-        return count, " · ".join(moved)
-    return count, "same nodes, wired differently"
-
-
-def _names_pictures(class_type: str, widgets: tuple) -> bool:
-    """Whether every asset a node names is a picture input, as :func:`_slots` reads it.
-
-    The stored document keeps an input picture's reference beside the models,
-    so a changed ``LoadImage`` is "other picture", never "other model".
-    """
-    named = [name for name, value in widgets if value is not None]
-    return bool(named) and all(
-        _PICTURE_WIDGET_RE.search(name)
-        or name in INPUT_IMAGE_FIELDS.get(class_type, ())
-        for name in named
-    )
-
-
-def _slots_outside(
-    nodes: dict[str, ReducedNode], groups: Collection[str]
-) -> list[Slot]:
-    node_group = node_groups(nodes)
-    return [s for s in _slots(nodes) if node_group[s.node_id] not in groups]
-
-
-def _class_counts(nodes: dict[str, ReducedNode]) -> Counter:
-    groups = node_groups(nodes)
-    return Counter(
-        (node.class_type, groups[node_id]) for node_id, node in nodes.items()
-    )
-
-
-def _assets(
-    workflow_slots: list[Slot], *, lora: bool, widgets: Collection[str] = ()
-) -> Counter:
-    return Counter(
-        (slot.widget, slot.asset)
-        for slot in workflow_slots
-        if slot.is_lora == lora and (not widgets or slot.widget in widgets)
-    )

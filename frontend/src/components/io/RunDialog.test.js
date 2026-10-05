@@ -28,6 +28,11 @@ const saveFixedWorkflow = vi.fn();
 const setWorkflowPins = vi.fn();
 const readModelSwap = vi.fn();
 
+const stackMemberIds = vi.fn();
+vi.mock("../../utils/stackMembers", () => ({
+  stackMemberIds: (...a) => stackMemberIds(...a),
+}));
+
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   listWorkflowCards: (...args) => listWorkflowCards(...args),
@@ -140,7 +145,7 @@ const globalOpts = {
 
 async function mountRun(source = { kind: "picture", pictureIds: [42] }) {
   const wrapper = mount(RunDialog, {
-    props: { open: true, source, context: { client_id: "test-client" } },
+    props: { source, context: { client_id: "test-client" } },
     ...globalOpts,
   });
   await flushPromises();
@@ -394,19 +399,6 @@ describe("switching to another workflow", () => {
 
     const after = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
     expect(wrapper.vm.currentValue(after)).toBe(20);
-  });
-
-  it("keeps the card of a popup reopened while the old card read was out", async () => {
-    let release;
-    getWorkflowCard.mockImplementationOnce(
-      () => new Promise((resolve) => (release = () => resolve({ card: card() }))),
-    );
-    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    await wrapper.setProps({ source: { kind: "card", workflowId: OTHER } });
-    await flushPromises();
-    release();
-    await flushPromises();
-    expect(wrapper.vm.card.id).toBe(OTHER);
   });
 
   it("offers the workflow alone, never a list of stack members (#1623)", async () => {
@@ -1879,6 +1871,59 @@ describe("the body it sends", () => {
       prompts: [{ prompt_id: "p1" }],
       pictureIds: [42],
     });
+    // Only a popup the Edit tab opened hands it the run to follow.
+    expect(useRunDialogStore().editRun).toBe(null);
+  });
+
+  it("hands a run opened from the Edit tab to the tab to follow", async () => {
+    // The stack as it stood BEFORE the run was queued: read after, a quick
+    // output would already be in it and never be told apart as the result.
+    const order = [];
+    stackMemberIds.mockImplementation(async () => {
+      order.push("stack");
+      return { members: [], ids: new Set(["42", "41"]) };
+    });
+    runWorkflowCard.mockImplementation(async () => {
+      order.push("run");
+      return { prompts: [{ prompt_id: "p1" }], groups: [] };
+    });
+    const wrapper = await mountRun({
+      kind: "selection",
+      pictureIds: [42],
+      fromEditTab: true,
+      stack: true,
+    });
+    wrapper.vm.prompt = "warmer light";
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(order).toEqual(["stack", "run"]);
+    expect(useRunDialogStore().editRun).toEqual(
+      expect.objectContaining({
+        prompts: [{ prompt_id: "p1" }],
+        pictureId: 42,
+        instruction: "warmer light",
+        beforeIds: new Set(["42", "41"]),
+      }),
+    );
+  });
+});
+
+describe("the Edit tab's hand-off when its stack cannot be read", () => {
+  it("says the before-run stack is unknown rather than guessing it", async () => {
+    stackMemberIds.mockRejectedValueOnce(new Error("offline"));
+    const wrapper = await mountRun({
+      kind: "edit",
+      pictureIds: [42],
+      workflowId: KEY,
+      fromEditTab: true,
+      stack: true,
+    });
+    await wrapper.vm.submit();
+    await flushPromises();
+    // Still queued: the stack read is for following the run, not for running it.
+    expect(runWorkflowCard).toHaveBeenCalled();
+    expect(useRunDialogStore().editRun.beforeIds).toBe(null);
   });
 });
 
@@ -2048,6 +2093,20 @@ describe("the pictures a workflow takes", () => {
   it("leaves the stack box unticked when no selected picture is fed in", async () => {
     preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "graph" })]));
     const wrapper = await mountRun({ kind: "picture", pictureIds: [1] });
+    expect(wrapper.find(".rund-box").element.checked).toBe(false);
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].stack).toBe(false);
+  });
+
+  it("starts from the caller's stack choice, explicit false included", async () => {
+    // The Edit tab already showed this checkbox; the popup must not re-tick it.
+    preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "selection" })]));
+    const wrapper = await mountRun({
+      kind: "edit",
+      pictureIds: [1],
+      workflowId: KEY,
+      stack: false,
+    });
     expect(wrapper.find(".rund-box").element.checked).toBe(false);
     await wrapper.vm.submit();
     expect(runWorkflowCard.mock.calls[0][0].stack).toBe(false);

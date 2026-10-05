@@ -60,7 +60,7 @@
                 <img v-if="set.cover" :src="coverSrc(set.cover)" alt="" loading="lazy" />
                 <v-icon v-else class="cos-cover-none" size="20">mdi-image-off-outline</v-icon>
                 <span v-if="set.pictures" class="cos-badge">{{
-                  picturesText(set.pictures)
+                  pictureCount(set.pictures)
                 }}</span>
               </span>
               <span class="cos-set-body">
@@ -287,11 +287,12 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import { getLoraChain, planSetClones } from "../../api/workflows";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
-import { loraStem } from "../../utils/loraChain";
+import { formatStrength, loraBase, loraStem } from "../../utils/loraChain";
 import { deriveModelName } from "../../utils/modelShelf";
 import {
   cloneOntoSetName,
   handMadeName,
+  pictureCount,
   setCheckpoint,
   setGroups,
 } from "../../utils/workflowSets";
@@ -407,7 +408,7 @@ const shownRows = computed(() => {
   return readLoaders.value.map((loader) => ({
     id: `n:${loader.node_id}`,
     name: loader.name || loraStem(loader.filename),
-    strengthText: strengthText(loader.strength),
+    strengthText: formatStrength(loader.strength),
     isNew: false,
   }));
 });
@@ -539,17 +540,6 @@ function fileNames(files) {
   return files.map((file) => deriveModelName(file) || file).join(", ");
 }
 
-function strengthText(value) {
-  const number = Number(value);
-  return value === null || value === undefined || !Number.isFinite(number)
-    ? ""
-    : number.toFixed(2);
-}
-
-function picturesText(count) {
-  return `${count} ${count === 1 ? "picture" : "pictures"}`;
-}
-
 function coverSrc(cover) {
   return pictureThumbnailUrl(cover.picture_id, { version: cover.version });
 }
@@ -583,15 +573,10 @@ function ranWith(checkpointId) {
   return out;
 }
 
-/** A file as the shelf and the plan both spell it: no folder, any case. */
-function fileKey(file) {
-  return String(file).split(/[/\\]/).pop().toLowerCase();
-}
-
-/** Each member's shelf name, by `fileKey` of its file. */
+/** Each member's shelf name, by `loraBase` of its file. */
 function namesByFile(members) {
   return Object.fromEntries(
-    members.filter((m) => m.filename).map((m) => [fileKey(m.filename), m.name]),
+    members.filter((m) => m.filename).map((m) => [loraBase(m.filename), m.name]),
   );
 }
 
@@ -606,7 +591,7 @@ function loadedModelName(set) {
   const names = set.plan.loaders
     .filter((row) => row.kind === "checkpoint" || row.kind === "unet")
     .flatMap((row) => row.now)
-    .map((file) => set.modelNames[fileKey(file)] || deriveModelName(file) || file);
+    .map((file) => set.modelNames[loraBase(file)] || deriveModelName(file) || file);
   return [...new Set(names)].join(" + ");
 }
 
@@ -798,8 +783,6 @@ watch(
   },
   { immediate: true },
 );
-
-defineExpose({ sets, chosenKey, choose, lorasBody });
 </script>
 
 <style scoped>

@@ -29,15 +29,6 @@ class TestGraphInspection:
     def test_the_saver_counts_as_an_output_node(self):
         assert comfyui_service._extract_output_node_ids(SAVER_GRAPH, {}) == ["9"]
 
-    def test_graph_has_pixlstash_saver(self):
-        assert comfyui_service.graph_has_pixlstash_saver(SAVER_GRAPH) is True
-        assert (
-            comfyui_service.graph_has_pixlstash_saver(
-                {"9": {"class_type": "SaveImage", "inputs": {}}}
-            )
-            is False
-        )
-
 
 def _node(class_type: str, **inputs) -> dict:
     return {"class_type": class_type, "inputs": inputs}

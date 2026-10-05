@@ -21,6 +21,11 @@
 import { apiClient, appendShareToken, API_BASE_URL } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
+/** `/workflows/{id}` and *tail*, the id encoded. */
+function wf(workflowId, tail = "") {
+  return `/workflows/${encodeURIComponent(workflowId)}${tail}`;
+}
+
 /**
  * The URL a browser loads one of a card's `covers` from.
  *
@@ -83,7 +88,7 @@ export async function listWorkflowCards({
  * @returns {Promise<{card: Object, notes: ?string, hidden: boolean, variants: Array<Object>, pins: ?Array<Object>}>}
  */
 export async function getWorkflowCard(workflowId) {
-  return unwrap(apiClient.get(`/workflows/${encodeURIComponent(workflowId)}`));
+  return unwrap(apiClient.get(wf(workflowId)));
 }
 
 /**
@@ -97,9 +102,7 @@ export async function getWorkflowCard(workflowId) {
  * @returns {Promise<Object>} the same shape `getWorkflowCard` returns
  */
 export async function patchWorkflowCard(workflowId, changes) {
-  return unwrap(
-    apiClient.patch(`/workflows/${encodeURIComponent(workflowId)}`, changes),
-  );
+  return unwrap(apiClient.patch(wf(workflowId), changes));
 }
 
 /**
@@ -119,7 +122,7 @@ export async function patchWorkflowCard(workflowId, changes) {
  */
 export async function getLoraSummary(workflowId, { cover } = {}) {
   return unwrap(
-    apiClient.get(`/workflows/${encodeURIComponent(workflowId)}/lora-summary`, {
+    apiClient.get(wf(workflowId, "/lora-summary"), {
       params: cover ? { cover } : {},
     }),
   );
@@ -136,11 +139,7 @@ export async function getLoraSummary(workflowId, { cover } = {}) {
  * @returns {Promise<Object>}
  */
 export async function setWorkflowDefaults(workflowId, defaults) {
-  return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowId)}/defaults`, {
-      defaults,
-    }),
-  );
+  return unwrap(apiClient.put(wf(workflowId, "/defaults"), { defaults }));
 }
 
 /**
@@ -156,12 +155,7 @@ export async function setWorkflowDefaults(workflowId, defaults) {
  * @param {{asset?: string, sha256?: string, include: boolean|null, strength?: number}} edit
  */
 export async function setWorkflowDefaultLora(workflowId, edit) {
-  return unwrap(
-    apiClient.put(
-      `/workflows/${encodeURIComponent(workflowId)}/default-lora`,
-      edit,
-    ),
-  );
+  return unwrap(apiClient.put(wf(workflowId, "/default-lora"), edit));
 }
 
 /**
@@ -176,9 +170,7 @@ export async function setWorkflowDefaultLora(workflowId, edit) {
  * @returns {Promise<Object>}
  */
 export async function setWorkflowModelFix(workflowId, fix) {
-  return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowId)}/model-fix`, fix),
-  );
+  return unwrap(apiClient.put(wf(workflowId, "/model-fix"), fix));
 }
 
 /**
@@ -192,11 +184,7 @@ export async function setWorkflowModelFix(workflowId, fix) {
  * @returns {Promise<{pins: ?Array<Object>}>}
  */
 export async function setWorkflowPins(workflowId, pins) {
-  return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowId)}/pins`, {
-      pins,
-    }),
-  );
+  return unwrap(apiClient.put(wf(workflowId, "/pins"), { pins }));
 }
 
 /**
@@ -215,11 +203,7 @@ export async function setWorkflowPins(workflowId, pins) {
  * @returns {Promise<{inputs: Array<Object>}>}
  */
 export async function setWorkflowInputs(workflowId, inputs) {
-  return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowId)}/inputs`, {
-      inputs,
-    }),
-  );
+  return unwrap(apiClient.put(wf(workflowId, "/inputs"), { inputs }));
 }
 
 /**
@@ -247,9 +231,7 @@ export async function preflightWorkflowRun(body) {
  * @returns {Promise<{name: string, workflow_id: ?string, changes: Array<string>}>}
  */
 export async function saveFixedWorkflow(workflowId) {
-  return unwrap(
-    apiClient.post(`/workflows/${encodeURIComponent(workflowId)}/fixed-copy`),
-  );
+  return unwrap(apiClient.post(wf(workflowId, "/fixed-copy")));
 }
 
 /**
@@ -283,9 +265,7 @@ export async function runWorkflowCard(body) {
  * @returns {Promise<{filename: string, workflow: Object, removed: Array<string>, source: string}>}
  */
 export async function exportWorkflow(workflowId) {
-  return unwrap(
-    apiClient.get(`/workflows/${encodeURIComponent(workflowId)}/export`),
-  );
+  return unwrap(apiClient.get(wf(workflowId, "/export")));
 }
 
 /**
@@ -298,9 +278,7 @@ export async function exportWorkflow(workflowId) {
  * @returns {Promise<{name: string, workflow_id: string}>}
  */
 export async function duplicateWorkflow(workflowId) {
-  return unwrap(
-    apiClient.post(`/workflows/${encodeURIComponent(workflowId)}/duplicate`),
-  );
+  return unwrap(apiClient.post(wf(workflowId, "/duplicate")));
 }
 
 /**
@@ -332,11 +310,7 @@ export async function readModelSwap(
   if (checkpointId != null) params.checkpoint_id = checkpointId;
   if (replacing != null) params.replacing = replacing;
   if (slotKind != null) params.slot_kind = slotKind;
-  return unwrap(
-    apiClient.get(`/workflows/${encodeURIComponent(workflowId)}/model-swap`, {
-      params,
-    }),
-  );
+  return unwrap(apiClient.get(wf(workflowId, "/model-swap"), { params }));
 }
 
 /**
@@ -353,12 +327,7 @@ export async function readModelSwap(
  * @returns {Promise<{base_filename: ?string, base_model: ?string, plans: Array<Object>}>}
  */
 export async function planSetClones(workflowId, sets) {
-  return unwrap(
-    apiClient.post(
-      `/workflows/${encodeURIComponent(workflowId)}/set-clone-plans`,
-      { sets },
-    ),
-  );
+  return unwrap(apiClient.post(wf(workflowId, "/set-clone-plans"), { sets }));
 }
 
 /**
@@ -378,12 +347,7 @@ export async function planSetClones(workflowId, sets) {
  * @returns {Promise<{name: string, workflow_id: ?string, swapped: Array, unswapped: Array, loaders: Array, verified: boolean}>}
  */
 export async function cloneWorkflowWithModels(workflowId, body) {
-  return unwrap(
-    apiClient.post(
-      `/workflows/${encodeURIComponent(workflowId)}/clone-with-models`,
-      body,
-    ),
-  );
+  return unwrap(apiClient.post(wf(workflowId, "/clone-with-models"), body));
 }
 
 /**
@@ -397,9 +361,7 @@ export async function cloneWorkflowWithModels(workflowId, body) {
  * @returns {Promise<{deleted: string, workflow_id: string}>} `deleted` is its name.
  */
 export async function deleteWorkflow(workflowId) {
-  return unwrap(
-    apiClient.delete(`/workflows/${encodeURIComponent(workflowId)}`),
-  );
+  return unwrap(apiClient.delete(wf(workflowId)));
 }
 
 /**
@@ -422,9 +384,7 @@ export async function deleteWorkflow(workflowId) {
  *   branch are left as they are.
  */
 export async function getLoraChain(workflowId) {
-  return unwrap(
-    apiClient.get(`/workflows/${encodeURIComponent(workflowId)}/lora-chain`),
-  );
+  return unwrap(apiClient.get(wf(workflowId, "/lora-chain")));
 }
 
 /**
@@ -446,10 +406,5 @@ export async function getLoraChain(workflowId) {
  *   changes: Array<{kind: string, node_id: ?string, text: string}>}>}
  */
 export async function saveLoraChain(workflowId, body) {
-  return unwrap(
-    apiClient.put(
-      `/workflows/${encodeURIComponent(workflowId)}/lora-chain`,
-      body,
-    ),
-  );
+  return unwrap(apiClient.put(wf(workflowId, "/lora-chain"), body));
 }

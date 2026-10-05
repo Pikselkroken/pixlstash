@@ -672,11 +672,15 @@ def test_only_an_error_that_will_not_pass_retires_a_batch(hub):
 
     task = finder.find_task()
     assert task.params["structural_hashes"] == [keys.structural_hash]
+    # The SAME batch again, by identity: a drained backfill hands out the
+    # family pass instead, which is "a task" too.
     finder.on_task_complete(task, TaskCancelledError("stopping"))
-    assert finder.find_task() is not None
+    again = finder.find_task()
+    assert again.params.get("structural_hashes") == [keys.structural_hash]
 
-    finder.on_task_complete(task, sqlite3.OperationalError("database is locked"))
-    assert finder.find_task() is not None
+    finder.on_task_complete(again, sqlite3.OperationalError("database is locked"))
+    again = finder.find_task()
+    assert again.params.get("structural_hashes") == [keys.structural_hash]
 
     finder.on_task_complete(task, RuntimeError("the worker died"))
     assert _drained(finder)

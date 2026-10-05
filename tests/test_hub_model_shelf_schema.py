@@ -1001,3 +1001,30 @@ def test_a_card_move_table_without_its_target_is_replaced(hub):
     hub.commit()
     apply_migrations(hub)
     assert "new_workflow_id" in ddl_for(hub, "workflow_card_move")
+
+
+def test_data_v11_re_derives_only_the_cached_reference_counts(hub):
+    # The count moved from ReferenceLatent nodes to pictures: a cached one is
+    # cleared for the variant finder to fill again, and nothing else is.
+    apply_migrations(hub)
+    rows = {"t1": "two-pass,references:4", "t2": "two-pass", "t3": ""}
+    for topology, traits in rows.items():
+        hub.execute(
+            "INSERT INTO workflow_topology VALUES (?, 'v', 1, '2026-01-01')",
+            (topology,),
+        )
+        hub.execute(
+            "INSERT INTO workflow_topology_core "
+            "(topology_hash, core_hash, core_version, slots, specials, traits) "
+            "VALUES (?, 'c', 'v3', '[]', '', ?)",
+            (topology, traits),
+        )
+    hub.execute("PRAGMA user_version = 10")
+    hub.commit()
+
+    apply_migrations(hub)
+
+    assert dict(
+        hub.execute("SELECT topology_hash, traits FROM workflow_topology_core")
+    ) == {"t1": None, "t2": "two-pass", "t3": ""}
+    assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION

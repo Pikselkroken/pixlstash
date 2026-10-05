@@ -1240,6 +1240,28 @@ function copyStateNote(state) {
 }
 
 /**
+ * One copy's full path: its registered folder and its relpath.
+ *
+ * The separator is taken from the registered folder rather than assumed, and a
+ * Windows folder takes the relpath's separators with it: the two halves come
+ * from different places (`model_folder.path` as registered, `relpath` as the
+ * scanner wrote it), so joining them without a rule is how a path comes back
+ * half-slashed. A POSIX folder leaves the relpath alone, where a backslash is a
+ * legal character in a filename rather than a separator.
+ *
+ * @param {{folder_path: string, relpath: string}} copy
+ * @returns {string}
+ */
+export function copyPath(copy) {
+  const folder = String(copy?.folder_path || "");
+  const relpath = String(copy?.relpath || "");
+  const windows = folder.includes("\\") && !folder.includes("/");
+  const sep = windows ? "\\" : "/";
+  const tail = windows ? relpath.replace(/\//g, "\\") : relpath;
+  return `${folder.replace(/[/\\]+$/, "")}${sep}${tail.replace(/^[/\\]+/, "")}`;
+}
+
+/**
  * Where a row's copies sit, one path per line, each saying what is there.
  *
  * The folder is only on screen under `groupBy: 'folder'`, where the header
@@ -1253,14 +1275,7 @@ function copyStateNote(state) {
  * naming one of its homes would read as naming its only one. Under `folder` the
  * store hands this ONE copy, because that draw stands for one copy.
  *
- * The separator is taken from the registered folder rather than assumed, and a
- * Windows folder takes the relpath's separators with it: the two halves come
- * from different places (`model_folder.path` as registered, `relpath` as the
- * scanner wrote it), so joining them without a rule is how a path comes back
- * half-slashed. A POSIX folder leaves the relpath alone, where a backslash is a
- * legal character in a filename rather than a separator.
- *
- * A copy missing either half is skipped rather than half-named: both are
+ * Each path is {@link copyPath}'s. A copy missing either half is skipped rather than half-named: both are
  * NOT NULL on the wire, so this is a broken row, and `a.st` on its own answers
  * "where is this file" with the one thing that is not a location.
  *
@@ -1271,13 +1286,8 @@ function copyStateNote(state) {
 export function copyPathsTitle(locations) {
   return (Array.isArray(locations) ? locations : [])
     .map((loc) => {
-      const folder = String(loc?.folder_path || "");
-      const relpath = String(loc?.relpath || "");
-      if (!folder || !relpath) return "";
-      const windows = folder.includes("\\") && !folder.includes("/");
-      const sep = windows ? "\\" : "/";
-      const tail = windows ? relpath.replace(/\//g, "\\") : relpath;
-      const path = `${folder.replace(/[/\\]+$/, "")}${sep}${tail.replace(/^[/\\]+/, "")}`;
+      if (!loc?.folder_path || !loc?.relpath) return "";
+      const path = copyPath(loc);
       const note = copyStateNote(loc?.state);
       return note ? `${path} · ${note}` : path;
     })
@@ -1921,11 +1931,35 @@ function hash32(text) {
   return hash;
 }
 
+// Words that carry no identity in a name, so "World of Wordcraft" marks as WW
+// rather than WO. Deliberately without "a": a lone letter in a model name is
+// more often a variant label than an article.
+const MARK_FILLER_WORDS = new Set([
+  "of",
+  "in",
+  "on",
+  "at",
+  "by",
+  "for",
+  "from",
+  "to",
+  "with",
+  "the",
+  "and",
+]);
+
 /** Up to two initials for a mark, from whatever the row is actually called. */
 function initialsOf(text) {
-  const words = String(text || "")
+  const all = String(text || "")
     .split(/[\s_\-.]+/)
     .filter(Boolean);
+  // The first word always counts: a leading "In" or "On" is usually part of
+  // the name ("In-Context LoRA" is IC), not a joiner between two others.
+  const significant = all.filter(
+    (word, index) => index === 0 || !MARK_FILLER_WORDS.has(word.toLowerCase()),
+  );
+  // Skipping must still leave two words to take a letter from each.
+  const words = significant.length > 1 ? significant : all;
   if (!words.length) return "?";
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return (words[0][0] + words[1][0]).toUpperCase();

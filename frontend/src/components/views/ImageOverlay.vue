@@ -927,6 +927,7 @@ import { listProjects } from "../../api/projects";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useSearchStore } from "../../stores/useSearchStore";
@@ -972,6 +973,7 @@ import { errorDetail } from "../../utils/apiError";
 // Failures report through the notice surface instead of a blocking native
 // alert() (docs/design/notice-surface.md §1).
 const noticeStore = useNoticeStore();
+const runDialogStore = useRunDialogStore();
 // Undo/redo is the same stack the grid uses; only the narration differs here
 // (OverlayActionReceipt, in the lightbox's own dark chrome).
 const operationStore = useOperationStore();
@@ -1498,12 +1500,6 @@ const descriptionTeaser = computed(() => {
   return match ? match[0].trim() : trimmed;
 });
 
-const lastTagUpdateKey = ref(0);
-const lastDescriptionUpdateKey = ref(0);
-const lastSmartScoreUpdateKey = ref(0);
-const lastDetectionUpdateKey = ref(0);
-const lastTextUpdateKey = ref(0);
-const lastOrientationUpdateKey = ref(0);
 const addToSetControlKey = ref(0);
 const pluginMenuOpen = ref(false);
 const starMenuOpen = ref(false);
@@ -2343,6 +2339,9 @@ function handleKeydown(e) {
   // its handler runs first; without this, ImageGrid would process the same
   // keypress (e.g. Escape) after the overlay has already handled it.
   e.stopImmediatePropagation();
+  // The Run popup the Edit tab opened sits over the lightbox: its keys are its
+  // own, and an arrow or Escape must not step or close the lightbox below.
+  if (runDialogStore.source || runDialogStore.makeMore) return;
 
   // Keyboard access to the media context menu (Shift+F10 / ContextMenu key),
   // available regardless of chrome visibility. Suppressed while typing so the
@@ -4220,39 +4219,34 @@ watch(
   { immediate: true },
 );
 
-watch(
-  () => tagUpdate.value,
-  (payload) => {
+/**
+ * Act on a realtime signal once per distinct `key`, while the overlay is open
+ * on a picture, with that picture's id. `gate` says which signals count:
+ * `"any"`, `"named"` (only one naming the open picture) or `"named-or-all"`
+ * (also one that names no picture at all).
+ */
+function onPictureSignal(signal, gate, act) {
+  let lastKey = 0;
+  watch(signal, (payload) => {
     if (!payload || typeof payload !== "object") return;
     const nextKey = payload.key || 0;
-    if (!nextKey || nextKey === lastTagUpdateKey.value) return;
-    lastTagUpdateKey.value = nextKey;
+    if (!nextKey || nextKey === lastKey) return;
+    lastKey = nextKey;
     if (!open.value || !image.value?.id) return;
-    const pictureIds = Array.isArray(payload.pictureIds)
-      ? payload.pictureIds.map((id) => String(id))
-      : [];
-    const currentId = String(image.value.id);
-    if (pictureIds.length && !pictureIds.includes(currentId)) return;
-    fetchOverlayMetadata(image.value.id);
-  },
-);
+    if (gate !== "any") {
+      const ids = Array.isArray(payload.pictureIds)
+        ? payload.pictureIds.map(String)
+        : [];
+      const named = ids.includes(String(image.value.id));
+      if (!named && !(gate === "named-or-all" && !ids.length)) return;
+    }
+    act(image.value.id);
+  });
+}
 
-watch(
-  () => descriptionUpdate.value,
-  (payload) => {
-    if (!payload || typeof payload !== "object") return;
-    const nextKey = payload.key || 0;
-    if (!nextKey || nextKey === lastDescriptionUpdateKey.value) return;
-    lastDescriptionUpdateKey.value = nextKey;
-    if (!open.value || !image.value?.id) return;
-    const pictureIds = Array.isArray(payload.pictureIds)
-      ? payload.pictureIds.map((id) => String(id))
-      : [];
-    const currentId = String(image.value.id);
-    if (pictureIds.length && !pictureIds.includes(currentId)) return;
-    fetchOverlayMetadata(image.value.id);
-  },
-);
+onPictureSignal(tagUpdate, "named-or-all", fetchOverlayMetadata);
+
+onPictureSignal(descriptionUpdate, "named-or-all", fetchOverlayMetadata);
 
 // A smart_score recompute landed somewhere (after a tag edit or a penalised-tag
 // settings change). Re-fetch the open card's metadata so the panel shows the
@@ -4270,17 +4264,7 @@ watch(
 // distinct signal is safe and cheap: fetchOverlayMetadata is requestId-deduped
 // and keeps the current value on a still-null read (recompute pending), so a
 // redundant fetch for an unrelated batch neither flickers nor hammers.
-watch(
-  () => smartScoreUpdate.value,
-  (payload) => {
-    if (!payload || typeof payload !== "object") return;
-    const nextKey = payload.key || 0;
-    if (!nextKey || nextKey === lastSmartScoreUpdateKey.value) return;
-    lastSmartScoreUpdateKey.value = nextKey;
-    if (!open.value || !image.value?.id) return;
-    fetchOverlayMetadata(image.value.id);
-  },
-);
+onPictureSignal(smartScoreUpdate, "any", fetchOverlayMetadata);
 
 // A Segment run finished. The boxes come from /pictures/{id}/detections, which
 // is only read when the displayed card changes, so without this the overlay kept
@@ -4289,36 +4273,12 @@ watch(
 // completing in one Vue flush coalesce to the later payload, which can omit the
 // open card. fetchDetections is requestId-deduped and drops a response for a card
 // that is no longer displayed, so a redundant fetch is one cheap call, not a race.
-watch(
-  () => detectionUpdate.value,
-  (payload) => {
-    if (!payload || typeof payload !== "object") return;
-    const nextKey = payload.key || 0;
-    if (!nextKey || nextKey === lastDetectionUpdateKey.value) return;
-    lastDetectionUpdateKey.value = nextKey;
-    if (!open.value || !image.value?.id) return;
-    fetchDetections(image.value.id);
-  },
-);
+onPictureSignal(detectionUpdate, "any", fetchDetections);
 
 // OCR finished (or was cleared for a re-read) for some pictures. Unlike the
 // detection signal this one is gated on the open picture: a text read is one
 // picture's own task, and its frame names that picture.
-watch(
-  () => textUpdate.value,
-  (payload) => {
-    if (!payload || typeof payload !== "object") return;
-    const nextKey = payload.key || 0;
-    if (!nextKey || nextKey === lastTextUpdateKey.value) return;
-    lastTextUpdateKey.value = nextKey;
-    if (!open.value || !image.value?.id) return;
-    const pictureIds = Array.isArray(payload.pictureIds)
-      ? payload.pictureIds.map((id) => String(id))
-      : [];
-    if (!pictureIds.includes(String(image.value.id))) return;
-    pictureText.refresh();
-  },
-);
+onPictureSignal(textUpdate, "named", () => pictureText.refresh());
 
 // The open picture was TURNED somewhere else: an undo or redo of a rotate
 // (Ctrl+Z, the receipt's Undo, the toolbar), or a rotate made in another tab.
@@ -4339,21 +4299,9 @@ watch(
 // watcher flush, which cannot happen to a socket-driven ref: `wsOrientationUpdate`
 // is written at most once per `ws.onmessage`, each message is its own
 // macrotask, and Vue drains the pre-flush queue on the microtask between them.
-watch(
-  () => orientationUpdate.value,
-  (payload) => {
-    if (!payload || typeof payload !== "object") return;
-    const nextKey = payload.key || 0;
-    if (!nextKey || nextKey === lastOrientationUpdateKey.value) return;
-    lastOrientationUpdateKey.value = nextKey;
-    if (!open.value || !image.value?.id) return;
-    const pictureIds = Array.isArray(payload.pictureIds)
-      ? payload.pictureIds.map((id) => String(id))
-      : [];
-    if (!pictureIds.includes(String(image.value.id))) return;
-    void refreshAfterTurn(image.value.id);
-  },
-);
+onPictureSignal(orientationUpdate, "named", (id) => {
+  void refreshAfterTurn(id);
+});
 
 const faceAssignItems = computed(() => {
   const faces = Array.isArray(faceBboxes.value) ? faceBboxes.value : [];

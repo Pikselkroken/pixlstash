@@ -86,12 +86,11 @@ from pixlstash.hub.workflow_group_writes import (
 from pixlstash.hub.workflows import (
     assets_for_topology_recipes,
     forgotten_asset_counts,
-    get_document,
-    recipe_exists,
     recipes_for_topology,
     unvouched_model_values,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.routes._helpers import require_hub
 from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
     CLIP_TYPE_BY_FAMILY,
@@ -111,6 +110,7 @@ from pixlstash.services.comfyui_recipe_service import (
     listed_as,
     listed_options,
     live_lora_targets,
+    live_node_ids,
     lora_display_name,
     model_filename_fields,
     plan_loader_rewrites,
@@ -247,12 +247,6 @@ from send2trash import TrashPermissionError
 
 logger = get_logger(__name__)
 
-# Every key in this module is a SHA-256 hex digest from
-# ``services/workflow_hash.py::graph_key``. Checked rather than trusted so a
-# malformed one is a 422 naming the parameter instead of an empty 200 that
-# reads as "this machine does not have it".
-_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
-
 # How many tiles the inspector's "Made with it" grid can ask for. The rail draws
 # six; the ceiling is here so a hand-made request cannot turn a tile strip into
 # a full library dump.
@@ -296,23 +290,6 @@ class WorkflowVariant(BaseModel):
     forgotten_models: int = Field(
         0, description="Models this recipe loads whose names were forgotten."
     )
-
-
-class WorkflowGraph(BaseModel):
-    """``GET /workflows/recipes/{structural_hash}/graph``: the stored document.
-
-    **This is the recipe's graph, not the file that was imported.** Parameters,
-    seeds and prompts are already nulled and assets are named by an opaque
-    reference, so it describes the workflow without carrying anything a purge
-    would have to reach into — and it is therefore *not* runnable in ComfyUI.
-    The verbatim import store that would be (§B5) is a different thing and is
-    not shipped; ``runnable`` says so in the payload rather than leaving a
-    caller to discover it by feeding this to ComfyUI.
-    """
-
-    structural_hash: str
-    document: dict
-    runnable: bool = False
 
 
 class WorkflowSlotModel(BaseModel):
@@ -1126,8 +1103,7 @@ class RunAddedLora(BaseModel):
     """One shelf LoRA a run ADDS, in a loader of its own, over whatever the graph loads.
 
     No slot is named: a new loader is spliced in right after the model source
-    on the run's own copy (``plan_lora_insertion`` / ``insert_adapter``, the
-    same splice ``insert-lora-loader`` writes into a stored copy), so the
+    on the run's own copy (``plan_lora_insertion`` / ``insert_adapter``), so the
     workflow keeps every LoRA it already loads and a graph with no loader at
     all can still take one. A LoRA the graph already loads is not added a
     second time; its strengths are set on the loader that has it.
@@ -1512,13 +1488,6 @@ class WorkflowFile(BaseModel):
             "or its graph is in no workflow yet."
         ),
     )
-
-
-class InsertedLoader(WorkflowFile):
-    """The file written by ``POST /workflows/{workflow_id}/insert-lora-loader``."""
-
-    node_id: str = Field(description="The id the new loader has in the graph.")
-    class_type: str = Field(description="Which loader node was added.")
 
 
 class FixedWorkflowCopy(WorkflowFile):
@@ -2155,14 +2124,6 @@ def _stored_value(value: bool | int | float | str) -> str:
     return str(value)
 
 
-def _require_hash(value: str, name: str) -> str:
-    if not _HASH_RE.match(value):
-        raise HTTPException(
-            status_code=422, detail=f"Invalid {name}: expected a SHA-256 hex digest."
-        )
-    return value
-
-
 def _iso(value) -> str | None:
     """Render a vault timestamp, which is a ``datetime``, as the API's string."""
     return value.isoformat() if value is not None else None
@@ -2643,6 +2604,16 @@ def _workflow_variants(hub, vault, workflow: Workflow) -> list[WorkflowVariant]:
     return variants
 
 
+def _require_object_info(read: tuple[dict | None, str | None], why: str) -> dict:
+    """The map from :func:`_read_object_info`, or a 503 saying *why* it is needed."""
+    object_info, error = read
+    if object_info is None:
+        raise HTTPException(
+            status_code=503, detail=f"PixlStash could not ask ComfyUI {why}: {error}"
+        )
+    return object_info
+
+
 def create_router(server) -> APIRouter:
     """Create the workflow-library router.
 
@@ -2655,45 +2626,7 @@ def create_router(server) -> APIRouter:
     """
     router = APIRouter(tags=["workflows"])
 
-    def _hub():
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            # A vault opened without a hub has no workflow library at all, which
-            # is a configuration state rather than a fault. Say so instead of
-            # raising an AttributeError out of a read.
-            raise HTTPException(
-                status_code=503,
-                detail="No hub is attached, so this machine has no workflow library.",
-            )
-        return hub
-
-    @router.get(
-        "/workflows/recipes/{structural_hash}/graph",
-        summary="A recipe's stored graph",
-        description=(
-            "The structural document for one recipe: the graph with its "
-            "parameters, seeds and prompts nulled and its assets named by an "
-            "opaque reference. Describes the workflow; does not run it."
-        ),
-        response_model=WorkflowGraph,
-        responses={404: {"description": "This machine has no such recipe."}},
-    )
-    def get_recipe_graph(request: Request, structural_hash: str):
-        server.auth.ensure_secure_when_required(request)
-        _require_hash(structural_hash, "structural_hash")
-        hub = _hub()
-        if not recipe_exists(hub, structural_hash):
-            raise HTTPException(status_code=404, detail="Unknown workflow variant.")
-        document = get_document(hub, structural_hash)
-        if document is None:
-            # The row is there and its document would not parse. The store has
-            # already logged the hash and the decode error; answering 404 here
-            # would report a corrupt row as a workflow this machine never had.
-            raise HTTPException(
-                status_code=500,
-                detail="This workflow's stored graph could not be read.",
-            )
-        return WorkflowGraph(structural_hash=structural_hash, document=document)
+    _hub = functools.partial(require_hub, server)
 
     # ── The workflows (#1623) ───────────────────────────────────────────────
     # The grid is `/workflows` itself, one entry per workflow. The payload is
@@ -3405,23 +3338,28 @@ def create_router(server) -> APIRouter:
                     status_code=422, detail="That is the model it already loads."
                 )
             labels = model_fix_labels(hub, card.topology_hash, was, kind)
-            # Two originals folded onto one replacement in one slot would file
-            # the replacement's pictures on whichever row SQLite read last.
-            clash = [
-                fix_was
+            # A slot another original is already replaced by `now` in loads
+            # `now` already: nothing to do there. Writing a second fix would
+            # fold two originals onto one replacement in one slot and file the
+            # replacement's pictures on whichever row SQLite read last.
+            loaded = {
+                label: fix_was
                 for label, fix_was, fix_now, _kind in fixes
                 if label in labels
                 and normalized_filename(fix_now) == normalized_filename(now)
                 and normalized_filename(fix_was) != was_norm
-            ]
-            if clash:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"{clash[0]} is already replaced by that model in this "
-                        "workflow; undo that first."
-                    ),
+            }
+            if labels and set(labels) <= loaded.keys():
+                logger.info(
+                    "Workflow %s already loads %s where it loaded %s (replacing "
+                    "%s); nothing to change.",
+                    workflow_id,
+                    now,
+                    was,
+                    ", ".join(sorted(set(loaded.values()))),
                 )
+                return _read_detail(hub, workflow_id)
+            labels = [label for label in labels if label not in loaded]
             targets = [(was, labels)] if labels else []
         else:
             for original in sorted(set(chained)) or [was]:
@@ -4306,6 +4244,7 @@ def create_router(server) -> APIRouter:
         graph: dict,
         addressed: bool,
         bindings: list | None = None,
+        object_info: dict | None = None,
     ) -> list[CardInput]:
         """The picture inputs in *graph*, with the workflow's stored setup over them.
 
@@ -4322,7 +4261,11 @@ def create_router(server) -> APIRouter:
             else []
         )
         try:
-            inputs = card_input_modes(graph, _on_graph_labels(graph, stored))
+            inputs = card_input_modes(
+                graph,
+                _on_graph_labels(graph, stored),
+                live_node_ids(graph, object_info) if object_info else None,
+            )
         except WorkflowGraphError as exc:
             if addressed:
                 raise HTTPException(
@@ -5057,7 +5000,12 @@ def create_router(server) -> APIRouter:
             # keeps every other node's id - so the fill below still finds its
             # nodes in the graph the bypass left.
             card_inputs = _card_inputs(
-                hub, group.workflow_id, graph, bool(requested), source.bindings
+                hub,
+                group.workflow_id,
+                graph,
+                bool(requested),
+                source.bindings,
+                object_info,
             )
             reached_inputs = True
             addressed.update(item.address for item in card_inputs)
@@ -6174,65 +6122,6 @@ def create_router(server) -> APIRouter:
         _announce(request, [landed], "imported")
         return WorkflowFile(name=name, workflow_id=landed)
 
-    @router.post(
-        "/workflows/{workflow_id}/insert-lora-loader",
-        summary="Add a LoRA loader to a workflow",
-        description=(
-            "Write a copy of this workflow with a LoRA loader spliced in right "
-            "after the model source, so a workflow that had nowhere to put a "
-            "LoRA now has a slot to swap into. The loader starts at ComfyUI's "
-            "own widget defaults — no LoRA is chosen here — so pick one before "
-            "running the copy as it is. The original file is not changed; the "
-            "copy is a workflow file of its own."
-        ),
-        response_model=InsertedLoader,
-        status_code=201,
-        responses={
-            404: {"description": "This machine has no such card."},
-            409: {"description": "No graph, or nowhere a loader can honestly go."},
-            503: {"description": "ComfyUI could not be reached."},
-        },
-    )
-    def insert_lora_loader(request: Request, workflow_id: str):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card)
-        # ComfyUI types the links (#1376): an API-format link carries no type,
-        # so without `object_info` an input reading the model could be missed
-        # and that branch would run without the LoRA, silently.
-        object_info, error = _read_object_info(_comfyui_url(_user(request)))
-        if object_info is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PixlStash could not ask ComfyUI what its nodes hand on, so "
-                    f"it cannot tell where a LoRA loader would go: {error}"
-                ),
-            )
-        graph = deepcopy(source.graph)
-        try:
-            plan = plan_lora_insertion(graph, object_info)
-            loader = insert_adapter(graph, plan, None, object_info)
-        except LookupError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        name, landed = _store_copy(
-            hub,
-            f"{_file_stem(card, workflow.name)} (LoRA)",
-            graph,
-            source.bindings,
-            "chain",
-            workflow,
-            card,
-        )
-        _announce(request, [landed], "imported")
-        return InsertedLoader(
-            name=name,
-            workflow_id=landed,
-            node_id=loader["node_id"],
-            class_type=loader["class_type"],
-        )
-
     def _swap_missing_loras(graph: dict, object_info: dict) -> list[dict]:
         """Load each LoRA this ComfyUI lacks through the ComfyUI-PixlStash loader.
 
@@ -6311,15 +6200,10 @@ def create_router(server) -> APIRouter:
         workflow, card = _require_base(hub, workflow_id)
         # What needs fixing is what THIS ComfyUI lacks, so without its node
         # list there is nothing to decide it from.
-        object_info, error = _read_object_info(_comfyui_url(_user(request)))
-        if object_info is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PixlStash could not ask ComfyUI what it has, so it cannot "
-                    f"tell what this workflow needs fixed: {error}"
-                ),
-            )
+        object_info = _require_object_info(
+            _read_object_info(_comfyui_url(_user(request))),
+            "what it has, so it cannot tell what this workflow needs fixed",
+        )
         source = _card_source(card)
         graph = deepcopy(source.graph)
         changes: list[str] = []
@@ -6372,7 +6256,7 @@ def create_router(server) -> APIRouter:
     # ── The LoRA chain (#1478) ──────────────────────────────────────────────
     # Read and written whole: the editor lists the loaders in the order a run
     # applies them, and one save is one new card however many gestures made
-    # it. `insert-lora-loader` above is the empty-list case of the write.
+    # it.
 
     def _shelf_chain(hub, chain: dict) -> None:
         """Mark each loader of *chain* with the shelf LoRA it loads, in place.
@@ -6656,15 +6540,10 @@ def create_router(server) -> APIRouter:
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
-        object_info, error = _read_object_info(_comfyui_url(_user(request)))
-        if object_info is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PixlStash could not ask ComfyUI what its nodes hand on, so "
-                    f"it cannot rewire this workflow's LoRAs: {error}"
-                ),
-            )
+        object_info = _require_object_info(
+            _read_object_info(_comfyui_url(_user(request))),
+            "what its nodes hand on, so it cannot rewire this workflow's LoRAs",
+        )
         graph = deepcopy(source.graph)
         plan = _chain_plan(hub, graph, object_info, payload.entries, payload.lanes)
         try:
@@ -7510,7 +7389,7 @@ def create_router(server) -> APIRouter:
         workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
         graph = deepcopy(source.graph)
-        # Not `insert_lora_loader`'s 503: nothing here depends on ComfyUI's link
+        # No 503 here: nothing depends on ComfyUI's link
         # types, so an unreachable ComfyUI means "write the names unchecked".
         # A chain to rewire is the exception, below.
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
@@ -7523,14 +7402,10 @@ def create_router(server) -> APIRouter:
             )
         chain_changed = False
         if body.loras is not None:
-            if object_info is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "PixlStash could not ask ComfyUI what its nodes hand on, "
-                        f"so it cannot rewire this clone's LoRAs: {error}"
-                    ),
-                )
+            _require_object_info(
+                (object_info, error),
+                "what its nodes hand on, so it cannot rewire this clone's LoRAs",
+            )
             # Before the loader rewrite: the chain is read against the
             # original's classes, which ComfyUI can type even when the new
             # loader's pack is not installed. A rewrite keeps every node id.

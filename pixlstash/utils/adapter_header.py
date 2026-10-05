@@ -30,9 +30,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import struct
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -389,23 +391,17 @@ def _valid_shape(entry) -> Optional[list[int]]:
     if not isinstance(entry, dict):
         return None
     shape = entry.get("shape")
-    if not isinstance(shape, list):
+    if not isinstance(shape, list) or not all(
+        isinstance(dim, int) and not isinstance(dim, bool) and dim >= 0 for dim in shape
+    ):
         return None
-    for dim in shape:
-        if not isinstance(dim, int) or isinstance(dim, bool) or dim < 0:
-            return None
     return shape
 
 
 def _shape_size(entry: dict) -> int:
     """Parameters in one tensor entry, 0 when its shape is unusable."""
     shape = _valid_shape(entry)
-    if shape is None:
-        return 0
-    count = 1
-    for dim in shape:
-        count *= dim
-    return count
+    return 0 if shape is None else math.prod(shape)
 
 
 def quant_from_header(header: dict) -> Optional[str]:
@@ -428,16 +424,15 @@ def quant_from_header(header: dict) -> Optional[str]:
         ``"mixed"``, or ``None`` when no tensor declares a usable dtype and
         shape.
     """
-    by_dtype: dict[str, int] = {}
+    by_dtype: Counter[str] = Counter()
     for _name, entry in _tensor_entries(header):
         dtype = entry.get("dtype")
         if isinstance(dtype, str) and dtype:
-            key = dtype.lower()
-            by_dtype[key] = by_dtype.get(key, 0) + _shape_size(entry)
-    total = sum(by_dtype.values())
+            by_dtype[dtype.lower()] += _shape_size(entry)
+    total = by_dtype.total()
     if not total:
         return None
-    dtype, count = max(by_dtype.items(), key=lambda item: item[1])
+    dtype, count = by_dtype.most_common(1)[0]
     return dtype if count > total * _QUANT_MAJORITY else QUANT_MIXED
 
 

@@ -7,6 +7,8 @@ the canvas. Embedding the API-format graph there breaks drag-back-in. ComfyUI
 writes the correct ``prompt`` chunk itself, so nothing needs to be embedded.
 """
 
+import json as stdlib_json
+
 import pixlstash.services.comfyui_service as comfyui_service
 
 WORKFLOW = {
@@ -70,3 +72,25 @@ class TestSubmitPayload:
     def test_client_id_is_forwarded(self, monkeypatch):
         captured = _capture_submit_payload(monkeypatch, client_id="tab-1")
         assert captured["payload"]["client_id"] == "tab-1"
+
+    def test_a_nan_is_changed_from_a_prompt_chunk_is_dropped(self, monkeypatch):
+        # ComfyUI writes `is_changed: NaN` for a loader whose file it could not
+        # hash, and requests refuses to serialise a NaN, so the run never left.
+        sent = {}
+
+        def strict_post(url, json=None, timeout=None):
+            sent["body"] = stdlib_json.dumps(json, allow_nan=False)
+            return _FakeResponse()
+
+        monkeypatch.setattr(comfyui_service.requests, "post", strict_post)
+        graph = {
+            "81": {
+                "class_type": "LoadImage",
+                "inputs": {"image": "a.png"},
+                "is_changed": float("nan"),
+            }
+        }
+        comfyui_service._submit_comfyui_prompt("http://comfy.test", graph)
+        assert stdlib_json.loads(sent["body"])["prompt"] == {
+            "81": {"class_type": "LoadImage", "inputs": {"image": "a.png"}}
+        }

@@ -14,7 +14,6 @@ from pixlstash.hub.workflow_group_convert import _core_strip_v1, _core_strip_v2
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     graph_key,
-    asset_reference,
     structural_document,
     structural_hash,
     topology_hash,
@@ -31,14 +30,10 @@ from pixlstash.services.workflow_identity import (
     STRUCTURAL,
     TWO_PASS,
     UPSCALE,
-    Difference,
     core_hash,
     core_node_labels,
-    differences_reduced,
-    differs_by,
     graph_traits,
     guess_mark,
-    reduce_stored_document,
     slots,
     special_groups,
     workflow_key,
@@ -180,7 +175,6 @@ def test_a_different_checkpoint_is_a_different_workflow_in_the_same_stack():
     a, b = _graph(ckpt="base.safetensors"), _graph(ckpt="other.safetensors")
     assert _key(a) != _key(b)
     assert core_hash(_doc(a)) == core_hash(_doc(b))
-    assert differs_by(_doc(a), _doc(b)) == ["other checkpoint"]
 
 
 def _with_companions(vae: str, clip: str) -> dict:
@@ -557,10 +551,9 @@ def test_sampler_less_filter_workflows_keep_their_filter_as_their_core():
     assert "8" in core_node_labels(_doc(filtered("ImageSharpen")))
 
 
-def test_seed_variance_is_a_stage_the_card_has_and_chips():
+def test_seed_variance_is_a_stage_the_card_has():
     member = _doc(_graph(extra=CORE_V2_TWINS["seed-variance"][1]))
     assert special_groups(member) == (SEED_VARIANCE,)
-    assert differs_by(_doc(_graph()), member) == ["+ seed variance"]
 
 
 def test_core_v2_is_a_function_of_the_v1_core():
@@ -722,24 +715,11 @@ def test_a_real_step_added_does_not_stack():
     assert core_hash(_doc(_graph())) != core_hash(_doc(_graph(extra=extra)))
 
 
-# ── differs by ──────────────────────────────────────────────────────────────
+# ── special groups and traits ───────────────────────────────────────────────
 
 
-def test_differs_by_names_post_processing_in_both_directions():
-    plain, upscaled = _doc(_graph()), _doc(_graph(upscale=True))
-    assert differs_by(plain, upscaled) == ["+ upscale"]
-    assert differs_by(plain, upscaled, upscale_factor=2) == ["+ upscale 2×"]
-    assert differs_by(upscaled, plain) == ["− upscale"]
-    assert differs_by(plain, _doc(_graph(face_detailer=True))) == ["+ face detailer"]
-    assert differs_by(plain, _doc(_graph(hires=True))) == ["+ upscale"]
-
-
-def test_special_groups_says_what_one_graph_has_rather_than_how_two_differ():
-    """The same taxonomy `differs_by` chips, asked of a card standing alone.
-
-    A lone card has no cover to differ from, so `differs_by` never runs for it
-    and nothing computes what it *has* - which is the half its generated name
-    needs (#1454).
+def test_special_groups_says_what_one_graph_has():
+    """The post-processing one card has, which its generated name needs (#1454).
 
     The empty tuple is a real answer and not a failure to look: a plain txt2img
     graph genuinely carries no post-processing, which is what lets a name claim
@@ -879,6 +859,36 @@ def test_traits_say_what_the_core_does_that_the_type_cannot():
         _doc(_graph(face_detailer=True, extra={**zeroed, **into_stage}))
     ) == ("references:1",)
 
+    # A Flux 2 edit: each picture is a reference on both prompts, and the
+    # edited one is a reference too. One picture beside it is one reference,
+    # not four nodes' worth; the edited picture alone is none.
+    edit = {
+        "L1": _node("LoadImage", image="a.png"),
+        "L2": _node("LoadImage", image="b.png"),
+        "E1": _node("VAEEncode", pixels=["L1", 0], vae=["1", 2]),
+        "E2": _node("VAEEncode", pixels=["L2", 0], vae=["1", 2]),
+        "P1": _node("ReferenceLatent", conditioning=["2", 0], latent=["E1", 0]),
+        "P2": _node("ReferenceLatent", conditioning=["P1", 0], latent=["E2", 0]),
+        "N1": _node("ReferenceLatent", conditioning=["3", 0], latent=["E1", 0]),
+        "N2": _node("ReferenceLatent", conditioning=["N1", 0], latent=["E2", 0]),
+        "5": _node(
+            "KSampler",
+            model=["1", 0],
+            positive=["P2", 0],
+            negative=["N2", 0],
+            latent_image=["4", 0],
+            seed=1,
+        ),
+    }
+    assert graph_traits(_doc(_graph(extra={**zeroed, **edit}))) == ("references:1",)
+    alone = {
+        **edit,
+        "P2": _node("ReferenceLatent", conditioning=["P1", 0], latent=["E1", 0]),
+        "N2": _node("ReferenceLatent", conditioning=["N1", 0], latent=["E1", 0]),
+    }
+    del alone["L2"], alone["E2"]
+    assert graph_traits(_doc(_graph(extra={**zeroed, **alone}))) == ()
+
 
 def test_a_loader_on_its_own_is_not_the_graph_doing_the_thing():
     """Narrower than the strip, and deliberately so.
@@ -913,97 +923,6 @@ def test_special_groups_refuses_a_raw_graph_like_every_other_rule_here():
     them."""
     with pytest.raises(WorkflowGraphError):
         special_groups(_graph(face_detailer=True))
-
-
-def test_plumbing_only_when_only_plumbing_differs():
-    assert differs_by(_doc(_graph()), _doc(_graph(preview=True))) == ["plumbing only"]
-
-
-def test_identical_workflows_differ_by_nothing():
-    assert differs_by(_doc(_graph()), _doc(_graph())) == []
-
-
-def test_plumbing_only_is_never_claimed_when_a_model_differs():
-    cover = _doc(_graph(loras=("alice.safetensors",)))
-    member = _doc(_graph(loras=("bob.safetensors",), preview=True))
-    chips = differs_by(cover, member)
-    assert "plumbing only" not in chips
-    assert chips == ["1 node differs"]
-
-    other_ckpt = _doc(_graph(ckpt="other.safetensors", preview=True))
-    assert differs_by(_doc(_graph()), other_ckpt) == [
-        "other checkpoint",
-        "1 node differs",
-    ]
-
-
-def test_plumbing_only_is_never_claimed_beside_an_unclassified_node():
-    extra = {"98": _node("SomeCustomNode"), "99": _node("PreviewImage")}
-    assert differs_by(_doc(_graph()), _doc(_graph(extra=extra))) == ["2 nodes differ"]
-
-
-def _differences(cover: dict, member: dict) -> list[Difference]:
-    return differences_reduced(
-        reduce_stored_document(_doc(cover)), reduce_stored_document(_doc(member))
-    )
-
-
-def test_a_nodes_chip_names_the_classes_it_counted():
-    """#1597: the detail says HOW, and names only what the chip counted."""
-    extra = {
-        "98": _node("SomeCustomNode"),
-        "97": _node("SomeCustomNode"),
-        "99": _node("PreviewImage"),
-    }
-    cover = _graph(loras=("alice.safetensors",))
-    # The upscale nodes are "+ upscale"'s, so the nodes chip leaves them out.
-    upscale, chip = _differences(cover, _graph(extra=extra, upscale=True))
-    assert upscale.chip == "+ upscale"
-    assert chip.chip == "4 nodes differ"
-    assert chip.detail == "+ PreviewImage · + SomeCustomNode ×2 · − LoraLoader"
-    # Reversed, the signs flip with it.
-    (back,) = _differences(_graph(extra=extra), cover)
-    assert back.detail == "+ LoraLoader · − PreviewImage · − SomeCustomNode ×2"
-
-
-def test_a_nodes_chip_with_no_class_change_says_what_did_change():
-    cover = _graph(loras=("alice.safetensors",))
-    rewired = _graph(loras=("alice.safetensors",))
-    rewired["5"]["inputs"]["model"] = ["1", 0]
-    assert [(d.chip, d.detail) for d in _differences(cover, rewired)] == [
-        ("1 node differs", "same nodes, wired differently")
-    ]
-
-
-def test_a_changed_node_says_whether_it_was_a_model_or_a_picture():
-    cover = _graph(img2img=True, input_picture="a.png")
-    picture = _graph(img2img=True, input_picture="b.png")
-    assert [(d.chip, d.detail) for d in _differences(cover, picture)] == [
-        ("1 node differs", "LoadImage: other picture")
-    ]
-    # A LoRA is not an "other models" chip, so a swapped one lands here.
-    alice = _graph(loras=("alice.safetensors",))
-    bob = _graph(loras=("bob.safetensors",))
-    assert [d.detail for d in _differences(alice, bob)] == ["LoraLoader: other model"]
-
-
-def test_a_model_chip_carries_both_sides_base_model_first():
-    member = _graph(ckpt="other.safetensors", upscale=True)
-    member["60"] = _node("VAELoader", vae_name="new_vae.safetensors")
-    cover = _graph()
-    cover["60"] = _node("VAELoader", vae_name="old_vae.safetensors")
-    chips = {d.chip: d for d in _differences(cover, member)}
-    # The upscaler's model belongs to "+ upscale", never to this chip.
-    assert chips["other checkpoint"].cover_assets == (
-        asset_reference("base.safetensors"),
-        asset_reference("old_vae.safetensors"),
-    )
-    assert chips["other checkpoint"].member_assets == (
-        asset_reference("other.safetensors"),
-        asset_reference("new_vae.safetensors"),
-    )
-    assert chips["+ upscale"].cover_assets == ()
-    assert chips["other checkpoint"].detail is None
 
 
 # ── type ────────────────────────────────────────────────────────────────────
@@ -1058,12 +977,11 @@ def test_a_video_from_a_start_frame_is_video_not_img2img():
     assert workflow_type(_doc(graph)) == "video"
 
 
-def test_plumbing_only_is_never_claimed_when_the_wiring_differs():
+def test_a_lora_wired_around_keeps_the_core_hash():
     cover = _graph(loras=("alice.safetensors",))
     member = _graph(loras=("alice.safetensors",), preview=True)
     member["5"]["inputs"]["model"] = ["1", 0]  # the LoRA no longer reaches the sampler
     assert core_hash(_doc(cover)) == core_hash(_doc(member))
-    assert "plumbing only" not in differs_by(_doc(cover), _doc(member))
 
 
 def test_every_slot_in_a_long_lora_chain_has_its_own_label():
@@ -1092,36 +1010,6 @@ def test_a_picture_fed_encode_is_img2img_even_beside_an_empty_latent():
     graph = _graph(img2img=True)
     graph["4"] = _node("EmptyLatentImage", width=512, height=512, batch_size=1)
     assert workflow_type(_doc(graph)) == "img2img"
-
-
-def _base_and_refiner(base: str, refiner: str, *, preview: bool = False) -> dict:
-    g = {
-        "1": _node("CheckpointLoaderSimple", ckpt_name=base),
-        "2": _node("CheckpointLoaderSimple", ckpt_name=refiner),
-        "3": _node("CLIPTextEncode", text="a cat", clip=["1", 1]),
-        "4": _node("EmptyLatentImage", width=512, height=512, batch_size=1),
-        "5": _node(
-            "KSampler", model=["1", 0], positive=["3", 0], latent_image=["4", 0]
-        ),
-        "6": _node(
-            "KSampler", model=["2", 0], positive=["3", 0], latent_image=["5", 0]
-        ),
-        "7": _node("VAEDecode", samples=["6", 0], vae=["2", 2]),
-        "8": _node("SaveImage", images=["7", 0], filename_prefix="out"),
-    }
-    if preview:
-        g["9"] = _node("PreviewImage", images=["7", 0])
-    return g
-
-
-def test_models_swapped_between_loaders_are_a_difference():
-    cover = _doc(_base_and_refiner("base.safetensors", "refiner.safetensors"))
-    swapped = _base_and_refiner("refiner.safetensors", "base.safetensors")
-    assert differs_by(cover, _doc(swapped)) != []
-    with_preview = _base_and_refiner(
-        "refiner.safetensors", "base.safetensors", preview=True
-    )
-    assert "plumbing only" not in differs_by(cover, _doc(with_preview))
 
 
 def test_a_raw_graph_is_refused_rather_than_read_as_having_no_models():
@@ -1159,7 +1047,6 @@ def test_the_shelf_checkpoint_is_part_of_the_workflow():
     a, b = _shelf_graph("11"), _shelf_graph("12")
     assert structural_hash(a) != structural_hash(b)
     assert _key(a) != _key(b)
-    assert differs_by(_doc(a), _doc(b)) == ["other checkpoint"]
     # Same card rule as the house loader: a checkpoint swap stays one stack.
     assert core_hash(_doc(a)) == core_hash(_doc(b))
 

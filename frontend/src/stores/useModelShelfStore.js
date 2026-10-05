@@ -1,4 +1,11 @@
-import { computed, onScopeDispose, reactive, ref, watch } from "vue";
+import {
+  computed,
+  onScopeDispose,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+} from "vue";
 import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import { mergeModelCopies } from "../api/modelFiles";
@@ -20,6 +27,7 @@ import {
   setWorkflowSetDeclines,
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
+import { useConfirm } from "../composables/useConfirm";
 import { useNoticeStore } from "./useNoticeStore";
 import { useOperationStore } from "./useOperationStore";
 import { errorDetail } from "../utils/apiError";
@@ -33,6 +41,7 @@ import {
   compareGroups,
   defaultSortDirection,
   deriveModelName,
+  quantFromFilename,
   fileKindLabel,
   locationState,
   presentCopies,
@@ -42,10 +51,14 @@ import {
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
 import {
+  defaultSlot,
+  handMadeBase,
   handMadeCard,
   handMadeName,
   pictureCount,
+  rowBaseModel,
   setCard,
+  setCheckpoint,
   setGroups,
   worksWith,
 } from "../utils/workflowSets";
@@ -1008,6 +1021,9 @@ const BLOCKS = [
   "support",
 ];
 
+/** The blocks some workflow-set slot takes: what the Models rail lists. */
+const RAIL_BLOCKS = ["adapters", "checkpoints", "unclassified", "support"];
+
 /**
  * Which block a row came from, so a fetch only replaces what it asked for.
  *
@@ -1028,6 +1044,8 @@ function blockOf(row) {
 
 export const useModelShelfStore = defineStore("modelShelf", () => {
   const filters = reactive(storedFilters() || defaultFilters());
+  /** Whether the Models rail is mounted; see `fetchedBlocks`. */
+  const railMounted = ref(false);
   /** Grouping and sort. A view preference, not part of the `Show` selection. */
   const view = reactive(storedView());
   /** Collapsed group keys, per axis. Replaced wholesale so templates react. */
@@ -1098,26 +1116,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const before = new Set(rows.value.map((row) => row.id));
     loading.value = true;
     error.value = "";
+    // Read before the request goes out: a tick while it is on the wire is the
+    // next fetch's business.
+    const blocks = fetchedBlocks();
     try {
-      const requests = [];
-      if (filters.adapters) requests.push(listAdapters());
-      if (filters.checkpoints) requests.push(listCheckpoints());
-      if (filters.unclassified) {
-        requests.push(listAdapters({ fileKind: "unknown" }));
-      }
-      // The engines block: PixlStash's own taggers and scorers, the
-      // InsightFace packs and every HuggingFace repo in the cache. Same
-      // route, same shape, one more `file_kind`.
-      if (filters.engines) requests.push(listAdapters({ fileKind: "engine" }));
-      // Two requests for one checkbox: the route takes a single `file_kind`,
-      // and these two kinds are one thing to a reader deciding what to keep.
-      if (filters.support) {
-        requests.push(listAdapters({ fileKind: "vae" }));
-        requests.push(listAdapters({ fileKind: "text_encoder" }));
-      }
-      const results = await Promise.all(requests);
+      const results = await Promise.all(blockRequests(blocks));
       if (startedAt !== epoch) return;
-      const refreshed = new Set(BLOCKS.filter((block) => filters[block]));
+      const refreshed = new Set(blocks);
       rows.value = [
         ...rows.value.filter((row) => !refreshed.has(blockOf(row))),
         ...results.flat(),
@@ -1149,6 +1154,58 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     } finally {
       if (startedAt === epoch) loading.value = false;
     }
+  }
+
+  /**
+   * The requests for some blocks: one per block, two for `support`.
+   *
+   * @param {Array<string>} blocks - `BLOCKS` entries.
+   */
+  function blockRequests(blocks) {
+    const requests = [];
+    if (blocks.includes("adapters")) requests.push(listAdapters());
+    if (blocks.includes("checkpoints")) requests.push(listCheckpoints());
+    if (blocks.includes("unclassified")) {
+      requests.push(listAdapters({ fileKind: "unknown" }));
+    }
+    // The engines block: PixlStash's own taggers and scorers, the
+    // InsightFace packs and every HuggingFace repo in the cache. Same
+    // route, same shape, one more `file_kind`.
+    if (blocks.includes("engines")) {
+      requests.push(listAdapters({ fileKind: "engine" }));
+    }
+    // Two requests for one checkbox: the route takes a single `file_kind`,
+    // and these two kinds are one thing to a reader deciding what to keep.
+    if (blocks.includes("support")) {
+      requests.push(listAdapters({ fileKind: "vae" }));
+      requests.push(listAdapters({ fileKind: "text_encoder" }));
+    }
+    return requests;
+  }
+
+  /**
+   * The blocks a fetch reads: the ticked ones, plus every block a set slot
+   * takes while the Models rail is mounted. The rail lists those whatever
+   * Show says, and `rows` is everything known rather than the shown set, so
+   * reading them in the same fetch keeps them as fresh as the shown ones: a
+   * scan or a session reset refreshes them too.
+   */
+  function fetchedBlocks() {
+    return BLOCKS.filter(
+      (block) => filters[block] || (railMounted.value && RAIL_BLOCKS.includes(block)),
+    );
+  }
+
+  /**
+   * The rail asks for its blocks as it mounts (and lets go as it unmounts).
+   * One extra fetch only when Show has left one of them unticked.
+   */
+  function setRailMounted(mounted) {
+    railMounted.value = mounted;
+    if (mounted && !RAIL_BLOCKS.every((block) => filters[block])) {
+      return fetchRows();
+    }
+    return null;
   }
 
   /**
@@ -1553,6 +1610,27 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const openSetKey = ref("");
 
   /**
+   * The Models rail (design B, a sibling of the shelf in App.vue), as far as
+   * the set grid has to see it: the shelf rows a drag from it carries, while
+   * it is in the air, and the set its *Fits* filter is on, which the set
+   * panel's *Models · N fit* button sets.
+   *
+   * The drag is the rail's own pointer drag, not the browser's, so the rows
+   * live here for its length, and `railOver` is the `data-rail-drop` key of
+   * the target under the pointer, which that target lights up from.
+   */
+  const railDrag = shallowRef(null);
+  const railOver = ref("");
+  /** What the drag carries, in words: one model's name, or how many. */
+  const railDragWhat = computed(() => {
+    const dragged = railDrag.value ?? [];
+    return dragged.length === 1
+      ? modelName(dragged[0]).text || dragged[0].filename
+      : `${dragged.length} models`;
+  });
+  const railFitsSetId = ref(null);
+
+  /**
    * Read which models have run together, once.
    *
    * `force` is what a scan passes: a scan can add a model, and a model with no
@@ -1769,6 +1847,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * run through the same `deriveModelName` the shelf uses. Every set this store
    * hands out or names in a receipt goes through here, so one name is shown
    * everywhere.
+   *
+   * `modelName` drops the precision from a filename, so each member and each
+   * offered model also carries the row's `quant`: a set holding the BF16 file
+   * and offered the FP8 one otherwise shows two tiles reading the same name.
    */
   function withShelfNames(set) {
     if (!set) return set;
@@ -1786,15 +1868,23 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         models: (set.offer.models ?? []).map((model) => ({
           ...model,
           name: shelfName(model),
+          quant: byId.get(model.id)?.quant ?? null,
         })),
       },
       members: (set.members ?? []).map((member) => {
         const row = member.id != null ? byId.get(member.id) : null;
         const kept = member.label || member.name || "";
+        // Only a filename is rewritten; a label kept verbatim keeps its quant.
+        const isFile = /\.[a-z0-9]{2,12}$/i.test(kept);
         const name = row
           ? modelName(row).text || member.name
-          : (/\.[a-z0-9]{2,12}$/i.test(kept) && deriveModelName(kept)) || kept;
-        return { ...member, name: name || member.name };
+          : (isFile && deriveModelName(kept)) || kept;
+        const quant = isFile ? quantFromFilename(kept) : null;
+        return {
+          ...member,
+          name: name || member.name,
+          quant: row ? (row.quant ?? null) : quant,
+        };
       }),
     };
   }
@@ -1984,7 +2074,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @param {Array<number>} ordered - the set ids in drawn order, for a range.
    */
   function selectSet(id, { ctrl = false, shift = false } = {}, ordered = []) {
-    if (!ctrl) clearSelection();
+    if (!ctrl) {
+      clearSelection();
+      clearMissingSelection();
+    }
     if (shift && setAnchor != null) {
       const from = ordered.indexOf(setAnchor);
       const to = ordered.indexOf(id);
@@ -2004,6 +2097,87 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   function clearSetSelection() {
     if (selectedSetIds.value.size) selectedSetIds.value = new Set();
   }
+
+  // ── Sets named after a missing base model: selection ────────────────────
+  //
+  // A third kind, beside models and hand-made sets: such a card has no shelf
+  // row behind it, so no file verb can touch it, but its missing file can be
+  // replaced in every workflow that loads it, several sets at a time. Held
+  // and cleared by the same rules as the hand-made sets.
+
+  /** Selected missing-base cards, by group key (`missing:<name>`). */
+  const selectedMissingKeys = ref(new Set());
+  let missingAnchor = null;
+
+  /** The selected missing heads, in drawn order: `{name, names, workflowsByName, …}`. */
+  const selectedMissing = computed(() =>
+    setGroupList.value
+      .filter((group) => selectedMissingKeys.value.has(group.key))
+      .map((group) => group.head),
+  );
+
+  /**
+   * Click, Ctrl+click, Shift+click on a card named after a missing file.
+   *
+   * @param {string} key
+   * @param {{ctrl?: boolean, shift?: boolean}} mods
+   * @param {Array<string>} ordered - the missing keys in drawn order.
+   */
+  function selectMissing(key, { ctrl = false, shift = false } = {}, ordered = []) {
+    if (!ctrl) {
+      clearSelection();
+      clearSetSelection();
+    }
+    if (shift && missingAnchor != null) {
+      const from = ordered.indexOf(missingAnchor);
+      const to = ordered.indexOf(key);
+      if (from >= 0 && to >= 0) {
+        const [a, b] = from < to ? [from, to] : [to, from];
+        selectedMissingKeys.value = new Set(ordered.slice(a, b + 1));
+        return;
+      }
+    }
+    const next = ctrl ? new Set(selectedMissingKeys.value) : new Set();
+    if (ctrl && next.has(key)) next.delete(key);
+    else next.add(key);
+    selectedMissingKeys.value = next;
+    missingAnchor = key;
+  }
+
+  function clearMissingSelection() {
+    if (selectedMissingKeys.value.size) selectedMissingKeys.value = new Set();
+    missingAnchor = null;
+  }
+
+  /** Every drawn card named after a missing base model, by key. */
+  const missingSetKeys = computed(() =>
+    setGroupList.value
+      .filter((group) => group.head?.missing)
+      .map((group) => group.key),
+  );
+
+  /**
+   * The set grid's "N sets are missing their checkpoint · Select them": a
+   * selection shortcut, not a second verb. It REPLACES the selection, as a
+   * plain click does, so the pill that comes up acts on exactly these.
+   */
+  function selectAllMissing() {
+    clearSelection();
+    clearSetSelection();
+    selectedMissingKeys.value = new Set(missingSetKeys.value);
+    missingAnchor = missingSetKeys.value[0] ?? null;
+  }
+
+  // A card that is no longer drawn (its file was replaced) cannot stay selected.
+  watch(setGroupList, (groups) => {
+    const live = new Set(
+      groups.filter((group) => group.head?.missing).map((group) => group.key),
+    );
+    const kept = [...selectedMissingKeys.value].filter((key) => live.has(key));
+    if (kept.length !== selectedMissingKeys.value.size) {
+      selectedMissingKeys.value = new Set(kept);
+    }
+  });
 
   // A set that is gone cannot stay selected.
   watch(handMadeSets, (sets) => {
@@ -2429,6 +2603,81 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       );
     }
     return result;
+  }
+
+  /**
+   * Ask before a set gets a second checkpoint. Nothing does that silently: a
+   * two-model workflow wants one, but a mis-drop of a checkpoint onto a set
+   * looks exactly like it.
+   *
+   * @param {Object} set
+   * @param {Array<{model_id: number, slot: string}>} members - slots resolved.
+   * @returns {Promise<boolean>} whether to go ahead.
+   */
+  async function confirmSecondCheckpoint(set, members) {
+    const current = setCheckpoint(withShelfNames(set));
+    const incoming = members.filter((m) => m.slot === "checkpoint");
+    if (!current || !incoming.length) return true;
+    const byId = new Map(rows.value.map((row) => [row.id, row]));
+    const names = incoming.map(
+      (m) => modelName(byId.get(m.model_id) ?? {}).text || "this checkpoint",
+    );
+    return useConfirm().confirm({
+      title: `Add a second checkpoint to "${setLabel(set)}"?`,
+      message: `It already has ${current.name}. ${names.join(", ")} would go in beside it, as a two-model workflow does.`,
+      confirmLabel: "Add as 2nd",
+    });
+  }
+
+  /**
+   * Shelf rows into a set, from a drop: each to `slotId`, or to the slot its
+   * kind goes to. One write and one receipt with Undo, the ＋ chooser's own.
+   *
+   * @param {Object} set
+   * @param {Array<Object>} models - shelf rows.
+   * @param {string} [slotId]
+   */
+  async function addRowsToHandMadeSet(set, models, slotId = "") {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({
+        model_id: row.id,
+        slot: slotId || defaultSlot(row.file_kind),
+      }));
+    if (!members.length) return null;
+    // The card already refused this during the drag; this is the same rule
+    // stated where the write happens.
+    if (railDropRefusal(set, models)) return null;
+    if (!(await confirmSecondCheckpoint(set, members))) return null;
+    return addToHandMadeSet(set, members);
+  }
+
+  /**
+   * Why a hand-made set will not take these shelf rows, or "" when it will:
+   * it holds them all already, or any one it would add is on another base
+   * model. One rule for the rail's *Add to set…* menu and for a drag over a
+   * card, so a card refuses while the pointer is over it rather than after
+   * the drop. A model with no known base model is not a conflict.
+   *
+   * @param {Object} set
+   * @param {Array<Object>} models - shelf rows.
+   */
+  function railDropRefusal(set, models) {
+    const held = new Set((set.members ?? []).map((member) => member.sha256));
+    const fresh = models.filter((row) => !held.has(row.sha256));
+    if (models.length && !fresh.length) return "Already in it";
+    const base = handMadeBase(set);
+    const other = fresh.map(rowBaseModel).find((b) => b && b !== base);
+    return base && other ? `${base}, not ${other}` : "";
+  }
+
+  /** A new set holding these shelf rows, each in its kind's slot. */
+  function createSetFromRows(models) {
+    const members = models
+      .filter((row) => row.sha256)
+      .map((row) => ({ model_id: row.id, slot: defaultSlot(row.file_kind) }));
+    if (!members.length) return Promise.resolve(null);
+    return createHandMadeSet({ members });
   }
 
   /**
@@ -2912,6 +3161,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // A plain click or a range REPLACES the selection, selected sets included;
     // only Ctrl adds a model beside them.
     clearSetSelection();
+    clearMissingSelection();
     const sequence = Array.isArray(order) ? order : [];
     const idOf = (item) => (typeof item === "object" ? item.id : item);
     const occurrenceOf = (item) =>
@@ -2971,6 +3221,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       selectedSetIds.value = new Set(handMadeSets.value.map((set) => set.id));
       setAnchor = handMadeSets.value[0].id;
     }
+    if (view.groupBy === GRID_GROUP_BY && missingSetKeys.value.length) {
+      selectedMissingKeys.value = new Set(missingSetKeys.value);
+      missingAnchor = missingSetKeys.value[0];
+    }
     // **With nothing drawn the selection is left alone, and this is where that
     // is decided.** It used to be a guard at one caller, reading `visibleRows`;
     // on the set grid that is the wrong list, so the key said "select" and
@@ -2997,7 +3251,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   watch(
     () => view.groupBy,
     (axis) => {
-      if (axis !== GRID_GROUP_BY) clearSetSelection();
+      if (axis !== GRID_GROUP_BY) {
+        clearSetSelection();
+        clearMissingSelection();
+      }
     },
   );
 
@@ -3421,7 +3678,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsLoading.value = false;
     setsError.value = "";
     openSetKey.value = "";
+    railDrag.value = null;
+    railOver.value = "";
+    railFitsSetId.value = null;
     selectedSetIds.value = new Set();
+    clearMissingSelection();
     checkpointAdded.value = null;
   }
 
@@ -3488,6 +3749,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError,
     setsLoaded,
     loadWorkflowSets,
+    setRailMounted,
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,
@@ -3504,6 +3766,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     handMadeSets,
     handMadeGroups,
     selectedSetIds,
+    selectedMissingKeys,
+    selectedMissing,
+    selectMissing,
+    clearMissingSelection,
+    missingSetKeys,
+    selectAllMissing,
     selectedSets,
     selectSet,
     clearSetSelection,
@@ -3512,6 +3780,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     renameHandMadeSet,
     deleteHandMadeSets,
     addToHandMadeSet,
+    addRowsToHandMadeSet,
+    railDropRefusal,
+    createSetFromRows,
+    confirmSecondCheckpoint,
+    railDrag,
+    railOver,
+    railDragWhat,
+    railFitsSetId,
     announceAdded,
     removeFromHandMadeSet,
     keepOutOfHandMadeSet,

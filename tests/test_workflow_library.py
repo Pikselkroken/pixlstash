@@ -40,6 +40,7 @@ from sqlmodel import delete as sqlmodel_delete, select
 from pixlstash.db_models import DeletedFileLog, Generation, Picture
 from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub import workflow_card_reads
 from pixlstash.hub.workflow_card_reads import workflow_of_variant
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
@@ -89,10 +90,7 @@ from pixlstash.services.model_shelf_service import (
     fetch_workflow_sets,
 )
 from pixlstash.services.model_workflow_sets import create_set, delete_set
-from pixlstash.services.workflow_library_service import (
-    scan_progress,
-    topology_activity,
-)
+from pixlstash.services.workflow_library_service import recipe_picture_counts
 from pixlstash.services.scrapheap_service import purge_scrapheap_pictures
 from pixlstash.services.workflow_ghost_service import (
     DEFAULT_GHOST_RETENTION,
@@ -1986,12 +1984,12 @@ def test_counts_exclude_soft_deleted_pictures(store):
 
     store.vault.run_task(soft_delete)
 
-    counts = store.vault.run_immediate_read_task(topology_activity)
-    kept_topology = topology_hash(api_graph(TXT2IMG))
-    other_topology = topology_hash(trimmed)
-    assert kept_topology != other_topology
-    assert counts[kept_topology].pictures == 1
-    assert counts[other_topology].pictures == 1
+    counts = store.vault.run_immediate_read_task(recipe_picture_counts)
+    kept_recipe = read_picture(store, ids[0]).workflow_structural_hash
+    other_recipe = read_picture(store, ids[2]).workflow_structural_hash
+    assert kept_recipe != other_recipe
+    assert counts[kept_recipe] == 1
+    assert counts[other_recipe] == 1
 
     def soft_delete_the_rest(session):
         session.get(Picture, ids[0]).deleted = True
@@ -2000,9 +1998,7 @@ def test_counts_exclude_soft_deleted_pictures(store):
     store.vault.run_task(soft_delete_the_rest)
 
     # Absent entirely, not present with a zero.
-    assert topology_hash(api_graph(TXT2IMG)) not in store.vault.run_immediate_read_task(
-        topology_activity
-    )
+    assert kept_recipe not in store.vault.run_immediate_read_task(recipe_picture_counts)
 
 
 def generation(store, picture_id):
@@ -2080,17 +2076,6 @@ def test_the_finder_hands_its_library_to_the_scan(store):
 
     instance = read_picture(store, picture_id).workflow_instance_hash
     assert instance_row(store.hub, LIBRARY, instance) is not None
-
-
-def test_scan_progress_does_not_fall_back_during_the_backfill(store):
-    """Clearing the marker to record how a picture was made is not un-reading it."""
-    name = write_png(Path(store.image_root), "progress.png", api=api_graph(TXT2IMG))
-    picture_id = add_picture(store, name)
-    run_extraction(store, [picture_id])
-    mark_unscanned(store, picture_id)
-
-    progress = store.vault.run_immediate_read_task(scan_progress)
-    assert (progress.pictures, progress.scanned) == (1, 1)
 
 
 def test_a_scrapheaped_picture_keeps_its_instance_row(store):
@@ -4668,6 +4653,31 @@ def test_adding_a_lora_is_a_second_set_not_a_change_to_the_first(store, set_shel
         {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
     )
     assert set(combinations) == {plain, plain | {"lora_a.safetensors"}}
+
+
+def test_a_workflow_whose_own_graph_lacks_the_missing_file_is_not_named(
+    store, set_shelf, monkeypatch
+):
+    """A workflow lists a missing file only where its fix can be made: its
+    base graph loads it. A recipe from another of its topologies does not make
+    the workflow a place to fix it, and the fix route would refuse it."""
+    picture_from(
+        store,
+        "gone.png",
+        generation_graph(
+            "Gone-Base.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    support = frozenset({"vae_a.safetensors", "clip_shared.safetensors"})
+    monkeypatch.setattr(
+        workflow_card_reads, "model_fix_labels", lambda hub, topology, was, kind: []
+    )
+
+    combinations, _ = sets_of(store)
+
+    assert combinations[support]["missing"] == [
+        {"name": "gone-base.safetensors", "workflow_ids": []}
+    ]
 
 
 def test_a_set_whose_checkpoint_is_off_the_shelf_is_named_after_the_missing_file(

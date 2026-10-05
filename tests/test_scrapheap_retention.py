@@ -38,9 +38,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.server import Server
 from pixlstash.services import scrapheap_service, workflow_ghost_service
-from pixlstash.tasks import (
-    scrapheap_retention_purge_finder as scrapheap_retention_purge_finder_module,
-)
+from pixlstash.tasks import base_task_finder as base_task_finder_module
 from pixlstash.tasks.scrapheap_retention_purge_finder import (
     ScrapheapRetentionPurgeFinder,
 )
@@ -526,7 +524,7 @@ def test_the_first_sweep_runs_on_a_host_that_booted_moments_ago(
     )
 
     monkeypatch.setattr(
-        scrapheap_retention_purge_finder_module,
+        base_task_finder_module,
         "time",
         _JustBootedClock(uptime_s=1.0),
     )
@@ -3126,6 +3124,22 @@ def test_an_unknown_ghost_position_is_refused_rather_than_stored(server):
     )
     assert resp.status_code == 422, resp.text
     assert client.get("/server-config/ghost-retention").json() == before
+
+
+def test_a_ghost_position_is_matched_case_and_space_blind(server):
+    client = _client(server)
+    try:
+        resp = client.patch(
+            "/server-config/ghost-retention",
+            json={"workflow_ghost_retention": " On "},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["workflow_ghost_retention"] == "on"
+    finally:
+        client.patch(
+            "/server-config/ghost-retention",
+            json={"workflow_ghost_retention": "covered"},
+        )
 
 
 def test_the_two_purge_settings_fail_in_opposite_directions():

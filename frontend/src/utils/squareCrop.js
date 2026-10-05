@@ -147,16 +147,6 @@ export function cropImgStyle(img, ratio = 1) {
 }
 
 /**
- * The square case, which is what the uniform grid's cells are.
- *
- * @param {Object} img - Grid image object.
- * @returns {Object|null} Inline style object, or null to fall back to CSS cover.
- */
-export function squareCropImgStyle(img) {
-  return cropImgStyle(img, 1);
-}
-
-/**
  * Map a bbox (in AR-bitmap pixel space) into rendered cell pixels for square
  * mode: subtract the crop offset then scale by S/side. Boxes partly outside the
  * crop produce out-of-cell coordinates and are clipped by the cell's

@@ -22,43 +22,57 @@
           <span class="msp__name">{{ name }}</span>
           <span class="mss__mark">Grouped by you</span>
           <span class="msp__count num">{{ facts }}</span>
-          <span class="msp__spacer"></span>
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="table-arrow-down"
-            :disabled="!canFillFromSet"
-            :tooltip="
-              canFillFromSet
-                ? 'Add models from your other sets'
-                : 'None of your other sets has anything to add.'
-            "
-            @click="emit('fill', { mode: 'set', el: $event.currentTarget })"
-            >Fill from a set…</AppButton
-          >
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="image-multiple-outline"
-            :disabled="!canFillFromPictures"
-            :tooltip="
-              canFillFromPictures
-                ? 'Add models your pictures used with this checkpoint'
-                : fillFromPicturesRefusal
-            "
-            @click="
-              emit('fill', { mode: 'pictures', el: $event.currentTarget })
-            "
-            >Fill from pictures…</AppButton
-          >
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="close"
-            icon-only
-            tooltip="Close this set"
-            @click="emit('close')"
-          />
+          <!-- One unit, so a narrow bar wraps the actions together to the
+               right of the next line rather than stranding Close on the left. -->
+          <span class="mss__actions">
+            <!-- The way to the Models rail from where the need arises: it opens
+                 the rail with Fits on this set, which nothing else does. -->
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="cube-outline"
+              data-testid="models-fit"
+              :tooltip="`Show the shelf models that fit ${name || 'this set'}`"
+              @click="emit('models-fit')"
+              >Models · {{ fitCount }} fit</AppButton
+            >
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="table-arrow-down"
+              :disabled="!canFillFromSet"
+              :tooltip="
+                canFillFromSet
+                  ? 'Add models from your other sets'
+                  : 'None of your other sets has anything to add.'
+              "
+              @click="emit('fill', { mode: 'set', el: $event.currentTarget })"
+              >Fill from a set…</AppButton
+            >
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="image-multiple-outline"
+              :disabled="!canFillFromPictures"
+              :tooltip="
+                canFillFromPictures
+                  ? 'Add models your pictures used with this checkpoint'
+                  : fillFromPicturesRefusal
+              "
+              @click="
+                emit('fill', { mode: 'pictures', el: $event.currentTarget })
+              "
+              >Fill from pictures…</AppButton
+            >
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="close"
+              icon-only
+              tooltip="Close this set"
+              @click="emit('close')"
+            />
+          </span>
         </div>
       </div>
     </div>
@@ -206,7 +220,20 @@
         v-for="{ slot, items } in slots"
         :key="slot.id"
         class="mss__slot"
+        :class="{
+          'mss__slot--refuse': dragRows && !dragFits(slot),
+          'mss__slot--target': dragRows && dragFits(slot),
+          'mss__slot--drop': dragOver === `slot:${slot.id}` && dragFits(slot),
+        }"
         role="presentation"
+        :data-slot="slot.id"
+        :data-rail-drop="dragRows ? `slot:${slot.id}` : undefined"
+        :data-rail-refused="
+          dragRows && !dragFits(slot)
+            ? dragRefused || `Not for ${slot.label}`
+            : undefined
+        "
+        @rail-drop.stop="onSlotDrop(slot)"
       >
         <div class="mss__label" role="presentation">
           <span class="mss__slotname">{{ slot.label }}</span>
@@ -249,6 +276,15 @@
                 <span class="mss__tilename" aria-hidden="true">{{
                   item.member.name
                 }}</span>
+                <span
+                  v-if="quantBadge(item.member.quant)"
+                  class="mss__quant"
+                  aria-hidden="true"
+                  ><Tooltip
+                    :text="quantBadge(item.member.quant).title"
+                    activator="parent"
+                  />{{ quantBadge(item.member.quant).label }}</span
+                >
                 <span
                   v-if="!item.member.on_shelf"
                   class="mss__gone"
@@ -294,6 +330,15 @@
                 <span class="mss__tilename" aria-hidden="true">{{
                   item.ghost.name
                 }}</span>
+                <span
+                  v-if="quantBadge(item.ghost.quant)"
+                  class="mss__quant"
+                  aria-hidden="true"
+                  ><Tooltip
+                    :text="quantBadge(item.ghost.quant).title"
+                    activator="parent"
+                  />{{ quantBadge(item.ghost.quant).label }}</span
+                >
                 <span class="mss__ghostcount num" aria-hidden="true">{{
                   ghostCount(item.ghost)
                 }}</span>
@@ -301,7 +346,7 @@
                   variant="outline"
                   size="sm"
                   tabindex="-1"
-                  :tooltip="`Add ${item.ghost.name} to this set`"
+                  :tooltip="`Add ${withQuant(item.ghost)} to this set`"
                   @click.stop="emit('add-ghost', item.ghost)"
                   >Add</AppButton
                 >
@@ -354,7 +399,9 @@ import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { quantBadge } from "../../utils/modelShelf";
 import {
+  fitsSlot,
   offerQuestion,
   pictureCount,
   recipeCount,
@@ -363,6 +410,7 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   panelId: { type: String, required: true },
@@ -387,6 +435,17 @@ const props = defineProps({
    * `key` names the offer (set and checkpoint), so a refetch is not a new one.
    */
   baseOffer: { type: Object, default: null },
+  /** How many shelf models fit this set, for Models · N fit. */
+  fitCount: { type: Number, default: 0 },
+  /** The shelf rows a drag from the Models rail carries, else null. */
+  dragRows: { type: Array, default: null },
+  /** The `data-rail-drop` key under the pointer (`store.railOver`). */
+  dragOver: { type: String, default: "" },
+  /**
+   * Why the whole set refuses that drag (`store.railDropRefusal`), else "":
+   * then no slot takes it either, as its card does not.
+   */
+  dragRefused: { type: String, default: "" },
 });
 
 const emit = defineEmits([
@@ -406,7 +465,26 @@ const emit = defineEmits([
   "add-ghost",
   "offer-again",
   "cursor",
+  // The Models rail (design B): open it with Fits on, and a drop on a slot.
+  "models-fit",
+  "drop-slot",
 ]);
+
+/** A slot takes a drop only when every dragged model fits it. */
+function dragFits(slot) {
+  if (props.dragRefused) return false;
+  return (props.dragRows ?? []).every((row) => fitsSlot(row, slot));
+}
+
+/**
+ * A drop handed over by the rail (`rail-drop`), which only hands it to a slot
+ * that does not refuse it. Stopped here: the tray's own row must not take it
+ * as well.
+ */
+function onSlotDrop(slot) {
+  if (!props.dragRows?.length || !dragFits(slot)) return;
+  emit("drop-slot", slot.id);
+}
 
 const slots = computed(() => setSlots(props.set));
 
@@ -526,12 +604,17 @@ function ghostCount(ghost) {
 }
 
 function ghostName(ghost, slot) {
-  return `${ghost.name}, ${slot.label}, offered: used in ${ghostCount(ghost)}. Enter adds it, Delete keeps it out.`;
+  return `${withQuant(ghost)}, ${slot.label}, offered: used in ${ghostCount(ghost)}. Enter adds it, Delete keeps it out.`;
+}
+
+/** A name with the precision `modelName` took out of it, for a spoken label. */
+function withQuant(model) {
+  return [model.name, quantBadge(model.quant)?.label].filter(Boolean).join(" ");
 }
 
 function tileName(member, slot) {
   return [
-    member.name,
+    withQuant(member),
     slot.label,
     member.on_shelf ? member.base_model : "not on shelf, kept by its hash",
   ]
@@ -591,10 +674,6 @@ const notchStyle = computed(() => {
   flex-shrink: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
-}
-
-.msp__spacer {
-  flex: 1;
 }
 
 .msp__note > [role="gridcell"] {
@@ -657,6 +736,13 @@ const notchStyle = computed(() => {
 }
 
 /* The hand-made mark: the dashed pill the card's cover badge also wears. */
+.mss__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
+}
+
 .mss__mark {
   flex-shrink: 0;
   padding: 0 var(--space-2);
@@ -679,6 +765,25 @@ const notchStyle = computed(() => {
   grid-template-columns: minmax(96px, 12%) minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
+}
+
+/* A rail drag: a slot the models do not fit fades and refuses the drop; every
+   slot that takes them wears a dashed rim for the whole drag, and the one under
+   the pointer turns it solid over the active wash. An outline, not an inset
+   ring: an outline paints above the slot's own tiles. */
+.mss__slot--refuse {
+  opacity: var(--opacity-disabled);
+}
+
+.mss__slot--target {
+  outline: var(--focus-width) dashed var(--active-bar);
+  outline-offset: var(--space-1);
+  border-radius: var(--radius-md);
+}
+
+.mss__slot--drop {
+  outline-style: solid;
+  background: var(--active-wash);
 }
 
 .mss__label {
@@ -847,6 +952,16 @@ const notchStyle = computed(() => {
 
 .mss__ghostmark {
   opacity: var(--opacity-disabled);
+}
+
+/* The precision the name to its left has lost: what tells a set's BF16 file
+   from the FP8 one it is offered. Mono, as the shelf row's quant chip is; no
+   border, since the tile already carries a bordered base-model pill. */
+.mss__quant {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
 .mss__ghostcount {

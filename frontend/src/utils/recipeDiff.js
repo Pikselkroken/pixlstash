@@ -11,15 +11,10 @@
  * negative or seed, so there is nothing to differ from.
  */
 
+import { loraStem } from "./loraChain";
+
 /** Shelf kinds as the line prefixes them; a checkpoint goes unprefixed. */
 const KIND_LABELS = { vae: "VAE", text_encoder: "Text encoder" };
-
-/** "characters/Ada_v2.safetensors" → "Ada_v2". */
-export function shortName(filename) {
-  const base = String(filename ?? "").split(/[\\/]/).pop();
-  const dot = base.lastIndexOf(".");
-  return dot > 0 ? base.slice(0, dot) : base;
-}
 
 /** A strength as a person writes it: 0.8, 1, 0.85. A missing one loads at 1. */
 function strengthText(value) {
@@ -51,7 +46,7 @@ function valueText(value) {
  */
 function sameFile(a, b) {
   if (a.sha256 && b.sha256) return a.sha256.toLowerCase() === b.sha256.toLowerCase();
-  return shortName(a.filename).toLowerCase() === shortName(b.filename).toLowerCase();
+  return loraStem(a.filename).toLowerCase() === loraStem(b.filename).toLowerCase();
 }
 
 /**
@@ -103,7 +98,7 @@ function pairLoras(mine, theirs) {
  * printed as a blank "without ".
  */
 function loraName(lora) {
-  return shortName(lora.filename) || "an unnamed LoRA";
+  return loraStem(lora.filename) || "an unnamed LoRA";
 }
 
 function segment(kind, parts) {
@@ -151,11 +146,11 @@ export function recipeDiff(recipe, defaultRecipe) {
   for (const model of recipe.models || []) {
     if (!model?.filename) continue;
     const base = defaultModels.find((row) => row.address === model.address);
-    if (base?.filename && shortName(base.filename).toLowerCase() === shortName(model.filename).toLowerCase()) {
+    if (base?.filename && loraStem(base.filename).toLowerCase() === loraStem(model.filename).toLowerCase()) {
       continue;
     }
     const prefix = KIND_LABELS[base?.kind];
-    segments.push(segment("model", [`${prefix ? `${prefix}: ` : ""}${shortName(model.filename)}`]));
+    segments.push(segment("model", [`${prefix ? `${prefix}: ` : ""}${loraStem(model.filename)}`]));
   }
 
   // LoRAs: an empty list runs the default's, so it differs in none of them.
@@ -221,7 +216,7 @@ export function lookLoraDiff(look, defaultRecipe) {
   if (!comparable(mine, theirs)) return null;
   const { added, removed } = pairLoras(mine, theirs);
   return [
-    ...added.map((lora) => segment("lora-add", [`+ ${shortName(lora.filename)}`])),
-    ...removed.map((lora) => segment("lora-without", [`without ${shortName(lora.filename)}`])),
+    ...added.map((lora) => segment("lora-add", [`+ ${loraStem(lora.filename)}`])),
+    ...removed.map((lora) => segment("lora-without", [`without ${loraStem(lora.filename)}`])),
   ];
 }

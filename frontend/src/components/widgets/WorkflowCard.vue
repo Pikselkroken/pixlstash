@@ -375,6 +375,7 @@ const facts = computed(() => factChips(props.card, { short: true }));
 const accessibleName = computed(() => cardAccessibleName(props.card));
 </script>
 
+<style scoped src="./cardCover.css"></style>
 <style scoped>
 /* 134 = 8 + 36 + 28 + 2 × 24 + 3 × 2 + 8: the meta block - the name's
    two-line --wf-name-h, row 2 at --wf-mark and two --control-h-sm rows. The
@@ -433,52 +434,6 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   pointer-events: none;
 }
 
-/* 6:5 is the cover at EVERY count; only the tracks inside it change, so cards
-   in a row are still exactly as tall as each other - that is what the old fixed
-   height was protecting, and it survives.
-
-   What the tracks come to, against a cover W wide and (5/6)W tall:
-     one    W × (5/6)W                         = 6/5
-     two    (1/2)W × (5/6)W                    = 3/5, twice
-     three  big (2/3)W × (5/6)W                = 4/5
-            small (1/3)W × (5/12)W             = 4/5
-   The 2px gap puts each a fraction of a pixel off that, which is not worth
-   carrying a `calc` for.
-
-   The crop follows from the shape, since the picture is `cover`-fitted and
-   top-anchored below: an 832×1216 generation keeps its top 57% at 6:5, its top
-   86% at 4:5, and ALL of its height at 3:5 (a cell narrower than the picture
-   trims the sides instead). So the widest cut on this card lands on the card
-   with one picture to show, which is the price of giving it the whole box. */
-.wf-card__cover {
-  position: relative;
-  flex: none;
-  box-sizing: border-box;
-  overflow: hidden;
-  display: grid;
-  gap: var(--space-1);
-  aspect-ratio: 6 / 5;
-}
-
-.wf-card__cover--1 {
-  grid-template-columns: 1fr;
-  grid-template-rows: 1fr;
-}
-
-.wf-card__cover--2 {
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr;
-}
-
-.wf-card__cover--3 {
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-.wf-card__cover--3 .wf-card__pic:first-child {
-  grid-row: 1 / 3;
-}
-
 /* Still painted, because a cell exists before its <img> has loaded. It is no
    longer a cell that will never hold a picture.
 
@@ -517,29 +472,6 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   height: 100%;
   object-fit: cover;
   object-position: top center;
-}
-
-/* The shipped scrim badge: a dark chip over an arbitrary photo. */
-.wf-card__badge {
-  position: absolute;
-  top: var(--space-3);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-height: var(--badge-size);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-snug);
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
-.wf-card__badge--end {
-  right: var(--space-3);
 }
 
 /* Per picture, so on the cell's own corner - bottom-left, clear of the
@@ -634,11 +566,6 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   margin-left: auto;
 }
 
-.wf-card__empty-line {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
 .wf-card__meta {
   flex: none;
   display: grid;
@@ -647,18 +574,6 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
     var(--control-h-sm);
   row-gap: var(--space-1);
   padding: var(--space-3);
-}
-
-.wf-card__row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.wf-card__row > .chip-row {
-  flex: 1;
 }
 
 /* Row 4 shares the bottom-right corner with ⓘ, so it keeps that square free. */
@@ -683,12 +598,6 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
   line-height: calc(var(--wf-name-h) / 2);
-}
-
-.wf-card__none {
-  flex-shrink: 0;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wf-card__info {

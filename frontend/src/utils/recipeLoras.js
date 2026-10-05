@@ -5,16 +5,7 @@
 // has saved — and both have to get the same two things right, which is why it
 // is one function.
 
-import { loraKey } from "./recipeKey";
-
-/** A file name as every side of this spells it: lowercase, no directory. */
-function baseName(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .split(/[\\/]/)
-    .pop();
-}
+import { loraBase } from "./loraChain";
 
 /**
  * Build a recipe's `loras` from what a picture names and what the shelf holds.
@@ -40,12 +31,12 @@ export function resolveRecipeLoras(loraNames, modelSlots, shelf) {
   const strengths = new Map(
     (modelSlots || [])
       .filter((slot) => /lora|adapter/i.test(slot?.widget || ""))
-      .map((slot) => [baseName(slot.name), slot.strength]),
+      .map((slot) => [loraBase(slot.name), slot.strength]),
   );
   return (loraNames || []).map((filename) => {
-    const base = baseName(filename);
+    const base = loraBase(filename);
     const hits = (shelf || []).filter(
-      (row) => row.sha256 && baseName(row.filename) === base,
+      (row) => row.sha256 && loraBase(row.filename) === base,
     );
     // Exactly one row, as `apply_adapter` resolves it: two files of that name
     // on the shelf is a coin toss over which one would load.
@@ -55,9 +46,4 @@ export function resolveRecipeLoras(loraNames, modelSlots, shelf) {
       strength: Number(strengths.get(base) ?? 1),
     };
   });
-}
-
-/** Whether two LoRA lists name the same files, however they are spelled. */
-export function sameLoras(left, right) {
-  return loraKey(left) === loraKey(right);
 }
