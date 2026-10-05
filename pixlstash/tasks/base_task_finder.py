@@ -223,7 +223,6 @@ class BaseDeferringFinder(BaseTaskFinder):
     def on_task_complete(self, task, error) -> None:
         """Release the batch, and defer what must not be handed out again."""
         ids = (getattr(task, "params", None) or {}).get(self._IDS_PARAM) or []
-        self._handed_out.difference_update(ids)
         if isinstance(error, self._TRANSIENT):
             logger.info(
                 "%s did not run for %d item(s): %s. They stay eligible.",
@@ -231,8 +230,7 @@ class BaseDeferringFinder(BaseTaskFinder):
                 len(ids),
                 error,
             )
-            return
-        if error is not None:
+        elif error is not None:
             logger.warning(
                 "%s failed for %s: %s. Deferring them for the rest of this session.",
                 self._WHAT,
@@ -240,5 +238,11 @@ class BaseDeferringFinder(BaseTaskFinder):
                 error,
             )
             self._deferred.update(ids)
-            return
-        self._deferred.update((getattr(task, "result", None) or {}).get("deferred", []))
+        else:
+            self._deferred.update(
+                (getattr(task, "result", None) or {}).get("deferred", [])
+            )
+        # Released last: the planner may run `find_task` the moment the batch
+        # is let go, and one released before its deferral is recorded is
+        # handed straight back out.
+        self._handed_out.difference_update(ids)

@@ -3,10 +3,10 @@ import sys
 import subprocess
 import time
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from sqlmodel import Session
 
 from PIL import Image
@@ -1176,8 +1176,10 @@ def create_router(server) -> APIRouter:
             json_schema_extra={"example": {"workflow_ghost_retention": "covered"}}
         )
 
-        workflow_ghost_retention: Literal[
-            workflow_ghost_service.GHOST_RETENTION_CHOICES
+        workflow_ghost_retention: Annotated[
+            Literal[workflow_ghost_service.GHOST_RETENTION_CHOICES],
+            # Matched case- and space-blind, as the setting always has been.
+            BeforeValidator(lambda value: str(value).strip().lower()),
         ] = Field(
             description=("One of `off`, `covered` or `on`. Any other value is a 422."),
             examples=["covered"],

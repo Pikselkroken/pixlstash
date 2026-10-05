@@ -3126,6 +3126,22 @@ def test_an_unknown_ghost_position_is_refused_rather_than_stored(server):
     assert client.get("/server-config/ghost-retention").json() == before
 
 
+def test_a_ghost_position_is_matched_case_and_space_blind(server):
+    client = _client(server)
+    try:
+        resp = client.patch(
+            "/server-config/ghost-retention",
+            json={"workflow_ghost_retention": " On "},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["workflow_ghost_retention"] == "on"
+    finally:
+        client.patch(
+            "/server-config/ghost-retention",
+            json={"workflow_ghost_retention": "covered"},
+        )
+
+
 def test_the_two_purge_settings_fail_in_opposite_directions():
     """An unreadable config falls to whichever position holds LESS data.
 
