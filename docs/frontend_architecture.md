@@ -5792,10 +5792,13 @@ the first time a hand-made set opens while the rail is closed.
 - **What it lists.** Every shelf row some set slot takes (`railListed`), under
   the set panel's slot headings, each saying where it already is ("In no set
   yet", "In Night city", "In 2 of your sets"). Picking a model already in
-  another set is ordinary. The tab shows the count. Every means every:
-  `store.ensureRailBlocks()` reads the blocks Show has unticked into `rows`
-  (which is everything known, not the shown set), so the shelf's own list is
-  unchanged. Until the sets are read nothing says where a model is and *In no
+  another set is ordinary. The tab shows the count. Every means every: while
+  the rail is mounted (`store.setRailMounted`) every `fetchRows` also reads the
+  blocks Show has unticked (`fetchedBlocks`) into `rows`, which is everything
+  known, not the shown set, so the shelf's own list is unchanged and a scan or
+  a session reset refreshes the rail's blocks with the shown ones. The shelf's
+  post-reset watcher re-reads the sets too, since the grid and the rail asked
+  for them only as they mounted. Until the sets are read nothing says where a model is and *In no
   set yet* is disabled; a failed read says so with Retry rather than calling
   every model loose.
 - **Two filters, never applied for you.** *Fits <set>* (`setFits` in
@@ -5816,7 +5819,9 @@ the first time a hand-made set opens while the rail is closed.
   {quiet: true})`; once they pause for 1.5 s, `announceAdded` raises one
   receipt for the whole run (what the set still holds of it), whose Undo takes
   all of it back. A run ends on an add to another set, a set panel opening or
-  closing, a tab switch or the rail closing. An added row keeps its place with
+  closing, a tab switch or the rail closing. A session change drops a
+  waiting run instead of raising it: its receipt would name a set by id in
+  the next library. An added row keeps its place with
   a check (*In set*); a row whose write is out ignores a second press. The
   receipt is raised again only when the run has grown since it went up.
 - **Checkpoints and hashes.** A row still being hashed is listed but cannot be

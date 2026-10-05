@@ -270,6 +270,27 @@ describe("what it knows before it says it", () => {
     expect(store.visibleRows.some((r) => r.id === 1)).toBe(false);
   });
 
+  it("keeps an unticked kind fresh: a scan's new checkpoint reaches the rail", async () => {
+    listCheckpoints.mockResolvedValue([ROWS[0]]);
+    const store = useModelShelfStore();
+    await store.setFilters({ checkpoints: false });
+    const { wrapper } = await mountRail({ rows: ROWS.slice(1) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // A scan refetches the shelf; Show still leaves checkpoints unticked.
+    listCheckpoints.mockResolvedValue([ROWS[0], row(9, "Juggernaut_XL", "checkpoint")]);
+    await store.fetchRows({ markNew: true });
+    await wrapper.vm.$nextTick();
+    expect(option(wrapper, "Juggernaut")).toBeTruthy();
+
+    // Unmounted, the rail stops costing the shelf an unticked block.
+    wrapper.unmount();
+    mounted.splice(mounted.indexOf(wrapper), 1);
+    listCheckpoints.mockClear();
+    await store.fetchRows();
+    expect(listCheckpoints).not.toHaveBeenCalled();
+  });
+
   it("says nothing about where a model is until the sets are read", async () => {
     listAdapters.mockResolvedValue(ROWS);
     fetchWorkflowSets.mockReturnValue(new Promise(() => {}));
@@ -401,6 +422,44 @@ describe("adding", () => {
     expect(new Set(removeWorkflowSetMembers.mock.calls[0][1])).toEqual(
       new Set([shaOf(5), shaOf(3)]),
     );
+  });
+
+  it("drops a run still waiting for its pause when the session changes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const held = [member(1, "RealVisXL_v5", "checkpoint"), member(5, "Soft", "lora")];
+    addWorkflowSetMembers.mockResolvedValue({
+      set: handSet(10, held),
+      added: [shaOf(5)],
+    });
+    // No set open: a reset leaves `openSetKey` as it was, so nothing else ends
+    // the run. Add to set… is how a run starts without one.
+    const { wrapper, store } = await mountRail({
+      handMade: [handSet(10, [member(1, "RealVisXL_v5", "checkpoint")])],
+    });
+    // The next library happens to hold a set with the same id.
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [handSet(10, held)],
+    });
+    const spy = vi.spyOn(store, "announceAdded");
+    await option(wrapper, "Soft").trigger("contextmenu");
+    const menuItems = () => wrapper.findAll(".mrail-menu .ctx-item");
+    await menuItems()
+      .find((b) => b.text().includes("Add to set"))
+      .trigger("click");
+    await menuItems()
+      .find((b) => b.text().includes("RealVisXL"))
+      .trigger("click");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(addWorkflowSetMembers).toHaveBeenCalledTimes(1);
+
+    store.resetForSession();
+    await wrapper.vm.$nextTick();
+    await store.loadWorkflowSets();
+    await vi.advanceTimersByTimeAsync(2000);
+    // No receipt, so no Undo that would reach into the other library's set.
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -865,5 +924,25 @@ describe("dropping on the set grid", () => {
     ]);
     await store.addRowsToHandMadeSet(sdxl, store.rows);
     expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+  });
+
+  it("refuses a mixed selection when any model is on another base model", async () => {
+    const store = useModelShelfStore();
+    listAdapters.mockResolvedValue([
+      row(5, "Soft_Light", "adapter", { base_model: "SD 1.5" }),
+      row(6, "Film_XL", "adapter", { base_model: "SDXL" }),
+    ]);
+    await store.fetchRows();
+    const sdxl = handSet(10, [
+      { ...member(1, "RealVisXL_v5", "checkpoint"), base_model: "SDXL" },
+    ]);
+    // One of them fits; the other must not ride in on its back.
+    expect(store.railDropRefusal(sdxl, store.rows)).toBe("SDXL, not SD 1.5");
+    await store.addRowsToHandMadeSet(sdxl, store.rows);
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+    // A model whose base is unknown is no conflict.
+    expect(
+      store.railDropRefusal(sdxl, [store.rows[1], row(8, "Mystery", "adapter")]),
+    ).toBe("");
   });
 });

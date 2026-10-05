@@ -4696,11 +4696,15 @@ onMounted(() => {
 // than gating the empty state on `loaded`: the view is still on screen and its
 // job is to show the shelf, so a blank body would be a second wrong answer.
 // The store cannot do this itself: session-reset handlers run BEFORE the new
-// credential is installed, whereas this pre-flush watcher runs after.
+// credential is installed, whereas this pre-flush watcher runs after. The
+// sets go with the rows, and the set grid and the Models rail asked for them
+// only as they mounted, so they are read again here too.
 watch(
   () => store.loaded,
   (isLoaded) => {
-    if (!isLoaded) store.fetchRows();
+    if (isLoaded) return;
+    store.fetchRows();
+    store.loadWorkflowSets();
   },
 );
 </script>

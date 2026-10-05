@@ -391,10 +391,11 @@ const tasksStore = useTasksStore();
 const route = useRoute();
 
 // The sets say where each model already is. The store's guard makes a repeat
-// of the grid's own read free. The rail lists every model a slot takes, so the
-// blocks Show has unticked are read too.
+// of the grid's own read free. The rail lists every model a slot takes, so
+// while it is mounted every fetch reads the blocks Show has unticked too.
 store.loadWorkflowSets();
-store.ensureRailBlocks();
+store.setRailMounted(true);
+onBeforeUnmount(() => store.setRailMounted(false));
 
 /**
  * Whether the sets have been read. Until they have, nothing may say "In no
@@ -910,6 +911,18 @@ watch(
   () => endRun(),
 );
 onBeforeUnmount(() => endRun());
+
+// A credential change empties the store under a run still waiting for its
+// pause. Its receipt would name a set by id in whatever library is read next,
+// and its Undo would act there, so the run is dropped, not raised.
+watch(
+  () => store.loaded,
+  (isLoaded) => {
+    if (isLoaded || !run) return;
+    clearTimeout(run.timer);
+    run = null;
+  },
+);
 
 /**
  * Add shelf rows to a set, quietly, as part of the current run.

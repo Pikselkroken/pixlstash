@@ -1020,6 +1020,9 @@ const BLOCKS = [
   "support",
 ];
 
+/** The blocks some workflow-set slot takes: what the Models rail lists. */
+const RAIL_BLOCKS = ["adapters", "checkpoints", "unclassified", "support"];
+
 /**
  * Which block a row came from, so a fetch only replaces what it asked for.
  *
@@ -1040,6 +1043,8 @@ function blockOf(row) {
 
 export const useModelShelfStore = defineStore("modelShelf", () => {
   const filters = reactive(storedFilters() || defaultFilters());
+  /** Whether the Models rail is mounted; see `fetchedBlocks`. */
+  const railMounted = ref(false);
   /** Grouping and sort. A view preference, not part of the `Show` selection. */
   const view = reactive(storedView());
   /** Collapsed group keys, per axis. Replaced wholesale so templates react. */
@@ -1110,12 +1115,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const before = new Set(rows.value.map((row) => row.id));
     loading.value = true;
     error.value = "";
+    // Read before the request goes out: a tick while it is on the wire is the
+    // next fetch's business.
+    const blocks = fetchedBlocks();
     try {
-      const results = await Promise.all(
-        blockRequests(BLOCKS.filter((block) => filters[block])),
-      );
+      const results = await Promise.all(blockRequests(blocks));
       if (startedAt !== epoch) return;
-      const refreshed = new Set(BLOCKS.filter((block) => filters[block]));
+      const refreshed = new Set(blocks);
       rows.value = [
         ...rows.value.filter((row) => !refreshed.has(blockOf(row))),
         ...results.flat(),
@@ -1177,42 +1183,28 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * Fetch the blocks the Models rail lists that `Show` has left unticked.
-   *
-   * The rail lists every model a set slot takes, whatever Show says, and
-   * `rows` is everything known rather than the shown set, so the missing
-   * blocks are merged in exactly as `fetchRows` merges its own. A block ticked
-   * while this is on the wire belongs to `fetchRows`, and is not overwritten.
+   * The blocks a fetch reads: the ticked ones, plus every block a set slot
+   * takes while the Models rail is mounted. The rail lists those whatever
+   * Show says, and `rows` is everything known rather than the shown set, so
+   * reading them in the same fetch keeps them as fresh as the shown ones: a
+   * scan or a session reset refreshes them too.
    */
-  async function ensureRailBlocks() {
-    const wanted = ["adapters", "checkpoints", "unclassified", "support"];
-    const known = new Set(rows.value.map(blockOf));
-    const missing = wanted.filter(
-      (block) => !filters[block] && !known.has(block),
+  function fetchedBlocks() {
+    return BLOCKS.filter(
+      (block) => filters[block] || (railMounted.value && RAIL_BLOCKS.includes(block)),
     );
-    if (!missing.length) return;
-    try {
-      const results = (await Promise.all(blockRequests(missing))).flat();
-      const mine = new Set(missing.filter((block) => !filters[block]));
-      const present = new Set(rows.value.map(blockOf));
-      rows.value = [
-        ...rows.value,
-        ...results.filter(
-          (row) => mine.has(blockOf(row)) && !present.has(blockOf(row)),
-        ),
-      ];
-    } catch (err) {
-      console.warn("[ModelShelf] the Models rail could not read every block", {
-        missing,
-        err,
-      });
-      useNoticeStore().push({
-        level: "error",
-        text:
-          errorDetail(err) ||
-          "Some models could not be read, so the Models rail is missing them.",
-      });
+  }
+
+  /**
+   * The rail asks for its blocks as it mounts (and lets go as it unmounts).
+   * One extra fetch only when Show has left one of them unticked.
+   */
+  function setRailMounted(mounted) {
+    railMounted.value = mounted;
+    if (mounted && !RAIL_BLOCKS.every((block) => filters[block])) {
+      return fetchRows();
     }
+    return null;
   }
 
   /**
@@ -2649,24 +2641,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /**
    * Why a hand-made set will not take these shelf rows, or "" when it will:
-   * it holds them all already, or it is on another base model. One rule for
-   * the rail's *Add to set…* menu and for a drag over a card, so a card
-   * refuses while the pointer is over it rather than after the drop.
+   * it holds them all already, or any one it would add is on another base
+   * model. One rule for the rail's *Add to set…* menu and for a drag over a
+   * card, so a card refuses while the pointer is over it rather than after
+   * the drop. A model with no known base model is not a conflict.
    *
    * @param {Object} set
    * @param {Array<Object>} models - shelf rows.
    */
   function railDropRefusal(set, models) {
     const held = new Set((set.members ?? []).map((member) => member.sha256));
-    if (models.length && models.every((row) => held.has(row.sha256))) {
-      return "Already in it";
-    }
-    const base = handMadeBase(withShelfNames(set));
-    const bases = new Set(models.map(rowBaseModel).filter(Boolean));
-    if (base && bases.size === 1 && !bases.has(base)) {
-      return `${base}, not ${[...bases][0]}`;
-    }
-    return "";
+    const fresh = models.filter((row) => !held.has(row.sha256));
+    if (models.length && !fresh.length) return "Already in it";
+    const base = handMadeBase(set);
+    const other = fresh.map(rowBaseModel).find((b) => b && b !== base);
+    return base && other ? `${base}, not ${other}` : "";
   }
 
   /** A new set holding these shelf rows, each in its kind's slot. */
@@ -3747,7 +3736,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError,
     setsLoaded,
     loadWorkflowSets,
-    ensureRailBlocks,
+    setRailMounted,
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,

@@ -28,6 +28,7 @@ const listSupport = vi.fn();
 const deleteModels = vi.fn();
 const fetchModelCompanions = vi.fn();
 const deleteWorkflowSet = vi.fn();
+const fetchWorkflowSets = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -48,6 +49,7 @@ vi.mock("../../api/modelShelf", () => ({
   // Asked before the delete prompt opens; answered per test.
   fetchModelCompanions: (...args) => fetchModelCompanions(...args),
   deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
+  fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
   // The base-model field asks for its completion list as it opens. Answered
   // with nothing here: the list is the widget's own suite's business, and left
   // unmocked this is a network call on a double-click.
@@ -319,6 +321,9 @@ beforeEach(() => {
   listEngines.mockReset().mockResolvedValue([]);
   listUnclassified.mockReset().mockResolvedValue([]);
   listSupport.mockReset().mockResolvedValue([]);
+  fetchWorkflowSets
+    .mockReset()
+    .mockResolvedValue({ combinations: [], no_set: [], hand_made: [] });
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
   // The thumbnail verb's two halves. Reset here rather than per-test: a
@@ -1053,11 +1058,16 @@ describe("after a session reset", () => {
     expect(wrapper.find(".shelf-row").exists()).toBe(true);
 
     listAdapters.mockClear();
+    fetchWorkflowSets.mockClear();
     useModelShelfStore().resetForSession();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await wrapper.vm.$nextTick();
 
     expect(listAdapters).toHaveBeenCalled();
+    // The sets go with the rows; the grid and the Models rail asked for them
+    // only as they mounted, and are still mounted.
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+    expect(useModelShelfStore().setsLoaded).toBe(true);
     expect(textOf(wrapper.find(".shelf-body"))).not.toContain(
       "No models found",
     );
