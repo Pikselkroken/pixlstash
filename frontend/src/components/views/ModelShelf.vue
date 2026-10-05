@@ -297,9 +297,10 @@
             transition="scale-transition"
           >
             <template #activator="{ props: menuProps }">
+              <!-- `withRef`, not a `ref` beside `v-bind`: the two would
+                   collide and the menu would lose its anchor. -->
               <AppBarButton
-                ref="groupButtonRef"
-                v-bind="menuProps"
+                v-bind="withRef(menuProps, (el) => (groupButtonRef = el))"
                 :icon="activeGroup.icon"
                 chevron
                 :open="groupMenuOpen"
