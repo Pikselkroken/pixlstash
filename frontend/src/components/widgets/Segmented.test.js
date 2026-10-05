@@ -97,15 +97,6 @@ describe.each([
     await w.trigger("keydown", { key: "ArrowLeft" });
     expect(w.emitted("update:modelValue")).toEqual([["a"], ["c"]]);
   });
-
-  it("does nothing while the whole group is disabled", async () => {
-    const w = mount(Component, {
-      props: { options: OPTIONS, modelValue: "a", disabled: true },
-    });
-    await w.findAll('[role="radio"]')[2].trigger("click");
-    await w.trigger("keydown", { key: "ArrowRight" });
-    expect(w.emitted("update:modelValue")).toBeUndefined();
-  });
 });
 
 describe("Segmented", () => {
@@ -116,16 +107,15 @@ describe("Segmented", () => {
     expect(labelOnly.find(".seg__opt--on").text()).toBe("Alpha");
     expect(labelOnly.find("i").exists()).toBe(false);
 
-    const iconOnly = mount(Segmented, {
+    const iconLabel = mount(Segmented, {
       props: {
-        options: [{ id: "g", icon: "view-grid", title: "Grid" }],
-        variant: "icon",
+        options: [{ id: "g", icon: "view-grid", label: "Grid" }],
+        variant: "icon-label",
       },
     });
-    const radio = iconOnly.find('[role="radio"]');
-    expect(radio.attributes("aria-label")).toBe("Grid");
+    const radio = iconLabel.find('[role="radio"]');
     expect(radio.find("i").text()).toBe("mdi-view-grid");
-    expect(radio.find(".seg__label").exists()).toBe(false);
+    expect(radio.find(".seg__label").text()).toBe("Grid");
   });
 
   it("picks on a click of the current value, so a snap stop can re-snap", async () => {
@@ -137,6 +127,15 @@ describe("Segmented", () => {
 });
 
 describe("OptionRows", () => {
+  it("does nothing while the whole group is disabled", async () => {
+    const w = mount(OptionRows, {
+      props: { options: OPTIONS, modelValue: "a", disabled: true },
+    });
+    await w.findAll('[role="radio"]')[2].trigger("click");
+    await w.trigger("keydown", { key: "ArrowRight" });
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+  });
+
   it("takes no fill: every row carries an aligned radio indicator", () => {
     const w = mount(OptionRows, {
       props: { options: OPTIONS, modelValue: "c" },

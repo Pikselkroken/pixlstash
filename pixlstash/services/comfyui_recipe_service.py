@@ -28,7 +28,7 @@ import threading
 from concurrent.futures import Future
 from copy import deepcopy
 from graphlib import CycleError, TopologicalSorter
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import requests
 
@@ -1806,7 +1806,7 @@ def _inserted_loader(
 def insert_adapter(
     prompt_graph: dict,
     plan: dict,
-    adapter: Optional[dict],
+    adapter: dict,
     object_info: dict,
 ) -> dict:
     """Add a LoRA loader carrying *adapter* to *prompt_graph*, as *plan* says.
@@ -1820,13 +1820,7 @@ def insert_adapter(
     Args:
         prompt_graph: The graph to mutate in place.
         plan: The output of :func:`plan_lora_insertion` for this graph.
-        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`, or
-            ``None`` to add the loader **without choosing a LoRA**: ComfyUI's
-            own loader, wired in and left at its widget defaults exactly as
-            dropping the node in ComfyUI would leave it. That is what
-            ``POST /workflows/{key}/insert-lora-loader`` writes into a stored
-            file, so the workflow has a slot to swap from then on. No adapter
-            means no digest loader either - nothing has a digest to resolve.
+        adapter: ``{"sha256", "filenames"}``, as for :func:`apply_adapter`.
         object_info: The map the plan was made with.
 
     Returns:
@@ -1837,22 +1831,7 @@ def insert_adapter(
             the graph has diverged from the plan.
     """
     clip = plan.get("clip")
-    if adapter is None:
-        loader = "LoraLoader" if clip is not None else "LoraLoaderModelOnly"
-        if loader not in object_info:
-            raise LookupError(f"This ComfyUI has no {loader} node.")
-        if not _combo_options(object_info[loader], "lora_name"):
-            # The same check `_inserted_loader` makes below, for the same
-            # reason: with no options `_widget_defaults` yields no `lora_name`
-            # key at all, so the copy would be written and answered 201 and
-            # then refused by ComfyUI on a missing required input — after the
-            # owner was told it was ready to pick a LoRA in.
-            raise LookupError(
-                f"This ComfyUI does not say which LoRA files {loader} can load."
-            )
-        field = value = None
-    else:
-        loader, field, value = _inserted_loader(adapter, object_info, clip is not None)
+    loader, field, value = _inserted_loader(adapter, object_info, clip is not None)
     spec = object_info.get(loader) or {}
     outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
     sources = {"MODEL": plan["model"], "CLIP": clip}
@@ -1888,8 +1867,7 @@ def insert_adapter(
         max((int(k) for k in prompt_graph if str(k).isdigit()), default=0) + 1
     )
     inputs = _widget_defaults(spec)
-    if field is not None:
-        inputs[field] = value
+    inputs[field] = value
     inputs["model"] = [plan["model"]["node_id"], plan["model"]["output"]]
     if clip:
         inputs["clip"] = [clip["node_id"], clip["output"]]

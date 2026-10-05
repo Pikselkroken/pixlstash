@@ -94,7 +94,7 @@ describe("usePictureText - which tab exists", () => {
     getPictureText.mockResolvedValue({ state: "pending", lines: [] });
     const { text } = setup();
     await settle();
-    expect(text.isPending.value).toBe(true);
+    expect(text.text.value.state).toBe("pending");
     text.pickTab(TEXT_TAB);
     expect(text.activeTab.value).toBe(DESCRIPTION_TAB);
   });

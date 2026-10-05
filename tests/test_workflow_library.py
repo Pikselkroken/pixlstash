@@ -90,10 +90,7 @@ from pixlstash.services.model_shelf_service import (
     fetch_workflow_sets,
 )
 from pixlstash.services.model_workflow_sets import create_set, delete_set
-from pixlstash.services.workflow_library_service import (
-    scan_progress,
-    topology_activity,
-)
+from pixlstash.services.workflow_library_service import recipe_picture_counts
 from pixlstash.services.scrapheap_service import purge_scrapheap_pictures
 from pixlstash.services.workflow_ghost_service import (
     DEFAULT_GHOST_RETENTION,
@@ -1987,12 +1984,12 @@ def test_counts_exclude_soft_deleted_pictures(store):
 
     store.vault.run_task(soft_delete)
 
-    counts = store.vault.run_immediate_read_task(topology_activity)
-    kept_topology = topology_hash(api_graph(TXT2IMG))
-    other_topology = topology_hash(trimmed)
-    assert kept_topology != other_topology
-    assert counts[kept_topology].pictures == 1
-    assert counts[other_topology].pictures == 1
+    counts = store.vault.run_immediate_read_task(recipe_picture_counts)
+    kept_recipe = read_picture(store, ids[0]).workflow_structural_hash
+    other_recipe = read_picture(store, ids[2]).workflow_structural_hash
+    assert kept_recipe != other_recipe
+    assert counts[kept_recipe] == 1
+    assert counts[other_recipe] == 1
 
     def soft_delete_the_rest(session):
         session.get(Picture, ids[0]).deleted = True
@@ -2001,9 +1998,7 @@ def test_counts_exclude_soft_deleted_pictures(store):
     store.vault.run_task(soft_delete_the_rest)
 
     # Absent entirely, not present with a zero.
-    assert topology_hash(api_graph(TXT2IMG)) not in store.vault.run_immediate_read_task(
-        topology_activity
-    )
+    assert kept_recipe not in store.vault.run_immediate_read_task(recipe_picture_counts)
 
 
 def generation(store, picture_id):
@@ -2081,17 +2076,6 @@ def test_the_finder_hands_its_library_to_the_scan(store):
 
     instance = read_picture(store, picture_id).workflow_instance_hash
     assert instance_row(store.hub, LIBRARY, instance) is not None
-
-
-def test_scan_progress_does_not_fall_back_during_the_backfill(store):
-    """Clearing the marker to record how a picture was made is not un-reading it."""
-    name = write_png(Path(store.image_root), "progress.png", api=api_graph(TXT2IMG))
-    picture_id = add_picture(store, name)
-    run_extraction(store, [picture_id])
-    mark_unscanned(store, picture_id)
-
-    progress = store.vault.run_immediate_read_task(scan_progress)
-    assert (progress.pictures, progress.scanned) == (1, 1)
 
 
 def test_a_scrapheaped_picture_keeps_its_instance_row(store):

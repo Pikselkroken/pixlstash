@@ -15,8 +15,8 @@ import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 // The precision a file was stored at, written into its name. Mirrors the
 // `_QUANT_*` vocabulary in `pixlstash/utils/model_utils.py` TOKEN FOR TOKEN:
 // `cleanAssetName` has already split on `_` and `-`, so `Q4_K_M` arrives as
-// three tokens, and the shelf row's name and the badge beside it come from one
-// parser on each side rather than two that can disagree.
+// three tokens, and the shelf row's name strips exactly the postfix the backend
+// parses into the `quant` its badge reads.
 //
 // Two rules and not one list. A GGUF level (`k`, `s`, `m`, `l`, `0`, `1`) is an
 // ordinary token in a real name, so it is only ever eaten as the tail of an
@@ -36,83 +36,63 @@ const GGUF_LEVELS = new Set([
   "1",
 ]);
 
-/** Filename spelling -> canonical id. The refinement wins where both appear. */
-const QUANT_TOKENS = {
-  fp32: "fp32",
-  f32: "fp32",
-  fp16: "fp16",
-  f16: "fp16",
-  bf16: "bf16",
-  fp8: "fp8",
-  f8: "fp8",
-  e4m3: "fp8_e4m3",
-  e4m3fn: "fp8_e4m3",
-  e5m2: "fp8_e5m2",
-  nvfp4: "nvfp4",
-  mxfp4: "mxfp4",
-  fp4: "fp4",
-  nf4: "nf4",
-  int8: "int8",
-  i8: "int8",
-  int4: "int4",
-  i4: "int4",
-};
+/** Filename spellings of a precision. */
+const QUANT_TOKENS = new Set([
+  "fp32",
+  "f32",
+  "fp16",
+  "f16",
+  "bf16",
+  "fp8",
+  "f8",
+  "e4m3",
+  "e4m3fn",
+  "e5m2",
+  "nvfp4",
+  "mxfp4",
+  "fp4",
+  "nf4",
+  "int8",
+  "i8",
+  "int4",
+  "i4",
+]);
 
 /** Popped only alongside a real quant token; alone they are somebody's name. */
 const QUANT_MODIFIERS = new Set(["scaled", "awq", "gptq", "fast"]);
 
 /**
- * Split a token list into its name and the quant postfix on the end.
+ * Drop the quant postfix off the end of a token list.
  *
- * Mirrors `_split_quant`. The one parser both {@link deriveModelName} and
- * {@link quantFromFilename} run.
+ * Mirrors the name half of `_split_quant`; the precision itself is served by
+ * the backend as `quant`.
  *
  * @param {string[]} tokens - `cleanAssetName(...)` split on whitespace.
- * @returns {{tokens: string[], quant: string|null}}
+ * @returns {string[]} the tokens that name the model.
  */
-function splitQuant(tokens) {
+function stripQuant(tokens) {
   // The GGUF tail first, longest match wins so `Q4 K M` beats the `Q4` in it.
   for (const width of [3, 2, 1]) {
     if (tokens.length < width) continue;
     const tail = tokens.slice(tokens.length - width);
     if (!GGUF_HEAD_RE.test(tail[0])) continue;
     if (!tail.slice(1).every((t) => GGUF_LEVELS.has(t.toLowerCase()))) continue;
-    return {
-      tokens: tokens.slice(0, tokens.length - width),
-      quant: tail.map((t) => t.toLowerCase()).join("_"),
-    };
+    return tokens.slice(0, tokens.length - width);
   }
   const kept = [...tokens];
   const popped = [];
   while (kept.length) {
     const last = kept[kept.length - 1].toLowerCase();
-    if (!(last in QUANT_TOKENS) && !QUANT_MODIFIERS.has(last)) break;
+    if (!QUANT_TOKENS.has(last) && !QUANT_MODIFIERS.has(last)) break;
     popped.push(kept.pop());
   }
   // The guard the whole safety of this rests on: `scaled` and `fast` are
   // ordinary tokens in real model names and may only be eaten when a genuine
   // quant token was eaten with them, or `some_model_scaled` silently becomes
   // `some model`.
-  const real = popped.find((t) => t.toLowerCase() in QUANT_TOKENS);
-  if (!real) return { tokens: [...tokens], quant: null };
-  return { tokens: kept, quant: QUANT_TOKENS[real.toLowerCase()] };
-}
-
-/**
- * The precision a model's filename says it was stored at.
- *
- * Mirrors `quant_from_filename`. The shelf and the workflow card are served
- * the canonical id by the backend; this is here so the two halves of the
- * parser stay provably identical (`modelShelf.test.js`) and so a client with
- * only a filename in hand can still answer.
- *
- * @param {string} filename - file name or path.
- * @returns {string|null} a canonical id, or null for the usual name that
- *   carries no quant postfix.
- */
-export function quantFromFilename(filename) {
-  return splitQuant(cleanAssetName(filename).split(/\s+/).filter(Boolean))
-    .quant;
+  return popped.some((t) => QUANT_TOKENS.has(t.toLowerCase()))
+    ? kept
+    : [...tokens];
 }
 
 /** Trailing tokens that record where in a training run a file was saved.
@@ -159,7 +139,7 @@ export function cleanAssetName(filename) {
  * @returns {string} a human-readable name, or `""` when nothing survives.
  */
 export function deriveModelName(filename) {
-  const { tokens } = splitQuant(
+  const tokens = stripQuant(
     cleanAssetName(filename).split(/\s+/).filter(Boolean),
   );
   while (tokens.length && TRAINING_SUFFIX_RE.test(tokens[tokens.length - 1])) {

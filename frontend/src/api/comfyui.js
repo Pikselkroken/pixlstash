@@ -41,27 +41,6 @@ export async function cardForWorkflow(name) {
 }
 
 /**
- * Where a LoRA loader would be added to a saved workflow that has none (#1376).
- *
- * `plan` is `{model, clip, rewires, pixlstash_loader}`: the node the loader
- * takes the model from (and the CLIP, `null` for a model-only loader), every
- * input it would rewire, and whether the loader may be the ComfyUI-PixlStash
- * one, which needs the node pack installed. It is `null` when no loader can be added, and `reason` says why;
- * `has_lora_loader` is true when there is a loader to swap instead. Owner-only,
- * since it asks the owner's ComfyUI.
- *
- * @param {string} name - the workflow's `name` as listed.
- * @returns {Promise<{plan: Object|null, reason: string|null, has_lora_loader: boolean}>}
- */
-export async function getLoraInsertion(name) {
-  return unwrap(
-    apiClient.get(
-      comfyUrl(`/workflows/${encodeURIComponent(name)}/lora-insertion`),
-    ),
-  );
-}
-
-/**
  * Import a workflow file as it is, UI or API format.
  *
  * Every import is a NEW manual workflow (identical copies are allowed), and

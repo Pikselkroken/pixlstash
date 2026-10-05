@@ -151,7 +151,6 @@ _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/workflows"),
     ("GET", "/api/v1/workflows/{workflow_id}"),
     ("GET", "/api/v1/workflows/{workflow_id}/pictures"),
-    ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"),
     # The ghost routes. Pinned here as well as refused in the authz test below:
     # every token that test can mint is READ, which the middleware refuses on a
     # DELETE before the gate reads the declaration, so a loosened entry would
@@ -160,9 +159,6 @@ _WORKFLOW_ROUTES = (
     ("PATCH", "/api/v1/server-config/ghost-retention"),
     ("DELETE", "/api/v1/server-config/ghost-retention/ghosts"),
     ("DELETE", "/api/v1/server-config/ghost-retention/model-ghosts"),
-    # Where a LoRA loader would go (#1376): it reaches the owner's ComfyUI, and
-    # its refusal is measured with the GET belts emptied in the test below.
-    ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"),
     # Export (v1.12 B8): the sharpest read here, because it hands back a whole
     # graph rather than a count of one.
     ("GET", "/api/v1/workflows/{workflow_id}/export"),
@@ -194,9 +190,8 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/run"),
     ("POST", "/api/v1/workflows/run/preflight"),
     # The file gestures (v1.12 B8). Each resolves the card's graph out of the
-    # whole library the way the run route does, and two of them write a file.
+    # whole library the way the run route does, and write a file.
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
-    ("POST", "/api/v1/workflows/{workflow_id}/insert-lora-loader"),
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
@@ -994,10 +989,6 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
             API + "/workflows/{workflow_id}/pictures",
         ),
         (
-            f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
-            API + "/workflows/recipes/{structural_hash}/graph",
-        ),
-        (
             f"{API}/workflows/{BUSY_WF}/export",
             API + "/workflows/{workflow_id}/export",
         ),
@@ -1021,28 +1012,6 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
 
 
 # ===========================================================================
-# The stored graph
-# ===========================================================================
-
-
-def test_a_recipe_serves_its_stored_graph_and_says_it_will_not_run(workflow_env):
-    """The stored document is prompt-free and parameter-free by construction, so
-    it describes the workflow and cannot be handed back to ComfyUI. The payload
-    has to say so; a caller discovering it by feeding this to ComfyUI is the
-    defect §B5 exists to close."""
-    r = workflow_env.owner.get(f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["document"] == _DOCUMENTS[BUSY_RECIPE_A]
-    assert body["runnable"] is False
-
-
-def test_an_unknown_recipe_is_a_404(workflow_env):
-    r = workflow_env.owner.get(f"{API}/workflows/recipes/{_h('nosuchrecipe')}/graph")
-    assert r.status_code == 404, r.text
-
-
-# ===========================================================================
 # Hardening (#1293): the rollback belt, transport, and the ghost routes
 # ===========================================================================
 
@@ -1054,10 +1023,6 @@ _TEMPLATED_PATHS = (
     (
         f"{API}/workflows/{BUSY_WF}/pictures",
         API + "/workflows/{workflow_id}/pictures",
-    ),
-    (
-        f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
-        API + "/workflows/recipes/{structural_hash}/graph",
     ),
     # The export (v1.12 B8) hands back a whole graph, so it is the one here
     # with most to lose from the rollback.
@@ -1448,63 +1413,6 @@ def loaderless_workflow(tmp_path, lora_workflow):
         },
     }
     return lora_workflow
-
-
-def test_a_workflow_with_no_lora_loader_shows_where_one_would_go(
-    workflow_env, loaderless_workflow
-):
-    owner = workflow_env.owner
-    r = owner.get(f"{API}/comfyui/workflows/plain.json/lora-insertion")
-    assert r.status_code == 200, r.text
-    plan = r.json()["plan"]
-    assert r.json()["has_lora_loader"] is False and r.json()["reason"] is None
-    assert plan["model"]["node_id"] == "4" and plan["clip"]["output"] == 1
-    assert [(w["node_id"], w["field"]) for w in plan["rewires"]] == [
-        ("6", "clip"),
-        ("3", "model"),
-    ]
-
-    # The control: a workflow that has a loader needs no plan.
-    r = owner.get(f"{API}/comfyui/workflows/lora.json/lora-insertion")
-    assert r.status_code == 200 and r.json()["has_lora_loader"] is True, r.text
-    assert r.json()["plan"] is None
-
-    # A ComfyUI that cannot be asked says so rather than guessing a splice.
-    loaderless_workflow.info = RuntimeError("Could not reach ComfyUI at example")
-    r = owner.get(f"{API}/comfyui/workflows/plain.json/lora-insertion")
-    assert r.status_code == 200 and r.json()["plan"] is None, r.text
-    assert "could not ask ComfyUI" in r.json()["reason"]
-
-
-def test_the_insertion_preview_is_owner_only(
-    workflow_env, loaderless_workflow, monkeypatch
-):
-    """Measured at the gate, on the route under test, in both directions.
-
-    The GET belts are emptied first: ``/api/v1/comfyui/workflows/`` is a
-    READ-blocked prefix, so the middleware would answer 403 before routing and
-    the declaration this test is named after could be loosened to ANY_TOKEN
-    with the test still green. ``assert_real_route`` is the other half - a
-    renamed or unmounted path 403s identically.
-    """
-    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
-    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
-    path = f"{API}/comfyui/workflows/plain.json/lora-insertion"
-    assert_real_route(workflow_env.server.api, "GET", path)
-    token = _mint(
-        workflow_env.owner,
-        "lora insertion probe",
-        resource_type="character",
-        resource_id=workflow_env.character_id,
-    )
-    client = _bearer(workflow_env.server, token)
-    assert client.get(f"{API}/pictures").status_code == 200, (
-        "the scoped token is dead; the refusal below would prove nothing"
-    )
-    r = client.get(path)
-    assert r.status_code == 403, r.text
-    # The positive control: the owner still reads it, with the belts down.
-    assert workflow_env.owner.get(path).status_code == 200
 
 
 def _extensions_answer(monkeypatch, answer):
@@ -4099,7 +4007,6 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
             {"picture_ids": [1], "target": BUSY_WF},
         ),
         ("POST", f"{API}/workflows/{BUSY_WF}/duplicate", None),
-        ("POST", f"{API}/workflows/{BUSY_WF}/insert-lora-loader", None),
         ("POST", f"{API}/workflows/{BUSY_WF}/fixed-copy", None),
         ("PUT", f"{API}/workflows/{BUSY_WF}/lora-chain", {"entries": []}),
         (
@@ -4134,12 +4041,6 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
 # row here fails rather than going unmeasured.
 _EVERY_WORKFLOW_ROUTE = (
     ("GET", "/workflows", "/workflows", None),
-    (
-        "GET",
-        "/workflows/recipes/{structural_hash}/graph",
-        f"/workflows/recipes/{BUSY_RECIPE_A}/graph",
-        None,
-    ),
     ("GET", "/workflows/{workflow_id}", f"/workflows/{BUSY_WF}", None),
     (
         "GET",
@@ -4208,12 +4109,6 @@ _EVERY_WORKFLOW_ROUTE = (
         "POST",
         "/workflows/{workflow_id}/duplicate",
         f"/workflows/{BUSY_WF}/duplicate",
-        None,
-    ),
-    (
-        "POST",
-        "/workflows/{workflow_id}/insert-lora-loader",
-        f"/workflows/{BUSY_WF}/insert-lora-loader",
         None,
     ),
     (
@@ -11968,25 +11863,6 @@ def loaderless(runnable, tmp_path):
     return SimpleNamespace(tmp_path=tmp_path, **vars(runnable))
 
 
-def test_inserting_a_lora_loader_writes_a_copy_with_a_slot_to_swap_into(loaderless):
-    """The #1376 splice, kept: a new file whose LoRA slot is there to be filled."""
-    r = loaderless.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["class_type"] == "LoraLoaderModelOnly"
-    written = _written(loaderless, body)
-    loader = written[body["node_id"]]
-    # ComfyUI's own widget default, the way dropping the node there would
-    # leave it. The gesture adds the slot; which LoRA goes in it is a later
-    # gesture, which is why the route says so and the client must too.
-    assert loader["inputs"]["lora_name"] == "add_detail.safetensors"
-    assert loader["inputs"]["strength_model"] == 1.0
-    assert loader["inputs"]["model"] == ["1", 0]
-    # The sampler now reads the loader rather than the checkpoint, or the run
-    # would go through without the LoRA and say nothing.
-    assert written["2"]["inputs"]["model"] == [body["node_id"], 0]
-
-
 def _serve_the_adapter_on(fixture, object_info: dict) -> None:
     """Make *object_info*'s model-only loader list the run tests' shelf LoRA."""
     info = json.loads(json.dumps(object_info))
@@ -12331,62 +12207,6 @@ def test_a_fixed_copy_needs_comfyui(runnable, tmp_path):
     )
     r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
     assert r.status_code == 503, r.text
-
-
-def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
-    """The stored file is never rewritten: the loader goes into a NEW file.
-
-    Asserts what it can observe — the original's bytes, and that the new file
-    is a different file with one more node in it. The dedupe bypass this route
-    also depends on is guarded where it IS observable, by
-    ``test_duplicating_twice_puts_a_second_file_beside_the_first``, where the
-    two documents are identical; here the spliced graph would not match the
-    original anyway, so asserting it would prove nothing.
-    """
-    original = loaderless.tmp_path / "original.json"
-    original.write_text(json.dumps(LOADERLESS_DOCUMENT))
-    body = loaderless.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader").json()
-    assert json.loads(original.read_text()) == LOADERLESS_DOCUMENT
-    written = _written(loaderless, body)
-    assert written != LOADERLESS_DOCUMENT
-    assert len(written) == len(LOADERLESS_DOCUMENT) + 1
-
-
-def test_inserting_a_loader_into_a_workflow_that_has_one_adds_it_after_the_source(
-    chained,
-):
-    """A loader always goes in the MODEL path, whatever loaders are there already.
-
-    Spliced right after the checkpoint, so the existing chain reads it. #1376
-    refused this; the owner's rule since is that the MODEL path from the
-    model source to the sampler always takes another LoRA.
-    """
-    r = chained.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
-    assert r.status_code == 201, r.text
-    body = r.json()
-    written = _written(chained, body)
-    new = body["node_id"]
-    assert written[new]["inputs"]["model"] == ["1", 0]
-    assert written["2"]["inputs"]["model"] == [new, 0]
-
-
-def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_path):
-    """An API link carries no type, so with no `object_info` a reader could be missed."""
-    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
-    runnable.monkeypatch.setattr(
-        workflows_routes,
-        "_load_embedded_api_prompt",
-        lambda server, pid, object_info=None: (
-            json.loads(json.dumps(LOADERLESS_DOCUMENT)),
-            [],
-        ),
-    )
-    runnable.monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
-    )
-    r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
-    assert r.status_code == 503, r.text
-    assert _manual_ids(runnable) == [], "a workflow was stored anyway"
 
 
 # --- the LoRA chain editor's routes (#1478) ---------------------------------
@@ -13458,24 +13278,3 @@ def test_a_graph_too_deeply_nested_to_walk_is_refused_not_a_500(runnable, monkey
     )
     r = runnable.owner.get(f"{API}/workflows/{RUN_WF}/export")
     assert r.status_code == 409, r.text
-
-
-def test_a_comfyui_with_no_lora_files_refuses_the_insert_rather_than_writing_one(
-    loaderless,
-):
-    """`_widget_defaults` yields no `lora_name` when the combo is empty.
-
-    The file would be written, answered 201 and then refused by ComfyUI on a
-    missing required input — after the owner was told it was ready to pick a
-    LoRA in. The adapter path has always made this check; the empty-slot path
-    did not.
-    """
-    empty = json.loads(json.dumps(LOADERLESS_OBJECT_INFO))
-    empty["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = [[], {}]
-    loaderless.monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (empty, None)
-    )
-    r = loaderless.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
-    assert r.status_code == 409, r.text
-    assert "which LoRA files" in r.json()["detail"]
-    assert _manual_ids(loaderless) == [], "a file was written anyway"

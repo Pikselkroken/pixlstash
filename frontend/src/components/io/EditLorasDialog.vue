@@ -394,7 +394,7 @@ const props = defineProps({
   pending: { type: Object, default: null },
 });
 
-const emit = defineEmits(["close", "saved", "done"]);
+const emit = defineEmits(["close", "done"]);
 
 const notices = useNoticeStore();
 const workflows = useWorkflowsStore();
@@ -1146,7 +1146,6 @@ async function save() {
     // moves onto it: the owner's next look is at what they just made.
     await workflows.refetch();
     if (answer?.workflow_id) workflows.select(answer.workflow_id);
-    emit("saved", answer);
     emit("close");
   } catch (err) {
     console.warn("[workflows] the LoRA chain save was refused", err);
@@ -1187,8 +1186,6 @@ watch(
   },
   { immediate: true },
 );
-
-defineExpose({ rows, step, changeCount });
 </script>
 
 <!-- Not scoped: the rows are EditLorasRow's markup, drawn by these rules, and

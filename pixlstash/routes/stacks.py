@@ -246,16 +246,6 @@ class KeepCoverOnlyStackRow(BaseModel):
         ),
         examples=[[{"id": 7, "name": "Ada", "picture_ids": [103]}]],
     )
-    staying_picture_ids: dict[str, list[int]] = Field(
-        default_factory=dict,
-        description=(
-            "Under `keep_recipes`: `{reason: [picture ids]}` for copies that "
-            "stay live, each under one of `no_recipe`, `model_missing`, "
-            "`no_thumbnail` or `ghost_not_kept`. Example: "
-            '`{"model_missing": [105]}`.'
-        ),
-        examples=[{"model_missing": [105]}],
-    )
 
 
 class KeepCoverOnlyPreviewResponse(BaseModel):

@@ -2303,7 +2303,7 @@ can no longer see.
   recorded". It arrives with the data. The ⋯ menu holds
   Hide/Unhide alone: Duplicate and Open in ComfyUI have no route at all;
   *Export workflow* has to write a runnable ComfyUI file and the only graph
-  read that exists, `GET /workflows/recipes/{structural_hash}/graph`, answers
+  read that existed then, a per-recipe structural read since removed, answered
   `runnable: false` by construction; *Delete* is only
   `DELETE /comfyui/workflows/{name}`, keyed by filename, and the card payload
   carries no filename. The **picture-input UI has not moved here**: what is
@@ -6143,13 +6143,12 @@ in. **Still gone**: the per-picture i2i caption. "Upscale from a selection"
 never had a surface of its own. `useGenStackPrefsStore` did not get its
 `stackI2IOutputs` half back: the checkbox is per run.
 
-**Inserting a loader where a graph has none (#1376) is not reachable from the
-UI in this step.** It was `insert_lora_loader` on the per-picture replay route,
-which #1410 retired, and `POST /workflows/run` has no field for it; the
-surface that offered it was `RemixDialog`. The backend keeps the capability and
-`GET /comfyui/workflows/{name}/lora-insertion` still answers, so this is a UI
-gap to close rather than a removal — the run route wants the flag before the
-popup can offer it again.
+**Inserting a bare loader where a graph has none (#1376) is gone.** It was
+`insert_lora_loader` on the per-picture replay route, which #1410 retired; the
+surface that offered it was `RemixDialog`, and the file-writing route and
+preview read that outlived it had no caller and were removed. A run that adds a
+LoRA still splices a loader in for it (`add_loras` on `POST /workflows/run`),
+which is the case the flag existed for.
 
 **A grid filtered to one workflow is deliberately not here.** "Show its
 pictures" as a *grid* would mean a new picture filter carried through

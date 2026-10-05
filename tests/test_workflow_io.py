@@ -30,7 +30,6 @@ from pixlstash.services.workflow_inputs import (
     node_title,
     resolve_fills,
     resolve_input_modes,
-    validate_requested_modes,
 )
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
@@ -1214,61 +1213,6 @@ def test_a_replaced_file_that_lost_its_selection_input_gets_a_default_one():
         "76": (PICKER, None),
         "81": (SELECTION, None),
     }
-
-
-def test_a_valid_setup_is_returned_in_order():
-    inputs = _inputs(_two_input_graph())
-    assert validate_requested_modes(
-        inputs,
-        [
-            {"node_id": "81", "mode": SELECTION},
-            {"node_id": "76", "mode": FIXED, "picture_id": 5},
-        ],
-    ) == [("81", SELECTION, None), ("76", FIXED, 5)]
-    # No Selection at all is a choice: the workflow leaves the selection pill.
-    assert validate_requested_modes(
-        inputs,
-        [{"node_id": "81", "mode": PICKER}, {"node_id": "76", "mode": PICKER}],
-    ) == [("81", PICKER, None), ("76", PICKER, None)]
-
-
-@pytest.mark.parametrize(
-    "requested, message",
-    [
-        (
-            [
-                {"node_id": "81", "mode": SELECTION},
-                {"node_id": "76", "mode": SELECTION},
-            ],
-            "at most one",
-        ),
-        ([{"node_id": "81", "mode": SELECTION}], "exactly once"),
-        (
-            [
-                {"node_id": "81", "mode": SELECTION},
-                {"node_id": "81", "mode": PICKER},
-                {"node_id": "76", "mode": PICKER},
-            ],
-            "exactly once",
-        ),
-        (
-            [
-                {"node_id": "81", "mode": SELECTION},
-                {"node_id": "76", "mode": FIXED, "picture_id": True},
-            ],
-            "picture_id",
-        ),
-        (
-            [{"node_id": "81", "mode": "grid"}, {"node_id": "76", "mode": PICKER}],
-            "mode must be",
-        ),
-        ([{"node_id": 81, "mode": SELECTION}, {"node_id": "76"}], "node_id"),
-        ({"81": SELECTION}, "list"),
-    ],
-)
-def test_a_bad_setup_is_refused(requested, message):
-    with pytest.raises(ValueError, match=message):
-        validate_requested_modes(_inputs(_two_input_graph()), requested)
 
 
 def test_modes_are_keyed_on_the_files_own_spelling(tmp_path):

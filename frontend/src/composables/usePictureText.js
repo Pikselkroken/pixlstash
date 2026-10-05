@@ -118,7 +118,6 @@ export function usePictureText({ pictureId, getSearchQuery }) {
   const hasText = computed(
     () => text.value.state === "read" && words.value.length > 0,
   );
-  const isPending = computed(() => text.value.state === "pending");
   // A picture with no text always shows Description, whatever was picked.
   const activeTab = computed(() =>
     hasText.value ? chosenTab.value : DESCRIPTION_TAB,
@@ -217,7 +216,6 @@ export function usePictureText({ pictureId, getSearchQuery }) {
     text,
     words,
     hasText,
-    isPending,
     activeTab,
     fullText,
     selectedWords,
