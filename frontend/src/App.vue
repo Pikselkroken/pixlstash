@@ -97,6 +97,11 @@ const WorkflowsView = defineAsyncComponent(
 const WorkflowTab = defineAsyncComponent(
   () => import("./components/panels/WorkflowTab.vue"),
 );
+// The Models screen's rail (Models | Tasks), for the same reason: the stats it
+// replaces there describe the library, and a hidden copy would keep fetching.
+const ModelsRail = defineAsyncComponent(
+  () => import("./components/panels/ModelsRail.vue"),
+);
 // The two Run popups (v1.12 F5). Mounted here rather than in the grid: they
 // are opened from the grid's menus, from the lightbox and from the Workflows
 // view's Workflow tab, and this is the only parent all three share.
@@ -893,6 +898,7 @@ defineExpose({
              both became a popup in F5, so `/workflows` is the one branch left
              ahead of the stats panel. -->
         <WorkflowTab v-if="isWorkflowsView" />
+        <ModelsRail v-else-if="isModelsView" />
         <StatsSidebar v-else />
       </div>
       <RunDialog
@@ -934,7 +940,9 @@ defineExpose({
         'shortcuts-fab--above-bar': multiSelectBarShown,
         'shortcuts-fab--stats-open': isWorkflowsView
           ? sidebarStore.workflowInspectorOpen
-          : sidebarStore.statsOpen,
+          : isModelsView
+            ? sidebarStore.modelsRailOpen
+            : sidebarStore.statsOpen,
       }"
       type="button"
       :disabled="librarySwitchOverlayOpen"

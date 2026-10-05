@@ -28,6 +28,7 @@ const listSupport = vi.fn();
 const deleteModels = vi.fn();
 const fetchModelCompanions = vi.fn();
 const deleteWorkflowSet = vi.fn();
+const fetchWorkflowSets = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -48,6 +49,7 @@ vi.mock("../../api/modelShelf", () => ({
   // Asked before the delete prompt opens; answered per test.
   fetchModelCompanions: (...args) => fetchModelCompanions(...args),
   deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
+  fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
   // The base-model field asks for its completion list as it opens. Answered
   // with nothing here: the list is the widget's own suite's business, and left
   // unmocked this is a network call on a double-click.
@@ -319,6 +321,9 @@ beforeEach(() => {
   listEngines.mockReset().mockResolvedValue([]);
   listUnclassified.mockReset().mockResolvedValue([]);
   listSupport.mockReset().mockResolvedValue([]);
+  fetchWorkflowSets
+    .mockReset()
+    .mockResolvedValue({ combinations: [], no_set: [], hand_made: [] });
   listModelFolderDevices.mockReset();
   listModelFolderDevices.mockResolvedValue([]);
   // The thumbnail verb's two halves. Reset here rather than per-test: a
@@ -1053,11 +1058,16 @@ describe("after a session reset", () => {
     expect(wrapper.find(".shelf-row").exists()).toBe(true);
 
     listAdapters.mockClear();
+    fetchWorkflowSets.mockClear();
     useModelShelfStore().resetForSession();
     await new Promise((resolve) => setTimeout(resolve, 0));
     await wrapper.vm.$nextTick();
 
     expect(listAdapters).toHaveBeenCalled();
+    // The sets go with the rows; the grid and the Models rail asked for them
+    // only as they mounted, and are still mounted.
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+    expect(useModelShelfStore().setsLoaded).toBe(true);
     expect(textOf(wrapper.find(".shelf-body"))).not.toContain(
       "No models found",
     );
@@ -1126,7 +1136,7 @@ describe("the shelf's own accessible name", () => {
     // them.
     const wrapper = await mountShelf([adapter()]);
     const help = wrapper.find("#shelf-help").text();
-    expect(help).toContain("Settings and the stats sidebar toggle");
+    expect(help).toContain("Settings and the Models and tasks toggle");
     expect(help).toMatch(/nothing on this screen can be undone/i);
     expect(help).not.toMatch(/undo and redo/i);
   });
@@ -4574,7 +4584,7 @@ describe("a long move, in the panel that is running it", () => {
 // moment the grid unmounts. Undo is the exception: nothing on this screen writes
 // to the operation log, so there is nothing here for it to take back.
 describe("the app-wide toolbar tail", () => {
-  it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
+  it("asks App.vue for Settings and toggles the Models rail itself", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const sidebar = useSidebarStore();
     const settings = wrapper.find(
@@ -4586,10 +4596,17 @@ describe("the app-wide toolbar tail", () => {
 
     // Directional, not a flip: the rail opens on the first press and closes on
     // the second, from the shut state a fresh session starts in.
+    // The rail on this screen is Models | Tasks, with its own flag: the
+    // Library's stats flag is left alone.
+    sidebar.modelsRailOpen = false;
     sidebar.statsOpen = false;
-    await wrapper.find(".shelf-toolbar .tb-stats-btn").trigger("click");
-    expect(sidebar.statsOpen).toBe(true);
-    await wrapper.find(".shelf-toolbar .tb-stats-btn").trigger("click");
+    const toggle = wrapper.find(".shelf-toolbar .tb-stats-btn");
+    expect(toggle.attributes("aria-label")).toBe("Models and tasks");
+    await toggle.trigger("click");
+    expect(sidebar.modelsRailOpen).toBe(true);
+    expect(toggle.attributes("aria-pressed")).toBe("true");
+    await toggle.trigger("click");
+    expect(sidebar.modelsRailOpen).toBe(false);
     expect(sidebar.statsOpen).toBe(false);
   });
 
@@ -4685,6 +4702,25 @@ describe("Delete", () => {
       in_use: [],
       no_evidence: [],
     });
+  });
+
+  // The Models rail beside the shelf has a selection of its own: Delete
+  // pressed there must not reach the shelf's, which the reader cannot see.
+  it("is not the shelf's when pressed in the Models rail", async () => {
+    const wrapper = await mountWithSelection();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const rail = document.createElement("div");
+    rail.className = "mrail";
+    document.body.appendChild(rail);
+    rail.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Delete", bubbles: true }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchModelCompanions).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(useModelShelfStore().selectedIds.size).toBe(1);
+    rail.remove();
+    wrapper.unmount();
   });
 
   it("says in the prompt what the delete leaves behind", async () => {

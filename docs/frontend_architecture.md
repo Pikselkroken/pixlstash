@@ -268,8 +268,8 @@ Sub-components that manage independent data (e.g. `AccountSection`, `SmartScoreS
 **Adaptive poll.** `App.vue` calls `tasksStore.startPolling()` on mount (and `stopPolling()` on unmount) so the indicators are live app-wide, not only while the Tasks tab is open. The store self-throttles: paused while `document.hidden`, ~2 s when the Tasks tab is open or work is active, ~5 s when merely idle-watching. `setTasksTabOpen` **counts mounted panels rather than holding a flag**, because the Tasks panel is shared: with a boolean, one host unmounting would drop the cadence back to idle under another host still showing it. Share / read-only sessions skip the fetch (the endpoint is owner-only). This is the only always-on background poll in the app.
 
 **Consumers (deny nothing, just read):**
-- `panels/TasksPanel.vue` renders the **Tasks tab** purely from `tasksStore.activeEntries` — backend workers as a throughput sparkline + rate, ComfyUI runs as a progress bar + abort. It owns only the canvas drawing and label formatting; it never fetches or polls. It exports `tasksTabFor(tasksStore)`, the tab descriptor its hosts declare — one function so the two cannot drift on the wording or on when the light comes on — and sets the store's fast cadence (`setTasksTabOpen`) for as long as it is mounted — which is exactly while the tab is on screen, since an inspector unmounts its body when the rail collapses. **Two inspectors offer the tab, last in their band**: `StatsSidebar` (everywhere the grid's rail is shown, the model shelf included) and `WorkflowTab` (`/workflows`), which the descriptor marks `busy` while `hasActiveTasks`, pulsing the tab. The image overlay's inspector deliberately does not: it is one picture's pane, laid over that picture. **A deep link to the tab goes through `sidebarStore.showTasksTab()`**, a counter both hosts watch: it used to be `statsSidebarRef.value.focusTasksTab()`, which reached nothing on `/workflows` — the one screen a run is usually started from, and so the one screen the "Started N runs" toast's *Show* silently did nothing on.
-- `Toolbar`'s **stats toggle** pulses its whole icon in `accent` when `hasActiveTasks`, so background work is visible even with the stats sidebar collapsed.
+- `panels/TasksPanel.vue` renders the **Tasks tab** purely from `tasksStore.activeEntries` — backend workers as a throughput sparkline + rate, ComfyUI runs as a progress bar + abort. It owns only the canvas drawing and label formatting; it never fetches or polls. It exports `tasksTabFor(tasksStore)`, the tab descriptor its hosts declare — one function so the two cannot drift on the wording or on when the light comes on — and sets the store's fast cadence (`setTasksTabOpen`) for as long as it is mounted — which is exactly while the tab is on screen, since an inspector unmounts its body when the rail collapses. **Three inspectors offer the tab, last in their band**: `StatsSidebar` (everywhere the grid's rail is shown), `WorkflowTab` (`/workflows`) and `ModelsRail` (`/models`), which the descriptor marks `busy` while `hasActiveTasks`, pulsing the tab. The image overlay's inspector deliberately does not: it is one picture's pane, laid over that picture. **A deep link to the tab goes through `sidebarStore.showTasksTab()`**, a counter every host watches (it opens all three rails' flags, unpersisted): it used to be `statsSidebarRef.value.focusTasksTab()`, which reached nothing on `/workflows` — the one screen a run is usually started from, and so the one screen the "Started N runs" toast's *Show* silently did nothing on.
+- The **right-rail toggle** (`TbGlobalActions`, on every screen's bar) pulses its whole icon in `accent` when `hasActiveTasks`, so background work is visible even with the rail collapsed. One glyph everywhere, `mdi-dock-right`, with open as its pressed state (`active` + `aria-pressed`), and a fixed name per screen given by the host's `rail-name`: *Stats and tasks* (Library), *Inspector* (Workflows), *Models and tasks* (Models), *Stats* elsewhere. While tasks run the name is prefixed with their count (`3 tasks running · Models and tasks`).
 - `ComfyUiRunner` retired its inline in-progress banner (progress now lives in the Tasks tab). It still renders an **inline banner for the failed state only**, so an error is never buried in a collapsed sidebar.
 
 All indicator animations honour `prefers-reduced-motion: reduce`.
@@ -5776,6 +5776,94 @@ section above for how, and for the one case (the empty-state button unmounting
 underneath its own dialog) that the fallback exists to catch.
 
 ---
+
+#### The Models rail (`panels/ModelsRail.vue`)
+
+On `/models` the right rail is `Models | Tasks` (an `AppInspector`, mounted by
+`App.vue` in place of `StatsSidebar`, which describes the library rather than the
+shelf). Its open flag is `sidebarStore.modelsRailOpen`, persisted, closed on a
+fresh install and never opened on the reader's behalf (the one exception is a
+Tasks deep link, `showTasksTab`, which opens it for the session without
+persisting it, as it does the stats rail); `TbGlobalActions
+rail="models"` toggles it. Closed, the shelf shows a plain `InspectorEdgeTab`
+with the count (named `Show models (N)`), which moves at most once a session:
+the first time a hand-made set opens while the rail is closed.
+
+- **What it lists.** Every shelf row some set slot takes (`railListed`), under
+  the set panel's slot headings, each saying where it already is ("In no set
+  yet", "In Night city", "In 2 of your sets"). Picking a model already in
+  another set is ordinary. The tab shows the count. Every means every: while
+  the rail is mounted (`store.setRailMounted`) every `fetchRows` also reads the
+  blocks Show has unticked (`fetchedBlocks`) into `rows`, which is everything
+  known, not the shown set, so the shelf's own list is unchanged and a scan or
+  a session reset refreshes the rail's blocks with the shown ones. The shelf's
+  post-reset watcher re-reads the sets too, since the grid and the rail asked
+  for them only as they mounted. Until the sets are read nothing says where a model is and *In no
+  set yet* is disabled; a failed read says so with Retry rather than calling
+  every model loose.
+- **Two filters, never applied for you.** *Fits <set>* (`setFits` in
+  `utils/workflowSets.js`: not held, a kind some slot takes, the set's base
+  model, or used beside its checkpoint, which ranks first with the picture
+  count as the reason) and *In no set yet*. The Fits set is
+  `store.railFitsSetId`; the set panel's *Models · N fit* button is the only
+  thing that sets it for you. A deleted filtered set clears it and says so.
+- **Its own selection.** A listbox, one tab stop: arrows, Shift/Ctrl, Home/End,
+  type-ahead, Space, Ctrl+A and Escape act on the rail's selection only, and
+  the shelf's window key handler declines any key whose target is inside
+  `.mrail` (`shelfOwnsTheKey`). Nothing in it reaches the shelf's selection, so
+  the shelf pill never appears and Delete, Move and Forget are unreachable. Its verbs are
+  *Add to <open set>* (Enter, and the row's mouse-only Add), *Add to set…* and
+  *New workflow set with these*, in the footer's ⋯ and the row menu
+  (right-click, Shift+F10, the Menu key).
+- **Adds in a run.** Adds into the open set go out with `addToHandMadeSet(…,
+  {quiet: true})`; once they pause for 1.5 s, `announceAdded` raises one
+  receipt for the whole run (what the set still holds of it), whose Undo takes
+  all of it back. A run ends on an add to another set, a set panel opening or
+  closing, a tab switch or the rail closing. A session change drops a
+  waiting run instead of raising it: its receipt would name a set by id in
+  the next library. An added row keeps its place with
+  a check (*In set*); a row whose write is out ignores a second press. The
+  receipt is raised again only when the run has grown since it went up.
+- **Checkpoints and hashes.** A row still being hashed is listed but cannot be
+  added or dragged. A checkpoint into a set that has one reads *Add as 2nd*;
+  pressing that button is the answer, while Enter, the footer, the menu and a
+  drop ask first (`store.confirmSecondCheckpoint`). A drop on a set whose base
+  model differs from the dragged models' one is refused with a notice, as the
+  *Add to set…* menu fades that set.
+- **Dragging is a pointer drag, not HTML5 drag-and-drop.** The browser's
+  drag hands the gesture and its image to the window system, and on the
+  desktop shell (X11) that image arrived late and dim and the whole drag
+  lagged. So a press on a row (mouse or pen, main button) becomes a drag after
+  4 px of travel; the rail draws its own pill (`.mrail-ghost`, teleported to
+  `<body>`, moved by `transform` on every `pointermove`), finds the target
+  under the pointer with `elementFromPoint(...).closest("[data-rail-drop]")`,
+  and on release dispatches a bubbling `rail-drop` event on it. Only on the
+  Workflow set axis. Escape puts the models back, the edges of whatever
+  scrolls under the pointer scroll it, and the click the release fires on the
+  source row is swallowed so it cannot narrow the selection. Touch never
+  starts one.
+- **The target contract.** A target carries `data-rail-drop="<key>"` (a card
+  key, `new`, or `slot:<id>`), plus `data-rail-refused="<why>"` when it will not
+  take the drag, and listens for `rail-drop`. The rows travel in
+  `store.railDrag` and the key under the pointer in `store.railOver`, which
+  targets light up from. The rail never hands a drop to a refusing target, and
+  each target checks again where it writes. `ModelSetGrid` takes a drop on a
+  hand-made card (each model to its kind's slot,
+  `store.addRowsToHandMadeSet`) and on *New workflow set*
+  (`store.createSetFromRows`); `ModelSetSlotsPanel` takes it on a slot every
+  dragged model fits, and stops it there. A drop is one write and one receipt.
+- **What a drag shows.** For the whole drag every target wears a dashed rim
+  (`railTargets` in `ModelSetGrid`, an overlay above the card's cover, since
+  an inset ring paints under its pictures), the target under the pointer
+  turns solid over the active wash and says what the drop does, the carried
+  rows look picked up, the pill names them in the primary fill, and the
+  rail's footer says where to drop. A hand-made set that will not take the
+  models (`store.railDropRefusal`: holds them all, or another base model)
+  fades and states the reason; its open tray's slots refuse too, and over any
+  refusing target the pill goes neutral with ⊘ and the cursor shows no-drop.
+  Evidence cards fade.
+- Not built yet: the narrow-window drawer (`statsForcedHidden`), *Works with*
+  from the rail, and virtualisation (rows use `content-visibility: auto`).
 
 ### 13.2 The workflow library
 
