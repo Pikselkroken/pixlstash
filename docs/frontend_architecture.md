@@ -4457,6 +4457,14 @@ anything was, which is the first question of anyone keeping the same adapter on
 two disks. `copyPathsTitle()` (pure, in `utils/modelShelf.js`) joins each
 `locations[]` entry into one full path and the **file line carries them as its
 tooltip**, one per line, on covers and on expanded stack members alike.
+`modelFileTitle()` wraps it and adds a last line, the row's whole `sha256`
+(`SHA-256: not read yet` for a checkpoint the hasher has not reached): that is
+what a set's membership and a recipe's digest are matched against. The same
+helper is the tooltip on a model in an open workflow set - the tray card's file
+line, the tray list's name, a hand-made set's tile name - where a member that
+has left the shelf has no path and shows the hash alone. A tray member whose
+shelf row is not loaded (its block unticked in Show) carries no hash on the
+wire, so it gets no tooltip rather than a false "not read yet".
 
 - **Every copy, not the first.** A model registered in two folders is one row,
   and naming one of its homes would read as naming its only one.

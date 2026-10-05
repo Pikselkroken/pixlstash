@@ -83,7 +83,9 @@ const globalOpts = {
     stubs: {
       "v-icon": true,
       Tooltip: {
-        template: "<span><slot name='activator' :props='{}' /><slot /></span>",
+        props: ["text"],
+        template:
+          "<span :data-tip='text'><slot name='activator' :props='{}' /><slot /></span>",
       },
       RouterLink: {
         props: ["to"],
@@ -1338,6 +1340,61 @@ describe("a tray shows who a model is assigned to", () => {
     expect(face(listRow)).toBe(true);
   });
 
+  it("names a model's path and whole SHA-256 in the tray, as cards and as a list", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
+      combinations: [combination("1,3", [CKPT, LORA])],
+    });
+    const title = `/m/filmgrain_xl\nSHA-256: ${"3".repeat(64)}`;
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+    const card = wrapper.findAll('[data-testid="model-set-member"]')[1];
+    expect(card.find(".msm__file [data-tip]").attributes("data-tip")).toBe(
+      title,
+    );
+
+    store.setView({ trayView: "list" });
+    await wrapper.vm.$nextTick();
+    expect(
+      wrapper
+        .find('.msp__row[data-key="3"] .msp__rowname [data-tip]')
+        .attributes("data-tip"),
+    ).toBe(title);
+  });
+
+  it("names the SHA-256 of a hand-made set's model that has left the shelf", async () => {
+    const sha = "c".repeat(64);
+    const { wrapper, store } = await mountGrid({
+      rows: [],
+      handMade: [
+        {
+          id: 10,
+          name: null,
+          members: [
+            {
+              sha256: sha,
+              slot: "lora",
+              label: "gone_xl",
+              on_shelf: false,
+              id: null,
+              name: "gone_xl",
+            },
+          ],
+          covers: [],
+          picture_count: 0,
+          incomplete: true,
+        },
+      ],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    expect(
+      wrapper
+        .find(`[data-key="m:${sha}"] .mss__tilename [data-tip]`)
+        .attributes("data-tip"),
+    ).toBe(`SHA-256: ${sha}`);
+  });
+
   it("does the same on a hand-made set's slot tile", async () => {
     const assigned = {
       ...row(3, "filmgrain_xl"),
@@ -1371,6 +1428,10 @@ describe("a tray shows who a model is assigned to", () => {
     await wrapper.vm.$nextTick();
 
     const tile = wrapper.find(`[data-key="m:${assigned.sha256}"]`);
+    // On the shelf, so the tile's tip has the row's path as well as the hash.
+    expect(tile.find(".mss__tilename [data-tip]").attributes("data-tip")).toBe(
+      `/m/filmgrain_xl\nSHA-256: ${assigned.sha256}`,
+    );
     expect(
       tile
         .findAll("img")

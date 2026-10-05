@@ -220,7 +220,12 @@
             }"
             >{{ markOf(member).initials }}</span
           >
-          <span class="msp__rowname">{{ member.name }}</span>
+          <span class="msp__rowname"
+            ><Tooltip
+              :text="modelFileTitle(marks.get(member.id)?.row ?? member)"
+              activator="parent"
+            />{{ member.name }}</span
+          >
           <span v-if="member.head" class="msp__pill">Names this set</span>
         </span>
         <span class="msp__kindcol" role="gridcell" aria-hidden="true">{{
@@ -289,13 +294,18 @@
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
-import { formatModelSize, generatedMark } from "../../utils/modelShelf";
+import {
+  formatModelSize,
+  generatedMark,
+  modelFileTitle,
+} from "../../utils/modelShelf";
 import { useWorkflowNames } from "../../composables/useWorkflowNames";
 import { pictureCount } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import ModelSetMemberCard from "../widgets/ModelSetMemberCard.vue";
 import Segmented from "../widgets/Segmented.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 /** The two views, spelled as the Workflows stack panel spells them. */
 const VIEW_OPTIONS = [

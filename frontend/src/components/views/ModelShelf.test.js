@@ -828,7 +828,7 @@ describe("location state", () => {
       }),
     ]);
     expect(tip(wrapper.find(".shelf-row-file"))).toBe(
-      "/home/me/models/a.st\n/media/me/spare/a.st",
+      `/home/me/models/a.st\n/media/me/spare/a.st\nSHA-256: ${"a".repeat(64)}`,
     );
   });
 
@@ -848,8 +848,8 @@ describe("location state", () => {
     await wrapper.vm.$nextTick();
     const titles = wrapper.findAll(".shelf-row-file").map((el) => tip(el));
     expect(titles).toEqual([
-      "/home/me/models/a.st",
-      "/media/me/spare/a.st · not where it was",
+      `/home/me/models/a.st\nSHA-256: ${"a".repeat(64)}`,
+      `/media/me/spare/a.st · not where it was\nSHA-256: ${"a".repeat(64)}`,
     ]);
   });
 
@@ -870,15 +870,23 @@ describe("location state", () => {
     ]);
     await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
     expect(tip(wrapper.find(".shelf-row--member .shelf-row-file"))).toBe(
-      "/media/me/spare/b.st",
+      `/media/me/spare/b.st\nSHA-256: ${"b".repeat(64)}`,
     );
   });
 
-  it("offers no tooltip at all when every copy has been forgotten", async () => {
-    // An empty tip is one that flashes and says nothing; empty text is what
-    // disables the Tooltip. The file line already carries the words.
+  it("still names the hash when every copy has been forgotten", async () => {
+    // No path left to give, but the hash is what the file is matched by.
     const wrapper = await mountShelf([adapter({ locations: [] })]);
-    expect(tip(wrapper.find(".shelf-row-file"))).toBe("");
+    expect(tip(wrapper.find(".shelf-row-file"))).toBe(
+      `SHA-256: ${"a".repeat(64)}`,
+    );
+  });
+
+  it("says a checkpoint not hashed yet is waiting, rather than showing none", async () => {
+    const wrapper = await mountShelf([adapter({ sha256: null })]);
+    expect(tip(wrapper.find(".shelf-row-file"))).toBe(
+      "/m/a.st\nSHA-256: not read yet",
+    );
   });
 });
 

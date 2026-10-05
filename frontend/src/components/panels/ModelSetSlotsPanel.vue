@@ -273,9 +273,16 @@
                   :style="markOf(item.member).style"
                   aria-hidden="true"
                 />
-                <span class="mss__tilename" aria-hidden="true">{{
-                  item.member.name
-                }}</span>
+                <span class="mss__tilename" aria-hidden="true"
+                  ><Tooltip
+                    :text="
+                      modelFileTitle(
+                        marks.get(item.member.id)?.row ?? item.member,
+                      )
+                    "
+                    activator="parent"
+                  />{{ item.member.name }}</span
+                >
                 <span
                   v-if="quantBadge(item.member.quant)"
                   class="mss__quant"
@@ -399,7 +406,7 @@ import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
-import { quantBadge } from "../../utils/modelShelf";
+import { modelFileTitle, quantBadge } from "../../utils/modelShelf";
 import {
   fitsSlot,
   offerQuestion,
