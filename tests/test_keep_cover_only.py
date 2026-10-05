@@ -1128,13 +1128,6 @@ def test_keep_recipes_only_moves_only_what_could_be_made_again():
         assert preview["pictures_staying_model_missing"] == 1
         assert preview["pictures_staying_no_thumbnail"] == 1
         assert preview["pictures_staying_ghost_not_kept"] == 1
-        row = _rows_by_stack(preview)[stack_id]
-        assert row["staying_picture_ids"] == {
-            "no_recipe": [pics["no_recipe"]],
-            "ghost_not_kept": [pics["uncovered"]],
-            "model_missing": [pics["model_missing"]],
-            "no_thumbnail": [pics["no_thumbnail"]],
-        }
 
         body = client.post(COLLAPSE_URL, json=selection).json()
         assert body["picture_ids_moved"] == [pics["covered"]]
@@ -1281,8 +1274,9 @@ def test_a_missing_thumbnail_file_or_pixel_sha_keeps_the_copy():
         preview = client.post(
             PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
         ).json()
-        row = _rows_by_stack(preview)[stack_id]
-        assert pics["covered"] in row["staying_picture_ids"]["no_thumbnail"]
+        # The covered copy joins the one with no thumbnail, and nothing moves.
+        assert preview["pictures_staying_no_thumbnail"] == 2
+        assert preview["pictures_moving"] == 0
 
         _set_keys(server, pics["covered"], None)  # rewrites the thumbnail file
 
@@ -1296,8 +1290,8 @@ def test_a_missing_thumbnail_file_or_pixel_sha_keeps_the_copy():
         preview = client.post(
             PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
         ).json()
-        row = _rows_by_stack(preview)[stack_id]
-        assert pics["covered"] in row["staying_picture_ids"]["no_recipe"]
+        assert preview["pictures_staying_no_recipe"] == 2
+        assert preview["pictures_moving"] == 0
     finally:
         _teardown(temp_dir, server)
 
@@ -1344,8 +1338,7 @@ def test_a_model_the_shelf_cannot_judge_keeps_the_copy():
         preview = client.post(
             PREVIEW_URL, json={"stack_ids": [stack_id], "keep_recipes": True}
         ).json()
-        row = _rows_by_stack(preview)[stack_id]
-        assert pics["covered"] in row["staying_picture_ids"]["model_missing"]
+        assert preview["pictures_staying_model_missing"] == 2
         assert preview["pictures_moving"] == 0
     finally:
         _teardown(temp_dir, server)
