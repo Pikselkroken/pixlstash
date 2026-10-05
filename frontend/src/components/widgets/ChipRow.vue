@@ -39,9 +39,7 @@
 <script setup>
 // One single-line row of chips that never wraps: what does not fit is clipped
 // and counted as "+N". Used by WorkflowCard's LoRA and facts rows, and by the
-// stack panel's List "Checkpoint" and "Differs by" columns. **Nothing reads
-// `overflow`**: a List row's own `aria-label` already carries every chip the
-// line clipped, so the event waits for a caller that wants to say so visibly.
+// stack panel's List "Checkpoint" and "Differs by" columns.
 //
 // The chip is the design's `.uchip`: a bordered control-tier chip on the input
 // surface, --tag-h-xs tall, --text-2xs, with a muted glyph. That is the app
@@ -103,8 +101,6 @@ const chipClass = (item) => [
   },
 ];
 
-const emit = defineEmits(["overflow"]);
-
 const rowEl = ref(null);
 const measureEl = ref(null);
 const visibleCount = ref(props.items.length);
@@ -127,7 +123,6 @@ function measure() {
   );
 }
 
-watch(hiddenCount, (n) => emit("overflow", n));
 watch(
   () => props.items,
   () => nextTick(measure),

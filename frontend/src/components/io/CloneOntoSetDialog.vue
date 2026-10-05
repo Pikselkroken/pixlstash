@@ -798,8 +798,6 @@ watch(
   },
   { immediate: true },
 );
-
-defineExpose({ sets, chosenKey, choose, lorasBody });
 </script>
 
 <style scoped>

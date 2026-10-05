@@ -5,8 +5,6 @@
 // has saved — and both have to get the same two things right, which is why it
 // is one function.
 
-import { loraKey } from "./recipeKey";
-
 /** A file name as every side of this spells it: lowercase, no directory. */
 function baseName(value) {
   return String(value || "")
@@ -55,9 +53,4 @@ export function resolveRecipeLoras(loraNames, modelSlots, shelf) {
       strength: Number(strengths.get(base) ?? 1),
     };
   });
-}
-
-/** Whether two LoRA lists name the same files, however they are spelled. */
-export function sameLoras(left, right) {
-  return loraKey(left) === loraKey(right);
 }

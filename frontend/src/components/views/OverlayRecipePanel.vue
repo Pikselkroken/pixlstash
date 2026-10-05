@@ -509,15 +509,6 @@ const useAsInputReason = computed(() =>
 );
 
 /**
- * Where each button's `aria-describedby` points.
- *
- * The two refusals coincide on a read-only session and diverge everywhere
- * else - a read-only reader looking at an A1111 picture is told two different
- * things, one per button. One sentence is rendered once and shared when they
- * agree; when they differ each button gets its own, so neither is described by
- * a sentence about the other.
- */
-/**
  * What describes the Run button, refusal AND reasons.
  *
  * `aria-describedby` takes a list, and shipping only the sentence gives a
@@ -532,6 +523,15 @@ const runDescribedBy = computed(() => {
     : runReasonId;
 });
 
+/**
+ * Where the Use as input button's `aria-describedby` points.
+ *
+ * The two refusals coincide on a read-only session and diverge everywhere
+ * else - a read-only reader looking at an A1111 picture is told two different
+ * things, one per button. One sentence is rendered once and shared when they
+ * agree; when they differ each button gets its own, so neither is described by
+ * a sentence about the other.
+ */
 const inputReasonIsOwn = computed(
   () => !!useAsInputReason.value && useAsInputReason.value !== runReason.value,
 );
@@ -739,15 +739,6 @@ function modelLabel(model) {
   return model.display_name || deriveModelName(model.name) || model.name;
 }
 
-/**
- * The design's rows, in its order, from whatever the graph actually set.
- *
- * `Sampler` and `Size` are each two graph settings written as one value
- * ("euler · sgm", "832×1216"), which is how the design draws them and how
- * ComfyUI users say them. A setting the graph does not carry is left out
- * entirely; Seed and Negative are the exception and say "none", because their
- * absence is a fact about the recipe worth reading.
- */
 /**
  * The design's Settings block, from the one settings reading the app has.
  *

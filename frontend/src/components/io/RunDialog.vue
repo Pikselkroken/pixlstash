@@ -2918,7 +2918,6 @@ async function load() {
         ? String(loraSource.value.entityId)
         : readLastSet() ||
           (props.context?.set_id ? String(props.context.set_id) : "");
-    void loadAdapters();
     // Both branches need the names: one to pick a set, the other to say which
     // one the output is going into.
     void entityLists.refresh("sets");

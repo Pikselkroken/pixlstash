@@ -215,35 +215,22 @@ export async function characterFaceSearch(
  *
  * Every match carries `cohesion`, the median similarity of the set's own
  * members to that centroid - the natural default cut, since a match strength
- * that suits a tight photoshoot empties a loose set. With `includeTagCounts`
- * each also carries `tags_matched` / `tags_total` against the set's signature
- * tags, which the second slider cuts on client-side.
+ * that suits a tight photoshoot empties a loose set. Each also carries
+ * `tags_matched` / `tags_total` against the set's signature tags, which the
+ * second slider cuts on client-side. The fetch floor is zero, because the
+ * slider's useful range is unknown until `cohesion` comes back.
  *
  * @param {number|string} setId
- * @param {Object} [options]
- * @param {number} [options.topN=500]
- * @param {number} [options.threshold=0] - fetch floor. Zero, because the
- *   slider's useful range is unknown until `cohesion` comes back.
- * @param {boolean} [options.excludeMembers=true]
- * @param {boolean} [options.includeTagCounts=true]
  * @returns {Promise<Array<Object>>} ranked matches (the response body).
  */
-export async function setLikenessSearch(
-  setId,
-  {
-    topN = 500,
-    threshold = 0,
-    excludeMembers = true,
-    includeTagCounts = true,
-  } = {},
-) {
+export async function setLikenessSearch(setId) {
   const params = new URLSearchParams({
     source_set_id: String(setId),
-    top_n: String(topN),
-    threshold: String(threshold),
+    top_n: "500",
+    threshold: "0",
+    exclude_set_id: String(setId),
+    include_tag_counts: "true",
   });
-  if (excludeMembers) params.append("exclude_set_id", String(setId));
-  if (includeTagCounts) params.append("include_tag_counts", "true");
   return unwrap(apiClient.post(
     `/pictures/likeness-search?${params.toString()}`,
   ));

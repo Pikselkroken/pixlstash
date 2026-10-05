@@ -88,10 +88,9 @@ describe("ChipRow", () => {
     await wrapper.vm.$nextTick();
     expect(shown(wrapper)).toHaveLength(5);
     expect(moreChip(wrapper)).toBeUndefined();
-    expect(wrapper.emitted("overflow")).toBeUndefined();
   });
 
-  it("clips what does not fit and emits the hidden count", async () => {
+  it("clips what does not fit and counts what it hid", async () => {
     // Two chips plus the +N chip: 40+4+40+4+40 = 128.
     const wrapper = laidOut(130);
     await wrapper.vm.$nextTick();
@@ -99,7 +98,6 @@ describe("ChipRow", () => {
     const more = moreChip(wrapper);
     expect(more.textContent).toBe("+3");
     expect(more.getAttribute("aria-hidden")).toBe("true");
-    expect(wrapper.emitted("overflow").at(-1)).toEqual([3]);
   });
 
   it("counts the gaps between chips", async () => {
@@ -112,12 +110,11 @@ describe("ChipRow", () => {
   it("shows the clipped chips again when the row grows", async () => {
     const wrapper = laidOut(130);
     await wrapper.vm.$nextTick();
-    expect(wrapper.emitted("overflow").at(-1)).toEqual([3]);
+    expect(moreChip(wrapper).textContent).toBe("+3");
     resize(wrapper, 216);
     await wrapper.vm.$nextTick();
     expect(shown(wrapper)).toHaveLength(5);
     expect(moreChip(wrapper)).toBeUndefined();
-    expect(wrapper.emitted("overflow").at(-1)).toEqual([0]);
   });
 
   it("clips the row rather than wrapping it", () => {

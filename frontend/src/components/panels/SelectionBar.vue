@@ -235,7 +235,7 @@
 <script setup>
 import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
@@ -257,7 +257,6 @@ const props = defineProps({
    */
   ownsEscape: { type: Boolean, default: true },
   scrapheapPicturesId: { type: String, required: true },
-  backendUrl: { type: String, default: () => API_BASE_URL },
   selectedImageIds: { type: Array, default: () => [] },
   selectedMediaSupport: {
     type: Object,
