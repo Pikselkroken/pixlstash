@@ -4116,12 +4116,9 @@ while the funnel keeps its count badge and its tooltip. `ShelfSortPanel.vue`
 takes a `section` prop (`"sort"` / `"group"` / `"all"`) so the two axes can be
 two buttons drawing one panel — the toggles, the labels and the store writes are
 identical and only which section is on screen differs. The Group menu **closes
-on a pick**: the panel emits `group-picked` from `OptionRows`' `pick` (a
-deliberate choice, on the current row too, never an arrow key) and
-`ModelShelf.vue` closes its menu and hands focus back to the Group button, which
-`v-menu` does by itself only on Escape. Picking **Folder** is the exception and
-leaves the menu up, because it opens the layout sub-choice below. The shelf's
-Sort menu is unchanged and stays open.
+on a pick** (a click, never an arrow key) and `ModelShelf.vue` hands focus back
+to the Group button. Picking **Folder** leaves the menu up, because it opens the
+layout sub-choice below.
 
 The `Show` panel (`components/panels/ShelfShowPanel.vue`) is the toolbar's
 shipped filter pattern reused whole: a `bar-btn--boxed` activator with a

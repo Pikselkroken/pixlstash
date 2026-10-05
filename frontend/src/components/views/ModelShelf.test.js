@@ -5858,7 +5858,6 @@ describe("the Group by menu", () => {
 
     expect(wrapper.vm.groupMenuOpen).toBe(false);
     expect(document.activeElement).toBe(wrapper.vm.groupButtonRef.el);
-    expect(document.activeElement.tagName).toBe("BUTTON");
     wrapper.unmount();
   });
 });

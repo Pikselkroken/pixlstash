@@ -48,11 +48,8 @@
          SHORT options; Sort by, in this same panel, has used two-column
          OptionRows for its five keys all along.
 
-         `pick` is a deliberate choice, on the current row too, and never an
-         arrow key, so the host can close on it without closing under somebody
-         walking the rows. Folder is not reported: it opens a further choice
-         below, and the menu must stay up for it (the toolbar's sort menu does
-         the same for a sort that needs a parameter). -->
+         `pick` is a click, never an arrow key. Folder is not reported: it
+         opens the layout choice below, so the menu stays up for it. -->
     <div v-if="showsGroup" class="tbm-section">
       <span class="tbm-label">Group by</span>
       <OptionRows

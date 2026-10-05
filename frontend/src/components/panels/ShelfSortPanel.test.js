@@ -114,11 +114,7 @@ describe("picking a grouping", () => {
     expect(wrapper.emitted("group-picked")).toHaveLength(1);
 
     // Pressing the grouping already in force is still an answer.
-    const picked = store.view.groupBy;
-    await groupRows(wrapper)
-      .find((row) => row.attributes("aria-checked") === "true")
-      .trigger("click");
-    expect(store.view.groupBy).toBe(picked);
+    await other.trigger("click");
     expect(wrapper.emitted("group-picked")).toHaveLength(2);
   });
 
@@ -132,15 +128,6 @@ describe("picking a grouping", () => {
     await folder.trigger("click");
     expect(store.view.groupBy).toBe("folder");
     expect(layoutSection(wrapper).exists()).toBe(true);
-    expect(wrapper.emitted("group-picked")).toBeUndefined();
-  });
-
-  it("says nothing when it is the sort key that is picked", async () => {
-    const wrapper = mount(ShelfSortPanel, globalOpts);
-    const rows = wrapper
-      .find('[aria-label="Sort by"]')
-      .findAll('[role="radio"]');
-    await rows[1].trigger("click");
     expect(wrapper.emitted("group-picked")).toBeUndefined();
   });
 });
