@@ -1728,3 +1728,113 @@ def test_linking_a_large_import_costs_a_bounded_number_of_statements(owner_env):
         f"pictures, {large} for 400"
     )
     assert large < 20, f"{large} statements to link 400 pictures"
+
+
+@pytest.fixture
+def first_import(owner_env):
+    """A folder mid-first-import, made active the way "Add a library" does.
+
+    Switched back afterwards, and the folder's row forgotten if it survived, so
+    the module's other tests keep their own library.
+    """
+    server = owner_env["server"]
+    registry = server.library_registry
+    original = registry.active_library()
+    folder = os.path.join(owner_env["tmp"], f"first-import-{time.monotonic_ns()}")
+    _make_tree(folder, {"Holiday": ["a.jpg", "b.jpg"]})
+    as_found = _snapshot(folder)
+    library = registry.create(folder, os.path.basename(folder), pending_import=True)
+    server.library_switch.switch_to(library.uuid)
+    yield registry.by_uuid(library.uuid), as_found
+    if registry.active_library().uuid != original.uuid:
+        server.library_switch.switch_to(original.uuid)
+    if registry.by_uuid(library.uuid) is not None:
+        registry.detach(library.id)
+
+
+def _commit_first_import(owner, folder: str) -> str:
+    read_task_id = owner.post(_READ, json={"path": folder}).json()["task_id"]
+    assert _drain_read(owner, read_task_id)["status"] == "completed"
+    started = owner.post(
+        _COMMIT,
+        json={"task_id": read_task_id, "mode": "local_import", "assignments": []},
+    )
+    assert started.status_code == 200, started.text
+    return started.json()["task_id"]
+
+
+def _settled_status(owner, task_id, timeout_s: float = 60.0) -> dict:
+    """The commit's status once its stage is ``done`` - after the settle step."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        body = owner.get(_COMMIT_STATUS, params={"task_id": task_id}).json()
+        if body["stage"] == "done" and body["status"] not in ("queued", "running"):
+            return body
+        time.sleep(0.02)
+    pytest.fail(f"the commit never settled: {body}")
+
+
+def test_a_finished_first_import_makes_the_folder_a_library(owner_env, first_import):
+    """Finishing promotes the temporary vault BEFORE reporting completed."""
+    from pixlstash.hub.registry import TEMP_VAULT_FILENAME, VAULT_FILENAME
+
+    owner, server = owner_env["owner"], owner_env["server"]
+    library, before = first_import
+    folder = library.path
+
+    body = _settled_status(owner, _commit_first_import(owner, folder))
+
+    assert body["status"] == "completed", body
+    assert os.path.isfile(os.path.join(folder, VAULT_FILENAME)), "not promoted"
+    assert not os.path.exists(os.path.join(folder, TEMP_VAULT_FILENAME))
+    assert server.library_registry.by_uuid(library.uuid).pending_import_at is None
+    assert server.vault.image_root == folder, "the session serves the new library"
+    after = _snapshot(folder)
+    assert {rel: after.get(rel) for rel in before} == before, "a picture changed"
+
+
+def test_an_abandoned_first_import_gives_the_folder_back(
+    owner_env, first_import, monkeypatch
+):
+    """Aborting a first import discards it: no library, the folder as found."""
+    import threading
+
+    from pixlstash.services import (
+        folder_structure_commit_service as commit_service_module,
+    )
+
+    owner, server = owner_env["owner"], owner_env["server"]
+    library, before = first_import
+    folder = library.path
+    # Hold the commit at "indexing" until the abort is in, so the stop is
+    # seen at the pre-assign check however fast the tiny import runs.
+    reached, proceed = threading.Event(), threading.Event()
+    real_stage = commit_service_module.record_commit_stage
+
+    def held_stage(srv, task_id, stage, *args, **kwargs):
+        result = real_stage(srv, task_id, stage, *args, **kwargs)
+        if stage == "indexing":
+            reached.set()
+            assert proceed.wait(30), "the test never released the commit"
+        return result
+
+    monkeypatch.setattr(commit_service_module, "record_commit_stage", held_stage)
+
+    task_id = _commit_first_import(owner, folder)
+    assert reached.wait(30), "the commit never reached indexing"
+    stopped = owner.request(
+        "DELETE", _COMMIT, params={"task_id": task_id, "stop": "abort"}
+    )
+    proceed.set()
+    assert stopped.status_code == 200, stopped.text
+    assert stopped.json()["status"] == "abandoned"
+
+    body = _settled_status(owner, task_id)
+
+    assert body["status"] == "abandoned", body
+    assert server.library_registry.by_uuid(library.uuid) is None, "still registered"
+    assert server.vault.image_root != folder, "the session is still on the folder"
+    assert _snapshot(folder) == before, (
+        "the folder must be exactly as found: pictures untouched, and no "
+        "database or thumbnails left behind"
+    )
