@@ -2746,6 +2746,42 @@ describe("hand-made sets (#1520)", () => {
       expect(ghosts[0].text()).toContain("812 pictures");
     });
 
+    it("says the precision of a held model and of the one it is offered", async () => {
+      // Two quants of one encoder: the shelf's name is the same for both.
+      const held = slotMember(6, "Qwen3VL_4b_bf16.st", "text_encoder");
+      const ghost = { ...GHOST_LORA, id: 7, sha256: "7".repeat(64), kind: "text_encoder", slot: "text_encoder" };
+      const { wrapper, store } = await mountGrid({
+        rows: [
+          row(1, "realvisXL_v5", "checkpoint"),
+          { ...row(6, "Qwen3VL_4b_bf16.st", "text_encoder"), quant: "bf16" },
+          { ...row(7, "Qwen3VL_4b_fp8_scaled.st", "text_encoder"), quant: "fp8" },
+        ],
+        handMade: [
+          handSet(10, [SET_CKPT, held], { offer: { ...OFFER, models: [ghost] } }),
+        ],
+      });
+      const card = wrapper.find('[data-testid="model-set-card"]');
+      expect(card.find('[data-testid="set-offer"]').text()).toContain(
+        "Text encoder · Qwen3VL 4b · FP8",
+      );
+      expect(card.attributes("aria-label")).toContain(
+        "Text encoder Qwen3VL 4b FP8. Add it?",
+      );
+
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const tile = wrapper.find(`[data-key="m:${held.sha256}"]`);
+      expect(tile.find(".mss__quant").text()).toBe("BF16");
+      expect(tile.attributes("aria-label")).toContain("Qwen3VL 4b BF16, ");
+      const offered = wrapper.find(".mss__tile--ghost");
+      expect(offered.find(".mss__quant").text()).toBe("FP8");
+      expect(offered.attributes("aria-label")).toContain("Qwen3VL 4b FP8, ");
+      // No precision recorded, no badge: never an empty one.
+      expect(
+        wrapper.find(`[data-key="m:${SET_CKPT.sha256}"] .mss__quant`).exists(),
+      ).toBe(false);
+    });
+
     it("adds one offered model from the card, with a receipt and an Undo", async () => {
       addWorkflowSetMembers.mockResolvedValue({
         set: handSet(10, [SET_CKPT], { picture_count: 812 }),

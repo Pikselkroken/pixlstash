@@ -24,7 +24,7 @@
 // names - or names only beside no base model - arrive from the server under
 // `no_set` and get a card of their own.
 
-import { fileKindLabel, modelName } from "./modelShelf";
+import { fileKindLabel, modelName, quantBadge } from "./modelShelf";
 
 /** The kinds a set is named after, as the server's `_SET_BASE_KINDS`. */
 const BASE_KINDS = new Set(["checkpoint", "unknown"]);
@@ -683,7 +683,7 @@ export function handMadeCard(set) {
  * the tray to repeat; `text` is the whole question.
  *
  * @returns {{adds: number, who: string, rest: string, text: string,
- *   model: {kind: string, name: string}|null}|null}
+ *   model: {kind: string, name: string, quant?: string}|null}|null}
  */
 export function offerQuestion(set) {
   const offer = set?.offer;
@@ -701,7 +701,14 @@ export function offerQuestion(set) {
     who,
     rest,
     text: `${who}${rest}${one ? " Add it?" : ""}`,
-    model: one ? { kind: memberKindLabel(one), name: one.name } : null,
+    model: one
+      ? {
+          kind: memberKindLabel(one),
+          name: one.name,
+          // The name has lost its precision; the set may hold its other quant.
+          quant: quantBadge(one.quant)?.label,
+        }
+      : null,
   };
 }
 

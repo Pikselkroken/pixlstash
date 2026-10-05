@@ -745,6 +745,17 @@ describe("hand-made sets (#1520)", () => {
     expect(offerQuestion({})).toBeNull();
   });
 
+  it("says the offered model's precision, which its name has lost", () => {
+    const offer = {
+      picture_count: 50,
+      recipes: 1,
+      models: [
+        { id: 6, sha256: "h6", slot: "text_encoder", kind: "text_encoder", name: "qwen3vl 4b", quant: "fp8_e4m3" },
+      ],
+    };
+    expect(offerQuestion({ offer }).model.quant).toBe("FP8");
+  });
+
   it("compares base models the way the server fills a member's", () => {
     // A fuzzy guess is not the base model; the folded raw label is.
     expect(
