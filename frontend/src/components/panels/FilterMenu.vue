@@ -617,18 +617,10 @@ const loraNames = ref([]);
 
 // /tags counts span the pictures this session may see, not the current view:
 // one request for the whole vocabulary rather than one per tag.
-const modelItems = computed(() =>
-  modelNames.value.map((m) => ({
-    value: m.value,
-    label: m.name || modelLabel(m.value),
-  })),
-);
-const loraItems = computed(() =>
-  loraNames.value.map((m) => ({
-    value: m.value,
-    label: m.name || modelLabel(m.value),
-  })),
-);
+const asItems = (names) =>
+  names.map((m) => ({ value: m.value, label: m.name || modelLabel(m.value) }));
+const modelItems = computed(() => asItems(modelNames.value));
+const loraItems = computed(() => asItems(loraNames.value));
 
 async function loadLists() {
   try {

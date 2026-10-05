@@ -609,8 +609,8 @@
               :row="row"
               :busy="busy === `default:${row.label}`"
               @toggle-pin="togglePin(row)"
-              @reset="resetDefault(row)"
-              @edit="(value) => editDefault(row, value)"
+              @reset="writeDefault(row)"
+              @edit="(value) => writeDefault(row, { value })"
             />
           </template>
           <template v-if="fixedDefaults.length">
@@ -637,8 +637,8 @@
                     :row="row"
                     :busy="busy === `default:${row.label}`"
                     @toggle-pin="togglePin(row)"
-                    @reset="resetDefault(row)"
-                    @edit="(value) => editDefault(row, value)"
+                    @reset="writeDefault(row)"
+                    @edit="(value) => writeDefault(row, { value })"
                   />
                 </div>
               </details>
@@ -652,8 +652,8 @@
                   :row="row"
                   :busy="busy === `default:${row.label}`"
                   @toggle-pin="togglePin(row)"
-                  @reset="resetDefault(row)"
-                  @edit="(value) => editDefault(row, value)"
+                  @reset="writeDefault(row)"
+                  @edit="(value) => writeDefault(row, { value })"
                 />
               </template>
               <p class="wftab-note wftab-quiet">
@@ -1637,32 +1637,25 @@ const usingChain = computed(
     !(defaultRecipe.value?.loras ?? []).length,
 );
 
-/** The summary's LoRAs by the shelf digest they resolve to, where they do. */
-const summaryByDigest = computed(() => {
+/** The summary's LoRAs by one of their fields, and whether each is everywhere. */
+function summaryBy(field) {
   const uses = new Map();
-  for (const use of summary.value?.shared ?? []) {
-    if (use.sha256) uses.set(digestOf(use.sha256), { use, everywhere: true });
-  }
-  for (const use of summary.value?.varying ?? []) {
-    if (use.sha256) uses.set(digestOf(use.sha256), { use, everywhere: false });
+  for (const [list, everywhere] of [
+    [summary.value?.shared, true],
+    [summary.value?.varying, false],
+  ]) {
+    for (const use of list ?? []) {
+      if (use[field]) uses.set(digestOf(use[field]), { use, everywhere });
+    }
   }
   return uses;
-});
+}
 
-/**
- * The summary's LoRAs by their `asset:` reference (a hash of the file's NAME,
- * as the stored graphs name it), and whether each is in every picture.
- */
-const summaryUses = computed(() => {
-  const uses = new Map();
-  for (const use of summary.value?.shared ?? []) {
-    uses.set(digestOf(use.asset), { use, everywhere: true });
-  }
-  for (const use of summary.value?.varying ?? []) {
-    uses.set(digestOf(use.asset), { use, everywhere: false });
-  }
-  return uses;
-});
+/** By the shelf digest they resolve to, where they do. */
+const summaryByDigest = computed(() => summaryBy("sha256"));
+
+/** By their `asset:` reference: a hash of the file's NAME, as graphs name it. */
+const summaryUses = computed(() => summaryBy("asset"));
 
 /** The asset references of the default recipe's LoRAs, which ALSO USED leaves out. */
 const defaultAssets = computed(
@@ -2193,13 +2186,15 @@ function editedExcept(rows, slotLabel, inputName) {
 }
 
 /**
- * Put a value back to what the pictures say.
+ * Set one value as the workflow's own ("Yours") when `edit` is `{value}`, or
+ * put it back to what the pictures say when there is no `edit`.
  *
  * The route replaces the whole override set, so this sends every other edited
  * value back untouched; sending only the survivors of a filter is the same
- * request and is what makes "reset one" possible at all.
+ * request and is what makes "reset one" possible at all. Locking afterwards
+ * keeps a set value, since a fixed parameter runs the workflow's value.
  */
-function resetDefault(row) {
+function writeDefault(row, edit = null) {
   const key = selectedKey.value;
   if (!key) return;
   return queueWrite(`default:${row.label}`, async () => {
@@ -2207,33 +2202,20 @@ function resetDefault(row) {
     if (!rows) return;
     try {
       const kept = editedExcept(rows, row.slot_label, row.input_name);
+      if (edit) {
+        kept.push({
+          slot_label: row.slot_label,
+          input_name: row.input_name,
+          value: edit.value,
+        });
+      }
       const body = await setWorkflowDefaults(key, kept);
       if (stillOn(key)) detail.value = body;
     } catch (err) {
-      fail(err, "Could not reset that value.");
-    }
-  });
-}
-
-/**
- * Set one value as the workflow's own ("Yours"). Whole-set, like a reset:
- * every other edited value is sent back untouched. Locking afterwards keeps
- * it, since a fixed parameter runs the workflow's value.
- */
-function editDefault(row, value) {
-  const key = selectedKey.value;
-  if (!key) return;
-  return queueWrite(`default:${row.label}`, async () => {
-    const rows = defaultsFor(key);
-    if (!rows) return;
-    try {
-      const body = await setWorkflowDefaults(key, [
-        ...editedExcept(rows, row.slot_label, row.input_name),
-        { slot_label: row.slot_label, input_name: row.input_name, value },
-      ]);
-      if (stillOn(key)) detail.value = body;
-    } catch (err) {
-      fail(err, `Could not set ${row.label}.`);
+      fail(
+        err,
+        edit ? `Could not set ${row.label}.` : "Could not reset that value.",
+      );
     }
   });
 }

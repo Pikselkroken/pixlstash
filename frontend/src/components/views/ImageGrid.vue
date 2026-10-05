@@ -1208,7 +1208,7 @@ import {
 } from "../../utils/setSuggestionCut.js";
 import {
   squareCropParams,
-  squareCropImgStyle,
+  cropImgStyle,
   squareCropBboxRect,
   coverBboxRect,
 } from "../../utils/squareCrop.js";
@@ -1685,9 +1685,7 @@ const impossibleSnackbarText = ref("");
 const lastImpossibleRemoved = ref([]);
 
 async function handleClearImpossibleTags() {
-  const pictureIds = selectedImageIds.value
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const pictureIds = selectedPictureIds();
   const filters = Array.isArray(filterStore.impossibleSources)
     ? filterStore.impossibleSources
     : [];
@@ -1839,9 +1837,7 @@ function handleTagsApplied(payload) {
 }
 
 async function handleAutoTag({ model } = {}) {
-  const ids = selectedImageIds.value
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const ids = selectedPictureIds();
   if (!ids.length || !props.backendUrl) return;
   if (!(await confirmRetag(ids.length))) return;
   try {
@@ -1856,9 +1852,7 @@ async function handleAutoTag({ model } = {}) {
 }
 
 async function handleGenerateDescription({ model } = {}) {
-  const ids = selectedImageIds.value
-    .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const ids = selectedPictureIds();
   if (!ids.length || !props.backendUrl) return;
   try {
     // One request marks the whole selection; each finished caption arrives
@@ -2092,9 +2086,7 @@ function openRunForPicture(pictureId) {
  * client that cannot see a card.
  */
 async function makeMoreLikeSelection() {
-  const ids = selectedImageIds.value
-    .map((id) => Number(getPictureId(id)))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const ids = selectedPictureIds();
   if (!ids.length || isReadOnly.value || decidingMakeMore) return;
   // One look-ahead at a time. The menu closes on the click, so a double press
   // or the entry fired from both menus would otherwise start two pre-flights -
@@ -2149,11 +2141,7 @@ function openRunWithWorkflowPicker(ids) {
 
 /** "Run a workflow on these…", from either grid menu. */
 function runWorkflowOnSelection() {
-  openRunWithWorkflowPicker(
-    selectedImageIds.value
-      .map((id) => Number(getPictureId(id)))
-      .filter((id) => Number.isFinite(id) && id > 0),
-  );
+  openRunWithWorkflowPicker(selectedPictureIds());
 }
 
 /** The built-in workflow "Edit with ComfyUI…" runs: Flux.2 Klein image edit. */
@@ -2168,9 +2156,7 @@ const EDIT_WORKFLOW = "Flux2-Klein-Image-Edit.json";
  * fetched on each gesture; the route is idempotent and answers the one filed.
  */
 async function editSelectionWithComfyui() {
-  const ids = selectedImageIds.value
-    .map((id) => Number(getPictureId(id)))
-    .filter((id) => Number.isFinite(id) && id > 0);
+  const ids = selectedPictureIds();
   if (isReadOnly.value || !ids.length) return;
   let workflowId;
   try {
@@ -2886,7 +2872,7 @@ function isSquareCropActive(img) {
 // Inline <img> style for the sprite crop, or null → CSS object-fit:cover.
 function getSquareCropImgStyle(img) {
   if (isJustifiedMode.value || isVideo(img)) return null;
-  return squareCropImgStyle(img);
+  return cropImgStyle(img);
 }
 
 // Helper to calculate face/detection bbox overlay style. Square-crop mode maps
@@ -5068,11 +5054,7 @@ const keepCoverOnlyLockReason = computed(() =>
 );
 
 const selectedExpandedCount = computed(() => {
-  const selectedSet = new Set(
-    selectedImageIds.value
-      .map((id) => Number(id))
-      .filter((id) => Number.isFinite(id) && id > 0),
-  );
+  const selectedSet = new Set(selectedPictureIds());
   const visibleIds = new Set(
     allGridImages.value
       .map((img) => Number(img?.id))
@@ -5664,6 +5646,13 @@ const {
   onFaceBboxDragStart,
   clearSelection,
 } = useMultiSelect();
+
+/** The selection as numeric picture ids, anything that is not one dropped. */
+function selectedPictureIds() {
+  return selectedImageIds.value
+    .map(Number)
+    .filter((id) => Number.isFinite(id) && id > 0);
+}
 
 // The Run popups are mounted in App.vue, outside the grid: they read the view
 // context a run's output is filed into, and the progress runner, from here.

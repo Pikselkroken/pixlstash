@@ -96,7 +96,7 @@
             <Tooltip text="Open the picture" activator="parent" :describe="false" />
             <img
               class="wfrt-thumb"
-              :src="thumbnail(recipe.source_picture_id)"
+              :src="pictureThumbnailUrl(recipe.source_picture_id)"
               alt=""
               loading="lazy"
               decoding="async"
@@ -276,7 +276,7 @@
               <Tooltip text="Open the picture" activator="parent" :describe="false" />
               <img
                 class="wfrt-thumb"
-                :src="thumbnail(look.cover_picture_id)"
+                :src="pictureThumbnailUrl(look.cover_picture_id)"
                 alt=""
                 loading="lazy"
                 decoding="async"
@@ -372,7 +372,6 @@
 
     <SaveRecipeDialog
       v-if="savingSource"
-      :open="Boolean(savingSource)"
       :workflow-id="savingSource.workflowId"
       :prompt="savingSource.prompt"
       :negative="savingSource.negative"
@@ -535,10 +534,6 @@ const subtitle = computed(() => {
   }
   return parts.join(" · ");
 });
-
-function thumbnail(pictureId) {
-  return pictureThumbnailUrl(pictureId);
-}
 
 // ── The diff line (#1653 §1.3) ──────────────────────────────────────────────
 

@@ -319,4 +319,20 @@ describe("the two menus cannot diverge", () => {
     // worse than the disabled one it replaced.
     expect(wrapper.emitted("rename")).toBeUndefined();
   });
+
+  it("re-gates its rows when the selection changes under it", async () => {
+    // The menu reads the bar's state itself rather than through props, so
+    // this is what proves it still re-renders when that state moves.
+    const { wrapper, store } = bar(["a", "b"]);
+    const rename = () =>
+      verbMenus(wrapper)[0]
+        .findAll(".ctx-item")
+        .find((el) => el.attributes("data-verb") === "rename");
+    expect(rename().attributes("aria-disabled")).toBe("true");
+    store.selectRange(["a"]);
+    await wrapper.vm.$nextTick();
+    expect(rename().attributes("aria-disabled")).toBeUndefined();
+    await rename().trigger("click");
+    expect(wrapper.emitted("rename")).toHaveLength(1);
+  });
 });

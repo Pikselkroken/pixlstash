@@ -430,21 +430,39 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     selectedKeys.value.length === 1 ? (selectedCards.value[0] ?? null) : null,
   );
 
-  /** Give one card a name of the owner's own. `null` clears it. */
-  async function renameCard(key, name) {
-    if (verbBusy.value) return false;
-    verbBusy.value = "rename";
+  /**
+   * One single-card verb under `verbBusy`: `call`, then the grid re-read.
+   * Answers what `call` did, or `null` - with the reason in `error` - when it
+   * failed or another verb was already busy.
+   */
+  async function busyCall(verb, key, failText, call) {
+    if (verbBusy.value) return null;
+    verbBusy.value = verb;
     try {
-      await patchWorkflowCard(key, { name: name || null });
+      const answer = await call();
       await refetch();
-      return true;
+      return answer;
     } catch (err) {
-      console.warn(`[workflows] could not rename ${key}`, err);
-      error.value = errorMessage(err, "Could not rename that workflow.");
-      return false;
+      console.warn(`[workflows] could not ${verb} ${key}`, err);
+      error.value = errorMessage(err, failText);
+      return null;
     } finally {
       verbBusy.value = "";
     }
+  }
+
+  /** Give one card a name of the owner's own. `null` clears it. */
+  async function renameCard(key, name) {
+    const done = await busyCall(
+      "rename",
+      key,
+      "Could not rename that workflow.",
+      async () => {
+        await patchWorkflowCard(key, { name: name || null });
+        return true;
+      },
+    );
+    return Boolean(done);
   }
 
   /**
@@ -453,20 +471,13 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * The copy is a card of its own, so the grid is re-read; the answer's
    * `workflow_id` is where it landed and is handed back to select it.
    */
-  async function duplicateCard(key) {
-    if (verbBusy.value) return null;
-    verbBusy.value = "duplicate";
-    try {
-      const body = await duplicateWorkflow(key);
-      await refetch();
-      return body;
-    } catch (err) {
-      console.warn(`[workflows] could not duplicate ${key}`, err);
-      error.value = errorMessage(err, "Could not duplicate that workflow.");
-      return null;
-    } finally {
-      verbBusy.value = "";
-    }
+  function duplicateCard(key) {
+    return busyCall(
+      "duplicate",
+      key,
+      "Could not duplicate that workflow.",
+      () => duplicateWorkflow(key),
+    );
   }
 
   /**
@@ -476,20 +487,13 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * the answer is handed back for the notice. `null` on failure, with the
    * reason in `error`.
    */
-  async function cloneCardWithModels(key, body) {
-    if (verbBusy.value) return null;
-    verbBusy.value = "clone-with-models";
-    try {
-      const answer = await cloneWorkflowWithModels(key, body);
-      await refetch();
-      return answer;
-    } catch (err) {
-      console.warn(`[workflows] could not clone ${key} with new models`, err);
-      error.value = errorMessage(err, "Could not clone that workflow.");
-      return null;
-    } finally {
-      verbBusy.value = "";
-    }
+  function cloneCardWithModels(key, body) {
+    return busyCall(
+      "clone-with-models",
+      key,
+      "Could not clone that workflow.",
+      () => cloneWorkflowWithModels(key, body),
+    );
   }
 
   /**

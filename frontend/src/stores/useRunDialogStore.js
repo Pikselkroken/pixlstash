@@ -84,9 +84,13 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    */
   const hasRunner = ref(false);
 
+  /** Bumped per `openRun`: App.vue keys the popup on it, so each opens fresh. */
+  const runOpened = ref(0);
+
   function openRun(next) {
     makeMore.value = null;
     source.value = { pictureIds: [], ...next };
+    runOpened.value += 1;
   }
 
   function openMakeMore(next) {
@@ -137,6 +141,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   return {
     source,
     makeMore,
+    runOpened,
     context,
     pinsWritten,
     editRun,

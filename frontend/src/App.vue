@@ -897,7 +897,7 @@ defineExpose({
       </div>
       <RunDialog
         v-if="runDialogStore.source"
-        open
+        :key="runDialogStore.runOpened"
         :source="runDialogStore.source"
         :context="runDialogStore.context"
         @close="runDialogStore.close()"

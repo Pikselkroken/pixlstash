@@ -1,6 +1,6 @@
 <template>
   <AppDialog
-    :open="open"
+    open
     size="lg"
     :title="title"
     :subtitle="subtitle"
@@ -118,7 +118,7 @@
                 v-for="id in pictureIds.slice(0, 4)"
                 :key="id"
                 class="rund-in-cell"
-                :src="thumbUrl(id)"
+                :src="pictureThumbnailUrl(id)"
                 alt=""
               />
             </span>
@@ -146,7 +146,7 @@
               <img
                 v-if="input.picture_id"
                 class="rund-in-img"
-                :src="thumbUrl(input.picture_id)"
+                :src="pictureThumbnailUrl(input.picture_id)"
                 alt=""
               />
               <v-icon v-else size="24">mdi-image-plus-outline</v-icon>
@@ -723,7 +723,6 @@
        already the densest surface in the app. -->
   <SaveRecipeDialog
     v-if="saveOpen"
-    :open="saveOpen"
     :workflow-id="activeKey"
     :models="checkpointEdited ? runModels : null"
     :suggested-name="card?.name || ''"
@@ -819,11 +818,10 @@ import RunReasonNotice from "./RunReasonNotice.vue";
 import RunResetChip from "./RunResetChip.vue";
 
 const props = defineProps({
-  open: { type: Boolean, default: false },
   /**
    * `{kind, pictureIds, workflowId, pickWorkflow, name, coverUrl}` - see
-   * `useRunDialogStore`. Replaced rather than mutated, so a new source is one
-   * watcher tick and never a half-swapped form.
+   * `useRunDialogStore`. Read once: a new source is a new popup, which App.vue
+   * mounts fresh by keying it on `runOpened`.
    */
   source: { type: Object, default: null },
   /** `{client_id, set_id, project_id, character_id}` from the grid. */
@@ -1228,7 +1226,7 @@ const sourceName = computed(
  */
 const coverUrl = computed(() => {
   if (props.source?.coverUrl) return props.source.coverUrl;
-  if (isEdit.value && pictureIds.value.length) return thumbUrl(pictureIds.value[0]);
+  if (isEdit.value && pictureIds.value.length) return pictureThumbnailUrl(pictureIds.value[0]);
   const cover = card.value?.covers?.[0];
   return cover ? workflowCoverUrl(cover) : "";
 });
@@ -2114,10 +2112,6 @@ const stack = computed({
   },
 });
 
-function thumbUrl(id) {
-  return pictureThumbnailUrl(id);
-}
-
 /**
  * What a row is called. A loader with no title of its own is called by its
  * class, and two of those side by side would read as one input twice, so a
@@ -2823,40 +2817,10 @@ async function runPreflight(token = loadToken) {
 async function load() {
   const token = (loadToken += 1);
   const mine = () => token === loadToken;
+  // Everything else starts empty: App.vue mounts a fresh popup per source.
   loading.value = true;
-  loadFailed.value = "";
-  submitError.value = "";
-  reasons.value = [];
-  choiceFixes.value = [];
-  fellBack.value = [];
-  for (const key of Object.keys(edits)) delete edits[key];
-  for (const key of Object.keys(editedLabels)) delete editedLabels[key];
-  recipe.value = null;
-  card.value = null;
-  pins.value = null;
-  modelFixes.value = [];
-  freeError.value = "";
-  cards.value = [];
-  loras.value = [];
-  addedLoras.value = [];
-  changedNodes.value = false;
-  fixedNote.value = "";
-  attachedLoras.value = [];
-  handMadeSets.value = [];
-  count.value = 1;
-  seedMode.value = "new";
-  saveOpen.value = false;
-  pictureInputs.value = [];
-  inputsKey.value = "";
-  clearPicks();
-  pickerFor.value = null;
   // The caller's own checkbox, explicit false included; else the popup decides.
   stackChoice.value = props.source?.stack ?? null;
-  checkpointEdit.value = null;
-  checkpointFix.value = null;
-  checkpointAsk += 1;
-  clearStages();
-  inputsError.value = "";
   try {
     if (props.source?.pickWorkflow) {
       cards.value = (await listWorkflowCards()).cards;
@@ -3051,13 +3015,7 @@ async function submit() {
   }
 }
 
-watch(
-  () => [props.open, props.source],
-  ([open]) => {
-    if (open) void load();
-  },
-  { immediate: true },
-);
+void load();
 </script>
 
 <style scoped>

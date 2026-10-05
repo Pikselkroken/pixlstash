@@ -419,9 +419,35 @@ const selectedText = computed(() =>
     .map((w) => w.text)
     .join(" "),
 );
-// Which copy button last succeeded ("text" | "selection"), for its check mark.
-const textCopyState = ref("");
-let textCopyTimer = null;
+/**
+ * A copy button's state: `mark` for two seconds after a copy that worked, then
+ * `idle` again. A failed copy says so in a notice instead.
+ */
+function copyMark(idle) {
+  const state = ref(idle);
+  let timer = null;
+  const reset = () => {
+    clearTimeout(timer);
+    timer = null;
+    state.value = idle;
+  };
+  async function copy(value, mark, failText, key) {
+    if (!value) return;
+    if (!(await copyText(value))) {
+      noticeStore.error(failText, { key });
+      return;
+    }
+    clearTimeout(timer);
+    state.value = mark;
+    timer = window.setTimeout(reset, 2000);
+  }
+  onUnmounted(reset);
+  return { state, reset, copy };
+}
+
+// Which text copy button last succeeded ("text" | "selection").
+const textCopy = copyMark("");
+const textCopyState = textCopy.state;
 // Roving focus: the word list is one tab stop, and arrows move inside it.
 const focusWord = ref(0);
 const tabStopWord = computed(() =>
@@ -485,20 +511,13 @@ function onTabKeydown(event) {
   );
 }
 
-async function copyPictureText(value, which) {
-  if (!value) return;
-  if (await copyText(value)) {
-    textCopyState.value = which;
-    if (textCopyTimer) clearTimeout(textCopyTimer);
-    textCopyTimer = window.setTimeout(() => {
-      textCopyState.value = "";
-      textCopyTimer = null;
-    }, 2000);
-  } else {
-    noticeStore.error("Couldn't copy the text to the clipboard.", {
-      key: "picture-text-copy",
-    });
-  }
+function copyPictureText(value, which) {
+  return textCopy.copy(
+    value,
+    which,
+    "Couldn't copy the text to the clipboard.",
+    "picture-text-copy",
+  );
 }
 
 /** Scroll a word's button into view (a box on the picture was clicked). */
@@ -520,12 +539,12 @@ const isSentinelDescription = computed(() =>
   isDescriptionSentinel(props.image?.description),
 );
 const descriptionEditorRef = ref(null);
-const descriptionCopyState = ref("idle");
+const descriptionCopy = copyMark("idle");
+const descriptionCopyState = descriptionCopy.state;
 const isDescriptionRefreshing = ref(false);
 const descPluginMenuOpen = ref(false);
 const descPlugins = ref([]);
 const descPluginsLoading = ref(false);
-let copyResetTimer = null;
 
 watch(
   () => props.image?.description,
@@ -592,31 +611,17 @@ async function saveDescription() {
   }
 }
 
-function resetCopyState() {
-  if (copyResetTimer) {
-    clearTimeout(copyResetTimer);
-    copyResetTimer = null;
-  }
-  descriptionCopyState.value = "idle";
-}
+const resetCopyState = descriptionCopy.reset;
 
-async function copyDescription() {
-  const text = isEditingDescription.value
-    ? descriptionDraft.value
-    : props.image?.description;
-  if (!text) return;
-  const copied = await copyText(text);
-  if (copied) {
-    descriptionCopyState.value = "copied";
-    if (copyResetTimer) clearTimeout(copyResetTimer);
-    copyResetTimer = window.setTimeout(() => {
-      resetCopyState();
-    }, 2000);
-  } else {
-    noticeStore.error("Couldn't copy the description to the clipboard.", {
-      key: "description-copy",
-    });
-  }
+function copyDescription() {
+  return descriptionCopy.copy(
+    isEditingDescription.value
+      ? descriptionDraft.value
+      : props.image?.description,
+    "copied",
+    "Couldn't copy the description to the clipboard.",
+    "description-copy",
+  );
 }
 
 async function fetchDescPlugins() {
@@ -675,10 +680,6 @@ function handleDescriptionEditorKey(event) {
     saveDescription();
   }
 }
-
-onUnmounted(() => {
-  if (textCopyTimer) clearTimeout(textCopyTimer);
-});
 
 defineExpose({
   isEditingDescription,

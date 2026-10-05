@@ -145,7 +145,7 @@ const globalOpts = {
 
 async function mountRun(source = { kind: "picture", pictureIds: [42] }) {
   const wrapper = mount(RunDialog, {
-    props: { open: true, source, context: { client_id: "test-client" } },
+    props: { source, context: { client_id: "test-client" } },
     ...globalOpts,
   });
   await flushPromises();
@@ -399,19 +399,6 @@ describe("switching to another workflow", () => {
 
     const after = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
     expect(wrapper.vm.currentValue(after)).toBe(20);
-  });
-
-  it("keeps the card of a popup reopened while the old card read was out", async () => {
-    let release;
-    getWorkflowCard.mockImplementationOnce(
-      () => new Promise((resolve) => (release = () => resolve({ card: card() }))),
-    );
-    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    await wrapper.setProps({ source: { kind: "card", workflowId: OTHER } });
-    await flushPromises();
-    release();
-    await flushPromises();
-    expect(wrapper.vm.card.id).toBe(OTHER);
   });
 
   it("offers the workflow alone, never a list of stack members (#1623)", async () => {

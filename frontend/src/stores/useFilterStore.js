@@ -1,35 +1,17 @@
-import { ref, computed, onScopeDispose } from "vue";
+import { ref, onScopeDispose } from "vue";
 import { defineStore } from "pinia";
 
 import { onSessionReset } from "../utils/apiClient";
 
 export const useFilterStore = defineStore("filter", () => {
   const mediaTypeFilter = ref("all"); // 'all' | 'images' | 'videos'
-  const _minScore = ref(null);
-  const _maxScore = ref(null);
+  const minScoreFilter = ref(null);
+  const maxScoreFilter = ref(null);
   // Pictures nobody has rated (`unscored=1`, i.e. score IS NULL OR 0). Alone it
   // is the unrated only; beside a score range it adds the unrated to that range
   // (the filter menu's Score sets it for a range from 0 stars), which the
   // backend ORs.
-  const _unscoredOnly = ref(false);
-  const minScoreFilter = computed({
-    get: () => _minScore.value,
-    set: (v) => {
-      _minScore.value = v ?? null;
-    },
-  });
-  const maxScoreFilter = computed({
-    get: () => _maxScore.value,
-    set: (v) => {
-      _maxScore.value = v ?? null;
-    },
-  });
-  const unscoredOnlyFilter = computed({
-    get: () => _unscoredOnly.value,
-    set: (v) => {
-      _unscoredOnly.value = Boolean(v);
-    },
-  });
+  const unscoredOnlyFilter = ref(false);
   const smartScoreBucketFilter = ref(null);
   const resolutionBucketFilter = ref(null);
   const tagFilter = ref([]);
@@ -76,9 +58,9 @@ export const useFilterStore = defineStore("filter", () => {
 
   function resetFilters() {
     mediaTypeFilter.value = "all";
-    _minScore.value = null;
-    _maxScore.value = null;
-    _unscoredOnly.value = false;
+    minScoreFilter.value = null;
+    maxScoreFilter.value = null;
+    unscoredOnlyFilter.value = false;
     smartScoreBucketFilter.value = null;
     resolutionBucketFilter.value = null;
     tagFilter.value = [];

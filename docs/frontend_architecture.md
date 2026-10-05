@@ -2180,7 +2180,7 @@ can no longer see.
     file" (`checkpointUnread`); "Not recorded" is left for nothing anywhere
     naming a base model.
 - **Whole-set writes are built when they run, and only on their own card.**
-  `resetDefault` and `togglePin` each PUT the complete set, read from
+  `writeDefault` (set or reset) and `togglePin` each PUT the complete set, read from
   `defaults` after any earlier write they queued behind. If the selection
   moved in between (the owner's click), `defaultsFor` refuses the write with a notice rather than sending one
   card's set to another.
