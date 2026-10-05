@@ -879,14 +879,20 @@ const selectedHashes = computed(() =>
 async function copyLines(names, plural) {
   const notices = useNoticeStore();
   if (!names.length) return;
+  // A row with nothing to give (a checkpoint not hashed yet) is left out, and
+  // the notice says so: a paste of two lines from three models must not read
+  // as the whole selection.
+  const total = store.selectedRows.length;
+  const skipped = total - names.length;
   try {
     await navigator.clipboard.writeText(names.join("\n"));
     notices.push({
       level: "success",
       text:
-        names.length === 1
+        (names.length === 1
           ? `Copied ${names[0]}.`
-          : `Copied ${names.length} ${plural}.`,
+          : `Copied ${names.length} ${plural}.`) +
+        (skipped > 0 ? ` ${skipped} of ${total} selected had none.` : ""),
     });
   } catch (err) {
     // Denied permission, an insecure origin, or a browser that has no

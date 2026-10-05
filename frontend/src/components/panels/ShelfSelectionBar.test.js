@@ -6,12 +6,13 @@
 // a deletion would wipe the curation for a whole disk on one press.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
 import ShelfSelectionBar from "./ShelfSelectionBar.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 // `AddToEntityControl` is stubbed rather than mounted: it reads the shared
 // entity lists on mount, and what this file has to assert about it is the props
@@ -553,6 +554,26 @@ describe("Copy SHA-256", () => {
       await item(wrapper).trigger("click");
       expect(writeText).toHaveBeenCalledWith(
         `${"1".repeat(64)}\n${"2".repeat(64)}`,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("says how many of the selection had no hash to copy", async () => {
+    const writeText = vi.fn().mockResolvedValue();
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      selectRows([
+        row(1, "present"),
+        row(2, "present", { sha256: null }),
+        row(3, "present"),
+      ]);
+      const wrapper = mount(ShelfSelectionBar, globalOpts);
+      await item(wrapper).trigger("click");
+      await flushPromises();
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "Copied 2 SHA-256 hashes. 1 of 3 selected had none.",
       );
     } finally {
       vi.unstubAllGlobals();
