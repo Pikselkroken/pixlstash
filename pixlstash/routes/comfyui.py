@@ -40,6 +40,7 @@ from pixlstash.hub.workflows import (
     input_modes_by_workflow,
     replace_parameter_pins,
 )
+from pixlstash.routes._helpers import require_hub
 from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_UNKNOWN
 from pixlstash.utils.comfyui_utilities import (
     collect_seed_inputs,
@@ -2118,11 +2119,7 @@ def create_router(server) -> APIRouter:
         },
     )
     def card_for_comfyui_workflow(request: Request, workflow_name: str):
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503, detail="The workflow library is not open."
-            )
+        hub = require_hub(server, "The workflow library is not open.")
         name = _normalize_workflow_name(workflow_name)
         path = _builtin_path(name)
         if path is None:
@@ -2209,11 +2206,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="workflow must be a JSON object"
             )
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503, detail="The workflow library is not open."
-            )
+        hub = require_hub(server, "The workflow library is not open.")
         try:
             workflow_id = store_manual_workflow(hub, _stem(name), workflow, "import")
         except WorkflowFileTooLarge as exc:
@@ -2279,11 +2272,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="output must be an API-format graph"
             )
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503, detail="The workflow library is not open."
-            )
+        hub = require_hub(server, "The workflow library is not open.")
         name = _stem(payload.get("name") or "workflow")
         try:
             migrated, _ = workflow_bindings.migrate_placeholders(workflow)
@@ -2336,12 +2325,9 @@ def create_router(server) -> APIRouter:
         response_model=ComfyUIWorkflowPullStartResponse,
     )
     def pull_comfyui_workflows(request: Request):
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503,
-                detail="The workflow library is not open, so nothing can be pulled.",
-            )
+        hub = require_hub(
+            server, "The workflow library is not open, so nothing can be pulled."
+        )
         comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
         origin_client_id = getattr(request.state, "origin_client_id", None)
 

@@ -494,21 +494,16 @@ def create_router(server) -> APIRouter:
         # `attach` re-check under the lock, which is what actually holds.
         try:
             registry.refuse_overlapping_watch_or_reference_folder(folder)
-        except LibraryOverlapError as exc:
-            return LibraryInspection(
-                verdict="overlaps",
-                path=folder,
-                can_add=False,
-                headline="Overlaps a watch or reference folder",
-                detail=str(exc),
-                suggested_name=suggested,
-            )
         except LibraryError as exc:
             return LibraryInspection(
                 verdict="overlaps",
                 path=folder,
                 can_add=False,
-                headline="Could not check this folder",
+                headline=(
+                    "Overlaps a watch or reference folder"
+                    if isinstance(exc, LibraryOverlapError)
+                    else "Could not check this folder"
+                ),
                 detail=str(exc),
                 suggested_name=suggested,
             )
