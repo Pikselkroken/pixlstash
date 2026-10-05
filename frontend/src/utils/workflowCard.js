@@ -490,3 +490,22 @@ export function replacementLabel(model) {
     model.via === "declared" ? " (untested)" : ""
   }${model.loader ? " (through a PixlStash loader)" : ""}`;
 }
+
+/**
+ * A "Replace with…" picker's options for a `model-swap` answer's
+ * `replacements`; none at all when there is nothing to offer.
+ *
+ * @param {?Array<Object>} models
+ * @returns {Array<{value: string, label: string}>}
+ */
+export function replacementOptions(models) {
+  return models?.length
+    ? [
+        { value: "", label: "Replace with…" },
+        ...models.map((model) => ({
+          value: model.filename,
+          label: replacementLabel(model),
+        })),
+      ]
+    : [];
+}

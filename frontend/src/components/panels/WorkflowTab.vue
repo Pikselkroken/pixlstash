@@ -861,7 +861,12 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { modelLabel } from "../../utils/filterChips";
-import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
+import {
+  EDIT_LORAS,
+  formatStrength,
+  loraBase,
+  loraStem,
+} from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
 import { PIXLSTASH_PACK_URL, STAGE_LABELS } from "../../utils/runReasons";
 import {
@@ -870,9 +875,10 @@ import {
   checkpointUnread,
   modelDisplayName,
   NO_REPLACEMENT_TEXT,
-  replacementLabel,
+  replacementOptions,
 } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
+import { pictureCount } from "../../utils/workflowSets";
 import { breakableName } from "../../utils/breakableName";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
@@ -1048,10 +1054,7 @@ const titleWords = computed(() => breakableName(card.value?.name));
 // grouped spelling went with the shelf in F1b, and this screen never used it.
 // Split from its prefix so the figure alone is F7's *Show all N pictures*
 // link, and the words that place the card stay text.
-const picturesLabel = computed(() => {
-  const count = card.value?.picture_count ?? 0;
-  return `${count} ${count === 1 ? "picture" : "pictures"}`;
-});
+const picturesLabel = computed(() => pictureCount(card.value?.picture_count));
 
 // All three read the MODEL SHELF's name where it has one, the same preference
 // the card's name row was built from, so the panel and the row do not describe
@@ -1256,10 +1259,8 @@ const checkpointFix = computed(
 const replacementMissing = computed(
   () =>
     Boolean(checkpointFix.value) &&
-    missingBaseFiles.value.some(
-      (file) =>
-        fileName(file).toLowerCase() ===
-        fileName(checkpointFix.value.now).toLowerCase(),
+    missingBaseFiles.value.some((file) =>
+      sameFile(file, checkpointFix.value.now),
     ),
 );
 
@@ -1275,16 +1276,9 @@ const replacementsByFile = ref({});
 /** Why a missing file has no "Replace with…", as the row says it. */
 /** A "Replace with…" picker's options for one missing file, or `[]`. */
 function replaceOptionsFor(kind, file) {
-  const models = replacementsByFile.value[`${kind}:${file}`]?.replacements;
-  return models?.length
-    ? [
-        { value: "", label: "Replace with…" },
-        ...models.map((model) => ({
-          value: model.filename,
-          label: replacementLabel(model),
-        })),
-      ]
-    : [];
+  return replacementOptions(
+    replacementsByFile.value[`${kind}:${file}`]?.replacements,
+  );
 }
 
 const replaceOptions = computed(() =>
@@ -1312,7 +1306,7 @@ const checkpointNoReplacement = computed(() => {
 
 /** Whether two recorded values name one file, whatever their folders. */
 function sameFile(a, b) {
-  return fileName(a).toLowerCase() === fileName(b).toLowerCase();
+  return loraBase(a) === loraBase(b);
 }
 
 /**
@@ -1444,7 +1438,6 @@ const chainLoaders = computed(() =>
     ...(chain.value?.loaders ?? []),
     ...(chain.value?.lanes ?? []).flatMap((lane) => lane.loaders ?? []),
   ].map((loader) => {
-    const strength = Number(loader.strength);
     return {
       id: String(loader.node_id),
       node_id: String(loader.node_id),
@@ -1456,12 +1449,7 @@ const chainLoaders = computed(() =>
         ? loader.name || loraStem(loader.filename)
         : String(loader.filename || loader.name || "").split(/[\\/]/).pop(),
       on_shelf: Boolean(loader.on_shelf),
-      strengthText:
-        loader.strength === null || loader.strength === undefined
-          ? "—"
-          : Number.isFinite(strength)
-            ? strength.toFixed(2)
-            : "—",
+      strengthText: formatStrength(loader.strength) || "—",
     };
   }),
 );
@@ -1712,7 +1700,6 @@ const defaultLoras = computed(() => {
       (digest ? summaryByDigest.value.get(digest) : null);
     const loader = digest ? byDigest.get(digest) : null;
     const edited = lora.provenance === "edited";
-    const strength = Number(lora.strength);
     let coverage = "";
     if (total && found && !found.everywhere && found.use.pictures) {
       coverage = `in ${found.use.pictures} of ${total}`;
@@ -1729,12 +1716,7 @@ const defaultLoras = computed(() => {
         (lora.filename ? loraStem(lora.filename) : "") ||
         "A LoRA whose name was forgotten",
       on_shelf: found ? Boolean(found.use.on_shelf) : (loader?.on_shelf ?? true),
-      strengthText:
-        lora.strength === null || lora.strength === undefined
-          ? ""
-          : Number.isFinite(strength)
-            ? strength.toFixed(2)
-            : "",
+      strengthText: formatStrength(lora.strength),
       edited,
       coverage,
       show:
@@ -1831,7 +1813,7 @@ const pileNote = computed(() => {
 
 /** A *Show N*'s accessible name, as the pile's own says it. */
 function showLabel(count, value) {
-  return `Show the ${count} ${count === 1 ? "picture" : "pictures"} in ${
+  return `Show the ${pictureCount(count)} in ${
     card.value?.name || "this workflow"
   } made with ${value}`;
 }

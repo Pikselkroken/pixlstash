@@ -792,7 +792,8 @@ import {
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
-import { editLorasRoute, loraStem } from "../../utils/loraChain";
+import { focusLater } from "../../utils/dom";
+import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
 import { fitWorkflows } from "../../utils/loraWorkflows";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { setEachRun } from "../../utils/workflowPins";
@@ -1292,11 +1293,11 @@ const modelFixes = ref([]);
 
 /** The owner's saved replacement for checkpoint *file*, or null. */
 function savedReplacement(file) {
-  const key = fileKey(file);
+  const key = loraBase(file);
   if (!key) return null;
   return (
     modelFixes.value.find(
-      (fix) => fix.slot_kind === "checkpoint" && fileKey(fix.was) === key,
+      (fix) => fix.slot_kind === "checkpoint" && loraBase(fix.was) === key,
     ) || null
   );
 }
@@ -2162,10 +2163,8 @@ function openPicker(input) {
  * Put focus back on a row after a gesture that removed the control holding it
  * (the clear, the move), so a keyboard user is not dropped to the page.
  */
-async function focusRow(key) {
-  await nextTick();
-  const tile = document.querySelector(`[data-input="${key}"]`);
-  if (tile) tile.focus();
+function focusRow(key) {
+  return focusLater(`[data-input="${key}"]`);
 }
 
 function clearPicks() {
@@ -2521,15 +2520,6 @@ function strengthOr1(value) {
   return Number.isFinite(number) ? number : 1;
 }
 
-/** A file as it is compared across the popup and the pre-flight. */
-function fileKey(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .split(/[\\/]/)
-    .pop();
-}
-
 /**
  * The files the last pre-flight says the run leaves out on its own, because
  * this ComfyUI does not have them (`bypassed_loras`, `requested: false`).
@@ -2540,7 +2530,7 @@ const bypassedFiles = computed(
       bypassed.value
         .filter((note) => note.code === LORAS_BYPASSED)
         .flatMap((note) => note.models || [])
-        .map((model) => fileKey(model?.file)),
+        .map((model) => loraBase(model?.file)),
     ),
 );
 
@@ -2563,7 +2553,7 @@ function rowName(row) {
  */
 function loraFlag(row) {
   if (row.added || row.skipped) return "";
-  const file = fileKey(row.graphValue);
+  const file = loraBase(row.graphValue);
   if (file && bypassedFiles.value.has(file)) {
     return "Not on this ComfyUI. The run leaves this loader out.";
   }
@@ -2576,12 +2566,8 @@ function loraFlag(row) {
 /** What the LoRA rows' live region is saying, or "". */
 const loraLive = ref("");
 
-async function focusLoraRow(key, which) {
-  await nextTick();
-  const el = document.querySelector(
-    `[data-lora="${key}"] [data-focus="${which}"]`,
-  );
-  el?.focus?.();
+function focusLoraRow(key, which) {
+  return focusLater(`[data-lora="${key}"] [data-focus="${which}"]`);
 }
 
 /**

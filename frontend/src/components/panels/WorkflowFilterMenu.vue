@@ -139,13 +139,14 @@
  * this menu and the filter button's badge all read `filterChips`, so the
  * three cannot disagree about which filters are on.
  */
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import {
   DEFAULT_FILTERS,
   useWorkflowsStore,
 } from "../../stores/useWorkflowsStore";
+import { useCascadeMenu } from "../../composables/useCascadeMenu";
 import OptionRows from "../widgets/OptionRows.vue";
 
 const props = defineProps({
@@ -183,11 +184,16 @@ const FOOTERS = {
   ghosts: "A deleted picture, or a model that is no longer on the shelf.",
 };
 
-const sub = ref(null);
-const subTop = ref(0);
-const rootRef = ref(null);
-const subRef = ref(null);
-const rowRefs = reactive({});
+const { sub, subTop, rootRef, subRef, rowRefs, openKind, toggle, onLeft } =
+  useCascadeMenu(
+    () => props.open,
+    // The Checkpoint field first, else the chosen radio; never the header.
+    (submenu) => {
+      const field = submenu?.querySelector("input");
+      if (field) field.focus();
+      else focusChosen();
+    },
+  );
 const submenuId = "wff-submenu";
 const checkpointQuery = ref("");
 
@@ -269,56 +275,16 @@ function focusChosen() {
   subRef.value?.querySelector('[role="radio"][tabindex="0"]')?.focus();
 }
 
-function openKind(kind) {
-  if (sub.value !== kind) checkpointQuery.value = "";
-  sub.value = kind;
-  const row = rowRefs[kind];
-  const rowTop = row ? Math.max(0, row.offsetTop - 8) : 0;
-  subTop.value = rowTop;
-  nextTick(() => {
-    // Level with its row, but never hanging below the root, as the grid's.
-    const rootHeight = rootRef.value?.offsetHeight ?? 0;
-    const subHeight = subRef.value?.offsetHeight ?? 0;
-    subTop.value = Math.max(0, Math.min(rowTop, rootHeight - subHeight));
-    // The Checkpoint field first, else the chosen radio; never the header.
-    const field = subRef.value?.querySelector("input");
-    if (field) field.focus();
-    else focusChosen();
-  });
-}
-
-function toggle(kind) {
-  if (sub.value === kind) sub.value = null;
-  else openKind(kind);
-}
-
 function stepRow(kind, step) {
   const at = ROW_ORDER.indexOf(kind);
   const next = ROW_ORDER[(at + step + ROW_ORDER.length) % ROW_ORDER.length];
   rowRefs[next]?.focus();
 }
 
-// Left arrow inside a submenu returns to its row, unless it is moving a caret.
-// Caught on the way down: a radiogroup would otherwise take it as "previous".
-// In the Checkpoint field it goes back only from the start of the text.
-function onLeft(event) {
-  const field = event.target?.tagName === "INPUT" ? event.target : null;
-  if (!sub.value || (field && (field.selectionStart || field.selectionEnd))) {
-    return;
-  }
-  if (!subRef.value?.contains(event.target)) return;
-  event.preventDefault();
-  event.stopPropagation();
-  rowRefs[sub.value]?.focus();
-  sub.value = null;
-}
-
-watch(
-  () => props.open,
-  (isOpen) => {
-    if (!isOpen) sub.value = null;
-  },
-);
+// A search typed for one checkpoint list is not carried to the next opening.
+watch(sub, () => {
+  checkpointQuery.value = "";
+});
 </script>
 
 <style scoped>

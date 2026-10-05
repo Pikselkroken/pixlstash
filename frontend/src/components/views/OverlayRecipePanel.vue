@@ -378,6 +378,7 @@ import { errorMessage } from "../../utils/apiError";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import { saveFileAs } from "../../utils/downloadFile";
+import { formatStrength } from "../../utils/loraChain";
 import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { keepsTheSameLook } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
@@ -842,11 +843,6 @@ function format(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") return String(Number(value.toFixed(4)));
   return String(value);
-}
-
-/** Two decimals, the way every LoRA strength in the app is written. */
-function formatStrength(strength) {
-  return Number(strength).toFixed(2);
 }
 
 const runTooltip = computed(

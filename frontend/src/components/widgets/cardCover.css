@@ -1,0 +1,107 @@
+/* The rules WorkflowCard and ModelSetCard share, so the two grids' cards are
+   one shape and a reader moving between them meets one rhythm. Each card loads
+   this scoped, ahead of its own rules, which still come after it and win. */
+
+/* 6:5 is the cover at EVERY count; only the tracks inside it change, so cards
+   in a row are still exactly as tall as each other.
+
+   What the tracks come to, against a cover W wide and (5/6)W tall:
+     one    W × (5/6)W                         = 6/5
+     two    (1/2)W × (5/6)W                    = 3/5, twice
+     three  big (2/3)W × (5/6)W                = 4/5
+            small (1/3)W × (5/12)W             = 4/5
+   The 2px gap puts each a fraction of a pixel off that, which is not worth
+   carrying a `calc` for.
+
+   The crop follows from the shape, since the picture is `cover`-fitted and
+   top-anchored: an 832×1216 generation keeps its top 57% at 6:5, its top 86%
+   at 4:5, and ALL of its height at 3:5 (a cell narrower than the picture trims
+   the sides instead). So the widest cut on a card lands on the card with one
+   picture to show, which is the price of giving it the whole box. */
+.wf-card__cover,
+.msc__cover {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: grid;
+  gap: var(--space-1);
+  aspect-ratio: 6 / 5;
+}
+
+/* The tracks follow the COVER COUNT, they are not a fixed 2fr/1fr mosaic with
+   holes in it: two pictures are two cells and a single picture fills the box. */
+.wf-card__cover--1,
+.msc__cover--1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.wf-card__cover--2,
+.msc__cover--2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+.wf-card__cover--3,
+.msc__cover--3 {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.wf-card__cover--3 .wf-card__pic:first-child,
+.msc__cover--3 .msc__pic:first-child {
+  grid-row: 1 / 3;
+}
+
+.wf-card__empty-line,
+.msc__empty-line {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The shipped scrim badge: a dark chip over an arbitrary photo. */
+.wf-card__badge,
+.msc__badge {
+  position: absolute;
+  top: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--badge-size);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.wf-card__badge--end,
+.msc__badge--end {
+  right: var(--space-3);
+}
+
+.wf-card__row,
+.msc__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.wf-card__row > .chip-row,
+.msc__row > .chip-row {
+  flex: 1;
+}
+
+.wf-card__none,
+.msc__none {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}

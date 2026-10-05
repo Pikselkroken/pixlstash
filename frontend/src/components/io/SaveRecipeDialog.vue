@@ -233,7 +233,7 @@
  * reading exactly the same thing as the first, with nothing to tell them
  * apart and no undo.
  */
-import { computed, nextTick, reactive, ref, useId, watch } from "vue";
+import { computed, reactive, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
@@ -247,6 +247,7 @@ import { useConfirm } from "../../composables/useConfirm";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -528,12 +529,8 @@ function say(message) {
   liveMessage.value = message;
 }
 
-async function focusLora(rowId, which) {
-  await nextTick();
-  const el = document.querySelector(
-    `[data-lora="${rowId}"] [data-focus="${which}"]`,
-  );
-  el?.focus?.();
+function focusLora(rowId, which) {
+  return focusLater(`[data-lora="${rowId}"] [data-focus="${which}"]`);
 }
 
 /**

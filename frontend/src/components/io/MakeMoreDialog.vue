@@ -43,8 +43,7 @@
           <span class="mmd-sub">{{ subOf(group) }}</span>
         </span>
         <span class="mmd-count">
-          {{ group.picture_ids.length }}
-          {{ group.picture_ids.length === 1 ? "picture" : "pictures" }}
+          {{ pictureCount(group.picture_ids.length) }}
         </span>
       </div>
 
@@ -143,6 +142,7 @@ import {
 } from "../../api/workflows";
 import { errorMessage } from "../../utils/apiError";
 import { BLOCKS_BATCH, repairNotices } from "../../utils/runReasons";
+import { pictureCount } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";

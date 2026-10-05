@@ -356,20 +356,12 @@ const accessibleName = computed(() => {
 });
 </script>
 
+<style scoped src="./cardCover.css"></style>
 <style scoped>
 /* 92 = 8 + 3 × 24 + 2 × 2 + 8: the meta block, fixed whatever the card holds
    and `flex: none` so a change to that sum shows as a wrong height rather than
-   being absorbed. The figure and the `6 / 5` cover below are `WorkflowCard`'s
-   own, so the two grids' cards are the same shape and a reader moving between
-   them meets one rhythm. Local on purpose, as that card's are.
-
-   **The COVER is not a fixed height, and that is the whole point of copying
-   this rather than a round number.** A flat 132px against an `1fr` width grows
-   steadily more landscape as the window widens - 1.2:1 at the 240px column
-   floor, 1.8:1 by 360px - and nobody chose landscape; generated pictures here
-   are mostly portrait or square. `WorkflowCard.vue` records removing exactly
-   that, so reintroducing it here would have been the same bug on a second
-   screen. */
+   being absorbed. Local on purpose, as `WorkflowCard`'s is; the `6 / 5` cover
+   the two cards share is in `cardCover.css`. */
 .msc {
   --msc-meta-h: 92px;
 
@@ -410,45 +402,6 @@ const accessibleName = computed(() => {
   background: var(--active-wash);
   box-shadow: var(--selection-ring);
   pointer-events: none;
-}
-
-.msc__cover {
-  position: relative;
-  flex: none;
-  box-sizing: border-box;
-  overflow: hidden;
-  display: grid;
-  gap: var(--space-1);
-  aspect-ratio: 6 / 5;
-}
-
-/* The tracks follow the COVER COUNT, they are not a fixed 2fr/1fr mosaic with
-   holes in it. A set with two pictures is two cells and one with a single
-   picture fills the box — `WorkflowCard` learned this and the first copy of its
-   geometry here did not, which is the duplication the #1479 review warned about
-   landing as an actual defect rather than a risk.
-
-   **Not extracted into a shared component, and only because of timing:** #1472
-   is open on `WorkflowCard.vue`'s cover code (face-aware cropping), so lifting
-   the mosaic out from under it would conflict with a PR already in review. The
-   extraction is the right end state and wants to happen after that lands. */
-.msc__cover--1 {
-  grid-template-columns: 1fr;
-  grid-template-rows: 1fr;
-}
-
-.msc__cover--2 {
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr;
-}
-
-.msc__cover--3 {
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-.msc__cover--3 .msc__pic:first-child {
-  grid-row: 1 / 3;
 }
 
 .msc__pic {
@@ -517,11 +470,6 @@ const accessibleName = computed(() => {
   text-overflow: ellipsis;
 }
 
-.msc__empty-line {
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
 /* The offer's question panel: a dark band across the cover's foot, dark in
    both themes like the scrim badges above it. Placed on the card rather than
    inside the cover so both hand-made covers (pictures or the checkpoint's mark)
@@ -579,32 +527,9 @@ const accessibleName = computed(() => {
   gap: var(--space-3);
 }
 
-/* The shipped scrim badge: a dark chip over an arbitrary photo. */
-.msc__badge {
-  position: absolute;
-  top: var(--space-3);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-height: var(--badge-size);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--scrim-photo);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-snug);
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
 .msc__badge--start {
   left: var(--space-3);
   z-index: var(--z-raised);
-}
-
-.msc__badge--end {
-  right: var(--space-3);
 }
 
 .msc__meta {
@@ -615,18 +540,6 @@ const accessibleName = computed(() => {
   grid-template-rows: repeat(4, var(--control-h-sm));
   row-gap: var(--space-1);
   padding: var(--space-3);
-}
-
-.msc__row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.msc__row > .chip-row {
-  flex: 1;
 }
 
 .msc__row--facts {
@@ -670,12 +583,6 @@ const accessibleName = computed(() => {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
-}
-
-.msc__none {
-  flex-shrink: 0;
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* ▸ carries full ink: opening a stack is the card's own affordance. */
