@@ -15,28 +15,28 @@ import { describe, it } from 'node:test';
 import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mcpShimPath, mcpShimScript, parseMcpArgs, syncMcpShim } from '../src/cliShim';
+import { argsAfter, mcpShimPath, mcpShimScript, syncMcpShim } from '../src/cliShim';
 
 const CFG = '/home/me/.config/pixlstash-desktop/server-config.json';
 
-describe('parseMcpArgs - deciding between a window and an MCP run', () => {
+describe('argsAfter - deciding between a window and an MCP run', () => {
   it('a packaged launch with no arguments opens a window', () => {
-    assert.equal(parseMcpArgs(['/opt/PixlStash/pixlstash']), null);
+    assert.equal(argsAfter('mcp', ['/opt/PixlStash/pixlstash']), null);
   });
 
   it('everything after the marker belongs to the MCP server', () => {
     const argv = ['/opt/PixlStash/pixlstash', 'mcp', '--url', 'http://127.0.0.1:9537'];
-    assert.deepEqual(parseMcpArgs(argv), ['--url', 'http://127.0.0.1:9537']);
+    assert.deepEqual(argsAfter('mcp', argv), ['--url', 'http://127.0.0.1:9537']);
   });
 
   it('a bare marker is an MCP run with no arguments, not a window', () => {
-    assert.deepEqual(parseMcpArgs(['/opt/PixlStash/pixlstash', 'mcp']), []);
+    assert.deepEqual(argsAfter('mcp', ['/opt/PixlStash/pixlstash', 'mcp']), []);
   });
 
   it("the executable's own path is never mistaken for the marker", () => {
     // Searched from index 1, so a user who installed into a directory called
     // `mcp` still gets a window.
-    assert.equal(parseMcpArgs(['/home/me/mcp']), null);
+    assert.equal(argsAfter('mcp', ['/home/me/mcp']), null);
   });
 });
 

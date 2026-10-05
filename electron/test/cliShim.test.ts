@@ -5,9 +5,9 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  argsAfter,
   cliCommandHint,
   launcherPath,
-  parseCliArgs,
   pathWith,
   pathWithout,
   shimBlocked,
@@ -18,24 +18,24 @@ import {
   syncUserPath,
 } from '../src/cliShim';
 
-describe('parseCliArgs — deciding between a window and a CLI run', () => {
+describe('argsAfter — deciding between a window and a CLI run', () => {
   it('a packaged launch with no arguments opens a window', () => {
-    assert.equal(parseCliArgs(['/opt/PixlStash/pixlstash']), null);
+    assert.equal(argsAfter('cli', ['/opt/PixlStash/pixlstash']), null);
   });
 
   it('everything after the marker belongs to the Python CLI', () => {
     const argv = ['/opt/PixlStash/pixlstash', 'cli', 'libraries', 'attach', '/photos'];
-    assert.deepEqual(parseCliArgs(argv), ['libraries', 'attach', '/photos']);
+    assert.deepEqual(argsAfter('cli', argv), ['libraries', 'attach', '/photos']);
   });
 
   it('a bare marker is a CLI run with no arguments, not a windowed launch', () => {
     // argparse prints usage and exits 2 — the right answer for `pixlstash`
     // with nothing after it, and NOT a silent extra window.
-    assert.deepEqual(parseCliArgs(['/opt/PixlStash/pixlstash', 'cli']), []);
+    assert.deepEqual(argsAfter('cli', ['/opt/PixlStash/pixlstash', 'cli']), []);
   });
 
   it('the dev launch (electron . cli …) parses like the packaged one', () => {
-    assert.deepEqual(parseCliArgs(['/n_m/electron', '.', 'cli', 'plugins', 'list']), [
+    assert.deepEqual(argsAfter('cli', ['/n_m/electron', '.', 'cli', 'plugins', 'list']), [
       'plugins',
       'list',
     ]);
@@ -43,7 +43,7 @@ describe('parseCliArgs — deciding between a window and a CLI run', () => {
 
   it('an executable path that happens to be named cli is not the marker', () => {
     // Searched from index 1, so argv[0] can never trigger a CLI run.
-    assert.equal(parseCliArgs(['/usr/local/bin/cli']), null);
+    assert.equal(argsAfter('cli', ['/usr/local/bin/cli']), null);
   });
 });
 
