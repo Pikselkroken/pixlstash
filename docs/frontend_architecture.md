@@ -5238,8 +5238,9 @@ the row's icon if it has one, else a generated mark.
 a bounded set and a moment of assignment; models are unbounded and have neither,
 and a mark that shifted when a neighbour was deleted would be worse than no
 mark. So the colour is `SET_COLORS[hash(foldedBaseModel) % 48]` and the initials
-come from the same name chain the row's label uses. **The two rules must not be
-unified**, however similar the palettes look.
+come from the same name chain the row's label uses, skipping a short English
+list of joining words after the first word ("World of Wordcraft" is WW, not
+WO). **The two rules must not be unified**, however similar the palettes look.
 
 Keyed on the **folded** base model, so every spelling of FLUX.2 lands on one
 colour instead of scattering across the palette — which is what the folding

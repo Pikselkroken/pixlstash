@@ -1921,11 +1921,35 @@ function hash32(text) {
   return hash;
 }
 
+// Words that carry no identity in a name, so "World of Wordcraft" marks as WW
+// rather than WO. Deliberately without "a": a lone letter in a model name is
+// more often a variant label than an article.
+const MARK_FILLER_WORDS = new Set([
+  "of",
+  "in",
+  "on",
+  "at",
+  "by",
+  "for",
+  "from",
+  "to",
+  "with",
+  "the",
+  "and",
+]);
+
 /** Up to two initials for a mark, from whatever the row is actually called. */
 function initialsOf(text) {
-  const words = String(text || "")
+  const all = String(text || "")
     .split(/[\s_\-.]+/)
     .filter(Boolean);
+  // The first word always counts: a leading "In" or "On" is usually part of
+  // the name ("In-Context LoRA" is IC), not a joiner between two others.
+  const significant = all.filter(
+    (word, index) => index === 0 || !MARK_FILLER_WORDS.has(word.toLowerCase()),
+  );
+  // Skipping must still leave two words to take a letter from each.
+  const words = significant.length > 1 ? significant : all;
   if (!words.length) return "?";
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return (words[0][0] + words[1][0]).toUpperCase();

@@ -1447,6 +1447,30 @@ describe("the generated mark's contrast", () => {
   });
 });
 
+describe("the generated mark's initials", () => {
+  const initials = (display_name) => generatedMark({ display_name }).initials;
+
+  it("skips prepositions between words", () => {
+    expect(initials("World of Wordcraft")).toBe("WW");
+    expect(initials("Lord_Of_The_Rings")).toBe("LR");
+    expect(initials("image-to-video")).toBe("IV");
+  });
+
+  it("keeps a leading one, which is part of the name", () => {
+    expect(initials("In-Context LoRA")).toBe("IC");
+  });
+
+  it("never skips its way down to a single word", () => {
+    expect(initials("The Thing")).toBe("TT");
+    expect(initials("x-in")).toBe("XI");
+    expect(initials("of the")).toBe("OT");
+  });
+
+  it("matches whole words only", () => {
+    expect(initials("Forest Inpaint")).toBe("FI");
+  });
+});
+
 describe("stackReceipt", () => {
   it("reports the stacks that landed and the ones that did not", () => {
     // "Stacks", not "runs": a stack can span training runs - several versions
