@@ -90,6 +90,7 @@ from pixlstash.hub.workflows import (
     unvouched_model_values,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.routes._helpers import require_hub
 from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
     CLIP_TYPE_BY_FAMILY,
@@ -2603,6 +2604,16 @@ def _workflow_variants(hub, vault, workflow: Workflow) -> list[WorkflowVariant]:
     return variants
 
 
+def _require_object_info(read: tuple[dict | None, str | None], why: str) -> dict:
+    """The map from :func:`_read_object_info`, or a 503 saying *why* it is needed."""
+    object_info, error = read
+    if object_info is None:
+        raise HTTPException(
+            status_code=503, detail=f"PixlStash could not ask ComfyUI {why}: {error}"
+        )
+    return object_info
+
+
 def create_router(server) -> APIRouter:
     """Create the workflow-library router.
 
@@ -2615,17 +2626,7 @@ def create_router(server) -> APIRouter:
     """
     router = APIRouter(tags=["workflows"])
 
-    def _hub():
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            # A vault opened without a hub has no workflow library at all, which
-            # is a configuration state rather than a fault. Say so instead of
-            # raising an AttributeError out of a read.
-            raise HTTPException(
-                status_code=503,
-                detail="No hub is attached, so this machine has no workflow library.",
-            )
-        return hub
+    _hub = functools.partial(require_hub, server)
 
     # ── The workflows (#1623) ───────────────────────────────────────────────
     # The grid is `/workflows` itself, one entry per workflow. The payload is
@@ -6199,15 +6200,10 @@ def create_router(server) -> APIRouter:
         workflow, card = _require_base(hub, workflow_id)
         # What needs fixing is what THIS ComfyUI lacks, so without its node
         # list there is nothing to decide it from.
-        object_info, error = _read_object_info(_comfyui_url(_user(request)))
-        if object_info is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PixlStash could not ask ComfyUI what it has, so it cannot "
-                    f"tell what this workflow needs fixed: {error}"
-                ),
-            )
+        object_info = _require_object_info(
+            _read_object_info(_comfyui_url(_user(request))),
+            "what it has, so it cannot tell what this workflow needs fixed",
+        )
         source = _card_source(card)
         graph = deepcopy(source.graph)
         changes: list[str] = []
@@ -6544,15 +6540,10 @@ def create_router(server) -> APIRouter:
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
-        object_info, error = _read_object_info(_comfyui_url(_user(request)))
-        if object_info is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PixlStash could not ask ComfyUI what its nodes hand on, so "
-                    f"it cannot rewire this workflow's LoRAs: {error}"
-                ),
-            )
+        object_info = _require_object_info(
+            _read_object_info(_comfyui_url(_user(request))),
+            "what its nodes hand on, so it cannot rewire this workflow's LoRAs",
+        )
         graph = deepcopy(source.graph)
         plan = _chain_plan(hub, graph, object_info, payload.entries, payload.lanes)
         try:
@@ -7411,14 +7402,10 @@ def create_router(server) -> APIRouter:
             )
         chain_changed = False
         if body.loras is not None:
-            if object_info is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail=(
-                        "PixlStash could not ask ComfyUI what its nodes hand on, "
-                        f"so it cannot rewire this clone's LoRAs: {error}"
-                    ),
-                )
+            _require_object_info(
+                (object_info, error),
+                "what its nodes hand on, so it cannot rewire this clone's LoRAs",
+            )
             # Before the loader rewrite: the chain is read against the
             # original's classes, which ComfyUI can type even when the new
             # loader's pack is not installed. A rewrite keeps every node id.

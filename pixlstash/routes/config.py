@@ -3,10 +3,10 @@ import sys
 import subprocess
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 from sqlmodel import Session
 
 from PIL import Image
@@ -23,6 +23,7 @@ from pixlstash.db_models.tag import (
     DEFAULT_SMART_SCORE_PENALIZED_TAG_WEIGHT,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.routes._helpers import require_hub
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.services import (
     config_service,
@@ -1175,7 +1176,11 @@ def create_router(server) -> APIRouter:
             json_schema_extra={"example": {"workflow_ghost_retention": "covered"}}
         )
 
-        workflow_ghost_retention: str = Field(
+        workflow_ghost_retention: Annotated[
+            Literal[workflow_ghost_service.GHOST_RETENTION_CHOICES],
+            # Matched case- and space-blind, as the setting always has been.
+            BeforeValidator(lambda value: str(value).strip().lower()),
+        ] = Field(
             description=("One of `off`, `covered` or `on`. Any other value is a 422."),
             examples=["covered"],
         )
@@ -1198,16 +1203,9 @@ def create_router(server) -> APIRouter:
     )
     def patch_ghost_retention_config(request: Request, body: GhostRetentionConfigPatch):
         _ensure_secure_when_required(request)
-        value = str(body.workflow_ghost_retention).strip().lower()
-        if value not in workflow_ghost_service.GHOST_RETENTION_CHOICES:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "workflow_ghost_retention must be one of "
-                    f"{list(workflow_ghost_service.GHOST_RETENTION_CHOICES)}."
-                ),
-            )
-        workflow_ghost_service.apply_ghost_retention(server, value)
+        workflow_ghost_service.apply_ghost_retention(
+            server, body.workflow_ghost_retention
+        )
         return _ghost_retention_payload()
 
     class GhostEraseResponse(BaseModel):
@@ -1270,12 +1268,7 @@ def create_router(server) -> APIRouter:
         ),
     ):
         _ensure_secure_when_required(request)
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            raise HTTPException(
-                status_code=503,
-                detail="No hub is attached, so there are no model ghosts.",
-            )
+        hub = require_hub(server, "No hub is attached, so there are no model ghosts.")
         forgotten = forget_model_ghosts(hub, expected)
         if forgotten is None:
             raise HTTPException(

@@ -1,7 +1,6 @@
 """Find recorded-but-unapplied smart-score invalidations."""
 
-import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
@@ -33,8 +32,6 @@ class PendingScoreInvalidationFinder(BaseTaskFinder):
 
     Attributes:
         _vault: The owning Vault.
-        _last_check_at: Monotonic timestamp of the last check, or ``None`` when
-            no check has happened yet.
     """
 
     def __init__(self, vault: "Vault") -> None:
@@ -45,11 +42,6 @@ class PendingScoreInvalidationFinder(BaseTaskFinder):
         """
         super().__init__()
         self._vault = vault
-        # ``None``, not 0.0: ``time.monotonic()``'s reference point is undefined,
-        # so 0.0 is an absolute instant rather than a "never checked" sentinel,
-        # and on a host that booted recently it would suppress the first run.
-        # Same defect as EnsureGfsSnapshotFinder; see its comment.
-        self._last_check_at: Optional[float] = None
 
     def finder_name(self) -> str:
         return "PendingScoreInvalidationFinder"
@@ -60,13 +52,8 @@ class PendingScoreInvalidationFinder(BaseTaskFinder):
         return 1
 
     def find_task(self):
-        now_mono = time.monotonic()
-        if (
-            self._last_check_at is not None
-            and now_mono - self._last_check_at < _CHECK_INTERVAL_S
-        ):
+        if not self._due(_CHECK_INTERVAL_S):
             return None
-        self._last_check_at = now_mono
 
         outstanding = self._vault.db.run_immediate_read_task(
             lambda session: session.exec(select(PendingScoreInvalidation)).first()

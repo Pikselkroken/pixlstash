@@ -18,6 +18,7 @@ pictures across the whole workflow, which is the whole-library disclosure class
 
 from __future__ import annotations
 
+import functools
 import json
 from typing import Annotated, Any, Optional
 
@@ -31,6 +32,7 @@ from pixlstash.hub.workflow_card_reads import (
     workflow_index,
 )
 from pixlstash.hub.workflows import shelf_model_names
+from pixlstash.routes._helpers import require_hub
 from pixlstash.routes.comfyui import _picture_workflow_key
 from pixlstash.routes.workflows import RunModel
 from pixlstash.services.workflow_library_service import read_variant_picture_counts
@@ -311,17 +313,8 @@ def create_router(server) -> APIRouter:
             found.update(variants_in_workflow(hub, workflow_id))
         return sorted(found)
 
-    def _hub():
-        hub = getattr(server, "hub", None)
-        if hub is None:
-            # Without a hub there are no workflows, so there is nothing to
-            # resolve and no credit to count. A configuration state, not a
-            # fault, and the same answer the Workflows reads give.
-            raise HTTPException(
-                status_code=503,
-                detail="No hub is attached, so this machine has no workflow library.",
-            )
-        return hub
+    # Without a hub there are no workflows, so nothing to resolve or credit.
+    _hub = functools.partial(require_hub, server)
 
     @router.get(
         "/recipes",

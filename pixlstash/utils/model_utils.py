@@ -167,30 +167,6 @@ def clean_asset_name(filename: str) -> str:
 _GGUF_HEAD_RE = re.compile(r"^(?:i?q|tq)\d+$", re.IGNORECASE | re.ASCII)
 _GGUF_LEVELS = frozenset({"k", "s", "m", "l", "xs", "xl", "xxs", "nl", "0", "1"})
 
-# Filename spelling -> canonical id. The refinement wins where both are
-# present (`fp8_e4m3fn` is `fp8_e4m3`), which the rightmost-token rule in
-# :func:`_split_quant` gets for free: real names put the refinement last.
-_QUANT_TOKENS = {
-    "fp32": "fp32",
-    "f32": "fp32",
-    "fp16": "fp16",
-    "f16": "fp16",
-    "bf16": "bf16",
-    "fp8": "fp8",
-    "f8": "fp8",
-    "e4m3": "fp8_e4m3",
-    "e4m3fn": "fp8_e4m3",
-    "e5m2": "fp8_e5m2",
-    "nvfp4": "nvfp4",
-    "mxfp4": "mxfp4",
-    "fp4": "fp4",
-    "nf4": "nf4",
-    "int8": "int8",
-    "i8": "int8",
-    "int4": "int4",
-    "i4": "int4",
-}
-
 # Popped only when a real quant token is popped with them. On their own they
 # are somebody's model name.
 _QUANT_MODIFIERS = frozenset({"scaled", "awq", "gptq", "fast"})
@@ -216,6 +192,18 @@ _QUANT_FOLDS = {
     "u32": "uint32",
     "u64": "uint64",
 }
+
+# Filename spelling -> canonical id: the canonical ids and their short dtype
+# spellings, plus the fp8 refinements. The refinement wins where both are
+# present (`fp8_e4m3fn` is `fp8_e4m3`), which the rightmost-token rule in
+# :func:`_split_quant` gets for free: real names put the refinement last.
+_QUANT_TOKENS = {
+    token: _QUANT_FOLDS.get(token, token)
+    for token in (
+        *("fp32", "fp16", "bf16", "fp8", "nvfp4", "mxfp4", "fp4", "nf4"),
+        *("int8", "int4", "f32", "f16", "f8", "i8", "i4"),
+    )
+} | {"e4m3": "fp8_e4m3", "e4m3fn": "fp8_e4m3", "e5m2": "fp8_e5m2"}
 
 
 def canonical_quant(raw: str | None) -> str | None:

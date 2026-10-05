@@ -8679,7 +8679,7 @@ so `POST /workflows/run/preflight` and `POST /workflows/run` can never disagree.
   relative to one of ComfyUI's own model folders and nothing on this side knows
   which prefix it puts in front — and the combo list decides. **Its keys are
   folded and its candidates are not.** The key is `normalized_filename`, which
-  lowercases, so `apply_model_swap` folds its lookup the same way (`_alias_key`)
+  lowercases, so `apply_model_swap` looks its value up through the same function
   or the whole feature misses every mixed-case filename, which is most real ones;
   the candidates are the scanner's own spelling, because ComfyUI compares exactly
   and a lowercased candidate is one it would refuse.
