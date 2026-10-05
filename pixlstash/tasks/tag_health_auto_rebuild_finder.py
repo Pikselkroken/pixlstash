@@ -9,8 +9,7 @@ monotonic-clock check-interval gate - the established precedent in this
 codebase for "cheap periodic condition check, act at most every N seconds".
 """
 
-import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.tasks.base_task_finder import BaseTaskFinder
@@ -40,8 +39,6 @@ class TagHealthAutoRebuildFinder(BaseTaskFinder):
 
     Attributes:
         _vault: The owning Vault.
-        _last_check_at: Monotonic timestamp of the last staleness check,
-            or ``None`` when no check has happened yet.
     """
 
     def __init__(self, vault: "Vault") -> None:
@@ -53,13 +50,6 @@ class TagHealthAutoRebuildFinder(BaseTaskFinder):
         """
         super().__init__()
         self._vault = vault
-        # ``None``, NOT 0.0 - ``time.monotonic()``'s reference point is undefined
-        # (on Linux it is seconds since BOOT), so 0.0 is an absolute instant, not
-        # a "never checked" sentinel. On a host that booted less than the check
-        # interval ago, ``now - 0.0`` falls BELOW the interval and silently
-        # suppresses the first run. Same defect as
-        # ScrapheapRetentionPurgeFinder; see its comment.
-        self._last_check_at: Optional[float] = None
 
     def finder_name(self) -> str:
         return "TagHealthAutoRebuildFinder"
@@ -68,13 +58,8 @@ class TagHealthAutoRebuildFinder(BaseTaskFinder):
         return 1
 
     def find_task(self):
-        now_mono = time.monotonic()
-        if (
-            self._last_check_at is not None
-            and now_mono - self._last_check_at < AUTO_REBUILD_CHECK_INTERVAL_S
-        ):
+        if not self._due(AUTO_REBUILD_CHECK_INTERVAL_S):
             return None
-        self._last_check_at = now_mono
 
         # Late import: avoids a service<->task import cycle at module load.
         from pixlstash.services import tag_health_service

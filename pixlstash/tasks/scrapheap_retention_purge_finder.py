@@ -31,9 +31,8 @@ Pictures frozen by a locked picture-set are excluded from the candidate query
 sweep). ``DELETE /pictures/{id}`` already refuses them with 423.
 """
 
-import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import scrapheap_service
@@ -56,8 +55,6 @@ class ScrapheapRetentionPurgeFinder(BaseTaskFinder):
 
     Attributes:
         _vault: The owning Vault (retention config + DB access).
-        _last_check_at: Monotonic timestamp of the last DB check, or ``None``
-            when no check has happened yet.
     """
 
     def __init__(self, vault: "Vault") -> None:
@@ -69,15 +66,6 @@ class ScrapheapRetentionPurgeFinder(BaseTaskFinder):
         """
         super().__init__()
         self._vault = vault
-        # ``None``, NOT 0.0. ``time.monotonic()``'s reference point is undefined
-        # (CPython docs: "only the difference between the results of two calls
-        # is valid"); on Linux it is seconds since BOOT. So 0.0 is not a "never
-        # checked" sentinel - it is an absolute instant, and on a host that
-        # booted less than _CHECK_INTERVAL_S ago ``now - 0.0`` is *below* the
-        # interval, which reads as "checked recently" and silently suppresses
-        # the first sweep. That is real on a fresh container/VM (and is exactly
-        # how this surfaced: a CI runner whose uptime was under 15 minutes).
-        self._last_check_at: Optional[float] = None
 
     def finder_name(self) -> str:
         return "ScrapheapRetentionPurgeFinder"
@@ -92,13 +80,8 @@ class ScrapheapRetentionPurgeFinder(BaseTaskFinder):
             # destroyed by the timer while this is set.
             return None
 
-        now_mono = time.monotonic()
-        if (
-            self._last_check_at is not None
-            and now_mono - self._last_check_at < _CHECK_INTERVAL_S
-        ):
+        if not self._due(_CHECK_INTERVAL_S):
             return None
-        self._last_check_at = now_mono
 
         try:
             due_ids = scrapheap_service.find_due_retention_picture_ids(

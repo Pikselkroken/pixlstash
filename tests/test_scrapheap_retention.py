@@ -38,9 +38,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.server import Server
 from pixlstash.services import scrapheap_service, workflow_ghost_service
-from pixlstash.tasks import (
-    scrapheap_retention_purge_finder as scrapheap_retention_purge_finder_module,
-)
+from pixlstash.tasks import base_task_finder as base_task_finder_module
 from pixlstash.tasks.scrapheap_retention_purge_finder import (
     ScrapheapRetentionPurgeFinder,
 )
@@ -526,7 +524,7 @@ def test_the_first_sweep_runs_on_a_host_that_booted_moments_ago(
     )
 
     monkeypatch.setattr(
-        scrapheap_retention_purge_finder_module,
+        base_task_finder_module,
         "time",
         _JustBootedClock(uptime_s=1.0),
     )

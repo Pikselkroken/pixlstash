@@ -1,9 +1,14 @@
 import threading
+import time
 from abc import ABC, ABCMeta, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
+
+from pixlstash.pixl_logging import get_logger
 
 if TYPE_CHECKING:
     from pixlstash.tasks.task_type import TaskType
+
+logger = get_logger(__name__)
 
 
 class TaskFinderRegistry(ABCMeta):
@@ -29,6 +34,24 @@ class BaseTaskFinder(ABC, metaclass=TaskFinderRegistry):
     def __init__(self):
         self._claim_lock = threading.Lock()
         self._claimed_picture_ids: set[int] = set()
+        # Monotonic timestamp of the last check `_due` let through.
+        self._last_check_at: Optional[float] = None
+
+    def _due(self, interval_s: float) -> bool:
+        """Whether *interval_s* has passed since the last check it let through.
+
+        The first call is always due. The sentinel is ``None``, NOT 0.0:
+        ``time.monotonic()``'s reference point is undefined (on Linux it is
+        seconds since BOOT), so 0.0 is an absolute instant, and on a host that
+        booted less than the interval ago ``now - 0.0`` reads as "checked
+        moments ago" and silently suppresses the first run - which is how it
+        surfaced, on a CI runner with under 15 minutes of uptime.
+        """
+        now = time.monotonic()
+        if self._last_check_at is not None and now - self._last_check_at < interval_s:
+            return False
+        self._last_check_at = now
+        return True
 
     def _filter_and_claim(self, pictures, batch_limit: int) -> list:
         """Return up to *batch_limit* pictures whose IDs are not yet claimed.
@@ -154,3 +177,68 @@ class SimpleMissingFinder(BaseTaskFinder, ABC):
         if not selected:
             return None
         return self._create_task(selected)
+
+
+class BaseDeferringFinder(BaseTaskFinder):
+    """A finder handing out batches of ids, deferring the ones that fail.
+
+    ``_handed_out`` holds a batch from the moment its task is built until its
+    result arrives. One task at a time is not enough on its own:
+    ``WorkPlanner.on_task_complete`` frees the inflight slot under its lock and
+    only then calls the finder's callback, so the planner can run ``find_task``
+    in between and re-issue the identical batch.
+
+    ``_deferred`` holds what failed, or what the task reported as
+    ``deferred``, for the life of the process. The planner sweeps
+    continuously, so without it one row that cannot succeed would make the
+    finder return a task on every cycle forever; a restart retries it.
+
+    Subclasses set ``_IDS_PARAM`` (the task param holding the batch),
+    ``_TRANSIENT`` (errors that teach nothing about the rows, such as
+    ``TaskCancelledError``: the batch stays eligible) and ``_WHAT`` (the work,
+    for the log).
+    """
+
+    _IDS_PARAM: str
+    _TRANSIENT: tuple
+    _WHAT: str
+
+    def __init__(self):
+        super().__init__()
+        self._deferred: set = set()
+        self._handed_out: set = set()
+
+    def _take(self, fetch: Callable[[int], list], size: int, key=lambda item: item):
+        """Up to *size* of ``fetch(limit)`` neither deferred nor out, now out.
+
+        *limit* is *size* plus every id skipped, so a page full of skipped rows
+        still yields a batch; *key* is an item's id.
+        """
+        skip = self._deferred | self._handed_out
+        batch = [item for item in fetch(size + len(skip)) if key(item) not in skip]
+        batch = batch[:size]
+        self._handed_out.update(key(item) for item in batch)
+        return batch
+
+    def on_task_complete(self, task, error) -> None:
+        """Release the batch, and defer what must not be handed out again."""
+        ids = (getattr(task, "params", None) or {}).get(self._IDS_PARAM) or []
+        self._handed_out.difference_update(ids)
+        if isinstance(error, self._TRANSIENT):
+            logger.info(
+                "%s did not run for %d item(s): %s. They stay eligible.",
+                self._WHAT,
+                len(ids),
+                error,
+            )
+            return
+        if error is not None:
+            logger.warning(
+                "%s failed for %s: %s. Deferring them for the rest of this session.",
+                self._WHAT,
+                ids,
+                error,
+            )
+            self._deferred.update(ids)
+            return
+        self._deferred.update((getattr(task, "result", None) or {}).get("deferred", []))

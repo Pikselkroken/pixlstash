@@ -47,6 +47,22 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# A saved recipe still to convert: no workflow yet, a retired one, or a card
+# moved out of a workflow that lives on. Binds: :func:`pending_recipe_binds`.
+PENDING_RECIPE_WHERE = (
+    "(workflow_id IS NULL "
+    "OR workflow_id IN (SELECT value FROM json_each(:retired)) "
+    "OR workflow_key || ' ' || workflow_id IN (SELECT value FROM json_each(:moved)))"
+)
+
+
+def pending_recipe_binds(successors: dict, moved: dict) -> dict:
+    """:data:`PENDING_RECIPE_WHERE`'s binds, from the hub's two successor maps."""
+    return {
+        "retired": json.dumps(sorted(successors)),
+        "moved": json.dumps(sorted(moved)),
+    }
+
 
 class SavedRecipeConvertTask(BaseTask):
     """Convert one batch of saved recipes that have no ``workflow_id`` yet."""
@@ -86,16 +102,10 @@ class SavedRecipeConvertTask(BaseTask):
             lambda session: session.execute(
                 text(
                     "SELECT id, workflow_key, overrides, models, workflow_id "
-                    "FROM saved_recipe WHERE (workflow_id IS NULL OR workflow_id "
-                    "IN (SELECT value FROM json_each(:retired)) "
-                    "OR workflow_key || ' ' || workflow_id IN "
-                    "(SELECT value FROM json_each(:moved))) "
+                    f"FROM saved_recipe WHERE {PENDING_RECIPE_WHERE} "
                     f"AND id IN ({placeholders})"
                 ),
-                {
-                    "retired": json.dumps(sorted(successors)),
-                    "moved": json.dumps(sorted(moved)),
-                },
+                pending_recipe_binds(successors, moved),
             ).all()
         )
         cards = card_index(hub)
