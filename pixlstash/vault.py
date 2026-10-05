@@ -400,24 +400,14 @@ class Vault:
 
         Call this at server startup. Tests that do not need the tagger can skip it;
         tagger init is also triggered lazily by get_worker_future().
+
+        On Metal this blocks for a few seconds while the CPU query encoders
+        load; see :meth:`_create_engine`.
         """
         if self._disable_background_workers:
             return
         if not self._engine:
-            self._engine = InferenceEngine.create(
-                image_root=self.image_root,
-                force_cpu=self._force_cpu,
-                fast_captions=self._fast_captions,
-                max_vram_gb=self._max_vram_gb,
-                wd14_enabled=self._wd14_tagger_enabled,
-                pixlstash_tagger_enabled=self._pixlstash_tagger_enabled,
-                wd14_threshold=self._wd14_threshold,
-                pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
-                or 0.0,
-                keep_models_in_memory=self._keep_models_in_memory,
-                insightface_model_pack=self._insightface_model_pack,
-                tagger_settings=self._tagger_settings,
-            )
+            self._engine = self._create_engine()
             self._bind_engine_services()
 
     def start(self) -> None:
@@ -434,6 +424,38 @@ class Vault:
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
         self._started = True
+
+    def _create_engine(self) -> InferenceEngine:
+        """Build the inference engine, with its CPU query encoders loaded.
+
+        The caller publishes the result to ``self._engine`` only after this
+        returns, and that order is the point. The planner's model finders queue
+        nothing while ``self._engine`` is ``None``, so loading the copies here
+        (Metal hosts only) runs no other model load beside them, even at boot,
+        where ``Server.__init__`` has already started the planner. A load beside
+        another one races transformers' and accelerate's imports. See
+        ``inference/cpu_query_encoders.py``.
+
+        Returns:
+            The engine, ready to publish.
+        """
+        engine = InferenceEngine.create(
+            image_root=self.image_root,
+            force_cpu=self._force_cpu,
+            fast_captions=self._fast_captions,
+            max_vram_gb=self._max_vram_gb,
+            wd14_enabled=self._wd14_tagger_enabled,
+            pixlstash_tagger_enabled=self._pixlstash_tagger_enabled,
+            wd14_threshold=self._wd14_threshold,
+            pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
+            or 0.0,
+            keep_models_in_memory=self._keep_models_in_memory,
+            insightface_model_pack=self._insightface_model_pack,
+            tagger_settings=self._tagger_settings,
+        )
+        if engine.query_encoders is not None:
+            engine.query_encoders.load()
+        return engine
 
     def _bind_engine_services(self) -> None:
         """Inject the engine's service instances into registry plugins.
@@ -1476,20 +1498,7 @@ class Vault:
             concurrent.futures.Future: Future set to True when completed.
         """
         if not self._engine:
-            self._engine = InferenceEngine.create(
-                image_root=self.image_root,
-                force_cpu=self._force_cpu,
-                fast_captions=self._fast_captions,
-                max_vram_gb=self._max_vram_gb,
-                wd14_enabled=self._wd14_tagger_enabled,
-                pixlstash_tagger_enabled=self._pixlstash_tagger_enabled,
-                wd14_threshold=self._wd14_threshold,
-                pixlstash_tagger_threshold_offset=self._pixlstash_tagger_threshold_offset
-                or 0.0,
-                keep_models_in_memory=self._keep_models_in_memory,
-                insightface_model_pack=self._insightface_model_pack,
-                tagger_settings=self._tagger_settings,
-            )
+            self._engine = self._create_engine()
             self._bind_engine_services()
 
         # Register the watcher BEFORE checking the DB to avoid a TOCTOU race where

@@ -1581,6 +1581,43 @@ the OOM classifier (`is_device_error`), the allocator cache flush
 (`empty_accelerator_cache`, reached through `vram_utils.empty_device_cache`)
 and the memory budget (`accelerator_total_memory_mb`) all answer per device.
 
+#### Metal takes one thread, and does not raise when it gets two
+
+Torch's Metal backend writes shared caches and the stream's command buffer from
+outside its serial queue, so two threads using Metal at once can corrupt them:
+every cast on Metal goes through one of those caches, and
+`torch.mps.empty_cache()` frees graphs another thread may be running. The process then dies (`SIGSEGV`,
+`SIGBUS`, an `NSInvalidArgumentException` out of `matmul`) or hangs — **never a
+Python exception**, so no `try`, retry or CPU fallback can reach it. CUDA
+tolerates the same pattern, which is why none of this exists for it. torch
+`main` has fixed the first cause and most of the second, in no release yet; the
+third is unfixed. Details, and every measurement, are in
+`docs/apple-metal-thread-safety.md`.
+
+Two sources of a second thread on the accelerator are closed at their source
+rather than synchronised. The rest — the tagger preload, the anomaly-region
+route, the idle sweep's flush, the face finder's end-of-work flush, stopping the
+vault, image plugins, and a few allocator calls — are listed under "Not covered" in that document.
+
+**Loading.** transformers reads and casts weights on a pool of
+`min(4, cpu_count)` threads, so *merely loading a model* trips it — measured at
+10 of 10 loads failing on torch 2.13.0 / transformers 5.16.1, and 0 of 10 with
+`HF_DEACTIVATE_ASYNC_LOAD=1`. `accelerator.configure_metal_model_loading()`
+sets it, and is called from `InferenceEngine.create` before any service is
+built and from `plugin_check` before a plugin's `setup()` and `init()`. It is
+set whenever Metal is **present**, not only when it is the inference device,
+because several routes put a load on Metal whatever PixlStash chose;
+`device_map="auto"` on a Mac is one. A value already in the environment is the
+owner's and is kept, with a warning when transformers would read it as false.
+
+**Searching.** On Metal only, search queries are encoded on CPU copies of CLIP
+and SBERT (`inference/cpu_query_encoders.py`), loaded in
+`Vault._create_engine` before the engine is assigned to `Vault._engine` and kept
+resident (#1774). Every query encode goes through
+`InferenceEngine.query_services()`, which also lets one run at a time on every
+host. The full reasoning and its costs are in that document, under "Searching:
+the CPU copies".
+
 #### "VRAM" on unified memory
 
 On Apple Silicon there is no card and no separate pool — the GPU reads the same
@@ -1861,6 +1898,7 @@ The fix is an additive column, `public_id`: 128 bits of randomness as lowercase 
 
 - File-based **SQLite** at `{image_root}/vault.db`
 - All writes are serialised through `VaultDatabase`'s task queue (single writer); reads run in parallel.
+- **No model inference runs inside a database task.** An encode on the writer thread blocks every write for the length of the model call. Encode on the calling thread and pass the result in as a value: text search (`GET /pictures/search`) and export by query encode before `db.run_task`, and `Picture.semantic_search` takes `query_embedding` / `clip_query_embedding`. `tests/test_server.py` asserts both routes encode off the writer thread.
 
 ### Stored path containment (#776)
 

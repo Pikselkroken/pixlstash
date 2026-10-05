@@ -68,7 +68,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.plugin_install import PluginError
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.tagger_plugins.registry import TaggerPluginManager
-from pixlstash.utils.accelerator import resolve_device
+from pixlstash.utils.accelerator import configure_metal_model_loading, resolve_device
 
 logger = get_logger(__name__)
 
@@ -762,6 +762,9 @@ def _run_over_image(
     # native libraries, and that is the checker's doing rather than the
     # plugin's.
     device = _device() if wants_device else None
+
+    # Also outside the window, and for the same reason: it probes torch.
+    configure_metal_model_loading()
 
     with recorder.watch("--image run"):
         try:

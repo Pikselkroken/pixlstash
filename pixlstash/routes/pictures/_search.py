@@ -16,6 +16,7 @@ from pixlstash.db_models import (
     Picture,
     SortMechanism,
 )
+from pixlstash.inference.cpu_query_encoders import CpuQueryEncodersNotReadyError
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
@@ -346,6 +347,20 @@ def register_routes(router, server):
         if candidate_ids is not None and not candidate_ids:
             return []
 
+        # Encoded here, never inside the database task: the DB writer is one
+        # thread, and an encode there holds every write for a model call.
+        try:
+            query_embedding = server.vault.generate_text_embedding(query)
+            clip_query_embedding = server.vault.generate_clip_text_embedding(query)
+        except CpuQueryEncodersNotReadyError as exc:
+            # 503 rather than a 500: nothing is wrong with the request; the
+            # CPU query encoders failed to load at start-up.
+            logger.warning("Text search cannot encode its query: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail=str(exc),
+            ) from exc
+
         def find_by_text(session, query, offset, limit):
             words = re.findall(r"\b\w+\b", query.lower())
             semantic_offset = 0 if sort_mech else offset
@@ -391,8 +406,8 @@ def register_routes(router, server):
                 session,
                 query,
                 words,
-                text_to_embedding=server.vault.generate_text_embedding,
-                clip_text_to_embedding=server.vault.generate_clip_text_embedding,
+                query_embedding=query_embedding,
+                clip_query_embedding=clip_query_embedding,
                 text_match_weight=OCR_TEXT_MATCH_WEIGHT,
                 offset=semantic_offset,
                 limit=semantic_limit,

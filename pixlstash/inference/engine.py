@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+import threading
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Iterator
 
+from pixlstash.inference.cpu_query_encoders import build_cpu_query_encoders
 from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import builtin_model_dir
-from pixlstash.utils.accelerator import CUDA, MPS, normalise_device, resolve_device
+from pixlstash.utils.accelerator import (
+    CUDA,
+    MPS,
+    configure_metal_model_loading,
+    normalise_device,
+    resolve_device,
+)
 
 if TYPE_CHECKING:
     from pixlstash.tagger_plugins.clip_service import ClipService
@@ -106,6 +115,12 @@ class InferenceEngine:
         self.wd14_service = wd14_service
         self.pixlstash_tagger_service = pixlstash_tagger_service
         self.florence_service = florence_service
+        # CPU copies of the query encoders, so a search never encodes on the
+        # inference device while the GPU worker is using it, when using Metal.
+        # See inference/cpu_query_encoders.py.
+        self.query_encoders = None
+        # One query encode at a time; see query_services.
+        self._query_lock = threading.Lock()
         self.vram_budget = vram_budget
         self.lifecycle = lifecycle
         self.force_cpu = force_cpu
@@ -361,7 +376,11 @@ class InferenceEngine:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Unload all models and release GPU/CPU memory."""
+        """Unload all models and release GPU/CPU memory.
+
+        The CPU query encoders are deliberately kept: they load once, before the
+        engine is published, and go when the engine does (#1774).
+        """
         self.lifecycle.aggressive_unload(
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,
@@ -373,6 +392,29 @@ class InferenceEngine:
     def aggressive_unload(self) -> None:
         """Alias for :meth:`close`."""
         self.close()
+
+    @contextmanager
+    def query_services(self) -> Iterator[tuple]:
+        """Yield ``(clip_service, sbert_service)`` for one search-query encode.
+
+        On Metal these are the CPU copies (:mod:`.cpu_query_encoders`), because
+        a query is encoded on a request thread while the GPU worker uses the
+        device; everywhere else they are the engine's own services.
+
+        One encode at a time, on every host: the query encodes run on request
+        threads and share these service instances, which read their model and
+        tokenizer without a lock once loaded. They used to take turns on the
+        single database writer thread; this lock is that serialisation, without
+        holding the writer.
+
+        Raises:
+            CpuQueryEncodersNotReadyError: The CPU copies failed to load.
+        """
+        with self._query_lock:
+            if self.query_encoders is None:
+                yield self.clip_service, self.sbert_service
+            else:
+                yield self.query_encoders.services()
 
     def safe_idle_unload(self) -> None:
         """Release non-captioning models during idle periods."""
@@ -548,6 +590,8 @@ class InferenceEngine:
 
         model_dir = builtin_model_dir()
 
+        configure_metal_model_loading()
+
         # One resolution, accelerator-blind. ``force_cpu`` wins over everything
         # here as it does everywhere else, which is what keeps CI's --force-cpu
         # honest on a developer machine that has Metal.
@@ -651,5 +695,10 @@ class InferenceEngine:
 
         if wd14_threshold is not None:
             wd14_service.set_threshold(wd14_threshold)
+
+        # Metal only, and constructed unloaded like every service here. The
+        # Vault loads them before it publishes the engine (Vault._create_engine);
+        # the CPU spillover engines built on the CPU never get any.
+        engine.query_encoders = build_cpu_query_encoders(device)
 
         return engine

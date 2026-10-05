@@ -20,6 +20,7 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
 from pixlstash.authz.membership import enforce_set_scope
+from pixlstash.inference.cpu_query_encoders import CpuQueryEncodersNotReadyError
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from pixlstash.services import search_query_service
@@ -63,7 +64,15 @@ def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
 
     workflow = engine.clip_embedding_workflow
     try:
-        embeddings = workflow.encode_images([pil_image])
+        embeddings = workflow.encode_query_image(pil_image)
+    except CpuQueryEncodersNotReadyError as exc:
+        # Already a 503, but say why: the generic message below would send
+        # the owner looking at CLIP rather than at the start-up log.
+        logger.warning("likeness-search: cannot encode the query image: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.error("likeness-search: CLIP encoding failed for query image: %s", exc)
         raise HTTPException(
@@ -139,7 +148,10 @@ def register_routes(router, server):
         response_model=list[ImageLikenessMatchResponse],
         response_model_exclude_none=True,
     )
-    async def search_by_image_likeness(
+    # A plain ``def``, so FastAPI runs it on a threadpool worker: the query
+    # encode (which waits its turn behind other searches' encodes), the
+    # database reads and the scoring would otherwise block every request.
+    def search_by_image_likeness(
         request: Request,
         files: List[UploadFile] = File(
             default=[], description="One or more query images to search against."
@@ -411,7 +423,7 @@ def register_routes(router, server):
                         detail=f"File {idx + 1}: uploaded file must be an image.",
                     )
 
-                raw_bytes = await file.read()
+                raw_bytes = file.file.read()
                 if not raw_bytes:
                     raise HTTPException(
                         status_code=400,

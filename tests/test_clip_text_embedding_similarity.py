@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 import shutil
 import pytest
 
@@ -391,7 +392,7 @@ def test_server():
         torch.cuda.empty_cache()
 
 
-def test_picture_semantic_search_returns_relevant_result(test_server):
+def test_picture_semantic_search_returns_relevant_result(test_server, caplog):
     # Dummy embedding function: returns fixed vectors for known descriptions
     def dummy_text_to_embedding(text):
         if "assault rifle" in text:
@@ -430,17 +431,25 @@ def test_picture_semantic_search_returns_relevant_result(test_server):
         session.commit()
 
         # Query for "Clementine holding a black assault rifle"
-        results = Picture.semantic_search(
-            session,
-            query="Clementine holding a black assault rifle",
-            query_words=["Clementine", "holding", "black", "assault", "rifle"],
-            text_to_embedding=dummy_text_to_embedding,
-            fuzzy_weight=0.0,  # Only embedding similarity
-            embedding_weight=1.0,
-            threshold=0.0,
-            limit=3,
-        )
+        query = "Clementine holding a black assault rifle"
+        with caplog.at_level(logging.DEBUG, logger="pixlstash.db_models.picture"):
+            results = Picture.semantic_search(
+                session,
+                query=query,
+                query_words=["Clementine", "holding", "black", "assault", "rifle"],
+                query_embedding=dummy_text_to_embedding(query),
+                fuzzy_weight=0.0,  # Only embedding similarity
+                embedding_weight=1.0,
+                threshold=0.0,
+                limit=3,
+            )
         assert results, "semantic_search returned no results"
+        # Search text is logged only at DEBUG, never at the default level.
+        logged = [r for r in caplog.records if query in r.getMessage()]
+        assert logged, "the search logged nothing at DEBUG either"
+        assert all(r.levelno < logging.INFO for r in logged), [
+            (r.levelname, r.getMessage()[:80]) for r in logged
+        ]
         top_result, score = results[0]
         print(f"Top result description: {top_result.description} with score {score}")
         assert "assault rifle" in top_result.description.lower(), (
@@ -509,7 +518,7 @@ def test_picture_semantic_search_with_tags_and_weights(
             session,
             query="assault rifle",
             query_words=["assault", "rifle"],
-            text_to_embedding=dummy_text_to_embedding,
+            query_embedding=dummy_text_to_embedding("assault rifle"),
             fuzzy_weight=fuzzy_weight,
             embedding_weight=embedding_weight,
             threshold=threshold,
@@ -585,7 +594,7 @@ def test_picture_semantic_search_without_embeddings(
             session,
             query="assault rifle",
             query_words=["assault", "rifle"],
-            text_to_embedding=dummy_text_to_embedding,
+            query_embedding=dummy_text_to_embedding("assault rifle"),
             fuzzy_weight=fuzzy_weight,
             embedding_weight=embedding_weight,
             threshold=threshold,
@@ -658,7 +667,7 @@ def test_picture_semantic_search_without_tags(
             session,
             query="assault rifle",
             query_words=preprocessed_query_words,
-            text_to_embedding=dummy_text_to_embedding,
+            query_embedding=dummy_text_to_embedding("assault rifle"),
             fuzzy_weight=fuzzy_weight,
             embedding_weight=embedding_weight,
             threshold=threshold,
