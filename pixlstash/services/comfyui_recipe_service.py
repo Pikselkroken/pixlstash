@@ -36,6 +36,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     is_link,
+    normalized_filename,
     reduce_api_graph,
 )
 
@@ -675,16 +676,6 @@ def detect_model_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     return preflight_prompt(prompt_graph, object_info)["missing_models"]
 
 
-def _alias_key(value: str) -> str:
-    """One loader value as :func:`model_name_aliases` keys its map.
-
-    Its keys are ``workflow_hash.normalized_filename`` - a **lowercased**
-    basename - so a lookup that merely unified separators would miss every
-    mixed-case filename, which is most of them.
-    """
-    return _normalize_filename(value).rsplit("/", 1)[-1].lower()
-
-
 def apply_model_swap(
     prompt_graph: dict,
     targets: list[dict],
@@ -734,11 +725,9 @@ def apply_model_swap(
         options = _combo_options(object_info.get(node.get("class_type")), field)
         if not options:
             continue
-        # Folded to match `model_name_aliases`' keys, which are
-        # `normalized_filename` - LOWERCASE. Looking up the graph's own
-        # spelling instead finds nothing for any name with a capital in
-        # it, which is most real model filenames.
-        candidates = aliases.get(_alias_key(value)) or ()
+        # The key function `model_name_aliases` uses, which LOWERCASES: the
+        # graph's own spelling finds nothing for any name with a capital in it.
+        candidates = aliases.get(normalized_filename(value)) or ()
         for candidate in candidates:
             # The OPTION, not the candidate: `_match_option` accepts a candidate
             # whose separators merely normalize onto an advertised entry, and
@@ -1728,15 +1717,7 @@ def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
     ]
     # Numeric where the id is a number, so the owner-facing sentence reads
     # #3 before #10; a subgraph id ("75:83") keeps its place after them.
-    rewires.sort(
-        key=lambda r: (
-            r["type"],
-            0 if r["node_id"].isdigit() else 1,
-            int(r["node_id"]) if r["node_id"].isdigit() else 0,
-            r["node_id"],
-            r["field"],
-        )
-    )
+    rewires.sort(key=lambda r: (r["type"], _node_order_key(r["node_id"]), r["field"]))
     return {
         "model": model,
         "clip": clip,
