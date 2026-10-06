@@ -46,9 +46,12 @@
         </button>
         <span v-if="member.head" class="msm__pill">Names this set</span>
       </div>
-      <span v-if="member.filename" class="msm__file">{{
-        member.filename
-      }}</span>
+      <span v-if="member.filename" class="msm__file"
+        ><Tooltip
+          :text="modelFileTitle(shelfMark?.row ?? member)"
+          activator="parent"
+        />{{ member.filename }}</span
+      >
       <div class="msm__line">
         <span v-if="member.kindLabel" class="msm__kind">{{
           member.kindLabel
@@ -89,7 +92,11 @@
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
-import { formatModelSize, generatedMark } from "../../utils/modelShelf";
+import {
+  formatModelSize,
+  generatedMark,
+  modelFileTitle,
+} from "../../utils/modelShelf";
 import {
   evidenceLine,
   sharingLabel,

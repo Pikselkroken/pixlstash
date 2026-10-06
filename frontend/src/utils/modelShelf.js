@@ -1280,8 +1280,7 @@ export function copyPath(copy) {
  * "where is this file" with the one thing that is not a location.
  *
  * @param {Array<Object>} locations - the row's `locations` array.
- * @returns {string} the paths, newline-separated, or `""` when there are none -
- *   which the caller must bind as no tooltip at all rather than an empty one.
+ * @returns {string} the paths, newline-separated, or `""` when there are none.
  */
 export function copyPathsTitle(locations) {
   return (Array.isArray(locations) ? locations : [])
@@ -1291,6 +1290,29 @@ export function copyPathsTitle(locations) {
       const note = copyStateNote(loc?.state);
       return note ? `${path} · ${note}` : path;
     })
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * A model's file tooltip: where its copies sit, then the SHA-256 it is matched by.
+ *
+ * The hash is whole, not shortened: it is what a set's membership and a
+ * recipe's digest are compared against, so it is here to be compared.
+ *
+ * "Not read yet" is said only of a `sha256` that is NULL, which is a shelf row
+ * the hasher has not reached. A set member whose row is not loaded has no
+ * `sha256` at all, and that is not a claim about the hasher: it gets no line.
+ *
+ * @param {Object} row - a shelf row, or a set member (which has no `locations`).
+ * @returns {string} the lines, or `""` - which disables the Tooltip.
+ */
+export function modelFileTitle(row) {
+  const sha = row?.sha256;
+  return [
+    copyPathsTitle(row?.locations),
+    sha ? `SHA-256: ${sha}` : sha === null ? "SHA-256: not read yet" : "",
+  ]
     .filter(Boolean)
     .join("\n");
 }

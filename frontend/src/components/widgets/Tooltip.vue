@@ -383,6 +383,11 @@ function onDocumentKeydown(e) {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   line-height: var(--leading-snug);
+  /* A tip may be several lines (a model's paths, then its hash), and a hash
+     or a path has nowhere to break: without these the lines run together and
+     the longest one spills out of the box. */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .app-tooltip__key {

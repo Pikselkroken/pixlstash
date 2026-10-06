@@ -1251,10 +1251,11 @@
                          there rather than living in a tooltip. What IS in the
                          tooltip is the folder: the header names it only under
                          `groupBy: 'folder'`, so on every other axis this line is
-                         the one place left that can say where the file is. -->
+                         the one place left that can say where the file is. The
+                         file's SHA-256 follows the paths (`modelFileTitle`). -->
                     <span class="shelf-row-file">
                       <Tooltip
-                        :text="copyPathsTitle(row.locations) || ''"
+                        :text="modelFileTitle(row)"
                         activator="parent"
                       />
                       {{ row.filename
@@ -1386,7 +1387,7 @@
                       }}</span>
                       <span class="shelf-row-file"
                         ><Tooltip
-                          :text="copyPathsTitle(member.locations) || ''"
+                          :text="modelFileTitle(member)"
                           activator="parent"
                         />{{ member.filename }}</span
                       >
@@ -1710,7 +1711,7 @@ import {
   bandUsage,
   capabilityLabel,
   companionsSentences,
-  copyPathsTitle,
+  modelFileTitle,
   dateColumnKey,
   defaultSortDirection,
   deletableModels,

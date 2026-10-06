@@ -22,6 +22,7 @@ import {
   capabilityLabel,
   collapseStacks,
   copyPathsTitle,
+  modelFileTitle,
   dateColumnKey,
   quantBadge,
   quantFromFilename,
@@ -335,6 +336,34 @@ describe("formatModelSize", () => {
   it("says nothing rather than zero when the size is unknown", () => {
     expect(formatModelSize(null)).toBe("");
     expect(formatModelSize(undefined)).toBe("");
+  });
+});
+
+describe("modelFileTitle", () => {
+  const SHA = "ab12".repeat(16);
+
+  it("puts the whole hash under the paths", () => {
+    expect(
+      modelFileTitle({
+        sha256: SHA,
+        locations: [{ folder_path: "/home/me/models", relpath: "a.st" }],
+      }),
+    ).toBe(`/home/me/models/a.st\nSHA-256: ${SHA}`);
+  });
+
+  it("is the hash alone for a set member, which has no locations", () => {
+    expect(modelFileTitle({ sha256: SHA })).toBe(`SHA-256: ${SHA}`);
+  });
+
+  it("says a checkpoint is still waiting for its hash", () => {
+    expect(modelFileTitle({ sha256: null })).toBe("SHA-256: not read yet");
+  });
+
+  it("claims nothing about a set member whose shelf row is not loaded", () => {
+    // Such a member has no `sha256` field at all; "not read yet" would be a
+    // statement about the hasher that nothing here knows to be true.
+    expect(modelFileTitle({ id: 3, filename: "a.st" })).toBe("");
+    expect(modelFileTitle(undefined)).toBe("");
   });
 });
 
