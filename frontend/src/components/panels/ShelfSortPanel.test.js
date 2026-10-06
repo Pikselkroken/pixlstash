@@ -83,3 +83,51 @@ describe("the folder layout sub-choice", () => {
     ).toBe("true");
   });
 });
+
+describe("picking a grouping", () => {
+  const groupRows = (wrapper) =>
+    wrapper.find('[aria-label="Group by"]').findAll('[role="radio"]');
+
+  it("tells the host on a click, on the current row too, and never on an arrow", async () => {
+    const wrapper = mount(ShelfSortPanel, {
+      ...globalOpts,
+      props: { section: "group" },
+    });
+    const store = useModelShelfStore();
+    const rows = groupRows(wrapper);
+    const current = rows.findIndex(
+      (row) => row.attributes("aria-checked") === "true",
+    );
+    // Any row but the current one and Folder, which has its own test below.
+    const other = rows.find(
+      (row, index) => index !== current && row.text() !== "Folder",
+    );
+
+    // Walking the rows changes the grouping without closing the menu under
+    // the reader.
+    const before = store.view.groupBy;
+    await rows[current].trigger("keydown", { key: "ArrowDown" });
+    expect(store.view.groupBy).not.toBe(before);
+    expect(wrapper.emitted("group-picked")).toBeUndefined();
+
+    await other.trigger("click");
+    expect(wrapper.emitted("group-picked")).toHaveLength(1);
+
+    // Pressing the grouping already in force is still an answer.
+    await other.trigger("click");
+    expect(wrapper.emitted("group-picked")).toHaveLength(2);
+  });
+
+  it("keeps the menu for Folder, which opens a further choice", async () => {
+    const wrapper = mount(ShelfSortPanel, {
+      ...globalOpts,
+      props: { section: "group" },
+    });
+    const store = useModelShelfStore();
+    const folder = groupRows(wrapper).find((row) => row.text() === "Folder");
+    await folder.trigger("click");
+    expect(store.view.groupBy).toBe("folder");
+    expect(layoutSection(wrapper).exists()).toBe(true);
+    expect(wrapper.emitted("group-picked")).toBeUndefined();
+  });
+});

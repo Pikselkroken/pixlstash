@@ -298,7 +298,7 @@
           >
             <template #activator="{ props: menuProps }">
               <AppBarButton
-                v-bind="menuProps"
+                v-bind="withRef(menuProps, (el) => (groupButtonRef = el))"
                 :icon="activeGroup.icon"
                 chevron
                 :open="groupMenuOpen"
@@ -309,7 +309,10 @@
                 <span class="bar-btn-value">{{ activeGroup.label }}</span>
               </AppBarButton>
             </template>
-            <ShelfSortPanel section="group" />
+            <ShelfSortPanel
+              section="group"
+              @group-picked="closeGroupMenu"
+            />
           </v-menu>
 
           <!-- Hidden on the set grid, not disabled, exactly as the whole
@@ -1782,6 +1785,13 @@ const folderMenuFolder = ref(null);
 const folderMenuInvoker = ref(null);
 const addMenuOpen = ref(false);
 const groupMenuOpen = ref(false);
+const groupButtonRef = ref(null);
+// `v-menu` returns focus to its trigger on Escape only; a close written through
+// the model leaves it on <body>, so a keyboard pick hands it back here.
+function closeGroupMenu() {
+  groupMenuOpen.value = false;
+  groupButtonRef.value?.focus();
+}
 /** The model whose companions the Works with dialog is answering for, or null. */
 const worksWithModel = ref(null);
 // Held raw like `folderInvoker`: a DOM node, not reactive state. `VDialog`
