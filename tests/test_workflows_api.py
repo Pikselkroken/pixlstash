@@ -2601,6 +2601,53 @@ def test_a_converted_editor_file_runs_from_the_graph_stored_beside_it(
     assert r.json()["workflow"]["2"]["inputs"]["lora_name"] == _EDITOR_UNRESOLVED
 
 
+# What a ComfyUI that holds _EDITOR_WORKFLOW's three nodes publishes.
+_EDITOR_OBJECT_INFO = {
+    "UNETLoader": {
+        "input": {"required": {"unet_name": [[_SHELF_FILENAME], {}]}},
+        "output": ["MODEL"],
+    },
+    "LoraLoader": {
+        "input": {
+            "required": {
+                "model": ["MODEL", {}],
+                "lora_name": [[_EDITOR_UNRESOLVED], {}],
+                "strength_model": ["FLOAT", {"default": 1.0}],
+                "strength_clip": ["FLOAT", {"default": 1.0}],
+            }
+        },
+        "output": ["MODEL"],
+    },
+    "SaveImage": {
+        "input": {
+            "required": {"images": ["IMAGE", {}], "filename_prefix": ["STRING", {}]}
+        }
+    },
+}
+
+
+def test_an_editor_file_converts_itself_when_comfyui_answers(
+    workflow_env, converting, monkeypatch
+):
+    """No *Convert for PixlStash* trip: the server converts with object_info."""
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(_EDITOR_OBJECT_INFO)), None),
+    )
+    owner = workflow_env.owner
+    r = owner.get(f"{API}/workflows/{converting.manual}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "file"
+    assert r.json()["workflow"]["2"]["inputs"]["model"] == ["1", 0]
+    assert r.json()["workflow"]["2"]["inputs"]["lora_name"] == _EDITOR_UNRESOLVED
+    # A file gesture converts too, through `_card_source`.
+    r = owner.get(f"{API}/workflows/{converting.manual}/export")
+    assert r.status_code == 200, r.text
+    # Converted per read, never written back over the stored row.
+    assert _api_document(workflow_env.server.hub, converting.manual) is None
+
+
 def test_a_conversion_of_another_editor_document_is_not_run(workflow_env, converting):
     """Matched on the whole document: another version is another workflow."""
     owner = workflow_env.owner

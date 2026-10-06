@@ -208,7 +208,12 @@ from pixlstash.services.workflow_inputs import (
     card_input_modes,
     resolve_fills,
 )
-from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.services.comfyui_ui_graph import convert_ui_graph_to_api
+from pixlstash.services.workflow_io import (
+    api_graph,
+    detect_workflow_io,
+    with_converted_graph,
+)
 from pixlstash.services.workflow_library_service import (
     read_best_picture_ids,
     read_card_picture_ids,
@@ -3693,26 +3698,68 @@ def create_router(server) -> APIRouter:
             )
         return graph
 
+    def _converted_document(
+        card, document: dict | None, object_info: dict | None, comfyui_url
+    ) -> dict | None:
+        """*document*, with an editor graph converted to the API graph it runs as.
+
+        A document ComfyUI's *Convert for PixlStash* already converted reads as
+        that conversion and is returned as is. One that was never sent through
+        it is converted here, the way a picture's editor graph is: with
+        ComfyUI's ``object_info``, read (cached) from *comfyui_url* only when
+        the caller had none and there is an editor graph to read. A refusal
+        leaves the document as it was, so the resolver still reports
+        ``ui_format``.
+        """
+        if not document or api_graph(document) is not None:
+            return document
+        if object_info is None and comfyui_url:
+            object_info, _error = _read_object_info(comfyui_url, cached=True)
+        graph, problems = convert_ui_graph_to_api(document, object_info)
+        if graph is None:
+            logger.info(
+                "Card %s holds an editor workflow that will not convert: %s",
+                card.workflow_key,
+                "; ".join(problems),
+            )
+            return document
+        return with_converted_graph(document, graph)
+
     def _source_graph_for(
-        card, object_info: dict | None = None
+        card, object_info: dict | None = None, comfyui_url: str | None = None
     ) -> tuple[run_service.Source | None, run_service.Reason | None]:
         """Resolve one card's runnable source, doing the reads the tiers need.
 
         The reads are done here and the decision in the service, so the order
         the tiers are tried in is testable without a vault: this function only
         stops early because reading the next tier costs a file or a query.
+
+        An editor-format file or manual document is converted with
+        ``object_info`` (or the map read from *comfyui_url*) before it is
+        judged, so it runs without a trip through ComfyUI first.
         """
         if card.manual:
             # Its own row and nothing else: no file, no picture, no instance.
             return run_service.resolve_source(
-                card, file_document=manual_document(_hub(), card.workflow_key)
+                card,
+                file_document=_converted_document(
+                    card,
+                    manual_document(_hub(), card.workflow_key),
+                    object_info,
+                    comfyui_url,
+                ),
             )
         file_document = None
         if card.file_name:
             path, _source = _resolve_workflow_path(card.file_name)
             if path:
                 try:
-                    file_document = runnable_document(path, _load_workflow_json(path))
+                    file_document = _converted_document(
+                        card,
+                        runnable_document(path, _load_workflow_json(path)),
+                        object_info,
+                        comfyui_url,
+                    )
                 except (OSError, ValueError) as exc:
                     logger.warning(
                         "Card %s names workflow file %s, which will not load, so "
@@ -5772,7 +5819,7 @@ def create_router(server) -> APIRouter:
     # meant to be run. A copy written for the owner (duplicate, clone, a chain
     # edit) is the graph as it is.
 
-    def _card_source(card, object_info: dict | None = None):
+    def _card_source(card, request: Request | None = None):
         """One card's runnable graph, or the 409 that says why there is none.
 
         ``RecursionError`` is caught here rather than at each gesture because
@@ -5784,7 +5831,10 @@ def create_router(server) -> APIRouter:
         this class for the same reason.
         """
         try:
-            source, reason = _source_graph_for(card, object_info)
+            source, reason = _source_graph_for(
+                card,
+                comfyui_url=_comfyui_url(_user(request)) if request else None,
+            )
         except RecursionError as exc:
             logger.warning(
                 "Card %s has a source graph too deeply nested to read: %s",
@@ -5923,7 +5973,7 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card)
+        source = _card_source(card, request)
         recipe = workflow_defaults(hub, server.vault, workflow.workflow_id)
         # Only a bypass asks it: without ComfyUI nothing is bypassed and the
         # scrub empties every LoRA slot outside the recipe instead.
@@ -6107,7 +6157,7 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card)
+        source = _card_source(card, request)
         # Unscrubbed on purpose: this file stays on the owner's machine and is
         # meant to RUN, and a copy with its models blanked would not.
         name, landed = _store_copy(
@@ -6204,7 +6254,7 @@ def create_router(server) -> APIRouter:
             _read_object_info(_comfyui_url(_user(request))),
             "what it has, so it cannot tell what this workflow needs fixed",
         )
-        source = _card_source(card)
+        source = _card_source(card, request)
         graph = deepcopy(source.graph)
         changes: list[str] = []
         for entry in _apply_model_fixes(card, graph, object_info, {}):
@@ -6400,7 +6450,7 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         _workflow, card = _require_base(hub, workflow_id)
-        graph = _card_source(card).graph
+        graph = _card_source(card, request).graph
         # Cached: the inspector asks on every card it selects, the map is
         # megabytes, and an unreachable ComfyUI would otherwise cost a full
         # timeout per click. This read only DRAWS the chain; the PUT that
@@ -6539,7 +6589,7 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card)
+        source = _card_source(card, request)
         object_info = _require_object_info(
             _read_object_info(_comfyui_url(_user(request))),
             "what its nodes hand on, so it cannot rewire this workflow's LoRAs",
@@ -6932,7 +6982,7 @@ def create_router(server) -> APIRouter:
         _workflow, card = _require_base(hub, workflow_id)
         # The graph is read on the proposal call too: the LoRA flags are about
         # the files it names.
-        source = _card_source(card)
+        source = _card_source(card, request)
         models = _swap_models(hub)
         index = recipe_asset_index(hub)
         found = _swap_slots(source.graph, models, index)
@@ -7180,7 +7230,7 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         _workflow, card = _require_base(hub, workflow_id)
-        graph = _card_source(card).graph
+        graph = _card_source(card, request).graph
         models = _swap_models(hub)
         index = recipe_asset_index(hub)
         found = _swap_slots(graph, models, index)
@@ -7387,7 +7437,7 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card)
+        source = _card_source(card, request)
         graph = deepcopy(source.graph)
         # No 503 here: nothing depends on ComfyUI's link
         # types, so an unreachable ComfyUI means "write the names unchecked".
