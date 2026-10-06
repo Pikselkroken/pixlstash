@@ -153,6 +153,9 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     expect(listSavedRecipes).toHaveBeenCalledWith([KEY]);
     expect(wrapper.find(".wfrt-title").text()).toBe("Cinematic portrait");
+    // Split into pieces that wrap, as the Workflow tab's title is, so a long
+    // name cannot widen the rail.
+    expect(wrapper.findAll(".wfrt-title .breakable-title-chunk")).toHaveLength(2);
     expect(namesOf(wrapper)).toEqual([
       "Rainy tram platform",
       "Red coat, backlit",
