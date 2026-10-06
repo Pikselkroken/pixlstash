@@ -11,6 +11,8 @@ document says at load is therefore what gets reported for the day. Assuming
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from pixlstash.server import Server
@@ -63,3 +65,17 @@ def test_cache_follows_a_changed_install_type(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Server, "detect_install_type", staticmethod(lambda: "electron"))
     assert 'content="electron"' in Server._index_html_response(stub).body.decode()
+
+
+def test_cache_follows_a_rebuilt_index(tmp_path, monkeypatch):
+    """A frontend rebuilt under a running server is served, not the old document."""
+    monkeypatch.setattr(Server, "detect_install_type", staticmethod(lambda: "pip"))
+    index = _write_index(tmp_path)
+    stub = _Stub(str(index))
+    assert 'content="pip"' in Server._index_html_response(stub).body.decode()
+
+    index.write_text('<script src="/assets/index-new.js"></script>', encoding="utf-8")
+    stat = index.stat()
+    os.utime(index, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert "index-new.js" in Server._index_html_response(stub).body.decode()
