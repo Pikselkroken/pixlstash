@@ -1244,6 +1244,7 @@ const sourceKindLine = computed(() => {
       ? "Person, with their LoRA added"
       : "Picture set, with its LoRA added";
   }
+  if (savedRecipe.value) return "Saved recipe";
   if (kind.value === "card") return "Workflow, with no picture behind it";
   if (isEdit.value) {
     return many > 1 ? `${many} pictures to edit, one run each` : "The picture to edit";

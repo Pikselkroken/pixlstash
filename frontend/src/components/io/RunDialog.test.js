@@ -1066,6 +1066,7 @@ describe("the picture beside the form", () => {
     });
 
     expect(wrapper.vm.coverUrl).toBe(pictureThumbnailUrl(77));
+    expect(wrapper.vm.sourceKindLine).toBe("Saved recipe");
   });
 });
 
