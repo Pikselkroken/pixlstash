@@ -1223,10 +1223,15 @@ const sourceName = computed(
  * appends the share token: used verbatim the browser asks the page origin for
  * a path no route serves and the cover is broken. `workflowCoverUrl` is the
  * one spelling of that fix (F1b hit it on the grid first).
+ *
+ * A run made from a picture, or from a saved recipe, shows THAT picture: the
+ * card's cover is whatever the workflow last made, and beside a recipe's own
+ * prompt it reads as a different run altogether.
  */
 const coverUrl = computed(() => {
   if (props.source?.coverUrl) return props.source.coverUrl;
-  if (isEdit.value && pictureIds.value.length) return pictureThumbnailUrl(pictureIds.value[0]);
+  const pictureId = pictureIds.value[0] ?? savedRecipe.value?.source_picture_id;
+  if (pictureId != null) return pictureThumbnailUrl(pictureId);
   const cover = card.value?.covers?.[0];
   return cover ? workflowCoverUrl(cover) : "";
 });

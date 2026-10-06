@@ -78,6 +78,7 @@ vi.mock("vuetify/components", async () => {
 import RunDialog from "./RunDialog.vue";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { notifySessionReset } from "../../utils/apiClient";
+import { pictureThumbnailUrl } from "../../api/pictures";
 
 const KEY = `auto:${"a".repeat(64)}`;
 const OTHER = `auto:${"b".repeat(64)}`;
@@ -1041,6 +1042,30 @@ describe("the picture beside the form", () => {
       coverUrl: "/api/v1/pictures/thumbnails/9.webp",
     });
     expect(wrapper.vm.coverUrl).toBe("/api/v1/pictures/thumbnails/9.webp");
+  });
+
+  it("shows the picture a recipe run is made from, not the card's cover", async () => {
+    // The card's cover is whatever the workflow last made; beside this
+    // picture's prompt it reads as a different run altogether.
+    getWorkflowCard.mockResolvedValue({
+      card: card({ covers: [{ url: "/pictures/thumbnails/812.webp" }] }),
+    });
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [42] });
+
+    expect(wrapper.vm.coverUrl).toBe(pictureThumbnailUrl(42));
+  });
+
+  it("shows a saved recipe's own picture, not the card's cover", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({ covers: [{ url: "/pictures/thumbnails/812.webp" }] }),
+    });
+    const wrapper = await mountRun({
+      kind: "card",
+      workflowId: KEY,
+      savedRecipe: { id: 5, workflow_id: KEY, name: "Rainy", source_picture_id: 77 },
+    });
+
+    expect(wrapper.vm.coverUrl).toBe(pictureThumbnailUrl(77));
   });
 });
 
