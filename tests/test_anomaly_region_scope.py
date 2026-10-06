@@ -15,6 +15,8 @@ import gc
 import json
 import os
 import tempfile
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,10 +34,18 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 
 class _FakeTaggerService:
-    """Stand-in for PixlStashTaggerService used by the anomaly_region route."""
+    """Stand-in for PixlStashTaggerService used by the anomaly_region route.
+
+    Records the thread each model call runs on, so a test can assert the work
+    reached the GPU worker rather than the request thread.
+    """
+
+    def __init__(self, loaded=True):
+        self.loaded = loaded
+        self.threads = {}
 
     def is_loaded(self):
-        return True
+        return self.loaded
 
     def version(self):
         return 1
@@ -45,6 +55,7 @@ class _FakeTaggerService:
         return 0 if (label or "").strip().lower() == "malformed hand" else None
 
     def localize_anomaly(self, pil_image, label):
+        self.threads["localize"] = threading.current_thread().name
         return {
             "boxes": [[0.1, 0.2, 0.3, 0.4], [0.6, 0.5, 0.2, 0.25]],
             "diffuse": False,
@@ -53,8 +64,14 @@ class _FakeTaggerService:
 
 
 class _FakeEngine:
-    def __init__(self):
-        self.pixlstash_tagger_service = _FakeTaggerService()
+    def __init__(self, loaded=True):
+        self.pixlstash_tagger_service = _FakeTaggerService(loaded)
+
+    def ensure_pixlstash_tagger_ready(self):
+        service = self.pixlstash_tagger_service
+        service.threads["load"] = threading.current_thread().name
+        service.loaded = True
+        return True
 
     def close(self):
         # No-op: the real InferenceEngine releases models here at shutdown.
@@ -72,6 +89,34 @@ def _good_picture_files():
             with open(path, "rb") as fh:
                 results.append((name, fh.read(), ct))
     return results
+
+
+def _quiesce_background_work(server):
+    """Detach every finder and wait for the GPU worker to go idle.
+
+    The route waits on the single GPU worker, so background work the upload
+    started (embedding, faces, tagging, loading their models cold) would sit in
+    front of every request and can outlast the route's timeout on a slow runner.
+    Nothing here needs derived data, so every finder goes. Same shape as
+    ``tests/test_picture_mutation_scope.py``.
+    """
+    task_types = list(server.vault._planner_work_finders)
+    for task_type in task_types:
+        server.vault._planner_work_finders.pop(task_type)
+    server.vault._work_planner.detach_finders(task_types)
+
+    runner = server.vault._task_runner
+    runner.cancel_pending_tasks()
+    deadline = time.monotonic() + 120.0
+    while time.monotonic() < deadline:
+        with runner._active_task_lock:
+            active = list(runner._active_tasks.values())
+        if not active:
+            return
+        time.sleep(0.05)
+    raise AssertionError(
+        f"background work did not settle within 120s; still running: {active}"
+    )
 
 
 def _setup_server_with_pictures():
@@ -97,6 +142,8 @@ def _setup_server_with_pictures():
     assert r.status_code == 200, r.text
     picture_ids = [p["id"] for p in r.json()]
     assert len(picture_ids) >= 2, "Need at least two pictures for the scope test"
+
+    _quiesce_background_work(server)
 
     # Inject the fake tagger service so the route resolves a "loaded" model.
     server.vault._engine = _FakeEngine()
@@ -385,6 +432,51 @@ def test_anomaly_region_single_picture_scope_both_directions():
         assert r.status_code == 403, (
             f"out-of-scope single-picture read must be 403, got {r.status_code}: {r.text}"
         )
+    finally:
+        server.__exit__(None, None, None)
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_anomaly_region_model_work_runs_on_the_gpu_worker():
+    """The tagger load and the Grad-CAM pass run on the GPU worker thread.
+
+    On Metal, model work on a request thread beside the GPU worker kills the
+    process, and on every host Grad-CAM's in-place fp32 cast would race a tag
+    batch on the shared model (docs/apple-metal-thread-safety.md, #1775).
+    """
+    temp_dir, server, client, picture_ids = _setup_server_with_pictures()
+    try:
+        engine = _FakeEngine(loaded=False)
+        server.vault._engine = engine
+        r = client.get(
+            f"{API}/pictures/{picture_ids[0]}/anomaly_region",
+            params={"tag": "malformed hand"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["boxes"] == [[0.1, 0.2, 0.3, 0.4], [0.6, 0.5, 0.2, 0.25]]
+        threads = engine.pixlstash_tagger_service.threads
+        assert threads.get("load") == "vault-task-runner-gpu", threads
+        assert threads.get("localize") == "vault-task-runner-gpu", threads
+    finally:
+        server.__exit__(None, None, None)
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_anomaly_region_tagger_that_cannot_load_is_503():
+    """A tagger the worker cannot load answers 503, not 500 or a hang."""
+    temp_dir, server, client, picture_ids = _setup_server_with_pictures()
+    try:
+        engine = _FakeEngine(loaded=False)
+        engine.ensure_pixlstash_tagger_ready = lambda: False
+        server.vault._engine = engine
+        r = client.get(
+            f"{API}/pictures/{picture_ids[0]}/anomaly_region",
+            params={"tag": "malformed hand"},
+        )
+        assert r.status_code == 503, r.text
+        assert "could not be loaded" in r.json()["detail"]
     finally:
         server.__exit__(None, None, None)
         temp_dir.cleanup()

@@ -1595,8 +1595,8 @@ third is unfixed. Details, and every measurement, are in
 `docs/apple-metal-thread-safety.md`.
 
 Two sources of a second thread on the accelerator are closed at their source
-rather than synchronised. The rest — the tagger preload, the anomaly-region
-route, the idle sweep's flush, the face finder's end-of-work flush, stopping the
+rather than synchronised, and a third is routed onto the GPU worker. The rest —
+the tagger preload, the idle sweep's flush, the face finder's end-of-work flush, stopping the
 vault, image plugins, and a few allocator calls — are listed under "Not covered" in that document.
 
 **Loading.** transformers reads and casts weights on a pool of
@@ -1617,6 +1617,14 @@ resident (#1774). Every query encode goes through
 `InferenceEngine.query_services()`, which also lets one run at a time on every
 host. The full reasoning and its costs are in that document, under "Searching:
 the CPU copies".
+
+**The anomaly-region route.** `GET /pictures/{id}/anomaly_region` hands the
+tagger load and the Grad-CAM pass to an `AnomalyRegionTask`
+(`tasks/anomaly_region_task.py`) on the GPU queue at `URGENT` priority and waits
+for it with `submit_and_wait`; the request thread only checks the cache, finds
+the file and decodes it. This runs on every host, not only Metal: Grad-CAM casts
+the shared tagger to fp32 in place for its backward pass, so on CUDA too a tag
+batch beside it would have met fp32 weights.
 
 #### "VRAM" on unified memory
 
