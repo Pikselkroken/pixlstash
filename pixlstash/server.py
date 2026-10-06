@@ -1615,16 +1615,18 @@ class Server(
         ``None`` when there is no built frontend, so callers fall back the same
         way they did when this served the file straight off disk.
 
-        Cached on ``(path, install_type)`` rather than re-read per request: the
-        SPA entry point is hit on every cold navigation, and the substitution is
-        the same string every time until one of those two changes.
+        Cached on ``(path, install_type, mtime)`` rather than re-read per
+        request: the SPA entry point is hit on every cold navigation, and the
+        substitution is the same string every time until one of those changes.
+        The mtime is there for a frontend rebuilt under a running server, whose
+        old document names entry chunks the build has deleted.
         """
         index_path = self._get_frontend_index_path()
         if not index_path:
             return None
 
         install_type = Server.detect_install_type()
-        key = (index_path, install_type)
+        key = (index_path, install_type, os.stat(index_path).st_mtime_ns)
         if (
             getattr(self, "_index_html_cache", None) is None
             or self._index_html_cache[0] != key
