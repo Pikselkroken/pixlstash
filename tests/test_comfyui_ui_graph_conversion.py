@@ -778,16 +778,6 @@ class TestItRefusesRatherThanGuesses:
         assert prompt is None
         assert problems == ["PixlStash could not ask ComfyUI which nodes it has"]
 
-    def test_subgraphs_are_refused_by_name(self):
-        """Refused for what they are, not as "no node class '<uuid>'"."""
-        graph = _graph([_node(1, "6e0f8-a-subgraph-uuid")], [])
-        graph["definitions"] = {"subgraphs": [{"id": "6e0f8-a-subgraph-uuid"}]}
-        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
-        assert prompt is None
-        assert problems == [
-            "this editor graph uses subgraphs, which PixlStash cannot run"
-        ]
-
     def test_an_api_graph_is_not_an_editor_graph(self):
         prompt, problems = convert_ui_graph_to_api(
             {"3": {"class_type": "KSampler", "inputs": {}}}, OBJECT_INFO
@@ -992,3 +982,253 @@ def test_a_malformed_graph_is_refused_not_raised(simple_editor_graph, corrupt):
         None,
         ["this editor graph is malformed and cannot be read"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Subgraphs: expanded into the graph, then converted as usual
+# ---------------------------------------------------------------------------
+
+SUBGRAPH = "8a6b5c4d-1e2f-4a3b-9c8d-7e6f5a4b3c2d"
+INNER = "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e"
+
+SUBGRAPH_OBJECT_INFO = {
+    **OBJECT_INFO,
+    "Scale": {
+        "input": {"required": {"image": ["IMAGE", {}], "factor": ["FLOAT", {}]}},
+        "input_order": {"required": ["image", "factor"]},
+    },
+    "FloatSource": {"input": {"required": {}}, "input_order": {"required": []}},
+}
+
+
+def _definition(definition_id=SUBGRAPH, *, inner_nodes=None, inner_links=None):
+    """A Scale wrapped in a subgraph, in the shape ComfyUI writes one.
+
+    Inside a definition links are objects and the two boundaries are nodes
+    -10 (its inputs) and -20 (its outputs), matched to the instance BY NAME.
+    """
+    return {
+        "id": definition_id,
+        "inputs": [
+            {"name": "image", "type": "IMAGE"},
+            {"name": "factor", "type": "FLOAT"},
+        ],
+        "outputs": [{"name": "IMAGE", "type": "IMAGE"}],
+        "nodes": inner_nodes
+        or [
+            _node(
+                5,
+                "Scale",
+                inputs=[
+                    {"name": "image", "type": "IMAGE", "link": 1},
+                    {
+                        "name": "factor",
+                        "type": "FLOAT",
+                        "link": 2,
+                        "widget": {"name": "factor"},
+                    },
+                ],
+                outputs=[{"name": "IMAGE", "type": "IMAGE", "links": [3]}],
+                widgets=[1.5],
+            )
+        ],
+        "links": inner_links
+        or [
+            {
+                "id": 1,
+                "origin_id": -10,
+                "origin_slot": 0,
+                "target_id": 5,
+                "target_slot": 0,
+                "type": "IMAGE",
+            },
+            {
+                "id": 2,
+                "origin_id": -10,
+                "origin_slot": 1,
+                "target_id": 5,
+                "target_slot": 1,
+                "type": "FLOAT",
+            },
+            {
+                "id": 3,
+                "origin_id": 5,
+                "origin_slot": 0,
+                "target_id": -20,
+                "target_slot": 0,
+                "type": "IMAGE",
+            },
+        ],
+    }
+
+
+def _subgraph_workflow(
+    *, instance_values=None, factor_link=None, definitions=None, mode=0
+):
+    """LoadImage -> [subgraph: Scale] -> SaveImage."""
+    nodes = [
+        _node(
+            1,
+            "LoadImage",
+            outputs=[{"name": "IMAGE", "type": "IMAGE", "links": [10]}],
+            widgets=["a.png", "image"],
+        ),
+        {
+            "id": 2,
+            "type": SUBGRAPH,
+            "mode": mode,
+            # The instance lists its inputs in its own order, not the
+            # definition's: matched by name, never by position.
+            "inputs": [
+                {
+                    "name": "factor",
+                    "type": "FLOAT",
+                    "link": factor_link,
+                    "widget": {"name": "factor"},
+                },
+                {"name": "image", "type": "IMAGE", "link": 10},
+            ],
+            "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [11]}],
+            "widgets_values": [] if instance_values is None else instance_values,
+        },
+        _node(
+            3,
+            "SaveImage",
+            inputs=[{"name": "images", "type": "IMAGE", "link": 11}],
+            widgets=["out"],
+        ),
+    ]
+    links = [[10, 1, 0, 2, 1, "IMAGE"], [11, 2, 0, 3, 0, "IMAGE"]]
+    if factor_link is not None:
+        nodes.append(
+            _node(
+                4,
+                "FloatSource",
+                outputs=[{"name": "FLOAT", "type": "FLOAT", "links": [factor_link]}],
+            )
+        )
+        links.append([factor_link, 4, 0, 2, 0, "FLOAT"])
+    graph = _graph(nodes, links)
+    graph["definitions"] = {"subgraphs": definitions or [_definition()]}
+    return graph
+
+
+class TestSubgraphs:
+    def test_an_instance_is_expanded_and_its_wires_cross_the_boundary(self):
+        prompt, problems = convert_ui_graph_to_api(
+            _subgraph_workflow(), SUBGRAPH_OBJECT_INFO
+        )
+        assert problems == []
+        # Keyed the way ComfyUI's own export keys an inner node.
+        assert prompt["2:5"]["class_type"] == "Scale"
+        assert prompt["2:5"]["inputs"]["image"] == ["1", 0]
+        assert prompt["3"]["inputs"]["images"] == ["2:5", 0]
+        assert SUBGRAPH not in {node["class_type"] for node in prompt.values()}
+
+    def test_with_no_value_of_its_own_the_inner_node_keeps_its_value(self):
+        """A promoted widget's value is kept on the inner node."""
+        prompt, problems = convert_ui_graph_to_api(
+            _subgraph_workflow(), SUBGRAPH_OBJECT_INFO
+        )
+        assert problems == []
+        assert prompt["2:5"]["inputs"]["factor"] == 1.5
+
+    def test_the_instances_own_value_replaces_the_definitions(self):
+        """One value per definition input that feeds a widget, in slot order."""
+        prompt, problems = convert_ui_graph_to_api(
+            _subgraph_workflow(instance_values=[3.0]), SUBGRAPH_OBJECT_INFO
+        )
+        assert problems == []
+        assert prompt["2:5"]["inputs"]["factor"] == 3.0
+
+    def test_a_wire_into_the_instance_wins_over_its_value(self):
+        prompt, problems = convert_ui_graph_to_api(
+            _subgraph_workflow(instance_values=[3.0], factor_link=12),
+            SUBGRAPH_OBJECT_INFO,
+        )
+        assert problems == []
+        assert prompt["2:5"]["inputs"]["factor"] == ["4", 0]
+
+    def test_a_subgraph_inside_a_subgraph_is_expanded_too(self):
+        inner = _definition(INNER)
+        outer = _definition(
+            SUBGRAPH,
+            inner_nodes=[
+                {
+                    "id": 7,
+                    "type": INNER,
+                    "mode": 0,
+                    "inputs": [
+                        {"name": "image", "type": "IMAGE", "link": 1},
+                        {
+                            "name": "factor",
+                            "type": "FLOAT",
+                            "link": 2,
+                            "widget": {"name": "factor"},
+                        },
+                    ],
+                    "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [3]}],
+                    "widgets_values": [],
+                }
+            ],
+            inner_links=[
+                {
+                    "id": 1,
+                    "origin_id": -10,
+                    "origin_slot": 0,
+                    "target_id": 7,
+                    "target_slot": 0,
+                    "type": "IMAGE",
+                },
+                {
+                    "id": 2,
+                    "origin_id": -10,
+                    "origin_slot": 1,
+                    "target_id": 7,
+                    "target_slot": 1,
+                    "type": "FLOAT",
+                },
+                {
+                    "id": 3,
+                    "origin_id": 7,
+                    "origin_slot": 0,
+                    "target_id": -20,
+                    "target_slot": 0,
+                    "type": "IMAGE",
+                },
+            ],
+        )
+        prompt, problems = convert_ui_graph_to_api(
+            _subgraph_workflow(instance_values=[2.5], definitions=[outer, inner]),
+            SUBGRAPH_OBJECT_INFO,
+        )
+        assert problems == []
+        assert prompt["2:7:5"]["inputs"]["image"] == ["1", 0]
+        # The outermost instance's value reaches the innermost widget.
+        assert prompt["2:7:5"]["inputs"]["factor"] == 2.5
+        assert prompt["3"]["inputs"]["images"] == ["2:7:5", 0]
+
+    def test_a_bypassed_instance_is_spliced_out_not_expanded(self):
+        prompt, problems = convert_ui_graph_to_api(
+            _subgraph_workflow(mode=4), SUBGRAPH_OBJECT_INFO
+        )
+        assert problems == []
+        assert "2:5" not in prompt
+        assert prompt["3"]["inputs"]["images"] == ["1", 0]
+
+    def test_a_missing_definition_is_refused_by_name(self):
+        """Refused for what it is, not as "no node class '<uuid>'"."""
+        graph = _subgraph_workflow()
+        graph["definitions"] = {"subgraphs": [_definition(INNER)]}
+        prompt, problems = convert_ui_graph_to_api(graph, SUBGRAPH_OBJECT_INFO)
+        assert prompt is None
+        assert any(
+            "subgraph whose definition is not in the file" in p for p in problems
+        )
+
+    def test_values_that_cannot_be_matched_to_inputs_are_refused(self):
+        prompt, problems = convert_ui_graph_to_api(
+            _subgraph_workflow(instance_values=[3.0, 4.0]), SUBGRAPH_OBJECT_INFO
+        )
+        assert prompt is None
+        assert any("cannot be matched up" in p for p in problems)

@@ -33,7 +33,13 @@ from __future__ import annotations
 
 import logging
 
-from pixlstash.services.workflow_hash import UI_PASSTHROUGH_CLASSES, bypass_input_slot
+from pixlstash.services.workflow_hash import (
+    _MAX_INLINED_NODES,
+    UI_PASSTHROUGH_CLASSES,
+    _normalized_ui_links,
+    _subgraph_definitions,
+    bypass_input_slot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +183,247 @@ def _constant_name(node: dict) -> str | None:
             if isinstance(value, str) and value:
                 return value
     return None
+
+
+# A value a subgraph instance supplies for an inner widget, keyed by widget name.
+# Set by `inline_subgraphs` on the inner node; `_node_inputs` prefers it to the
+# node's own `widgets_values`, which hold the definition's default.
+_WIDGET_OVERRIDES = "_pixlstash_widget_overrides"
+
+# A subgraph's two boundary nodes, as their definitions number them.
+_SUBGRAPH_INPUT_ID = -10
+_SUBGRAPH_OUTPUT_ID = -20
+
+
+class _Inliner:
+    """An editor graph with its subgraph instances expanded in place.
+
+    The result is an ordinary editor graph the converter already reads: each
+    active instance is replaced by its definition's nodes, keyed ``"75:61"``
+    the way ComfyUI numbers them in its own API export, and every wire that
+    crossed a subgraph boundary is re-pointed at what really feeds it. Reroutes,
+    bypassed and muted nodes and Get/Set pairs are left as nodes, because the
+    converter resolves those itself.
+
+    **Where an instance's own values go.** An instance carries one
+    ``widgets_values`` entry per definition input that feeds an inner widget,
+    in that input's slot order - measured on ComfyUI's 200 subgraph templates:
+    107 of 108 instances that carry values, 458 of 458 typed values lining up. Such a value wins
+    when the instance leaves the input unwired; a wire wins over it. An
+    instance with no values (one whose widgets are promoted, ``proxyWidgets``)
+    leaves the inner node's own value, which is where those are kept.
+    """
+
+    def __init__(self, workflow: dict):
+        self.definitions = _subgraph_definitions(workflow)
+        self.problems: list[str] = []
+        self.nodes: dict = {}
+        # (target key, target slot) -> (origin key, origin slot)
+        self.edges: dict = {}
+        self._flatten(workflow.get("nodes"), workflow.get("links"), "", 0)
+
+    @staticmethod
+    def _key(prefix: str, node_id):
+        return node_id if not prefix else f"{prefix}{node_id}"
+
+    def _flatten(self, node_list, links, prefix: str, depth: int) -> None:
+        if depth > _MAX_LINK_DEPTH:
+            self.problems.append("subgraphs nest deeper than PixlStash follows")
+            return
+        for node in node_list or ():
+            if not isinstance(node, dict) or node.get("id") is None:
+                continue
+            if node.get("id") in (_SUBGRAPH_INPUT_ID, _SUBGRAPH_OUTPUT_ID) and prefix:
+                continue
+            if len(self.nodes) >= _MAX_INLINED_NODES:
+                self.problems.append(
+                    f"expanding its subgraphs makes more than {_MAX_INLINED_NODES} nodes"
+                )
+                return
+            key = self._key(prefix, node["id"])
+            definition = self.definitions.get(str(node.get("type")))
+            active = (node.get("mode") or 0) not in (_MODE_MUTED, _MODE_BYPASSED)
+            if definition is None or not active:
+                # An inactive instance stays a node: the converter skips a
+                # muted one and splices a bypassed one through its own slots.
+                self.nodes[key] = {"node": node, "kind": "node"}
+                continue
+            self.nodes[key] = {
+                "node": node,
+                "kind": "instance",
+                "definition": definition,
+            }
+            inner = f"{key}:"
+            self._flatten(
+                definition.get("nodes"), definition.get("links"), inner, depth + 1
+            )
+            # After the definition's own nodes, so these two always win.
+            self.nodes[f"{inner}{_SUBGRAPH_INPUT_ID}"] = {
+                "kind": "boundary_in",
+                "instance": key,
+            }
+            self.nodes[f"{inner}{_SUBGRAPH_OUTPUT_ID}"] = {"kind": "boundary_out"}
+        for origin, origin_slot, target, target_slot in _normalized_ui_links(links):
+            self.edges[(self._key(prefix, target), target_slot)] = (
+                self._key(prefix, origin),
+                origin_slot,
+            )
+
+    @staticmethod
+    def _slot_by_name(entries, name) -> int | None:
+        for index, entry in enumerate(entries or ()):
+            if isinstance(entry, dict) and entry.get("name") == name:
+                return index
+        return None
+
+    def _instance_value(self, instance: dict, slot: int):
+        """``(True, value)`` the instance supplies for definition input *slot*."""
+        node, definition = instance["node"], instance["definition"]
+        values = node.get("widgets_values")
+        if not isinstance(values, list) or not values:
+            return False, None
+        feeding = sorted(self._widget_slots(definition))
+        if slot not in feeding:
+            return False, None
+        rank = feeding.index(slot)
+        if len(values) != len(feeding):
+            self.problems.append(
+                f"subgraph node {node.get('id')} carries {len(values)} values for "
+                f"{len(feeding)} widget inputs, so they cannot be matched up"
+            )
+            return False, None
+        return True, values[rank]
+
+    def _widget_slots(self, definition: dict) -> set[int]:
+        """Definition input slots that feed a widget of an inner node."""
+        inner = {
+            n.get("id"): n for n in definition.get("nodes") or () if isinstance(n, dict)
+        }
+        slots = set()
+        for origin, origin_slot, target, target_slot in _normalized_ui_links(
+            definition.get("links")
+        ):
+            if origin != _SUBGRAPH_INPUT_ID:
+                continue
+            inputs = (inner.get(target) or {}).get("inputs") or []
+            entry = inputs[target_slot] if 0 <= target_slot < len(inputs) else None
+            if isinstance(entry, dict) and entry.get("widget"):
+                slots.add(origin_slot)
+        return slots
+
+    def origin(self, key, slot: int, depth: int = 0):
+        """What really feeds output *slot* of *key*.
+
+        ``("node", key, slot)``, ``("value", v)`` for an instance's own value,
+        or ``None`` when nothing does.
+        """
+        if depth > _MAX_LINK_DEPTH:
+            self.problems.append("a wire runs in a circle through subgraphs")
+            return None
+        entry = self.nodes.get(key)
+        if entry is None:
+            return None
+        if entry["kind"] == "boundary_in":
+            instance = self.nodes[entry["instance"]]
+            definition_inputs = instance["definition"].get("inputs") or []
+            name = (
+                definition_inputs[slot].get("name")
+                if 0 <= slot < len(definition_inputs)
+                and isinstance(definition_inputs[slot], dict)
+                else None
+            )
+            outer_slot = self._slot_by_name(instance["node"].get("inputs"), name)
+            edge = (
+                self.edges.get((entry["instance"], outer_slot))
+                if outer_slot is not None
+                else None
+            )
+            if edge is not None:
+                found = self.origin(*edge, depth + 1)
+                if found is not None:
+                    return found
+            has, value = self._instance_value(instance, slot)
+            return ("value", value) if has else None
+        if entry["kind"] == "instance":
+            outputs = entry["node"].get("outputs") or []
+            name = (
+                outputs[slot].get("name")
+                if 0 <= slot < len(outputs) and isinstance(outputs[slot], dict)
+                else None
+            )
+            inner_slot = self._slot_by_name(entry["definition"].get("outputs"), name)
+            if inner_slot is None:
+                return None
+            edge = self.edges.get((f"{key}:{_SUBGRAPH_OUTPUT_ID}", inner_slot))
+            return self.origin(*edge, depth + 1) if edge else None
+        if entry["kind"] == "boundary_out":
+            return None
+        return ("node", key, slot)
+
+    def run(self) -> dict:
+        nodes, links = [], []
+        for key, entry in self.nodes.items():
+            if entry["kind"] != "node":
+                continue
+            node = dict(entry["node"], id=key)
+            overrides = {}
+            inputs = []
+            for target_slot, slot_entry in enumerate(node.get("inputs") or []):
+                if not isinstance(slot_entry, dict):
+                    inputs.append(slot_entry)
+                    continue
+                slot_entry = dict(slot_entry, link=None)
+                edge = self.edges.get((key, target_slot))
+                found = self.origin(*edge) if edge else None
+                if found and found[0] == "node":
+                    link_id = len(links) + 1
+                    links.append(
+                        [
+                            link_id,
+                            found[1],
+                            found[2],
+                            key,
+                            target_slot,
+                            slot_entry.get("type"),
+                        ]
+                    )
+                    slot_entry["link"] = link_id
+                elif found and found[0] == "value":
+                    widget = slot_entry.get("widget") or {}
+                    overrides[str(widget.get("name") or slot_entry.get("name"))] = (
+                        found[1]
+                    )
+                inputs.append(slot_entry)
+            node["inputs"] = inputs
+            if overrides:
+                node[_WIDGET_OVERRIDES] = overrides
+            nodes.append(node)
+        return {"nodes": nodes, "links": links}
+
+
+def inline_subgraphs(workflow: dict) -> tuple[dict | None, list[str]]:
+    """*workflow* with its subgraphs expanded, or the problems that stop it.
+
+    A graph without subgraph definitions is returned as it is.
+    """
+    if not (workflow.get("definitions") or {}).get("subgraphs"):
+        return workflow, []
+    inliner = _Inliner(workflow)
+    for key, entry in inliner.nodes.items():
+        node_type = str((entry.get("node") or {}).get("type") or "")
+        if (
+            entry["kind"] == "node"
+            and len(node_type) == 36
+            and node_type.count("-") == 4
+            and (entry["node"].get("mode") or 0) not in (_MODE_MUTED, _MODE_BYPASSED)
+        ):
+            inliner.problems.append(
+                f"node {key} is a subgraph whose definition is not in the file"
+            )
+    flat = inliner.run()
+    if inliner.problems:
+        return None, inliner.problems
+    return dict(workflow, nodes=flat["nodes"], links=flat["links"], definitions={}), []
 
 
 def _index_links(workflow: dict) -> dict[object, tuple[object, int]]:
@@ -353,6 +600,7 @@ class _Converter:
             if isinstance(entry, dict)
         }
         widget_values = node.get("widgets_values")
+        overrides = node.get(_WIDGET_OVERRIDES) or {}
         by_name = isinstance(widget_values, dict)
         positional = widget_values if isinstance(widget_values, list) else []
         where = f"{node_class} (node {node.get('id')})"
@@ -391,11 +639,15 @@ class _Converter:
             if not is_widget:
                 continue
             if by_name:
-                if name in widget_values:
+                if name in overrides:
+                    inputs[name] = overrides[name]
+                elif name in widget_values:
                     inputs[name] = widget_values[name]
                 continue
             if consumed < len(positional):
-                value = positional[consumed]
+                # The slot is consumed either way; an instance's own value
+                # replaces the default the definition keeps there.
+                value = overrides.get(name, positional[consumed])
                 holds = (
                     _TYPE_HOLDS.get(type_field) if isinstance(type_field, str) else None
                 )
@@ -411,7 +663,9 @@ class _Converter:
         if by_name:
             declared_names = {name for name, _t, _o, _r in declared}
             unknown = sorted(k for k in widget_values if k not in declared_names)
-            missing = sorted(widget_names - set(widget_values) - set(connected))
+            missing = sorted(
+                widget_names - set(widget_values) - set(connected) - set(overrides)
+            )
             if unknown:
                 self.problems.append(
                     f"{where} carries a widget value for "
@@ -483,21 +737,16 @@ def convert_ui_graph_to_api(workflow, object_info) -> tuple[dict | None, list[st
         return None, ["this is not a ComfyUI editor graph"]
     if not isinstance(object_info, dict) or not object_info:
         return None, [NO_OBJECT_INFO]
-    # Refused by name rather than by its symptom. A subgraph instance's class
-    # is the definition's uuid, so without this the report would be "this
-    # ComfyUI has no node class '6e0f8...'", which tells the reader nothing.
-    # Inlining them is `reduce_ui_graph`'s job and it reduces for a hash, not
-    # for a run.
-    # ponytail: subgraphs and the deprecated `PrimitiveNode` are the two things
-    # this refuses that the editor can resolve; expand them here if real
-    # pictures turn out to carry them. `PrimitiveNode` is refused only as an
+    # Subgraphs are expanded first, into the ordinary editor graph the
+    # converter reads (`_Inliner`); a definition missing from the file, or
+    # values that cannot be matched to inputs, is refused by name.
+    # ponytail: the deprecated `PrimitiveNode` is still refused, as an
     # undeclared class ("this ComfyUI has no node class 'PrimitiveNode'"),
     # which is true and is the reason a reader gets.
     try:
-        if (workflow.get("definitions") or {}).get("subgraphs"):
-            return None, [
-                "this editor graph uses subgraphs, which PixlStash cannot run"
-            ]
+        workflow, problems = inline_subgraphs(workflow)
+        if problems:
+            return None, problems
         converter = _Converter(workflow, object_info)
         prompt = converter.run()
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
