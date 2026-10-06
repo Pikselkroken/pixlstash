@@ -8,8 +8,10 @@ model to fp32 in place for its backward pass, so a batch running at that moment
 met fp32 weights. Running it here, on the single GPU worker, serialises it with
 everything else that touches the device or the model.
 
-It runs at ``URGENT`` priority, so it waits only for the task the worker is
-already running.
+It runs at ``URGENT`` priority, so it skips background batches and waits for
+the task the worker is running plus any interactive work queued before it
+(an interactive retag is ``URGENT`` too, and the queue is FIFO within a
+priority).
 """
 
 from __future__ import annotations

@@ -507,10 +507,12 @@ runs Grad-CAM, which casts the shared model to fp32 and back around a forward
 and backward pass. It used to do both on its request thread. Both now run in an
 `AnomalyRegionTask` (`tasks/anomaly_region_task.py`) on the GPU queue at
 `URGENT` priority, which the route waits on with `submit_and_wait`; the request
-thread only checks the cache, finds the file and decodes it. The task waits only
-for the batch the worker is already running, and the route answers 503 if it is
-not reached within 120 s. Before the move, the route's work beside tag batches
-failed 10 of 10 on an M1 (see "Measured in PixlStash").
+thread only checks the cache, finds the file and decodes it. The task skips
+background batches but waits for the task the worker is running and for any
+interactive work queued before it (an interactive retag is `URGENT` too), and
+the route answers 503 if it is not reached within 120 s. Before the move, the
+route's work beside tag batches failed 10 of 10 on an M1 (see "Measured in
+PixlStash").
 
 This is not Metal-only. The cast is in place on the shared model, so on any
 host a tag batch on the worker beside it would have met fp32 weights (the CPU

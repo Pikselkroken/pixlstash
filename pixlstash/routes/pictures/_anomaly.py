@@ -42,8 +42,9 @@ _ANOMALY_REGION_CACHE_MAX = 512
 _anomaly_region_cache: "OrderedDict[tuple, dict]" = OrderedDict()
 _anomaly_region_cache_lock = threading.Lock()
 
-# How long a request waits for its task: the GPU batch already running, then a
-# tagger load if it was idle-unloaded, then the Grad-CAM pass itself.
+# How long a request waits for its task: the GPU task already running and any
+# interactive work queued ahead of it, then a tagger load if it was
+# idle-unloaded, then the Grad-CAM pass itself.
 _ANOMALY_REGION_TIMEOUT_S = 120.0
 
 
