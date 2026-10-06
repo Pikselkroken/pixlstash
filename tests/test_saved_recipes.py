@@ -1440,6 +1440,43 @@ def test_a_look_names_a_cover_picture_to_read_its_strengths_back_from(recipe_env
     assert "a_binned.png" not in covers, covers
 
 
+def test_a_manual_workflows_runs_are_its_looks_whatever_their_graph(recipe_env):
+    """A run's repairs (a dropped Seed node, a bypassed LoRA) give its output a
+    topology the manual workflow does not hold, so matching by topology left
+    the run out of the tab while the card counted it. Filing is by
+    ``run_workflow_id``, and exclusive: the automatic workflow whose variant
+    the output landed on no longer shows it."""
+    manual = create_manual_workflow(
+        recipe_env.server.hub, "Mine", {"1": {"class_type": "X"}}, "import"
+    )
+
+    def write(session):
+        session.add(
+            Picture(
+                file_path="run.png",
+                created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                workflow_structural_hash=VARIANT_C,
+                workflow_hash_version="v1",
+                run_workflow_id=manual,
+                comfyui_positive_prompt=OTHER_PROMPT,
+                comfyui_loras=json.dumps([]),
+                comfyui_models=json.dumps([]),
+            )
+        )
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+    looks = _used(recipe_env.owner, manual)
+    assert [(look["prompt"], look["pictures"]) for look in looks] == [(OTHER_PROMPT, 1)]
+    assert OTHER_PROMPT not in [
+        look["prompt"] for look in _used(recipe_env.owner, WF_C)
+    ]
+    saved = _save(recipe_env.owner, manual, prompt=OTHER_PROMPT, loras=[])
+    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": manual})
+    assert [(r["id"], r["pictures"]) for r in listed.json()] == [(saved["id"], 1)]
+
+
 def test_used_looks_need_a_workflow_and_answer_empty_without_one(recipe_env):
     """No key is no question: this route never lists the whole library.
 
