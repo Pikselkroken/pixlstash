@@ -1595,8 +1595,8 @@ const CHOICE_REASK_MS = 300;
 
 function setValue(field, value) {
   const key = address(field);
-  // Not a value: the field goes back to what it started at rather than
-  // recording a zero nobody typed.
+  // Not a value: the field runs at what it started at rather than recording
+  // a zero nobody typed (its box may still show the draft; see typeValue).
   if (value === undefined || value === baseOf(field)) {
     delete edits[key];
     delete editedLabels[key];
