@@ -1473,6 +1473,8 @@ def fetch_workflow_sets(hub, vault) -> dict:
         ``hub_combinations`` is every combination some recipe names,
         before the "a picture here" cut, so it holds every library's recipes
         and no run-only combination; only the merge offer reads it.
+        ``recipe_models`` is each recipe's resolved model ids, which only the
+        sets' check reads (:mod:`pixlstash.services.workflow_set_verdicts`).
     """
     index = recipe_asset_index(hub)
     recipe_models, ambiguous, unresolved, namesakes = resolve_recipe_models(hub, index)
@@ -1637,6 +1639,10 @@ def fetch_workflow_sets(hub, vault) -> dict:
         # Recipe combinations only: the offer is worded in pictures and
         # recipes, and a run-only one would read "0 recipes need N more".
         "hub_combinations": [c for c in every if c["recipes"]],
+        # Each recipe's resolved models, model fixes applied, so the sets'
+        # check (`workflow_set_verdicts.fetch_set_checks`) reads the very
+        # co-occurrence the grid was drawn from. Not served.
+        "recipe_models": recipe_models,
         # Engines are left out, and that is the honesty rule rather than an
         # exception to it. `no_set` means "nothing here has been made with
         # these", which is a statement a reader can act on for a checkpoint and

@@ -77,6 +77,17 @@
       </div>
     </div>
 
+    <!-- PixlStash's check of this set's pictures and the owner's verdicts, from
+         its on-shelf members. No plain sentence: a hand-made set claims nothing
+         about co-occurrence. -->
+    <SetVerdictNotes
+      ref="notes"
+      :check="check"
+      :members="verdictMembers"
+      :save-set="saveSet"
+      :save-member="saveMember"
+    />
+
     <div
       v-if="incomplete"
       class="msp__note mss__warn"
@@ -304,6 +315,17 @@
                   aria-hidden="true"
                   >{{ item.member.base_model }}</span
                 >
+                <!-- Off the tab order like the remove button beside it: the
+                     grid's cursor owns Tab. -->
+                <VerdictIcon
+                  v-if="memberVerdict(item.member)"
+                  interactive
+                  tabindex="-1"
+                  :data-verdict-member="item.member.id"
+                  :verdict="memberVerdict(item.member)"
+                  :label="memberVerdictLabel(item.member)"
+                  @click="notes?.reopenMember(item.member.id)"
+                />
                 <AppButton
                   class="mss__remove"
                   variant="ghost"
@@ -407,6 +429,7 @@ import { VIcon } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { modelFileTitle, quantBadge } from "../../utils/modelShelf";
+import { memberVerdictOf, memberVerdictText } from "../../utils/setVerdicts";
 import {
   fitsSlot,
   offerQuestion,
@@ -418,6 +441,8 @@ import AppButton from "../widgets/AppButton.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import VerdictIcon from "../widgets/VerdictIcon.vue";
+import SetVerdictNotes from "./SetVerdictNotes.vue";
 
 const props = defineProps({
   panelId: { type: String, required: true },
@@ -453,6 +478,12 @@ const props = defineProps({
    * then no slot takes it either, as its card does not.
    */
   dragRefused: { type: String, default: "" },
+  /** This set's `set_checks` entry, or null when none was served. */
+  check: { type: Object, default: null },
+  /** `(verdict) => Promise`: record the set's verdict; rejects on failure. */
+  saveSet: { type: Function, default: async () => {} },
+  /** `(modelId, verdict) => Promise`: the same for one member. */
+  saveMember: { type: Function, default: async () => {} },
 });
 
 const emit = defineEmits([
@@ -494,6 +525,21 @@ function onSlotDrop(slot) {
 }
 
 const slots = computed(() => setSlots(props.set));
+
+const notes = ref(null);
+
+/** The on-shelf members, by the names the notes use. */
+const verdictMembers = computed(() =>
+  (props.set.members ?? []).filter((m) => m.on_shelf && m.id != null),
+);
+
+function memberVerdict(member) {
+  return memberVerdictOf(props.check, member.id);
+}
+
+function memberVerdictLabel(member) {
+  return `Your verdict: ${memberVerdictText(memberVerdict(member), member.name)}`;
+}
 
 /** The offer's field, starting from the shelf's own guess when it has one. */
 const baseValue = ref("");

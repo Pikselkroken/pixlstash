@@ -17,6 +17,8 @@ import {
   deleteWorkflowSet,
   editModels,
   fetchWorkflowSets,
+  putSetVerdict,
+  putMemberVerdict,
   forgetModels,
   listAdapters,
   listBaseModelCompletions,
@@ -62,6 +64,7 @@ import {
   setGroups,
   worksWith,
 } from "../utils/workflowSets";
+import { checksByKey, comboKey } from "../utils/setVerdicts";
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -1600,7 +1603,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   // row list: `fetchRows` runs on every `Show` checkbox and this one is a window
   // over every kept picture in the vault. Fetched once when something needs it
   // and again after a scan, never per filter tick.
-  const workflowSets = ref({ combinations: [], noSet: [], handMade: [] });
+  const workflowSets = ref({
+    combinations: [],
+    noSet: [],
+    handMade: [],
+    setChecks: [],
+  });
   const setsLoading = ref(false);
   const setsError = ref("");
   const setsLoaded = ref(false);
@@ -1660,6 +1668,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         combinations: body.combinations,
         noSet: body.no_set,
         handMade: body.hand_made ?? [],
+        setChecks: body.set_checks ?? [],
       };
       setsLoaded.value = true;
     } catch (err) {
@@ -1726,12 +1735,56 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setGroups(visibleCombinations.value).map((group) => ({
       ...group,
       hidden: hiddenSetKeys.value.has(group.key),
+      check: checkOf(group.models),
       card: {
         ...setCard(group),
         hidden: hiddenSetKeys.value.has(group.key),
+        // The owner's word only; PixlStash's check never reaches the card.
+        verdict: checkOf(group.models)?.verdict ?? null,
       },
     })),
   );
+
+  // ── The owner's verdicts (docs/ideas/workflow-set-verdicts.md) ───────────
+
+  const checkIndex = computed(() => checksByKey(workflowSets.value.setChecks));
+
+  /** The `set_checks` entry for exactly these members, or null (none served). */
+  function checkOf(models) {
+    return checkIndex.value.get(comboKey(models.map((m) => m.id))) ?? null;
+  }
+
+  function patchCheck(key, patch) {
+    workflowSets.value = {
+      ...workflowSets.value,
+      setChecks: workflowSets.value.setChecks.map((entry) =>
+        entry.combo_key === key ? patch(entry) : entry,
+      ),
+    };
+  }
+
+  /** Record (or clear, with null) the owner's verdict on a whole set. */
+  async function answerSetVerdict(key, verdict) {
+    await putSetVerdict(key, verdict);
+    patchCheck(key, (entry) => ({ ...entry, verdict }));
+  }
+
+  /** Record the owner's verdict on one member of the set `key` names. */
+  async function answerMemberVerdict(key, modelId, verdict) {
+    await putMemberVerdict(key, modelId, verdict);
+    patchCheck(key, (entry) => ({
+      ...entry,
+      suspects: entry.suspects.map((s) =>
+        s.model_id === modelId ? { ...s, verdict } : s,
+      ),
+      member_verdicts: [
+        ...entry.member_verdicts.filter((m) => m.model_id !== modelId),
+        { model_id: modelId, verdict },
+      ],
+    }));
+    // The model's own row wears the mark, and the rows came from another route.
+    fetchRows();
+  }
 
   /** The evidence cards drawn: the hidden ones only while Show hidden is on. */
   const setGroupList = computed(() =>
@@ -1894,13 +1947,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return handMadeName(withShelfNames(set));
   }
   const handMadeGroups = computed(() =>
-    handMadeSets.value.map((set) => ({
-      key: `hand:${set.id}`,
-      set,
-      head: null,
-      models: (set.members ?? []).filter((m) => m.on_shelf && m.id != null),
-      card: handMadeCard(set),
-    })),
+    handMadeSets.value.map((set) => {
+      const models = (set.members ?? []).filter(
+        (m) => m.on_shelf && m.id != null,
+      );
+      const check = checkOf(models);
+      return {
+        key: `hand:${set.id}`,
+        set,
+        head: null,
+        models,
+        check,
+        card: { ...handMadeCard(set), verdict: check?.verdict ?? null },
+      };
+    }),
   );
 
   /**
@@ -3673,7 +3733,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // derived from this machine's models and this library's pictures, and the
     // credential that could read both has just changed.
     setsEpoch += 1;
-    workflowSets.value = { combinations: [], noSet: [], handMade: [] };
+    workflowSets.value = {
+      combinations: [],
+      noSet: [],
+      handMade: [],
+      setChecks: [],
+    };
     setsLoaded.value = false;
     setsLoading.value = false;
     setsError.value = "";
@@ -3745,6 +3810,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     visibleRows,
     groups,
     workflowSets,
+    answerSetVerdict,
+    answerMemberVerdict,
     setsLoading,
     setsError,
     setsLoaded,

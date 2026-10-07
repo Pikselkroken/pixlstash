@@ -138,6 +138,13 @@ from pixlstash.services.model_workflow_sets import (
     rename_set,
     set_declines,
 )
+from pixlstash.services.workflow_set_verdicts import (
+    VerdictTargetError,
+    fetch_model_marks,
+    fetch_set_checks,
+    write_member_verdict,
+    write_set_verdict,
+)
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
@@ -251,6 +258,19 @@ class ModelAttachmentRequest(ModelAttachment):
 # data (one adapter used by a handful of characters or sets) and far below a
 # list long enough to hold the write path.
 MAX_ATTACHMENTS_PER_MODEL = 200
+
+
+class ModelSetVerdictMark(BaseModel):
+    """The owner's answer about one model in one workflow set, for its card."""
+
+    combo_key: str = Field(description="The set: its sorted member ids.")
+    names: list[str] = Field(
+        description=(
+            "The set's members in the shelf's names, base model first. A "
+            "member no longer on the shelf is left out."
+        )
+    )
+    verdict: Literal["problem", "not_problem"]
 
 
 class ModelResponse(BaseModel):
@@ -473,6 +493,15 @@ class ModelResponse(BaseModel):
             "filename. Unverified: a file of that name, not necessarily this "
             "one. Never folded into `pictures_verified`, and a picture counted "
             "there is not counted here."
+        ),
+    )
+    set_verdicts: list[ModelSetVerdictMark] = Field(
+        default_factory=list,
+        description=(
+            'The owner\'s answers to "is this model a problem in this set", '
+            "one per workflow set answered about (`PUT /models/workflow-sets/"
+            "verdicts/{combo_key}/members/{model_id}`). The owner's word only, "
+            "never PixlStash's check; empty when nobody has answered."
         ),
     )
     locations: list[ModelLocation] = Field(
@@ -1062,6 +1091,47 @@ class WorkflowSetDeclinesResponse(BaseModel):
     previous: list[str] = Field(description="The list before; putting it undoes.")
 
 
+class SetVerdictRequest(BaseModel):
+    """Body of ``PUT /models/workflow-sets/verdicts/{combo_key}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: Literal["yes", "no"]
+
+
+class SetVerdictResponse(BaseModel):
+    """Body of the set-verdict PUT and DELETE."""
+
+    combo_key: str
+    verdict: Optional[Literal["yes", "no"]] = Field(
+        description="As stored now; null after a DELETE."
+    )
+    previous: Optional[Literal["yes", "no"]] = Field(
+        description="The verdict before; writing it back (or deleting) undoes."
+    )
+
+
+class MemberVerdictRequest(BaseModel):
+    """Body of ``PUT /models/workflow-sets/verdicts/{combo_key}/members/{model_id}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: Literal["problem", "not_problem"]
+
+
+class MemberVerdictResponse(BaseModel):
+    """Body of the member-verdict PUT and DELETE."""
+
+    combo_key: str
+    model_id: int
+    verdict: Optional[Literal["problem", "not_problem"]] = Field(
+        description="As stored now; null after a DELETE."
+    )
+    previous: Optional[Literal["problem", "not_problem"]] = Field(
+        description="The verdict before; writing it back (or deleting) undoes."
+    )
+
+
 class RemovedWorkflowSetMember(BaseModel):
     """What a remove took out, shaped for putting it back."""
 
@@ -1092,6 +1162,88 @@ class WorkflowSetRemoveResponse(BaseModel):
 
     set: HandMadeSet
     removed: list[RemovedWorkflowSetMember]
+
+
+class WorkflowSetEvidence(BaseModel):
+    """What PixlStash's check counted for one set."""
+
+    together: int = Field(
+        description=(
+            "Kept pictures in the active library whose recipe used EVERY "
+            "member together (the recipe may have used more)."
+        )
+    )
+    checked: int = Field(
+        description="Of those, the ones with a prompt-match score (not unscored, not -1)."
+    )
+    passing: int = Field(
+        description="Of the checked, the ones that look like their prompt at all."
+    )
+
+
+class WorkflowSetSuspect(BaseModel):
+    """A member whose pictures fail the check far more often than the set's without it."""
+
+    model_id: int
+    with_failed: int = Field(
+        description="Checked pictures made with the whole set that fail the check."
+    )
+    with_total: int = Field(
+        description="Checked pictures made with the whole set (= `evidence.checked`)."
+    )
+    without_failed: int = Field(
+        description="Checked pictures with every other member but not this one that fail."
+    )
+    without_total: int = Field(
+        description="Checked pictures with every other member but not this one."
+    )
+    verdict: Optional[Literal["problem", "not_problem"]] = Field(
+        default=None, description="The owner's answer, null while unanswered."
+    )
+
+
+class WorkflowSetMemberVerdict(BaseModel):
+    """The owner's answer about one member of a set, suspect or not."""
+
+    model_id: int
+    verdict: Literal["problem", "not_problem"]
+
+
+class WorkflowSetCheck(BaseModel):
+    """PixlStash's check and the owner's verdicts for one set of members."""
+
+    combo_key: str = Field(
+        description=(
+            "The sorted member model ids, comma-joined. The join key: a client "
+            "computes it from the members it draws and looks the set up here. "
+            "A verdict belongs to this exact key."
+        )
+    )
+    member_ids: list[int]
+    evidence: WorkflowSetEvidence
+    check: Literal["none", "pending", "too_few", "pass", "fail", "unavailable"] = Field(
+        description=(
+            "`none`: no picture used them all. `pending`: some are still to be "
+            "scored. `unavailable`: none is scored and none will be (no "
+            "scorer running, or no prompt). `too_few`: fewer than 3 checked. "
+            "`pass` / `fail`: at least half of the checked look like their "
+            "prompt, or fewer than half."
+        )
+    )
+    verdict: Optional[Literal["yes", "no"]] = Field(
+        default=None,
+        description='The owner\'s answer to "does this set produce sensible output".',
+    )
+    suspects: list[WorkflowSetSuspect] = Field(
+        default_factory=list, description="Strongest first."
+    )
+    member_verdicts: list[WorkflowSetMemberVerdict] = Field(
+        default_factory=list,
+        description=(
+            "Every member answered about, suspect today or not: an answer is "
+            "never dropped because the counts moved."
+        ),
+    )
 
 
 class WorkflowSetsResponse(BaseModel):
@@ -1125,6 +1277,15 @@ class WorkflowSetsResponse(BaseModel):
     hand_made: list[HandMadeSet] = Field(
         default_factory=list,
         description="The owner's own workflow sets, newest first.",
+    )
+    set_checks: list[WorkflowSetCheck] = Field(
+        default_factory=list,
+        description=(
+            "PixlStash's check and the owner's verdicts for every set the grid "
+            "draws: one per evidence card (the union of the members of the "
+            "uncovered combinations sharing a head) and one per hand-made set "
+            "(its on-shelf members), deduplicated by `combo_key`."
+        ),
     )
 
 
@@ -1274,6 +1435,7 @@ def _to_response(
     attachments: dict[str, list[dict]],
     capabilities: dict[int, list[str]],
     picture_counts: dict[int, dict[str, int]],
+    marks: dict[int, list[dict]],
 ) -> ModelResponse:
     counts = picture_counts.get(int(row["id"]), {})
     return ModelResponse(
@@ -1315,6 +1477,9 @@ def _to_response(
         capabilities=capabilities.get(int(row["id"]), []),
         pictures_verified=counts.get("verified", 0),
         pictures_by_filename=counts.get("by_filename", 0),
+        set_verdicts=[
+            ModelSetVerdictMark(**mark) for mark in marks.get(int(row["id"]), [])
+        ],
     )
 
 
@@ -1376,8 +1541,11 @@ def create_router(server) -> APIRouter:
         attachments = fetch_attachments(server.vault)
         capabilities = fetch_capabilities(server.hub)
         picture_counts = fetch_picture_counts(server.hub, server.vault)
+        marks = fetch_model_marks(server.hub)
         return [
-            _to_response(row, locations, attachments, capabilities, picture_counts)
+            _to_response(
+                row, locations, attachments, capabilities, picture_counts, marks
+            )
             for row in rows
         ]
 
@@ -1489,6 +1657,7 @@ def create_router(server) -> APIRouter:
             fetch_attachments(server.vault, sha256=sha256),
             fetch_capabilities(server.hub, int(row["id"])),
             fetch_picture_counts(server.hub, server.vault),
+            fetch_model_marks(server.hub),
         )
 
     @router.get(
@@ -1958,6 +2127,7 @@ def create_router(server) -> APIRouter:
     def list_workflow_sets(request: Request):
         server.auth.ensure_secure_when_required(request)
         found = _workflow_sets()
+        checks = fetch_set_checks(server.hub, server.vault, found)
         return WorkflowSetsResponse(
             combinations=[
                 WorkflowSetCombination(
@@ -1979,6 +2149,7 @@ def create_router(server) -> APIRouter:
             ],
             no_set=found["no_set"],
             hand_made=[_hand_made_set(entry) for entry in found["hand_made"]],
+            set_checks=[WorkflowSetCheck(**check) for check in checks],
         )
 
     def _workflow_sets() -> dict:
@@ -2112,6 +2283,101 @@ def create_router(server) -> APIRouter:
         with _workflow_set_errors():
             previous = set_declines(server.hub, set_id, payload.sha256)
         return WorkflowSetDeclinesResponse(set=_one_set(set_id), previous=previous)
+
+    @contextmanager
+    def _verdict_errors():
+        try:
+            yield
+        except ValueError as exc:
+            logger.info("Workflow set verdict refused (422): %s", exc)
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except VerdictTargetError as exc:
+            logger.info("Workflow set verdict answered 404: %s", exc)
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    _VERDICT_NOTE = (
+        "**The owner's word, never PixlStash's check**, and a mark only: it "
+        "changes nothing else. It belongs to the exact combination "
+        "`combo_key` names (the sorted member model ids, comma-joined, as "
+        "`GET /models/workflow-sets` serves it under `set_checks`); a set "
+        "whose members change has a different key and so no verdict, and "
+        "nothing clears one when the check later changes. Every id must be on "
+        "the shelf (404). Returns the answer it replaced as `previous`, so "
+        "writing that back undoes the call."
+    )
+
+    @router.put(
+        "/models/workflow-sets/verdicts/{combo_key}",
+        summary="Record the owner's verdict on a workflow set",
+        description="Does this set produce sensible output: `yes` or `no`. "
+        + _VERDICT_NOTE,
+        tags=["model_shelf"],
+        response_model=SetVerdictResponse,
+    )
+    def put_set_verdict(
+        combo_key: str, request: Request, payload: SetVerdictRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _verdict_errors():
+            previous = write_set_verdict(server.hub, combo_key, payload.verdict)
+        return SetVerdictResponse(
+            combo_key=combo_key, verdict=payload.verdict, previous=previous
+        )
+
+    @router.delete(
+        "/models/workflow-sets/verdicts/{combo_key}",
+        summary="Clear the owner's verdict on a workflow set",
+        description="Back to unanswered. " + _VERDICT_NOTE,
+        tags=["model_shelf"],
+        response_model=SetVerdictResponse,
+    )
+    def delete_set_verdict(combo_key: str, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        with _verdict_errors():
+            previous = write_set_verdict(server.hub, combo_key, None)
+        return SetVerdictResponse(combo_key=combo_key, verdict=None, previous=previous)
+
+    @router.put(
+        "/models/workflow-sets/verdicts/{combo_key}/members/{model_id}",
+        summary="Record whether a member is a problem in a workflow set",
+        description="`problem` or `not_problem`; `model_id` must be one of "
+        "the key's ids (404). Also marks the model's own shelf row "
+        "(`set_verdicts`). " + _VERDICT_NOTE,
+        tags=["model_shelf"],
+        response_model=MemberVerdictResponse,
+    )
+    def put_member_verdict(
+        combo_key: str,
+        model_id: int,
+        request: Request,
+        payload: MemberVerdictRequest = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _verdict_errors():
+            previous = write_member_verdict(
+                server.hub, combo_key, model_id, payload.verdict
+            )
+        return MemberVerdictResponse(
+            combo_key=combo_key,
+            model_id=model_id,
+            verdict=payload.verdict,
+            previous=previous,
+        )
+
+    @router.delete(
+        "/models/workflow-sets/verdicts/{combo_key}/members/{model_id}",
+        summary="Clear whether a member is a problem in a workflow set",
+        description="Back to unanswered. " + _VERDICT_NOTE,
+        tags=["model_shelf"],
+        response_model=MemberVerdictResponse,
+    )
+    def delete_member_verdict(combo_key: str, model_id: int, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        with _verdict_errors():
+            previous = write_member_verdict(server.hub, combo_key, model_id, None)
+        return MemberVerdictResponse(
+            combo_key=combo_key, model_id=model_id, verdict=None, previous=previous
+        )
 
     @router.post(
         "/models/{model_id}/open-location",

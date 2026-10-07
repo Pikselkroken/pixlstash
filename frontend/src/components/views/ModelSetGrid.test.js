@@ -31,6 +31,7 @@ const addWorkflowSetMembers = vi.fn();
 const removeWorkflowSetMembers = vi.fn();
 const renameWorkflowSet = vi.fn();
 const setWorkflowSetDeclines = vi.fn();
+const putSetVerdict = vi.fn();
 // One double per result set, like the store's own suite: `/adapters` is ONE
 // route serving five `file_kind`s, and a single mock would answer the engines
 // and support requests with the same rows and make the shelf look duplicated.
@@ -58,6 +59,8 @@ vi.mock("../../api/modelShelf", () => ({
   removeWorkflowSetMembers: (...args) => removeWorkflowSetMembers(...args),
   renameWorkflowSet: (...args) => renameWorkflowSet(...args),
   setWorkflowSetDeclines: (...args) => setWorkflowSetDeclines(...args),
+  putSetVerdict: (...args) => putSetVerdict(...args),
+  putMemberVerdict: vi.fn(),
 }));
 
 const getWorkflowCard = vi.fn();
@@ -153,6 +156,7 @@ async function mountGrid({
   rows = [],
   support = [],
   handMade = [],
+  setChecks = [],
   attach = false,
 } = {}) {
   listAdapters.mockResolvedValue(rows);
@@ -161,6 +165,7 @@ async function mountGrid({
     combinations,
     no_set: noSet,
     hand_made: handMade,
+    set_checks: setChecks,
   });
   const store = useModelShelfStore();
   await store.fetchRows();
@@ -180,6 +185,7 @@ beforeEach(() => {
   removeWorkflowSetMembers.mockReset();
   renameWorkflowSet.mockReset();
   setWorkflowSetDeclines.mockReset();
+  putSetVerdict.mockReset().mockResolvedValue({});
   setActivePinia(createPinia());
   // The grid is mounted without the shelf, which is what declares the host.
   useOperationStore().setLocalReceiptHost(true);
@@ -3165,5 +3171,167 @@ describe("hiding a set from pictures", () => {
     await wrapper.find('[data-testid="set-hide"]').trigger("click");
     expect(card.classes()).not.toContain("msc--hidden");
     wrapper.unmount();
+  });
+});
+
+describe("ModelSetGrid owner verdicts", () => {
+  const entry = (extra = {}) => ({
+    combo_key: "1,2",
+    member_ids: [1, 2],
+    evidence: { together: 6, checked: 5, passing: 4 },
+    check: "pass",
+    verdict: null,
+    suspects: [],
+    member_verdicts: [],
+    ...extra,
+  });
+  const base = {
+    rows: [row(1, "realvisXL_v5")],
+    support: [row(2, "sdxl_vae", "vae")],
+    combinations: [combination("1,2", [CKPT, VAE])],
+  };
+
+  it("draws the owner's verdict on the card, joined by combo key", async () => {
+    const { wrapper } = await mountGrid({
+      ...base,
+      setChecks: [entry({ verdict: "no" })],
+    });
+    const icon = wrapper.get(
+      '[data-testid="model-set-card"] [data-testid="verdict-icon"]',
+    );
+    expect(icon.attributes("aria-label")).toBe(
+      "Your verdict: this set does not produce sensible output",
+    );
+  });
+
+  it("never draws PixlStash's check on the card, only an answer", async () => {
+    const { wrapper } = await mountGrid({ ...base, setChecks: [entry()] });
+    expect(wrapper.find('[data-testid="verdict-icon"]').exists()).toBe(false);
+  });
+
+  it("draws no check or verdict UI when no entry matches the union", async () => {
+    const { wrapper, store } = await mountGrid({
+      ...base,
+      setChecks: [entry({ combo_key: "1,9", verdict: "yes" })],
+    });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="verdict-icon"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="verdict-ask"]').exists()).toBe(false);
+    expect(wrapper.get(".msp__note").text()).toContain(
+      "not necessarily run with",
+    );
+  });
+
+  it("PUTs the answer under the set's combo key and then shows the icon", async () => {
+    const { wrapper, store } = await mountGrid({
+      ...base,
+      setChecks: [entry()],
+    });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-testid="verdict-yes"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    expect(putSetVerdict).toHaveBeenCalledWith("1,2", "yes");
+    const icon = wrapper.get('.msp [data-testid="verdict-icon"]');
+    expect(icon.attributes("aria-label")).toContain(
+      "Your verdict: this set produces sensible output",
+    );
+  });
+
+  const handMember = (id, name, slot) => ({
+    sha256: String(id).repeat(64).slice(0, 64),
+    slot,
+    label: name,
+    on_shelf: true,
+    id,
+    name,
+    filename: name,
+    kind: slot,
+    base_model: "SDXL",
+    file_size: 1000,
+  });
+  const handBase = {
+    rows: [row(1, "realvisXL_v5", "checkpoint")],
+    support: [row(2, "sdxl_vae", "vae")],
+    handMade: [
+      {
+        id: 10,
+        name: null,
+        created_at: "2026-09-26T08:00:00Z",
+        updated_at: "2026-09-26T08:00:00Z",
+        incomplete: false,
+        checkpoint_ids: [1],
+        picture_count: 0,
+        recipes: 0,
+        covers: [],
+        members: [
+          handMember(1, "realvisXL_v5", "checkpoint"),
+          handMember(2, "sdxl_vae", "vae"),
+        ],
+      },
+    ],
+  };
+
+  it("gives a hand-made set the same note, question and icons", async () => {
+    const { wrapper, store } = await mountGrid({
+      ...handBase,
+      setChecks: [
+        entry({
+          member_verdicts: [{ model_id: 2, verdict: "problem" }],
+        }),
+      ],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    const panel = wrapper.get('[data-testid="model-set-slots-panel"]');
+    expect(panel.get('[data-testid="model-set-ask"]').text()).toContain(
+      "Do you agree?",
+    );
+    expect(panel.find('[data-testid="model-set-note"]').text()).not.toContain(
+      "Each of these has run with",
+    );
+    await panel.get('[data-testid="verdict-yes"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(putSetVerdict).toHaveBeenCalledWith("1,2", "yes");
+    // The VAE tile carries its own answer, and pressing it asks again.
+    const icon = panel.get('.mss__tile [data-testid="verdict-icon"]');
+    expect(icon.attributes("aria-label")).toBe(
+      "Your verdict: sdxl vae is a problem in this set",
+    );
+  });
+
+  it("says nothing about checks on a hand-made set with no entry", async () => {
+    const { wrapper, store } = await mountGrid({ ...handBase, setChecks: [] });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    const panel = wrapper.get('[data-testid="model-set-slots-panel"]');
+    expect(panel.find('[data-testid="model-set-note"]').exists()).toBe(false);
+  });
+
+  it("keeps the question open with an alert when the PUT is refused", async () => {
+    putSetVerdict.mockRejectedValue(new Error("403"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { wrapper, store } = await mountGrid({
+      ...base,
+      setChecks: [entry()],
+    });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+    await wrapper.get('[data-testid="verdict-yes"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('.msp [role="alert"]').text()).toContain(
+      "Could not save your answer. Try again.",
+    );
+    expect(wrapper.find('.msp [data-testid="verdict-icon"]').exists()).toBe(
+      false,
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      "Could not record the set verdict",
+      expect.objectContaining({ key: "1,2", verdict: "yes" }),
+    );
+    errorSpy.mockRestore();
   });
 });

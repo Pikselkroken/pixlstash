@@ -5869,3 +5869,39 @@ describe("the Group by menu", () => {
     wrapper.unmount();
   });
 });
+
+describe("a row the owner has marked in a set", () => {
+  const mark = (verdict, names) => ({ combo_key: "1,2", names, verdict });
+
+  it("wears a cross that names the set, and the cross wins over a check", async () => {
+    const wrapper = await mountShelf([
+      adapter({
+        set_verdicts: [
+          mark("not_problem", ["Base", "VAE"]),
+          mark("problem", ["Base", "LoRA"]),
+        ],
+      }),
+    ]);
+    const icon = wrapper.get(".shelf-row [data-testid='verdict-icon']");
+    expect(icon.classes()).toContain("verdict-icon--negative");
+    expect(icon.attributes("aria-label")).toBe(
+      "Marked a problem in 1 set: Base + LoRA. Not a problem in 1 set: Base + VAE",
+    );
+  });
+
+  it("wears a check when every answer was not-a-problem", async () => {
+    const wrapper = await mountShelf([
+      adapter({ set_verdicts: [mark("not_problem", ["Base", "VAE"])] }),
+    ]);
+    expect(
+      wrapper.get(".shelf-row [data-testid='verdict-icon']").classes(),
+    ).toContain("verdict-icon--positive");
+  });
+
+  it("wears nothing without verdicts", async () => {
+    const wrapper = await mountShelf([adapter({ set_verdicts: [] })]);
+    expect(
+      wrapper.find(".shelf-row [data-testid='verdict-icon']").exists(),
+    ).toBe(false);
+  });
+});

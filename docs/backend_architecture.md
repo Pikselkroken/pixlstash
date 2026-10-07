@@ -9549,6 +9549,61 @@ max rowids are not enough. The workflow grid (`read_grid`) still builds the
 index twice per request, once per `_shelf_candidates` call; at these sizes that
 is tens of milliseconds, left as is.
 
+#### Workflow sets: PixlStash's check and the owner's verdict
+
+Spec: `docs/ideas/workflow-set-verdicts.md`. Code:
+`pixlstash/services/workflow_set_verdicts.py`. Two answers about one set, said
+in different words and never merged: the **check** is PixlStash's (do the
+pictures look like their prompt at all, §26), the **verdict** is the owner's
+yes or no. Nothing derives one from the other, and nothing clears a verdict
+when the check later moves.
+
+- **Which sets.** `shown_member_sets` mirrors the grid's own grouping
+  (`frontend/src/utils/workflowSets.js` `setGroups` over the combinations no
+  hand-made set covers): one set per head, its members the union of its
+  combinations' members, plus each hand-made set's on-shelf members.
+  Deduplicated by key. A client whose `Show` filter shrinks a union computes a
+  key that is not served, and shows no check rather than another set's.
+- **`combo_key`** is the sorted member `model.id`s, comma-joined, and the only
+  spelling the routes accept (`parse_combo_key`; 422 otherwise). `model.id` is
+  `AUTOINCREMENT`, so a key never comes to name other files. Members change,
+  key changes, no verdict: the old row stays and is never read for the new set.
+- **Evidence** is per recipe, summed per set. `recipe_evidence` is ONE vault
+  `GROUP BY workflow_structural_hash` over kept pictures giving `(kept,
+  checked, passing, awaiting)`: *checked* is `prompt_match >= 0` (NULL and the
+  -1.0 failure marker excluded), *passing* `>= PROMPT_MATCH_THRESHOLD` (the
+  `looks_like_prompt` rule), *awaiting* NULL with a prompt (the finder's
+  candidates). A set's `together` is the sum over the recipes whose resolved
+  models (`fetch_workflow_sets`'s `recipe_models`, model fixes applied) hold
+  every member; a manual workflow's run still carries its variant's hash, so
+  it counts. Sets are intersections of per-model recipe sets, so the cost is
+  one query plus set algebra, whatever the number of sets or members. Measured
+  on a synthetic 100,000-picture vault with 2,000 recipes and 110 sets (up to
+  158 members): 82 ms warm (138 ms cold) for the query, 4 ms for the sets.
+- **`check`**, in the spec table's order: `none` (no picture used them all),
+  `pending` (something awaits a score AND `vault.is_worker_running(PROMPT_MATCH)`),
+  `unavailable` (nothing checked and nothing will be: no scorer, or no prompt),
+  `too_few` (< `MIN_CHECKED_FOR_CHECK` = 3), `pass` (passing >= `PASS_PERCENT`
+  = 50 % of checked) or `fail`. *Pending* is deliberately not "checked <
+  together": a picture with no prompt or stored as -1.0 is never checked, and
+  would keep a set pending for good.
+- **Suspects.** For member X: *with* is the set's checked pictures, *without*
+  is the checked pictures of recipes holding every other member and not X. A
+  suspect needs `SUSPECT_MIN_WITH` (5) with, `SUSPECT_MIN_WITHOUT` (5) without,
+  `SUSPECT_MIN_FAILURES` (3) failing with, and a failure rate
+  `SUSPECT_MIN_GAP_POINTS` (40) points above without; compared in integers so
+  a boundary is exact. Strongest gap first. A one-member set has none.
+- **Storage.** Hub tables `model_set_verdict (combo_key PK, verdict IN
+  ('yes','no'))` and `model_set_member_verdict ((combo_key, model_id) PK,
+  verdict IN ('problem','not_problem'))`, amended into v2 like every shelf
+  table. No foreign key to `model`: a verdict outlives a forget, and the purge
+  must not be blocked by one.
+- **Model card marks.** `fetch_model_marks` reads the member verdicts once per
+  shelf list or detail request (one hub read while nobody has answered, a
+  second for the members' names once someone has), so a row costs nothing
+  extra; `tests/test_model_shelf_api.py::test_sorting_by_an_aggregate_is_still_two_hub_queries`
+  pins the list at four hub reads whatever the row count.
+
 #### The shelf catalogues more than one suffix
 
 `model_folder_scanner.SHELF_MODEL_SUFFIXES` is the one answer to "is this a
@@ -9642,7 +9697,8 @@ its prompt asked for, **at all**. It is a sanity check for total failures
 (noise, a black or blank frame, mush from a broken LoRA, a picture with
 nothing to do with its prompt) and must never be presented as a quality
 score: passing means "recognisably about its prompt", not "good". It feeds
-the Model Shelf set panel's "M of N look like their prompt".
+the Model Shelf set panel's "M of N look like their prompt" and the sets'
+check (§25, "Workflow sets: PixlStash's check and the owner's verdict").
 
 **Method** (`pixlstash/scoring/prompt_match.py`). Raw CLIP cosine, the quantity
 CLIPScore rescales (Hessel et al. 2021, arXiv:2104.08718), is not comparable

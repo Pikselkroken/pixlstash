@@ -45,6 +45,16 @@
           {{ member.name }}
         </button>
         <span v-if="member.head" class="msm__pill">Names this set</span>
+        <span v-if="possibleProblem" class="msm__pill">Possible problem</span>
+        <VerdictIcon
+          v-if="verdict"
+          interactive
+          tabindex="-1"
+          :data-verdict-member="member.id"
+          :verdict="verdict"
+          :label="verdictLabel"
+          @click="emit('reopen')"
+        />
       </div>
       <span v-if="member.filename" class="msm__file"
         ><Tooltip
@@ -103,6 +113,7 @@ import {
 } from "../../utils/workflowSets";
 import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
+import VerdictIcon from "./VerdictIcon.vue";
 
 /**
  * Why a member is drawn as uncertain.
@@ -125,10 +136,15 @@ const props = defineProps({
   selected: { type: Boolean, default: false },
   /** `{row, ring, style}` from the shelf, or null for a model with no row. */
   shelfMark: { type: Object, default: null },
+  /** The owner's verdict on this member in this set, or null. */
+  verdict: { type: String, default: null },
+  verdictLabel: { type: String, default: "" },
+  /** A suspect nobody has answered about yet. */
+  possibleProblem: { type: Boolean, default: false },
 });
 
 /** The name was pressed: the grid answers with this model's companions. */
-const emit = defineEmits(["pick"]);
+const emit = defineEmits(["pick", "reopen"]);
 
 // The shelf's own identity square, so a model looks the same here as in the row
 // list. `generatedMark` reads a row's name and base model, so the member is
@@ -153,6 +169,7 @@ const accessibleName = computed(() =>
   [
     props.member.name,
     props.member.head ? "names this set" : null,
+    props.possibleProblem ? "possible problem" : null,
     props.member.kindLabel,
     size.value,
     evidence.value,

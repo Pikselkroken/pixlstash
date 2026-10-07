@@ -173,6 +173,12 @@
         <span v-if="card.hidden" class="msc__kind" aria-hidden="true"
           >Hidden</span
         >
+        <!-- The owner's word on the set, never PixlStash's check. -->
+        <VerdictIcon
+          v-if="card.verdict"
+          :verdict="card.verdict"
+          :label="`Your verdict: ${setVerdictText(card.verdict)}`"
+        />
         <!-- A set from pictures is read off the library, so it is hidden rather
              than deleted (the next read would only draw it again). Mouse-only,
              like the toggle: the grid owns Tab, and Delete on the card hides. -->
@@ -261,6 +267,8 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
 import ModelMark from "./ModelMark.vue";
+import VerdictIcon from "./VerdictIcon.vue";
+import { setVerdictText } from "../../utils/setVerdicts";
 
 const props = defineProps({
   /** One card from `setCard` (see `utils/workflowSets.js`). */

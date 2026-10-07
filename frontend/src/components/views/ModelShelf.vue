@@ -1174,6 +1174,11 @@
                         @dblclick.stop="startRename(row)"
                         >{{ row.name.text || "Name this model" }}</span
                       >
+                      <VerdictIcon
+                        v-if="rowVerdict(row)"
+                        :verdict="rowVerdict(row).verdict"
+                        :label="rowVerdict(row).tooltip"
+                      />
                       <span
                         v-if="row.name.state === 'from-file'"
                         class="shelf-name-tag"
@@ -1670,6 +1675,8 @@ import TrainingRuns from "./TrainingRuns.vue";
 import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import VerdictIcon from "../widgets/VerdictIcon.vue";
+import { modelVerdictMark } from "../../utils/setVerdicts";
 import PicturePicker from "../widgets/PicturePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -3061,6 +3068,11 @@ function memberLabel(member, row) {
   // nothing here would leave the one unlabelled row in a strip whose whole
   // point is telling versions apart.
   return `${modelVersion(member.filename ?? "") ?? "v1"} · ${label}`;
+}
+
+/** The check or cross the owner's set verdicts give this model, if any. */
+function rowVerdict(row) {
+  return modelVerdictMark(row.set_verdicts);
 }
 
 /**

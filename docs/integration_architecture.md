@@ -511,9 +511,10 @@ half was moved onto `/recipe` and deleted here.
 ### 2.2c The `/models/workflow-sets` contract (#1438)
 
 One read behind the model shelf's `Workflow set` axis (plus the hand-made set
-writes of rule 8), and the split of work
+writes of rule 8 and the verdict writes of rule 9), and the split of work
 across the seam is the whole of the contract: **the server resolves the evidence
-and groups nothing; the client folds.**
+and groups nothing; the client folds** (rule 9's checks are counted for the
+client's unions, never served as a grouping).
 
 | Route | Answers | Costs |
 |---|---|---|
@@ -596,6 +597,36 @@ Rules neither side may drift from:
    The offer reads recipe combinations only: one only ComfyUI ran is covered
    by a set like any other but never offered, since the offer is worded in
    pictures and recipes.
+9. **PixlStash's check and the owner's verdicts ride on it too, keyed by
+   `combo_key`** (`docs/ideas/workflow-set-verdicts.md`; backend §25,
+   "Workflow sets: PixlStash's check and the owner's verdict"). `set_checks`
+   is a list of `{combo_key, member_ids, evidence: {together, checked,
+   passing}, check, verdict, suspects, member_verdicts}`: `check` is one of
+   `none | pending | too_few | pass | fail | unavailable`, `verdict` is
+   `yes | no | null` (the owner's), each suspect is `{model_id, with_failed,
+   with_total, without_failed, without_total, verdict}` with `verdict`
+   `problem | not_problem | null`, and `member_verdicts` is
+   `[{model_id, verdict}]`, every member answered about, suspect today or not.
+   **The one place the server reads the client's grouping**, and only to know
+   which unions to count: it computes a check for the union `setGroups` draws
+   per head (every kind shown, covered combinations left out) and for each
+   hand-made set's on-shelf members, and nothing else about the payload
+   changes. **The join is the key, never the position**: the client takes the
+   member ids it draws, sorts them ascending, joins them with `,` and looks
+   that up; a union the `Show` filter shrank has a key that is not served, and
+   the card then shows no check, never a neighbour's. The owner answers with
+   `PUT /models/workflow-sets/verdicts/{combo_key}` (`{verdict: "yes"|"no"}`)
+   and `PUT .../verdicts/{combo_key}/members/{model_id}` (`{verdict:
+   "problem"|"not_problem"}`), cleared by `DELETE` on the same paths, all
+   owner-only. Each answers `{combo_key, [model_id,] verdict, previous}`;
+   writing `previous` back (or `DELETE` when it is null) is the undo. A
+   non-canonical key or a wrong verdict word is a 422; an id not on the shelf,
+   or a `model_id` not in the key, a 404. A verdict belongs to its exact key:
+   members change, no verdict, and the server clears nothing. The model's own
+   shelf row (`GET /adapters`, `GET /adapters/{sha256}`, `GET /checkpoints`)
+   carries `set_verdicts: [{combo_key, names, verdict}]`, the owner's member
+   answers about that model, `names` being the set's members in shelf names,
+   base model first.
 
 ### 2.3 The `/workflows` contract
 
