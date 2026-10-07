@@ -1748,6 +1748,62 @@ def _steps(reply: dict) -> dict:
     return {step["id"]: step for step in reply["steps"]}
 
 
+class _RunNow:
+    """``threading.Thread`` that runs its target at ``start()``, in the test."""
+
+    def __init__(self, target, args=(), **_kwargs):
+        self._target, self._args = target, args
+
+    def start(self):
+        self._target(*self._args)
+
+
+def test_saving_a_comfyui_address_registers_folders_only_where_host_ops_are_allowed(
+    workflow_env, monkeypatch
+):
+    """The config save must not get round ``LOCAL_OWNER_ONLY`` on the
+    model-folder routes: a remote owner saves the address, nothing is
+    registered; the same save from this computer registers."""
+    server = workflow_env.server
+    calls: list[str] = []
+    monkeypatch.setattr(
+        config_routes,
+        "register_comfyui_model_folders",
+        lambda _server, url: calls.append(url) or [],
+    )
+    monkeypatch.setattr(config_routes.threading, "Thread", _RunNow)
+    client_ip = ["8.8.8.8"]
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda r: client_ip[0])
+    monkeypatch.setattr(server.auth, "real_client_ip", lambda r: client_ip[0])
+    monkeypatch.setitem(server.auth._server_config, "allow_remote_host_ops", False)
+    try:
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": "http://127.0.0.1:18189/"}
+        )
+        assert r.status_code == 200, r.text
+        assert calls == []
+
+        # Positive control: the same save, from this computer.
+        client_ip[0] = "127.0.0.1"
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": "http://127.0.0.1:18190/"}
+        )
+        assert r.status_code == 200, r.text
+        assert calls == ["http://127.0.0.1:18190"]
+
+        # A remote owner the server config allows host operations to.
+        client_ip[0] = "8.8.8.8"
+        monkeypatch.setitem(server.auth._server_config, "allow_remote_host_ops", True)
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": "http://127.0.0.1:18191/"}
+        )
+        assert r.status_code == 200, r.text
+        assert calls[-1] == "http://127.0.0.1:18191"
+    finally:
+        client_ip[0] = "127.0.0.1"
+        workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+
+
 def test_the_link_routes_are_owner_only(workflow_env):
     """Declared owner-only, and a share token is refused on each verb while
     the owner reaches the read. The refused token is proven live first."""

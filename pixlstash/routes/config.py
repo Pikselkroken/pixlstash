@@ -12,6 +12,7 @@ from sqlmodel import Session
 
 from PIL import Image
 
+from pixlstash.auth import is_local_or_tailscale_ip
 from pixlstash.database import DBPriority
 from pixlstash.db_models import User
 from pixlstash.hub.workflows import (
@@ -476,6 +477,23 @@ def create_router(server) -> APIRouter:
         config = _config_payload(user)
         return {"smart_score_penalised_tags": config["smart_score_penalised_tags"]}
 
+    def _host_ops_allowed(request: Request) -> bool:
+        """Whether this request may register and scan model folders.
+
+        The same locality rule the model-folder routes get from the gate
+        (``LOCAL_OWNER_ONLY``, §16.3): saving a ComfyUI address must not be a
+        way round it. A refused request still saves the address; it is logged.
+        """
+        client_ip = server.auth.real_client_ip(request)
+        if is_local_or_tailscale_ip(client_ip) or server.auth.allow_remote_host_ops:
+            return True
+        logger.info(
+            "ComfyUI address saved from %s; its model folders are not registered "
+            "because host operations are local-only (allow_remote_host_ops is off).",
+            client_ip,
+        )
+        return False
+
     def _register_comfyui_model_folders(base_url: str) -> None:
         try:
             register_comfyui_model_folders(server, base_url)
@@ -656,7 +674,12 @@ def create_router(server) -> APIRouter:
             # so MissingSmartScoreFinder promptly re-scores the cleared rows. wake() is a
             # scheduler poke, not a DB write, so it need not be inside the transaction.
             server.vault.wake()
-        if updated and "comfyui_url" in patch_data and user.comfyui_url:
+        if (
+            updated
+            and "comfyui_url" in patch_data
+            and user.comfyui_url
+            and _host_ops_allowed(request)
+        ):
             # Off the request: ComfyUI may be slow or down, and the URL is saved
             # whether or not its model folders can be read.
             threading.Thread(
