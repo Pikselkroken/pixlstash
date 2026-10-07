@@ -335,6 +335,7 @@
         @select-all="selectAllShown"
         @menu-closed="focusCursorRow"
         @open-cover="openCoverPicture"
+        @show-pictures="showSelectedPictures"
         @run="runSelected"
         @rename="startRename"
         @hide="hideSelected"
@@ -433,6 +434,7 @@ import { importWorkflow } from "../../api/comfyui";
 import { listImportFolders } from "../../api/folders";
 import { exportWorkflow, workflowCoverUrl } from "../../api/workflows";
 import { useConfirm } from "../../composables/useConfirm";
+import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -495,6 +497,7 @@ const sidebarStore = useSidebarStore();
 const router = useRouter();
 const route = useRoute();
 const { confirm } = useConfirm();
+const { showWorkflowsPictures } = useWorkflowPictures();
 
 const gridEl = ref(null);
 const fileInput = ref(null);
@@ -1218,6 +1221,11 @@ watch(
 function openCoverPicture() {
   const id = selBarRef.value?.openTarget?.id;
   if (id != null) openPicture(id);
+}
+
+/** *Show all pictures using these workflows* (#1797): the grid, filtered. */
+function showSelectedPictures() {
+  showWorkflowsPictures(store.selectedCards);
 }
 
 function closeRename() {

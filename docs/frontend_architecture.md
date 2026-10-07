@@ -1985,11 +1985,12 @@ filtered by.
   for a workflow they already have.
 - ***Show all N pictures*** (F7) is the picture figure in `WorkflowTab`'s
   header and in `InfoPopover`, wired by `composables/useWorkflowPictures.js`:
-  `showPictures({id, name})` writes `useFilterStore().workflowFilter = {id,
-  name}` (`{id, name, lora, loraName}` for a pile LoRA's pictures, and
+  `showPictures({id, name})` writes `useFilterStore().workflowFilter = [{id,
+  name}]` (`{id, name, lora, loraName}` for a pile LoRA's pictures, and
   `opened` for a default-recipe row's value, below) and pushes `/`, so the
   library opens narrowed with a removable **Workflow** chip on #1387's strip;
-  `workflowFilterParams` sends it as `workflow=<id>` (plus `workflow_lora`).
+  `workflowFilterParams` sends one `workflow=<id>` per entry (plus
+  `workflow_lora` only when there is exactly one).
   **It clears the view it lands in first** — `handleResetToAll`'s own
   clearing, repeated rather than called because that composable takes
   App-level deps — since this is the one control in the app that promises a
@@ -2001,6 +2002,19 @@ filtered by.
   what makes the chip's × refetch — arrival works without it by accident (the
   route change remounts the grid), removal does not. A card with no pictures
   draws the figure as plain text; there is nothing to show.
+- **`workflowFilter` is a list** (#1797), OR'd like the Checkpoint filter,
+  one **Workflow** chip per entry. Three ways fill it: the grid's Filters
+  menu has a Content › **Workflow** row (`FilterMenu.vue`) opening the
+  shared `FilterChecklistMenu` over `GET /workflows?include_hidden&
+  include_one_offs` (owner only, so the row is hidden for a READ token), each
+  row with the card's covers as a 32×24 mosaic, its short type and its
+  `picture_count`, most pictures first and hidden ones last with an eye-off
+  glyph; the Workflows screen's selection pill (an `image-multiple-outline`
+  icon) and card context menu (*Show all pictures using this workflow / these
+  N workflows*, after *Run…*) call `showWorkflowsPictures(selectedCards)`,
+  the same clearing arrival with one entry per card. Ticking a second
+  workflow in the menu drops a pile LoRA from the entries, chip and all,
+  since `workflow_lora` narrows only one.
 - **`?workflow=<id>` moves the cursor too** (the Run popup's *Open in
   Workflows*, the lightbox Edit tab's *Open*). `WorkflowTab` selects the card
   and opens the rail; the grid puts the cursor, and so focus and the scroll, on
@@ -2250,7 +2264,7 @@ can no longer see.
     lists the other `recipe_values.checkpoints`, each with its own *Show N*.
   - **Landing is two chips** (`useWorkflowPictures`):
     `showValuePictures({id, name, kind, value, label})` sets
-    `workflowFilter = {id, name, opened: {kind, value, label}}` beside
+    `workflowFilter = [{id, name, opened: {kind, value, label}}]` beside
     `comfyuiModelFilter` / `comfyuiLoraFilter = [value]`; the pile's
     `showLoraPictures` keeps `workflow_lora` on the workflow filter
     (`{id, name, lora, loraName}`) because it only narrows a workflow.

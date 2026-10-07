@@ -4783,6 +4783,9 @@ def test_the_picture_grid_narrows_a_workflow_to_one_lora(workflow_env):
     # than parsing every stored graph for whoever asked.
     assert ids(workflow_lora=_ADA) == set()
     assert ids(workflow=FLIP_WF, workflow_lora="character_ada") == set()
+    # It narrows exactly one workflow: beside two it matches nothing, rather
+    # than narrowing whichever came first.
+    assert ids(workflow=[FLIP_WF, BUSY_WF], workflow_lora=_ADA) == set()
     # And the summary names the workflow it counted, which is what Show N sends.
     assert (
         owner.get(f"{API}/workflows/{FLIP_WF}/lora-summary").json()["workflow_id"]
@@ -4800,6 +4803,9 @@ def test_the_picture_grid_narrows_a_workflow_to_one_lora(workflow_env):
         assert ids(workflow=manual, workflow_lora=_ADA) == {mine_a}
         assert ids(workflow=manual, workflow_lora=_BO) == {mine_b}
         assert ids(workflow=FLIP_WF, workflow_lora=_ADA) == a_ids - {mine_a}
+        # Several workflows are OR'd (#1797): the manual one's runs arrive by
+        # its id, past the exclusion that keeps them off the automatic one.
+        assert ids(workflow=[manual, FLIP_WF]) == a_ids | b_ids
     finally:
         delete_manual_workflow(server.hub, manual)
 

@@ -135,7 +135,7 @@ describe("the workflow chip and the grid's filter watcher", () => {
     await settle(wrapper);
     apiGet.mockClear();
 
-    useFilterStore().workflowFilter = { id: KEY, name: "Cinematic portrait" };
+    useFilterStore().workflowFilter = [{ id: KEY, name: "Cinematic portrait" }];
     await settle(wrapper);
 
     const urls = gridUrls();
@@ -147,12 +147,12 @@ describe("the workflow chip and the grid's filter watcher", () => {
   it("refetches the whole library when the chip is removed", async () => {
     const wrapper = mountGrid();
     await settle(wrapper);
-    useFilterStore().workflowFilter = { id: KEY, name: "Cinematic portrait" };
+    useFilterStore().workflowFilter = [{ id: KEY, name: "Cinematic portrait" }];
     await settle(wrapper);
     apiGet.mockClear();
 
     // What the chip's × does.
-    useFilterStore().workflowFilter = null;
+    useFilterStore().workflowFilter = [];
     await settle(wrapper);
 
     const urls = gridUrls();

@@ -1559,15 +1559,17 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     );
     await show.trigger("click");
     const filters = useFilterStore();
-    expect(filters.workflowFilter).toEqual({
-      id: KEY,
-      name: "Cinematic portrait",
-      opened: {
-        kind: "model",
-        value: "SDXL/realvisXL_v5.safetensors.safetensors",
-        label: "realvisXL_v5.safetensors",
+    expect(filters.workflowFilter).toEqual([
+      {
+        id: KEY,
+        name: "Cinematic portrait",
+        opened: {
+          kind: "model",
+          value: "SDXL/realvisXL_v5.safetensors.safetensors",
+          label: "realvisXL_v5.safetensors",
+        },
       },
-    });
+    ]);
     expect(filters.comfyuiModelFilter).toEqual(["SDXL/realvisXL_v5.safetensors.safetensors"]);
     expect(push).toHaveBeenCalledWith("/");
 
@@ -1688,7 +1690,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     await show.trigger("click");
     const filters = useFilterStore();
     expect(filters.comfyuiLoraFilter).toEqual(["Loras\\BO.safetensors"]);
-    expect(filters.workflowFilter.opened).toEqual({
+    expect(filters.workflowFilter[0].opened).toEqual({
       kind: "lora",
       value: "Loras\\BO.safetensors",
       label: "Bo",
@@ -2034,12 +2036,14 @@ describe("the LoRA pile", () => {
       .find((button) => button.text() === "Show 3")
       .trigger("click");
     // Two chips' worth (F-4): the workflow, and the LoRA narrowing it.
-    expect(useFilterStore().workflowFilter).toEqual({
-      id: KEY,
-      lora: BO,
-      name: "Cinematic portrait",
-      loraName: "Bo",
-    });
+    expect(useFilterStore().workflowFilter).toEqual([
+      {
+        id: KEY,
+        lora: BO,
+        name: "Cinematic portrait",
+        loraName: "Bo",
+      },
+    ]);
     expect(push).toHaveBeenCalledWith("/");
   });
 });
@@ -2566,10 +2570,9 @@ describe("which card the rail shows", () => {
 
     await link.trigger("click");
 
-    expect(useFilterStore().workflowFilter).toEqual({
-      id: KEY,
-      name: "Cinematic portrait",
-    });
+    expect(useFilterStore().workflowFilter).toEqual([
+      { id: KEY, name: "Cinematic portrait" },
+    ]);
     expect(push).toHaveBeenCalledWith("/");
   });
 
@@ -2595,10 +2598,9 @@ describe("which card the rail shows", () => {
     expect(useSearchStore().searchQuery).toBe("");
     // And the one filter it is FOR survives `resetFilters`, which clears it
     // too — the order of those two lines is the whole behaviour.
-    expect(filterStore.workflowFilter).toEqual({
-      id: KEY,
-      name: "Cinematic portrait",
-    });
+    expect(filterStore.workflowFilter).toEqual([
+      { id: KEY, name: "Cinematic portrait" },
+    ]);
   });
 
   // Nothing to show, so nothing to press: a link that filtered the library

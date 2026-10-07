@@ -352,12 +352,13 @@ class PictureListFilters:
         comfyui_lora: list[str] = Query(
             default=[], description="Filter by ComfyUI LoRA (repeatable)."
         ),
-        workflow: str | None = Query(
-            None,
+        workflow: list[str] = Query(
+            default=[],
             description=(
-                "Only pictures made by this workflow, named by its id "
-                "(`auto:<core and families digest>` or a manual group's id). Resolved to the "
-                "workflow's variants; an unknown id matches nothing."
+                "Only pictures made by any of these workflows (repeatable, "
+                "OR'd), each named by its id (`auto:<core and families "
+                "digest>` or a manual group's id). Resolved to the workflows' "
+                "variants; an unknown id matches nothing."
             ),
         ),
         workflow_lora: str | None = Query(
@@ -366,8 +367,8 @@ class PictureListFilters:
                 "Only pictures whose workflow loaded this LoRA file, named by "
                 "its stored reference (`asset:<sha256>`, as "
                 "`GET /workflows/{workflow_id}/lora-summary` serves it). "
-                "Narrows `workflow`; alone, or malformed, it "
-                "matches nothing."
+                "Narrows `workflow`, and only exactly one; alone, beside "
+                "several workflows, or malformed, it matches nothing."
             ),
         ),
         reference_folder_id: str | None = Query(
@@ -393,27 +394,35 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     """``workflow`` / ``workflow_lora`` as variants, or ``None``.
 
     The workflows are in the hub and the pictures are in the vault, so there is
-    no join to write: the workflow is resolved to its variants here and the listing
-    matches ``picture.workflow_structural_hash`` against them, the way the
-    ComfyUI LoRA filter matches a name against the picture's own column.
+    no join to write: the workflows are resolved to their variants here and the
+    listing matches ``picture.workflow_structural_hash`` against them, the way
+    the ComfyUI LoRA filter matches a name against the picture's own column.
+
+    ``workflow`` is repeatable and the workflows are OR'd, like
+    ``comfyui_model``: the keys are the union of each one's. That union is
+    exact because every automatic workflow leaves out the same thing (every
+    live manual workflow's runs), and a manual one's pictures arrive by its
+    own id, past that exclusion.
 
     **An empty list is a filter, not the absence of one.** A workflow with no
     filed variant - or a workflow the pictures of this library never ran - matches no
     picture, and returning ``None`` for it would widen the grid to the whole
     library instead. Given both, the two narrow each other, as every other pair
-    of filters on this route does.
+    of filters on this route does. ``workflow_lora`` narrows exactly one
+    workflow; beside several it matches nothing, like a malformed one.
 
     Args:
         server: The running server, for the hub.
         query_params: The parsed query params; every key is popped, so an
             unresolved one cannot reach ``Picture.find(**query_params)``.
+            ``workflow`` is a list of ids, or one id as a string.
 
     Returns:
-        The keys to match (``predicate_filter.workflow_keys_predicate``: a
-        manual workflow's own id, or variants with the live manual ids whose
-        runs they leave out, or - a manual workflow narrowed by a LoRA - its
-        runs' variants that load it, held to its runs), or ``None`` when
-        neither param is set.
+        The keys to match (``predicate_filter.workflow_keys_predicate``: manual
+        workflows' own ids and automatic ones' variants, with the live manual
+        ids whose runs the variants leave out, or - a manual workflow narrowed
+        by a LoRA - its runs' variants that load it, held to its runs), or
+        ``None`` when neither param is set.
     """
     # Presence, not truthiness: `?workflow=` names no workflow, and dropping
     # the filter for it would answer a request for one workflow with the whole
@@ -428,30 +437,36 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     # its own bug. (Four sibling filters here are unpopped in the same way and
     # are the same class; this closes the one the change adds.)
     query_params.pop("workflow_structural_hashes", None)
-    workflow_id = query_params.pop("workflow", None)
+    raw = query_params.pop("workflow", None)
+    workflow_ids = [raw] if isinstance(raw, str) else raw
     lora = query_params.pop("workflow_lora", None)
-    if workflow_id is None and lora is None:
+    if workflow_ids is None and lora is None:
         return None
+    # The one workflow a LoRA may narrow, else None.
+    workflow_id = workflow_ids[0] if workflow_ids and len(workflow_ids) == 1 else None
     hub = getattr(server, "hub", None)
     matched: list[set[str]] = []
     live: list[str] = []
     try:
         if hub is None:
             raise LookupError("no hub is attached to this server")
-        if workflow_id is not None:
+        if workflow_ids is not None:
             live = manual_workflow_ids(hub)
             # A manual workflow's pictures are its runs'; an automatic one's
             # are its variants', less every live manual workflow's runs.
             matched.append(
-                {workflow_id}
-                if workflow_id in live
-                else set(variants_in_workflow(hub, workflow_id))
+                set().union(
+                    *(
+                        {wid} if wid in live else set(variants_in_workflow(hub, wid))
+                        for wid in workflow_ids
+                    )
+                )
             )
         if lora is not None:
-            # Only ever a narrowing, and only of a well-formed reference:
-            # alone it would parse every stored graph on the hub per request,
-            # and this route is open to scoped tokens.
-            if matched and _ASSET_RE.match(lora):
+            # Only ever a narrowing of one workflow, and only of a well-formed
+            # reference: alone it would parse every stored graph on the hub
+            # per request, and this route is open to scoped tokens.
+            if workflow_id is not None and _ASSET_RE.match(lora):
                 among = sorted(set.intersection(*matched))
                 if workflow_id in live:
                     # A manual workflow's key is its id, not a variant: narrow
@@ -469,15 +484,15 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
         logger.warning(
             "Could not resolve the workflow filter (workflow=%r, lora=%r): "
             "%s; listing no pictures rather than every picture.",
-            workflow_id,
+            workflow_ids,
             lora,
             exc,
         )
         return []
     keys = sorted(set.intersection(*matched))
-    if keys and workflow_id in live and lora is not None:
+    if keys and lora is not None and workflow_id in live:
         keys += [ONLY_MADE_BY + workflow_id]
-    elif keys and workflow_id not in live:
+    elif keys and any(wid not in live for wid in workflow_ids or ()):
         keys += [NOT_MADE_BY + manual for manual in live]
     return keys
 
@@ -571,6 +586,9 @@ def select_pictures_for_listing(
             picture_ids = request.query_params.getlist("id")
             if picture_ids:
                 query_params["id"] = picture_ids
+            workflows = request.query_params.getlist("workflow")
+            if workflows:
+                query_params["workflow"] = workflows
             comfyui_models = request.query_params.getlist("comfyui_model")
             if comfyui_models:
                 query_params["comfyui_models_filter"] = comfyui_models

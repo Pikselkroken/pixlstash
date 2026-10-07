@@ -308,35 +308,50 @@ export function filterChips(store, { allPicturesView = true } = {}) {
     );
   }
 
-  // *Show all N pictures* on a workflow card (F7). No menu row offers it: the
-  // Workflows screen is the only place that knows a card's key, so the chip is
-  // how it arrives and its × is the whole of the way back.
+  // One chip per workflow (#1797), the way four ticked checkpoints are four
+  // chips. They arrive from the Filters menu's Workflow row, *Show all N
+  // pictures* on a card (F7) and the Workflows screen's *Show all pictures*.
   //
   // Before the Checkpoint and LoRA chips, because a value opened from the
   // Workflow tab (#1653) is a narrowing of the workflow: × on the value chip
   // leaves this one standing, and × on this one takes the value it was opened
   // with too, or a checkpoint chip would silently filter the whole library.
-  const workflow = store.workflowFilter;
-  const opened = workflow?.opened;
-  if (workflow) {
-    push("workflow", "Workflow", workflow.name, () => {
-      store.workflowFilter = null;
-      if (opened?.kind === "model") {
-        store.comfyuiModelFilter = without(store.comfyuiModelFilter, opened.value);
-      } else if (opened?.kind === "lora") {
-        store.comfyuiLoraFilter = without(store.comfyuiLoraFilter, opened.value);
-      }
+  const workflows = store.workflowFilter || [];
+  const opened = workflows.find((w) => w.opened)?.opened;
+  for (const workflow of workflows) {
+    push(
+      `workflow:${workflow.id}`,
+      "Workflow",
+      workflow.name || "A deleted workflow",
+      () => {
+        store.workflowFilter = (store.workflowFilter || []).filter(
+          (w) => w.id !== workflow.id,
+        );
+        if (workflow.opened?.kind === "model") {
+          store.comfyuiModelFilter = without(
+            store.comfyuiModelFilter,
+            workflow.opened.value,
+          );
+        } else if (workflow.opened?.kind === "lora") {
+          store.comfyuiLoraFilter = without(
+            store.comfyuiLoraFilter,
+            workflow.opened.value,
+          );
+        }
+      },
+    );
+  }
+  // The pile's LoRA (`workflow_lora`) only narrows one workflow, so it stays
+  // on that workflow's entry and gets a chip of its own (F-4). Beside a second
+  // workflow it is not sent (`workflowFilterParams`), so it gets no chip.
+  const only = workflows.length === 1 ? workflows[0] : null;
+  if (only?.lora) {
+    push("workflow-lora", "LoRA", only.loraName || "A forgotten LoRA", () => {
+      const rest = { ...only };
+      delete rest.lora;
+      delete rest.loraName;
+      store.workflowFilter = [rest];
     });
-    // The pile's LoRA (`workflow_lora`) only narrows a workflow, so it stays
-    // on the workflow filter and gets a chip of its own (F-4).
-    if (workflow.lora) {
-      push("workflow-lora", "LoRA", workflow.loraName || "A forgotten LoRA", () => {
-        const rest = { ...store.workflowFilter };
-        delete rest.lora;
-        delete rest.loraName;
-        store.workflowFilter = rest;
-      });
-    }
   }
   /** The Workflow tab's short name for the value it opened, else the file's. */
   const valueLabel = (kind, name) =>

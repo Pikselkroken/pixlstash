@@ -47,14 +47,17 @@ export const useFilterStore = defineStore("filter", () => {
   // has ruled on yet) is still honoured by the store and the API, but the filter
   // panel no longer offers it: the duplicate queue owns that work.
   const stackStateFilter = ref("all");
-  // One workflow's pictures (v1.12 F7's *Show all N pictures*):
-  // `{id, name}`, or null. The Workflow tab's LoRA pile narrows it to one
-  // LoRA: `{id, lora, loraName, name}` (`workflowFilterParams`). A default-
-  // recipe row's *Show N* adds `opened: {kind, value, label}`, the
+  // The pictures of any of these workflows (#1797; OR'd, like the checkpoint
+  // filter): a list of `{id, name}`, empty for none. The Filters menu's
+  // Workflow row ticks them; *Show all N pictures* (v1.12 F7) and the
+  // Workflows screen's *Show all pictures* arrive as a list of their own. With
+  // exactly one, the Workflow tab's LoRA pile narrows it to one LoRA:
+  // `{id, lora, loraName, name}` (`workflowFilterParams`). A default-recipe
+  // row's *Show N* adds `opened: {kind, value, label}`, the
   // `comfyuiModelFilter` / `comfyuiLoraFilter` value it set beside it, so the
   // Workflow chip's × clears that too. The names are carried because the chips
   // have to say which, and the grid holds no workflow cards to look them up in.
-  const workflowFilter = ref(null);
+  const workflowFilter = ref([]);
 
   function resetFilters() {
     mediaTypeFilter.value = "all";
@@ -75,7 +78,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiLoraFilter.value = [];
     impossibleSources.value = [];
     stackStateFilter.value = "all";
-    workflowFilter.value = null;
+    workflowFilter.value = [];
   }
 
   return {
@@ -105,16 +108,18 @@ export const useFilterStore = defineStore("filter", () => {
 });
 
 /**
- * The listing params one `workflowFilter` sends: `workflow` (the workflow
- * id), and `workflow_lora` when it names a LoRA.
+ * The listing params a `workflowFilter` sends: one `workflow` per workflow,
+ * and `workflow_lora` when exactly one is ticked and it names a LoRA (the
+ * listing matches nothing for a LoRA beside several).
  *
- * @param {?{id?: string, lora?: string}} filter
+ * @param {Array<{id?: string, lora?: string}>} filter
  * @returns {Array<[string, string]>}
  */
 export function workflowFilterParams(filter) {
-  if (!filter) return [];
+  const list = filter || [];
+  const lora = list.length === 1 ? list[0].lora : null;
   return [
-    ...(filter.id ? [["workflow", filter.id]] : []),
-    ...(filter.lora ? [["workflow_lora", filter.lora]] : []),
+    ...list.filter((w) => w.id).map((w) => ["workflow", w.id]),
+    ...(lora ? [["workflow_lora", lora]] : []),
   ];
 }
