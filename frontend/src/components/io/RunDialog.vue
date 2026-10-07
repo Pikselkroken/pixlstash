@@ -370,7 +370,8 @@
               :aria-label="field.label"
               type="number"
               :disabled="submitting"
-              @update:model-value="(v) => setValue(field, coerce(field, v))"
+              @update:model-value="(v) => typeValue(field, v)"
+              @blur="settleDraft(field)"
               @keydown.stop
             />
           </div>
@@ -391,7 +392,8 @@
             :aria-label="field.label"
             type="number"
             :disabled="submitting"
-            @update:model-value="(v) => setValue(field, coerce(field, v))"
+            @update:model-value="(v) => typeValue(field, v)"
+            @blur="settleDraft(field)"
             @keydown.stop
           />
         </div>
@@ -416,7 +418,8 @@
             :model-value="String(currentValue(field))"
             :aria-label="field.label"
             :disabled="submitting"
-            @update:model-value="(v) => setValue(field, coerce(field, v))"
+            @update:model-value="(v) => typeValue(field, v)"
+            @blur="settleDraft(field)"
             @keydown.stop
           />
         </div>
@@ -911,6 +914,11 @@ const activeKey = ref("");
 const editedLabels = reactive({});
 /** address -> the owner's value, over the card's own default. */
 const edits = reactive({});
+/**
+ * address -> what an emptied or half-typed number box shows while the owner
+ * is still in it. Never sent: the run uses the default until it parses.
+ */
+const drafts = reactive({});
 const fellBack = ref([]);
 
 const prompt = ref("");
@@ -1528,9 +1536,37 @@ const skippedStages = computed(() =>
   stageRows.value.filter((row) => !stageOn(row.name)).map((row) => row.name),
 );
 
-function currentValue(field) {
+/** What this run sends for a field: the owner's value, else the default. */
+function runValue(field) {
   const key = address(field);
   return key in edits ? edits[key] : baseOf(field);
+}
+
+/** What a field's box shows: a half-typed draft over the value it runs at. */
+function currentValue(field) {
+  const key = address(field);
+  return key in drafts ? drafts[key] : runValue(field);
+}
+
+/**
+ * What a box hands back as the owner types. A box with no number in it yet
+ * keeps showing what was typed - writing the default back into it would undo
+ * the very keystroke that cleared it - and runs at the default meanwhile.
+ */
+function typeValue(field, raw) {
+  const value = coerce(field, raw);
+  const key = address(field);
+  if (value === undefined && typeof baseOf(field) === "number") {
+    drafts[key] = raw;
+  } else {
+    delete drafts[key];
+  }
+  setValue(field, value);
+}
+
+/** Leaving a box with no number in it shows what the run will use. */
+function settleDraft(field) {
+  delete drafts[address(field)];
 }
 
 function isEdited(field) {
@@ -1559,8 +1595,8 @@ const CHOICE_REASK_MS = 300;
 
 function setValue(field, value) {
   const key = address(field);
-  // Not a value: the field goes back to what it started at rather than
-  // recording a zero nobody typed.
+  // Not a value: the field runs at what it started at rather than recording
+  // a zero nobody typed (its box may still show the draft; see typeValue).
   if (value === undefined || value === baseOf(field)) {
     delete edits[key];
     delete editedLabels[key];
@@ -1591,6 +1627,7 @@ function setValue(field, value) {
 
 function resetValue(field) {
   const key = address(field);
+  delete drafts[key];
   delete edits[key];
   delete editedLabels[key];
 }
@@ -2427,7 +2464,7 @@ function runBody() {
 function displayedValues() {
   const rows = [];
   for (const field of defaults.value) {
-    const value = currentValue(field);
+    const value = runValue(field);
     if (value === null || value === undefined) continue;
     rows.push({
       slot_label: field.slot_label,
@@ -2712,6 +2749,7 @@ async function loadCard(key, { keepEdits = false } = {}) {
   // Stages are the graph's, so a choice made on one workflow says nothing
   // about another's.
   clearStages();
+  for (const key2 of Object.keys(drafts)) delete drafts[key2];
   checkpointFix.value = null;
   checkpointAsk += 1;
   if (!keepEdits) {
