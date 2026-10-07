@@ -142,6 +142,24 @@ def _declared_inputs(node_spec: dict) -> list[tuple[str, object, dict, bool]]:
     return declared
 
 
+# ComfyUI's V3 dynamic combo: the chosen option brings inputs of its own. The
+# editor inserts their widgets straight after the combo's, required then
+# optional, named `<combo>.<input>` (frontend `dynamicWidgets.ts`), and the
+# server reads them under those names (`comfy_api/latest/_io.py`).
+_DYNAMIC_COMBO = "COMFY_DYNAMICCOMBO_V3"
+
+
+def _dynamic_option_inputs(
+    name: str, options: dict, chosen
+) -> list[tuple[str, object, dict, bool]] | None:
+    """The chosen option's own inputs, prefixed, or None for an unknown key."""
+    for option in options.get("options") or ():
+        if isinstance(option, dict) and option.get("key") == chosen:
+            nested = _declared_inputs({"input": option.get("inputs") or {}})
+            return [(f"{name}.{n}", t, o, r) for n, t, o, r in nested]
+    return None
+
+
 def _is_widget(type_field, options: dict) -> bool:
     """Whether this input takes a value from ``widgets_values``.
 
@@ -152,7 +170,7 @@ def _is_widget(type_field, options: dict) -> bool:
         return False
     if not isinstance(type_field, str):
         return True
-    return type_field in _WIDGET_TYPES
+    return type_field in _WIDGET_TYPES or type_field == _DYNAMIC_COMBO
 
 
 def _extra_widget_slots(options: dict) -> int:
@@ -573,6 +591,24 @@ class _Converter:
             return None
         return self._resolve(wired[0]["link"], depth + 1, want_type)
 
+    def _expand_dynamic(
+        self, declared: list, index: int, name: str, options: dict, chosen, where: str
+    ) -> bool:
+        """Put the chosen option's inputs straight after its combo.
+
+        That is where the editor's widgets for them sit, so the positional
+        values that follow the combo's own are theirs.
+        """
+        nested = _dynamic_option_inputs(name, options, chosen)
+        if nested is None:
+            self.problems.append(
+                f"{where} has {chosen!r} for its {name!r}, which this ComfyUI's "
+                "version of the node does not offer"
+            )
+            return False
+        declared[index + 1 : index + 1] = nested
+        return True
+
     def _connected_inputs(self, node: dict) -> dict[str, object]:
         return {
             str(entry.get("name")): entry["link"]
@@ -590,7 +626,7 @@ class _Converter:
         still means the file and ``/object_info`` disagree about the node - and
         a rebuild from a disagreement is not the rebuild it claims to be.
         """
-        declared = _declared_inputs(self.object_info[node_class])
+        declared = list(_declared_inputs(self.object_info[node_class]))
         connected = self._connected_inputs(node)
         # The editor's own slot types, which is what ComfyUI hands a bypassed
         # node upstream when it picks the wire to splice.
@@ -607,7 +643,10 @@ class _Converter:
         inputs: dict = {}
         consumed = 0
         widget_names: set[str] = set()
-        for name, type_field, options, required in declared:
+        index = -1
+        while index + 1 < len(declared):
+            index += 1
+            name, type_field, options, required = declared[index]
             is_widget = _is_widget(type_field, options)
             if is_widget:
                 widget_names.add(name)
@@ -635,6 +674,14 @@ class _Converter:
                 # socket.
                 if is_widget and not by_name:
                     consumed += 1 + _extra_widget_slots(options)
+                if type_field == _DYNAMIC_COMBO:
+                    # Which option is chosen decides which inputs follow, and
+                    # a wire does not say.
+                    self.problems.append(
+                        f"{where} has its {name!r} choice wired in, so which "
+                        "inputs come with it cannot be read"
+                    )
+                    return None
                 continue
             if not is_widget:
                 continue
@@ -643,6 +690,10 @@ class _Converter:
                     inputs[name] = overrides[name]
                 elif name in widget_values:
                     inputs[name] = widget_values[name]
+                if type_field == _DYNAMIC_COMBO and not self._expand_dynamic(
+                    declared, index, name, options, inputs.get(name), where
+                ):
+                    return None
                 continue
             if consumed < len(positional):
                 # The slot is consumed either way; an instance's own value
@@ -660,6 +711,10 @@ class _Converter:
                     return None
                 inputs[name] = value
             consumed += 1 + _extra_widget_slots(options)
+            if type_field == _DYNAMIC_COMBO and not self._expand_dynamic(
+                declared, index, name, options, inputs.get(name), where
+            ):
+                return None
         if by_name:
             declared_names = {name for name, _t, _o, _r in declared}
             unknown = sorted(k for k in widget_values if k not in declared_names)

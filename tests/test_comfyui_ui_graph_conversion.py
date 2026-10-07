@@ -1232,3 +1232,97 @@ class TestSubgraphs:
         )
         assert prompt is None
         assert any("cannot be matched up" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# V3 dynamic combos: the chosen option's own inputs follow the combo
+# ---------------------------------------------------------------------------
+
+DYNAMIC_OBJECT_INFO = {
+    **OBJECT_INFO,
+    # The shape ComfyUI 0.38's TextGenerate declares, cut down.
+    "TextGen": {
+        "input": {
+            "required": {
+                "max_length": ["INT", {}],
+                "sampling_mode": [
+                    "COMFY_DYNAMICCOMBO_V3",
+                    {
+                        "options": [
+                            {
+                                "key": "on",
+                                "inputs": {
+                                    "required": {
+                                        "temperature": ["FLOAT", {}],
+                                        "top_k": ["INT", {}],
+                                    },
+                                    "optional": {"presence_penalty": ["FLOAT", {}]},
+                                },
+                            },
+                            {"key": "off", "inputs": {"required": {}}},
+                        ]
+                    },
+                ],
+            },
+            "optional": {"use_default_template": ["BOOLEAN", {}]},
+        },
+        "input_order": {
+            "required": ["max_length", "sampling_mode"],
+            "optional": ["use_default_template"],
+        },
+    },
+}
+
+
+def _textgen(values):
+    return _graph([_node(1, "TextGen", widgets=values)], [])
+
+
+class TestDynamicCombos:
+    def test_the_chosen_options_inputs_take_the_values_after_it(self):
+        prompt, problems = convert_ui_graph_to_api(
+            _textgen([256, "on", 0.7, 64, 0.0, True]), DYNAMIC_OBJECT_INFO
+        )
+        assert problems == []
+        # Named as ComfyUI's server reads them: `<combo>.<input>`.
+        assert prompt["1"]["inputs"] == {
+            "max_length": 256,
+            "sampling_mode": "on",
+            "sampling_mode.temperature": 0.7,
+            "sampling_mode.top_k": 64,
+            "sampling_mode.presence_penalty": 0.0,
+            "use_default_template": True,
+        }
+
+    def test_an_option_with_no_inputs_takes_no_values(self):
+        prompt, problems = convert_ui_graph_to_api(
+            _textgen([256, "off", False]), DYNAMIC_OBJECT_INFO
+        )
+        assert problems == []
+        assert prompt["1"]["inputs"] == {
+            "max_length": 256,
+            "sampling_mode": "off",
+            "use_default_template": False,
+        }
+
+    def test_an_option_this_comfyui_does_not_offer_is_refused_by_name(self):
+        prompt, problems = convert_ui_graph_to_api(
+            _textgen([256, "turbo", 1.0, True]), DYNAMIC_OBJECT_INFO
+        )
+        assert prompt is None
+        assert any("'turbo' for its 'sampling_mode'" in p for p in problems)
+
+    def test_values_keyed_by_name_use_the_prefixed_names(self):
+        graph = _textgen(
+            {
+                "max_length": 256,
+                "sampling_mode": "on",
+                "sampling_mode.temperature": 0.5,
+                "sampling_mode.top_k": 10,
+                "sampling_mode.presence_penalty": 0.1,
+                "use_default_template": True,
+            }
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, DYNAMIC_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"]["sampling_mode.temperature"] == 0.5
