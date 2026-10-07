@@ -38,7 +38,7 @@ from pixlstash.utils.query.predicate_filter import (
     NOT_MADE_BY,
     workflow_keys_predicate,
 )
-from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK, chunked
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 from pixlstash.services.workflow_hash import normalized_filename
 
@@ -331,9 +331,12 @@ def credit_groups_in_session(
     # can also straddle two chunks, so the counts are summed and the newest
     # picture is taken across all of them; concatenating would list one look
     # twice with its pictures split. The manual ids go in the first chunk
-    # only, or their runs would be counted once per chunk.
+    # only, or their runs would be counted once per chunk, and the variant
+    # chunks shrink by their count so that query stays under the floor too
+    # (``excluded`` is one bound JSON array, however many ids).
     merged: dict[tuple[Optional[str], Optional[str]], list] = {}
-    for index, chunk in enumerate(list(chunked(variants)) or [[]]):
+    size = SQLITE_ID_CHUNK - len(manual)
+    for index, chunk in enumerate(list(chunked(variants, size)) or [[]]):
         chunk_keys = [*chunk, *excluded, *(manual if index == 0 else [])]
         rows = session.exec(
             select(

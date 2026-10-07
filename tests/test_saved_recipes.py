@@ -1620,6 +1620,13 @@ def test_used_looks_survive_sqlites_variable_ceiling(recipe_env):
                 "VALUES (?, ?, ?, 'v1')",
                 (structural, TOPO_A, CARD_A),
             )
+            # Without its family row an automatic workflow does not count the
+            # variant, and the selection stays two hashes long.
+            conn.execute(
+                "INSERT INTO workflow_variant_family (structural_hash, families) "
+                "VALUES (?, '')",
+                (structural,),
+            )
 
     engine = recipe_env.server.vault.db._engine
 
@@ -1639,6 +1646,21 @@ def test_used_looks_survive_sqlites_variable_ceiling(recipe_env):
         ]
         listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": WF_AB})
         assert listed.status_code == 200, listed.text
+        # A manual workflow's id shares the first chunk's query with a full
+        # chunk of variants, so the most a selection can name (one automatic,
+        # 99 manual) must still fit under the floor.
+        manuals = [
+            create_manual_workflow(
+                recipe_env.server.hub, f"Mine {i}", {"1": {"class_type": "X"}}, "import"
+            )
+            for i in range(99)
+        ]
+        looks = _used(recipe_env.owner, WF_AB, *manuals)
+        assert [(look["prompt"], look["pictures"]) for look in looks] == [
+            (PROMPT, 2),
+            (PROMPT, 1),
+            (OTHER_PROMPT, 1),
+        ]
     finally:
         sa_event.remove(engine, "connect", _set_limit)
         engine.dispose()
