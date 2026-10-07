@@ -1151,6 +1151,14 @@ class TestSubgraphs:
         assert problems == []
         assert prompt["2:5"]["inputs"]["factor"] == ["4", 0]
 
+    def test_the_instances_value_fills_a_widget_its_inner_file_lacks(self):
+        """An inner node saved before its widget existed takes the instance's value."""
+        graph = _subgraph_workflow(instance_values=[3.0])
+        graph["definitions"]["subgraphs"][0]["nodes"][0]["widgets_values"] = []
+        prompt, problems = convert_ui_graph_to_api(graph, SUBGRAPH_OBJECT_INFO)
+        assert problems == []
+        assert prompt["2:5"]["inputs"]["factor"] == 3.0
+
     def test_a_slot_the_definition_does_not_declare_takes_no_unnamed_wire(self):
         """No name to match by is no match, not the first nameless input."""
         graph = _subgraph_workflow(factor_link=12)

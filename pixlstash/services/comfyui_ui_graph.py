@@ -734,10 +734,11 @@ class _Converter:
                 ):
                     return None
                 continue
-            if consumed < len(positional):
+            if name in overrides or consumed < len(positional):
                 # The slot is consumed either way; an instance's own value
-                # replaces the default the definition keeps there.
-                value = overrides.get(name, positional[consumed])
+                # replaces the default the definition keeps there, and stands
+                # in for one the inner node's file is too old to carry.
+                value = overrides[name] if name in overrides else positional[consumed]
                 holds = (
                     _TYPE_HOLDS.get(type_field) if isinstance(type_field, str) else None
                 )
@@ -866,10 +867,18 @@ def convert_ui_graph_to_api(workflow, object_info) -> tuple[dict | None, list[st
         # The graph came from an import or a picture from anywhere, and the map
         # from a ComfyUI with any node pack: a shape the walk does not expect is
         # a refusal like any other, never an error out of Run or a recipe read.
+        # The traceback is what tells a malformed file from a bug in this walk.
         logger.warning(
-            "[comfyui] Editor graph is malformed, so it is not converted: %s: %s",
+            "[comfyui] Editor graph is malformed, so it is not converted: %s: %s "
+            "(nodes: %s)",
             type(exc).__name__,
             exc,
+            [
+                (n.get("id"), n.get("type"))
+                for n in workflow["nodes"][:20]
+                if isinstance(n, dict)
+            ],
+            exc_info=True,
         )
         return None, ["this editor graph is malformed and cannot be read"]
     if converter.problems:
