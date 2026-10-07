@@ -3,7 +3,7 @@
        wider than its container ellipsizes, and the tip has it whole. The
        caller's class sets the type. -->
   <p class="breakable-title" tabindex="0">
-    <Tooltip :text="name" activator="parent" :describe="false" />
+    <Tooltip :text="name" activator="parent" :describe="false" /><template
       v-for="(word, w) in words"
       :key="w"
       >{{ w ? " " : "" }}<template v-for="(chunk, c) in word" :key="c"
