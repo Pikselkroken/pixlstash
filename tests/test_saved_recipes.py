@@ -1655,12 +1655,30 @@ def test_used_looks_survive_sqlites_variable_ceiling(recipe_env):
             )
             for i in range(99)
         ]
+
+        # One manual run landed on a variant of the selected stack. The manual
+        # ids share chunks with the variants now, so the run's id and its hash
+        # sit in different queries; it must still be one picture, not two.
+        def write_run(session):
+            session.add(
+                Picture(
+                    file_path="ceiling_run.png",
+                    created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                    workflow_structural_hash=VARIANT_A,
+                    workflow_hash_version="v1",
+                    run_workflow_id=manuals[-1],
+                    comfyui_positive_prompt="a manual run",
+                    comfyui_loras=json.dumps([]),
+                    comfyui_models=json.dumps([]),
+                )
+            )
+            session.commit()
+
+        recipe_env.server.vault.db.run_task(write_run, priority=DBPriority.IMMEDIATE)
         looks = _used(recipe_env.owner, WF_AB, *manuals)
-        assert [(look["prompt"], look["pictures"]) for look in looks] == [
-            (PROMPT, 2),
-            (PROMPT, 1),
-            (OTHER_PROMPT, 1),
-        ]
+        assert sorted((look["prompt"], look["pictures"]) for look in looks) == sorted(
+            [("a manual run", 1), (OTHER_PROMPT, 1), (PROMPT, 1), (PROMPT, 2)]
+        )
     finally:
         sa_event.remove(engine, "connect", _set_limit)
         engine.dispose()

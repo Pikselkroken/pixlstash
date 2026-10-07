@@ -38,7 +38,7 @@ from pixlstash.utils.query.predicate_filter import (
     NOT_MADE_BY,
     workflow_keys_predicate,
 )
-from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK, chunked
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 from pixlstash.services.workflow_hash import normalized_filename
 
@@ -330,14 +330,14 @@ def credit_groups_in_session(
     # surfacing as a 500 that ``MAX_REORDER_IDS`` exists to prevent. A group
     # can also straddle two chunks, so the counts are summed and the newest
     # picture is taken across all of them; concatenating would list one look
-    # twice with its pictures split. The manual ids go in the first chunk
-    # only, or their runs would be counted once per chunk, and the variant
-    # chunks shrink by their count so that query stays under the floor too
-    # (``excluded`` is one bound JSON array, however many ids).
+    # twice with its pictures split. The manual ids are chunked with the
+    # variants, each in exactly one chunk: while a manual workflow lives,
+    # ``excluded`` keeps its runs out of every variant, so no picture matches
+    # two chunks. ``excluded`` goes in every chunk and is one bound JSON array,
+    # however many ids.
     merged: dict[tuple[Optional[str], Optional[str]], list] = {}
-    size = SQLITE_ID_CHUNK - len(manual)
-    for index, chunk in enumerate(list(chunked(variants, size)) or [[]]):
-        chunk_keys = [*chunk, *excluded, *(manual if index == 0 else [])]
+    for chunk in chunked([*variants, *manual]):
+        chunk_keys = [*chunk, *excluded]
         rows = session.exec(
             select(
                 Picture.comfyui_positive_prompt,
