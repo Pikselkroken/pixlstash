@@ -255,6 +255,8 @@ class ComfyUIExtractionTask(BaseTask):
                 if write_comfyui:
                     if pos_prompt is not None:
                         db_pic.comfyui_positive_prompt = pos_prompt
+                        # Scored against whatever prompt was there before.
+                        db_pic.prompt_match = None
                     # Always write the sentinel ("[]" at minimum) so this picture
                     # is never re-queued by the finder.
                     db_pic.comfyui_models = models_json

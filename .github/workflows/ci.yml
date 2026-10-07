@@ -573,6 +573,7 @@ jobs:
           tests/test_process_teardown.py
           tests/test_project_membership_service.py
           tests/test_projects_api.py
+          tests/test_prompt_match.py
           tests/test_rate_limiter.py
           tests/test_read_token_security.py
           tests/test_reference_folder_moves.py

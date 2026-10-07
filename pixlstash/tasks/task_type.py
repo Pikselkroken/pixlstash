@@ -23,6 +23,7 @@ class TaskType(str, Enum):
     REFERENCE_FOLDER_SCAN = "ReferenceFolderScanTask"
     SMART_SCORE = "SmartScoreTask"
     TEXT_SCORE = "TextScoreTask"
+    PROMPT_MATCH = "PromptMatchTask"
     OCR = "OcrTask"
     GFS_SNAPSHOT = "EnsureGfsSnapshotTask"
     TAG_HEALTH_AUTO_REBUILD = "TagHealthAutoRebuildTask"
