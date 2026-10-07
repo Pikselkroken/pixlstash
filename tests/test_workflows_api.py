@@ -2601,6 +2601,53 @@ def test_a_converted_editor_file_runs_from_the_graph_stored_beside_it(
     assert r.json()["workflow"]["2"]["inputs"]["lora_name"] == _EDITOR_UNRESOLVED
 
 
+# What a ComfyUI that holds _EDITOR_WORKFLOW's three nodes publishes.
+_EDITOR_OBJECT_INFO = {
+    "UNETLoader": {
+        "input": {"required": {"unet_name": [[_SHELF_FILENAME], {}]}},
+        "output": ["MODEL"],
+    },
+    "LoraLoader": {
+        "input": {
+            "required": {
+                "model": ["MODEL", {}],
+                "lora_name": [[_EDITOR_UNRESOLVED], {}],
+                "strength_model": ["FLOAT", {"default": 1.0}],
+                "strength_clip": ["FLOAT", {"default": 1.0}],
+            }
+        },
+        "output": ["MODEL"],
+    },
+    "SaveImage": {
+        "input": {
+            "required": {"images": ["IMAGE", {}], "filename_prefix": ["STRING", {}]}
+        }
+    },
+}
+
+
+def test_an_editor_file_converts_itself_when_comfyui_answers(
+    workflow_env, converting, monkeypatch
+):
+    """No *Convert for PixlStash* trip: the server converts with object_info."""
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(_EDITOR_OBJECT_INFO)), None),
+    )
+    owner = workflow_env.owner
+    r = owner.get(f"{API}/workflows/{converting.manual}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "file"
+    assert r.json()["workflow"]["2"]["inputs"]["model"] == ["1", 0]
+    assert r.json()["workflow"]["2"]["inputs"]["lora_name"] == _EDITOR_UNRESOLVED
+    # A file gesture converts too, through `_card_source`.
+    r = owner.get(f"{API}/workflows/{converting.manual}/export")
+    assert r.status_code == 200, r.text
+    # Converted per read, never written back over the stored row.
+    assert _api_document(workflow_env.server.hub, converting.manual) is None
+
+
 def test_a_conversion_of_another_editor_document_is_not_run(workflow_env, converting):
     """Matched on the whole document: another version is another workflow."""
     owner = workflow_env.owner
@@ -8455,7 +8502,9 @@ def test_a_file_whose_bindings_opted_out_of_its_picture_is_not_filled(i2i):
 
 
 def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
-    """A card whose only source is a UI export says which format it is in."""
+    """A card whose only source is a UI export that will not rebuild says which
+    format it is in. The node is one this ComfyUI lacks: a known node with no
+    widget values now rebuilds from its defaults, as ComfyUI loads it."""
     monkeypatch.setattr(
         workflows_routes,
         "_resolve_workflow_path",
@@ -8464,7 +8513,7 @@ def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
     monkeypatch.setattr(
         workflows_routes,
         "_load_workflow_json",
-        lambda path: {"nodes": [{"id": 1, "type": "KSampler"}], "links": []},
+        lambda path: {"nodes": [{"id": 1, "type": "NotInstalledNode"}], "links": []},
     )
     with runnable.server.hub.transaction() as conn:
         conn.execute(
@@ -8476,6 +8525,39 @@ def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
     # HIDDEN has no instances in this library, so the file is its only tier.
     payload = _preflight(runnable.owner, workflow_id=HIDDEN_WF)
     assert "ui_format" in _reasons(payload), payload
+
+
+def test_an_editor_file_converts_when_comfyui_answers(runnable, monkeypatch):
+    """The legacy file tier converts an editor export the way a manual row does."""
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(_EDITOR_OBJECT_INFO)), None),
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_resolve_workflow_path",
+        lambda name: ("/editor.json", "user"),
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_workflow_json",
+        lambda path: json.loads(json.dumps(_EDITOR_WORKFLOW)),
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, workflow_key, topology_hash, structural_hash) "
+            "VALUES (?, ?, ?, ?)",
+            ("editor.json", HIDDEN_CARD, HIDDEN_TOPOLOGY, HIDDEN_RECIPE),
+        )
+    # HIDDEN has no instances in this library, so the file is its only tier.
+    payload = _preflight(runnable.owner, workflow_id=HIDDEN_WF)
+    assert "ui_format" not in _reasons(payload), payload
+    assert payload["groups"][0]["source"] == "file", payload
+    # And through `_card_source`, which takes the gesture's own map.
+    r = runnable.owner.get(f"{API}/workflows/{HIDDEN_WF}/export")
+    assert r.status_code == 200, r.text
 
 
 # --- what a run actually does ----------------------------------------------

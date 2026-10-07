@@ -1171,7 +1171,18 @@ the two sides have agreed:
    a workflow. A document past `MAX_WORKFLOW_FILE_BYTES` serialised is a 413
    on every route that stores one.
 
-   **ComfyUI converts such a document, PixlStash does not (#1530).** `POST
+   **Running or opening converts such a document on the server**:
+   `_source_graph_for` rebuilds an editor-format file or manual document with
+   `convert_ui_graph_to_api` against ComfyUI's `object_info`, as it already
+   did a picture's editor graph, per read and never written back to the row
+   (a copy a gesture saves is made from the converted graph). That covers Run,
+   preflight, Open in ComfyUI and the file gestures (`_card_source`), not
+   Extract workflow from a saved recipe, which asks ComfyUI nothing. It
+   refuses when ComfyUI cannot be asked or the graph will not rebuild
+   (subgraphs, a widget count that does not match the node), and those
+   still answer `ui_format`.
+
+   **A stored conversion from ComfyUI wins over that (#1530).** `POST
    /api/v1/comfyui/workflows/convert` (`OWNER_ONLY`) takes `{name, workflow,
    output}`: what ComfyUI's own `app.graphToPrompt()` returns for the workflow
    on its canvas, sent by the ComfyUI-PixlStash node one workflow at a time,
@@ -1182,8 +1193,9 @@ the two sides have agreed:
    runs and takes parameters from the API graph. The response is `{name,
    matched, workflow_id}`: the (first) manual workflow and whether it already
    held the document. A client reads a manual workflow whose `models` are
-   empty and which will not run (`ui_format`) as an editor document not
-   converted yet.
+   empty and which will not run (`ui_format`) as an editor document neither
+   ComfyUI nor the server could convert. Parameters and defaults are still read
+   from the stored conversion only.
 
 **The file-keyed workflow routes are retired (#1410).** `GET` / `PUT
 /api/v1/comfyui/workflows/{workflow_name}/inputs` (#1305), `GET .../parameters`
@@ -1773,7 +1785,7 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
   | Response | Meaning | UI |
   |---|---|---|
   | `available:false`, `reason:"no_prompt_chunk"` | Ordinary photo or stripped metadata: nothing was made in ComfyUI here. **The lightbox hides its Recipe tab entirely on this answer** | Recipe mode disabled: "No executable workflow embedded" |
-  | `available:false`, `reason:"editor_graph"` | The file carries ComfyUI's editor graph and PixlStash could not rebuild it exactly — a node class this ComfyUI does not have, a widget array it cannot account for, a subgraph. `conversion_problems` is one sentence per reason | Recipe mode disabled, the recipe still shown (prompt, models, seed read off the editor graph), with `conversion_problems` printed under the refusal |
+  | `available:false`, `reason:"editor_graph"` | The file carries ComfyUI's editor graph and PixlStash could not rebuild it exactly — a node class this ComfyUI does not have, a widget array it cannot account for, a subgraph whose definition is missing or whose values do not match its inputs. `conversion_problems` is one sentence per reason | Recipe mode disabled, the recipe still shown (prompt, models, seed read off the editor graph), with `conversion_problems` printed under the refusal |
   | `available:false`, `reason:"a1111"`, `source:"a1111"` | A1111 output: its recipe is readable (prompts, settings, LoRAs, seed) but is not a graph ComfyUI can be handed | Recipe mode disabled, the recipe still shown. A client that does not know this value falls through to the row above, which stays true |
   | `available:false`, `reason:"no_seed_input"` | The graph has no seed to change, so a re-run would be byte-identical (and would be deduped on `pixel_sha`, emitting no event — the user would see nothing at all) | Recipe mode disabled, with that reason |
   | `preflight.ok:false` | Checked, and this ComfyUI cannot run it | Recipe mode disabled, naming the missing node types / models / input images |
