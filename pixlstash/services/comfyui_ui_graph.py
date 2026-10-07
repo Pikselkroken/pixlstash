@@ -493,10 +493,23 @@ def convert_ui_graph_to_api(workflow, object_info) -> tuple[dict | None, list[st
     # pictures turn out to carry them. `PrimitiveNode` is refused only as an
     # undeclared class ("this ComfyUI has no node class 'PrimitiveNode'"),
     # which is true and is the reason a reader gets.
-    if (workflow.get("definitions") or {}).get("subgraphs"):
-        return None, ["this editor graph uses subgraphs, which PixlStash cannot run"]
-    converter = _Converter(workflow, object_info)
-    prompt = converter.run()
+    try:
+        if (workflow.get("definitions") or {}).get("subgraphs"):
+            return None, [
+                "this editor graph uses subgraphs, which PixlStash cannot run"
+            ]
+        converter = _Converter(workflow, object_info)
+        prompt = converter.run()
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        # The graph came from an import or a picture from anywhere, and the map
+        # from a ComfyUI with any node pack: a shape the walk does not expect is
+        # a refusal like any other, never an error out of Run or a recipe read.
+        logger.warning(
+            "[comfyui] Editor graph is malformed, so it is not converted: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return None, ["this editor graph is malformed and cannot be read"]
     if converter.problems:
         # Deduplicated, because one missing node pack is one problem however
         # many nodes it accounts for, and the list is read by a person.

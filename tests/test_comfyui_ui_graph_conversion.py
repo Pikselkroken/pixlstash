@@ -967,3 +967,28 @@ class TestIsUiGraph:
         assert is_ui_graph({"3": {"class_type": "KSampler"}}) is False
         assert is_ui_graph(None) is False
         assert is_ui_graph("{}") is False
+
+
+def _node_id_a_list(graph, info):
+    graph["nodes"][0]["id"] = [4]
+
+
+def _inputs_a_number(graph, info):
+    graph["nodes"][2]["inputs"] = 1
+
+
+def _node_spec_a_string(graph, info):
+    info["KSampler"] = "not a spec"
+
+
+@pytest.mark.parametrize(
+    "corrupt", [_node_id_a_list, _inputs_a_number, _node_spec_a_string]
+)
+def test_a_malformed_graph_is_refused_not_raised(simple_editor_graph, corrupt):
+    """An imported file or a picture's chunk can hold any shape; Run must not 500."""
+    info = {cls: dict(spec) for cls, spec in OBJECT_INFO.items()}
+    corrupt(simple_editor_graph, info)
+    assert convert_ui_graph_to_api(simple_editor_graph, info) == (
+        None,
+        ["this editor graph is malformed and cannot be read"],
+    )
