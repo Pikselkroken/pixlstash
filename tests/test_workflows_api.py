@@ -8462,6 +8462,39 @@ def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
     assert "ui_format" in _reasons(payload), payload
 
 
+def test_an_editor_file_converts_when_comfyui_answers(runnable, monkeypatch):
+    """The legacy file tier converts an editor export the way a manual row does."""
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(_EDITOR_OBJECT_INFO)), None),
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_resolve_workflow_path",
+        lambda name: ("/editor.json", "user"),
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_workflow_json",
+        lambda path: json.loads(json.dumps(_EDITOR_WORKFLOW)),
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, workflow_key, topology_hash, structural_hash) "
+            "VALUES (?, ?, ?, ?)",
+            ("editor.json", HIDDEN_CARD, HIDDEN_TOPOLOGY, HIDDEN_RECIPE),
+        )
+    # HIDDEN has no instances in this library, so the file is its only tier.
+    payload = _preflight(runnable.owner, workflow_id=HIDDEN_WF)
+    assert "ui_format" not in _reasons(payload), payload
+    assert payload["groups"][0]["source"] == "file", payload
+    # And through `_card_source`, which takes the gesture's own map.
+    r = runnable.owner.get(f"{API}/workflows/{HIDDEN_WF}/export")
+    assert r.status_code == 200, r.text
+
+
 # --- what a run actually does ----------------------------------------------
 
 

@@ -1174,8 +1174,10 @@ the two sides have agreed:
    **Running or opening converts such a document on the server**:
    `_source_graph_for` rebuilds an editor-format file or manual document with
    `convert_ui_graph_to_api` against ComfyUI's `object_info`, as it already
-   did a picture's editor graph, per read and never stored. That covers Run,
-   preflight, Open in ComfyUI and the file gestures (`_card_source`). It
+   did a picture's editor graph, per read and never written back to the row
+   (a copy a gesture saves is made from the converted graph). That covers Run,
+   preflight, Open in ComfyUI and the file gestures (`_card_source`), not
+   Extract workflow from a saved recipe, which asks ComfyUI nothing. It
    refuses when ComfyUI cannot be asked or the graph will not rebuild
    (subgraphs, a widget count that does not match the node), and those
    still answer `ui_format`.

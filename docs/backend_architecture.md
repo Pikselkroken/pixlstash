@@ -2531,8 +2531,12 @@ by cloning.
 **Run, defaults, addresses.** `_source_graph_for` answers a manual card with
 its row (`manual_document`: the document, or the API conversion over it, as
 `runnable_document` reads a file and its sidecar) and never a picture or an
-instance. `workflow_defaults` samples the document's own API graph once and
-addresses it by **its own slot labels, never `core:`**, with model names read
+instance. An editor document with no stored conversion, row or legacy file, is
+converted per read (`_converted_document`: `convert_ui_graph_to_api` against
+the `object_info` the caller read, else a cached read of its ComfyUI URL) and
+never written back (a copy saved from it holds the converted graph); a refusal
+leaves it `ui_format`. `workflow_defaults` samples the document's own API graph
+once and addresses it by **its own slot labels, never `core:`**, with model names read
 off the graph and the `workflow_group_default` edits over it; a document with
 no API graph samples nothing. The grid reads its models off the document
 (`routes/workflows._manual_model_widgets`, cached per id: a row's document is

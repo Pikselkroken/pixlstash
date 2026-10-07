@@ -3715,6 +3715,9 @@ def create_router(server) -> APIRouter:
             return document
         if object_info is None and comfyui_url:
             object_info, _error = _read_object_info(comfyui_url, cached=True)
+        if object_info is None:
+            # Nothing to convert against; the failed read logged why.
+            return document
         graph, problems = convert_ui_graph_to_api(document, object_info)
         if graph is None:
             logger.info(
@@ -5819,8 +5822,16 @@ def create_router(server) -> APIRouter:
     # meant to be run. A copy written for the owner (duplicate, clone, a chain
     # edit) is the graph as it is.
 
-    def _card_source(card, request: Request | None = None):
+    def _card_source(
+        card, *, object_info: dict | None = None, comfyui_url: str | None = None
+    ):
         """One card's runnable graph, or the 409 that says why there is none.
+
+        An editor-format document converts against *object_info*; a gesture
+        that reads the map anyway passes it, so the map is fetched once and the
+        conversion cannot disagree with the gesture about whether ComfyUI
+        answered. One that does not need it passes *comfyui_url* instead, read
+        (cached) only when there is an editor graph to convert.
 
         ``RecursionError`` is caught here rather than at each gesture because
         all three resolve through this one function and share the exposure: an
@@ -5831,10 +5842,7 @@ def create_router(server) -> APIRouter:
         this class for the same reason.
         """
         try:
-            source, reason = _source_graph_for(
-                card,
-                comfyui_url=_comfyui_url(_user(request)) if request else None,
-            )
+            source, reason = _source_graph_for(card, object_info, comfyui_url)
         except RecursionError as exc:
             logger.warning(
                 "Card %s has a source graph too deeply nested to read: %s",
@@ -5973,11 +5981,12 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card, request)
-        recipe = workflow_defaults(hub, server.vault, workflow.workflow_id)
-        # Only a bypass asks it: without ComfyUI nothing is bypassed and the
-        # scrub empties every LoRA slot outside the recipe instead.
+        # Only a bypass and an editor-format document ask it: without ComfyUI
+        # nothing is bypassed and the scrub empties every LoRA slot outside the
+        # recipe instead.
         object_info, _error = _read_object_info(_comfyui_url(_user(request)))
+        source = _card_source(card, object_info=object_info)
+        recipe = workflow_defaults(hub, server.vault, workflow.workflow_id)
         graph = deepcopy(source.graph)
         try:
             keep, bypassed = (
@@ -6157,7 +6166,7 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card, request)
+        source = _card_source(card, comfyui_url=_comfyui_url(_user(request)))
         # Unscrubbed on purpose: this file stays on the owner's machine and is
         # meant to RUN, and a copy with its models blanked would not.
         name, landed = _store_copy(
@@ -6254,7 +6263,7 @@ def create_router(server) -> APIRouter:
             _read_object_info(_comfyui_url(_user(request))),
             "what it has, so it cannot tell what this workflow needs fixed",
         )
-        source = _card_source(card, request)
+        source = _card_source(card, object_info=object_info)
         graph = deepcopy(source.graph)
         changes: list[str] = []
         for entry in _apply_model_fixes(card, graph, object_info, {}):
@@ -6450,7 +6459,6 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         _workflow, card = _require_base(hub, workflow_id)
-        graph = _card_source(card, request).graph
         # Cached: the inspector asks on every card it selects, the map is
         # megabytes, and an unreachable ComfyUI would otherwise cost a full
         # timeout per click. This read only DRAWS the chain; the PUT that
@@ -6458,6 +6466,7 @@ def create_router(server) -> APIRouter:
         object_info, error = _read_object_info(
             _comfyui_url(_user(request)), cached=True
         )
+        graph = _card_source(card, object_info=object_info).graph
         chain = None
         if object_info is None:
             refusal = (
@@ -6589,9 +6598,12 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card, request)
+        # Read before the source so an editor document converts against the
+        # same map; required after it, so a card with no graph is still a 409.
+        read = _read_object_info(_comfyui_url(_user(request)))
+        source = _card_source(card, object_info=read[0])
         object_info = _require_object_info(
-            _read_object_info(_comfyui_url(_user(request))),
+            read,
             "what its nodes hand on, so it cannot rewire this workflow's LoRAs",
         )
         graph = deepcopy(source.graph)
@@ -6982,7 +6994,7 @@ def create_router(server) -> APIRouter:
         _workflow, card = _require_base(hub, workflow_id)
         # The graph is read on the proposal call too: the LoRA flags are about
         # the files it names.
-        source = _card_source(card, request)
+        source = _card_source(card, comfyui_url=_comfyui_url(_user(request)))
         models = _swap_models(hub)
         index = recipe_asset_index(hub)
         found = _swap_slots(source.graph, models, index)
@@ -7230,7 +7242,9 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         _workflow, card = _require_base(hub, workflow_id)
-        graph = _card_source(card, request).graph
+        # Once per request, for every set: the dialog asks on open.
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        graph = _card_source(card, object_info=object_info).graph
         models = _swap_models(hub)
         index = recipe_asset_index(hub)
         found = _swap_slots(graph, models, index)
@@ -7244,8 +7258,6 @@ def create_router(server) -> APIRouter:
             if base is not None
             else None
         )
-        # Once per request, for every set: the dialog asks on open.
-        object_info, error = _read_object_info(_comfyui_url(_user(request)))
         if object_info is None:
             logger.info(
                 "Planning clones of workflow %s onto workflow sets without "
@@ -7437,12 +7449,12 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card, request)
-        graph = deepcopy(source.graph)
         # No 503 here: nothing depends on ComfyUI's link
         # types, so an unreachable ComfyUI means "write the names unchecked".
         # A chain to rewire is the exception, below.
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        source = _card_source(card, object_info=object_info)
+        graph = deepcopy(source.graph)
         if object_info is None:
             logger.info(
                 "Cloning workflow %s with its model names unchecked, ComfyUI did "
