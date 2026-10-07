@@ -1624,7 +1624,9 @@ tagger load and the Grad-CAM pass to an `AnomalyRegionTask`
 for it with `submit_and_wait`; the request thread only checks the cache, finds
 the file and decodes it. This runs on every host, not only Metal: Grad-CAM casts
 the shared tagger to fp32 in place for its backward pass, so on CUDA too a tag
-batch beside it would have met fp32 weights.
+batch beside it would have met fp32 weights. A request that times out (503
+after 120 s) cancels its task, as every `submit_and_wait` timeout does, so a
+burst of abandoned hints never reaches the worker.
 
 #### "VRAM" on unified memory
 
