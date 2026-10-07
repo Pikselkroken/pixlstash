@@ -13,11 +13,16 @@ function itself and in ``docs/backend_architecture.md`` §15. Preserve it exactl
 
 import json
 import mimetypes
+import ntpath
 import os
+import posixpath
 import re
 import time
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
+
+from urllib3.util import parse_url
 
 import requests
 from fastapi import HTTPException
@@ -59,6 +64,12 @@ PIXLSTASH_NODE_PREFIX = "PixlStash"
 
 # Every class that ends a graph with an image PixlStash can end up owning.
 SAVE_NODE_CLASSES = frozenset({"SaveImage"}) | PIXLSTASH_SAVER_CLASSES
+
+# Requests that vet or link a ComfyUI go straight to the address asked.
+# ``requests`` otherwise honours HTTP_PROXY / HTTPS_PROXY / ALL_PROXY from the
+# environment, and a proxy is a host nobody checked. A ``None`` value drops the
+# environment's entry for that key, so ``all`` must be named as well.
+NO_PROXY = {"http": None, "https": None, "all": None}
 
 
 def _extract_history_entry(history_payload: dict, prompt_id: str) -> dict:
@@ -1393,4 +1404,188 @@ def comfyui_can_open_workflows(base_url: str) -> bool | None:
         and "pixlstash" in script.lower()
         and script.endswith("/open_workflow.js")
         for script in scripts
+    )
+
+
+def normalize_comfyui_url(url: str) -> str:
+    """``scheme://host[:port][/path]/`` for an http(s) URL, else ``ValueError``.
+
+    The trailing slash is the form ``comfyui_url`` has always been saved in. The
+    scheme's default port (``:80``, ``:443``) is dropped.
+    """
+    text = str(url or "").strip()
+    parts = urlsplit(text)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(
+            f"A ComfyUI address needs http:// or https:// and a host, not {url!r}."
+        )
+    # Scheme, host, port and path only. A user part, a backslash, a query or a
+    # fragment is where URL parsers disagree on the host: `urlsplit` reads
+    # ``http://evil.example\\@127.0.0.1/`` as 127.0.0.1 while urllib3, which
+    # sends the request, connects to evil.example. Refused, and the host is
+    # then required to read the same to both.
+    if any(mark in text for mark in "@\\?#") or parts.username is not None:
+        raise ValueError(
+            f"A ComfyUI address is scheme, host, port and path only, not {url!r}."
+        )
+    sent_to = (parse_url(text).host or "").strip("[]").lower()
+    if sent_to != parts.hostname.lower():
+        raise ValueError(f"The host in {url!r} is ambiguous.")
+    netloc = parts.netloc
+    # The scheme's own port is the same address without it; one spelling only.
+    if parts.port == {"http": 80, "https": 443}[parts.scheme]:
+        netloc = netloc.rsplit(":", 1)[0]
+    return f"{parts.scheme}://{netloc}{parts.path.rstrip('/')}/"
+
+
+def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
+    """Whether ComfyUI answers at *url*, asked from this server.
+
+    ``GET /system_stats`` is ComfyUI's own and carries a ``system`` object, so
+    another web server answering on the port is told apart from ComfyUI.
+    Asked from the backend because the backend is what submits runs: an
+    address the browser can reach and the server cannot is no use.
+
+    Returns:
+        ``{"reachable", "url", "version", "detail"}``: ``url`` normalised,
+        ``version`` ComfyUI's own when it reports one, ``detail`` the reason
+        when not reachable, written for the person who typed the address.
+
+    Raises:
+        ValueError: *url* is not an http(s) URL with a host.
+    """
+    base = normalize_comfyui_url(url)
+    where = urlsplit(base).netloc
+    result = {"reachable": False, "url": base, "version": None, "detail": None}
+    try:
+        # A redirect is not ComfyUI answering: it is another host's address.
+        response = requests.get(
+            f"{base}system_stats",
+            timeout=timeout,
+            allow_redirects=False,
+            proxies=NO_PROXY,
+        )
+    except requests.exceptions.SSLError as exc:
+        logger.info("ComfyUI probe of %s: TLS failed: %s", base, exc)
+        result["detail"] = (
+            f"{where} answered, but its HTTPS certificate could not be checked."
+        )
+        return result
+    except requests.Timeout:
+        logger.info("ComfyUI probe of %s: no answer within %ss", base, timeout)
+        result["detail"] = f"{where} did not answer within {timeout:g} seconds."
+        return result
+    except requests.RequestException as exc:
+        logger.info("ComfyUI probe of %s: %s", base, exc)
+        result["detail"] = (
+            f"Nothing answered at {where}. Check that ComfyUI is running and "
+            "that the port matches the one in its console."
+        )
+        return result
+    try:
+        stats = response.json() if response.status_code == 200 else None
+    except ValueError:
+        stats = None
+    system = stats.get("system") if isinstance(stats, dict) else None
+    if not isinstance(system, dict):
+        logger.info(
+            "ComfyUI probe of %s: HTTP %s without ComfyUI's system_stats",
+            base,
+            response.status_code,
+        )
+        result["detail"] = f"Something answered at {where}, but it is not ComfyUI."
+        return result
+    version = system.get("comfyui_version")
+    result["reachable"] = True
+    result["version"] = str(version) if version else None
+    return result
+
+
+def comfyui_folder_paths(base_url: str):
+    """ComfyUI's ``GET /internal/folder_paths``, parsed; only a 200 counts.
+
+    Never follows a redirect and never goes through a proxy: the answer names
+    folders on this machine that PixlStash then scans or writes into.
+
+    Raises:
+        requests.RequestException: ComfyUI did not answer with a 200.
+        ValueError: the answer is not JSON.
+    """
+    url = f"{base_url.rstrip('/')}/internal/folder_paths"
+    response = requests.get(url, timeout=5, allow_redirects=False, proxies=NO_PROXY)
+    if response.status_code != 200:
+        raise requests.HTTPError(
+            f"ComfyUI answered HTTP {response.status_code} at {url}"
+        )
+    return response.json()
+
+
+def _path_module(path: str):
+    """``ntpath`` for a Windows path (drive or UNC), else ``posixpath``.
+
+    The paths are spelled by ComfyUI's filesystem, which need not be this one's.
+    """
+    return ntpath if re.match(r"^([A-Za-z]:[\\/]|\\\\)", path) else posixpath
+
+
+def comfyui_model_roots(base_url: str) -> list[str]:
+    """The folders ComfyUI loads models from, reduced to their roots.
+
+    ComfyUI's ``GET /internal/folder_paths`` maps each model category to its
+    directories (``extra_model_paths.yaml`` included), as ComfyUI's own
+    filesystem spells them. A parent holding folders of two or more categories
+    is a models root (``ComfyUI/models``) and is returned in their place; folders
+    of one category alone under their parent are returned as themselves, so a
+    ``loras:`` entry pointing straight at ``~/loras`` does not turn into the
+    whole home folder. ``custom_nodes`` is skipped: its parent is the ComfyUI
+    install, not models.
+
+    Empty when ComfyUI cannot be asked. Whether a root is reachable from this
+    machine is the caller's question.
+
+    ponytail: ``/internal`` is ComfyUI's frontend API, not a stable one; if it
+    moves, ask the PixlStash node pack to report ``folder_paths`` instead.
+    """
+    try:
+        folder_paths = comfyui_folder_paths(base_url)
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(
+            "Could not read ComfyUI model folders from %s: %s", base_url, exc
+        )
+        return []
+    if not isinstance(folder_paths, dict):
+        logger.warning(
+            "ComfyUI /internal/folder_paths at %s returned %s, not an object",
+            base_url,
+            type(folder_paths).__name__,
+        )
+        return []
+    # parent -> {child folder -> the categories that use it}
+    by_parent: dict[str, dict[str, set[str]]] = {}
+    seps: dict[str, str] = {}
+    for category, paths in folder_paths.items():
+        if category == "custom_nodes" or not isinstance(paths, list):
+            continue
+        for path in paths:
+            if isinstance(path, str) and path.strip():
+                pathmod = _path_module(path)
+                path = pathmod.normpath(path)
+                seps[path] = pathmod.sep
+                children = by_parent.setdefault(pathmod.dirname(path), {})
+                children.setdefault(path, set()).add(category)
+    roots = set()
+    for parent, children in by_parent.items():
+        categories = set().union(*children.values())
+        if len(children) > 1 and len(categories) > 1:
+            roots.add(parent)
+            seps[parent] = seps[next(iter(children))]
+        else:
+            roots.update(children)
+    return sorted(
+        root
+        for root in roots
+        if not any(
+            other != root and root.startswith(other.rstrip(seps[other]) + seps[other])
+            for other in roots
+        )
     )

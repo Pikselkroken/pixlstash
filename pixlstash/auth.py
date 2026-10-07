@@ -264,6 +264,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # Whether the owner's ComfyUI has the ComfyUI-PixlStash node: it
         # reaches the owner's ComfyUI, so the rollback must not hand it out.
         "/api/v1/comfyui/pixlstash-node",
+        # Which ComfyUI holds a full-access token and the URL it calls.
+        "/api/v1/comfyui/link",
     }
 )
 
@@ -1990,6 +1992,7 @@ class AuthService:
         return {
             "token": token_value,
             "token_id": token.id,
+            "public_id": token.public_id,
             "scope": token.scope,
             "resource_type": token.resource_type,
             "resource_id": token.resource_id,

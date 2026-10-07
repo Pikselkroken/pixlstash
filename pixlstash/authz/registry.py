@@ -1474,6 +1474,26 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Whether the owner's ComfyUI has the ComfyUI-PixlStash node; reaches the owner's ComfyUI; owner only",
     ),
+    ("GET", "/api/v1/comfyui/link"): RoutePolicy(
+        _OWNER,
+        justification="Whether the owner's ComfyUI is linked and through which URL; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/link"): RoutePolicy(
+        _OWNER,
+        justification="Mints a full-access token and writes it into the owner's ComfyUI; the authority POST /users/me/token already has; owner only",
+    ),
+    ("DELETE", "/api/v1/comfyui/link"): RoutePolicy(
+        _OWNER,
+        justification="Revokes the ComfyUI link token; the authority DELETE /users/me/token already has; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/pack/install"): RoutePolicy(
+        _LOOPBACK,
+        justification="Writes code (the ComfyUI-PixlStash nodes) into a ComfyUI custom_nodes folder on this machine, trashes an older copy and restarts ComfyUI: the host-shell class, loopback only (§16.3)",
+    ),
+    ("POST", "/api/v1/comfyui/probe"): RoutePolicy(
+        _OWNER,
+        justification="Makes this server fetch an address the owner names; the same reach comfyui_url already has; owner only",
+    ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
         justification="Abort generation; POST blocked for READ tokens; owner only",

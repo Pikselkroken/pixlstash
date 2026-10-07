@@ -61,7 +61,7 @@ from pixlstash.routes.model_imports import (
 )
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
-from pixlstash.services import builtin_models
+from pixlstash.services import builtin_models, comfyui_service
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.model_mover import SHELF_IO_LOCK
@@ -2287,6 +2287,163 @@ def test_the_filesystem_root_is_refused(shelf_env):
     r = shelf_env.owner.post(f"{API}/model-folders", json={"path": "/"})
     assert r.status_code == 409, r.text
     assert "PixlStash data folder" in r.json()["detail"], r.text
+
+
+class _FolderPaths:
+    """``requests.get`` stand-in answering ComfyUI's ``/internal/folder_paths``."""
+
+    def __init__(self, folder_paths: dict):
+        self.folder_paths = folder_paths
+        self.urls: list[str] = []
+
+    def __call__(self, url, timeout=None, allow_redirects=True, proxies=None):
+        assert allow_redirects is False, "a redirect names a host nobody vetted"
+        assert proxies == comfyui_service.NO_PROXY
+        self.urls.append(url)
+        return SimpleNamespace(status_code=200, json=lambda: self.folder_paths)
+
+
+def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
+    """Two categories under one parent make that parent the root; a category
+    alone keeps itself, so a ``loras:`` entry pointing at a home folder does not
+    put the whole home folder on the shelf. ``custom_nodes`` names the install."""
+    fake = _FolderPaths(
+        {
+            "checkpoints": ["/comfy/models/checkpoints"],
+            "loras": ["/comfy/models/loras", "/data/my-loras"],
+            "vae": ["/comfy/models/vae", "/comfy/models/vae/extra"],
+            "custom_nodes": ["/comfy/custom_nodes"],
+            "configs": "not a list",
+        }
+    )
+    monkeypatch.setattr(comfyui_service.requests, "get", fake)
+    assert comfyui_service.comfyui_model_roots("http://comfy:8188") == [
+        "/comfy/models",
+        "/data/my-loras",
+    ]
+    assert fake.urls == ["http://comfy:8188/internal/folder_paths"]
+
+
+def test_comfyui_model_roots_group_by_category_not_by_folder_count(monkeypatch):
+    """Two folders of one category under a parent are not a models root: the
+    parent is somebody's home or data drive. A Windows ComfyUI's paths group
+    the same way on any backend."""
+    fake = _FolderPaths(
+        {
+            "loras": ["/home/me/loras-a", "/home/me/loras-b"],
+            "checkpoints": ["C:\\ComfyUI\\models\\checkpoints"],
+            "vae": ["C:\\ComfyUI\\models\\vae"],
+        }
+    )
+    monkeypatch.setattr(comfyui_service.requests, "get", fake)
+    assert comfyui_service.comfyui_model_roots("http://comfy:8188/") == [
+        "/home/me/loras-a",
+        "/home/me/loras-b",
+        "C:\\ComfyUI\\models",
+    ]
+    assert fake.urls == ["http://comfy:8188/internal/folder_paths"]
+
+
+def test_comfyui_model_roots_is_empty_when_comfyui_cannot_be_asked(monkeypatch):
+    def refuse(url, **kwargs):
+        raise comfyui_service.requests.ConnectionError("refused")
+
+    monkeypatch.setattr(comfyui_service.requests, "get", refuse)
+    assert comfyui_service.comfyui_model_roots("http://comfy:8188") == []
+
+
+def test_saving_a_comfyui_url_puts_its_model_folder_on_the_shelf(
+    shelf_env, tmp_path, monkeypatch
+):
+    """The connect gesture registers ComfyUI's models root as a user folder and
+    queues its scan. A path ComfyUI reports that this machine cannot see is
+    skipped, not an error: the URL save still succeeds."""
+    models = tmp_path / "ComfyUI" / "models"
+    for category in ("checkpoints", "loras"):
+        (models / category).mkdir(parents=True)
+    fake = _FolderPaths(
+        {
+            "checkpoints": [str(models / "checkpoints")],
+            "loras": [str(models / "loras"), str(tmp_path / "not-here" / "x" / "y")],
+        }
+    )
+    monkeypatch.setattr(comfyui_service.requests, "get", fake)
+
+    def registered() -> dict[str, dict]:
+        r = shelf_env.owner.get(f"{API}/model-folders")
+        assert r.status_code == 200, r.text
+        return {row["path"]: row for row in r.json()["folders"]}
+
+    root = os.path.realpath(str(models))
+    try:
+        r = shelf_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": "http://127.0.0.1:18188/"}
+        )
+        assert r.status_code == 200, r.text
+        deadline = time.monotonic() + 10
+        while root not in registered() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        folders = registered()
+        assert root in folders, folders
+        assert fake.urls == ["http://127.0.0.1:18188/internal/folder_paths"]
+        assert folders[root]["kind"] == "user"
+        assert folders[root]["scan_status"] is not None, folders[root]
+        assert not any("not-here" in path for path in folders), folders
+    finally:
+        shelf_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+
+
+def test_only_a_comfyui_on_this_computer_names_model_folders(shelf_env, monkeypatch):
+    """The paths are ComfyUI's own filesystem's. From another host they name
+    directories on a machine this is not, so they are not even asked for."""
+    fake = _FolderPaths({"checkpoints": ["/home/me/models/checkpoints"]})
+    monkeypatch.setattr(comfyui_service.requests, "get", fake)
+    for elsewhere in ("http://8.8.8.8:8188/", f"http://{LAN_IPV4}:8188/"):
+        assert (
+            model_folders_routes.register_comfyui_model_folders(
+                shelf_env.server, elsewhere
+            )
+            == []
+        )
+    assert fake.urls == []
+
+
+def test_the_home_folder_from_comfyui_is_never_put_on_the_shelf(
+    shelf_env, tmp_path, monkeypatch
+):
+    """Two categories directly under the home folder collapse to the home
+    folder itself: a scan of everything the person owns. Nothing else refuses
+    it (``/`` is already refused for containing the library), so this rule is
+    the one under test. HOME points at a stand-in so a failure cannot walk the
+    real one."""
+    home = tmp_path / "home"
+    for name in ("checkpoints", "loras"):
+        (home / name).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    fake = _FolderPaths(
+        {"checkpoints": [str(home / "checkpoints")], "loras": [str(home / "loras")]}
+    )
+    monkeypatch.setattr(comfyui_service.requests, "get", fake)
+    before = {
+        row["path"]
+        for row in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+    }
+    try:
+        assert (
+            model_folders_routes.register_comfyui_model_folders(
+                shelf_env.server, "http://127.0.0.1:18188"
+            )
+            == []
+        )
+    finally:
+        after = {
+            row["path"]: row["id"]
+            for row in shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+        }
+        for path, folder_id in after.items():
+            if path not in before:
+                shelf_env.owner.delete(f"{API}/model-folders/{folder_id}")
+    assert set(after) == before, after
 
 
 def test_the_vault_data_folder_is_refused(shelf_env):

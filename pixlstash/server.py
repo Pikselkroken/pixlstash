@@ -51,6 +51,7 @@ from pixlstash.ssl_setup import SslSetupMixin
 from pixlstash.ws.broadcaster import WsBroadcasterMixin
 from pixlstash.pixl_logging import get_logger, uvicorn_log_config
 from pixlstash.services import (
+    comfyui_link_service,
     library_settings_service,
     scrapheap_service,
     workflow_ghost_service,
@@ -1266,6 +1267,13 @@ class Server(
         # get_worker_progress, which the in-app upgrade bar consumes.
         self.vault.start()
         self._maybe_send_telemetry_ping()
+        # A linked ComfyUI on this computer is told if the loopback port moved.
+        threading.Thread(
+            target=comfyui_link_service.reannounce,
+            args=(self,),
+            name="comfyui-link-reannounce",
+            daemon=True,
+        ).start()
         if os.environ.get("PIXLSTASH_INSTALL_TYPE", "").strip().lower() == "electron":
             # The desktop window uses the ephemeral loopback HTTP port (env), not
             # the configured host/port - those describe the optional external

@@ -86,6 +86,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/server-config/open"),
     ("POST", "/api/v1/pictures/export/folder"),
     ("POST", "/api/v1/test-hooks/ws-event"),
+    ("POST", "/api/v1/comfyui/pack/install"),
 }
 
 
@@ -450,6 +451,10 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     folder gets ``vault.db`` from ``POST /libraries`` directly). A finished
     import still promotes its vault, from the commit, not through a route.
 
+    57 = 49 + 8 with ``POST /comfyui/pack/install``: it writes code (the
+    ComfyUI-PixlStash nodes) into a ComfyUI ``custom_nodes`` folder on this
+    machine and restarts ComfyUI, the host-shell class, so loopback only.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -462,7 +467,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 7, sorted(loopback)
+    assert len(loopback) == 8, sorted(loopback)
     assert len(local) == 49, sorted(local)
 
 

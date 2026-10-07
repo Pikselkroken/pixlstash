@@ -70,6 +70,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import BUILTIN_OWNER
+from pixlstash.services import comfyui_link_service
+from pixlstash.services.comfyui_service import comfyui_model_roots
 from pixlstash.services.managed_model_store import (
     MANAGED_KIND,
     deletes_unclaimed_files,
@@ -400,6 +402,257 @@ def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
     return normalized
 
 
+def _validate_folder_conflicts(server, path: str) -> None:
+    """Refuse a path that overlaps the vault or an already-registered folder.
+
+    Containment, not just equality, for the same reason
+    ``_validate_reference_folder_conflicts`` checks it: two roots over the
+    same files register a ``model_file`` row per root, which double-counts
+    every file in ``file_count`` and in a model's locations, and gives the
+    scanner N walks of the same bytes. ``/`` is refused here rather than by a
+    rule of its own, since it contains the vault by construction.
+
+    Args:
+        server: The Server instance, for ``vault`` and ``hub``.
+        path: The resolved candidate path.
+
+    Raises:
+        HTTPException: 409 if the path overlaps something already registered.
+    """
+    image_root = getattr(server.vault, "image_root", "") or ""
+    if path_is_within(path, image_root) or path_is_within(image_root, path):
+        raise HTTPException(
+            status_code=409,
+            detail="Path overlaps the PixlStash data folder.",
+        )
+    for row in server.hub.fetchall("SELECT path FROM model_folder"):
+        other = str(row["path"])
+        if path_is_within(path, other):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Path is inside a registered model folder: {other}",
+            )
+        if path_is_within(other, path):
+            raise HTTPException(
+                status_code=409,
+                detail=f"A registered model folder is inside this path: {other}",
+            )
+
+
+def register_model_folder(
+    server,
+    path: str,
+    kind: str,
+    host_path: Optional[str] = None,
+    delete_after_import: bool = False,
+) -> int:
+    """Validate and insert a ``model_folder`` row; does not scan.
+
+    Shared by the create route and :func:`register_comfyui_model_folders`, so
+    both refuse the same paths for the same reasons.
+
+    Args:
+        server: The Server instance, for ``hub``, ``vault`` and Docker mode.
+        path: The folder to register; resolved through symlinks before storing.
+        kind: One of :data:`CREATABLE_KINDS`.
+        host_path: The Docker bind source, required in Docker mode.
+        delete_after_import: Source folders only: remove runs once imported.
+
+    Returns:
+        The new folder's id.
+
+    Raises:
+        HTTPException: 400 for an unusable path, 409 for an overlapping one.
+    """
+    if kind not in CREATABLE_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"kind must be one of {list(CREATABLE_KINDS)}; managed and "
+                "foreign folders are registered by PixlStash itself."
+            ),
+        )
+    path = os.path.normpath(path)
+    # Lexical first, because it is the only check that can still see a
+    # relative path: realpath below would silently make one absolute against
+    # the server's cwd.
+    error = validate_reference_folder_path(path)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    # That check compares strings, so one symlink defeats it:
+    # ``/home/u/models-link -> /etc`` passes, and the scan then walks /etc
+    # because os.walk follows the top-level link (followlinks=False only
+    # governs links found inside the tree). The example is spelled absolute
+    # because the lexical check above has already refused anything else, and
+    # nothing here expands ``~``. Resolve, re-run the blocklist on what the
+    # link actually points
+    # at, and store the resolved path so the row names the directory that
+    # gets walked. This is the second half of the check
+    # ``create_reference_folder`` runs and this route was missing.
+    path = os.path.realpath(path)
+    error = validate_reference_folder_accessible(path)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    host_path = _normalize_optional_host_path(host_path)
+    if server.running_in_docker() and host_path is None:
+        raise HTTPException(
+            status_code=400, detail="Host path is required in Docker mode."
+        )
+
+    movable, owner = _DERIVED_BY_KIND[kind]
+    now = datetime.now(timezone.utc).isoformat()
+    existing = server.hub.fetchone(
+        "SELECT id FROM model_folder WHERE path = ?", (path,)
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409, detail="This folder is already registered."
+        )
+    _validate_folder_conflicts(server, path)
+    with server.hub.transaction() as conn:
+        cursor = conn.execute(
+            "INSERT INTO model_folder (path, kind, owner, movable, host_path, "
+            "delete_after_import, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                path,
+                kind,
+                owner,
+                movable,
+                host_path,
+                int(delete_after_import),
+                now,
+            ),
+        )
+        folder_id = int(cursor.lastrowid)
+    logger.info("Model folder registered: %s (kind=%s)", path, kind)
+    return folder_id
+
+
+def queue_model_folder_scan(
+    server, folder_id: int, path: str, kind: str
+) -> tuple[str, Optional[str]]:
+    """Queue a scan of a registered folder unless one is already in flight.
+
+    Args:
+        server: The Server instance, for ``hub`` and the vault's task runner.
+        folder_id: The ``model_folder`` row to scan.
+        path: That row's path.
+        kind: That row's kind.
+
+    Returns:
+        ``("started" | "already_running", task_id)``.
+
+    Raises:
+        HTTPException: 503 when the task runner refuses the submission.
+    """
+    with _scans_lock:
+        running = _scans.get(folder_id)
+        if running is not None and running.status in _SCAN_IN_FLIGHT:
+            return "already_running", running.id
+        task = ModelFolderScanTask(server.hub, folder_id, path, kind)
+        # Claimed before submission, so the gate covers the queued window
+        # too. A submission that fails releases it below.
+        _scans[folder_id] = task
+
+    try:
+        task_id = server.vault.submit_task(task)
+    except RuntimeError as exc:
+        logger.error(
+            "Could not queue a rescan of model folder %s (id=%s): the task "
+            "runner refused the submission: %s",
+            path,
+            folder_id,
+            exc,
+        )
+        task_id = None
+    if task_id is None:
+        with _scans_lock:
+            if _scans.get(folder_id) is task:
+                del _scans[folder_id]
+        raise HTTPException(
+            status_code=503,
+            detail="The task runner is not available, so the scan cannot be queued.",
+        )
+    logger.info(
+        "Rescan of model folder %s (id=%s, kind=%s) queued as task %s.",
+        path,
+        folder_id,
+        kind,
+        task_id,
+    )
+    return "started", task_id
+
+
+def register_comfyui_model_folders(server, base_url: str) -> list[int]:
+    """Put a connected ComfyUI's model folders on the shelf and scan them.
+
+    Only for a ComfyUI on this computer: the paths are ComfyUI's own, and from
+    any other host they name directories on a machine this is not, which a
+    hostile ComfyUI could use to make the shelf walk the whole filesystem.
+    Each root from :func:`comfyui_model_roots` then goes through the same
+    checks as a folder added by hand, and a filesystem root or the home folder
+    itself is never registered. A refused one (already on the shelf, inside another
+    folder, not on this machine, Docker without a host path) is logged and
+    skipped: the ComfyUI connection is saved either way.
+
+    Args:
+        server: The Server instance.
+        base_url: The ComfyUI URL, without a trailing slash.
+
+    Returns:
+        The ids of the folders newly registered.
+    """
+    try:
+        where, pinned = comfyui_link_service.locate(base_url)
+    except ValueError as exc:
+        logger.info("ComfyUI model folders not read: %s", exc)
+        return []
+    if where != "this_computer":
+        logger.info(
+            "ComfyUI at %s is not on this computer; its model folders are not "
+            "added to the shelf.",
+            base_url,
+        )
+        return []
+    too_broad = {os.path.realpath(os.path.expanduser("~"))}
+    registered = []
+    # Asked at the address `locate` vetted, so a second DNS answer cannot
+    # supply the paths from somewhere else.
+    for root in comfyui_model_roots(pinned.rstrip("/")):
+        resolved = os.path.realpath(root)
+        if os.path.dirname(resolved) == resolved or resolved in too_broad:
+            logger.warning(
+                "ComfyUI reported %s as a model folder; a filesystem root or the "
+                "home folder is never put on the shelf whole.",
+                root,
+            )
+            continue
+        try:
+            folder_id = register_model_folder(server, root, "user")
+        except HTTPException as exc:
+            logger.info(
+                "ComfyUI model folder %s not added to the shelf: %s",
+                root,
+                exc.detail,
+            )
+            continue
+        registered.append(folder_id)
+        folder = server.hub.fetchone(
+            "SELECT path FROM model_folder WHERE id = ?", (folder_id,)
+        )
+        try:
+            queue_model_folder_scan(server, folder_id, folder["path"], "user")
+        except HTTPException as exc:
+            logger.warning(
+                "ComfyUI model folder %s (id=%s) registered but not scanned: %s. "
+                "Rescan it from the model folders dialog.",
+                folder["path"],
+                folder_id,
+                exc.detail,
+            )
+    return registered
+
+
 def create_router(server) -> APIRouter:
     """Create the model-folder router.
 
@@ -420,41 +673,6 @@ def create_router(server) -> APIRouter:
         if row is None:
             raise HTTPException(status_code=404, detail="Model folder not found.")
         return dict(row)
-
-    def _validate_folder_conflicts(path: str) -> None:
-        """Refuse a path that overlaps the vault or an already-registered folder.
-
-        Containment, not just equality, for the same reason
-        ``_validate_reference_folder_conflicts`` checks it: two roots over the
-        same files register a ``model_file`` row per root, which double-counts
-        every file in ``file_count`` and in a model's locations, and gives the
-        scanner N walks of the same bytes. ``/`` is refused here rather than by a
-        rule of its own, since it contains the vault by construction.
-
-        Args:
-            path: The resolved candidate path.
-
-        Raises:
-            HTTPException: 409 if the path overlaps something already registered.
-        """
-        image_root = getattr(server.vault, "image_root", "") or ""
-        if path_is_within(path, image_root) or path_is_within(image_root, path):
-            raise HTTPException(
-                status_code=409,
-                detail="Path overlaps the PixlStash data folder.",
-            )
-        for row in server.hub.fetchall("SELECT path FROM model_folder"):
-            other = str(row["path"])
-            if path_is_within(path, other):
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Path is inside a registered model folder: {other}",
-                )
-            if path_is_within(other, path):
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"A registered model folder is inside this path: {other}",
-                )
 
     def _file_counts() -> dict[int, int]:
         """Copies per folder, in one grouped query rather than one per folder."""
@@ -622,67 +840,13 @@ def create_router(server) -> APIRouter:
         payload: ModelFolderCreateRequest = Body(...),
     ):
         server.auth.ensure_secure_when_required(request)
-        if payload.kind not in CREATABLE_KINDS:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"kind must be one of {list(CREATABLE_KINDS)}; managed and "
-                    "foreign folders are registered by PixlStash itself."
-                ),
-            )
-        path = os.path.normpath(payload.path)
-        # Lexical first, because it is the only check that can still see a
-        # relative path: realpath below would silently make one absolute against
-        # the server's cwd.
-        error = validate_reference_folder_path(path)
-        if error:
-            raise HTTPException(status_code=400, detail=error)
-        # That check compares strings, so one symlink defeats it:
-        # ``/home/u/models-link -> /etc`` passes, and the scan then walks /etc
-        # because os.walk follows the top-level link (followlinks=False only
-        # governs links found inside the tree). The example is spelled absolute
-        # because the lexical check above has already refused anything else, and
-        # nothing here expands ``~``. Resolve, re-run the blocklist on what the
-        # link actually points
-        # at, and store the resolved path so the row names the directory that
-        # gets walked. This is the second half of the check
-        # ``create_reference_folder`` runs and this route was missing.
-        path = os.path.realpath(path)
-        error = validate_reference_folder_accessible(path)
-        if error:
-            raise HTTPException(status_code=400, detail=error)
-        host_path = _normalize_optional_host_path(payload.host_path)
-        if server.running_in_docker() and host_path is None:
-            raise HTTPException(
-                status_code=400, detail="Host path is required in Docker mode."
-            )
-
-        movable, owner = _DERIVED_BY_KIND[payload.kind]
-        now = datetime.now(timezone.utc).isoformat()
-        existing = server.hub.fetchone(
-            "SELECT id FROM model_folder WHERE path = ?", (path,)
+        folder_id = register_model_folder(
+            server,
+            payload.path,
+            payload.kind,
+            host_path=payload.host_path,
+            delete_after_import=payload.delete_after_import,
         )
-        if existing is not None:
-            raise HTTPException(
-                status_code=409, detail="This folder is already registered."
-            )
-        _validate_folder_conflicts(path)
-        with server.hub.transaction() as conn:
-            cursor = conn.execute(
-                "INSERT INTO model_folder (path, kind, owner, movable, host_path, "
-                "delete_after_import, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    path,
-                    payload.kind,
-                    owner,
-                    movable,
-                    host_path,
-                    int(payload.delete_after_import),
-                    now,
-                ),
-            )
-            folder_id = int(cursor.lastrowid)
-        logger.info("Model folder registered: %s (kind=%s)", path, payload.kind)
         return _to_response(_fetch_folder(folder_id))
 
     @router.patch(
@@ -838,47 +1002,9 @@ def create_router(server) -> APIRouter:
             # `.pth` scorers missing on every pass.
             return ModelFolderRescanResponse(status="skipped", id=folder_id)
 
-        with _scans_lock:
-            running = _scans.get(folder_id)
-            if running is not None and running.status in _SCAN_IN_FLIGHT:
-                return ModelFolderRescanResponse(
-                    status="already_running", id=folder_id, task_id=running.id
-                )
-            task = ModelFolderScanTask(
-                server.hub, folder_id, folder["path"], folder["kind"]
-            )
-            # Claimed before submission, so the gate covers the queued window
-            # too. A submission that fails releases it below.
-            _scans[folder_id] = task
-
-        try:
-            task_id = server.vault.submit_task(task)
-        except RuntimeError as exc:
-            logger.error(
-                "Could not queue a rescan of model folder %s (id=%s): the task "
-                "runner refused the submission: %s",
-                folder["path"],
-                folder_id,
-                exc,
-            )
-            task_id = None
-        if task_id is None:
-            with _scans_lock:
-                if _scans.get(folder_id) is task:
-                    del _scans[folder_id]
-            raise HTTPException(
-                status_code=503,
-                detail="The task runner is not available, so the scan cannot be queued.",
-            )
-        logger.info(
-            "Rescan of model folder %s (id=%s, kind=%s) queued as task %s.",
-            folder["path"],
-            folder_id,
-            folder["kind"],
-            task_id,
+        status, task_id = queue_model_folder_scan(
+            server, folder_id, folder["path"], folder["kind"]
         )
-        return ModelFolderRescanResponse(
-            status="started", id=folder_id, task_id=task_id
-        )
+        return ModelFolderRescanResponse(status=status, id=folder_id, task_id=task_id)
 
     return router
