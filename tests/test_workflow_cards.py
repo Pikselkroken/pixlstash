@@ -1549,6 +1549,23 @@ def test_the_default_recipe_is_the_modal_checkpoint_and_the_majority_loras(
     assert recipe.stages == {"face_detailer": False}
 
 
+def test_a_latent_sized_by_a_resolution_selector_offers_its_size(hub, monkeypatch):
+    """The wired width and height read as what the selector works out to."""
+    graph = _graph()
+    graph["49"] = _node(
+        "ResolutionSelector",
+        aspect_ratio="16:9 (Widescreen)",
+        megapixels=1.0,
+        multiple=8,
+    )
+    graph["4"]["inputs"]["width"] = ["49", 0]
+    graph["4"]["inputs"]["height"] = ["49", 1]
+    runs = [record_api_graph(hub, graph, library_uuid="test-library")]
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    size = {d.input_name: d.value for d in recipe.values}
+    assert (size["width"], size["height"]) == (1368, 768)
+
+
 def test_a_shelf_loader_s_default_model_names_the_file_its_id_names(hub, monkeypatch):
     """`filename` stays the id a run writes back; `shelf_filename` is the file
     (#1721), and an id the shelf lost says so rather than being a number."""
