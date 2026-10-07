@@ -129,4 +129,10 @@ pixlstash = [
     "data/anchors/*.npy",
     "data/comfyui-workflows/built-in/*.json",
     "data/scalar-assets/*",
+    "data/comfyui-pack/**/*",
 ]
+
+[tool.ruff]
+# The ComfyUI-PixlStash nodes staged into the wheel at build time (setup.py):
+# another project's code, linted in its own repository. Rules stay the defaults.
+extend-exclude = ["pixlstash/data/comfyui-pack"]

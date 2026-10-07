@@ -28,18 +28,27 @@ refused credential is live.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import ipaddress
 import json
 from pathlib import Path
 import logging
 import os
+import shutil
+import socket
 import sqlite3
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 from types import SimpleNamespace
 
 import pytest
 import requests
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select, update
@@ -78,7 +87,11 @@ from pixlstash.services.workflow_hash import (
     structural_document,
     topology_hash,
 )
-from pixlstash.services import workflow_card_service
+from pixlstash.services import (
+    comfyui_link_service,
+    comfyui_pack_service,
+    workflow_card_service,
+)
 from pixlstash.services.workflow_run_service import (
     MISSING_MODELS,
     MISSING_NODES,
@@ -92,6 +105,7 @@ from pixlstash.services.workflow_run_service import (
     skip_requested_loras,
 )
 from pixlstash.utils.known_base_models import family_of, fold
+import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
@@ -140,6 +154,7 @@ from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
+from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4
 
 API = "/api/v1"
 
@@ -1470,6 +1485,756 @@ def test_the_node_check_reads_comfyuis_extensions(
     r = workflow_env.owner.get(f"{API}/comfyui/pixlstash-node")
     assert r.status_code == 200, r.text
     assert r.json() == {"can_open_workflows": expected}
+
+
+def _system_stats_answer(monkeypatch, answer) -> list[str]:
+    """Stand in for ComfyUI's ``GET /system_stats``; returns the URLs asked."""
+    asked: list[str] = []
+
+    def fake_get(url, timeout):
+        asked.append(url)
+        if isinstance(answer, Exception):
+            raise answer
+        status, body = answer
+
+        def json():
+            if isinstance(body, Exception):
+                raise body
+            return body
+
+        return SimpleNamespace(ok=status == 200, status_code=status, json=json)
+
+    monkeypatch.setattr(comfyui_service.requests, "get", fake_get)
+    return asked
+
+
+def test_the_probe_is_owner_only(workflow_env, monkeypatch):
+    """Declared owner-only, and a scoped token is refused while the owner is
+    answered. The refused token is proven live first."""
+    _system_stats_answer(monkeypatch, (200, {"system": {}}))
+    path = f"{API}/comfyui/probe"
+    assert_real_route(workflow_env.server.api, "POST", path)
+    assert ROUTE_POLICIES[("POST", path)].policy is AccessPolicy.OWNER_ONLY
+    token = _mint(
+        workflow_env.owner,
+        "probe check",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(workflow_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusal below would prove nothing"
+    )
+    body = {"url": "http://127.0.0.1:8188"}
+    assert client.post(path, json=body).status_code == 403
+    assert workflow_env.owner.post(path, json=body).status_code == 200
+
+
+def test_the_probe_recognises_comfyui_and_normalises_the_address(
+    workflow_env, monkeypatch
+):
+    asked = _system_stats_answer(
+        monkeypatch, (200, {"system": {"comfyui_version": "0.3.62"}})
+    )
+    r = workflow_env.owner.post(
+        f"{API}/comfyui/probe", json={"url": " https://comfy.example.com:8188 "}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "reachable": True,
+        "url": "https://comfy.example.com:8188/",
+        "version": "0.3.62",
+        "detail": None,
+    }
+    assert asked == ["https://comfy.example.com:8188/system_stats"]
+
+
+@pytest.mark.parametrize(
+    "answer, says",
+    [
+        # Another web server on the port: a page, a 404, JSON without `system`.
+        ((200, ValueError("not json")), "but it is not ComfyUI"),
+        ((404, {"detail": "Not Found"}), "but it is not ComfyUI"),
+        ((200, {"status": "ok"}), "but it is not ComfyUI"),
+        (requests.ConnectionError("refused"), "Nothing answered at 127.0.0.1:8189"),
+        (requests.Timeout("slow"), "did not answer within 2 seconds"),
+        (requests.exceptions.SSLError("self-signed"), "certificate could not be"),
+    ],
+)
+def test_the_probe_says_why_an_address_is_not_comfyui(
+    workflow_env, monkeypatch, answer, says
+):
+    """Unreachable is an answer, not an error: 200 with the reason."""
+    _system_stats_answer(monkeypatch, answer)
+    r = workflow_env.owner.post(
+        f"{API}/comfyui/probe", json={"url": "http://127.0.0.1:8189/"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["reachable"] is False
+    assert says in r.json()["detail"], r.json()
+
+
+@pytest.mark.parametrize("url", ["127.0.0.1:8188", "ftp://comfy.example.com/", ""])
+def test_the_probe_refuses_an_address_that_is_not_http(workflow_env, monkeypatch, url):
+    asked = _system_stats_answer(monkeypatch, (200, {"system": {}}))
+    r = workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": url})
+    assert r.status_code == 400, r.text
+    assert asked == []
+
+
+# ===========================================================================
+# Linking ComfyUI: a full-access token written into ComfyUI's settings
+# ===========================================================================
+
+
+def _http_answer(status: int, body):
+    def raise_for_status():
+        if status >= 400:
+            raise requests.HTTPError(f"HTTP {status}")
+
+    return SimpleNamespace(
+        ok=status < 400,
+        status_code=status,
+        json=lambda: body,
+        raise_for_status=raise_for_status,
+    )
+
+
+class _FakeComfyUI:
+    """A ComfyUI with (or without) the PixlStash nodes, reached over ``requests``.
+
+    The link check goes through the pack's proxy, which calls PixlStash with
+    the token it is handed; this one calls the real test server the same way,
+    so "the token works" is the server's own answer, not an assumption.
+    """
+
+    def __init__(self, server, *, pack: bool = True, settings_status: int = 200):
+        self.server = server
+        self.pack = pack
+        self.settings_status = settings_status
+        self.settings: dict = {}
+        self.writes: list[dict] = []
+        # What a client that follows redirects would have re-sent to the
+        # Location: a host nobody checked.
+        self.followed: list[dict] = []
+
+    def get(self, url, timeout=None, headers=None, **kwargs):
+        path = urlsplit(url).path
+        if path.endswith("/system_stats"):
+            return _http_answer(200, {"system": {"comfyui_version": "0.38.2"}})
+        if path.endswith("/extensions"):
+            scripts = ["/extensions/ComfyUI-PixlStash/open_workflow.js"]
+            return _http_answer(200, scripts if self.pack else [])
+        if path.endswith("/internal/folder_paths"):
+            return _http_answer(200, {})
+        if path.endswith("/pixlstash/sort_mechanisms"):
+            assert kwargs.get("proxies") == comfyui_link_service.NO_PROXY, (
+                "the check carries the token and must not go through a proxy"
+            )
+            assert self.settings.get(comfyui_link_service.SETTING_URL), (
+                "the link was checked before ComfyUI was told where PixlStash is"
+            )
+            token = headers["Authorization"].split(" ", 1)[1]
+            r = _bearer(self.server, token).get(f"{API}/sort_mechanisms")
+            return _http_answer(r.status_code, r.json() if r.is_success else {})
+        raise AssertionError(f"unexpected GET {url}")
+
+    def post(self, url, json=None, timeout=None, allow_redirects=True, **kwargs):
+        assert urlsplit(url).path.endswith("/settings"), url
+        assert kwargs.get("proxies") == comfyui_link_service.NO_PROXY, (
+            "the settings write carries the token and must not go through a proxy"
+        )
+        self.writes.append(json)
+        if 300 <= self.settings_status < 400 and allow_redirects:
+            self.followed.append(json)
+        if self.settings_status != 200:
+            return _http_answer(self.settings_status, None)
+        self.settings.update(json)
+        return _http_answer(200, None)
+
+
+def _link_tokens(server) -> list[int]:
+    """Ids of live ComfyUI link tokens, read from the token table.
+
+    Not through ``GET /users/me/token``: that route resolves a scoped token's
+    character name against the hub, where characters do not live, so it fails
+    once any test here has minted a character-scoped token.
+    """
+
+    def ids(session):
+        return list(
+            session.exec(
+                select(UserToken.id).where(
+                    UserToken.description == comfyui_link_service.TOKEN_DESCRIPTION
+                )
+            ).all()
+        )
+
+    return server.auth._db.run_task(ids, priority=DBPriority.IMMEDIATE)
+
+
+@pytest.fixture
+def comfy_at(workflow_env, monkeypatch):
+    """Save a ComfyUI address and answer for it with a fake ComfyUI.
+
+    Saving the address also starts the models-folder registration, which is
+    not under test here and would otherwise outlive the fake.
+    """
+    monkeypatch.setattr(config_routes, "register_comfyui_model_folders", lambda *a: [])
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    monkeypatch.delenv("PIXLSTASH_PORT", raising=False)
+    fakes: list[_FakeComfyUI] = []
+
+    def at(url: str, **kwargs) -> _FakeComfyUI:
+        fake = _FakeComfyUI(workflow_env.server, **kwargs)
+        fakes.append(fake)
+        monkeypatch.setattr(comfyui_link_service.requests, "get", fake.get)
+        monkeypatch.setattr(comfyui_link_service.requests, "post", fake.post)
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": url}
+        )
+        assert r.status_code == 200, r.text
+        return fake
+
+    yield at
+    if fakes:
+        workflow_env.owner.delete(f"{API}/comfyui/link")
+    workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+
+
+def _steps(reply: dict) -> dict:
+    return {step["id"]: step for step in reply["steps"]}
+
+
+def test_the_link_routes_are_owner_only(workflow_env):
+    """Declared owner-only, and a share token is refused on each verb while
+    the owner reaches the read. The refused token is proven live first."""
+    path = f"{API}/comfyui/link"
+    for method in ("GET", "POST", "DELETE"):
+        assert_real_route(workflow_env.server.api, method, path)
+        assert ROUTE_POLICIES[(method, path)].policy is AccessPolicy.OWNER_ONLY
+    token = _mint(
+        workflow_env.owner,
+        "link check",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(workflow_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusals below would prove nothing"
+    )
+    assert client.get(path).status_code == 403
+    assert client.post(path).status_code == 403
+    assert client.delete(path).status_code == 403
+    assert workflow_env.owner.get(path).status_code == 200
+
+
+def test_linking_a_comfyui_on_this_computer_writes_a_working_full_access_token(
+    workflow_env, comfy_at
+):
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+
+    r = workflow_env.owner.post(f"{API}/comfyui/link")
+    assert r.status_code == 200, r.text
+    reply = r.json()
+    assert [s["state"] for s in reply["steps"]] == ["done"] * 4, reply
+    assert reply["linked"] is True
+    written = fake.settings
+    assert written[comfyui_link_service.SETTING_URL] == (
+        f"http://127.0.0.1:{server._server_config['port']}"
+    )
+    assert written[comfyui_link_service.SETTING_SSL] is True
+    assert written[comfyui_link_service.SETTING_CA] == ""
+    first = written[comfyui_link_service.SETTING_TOKEN]
+    # Full access: the token reaches an owner-only route a share token cannot.
+    assert ROUTE_POLICIES[("GET", f"{API}/comfyui/link")].policy is (
+        AccessPolicy.OWNER_ONLY
+    )
+    assert _bearer(server, first).get(f"{API}/comfyui/link").status_code == 200
+    assert len(_link_tokens(workflow_env.server)) == 1
+    status = workflow_env.owner.get(f"{API}/comfyui/link").json()
+    assert (status["linked"], status["where"]) == (True, "this_computer")
+
+    # Linking again replaces the token: the old one stops working.
+    r = workflow_env.owner.post(f"{API}/comfyui/link")
+    assert r.json()["linked"] is True, r.json()
+    second = fake.settings[comfyui_link_service.SETTING_TOKEN]
+    assert second != first
+    assert _bearer(server, first).get(f"{API}/sort_mechanisms").status_code in {
+        401,
+        403,
+    }
+    assert _bearer(server, second).get(f"{API}/sort_mechanisms").status_code == 200
+    assert len(_link_tokens(workflow_env.server)) == 1
+
+    # Disconnect revokes it here and clears ComfyUI's copy.
+    r = workflow_env.owner.delete(f"{API}/comfyui/link")
+    assert r.status_code == 200, r.text
+    assert _bearer(server, second).get(f"{API}/sort_mechanisms").status_code in {
+        401,
+        403,
+    }
+    assert fake.settings[comfyui_link_service.SETTING_TOKEN] == ""
+    assert _link_tokens(workflow_env.server) == []
+    assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
+
+
+def test_no_token_is_minted_when_the_nodes_are_missing(workflow_env, comfy_at):
+    fake = comfy_at("http://127.0.0.1:18188/", pack=False)
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    steps = _steps(reply)
+    assert (steps["nodes"]["state"], steps["nodes"]["reason"]) == (
+        "needs_you",
+        "pack_missing",
+    )
+    assert steps["link"]["state"] == steps["check"]["state"] == "not_run"
+    assert fake.writes == []
+    assert _link_tokens(workflow_env.server) == []
+
+
+def test_a_comfyui_outside_the_local_network_is_left_to_set_up_by_hand(
+    workflow_env, comfy_at
+):
+    fake = comfy_at("http://8.8.8.8:8188/")
+    steps = _steps(workflow_env.owner.post(f"{API}/comfyui/link").json())
+    assert (steps["link"]["state"], steps["link"]["reason"]) == (
+        "needs_you",
+        "not_local",
+    )
+    assert fake.writes == []
+    assert _link_tokens(workflow_env.server) == []
+
+
+def test_a_comfyui_on_the_local_network_needs_remote_access_with_https(
+    workflow_env, comfy_at, monkeypatch
+):
+    fake = comfy_at(f"http://{LAN_IPV4}:8188/")
+    # This server listens on loopback only: remote access is effectively off.
+    steps = _steps(workflow_env.owner.post(f"{API}/comfyui/link").json())
+    assert steps["reach"]["state"] == "done", steps
+    assert steps["link"]["reason"] == "remote_access_off", steps
+    # Listening on the network, but plain HTTP.
+    monkeypatch.setitem(workflow_env.server._server_config, "host", "0.0.0.0")
+    monkeypatch.setitem(workflow_env.server._server_config, "require_ssl", False)
+    steps = _steps(workflow_env.owner.post(f"{API}/comfyui/link").json())
+    assert steps["link"]["reason"] == "https_off", steps
+    assert fake.writes == []
+    assert _link_tokens(workflow_env.server) == []
+
+
+def test_a_redirect_never_carries_the_token_to_another_host(workflow_env, comfy_at):
+    """A 307/308 from ComfyUI (a reverse proxy's HTTP-to-HTTPS hop) is a
+    failed write, not a hop: following it re-sends the token to an unchecked
+    Location."""
+    fake = comfy_at("http://127.0.0.1:18188/", settings_status=307)
+    steps = _steps(workflow_env.owner.post(f"{API}/comfyui/link").json())
+    assert (steps["link"]["state"], steps["link"]["reason"]) == (
+        "failed",
+        "write_failed",
+    )
+    assert fake.followed == []
+    assert _link_tokens(workflow_env.server) == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # urlsplit reads 127.0.0.1; the HTTP client connects to evil.example.
+        "http://evil.example\\@127.0.0.1:18188/",
+        "http://user@127.0.0.1:18188/",
+        "http://127.0.0.1:18188/#frag",
+    ],
+)
+def test_an_address_parsers_disagree_on_is_never_linked(workflow_env, comfy_at, url):
+    fake = comfy_at(url)
+    steps = _steps(workflow_env.owner.post(f"{API}/comfyui/link").json())
+    assert steps["reach"]["state"] == "failed", steps
+    assert fake.writes == []
+    assert _link_tokens(workflow_env.server) == []
+    r = workflow_env.owner.post(f"{API}/comfyui/probe", json={"url": url})
+    assert r.status_code == 400, r.text
+
+
+def test_every_address_a_host_resolves_to_must_be_local(
+    workflow_env, comfy_at, monkeypatch
+):
+    """The HTTP client tries each address in turn, so one public address among
+    loopback ones is a host outside the local network."""
+    real = socket.getaddrinfo
+
+    def answers(host, *args, **kwargs):
+        if host == "both.example":
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0)),
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0)),
+            ]
+        return real(host, *args, **kwargs)
+
+    monkeypatch.setattr(comfyui_link_service.socket, "getaddrinfo", answers)
+    fake = comfy_at("http://both.example:18188/")
+    steps = _steps(workflow_env.owner.post(f"{API}/comfyui/link").json())
+    assert steps["link"]["reason"] == "not_local", steps
+    assert fake.writes == []
+    assert _link_tokens(workflow_env.server) == []
+
+
+def test_an_unscoped_read_token_cannot_see_the_link(workflow_env):
+    token = _mint(workflow_env.owner, "unscoped read probe")
+    client = _bearer(workflow_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the READ token is dead; the refusal below would prove nothing"
+    )
+    assert client.get(f"{API}/comfyui/link").status_code == 403
+
+
+def test_a_refused_settings_write_leaves_no_token_behind(workflow_env, comfy_at):
+    comfy_at("http://127.0.0.1:18188/", settings_status=403)
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    steps = _steps(reply)
+    assert (steps["link"]["state"], steps["link"]["reason"]) == (
+        "failed",
+        "write_failed",
+    )
+    assert reply["linked"] is False
+    assert _link_tokens(workflow_env.server) == []
+    assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
+
+
+def _self_signed(path, *ips: str) -> str:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.IPAddress(ipaddress.ip_address(ip)) for ip in ips]
+            ),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    return str(path)
+
+
+def test_a_local_network_link_hands_over_the_certificate_that_covers_it(
+    tmp_path, monkeypatch
+):
+    """The pack verifies against PixlStash's own certificate, so the URL must
+    be an address that certificate names; one it does not is refused before
+    any token exists."""
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    certfile = _self_signed(tmp_path / "cert.pem", "127.0.0.1", LAN_IPV4)
+    server = SimpleNamespace(
+        _server_config={
+            "host": "0.0.0.0",
+            "port": 9537,
+            "require_ssl": True,
+            "ssl_certfile": certfile,
+        }
+    )
+    monkeypatch.setattr(comfyui_link_service, "_address_toward", lambda h, p: LAN_IPV4)
+    url, cert = comfyui_link_service.link_target(
+        server, "local_network", f"http://{LAN_IPV4}:8188/"
+    )
+    assert url == f"https://{LAN_IPV4}:9537"
+    assert cert == Path(certfile).read_text()
+
+    monkeypatch.setattr(
+        comfyui_link_service, "_address_toward", lambda h, p: PRIVATE_10_IPV4
+    )
+    with pytest.raises(comfyui_link_service.LinkRefused) as refused:
+        comfyui_link_service.link_target(
+            server, "local_network", f"http://{PRIVATE_10_IPV4}:8188/"
+        )
+    assert refused.value.reason == "certificate_mismatch"
+
+
+def test_the_desktop_needs_remote_access_and_a_password_for_a_network_link(
+    monkeypatch,
+):
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
+    ready = {"password": False}
+    server = SimpleNamespace(
+        _server_config={"external_server_enabled": False, "require_ssl": True},
+        _external_listener_password_ready=lambda: ready["password"],
+    )
+    # No password is reported first: remote access will not bind without one.
+    with pytest.raises(comfyui_link_service.LinkRefused) as refused:
+        comfyui_link_service.link_target(server, "local_network", "http://x:8188/")
+    assert refused.value.reason == "password_missing"
+    ready["password"] = True
+    with pytest.raises(comfyui_link_service.LinkRefused) as refused:
+        comfyui_link_service.link_target(server, "local_network", "http://x:8188/")
+    assert refused.value.reason == "remote_access_off"
+    # This computer goes through the window's own listener: plain HTTP, no cert.
+    monkeypatch.setenv("PIXLSTASH_PORT", "61001")
+    assert comfyui_link_service.link_target(
+        server, "this_computer", "http://127.0.0.1:8188/"
+    ) == ("http://127.0.0.1:61001", None)
+
+
+def test_a_moved_loopback_port_is_sent_to_the_linked_comfyui(monkeypatch):
+    monkeypatch.setenv("PIXLSTASH_INSTALL_TYPE", "electron")
+    monkeypatch.setenv("PIXLSTASH_PORT", "61002")
+    record = {
+        "token_public_id": "example-public-id",
+        "comfyui_url": "http://127.0.0.1:8188/",
+        "pixlstash_url": "http://127.0.0.1:61001",
+        "where": "this_computer",
+    }
+    server = SimpleNamespace(
+        _server_config={comfyui_link_service.LINK_CONFIG_KEY: dict(record)}
+    )
+    writes = []
+
+    def fake_post(url, json=None, timeout=None, allow_redirects=True, proxies=None):
+        assert allow_redirects is False
+        assert proxies == comfyui_link_service.NO_PROXY
+        writes.append((url, json))
+        return _http_answer(200, None)
+
+    monkeypatch.setattr(comfyui_link_service.requests, "post", fake_post)
+    comfyui_link_service.reannounce(server)
+    assert writes == [
+        (
+            "http://127.0.0.1:8188/settings",
+            {comfyui_link_service.SETTING_URL: "http://127.0.0.1:61002"},
+        )
+    ]
+    saved = server._server_config[comfyui_link_service.LINK_CONFIG_KEY]
+    assert saved["pixlstash_url"] == "http://127.0.0.1:61002"
+    comfyui_link_service.reannounce(server)
+    assert len(writes) == 1, "an unchanged port must not be re-sent"
+
+
+# ===========================================================================
+# Installing the ComfyUI-PixlStash nodes PixlStash ships
+# ===========================================================================
+
+
+def _fake_pack(root: Path) -> Path:
+    """A stand-in for the bundled nodes: enough files to tell a copy apart."""
+    pack = root / "bundled" / "ComfyUI-PixlStash"
+    (pack / "nodes").mkdir(parents=True)
+    (pack / "tests").mkdir()
+    (pack / "__init__.py").write_text("# the bundled nodes\n")
+    (pack / "nodes" / "picture_saver.py").write_text("# saver\n")
+    (pack / "tests" / "test_x.py").write_text("# not shipped\n")
+    (pack / "pyproject.toml").write_text(
+        '[project]\nname = "pixlstash"\nversion = "9.9.9"\n'
+    )
+    return pack
+
+
+class _FakeComfyForInstall:
+    """ComfyUI's folder report and ComfyUI-Manager's restart, over ``requests``."""
+
+    def __init__(self, custom_nodes: Path, reboot: dict):
+        self.custom_nodes = custom_nodes
+        self.reboot = reboot  # {"POST v2/manager/reboot": status, ...}
+        self.asked: list[str] = []
+
+    def get(self, url, **kwargs):
+        assert kwargs.get("proxies") == comfyui_link_service.NO_PROXY
+        assert kwargs.get("allow_redirects") is False
+        self.asked.append(f"GET {urlsplit(url).path}")
+        assert urlsplit(url).path.endswith("/internal/folder_paths"), url
+        return _http_answer(200, {"custom_nodes": [str(self.custom_nodes)]})
+
+    def request(self, method, url, **kwargs):
+        assert kwargs.get("proxies") == comfyui_link_service.NO_PROXY
+        assert kwargs.get("allow_redirects") is False
+        key = f"{method} {urlsplit(url).path.lstrip('/')}"
+        self.asked.append(key)
+        return _http_answer(self.reboot.get(key, 404), None)
+
+
+@pytest.fixture
+def install_env(tmp_path, monkeypatch):
+    pack = _fake_pack(tmp_path)
+    custom_nodes = tmp_path / "custom_nodes"
+    custom_nodes.mkdir()
+    monkeypatch.setattr(comfyui_pack_service, "bundled_pack", lambda: pack)
+    trashed: list[str] = []
+
+    def to_trash(path):
+        trashed.append(path)
+        shutil.rmtree(path)
+
+    monkeypatch.setattr(comfyui_pack_service, "send2trash", to_trash)
+
+    def with_comfy(reboot):
+        fake = _FakeComfyForInstall(custom_nodes, reboot)
+        monkeypatch.setattr(comfyui_pack_service.requests, "get", fake.get)
+        monkeypatch.setattr(comfyui_pack_service.requests, "request", fake.request)
+        return fake
+
+    return SimpleNamespace(
+        pack=pack, custom_nodes=custom_nodes, trashed=trashed, with_comfy=with_comfy
+    )
+
+
+def test_installing_copies_the_nodes_and_trashes_an_older_copy(install_env):
+    older = install_env.custom_nodes / "comfyui-pixlstash"
+    older.mkdir()
+    (older / "__init__.py").write_text("# an old Manager install\n")
+    unrelated = install_env.custom_nodes / "ComfyUI-Impact-Pack"
+    unrelated.mkdir()
+    fake = install_env.with_comfy({"POST v2/manager/reboot": 200})
+
+    result = comfyui_pack_service.install("http://127.0.0.1:18188/")
+
+    target = install_env.custom_nodes / "ComfyUI-PixlStash"
+    assert result["installed_to"] == str(target)
+    assert result["version"] == "9.9.9"
+    assert result["replaced"] == [str(older)]
+    assert (result["restart"], result["detail"]) == ("requested", None)
+    assert install_env.trashed == [str(older)]
+    assert (target / "nodes" / "picture_saver.py").is_file()
+    assert not (target / "tests").exists(), "the pack's own tests are not installed"
+    assert unrelated.is_dir(), "another node pack must never be touched"
+    assert fake.asked[-1] == "POST v2/manager/reboot"
+
+
+def test_without_comfyui_manager_the_restart_is_left_to_the_person(install_env):
+    fake = install_env.with_comfy({})
+    result = comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert result["restart"] == "manual"
+    assert "restart ComfyUI yourself" in result["detail"]
+    # The new route first, then the older Managers' one.
+    assert fake.asked[-2:] == ["POST v2/manager/reboot", "GET manager/reboot"]
+
+
+def test_a_failed_move_to_the_trash_installs_nothing_and_deletes_nothing(
+    install_env, monkeypatch
+):
+    older = install_env.custom_nodes / "ComfyUI-PixlStash-main"
+    older.mkdir()
+    (older / "__init__.py").write_text("# a zip install\n")
+
+    def no_trash(path):
+        raise PermissionError("no trash here")
+
+    monkeypatch.setattr(comfyui_pack_service, "send2trash", no_trash)
+    install_env.with_comfy({"POST v2/manager/reboot": 200})
+    with pytest.raises(comfyui_pack_service.PackInstallRefused):
+        comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert (older / "__init__.py").is_file(), "the older copy must survive"
+    assert not (install_env.custom_nodes / "ComfyUI-PixlStash").exists()
+
+
+@pytest.mark.parametrize("url", ["http://8.8.8.8:8188/", f"http://{LAN_IPV4}:8188/"])
+def test_the_nodes_are_only_installed_into_a_comfyui_on_this_computer(install_env, url):
+    fake = install_env.with_comfy({"POST v2/manager/reboot": 200})
+    with pytest.raises(comfyui_pack_service.PackInstallRefused):
+        comfyui_pack_service.install(url)
+    assert fake.asked == [], "nothing is asked of a ComfyUI that is not here"
+    assert list(install_env.custom_nodes.iterdir()) == []
+
+
+def test_a_build_without_the_nodes_says_so(install_env, monkeypatch):
+    monkeypatch.setattr(comfyui_pack_service, "bundled_pack", lambda: None)
+    install_env.with_comfy({})
+    with pytest.raises(comfyui_pack_service.PackInstallRefused) as refused:
+        comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert "built without the ComfyUI nodes" in str(refused.value)
+
+
+def _point_comfy_at(monkeypatch, folder: Path) -> _FakeComfyForInstall:
+    """A ComfyUI (or whatever holds its port) naming *folder* as custom_nodes."""
+    fake = _FakeComfyForInstall(folder, {"POST v2/manager/reboot": 200})
+    monkeypatch.setattr(comfyui_pack_service.requests, "get", fake.get)
+    monkeypatch.setattr(comfyui_pack_service.requests, "request", fake.request)
+    return fake
+
+
+def _a_dev_clone(parent: Path) -> Path:
+    clone = parent / "ComfyUI-PixlStash"
+    clone.mkdir(parents=True)
+    (clone / "__init__.py").write_text("# someone's unpushed work\n")
+    return clone
+
+
+@pytest.mark.parametrize("hostile", ["projects", "home", "holds_the_source"])
+def test_a_folder_that_is_not_custom_nodes_is_never_written_or_trashed(
+    install_env, tmp_path, monkeypatch, hostile
+):
+    """Whatever answers on ComfyUI's port names the folder. A folder not named
+    custom_nodes, the home folder, or one holding the very copy being installed
+    must get no files and lose nothing to the trash."""
+    if hostile == "projects":
+        folder = tmp_path / "projects"
+    elif hostile == "home":
+        folder = tmp_path / "custom_nodes_home" / "custom_nodes"
+        monkeypatch.setenv("HOME", str(folder))
+    else:
+        folder = install_env.pack.parent.parent / "custom_nodes"
+        source = folder / "bundled" / "ComfyUI-PixlStash"
+        shutil.copytree(install_env.pack, source)
+        monkeypatch.setattr(comfyui_pack_service, "bundled_pack", lambda: source)
+    folder.mkdir(parents=True, exist_ok=True)
+    clone = _a_dev_clone(folder) if hostile != "holds_the_source" else None
+    _point_comfy_at(monkeypatch, folder)
+
+    with pytest.raises(comfyui_pack_service.PackInstallRefused):
+        comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert install_env.trashed == []
+    if clone is not None:
+        assert (clone / "__init__.py").read_text() == "# someone's unpushed work\n"
+
+
+def test_a_target_that_cannot_be_replaced_is_a_refusal_not_a_crash(
+    install_env, monkeypatch
+):
+    blocker = install_env.custom_nodes / "ComfyUI-PixlStash"
+    blocker.write_text("a file where the nodes' folder goes")
+    # Not recognised as an older copy (it is not a folder), so it stays, and
+    # replacing a file with a folder fails.
+    install_env.with_comfy({"POST v2/manager/reboot": 200})
+    with pytest.raises(comfyui_pack_service.PackInstallRefused) as refused:
+        comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert str(blocker) in str(refused.value)
+    assert blocker.read_text() == "a file where the nodes' folder goes"
+
+
+def test_the_wheel_and_the_install_leave_out_the_same_files():
+    spec = importlib.util.spec_from_file_location(
+        "pixlstash_setup", Path(__file__).resolve().parent.parent / "setup.py"
+    )
+    setup_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(setup_module)
+    assert setup_module._PACK_LEFT_OUT == comfyui_pack_service.PACK_LEFT_OUT
+
+
+def test_the_install_route_is_loopback_only_and_refuses_with_409(workflow_env):
+    path = f"{API}/comfyui/pack/install"
+    assert_real_route(workflow_env.server.api, "POST", path)
+    assert ROUTE_POLICIES[("POST", path)].policy is AccessPolicy.LOOPBACK_OWNER_ONLY
+    # No ComfyUI address saved: a refusal the dialog can show, not a 500.
+    workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+    r = workflow_env.owner.post(path)
+    assert r.status_code == 409, r.text
+    assert "No ComfyUI address" in r.json()["detail"]
+
+
+def test_the_link_reply_offers_the_install_only_for_this_computer(
+    workflow_env, comfy_at, install_env
+):
+    comfy_at("http://127.0.0.1:18188/", pack=False)
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    assert reply["can_install_pack"] is True, reply
+    comfy_at(f"http://{LAN_IPV4}:8188/", pack=False)
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    assert reply["can_install_pack"] is False, reply
 
 
 def test_the_workflow_list_says_which_files_have_a_lora_loader(

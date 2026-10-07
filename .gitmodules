@@ -1,0 +1,3 @@
+[submodule "integrations/ComfyUI-PixlStash"]
+	path = integrations/ComfyUI-PixlStash
+	url = https://github.com/Pikselkroken/ComfyUI-PixlStash

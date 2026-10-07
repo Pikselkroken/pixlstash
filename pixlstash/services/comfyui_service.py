@@ -18,6 +18,9 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
+
+from urllib3.util import parse_url
 
 import requests
 from fastapi import HTTPException
@@ -1393,4 +1396,141 @@ def comfyui_can_open_workflows(base_url: str) -> bool | None:
         and "pixlstash" in script.lower()
         and script.endswith("/open_workflow.js")
         for script in scripts
+    )
+
+
+def normalize_comfyui_url(url: str) -> str:
+    """``scheme://host[:port][/path]/`` for an http(s) URL, else ``ValueError``.
+
+    The trailing slash is the form ``comfyui_url`` has always been saved in.
+    """
+    text = str(url or "").strip()
+    parts = urlsplit(text)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(
+            f"A ComfyUI address needs http:// or https:// and a host, not {url!r}."
+        )
+    # Scheme, host, port and path only. A user part, a backslash, a query or a
+    # fragment is where URL parsers disagree on the host: `urlsplit` reads
+    # ``http://evil.example\\@127.0.0.1/`` as 127.0.0.1 while urllib3, which
+    # sends the request, connects to evil.example. Refused, and the host is
+    # then required to read the same to both.
+    if any(mark in text for mark in "@\\?#") or parts.username is not None:
+        raise ValueError(
+            f"A ComfyUI address is scheme, host, port and path only, not {url!r}."
+        )
+    sent_to = (parse_url(text).host or "").strip("[]").lower()
+    if sent_to != parts.hostname.lower():
+        raise ValueError(f"The host in {url!r} is ambiguous.")
+    return f"{parts.scheme}://{parts.netloc}{parts.path.rstrip('/')}/"
+
+
+def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
+    """Whether ComfyUI answers at *url*, asked from this server.
+
+    ``GET /system_stats`` is ComfyUI's own and carries a ``system`` object, so
+    another web server answering on the port is told apart from ComfyUI.
+    Asked from the backend because the backend is what submits runs: an
+    address the browser can reach and the server cannot is no use.
+
+    Returns:
+        ``{"reachable", "url", "version", "detail"}``: ``url`` normalised,
+        ``version`` ComfyUI's own when it reports one, ``detail`` the reason
+        when not reachable, written for the person who typed the address.
+
+    Raises:
+        ValueError: *url* is not an http(s) URL with a host.
+    """
+    base = normalize_comfyui_url(url)
+    where = urlsplit(base).netloc
+    result = {"reachable": False, "url": base, "version": None, "detail": None}
+    try:
+        response = requests.get(f"{base}system_stats", timeout=timeout)
+    except requests.exceptions.SSLError as exc:
+        logger.info("ComfyUI probe of %s: TLS failed: %s", base, exc)
+        result["detail"] = (
+            f"{where} answered, but its HTTPS certificate could not be checked."
+        )
+        return result
+    except requests.Timeout:
+        logger.info("ComfyUI probe of %s: no answer within %ss", base, timeout)
+        result["detail"] = f"{where} did not answer within {timeout:g} seconds."
+        return result
+    except requests.RequestException as exc:
+        logger.info("ComfyUI probe of %s: %s", base, exc)
+        result["detail"] = (
+            f"Nothing answered at {where}. Check that ComfyUI is running and "
+            "that the port matches the one in its console."
+        )
+        return result
+    try:
+        stats = response.json() if response.ok else None
+    except ValueError:
+        stats = None
+    system = stats.get("system") if isinstance(stats, dict) else None
+    if not isinstance(system, dict):
+        logger.info(
+            "ComfyUI probe of %s: HTTP %s without ComfyUI's system_stats",
+            base,
+            response.status_code,
+        )
+        result["detail"] = f"Something answered at {where}, but it is not ComfyUI."
+        return result
+    version = system.get("comfyui_version")
+    result["reachable"] = True
+    result["version"] = str(version) if version else None
+    return result
+
+
+def comfyui_model_roots(base_url: str) -> list[str]:
+    """The folders ComfyUI loads models from, reduced to their roots.
+
+    ComfyUI's ``GET /internal/folder_paths`` maps each model category to its
+    directories (``extra_model_paths.yaml`` included), as ComfyUI's own
+    filesystem spells them. A parent holding two or more category folders is a
+    models root (``ComfyUI/models``) and is returned in their place; a category
+    folder alone under its parent is returned as itself, so a ``loras:`` entry
+    pointing straight at ``~/loras`` does not turn into the whole home folder.
+    ``custom_nodes`` is skipped: its parent is the ComfyUI install, not models.
+
+    Empty when ComfyUI cannot be asked. Whether a root is reachable from this
+    machine is the caller's question.
+
+    ponytail: ``/internal`` is ComfyUI's frontend API, not a stable one; if it
+    moves, ask the PixlStash node pack to report ``folder_paths`` instead.
+    """
+    try:
+        response = requests.get(f"{base_url}/internal/folder_paths", timeout=5)
+        response.raise_for_status()
+        folder_paths = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(
+            "Could not read ComfyUI model folders from %s: %s", base_url, exc
+        )
+        return []
+    if not isinstance(folder_paths, dict):
+        logger.warning(
+            "ComfyUI /internal/folder_paths at %s returned %s, not an object",
+            base_url,
+            type(folder_paths).__name__,
+        )
+        return []
+    by_parent: dict[str, set[str]] = {}
+    for category, paths in folder_paths.items():
+        if category == "custom_nodes" or not isinstance(paths, list):
+            continue
+        for path in paths:
+            if isinstance(path, str) and path.strip():
+                path = os.path.normpath(path)
+                by_parent.setdefault(os.path.dirname(path), set()).add(path)
+    roots = set()
+    for parent, children in by_parent.items():
+        roots.update([parent] if len(children) > 1 else children)
+    return sorted(
+        root
+        for root in roots
+        if not any(
+            other != root and root.startswith(other.rstrip(os.sep) + os.sep)
+            for other in roots
+        )
     )

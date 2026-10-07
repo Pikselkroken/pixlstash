@@ -69,7 +69,6 @@ vi.mock("vuetify/components", () => ({
 }));
 
 import AccountSection from "./AccountSection.vue";
-import ComfyuiHostSection from "./ComfyuiHostSection.vue";
 
 const EM_DASH = "—";
 
@@ -109,19 +108,6 @@ describe("a Settings readout with no value", () => {
 
     wrapper.unmount();
   });
-
-  it("shows an em dash for the ComfyUI port when none is configured", async () => {
-    const wrapper = await settle(
-      mount(ComfyuiHostSection, { props: { open: true }, global: { stubs } }),
-    );
-
-    const values = wrapper.findAll(".wf-host-value").map((v) => v.text());
-    expect(values).toContain("Not configured");
-    expect(values).toContain(EM_DASH);
-    expect(values).not.toContain("-");
-
-    wrapper.unmount();
-  });
 });
 
 // The sweep flattened TEN of these, across seven files. Each count in this
@@ -130,11 +116,11 @@ describe("a Settings readout with no value", () => {
 // rather than a string literal, and the first version of this regex only
 // looked between double quotes. Rather than mount seven components for one
 // glyph each, this reads the sources. Verified against c760dd05, which is
-// where every one of them lost its em dash.
+// where every one of them lost its em dash. ComfyuiHostSection.vue has since
+// left the list: its connect card has no empty readout to spell.
 describe("no value placeholder was left flattened by the em-dash sweep", () => {
   const SWEPT = [
     "components/settings/AccountSection.vue",
-    "components/settings/ComfyuiHostSection.vue",
     "components/settings/SnapshotsSection.vue",
     "components/widgets/RestoreConfirmDialog.vue",
     "components/panels/StatsSidebar.vue",

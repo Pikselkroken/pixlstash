@@ -165,3 +165,69 @@ export async function abortRun() {
 export async function getPixlstashNode() {
   return unwrap(apiClient.get(comfyUrl("/pixlstash-node")));
 }
+
+/**
+ * Ask the backend whether a ComfyUI answers at `url`. Owner-only.
+ *
+ * Always resolves for a well-formed URL, reachable or not; rejects (400) only
+ * for a malformed one. Save the reply's `url`, which is normalised.
+ *
+ * @param {string} url - e.g. `"http://127.0.0.1:8188/"`.
+ * @returns {Promise<{reachable: boolean, url: string, version: ?string,
+ *   detail: ?string}>}
+ */
+export async function probeComfyui(url) {
+  return unwrap(apiClient.post(comfyUrl("/probe"), { url }));
+}
+
+/**
+ * Whether this PixlStash is linked to the saved ComfyUI. Owner-only.
+ *
+ * @returns {Promise<{linked: boolean, comfyui_url: ?string,
+ *   pixlstash_url: ?string, where: ?("this_computer"|"local_network"),
+ *   linked_at: ?string}>}
+ */
+export async function getComfyuiLink() {
+  return unwrap(apiClient.get(comfyUrl("/link")));
+}
+
+/**
+ * Link the saved ComfyUI: mint a full-access token and write it, with
+ * PixlStash's URL, into ComfyUI's settings. Owner-only.
+ *
+ * Always resolves 200 whether or not it linked. `steps` is exactly four, in
+ * order `reach`, `nodes`, `link`, `check`, each `{id, state, detail, reason}`
+ * with `state` one of `done`, `failed`, `needs_you`, `not_run`.
+ * `can_install_pack` is true when this PixlStash carries the nodes and the
+ * saved ComfyUI is on this computer, so {@link installComfyuiPack} can run.
+ *
+ * @returns {Promise<{linked: boolean, link: Object, steps: Array<Object>,
+ *   can_install_pack: boolean}>}
+ */
+export async function linkComfyui() {
+  return unwrap(apiClient.post(comfyUrl("/link")));
+}
+
+/**
+ * Revoke the ComfyUI token and clear ComfyUI's copy, best-effort. Owner-only.
+ * @returns {Promise<{linked: false}>}
+ */
+export async function unlinkComfyui() {
+  return unwrap(apiClient.delete(comfyUrl("/link")));
+}
+
+/**
+ * Install the ComfyUI-PixlStash nodes this PixlStash carries into the saved
+ * ComfyUI, which must be on this computer. Owner-only, local caller only.
+ *
+ * Older copies go to the system trash (`replaced`). `restart` is `"requested"`
+ * when ComfyUI-Manager was asked to restart ComfyUI, `"manual"` when the
+ * person has to (`detail` says why). Rejects 409 when it cannot install.
+ *
+ * @returns {Promise<{installed_to: string, version: string,
+ *   replaced: Array<string>, restart: ("requested"|"manual"),
+ *   detail: ?string}>}
+ */
+export async function installComfyuiPack() {
+  return unwrap(apiClient.post(comfyUrl("/pack/install")));
+}

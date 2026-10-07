@@ -33,3 +33,5 @@ test-results
 .container-home/
 docs/macos-signing-setup.md
 docs/reviews/
+# Staged from integrations/ComfyUI-PixlStash at wheel build (setup.py).
+pixlstash/data/comfyui-pack/

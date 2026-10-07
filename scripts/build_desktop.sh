@@ -71,8 +71,11 @@ fi
 # --- 1. pixlstash wheel (installed into the bundled env) ---
 if [ "$SKIP_WHEEL" -eq 0 ]; then
   log "Building pixlstash wheel"
+  # The wheel carries the ComfyUI-PixlStash nodes from the pinned submodule;
+  # the flag makes an empty submodule fail the build instead of shipping without.
+  git submodule update --init integrations/ComfyUI-PixlStash
   "$PYTHON" -m build --version >/dev/null 2>&1 || "$PYTHON" -m pip install --upgrade build
-  "$PYTHON" -m build --wheel
+  PIXLSTASH_REQUIRE_COMFYUI_PACK=1 "$PYTHON" -m build --wheel
 fi
 WHEEL="$(ls -t dist/pixlstash-*.whl 2>/dev/null | head -n1 || true)"
 [ -n "$WHEEL" ] || die "no wheel in dist/ — run without --skip-wheel."

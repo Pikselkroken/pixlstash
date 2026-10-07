@@ -53,6 +53,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The wheel carries the ComfyUI-PixlStash nodes (a public submodule).
+          submodules: true
 
       # The wheel carries the built SPA via [tool.setuptools.package-data]
       # (pixlstash/frontend/dist/**). Without this step the wheel still builds
@@ -78,6 +80,9 @@ jobs:
 
       - name: Build the wheel
         shell: bash
+        env:
+          # Fail rather than ship a wheel without the ComfyUI-PixlStash nodes.
+          PIXLSTASH_REQUIRE_COMFYUI_PACK: "1"
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip build

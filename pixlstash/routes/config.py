@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Annotated, Literal, Optional
@@ -24,6 +25,7 @@ from pixlstash.db_models.tag import (
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.routes._helpers import require_hub
+from pixlstash.routes.model_folders import register_comfyui_model_folders
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
 from pixlstash.services import (
     config_service,
@@ -474,6 +476,16 @@ def create_router(server) -> APIRouter:
         config = _config_payload(user)
         return {"smart_score_penalised_tags": config["smart_score_penalised_tags"]}
 
+    def _register_comfyui_model_folders(base_url: str) -> None:
+        try:
+            register_comfyui_model_folders(server, base_url)
+        except Exception:
+            logger.exception(
+                "Adding ComfyUI's model folders at %s to the shelf failed; the "
+                "ComfyUI URL is saved and the folders can be added by hand.",
+                base_url,
+            )
+
     @router.patch(
         "/users/me/config",
         summary="Update current user config",
@@ -644,6 +656,15 @@ def create_router(server) -> APIRouter:
             # so MissingSmartScoreFinder promptly re-scores the cleared rows. wake() is a
             # scheduler poke, not a DB write, so it need not be inside the transaction.
             server.vault.wake()
+        if updated and "comfyui_url" in patch_data and user.comfyui_url:
+            # Off the request: ComfyUI may be slow or down, and the URL is saved
+            # whether or not its model folders can be read.
+            threading.Thread(
+                target=_register_comfyui_model_folders,
+                args=(user.comfyui_url.rstrip("/"),),
+                name="comfyui-model-folders",
+                daemon=True,
+            ).start()
         if "keep_models_in_memory" in patch_data:
             server.vault.set_keep_models_in_memory(
                 getattr(user, "keep_models_in_memory", True)

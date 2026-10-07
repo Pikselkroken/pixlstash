@@ -111,9 +111,11 @@ from pixlstash.services.comfyui_service import (
     _comfyui_abort,
     comfyui_can_open_workflows,
     library_ids_named,
+    probe_comfyui,
     pixlstash_node_refusals,
     swap_pixlstash_savers,
 )
+from pixlstash.services import comfyui_link_service, comfyui_pack_service
 from pixlstash.services.workflow_library_service import read_library_ids
 
 # Re-exported so existing call sites and tests that import these helpers from
@@ -1534,6 +1536,59 @@ class ComfyUIPixlstashNodeResponse(BaseModel):
     can_open_workflows: Optional[bool] = None
 
 
+class ComfyUIProbeRequest(BaseModel):
+    """An address to try ComfyUI at."""
+
+    url: str
+
+
+class ComfyUIProbeResponse(BaseModel):
+    """Whether ComfyUI answered at an address, asked from this server."""
+
+    reachable: bool
+    url: str
+    version: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class ComfyUILinkStatus(BaseModel):
+    """The live ComfyUI link, if any."""
+
+    linked: bool
+    comfyui_url: Optional[str] = None
+    pixlstash_url: Optional[str] = None
+    where: Optional[str] = None
+    linked_at: Optional[str] = None
+
+
+class ComfyUILinkStep(BaseModel):
+    """One row of the connect checklist."""
+
+    id: str
+    state: str
+    detail: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class ComfyUILinkResponse(BaseModel):
+    """How far linking got: ``linked`` only when every step is done."""
+
+    linked: bool
+    link: ComfyUILinkStatus
+    steps: list[ComfyUILinkStep]
+    can_install_pack: bool = False
+
+
+class ComfyUIPackInstallResponse(BaseModel):
+    """Where the nodes went, what they replaced and how ComfyUI restarts."""
+
+    installed_to: str
+    version: Optional[str] = None
+    replaced: list[str]
+    restart: str
+    detail: Optional[str] = None
+
+
 class ComfyUIAbortResponse(BaseModel):
     """Result of aborting the active ComfyUI run."""
 
@@ -2099,6 +2154,92 @@ def create_router(server) -> APIRouter:
     def get_comfyui_pixlstash_node(request: Request):
         comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
         return {"can_open_workflows": comfyui_can_open_workflows(comfyui_url)}
+
+    @router.get(
+        "/comfyui/link",
+        summary="Whether ComfyUI is linked to PixlStash",
+        response_model=ComfyUILinkStatus,
+    )
+    def get_comfyui_link():
+        return comfyui_link_service.link_status(server)
+
+    @router.post(
+        "/comfyui/link",
+        summary="Link the saved ComfyUI with a full-access token",
+        description=(
+            "For a ComfyUI on this computer or the local network: mints an "
+            "ordinary full-access token and writes it, with the PixlStash URL "
+            "ComfyUI should call (and PixlStash's certificate over HTTPS), into "
+            "ComfyUI's settings for the ComfyUI-PixlStash nodes. Then checks "
+            "that ComfyUI reaches PixlStash with it. Always 200: `steps` says "
+            "how far it got (`reach`, `nodes`, `link`, `check`), and `reason` "
+            "why a step needs the person. A ComfyUI on the local network needs "
+            "remote access on with HTTPS."
+        ),
+        response_model=ComfyUILinkResponse,
+    )
+    def link_comfyui(request: Request):
+        user = server.auth.get_user_for_request(request)
+        saved = getattr(user, "comfyui_url", None) if user else None
+        reply = comfyui_link_service.link(server, request, saved)
+        reply["can_install_pack"] = _can_install_pack(saved)
+        return reply
+
+    def _can_install_pack(saved: Optional[str]) -> bool:
+        if not saved or comfyui_pack_service.bundled_pack() is None:
+            return False
+        try:
+            where, _pinned = comfyui_link_service.locate(saved)
+        except ValueError:
+            return False
+        return where == "this_computer"
+
+    @router.post(
+        "/comfyui/pack/install",
+        summary="Install the ComfyUI-PixlStash nodes PixlStash ships",
+        description=(
+            "Copies the nodes this PixlStash carries (the version it is tested "
+            "with) into the saved ComfyUI's custom_nodes folder, moving any "
+            "older copy to the trash, then asks ComfyUI-Manager to restart "
+            "ComfyUI. Only for a ComfyUI on this computer. `restart` is "
+            "`requested`, or `manual` with `detail` saying why. 409 when it "
+            "cannot install here."
+        ),
+        response_model=ComfyUIPackInstallResponse,
+    )
+    def install_comfyui_pack(request: Request):
+        user = server.auth.get_user_for_request(request)
+        saved = getattr(user, "comfyui_url", None) if user else None
+        try:
+            return comfyui_pack_service.install(saved)
+        except comfyui_pack_service.PackInstallRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.delete(
+        "/comfyui/link",
+        summary="Unlink ComfyUI and revoke its token",
+        response_model=ComfyUILinkStatus,
+    )
+    def unlink_comfyui(request: Request):
+        return comfyui_link_service.unlink(server, request)
+
+    @router.post(
+        "/comfyui/probe",
+        summary="Check whether ComfyUI answers at an address",
+        description=(
+            "Asks `GET /system_stats` at the address from this server, which is "
+            "where runs are submitted from. 200 whether or not it answered: "
+            "`reachable` says which and `detail` why not. `url` is the address "
+            "normalised to the form `comfyui_url` is saved in. 400 for an "
+            "address that is not http(s) with a host."
+        ),
+        response_model=ComfyUIProbeResponse,
+    )
+    def probe_comfyui_address(payload: ComfyUIProbeRequest = Body(...)):
+        try:
+            return probe_comfyui(payload.url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post(
         "/comfyui/workflows/{workflow_name}/card",

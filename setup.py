@@ -1,4 +1,6 @@
 from pathlib import Path
+import os
+import shutil
 import subprocess
 import sys
 import time
@@ -79,15 +81,73 @@ def _build_frontend() -> None:
     _run_npm(["run", "build"], frontend_dir)
 
 
+# The ComfyUI-PixlStash nodes ride in the wheel, copied from the pinned
+# submodule, so PixlStash can install the exact version it is tested with.
+# Only what ComfyUI loads is copied; the pack's own tests and media stay out.
+_PACK_SOURCE = Path(__file__).resolve().parent / "integrations" / "ComfyUI-PixlStash"
+_PACK_STAGED = (
+    Path(__file__).resolve().parent
+    / "pixlstash"
+    / "data"
+    / "comfyui-pack"
+    / "ComfyUI-PixlStash"
+)
+# Kept equal to comfyui_pack_service.PACK_LEFT_OUT (a test holds them equal);
+# not imported from it, since importing pixlstash at build time pulls its deps.
+_PACK_LEFT_OUT = (
+    ".git",
+    ".git*",
+    ".ruff_cache",
+    ".pytest_cache",
+    "tests",
+    "examples",
+    "screenshots",
+    "__pycache__",
+)
+
+
+def _stage_comfyui_pack() -> None:
+    """Copy the pinned nodes into package data.
+
+    A build that ships (the desktop app, PyPI) sets
+    ``PIXLSTASH_REQUIRE_COMFYUI_PACK=1``, and an empty submodule then stops it:
+    a release without the nodes would build fine and offer an install it cannot
+    do. Any other build (CI's ``pip install .``) warns and goes on; PixlStash
+    then says it was built without the nodes.
+    """
+    if not (_PACK_SOURCE / "__init__.py").is_file():
+        if (_PACK_STAGED / "__init__.py").is_file():
+            # An unpacked sdist that already carries the staged copy.
+            return
+        message = (
+            f"{_PACK_SOURCE} is empty. Run `git submodule update --init`: "
+            "the wheel carries the ComfyUI-PixlStash nodes."
+        )
+        if os.environ.get("PIXLSTASH_REQUIRE_COMFYUI_PACK") == "1":
+            raise FileNotFoundError(message)
+        print(f"setup.py: WARNING: {message} Building without them.", flush=True)
+        return
+    if _PACK_STAGED.exists():
+        shutil.rmtree(_PACK_STAGED)
+    shutil.copytree(
+        _PACK_SOURCE, _PACK_STAGED, ignore=shutil.ignore_patterns(*_PACK_LEFT_OUT)
+    )
+    print(f"setup.py: staged ComfyUI-PixlStash into {_PACK_STAGED}", flush=True)
+
+
 class build_py(_build_py):
     def run(self):
         _build_frontend()
+        # An editable install (dev, CI, Docker) reads the submodule in place.
+        if not getattr(self, "editable_mode", False):
+            _stage_comfyui_pack()
         super().run()
 
 
 class sdist(_sdist):
     def run(self):
         _build_frontend()
+        _stage_comfyui_pack()
         super().run()
 
 

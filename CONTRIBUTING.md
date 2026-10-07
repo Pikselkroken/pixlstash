@@ -20,6 +20,16 @@ PixlStash consists of two main components:
   - License: MIT  
   - No CLA required
 
+- **ComfyUI nodes (`integrations/ComfyUI-PixlStash/`)**  
+  - A git submodule of [ComfyUI-PixlStash](https://github.com/Pikselkroken/ComfyUI-PixlStash)
+    (MIT), pinned at the version this PixlStash works with. Changes to the
+    nodes go to that repository; here, only the pin moves.  
+  - Clone with `git clone --recursive`, or run `git submodule update --init`
+    in an existing checkout (and in every new worktree).
+  - PixlStash ships this copy and installs it into the user's ComfyUI, where
+    it runs. A pin bump is a code change: review the pack's diff between the
+    two commits, not just the new SHA.
+
 Please make sure your contributions follow the rules for the part of the project
 you are modifying.
 
