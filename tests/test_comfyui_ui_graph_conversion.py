@@ -13,6 +13,8 @@ deprecated ``PrimitiveNode``, and two classes whose widget arrays this does not
 account for - each named in the report rather than papered over.
 """
 
+from copy import deepcopy
+
 import pytest
 
 from pixlstash.services.comfyui_ui_graph import convert_ui_graph_to_api, is_ui_graph
@@ -1149,6 +1151,17 @@ class TestSubgraphs:
         assert problems == []
         assert prompt["2:5"]["inputs"]["factor"] == ["4", 0]
 
+    def test_a_slot_the_definition_does_not_declare_takes_no_unnamed_wire(self):
+        """No name to match by is no match, not the first nameless input."""
+        graph = _subgraph_workflow(factor_link=12)
+        graph["definitions"]["subgraphs"][0]["inputs"] = [
+            {"name": "image", "type": "IMAGE"}
+        ]
+        del graph["nodes"][1]["inputs"][0]["name"]
+        prompt, problems = convert_ui_graph_to_api(graph, SUBGRAPH_OBJECT_INFO)
+        assert problems == []
+        assert prompt["2:5"]["inputs"]["factor"] == 1.5
+
     def test_a_subgraph_inside_a_subgraph_is_expanded_too(self):
         inner = _definition(INNER)
         outer = _definition(
@@ -1311,6 +1324,18 @@ class TestDynamicCombos:
         )
         assert prompt is None
         assert any("'turbo' for its 'sampling_mode'" in p for p in problems)
+
+    def test_a_combo_with_no_value_expands_no_option(self):
+        """A null choice must not pick an option that has no key."""
+        info = deepcopy(DYNAMIC_OBJECT_INFO)
+        info["TextGen"]["input"]["required"]["sampling_mode"][1]["options"].insert(
+            0, {"inputs": {"required": {"bogus": ["INT", {}]}}}
+        )
+        prompt, problems = convert_ui_graph_to_api(
+            _textgen([256, None, 5, False]), info
+        )
+        assert prompt is None
+        assert any("no value for its 'sampling_mode' choice" in p for p in problems)
 
     def test_values_keyed_by_name_use_the_prefixed_names(self):
         graph = _textgen(

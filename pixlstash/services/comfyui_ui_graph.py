@@ -316,6 +316,10 @@ class _Inliner:
 
     @staticmethod
     def _slot_by_name(entries, name) -> int | None:
+        # No name is no match: an entry missing its own "name" must not
+        # answer for a slot the definition does not declare.
+        if name is None:
+            return None
         for index, entry in enumerate(entries or ()):
             if isinstance(entry, dict) and entry.get("name") == name:
                 return index
@@ -626,6 +630,13 @@ class _Converter:
         That is where the editor's widgets for them sit, so the positional
         values that follow the combo's own are theirs.
         """
+        if chosen is None:
+            # Would match an option with no "key" and expand its inputs.
+            self.problems.append(
+                f"{where} has no value for its {name!r} choice, so which inputs "
+                "come with it cannot be read"
+            )
+            return False
         nested = _dynamic_option_inputs(name, options, chosen)
         if nested is None:
             self.problems.append(
