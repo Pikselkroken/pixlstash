@@ -375,7 +375,11 @@ def test_a_loader_wired_into_nothing_is_not_credited():
             "inputs": {"seed": 1, "model": ["1", 0], "positive": ["6", 0]},
         },
         "3": {"class_type": "VAEDecode", "inputs": {"samples": ["2", 0]}},
-        "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}},
+        # A numeric pair is a widget value, not a link to node 8.
+        "4": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["3", 0], "size": [8, 8]},
+        },
         "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a castle"}},
         "8": {"class_type": "UNETLoader", "inputs": {"unet_name": "dead.safetensors"}},
         "9": {

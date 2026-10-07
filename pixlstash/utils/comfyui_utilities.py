@@ -13,7 +13,7 @@ from typing import Any
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import model_filename_fields
-from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SHELF_ID_FIELD
+from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SHELF_ID_FIELD, is_link
 
 logger = get_logger(__name__)
 
@@ -448,7 +448,7 @@ def _dead_loader_ids(workflow: dict) -> set[str]:
             for node_id, node in nodes.items()
             if node_id not in dead
             for value in (node.get("inputs") or {}).values()
-            if _is_api_ref(value)
+            if is_link(value)
         }
         newly_dead = loaders - dead - read
         if not newly_dead:
