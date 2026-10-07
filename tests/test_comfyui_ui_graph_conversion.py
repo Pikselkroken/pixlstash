@@ -1326,3 +1326,56 @@ class TestDynamicCombos:
         prompt, problems = convert_ui_graph_to_api(graph, DYNAMIC_OBJECT_INFO)
         assert problems == []
         assert prompt["1"]["inputs"]["sampling_mode.temperature"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# A widget the node gained after the file was saved gets its default
+# ---------------------------------------------------------------------------
+
+GROWN_OBJECT_INFO = {
+    **OBJECT_INFO,
+    "ShiftModel": {
+        "input": {
+            "required": {"model": ["MODEL", {}], "shift": ["FLOAT", {}]},
+            # Added in a later ComfyUI: older files carry one value, not two.
+            "optional": {
+                "sampling": [["flow", "img_to_img_velocity"], {"default": "flow"}],
+                "mode": [["a", "b"], {}],
+            },
+        },
+        "input_order": {
+            "required": ["model", "shift"],
+            "optional": ["sampling", "mode"],
+        },
+    },
+    "NoDefault": {
+        "input": {"required": {"a": ["FLOAT", {}], "b": ["FLOAT", {}]}},
+        "input_order": {"required": ["a", "b"]},
+    },
+}
+
+
+class TestWidgetsAddedSinceTheFileWasSaved:
+    def test_missing_trailing_widgets_take_their_defaults_as_comfyui_loads_them(self):
+        graph = _graph([_node(1, "ShiftModel", widgets=[3.0])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, GROWN_OBJECT_INFO)
+        assert problems == []
+        # The declared default, else a combo's first choice.
+        assert prompt["1"]["inputs"] == {
+            "shift": 3.0,
+            "sampling": "flow",
+            "mode": "a",
+        }
+
+    def test_a_missing_widget_with_no_default_is_refused_by_name(self):
+        graph = _graph([_node(1, "NoDefault", widgets=[1.0])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, GROWN_OBJECT_INFO)
+        assert prompt is None
+        assert any("no value for 'b'" in p for p in problems)
+
+    def test_more_values_than_widgets_is_still_refused(self):
+        """A removed or moved widget: which value is whose cannot be told."""
+        graph = _graph([_node(1, "NoDefault", widgets=[1.0, 2.0, 3.0])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, GROWN_OBJECT_INFO)
+        assert prompt is None
+        assert any("carries 3 widget values" in p for p in problems)

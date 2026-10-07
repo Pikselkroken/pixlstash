@@ -160,6 +160,33 @@ def _dynamic_option_inputs(
     return None
 
 
+_NO_DEFAULT = object()
+
+
+def _declared_default(type_field, options: dict):
+    """The value ComfyUI gives a widget the file has no value for.
+
+    The declared ``default``, else a combo's first choice (a list type, or the
+    ``options`` of a ``COMBO``, or a dynamic combo's first key) - what the
+    editor shows on a fresh node. ``_NO_DEFAULT`` when there is none.
+    """
+    if "default" in options:
+        return options["default"]
+    if isinstance(type_field, list) and type_field:
+        return type_field[0]
+    choices = options.get("options")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if type_field == _DYNAMIC_COMBO:
+            return (
+                first.get("key", _NO_DEFAULT)
+                if isinstance(first, dict)
+                else _NO_DEFAULT
+            )
+        return first
+    return _NO_DEFAULT
+
+
 def _is_widget(type_field, options: dict) -> bool:
     """Whether this input takes a value from ``widgets_values``.
 
@@ -643,6 +670,7 @@ class _Converter:
         inputs: dict = {}
         consumed = 0
         widget_names: set[str] = set()
+        undefaulted: list[str] = []
         index = -1
         while index + 1 < len(declared):
             index += 1
@@ -710,6 +738,15 @@ class _Converter:
                     )
                     return None
                 inputs[name] = value
+            else:
+                # Past the end of the file's values: a widget this ComfyUI's
+                # node gained after the file was saved. ComfyUI loads such a
+                # file by giving it its default, so that is what runs.
+                default = _declared_default(type_field, options)
+                if default is _NO_DEFAULT:
+                    undefaulted.append(name)
+                else:
+                    inputs[name] = default
             consumed += 1 + _extra_widget_slots(options)
             if type_field == _DYNAMIC_COMBO and not self._expand_dynamic(
                 declared, index, name, options, inputs.get(name), where
@@ -736,10 +773,20 @@ class _Converter:
             if unknown or missing:
                 return None
             return inputs
-        if consumed != len(positional):
+        if consumed < len(positional):
+            # More values than this node has widgets: one was removed or
+            # moved, and which one cannot be told.
             self.problems.append(
                 f"{where} carries {len(positional)} widget values, and its "
                 f"inputs account for {consumed}"
+            )
+            return None
+        if undefaulted:
+            self.problems.append(
+                f"{where} has no value for "
+                + ", ".join(repr(name) for name in undefaulted)
+                + ", which this ComfyUI's version of the node needs and gives "
+                "no default for"
             )
             return None
         return inputs
