@@ -418,8 +418,9 @@ Terms used below:
   CPU for search queries (see "Searching").
 
 Two sources of a second Metal thread are closed at their source rather than
-synchronised: transformers' loader pool and search queries. The rest are listed
-under "Not covered".
+synchronised: transformers' loader pool and search queries. A third, the
+anomaly-region route, is routed onto the GPU worker. The rest are listed under
+"Not covered".
 
 ### Loading: one loader thread wherever Metal exists
 
@@ -499,6 +500,31 @@ read their model and tokenizer without a lock once loaded. They used to take
 turns on the single DB writer thread; no encode runs inside a database task any
 more, because there it holds every write for the length of a model call.
 
+### The anomaly-region route: on the GPU worker
+
+`GET /pictures/{id}/anomaly_region` loads the tagger if it is not resident, then
+runs Grad-CAM, which casts the shared model to fp32 and back around a forward
+and backward pass. It used to do both on its request thread. Both now run in an
+`AnomalyRegionTask` (`tasks/anomaly_region_task.py`) on the GPU queue at
+`URGENT` priority, which the route waits on with `submit_and_wait`; the request
+thread only checks the cache, finds the file and decodes it. The task skips
+background batches but waits for the task the worker is running and for any
+interactive work queued before it (an interactive retag is `URGENT` too), and
+the route answers 503 if it is not reached within 120 s. Before the move, a
+real server crashed in 5 of 5 runs with the route called beside interactive
+retags, and the route's work beside tag batches in a harness failed 10 of 10
+(see "Measured in PixlStash").
+
+The cost is latency. A task already on the worker is never pre-empted, so the
+hint waits it out: about 3.7 s per call beside retags, but 53 s in the one run
+where a Florence-2 caption batch was running, because on Metal Florence-2 is
+held on the CPU in fp32 (see #1775).
+
+This is not Metal-only. The cast is in place on the shared model, so on any
+host a tag batch on the worker beside it would have met fp32 weights (the CPU
+model is fp32 throughout, so only accelerators were affected). One worker
+thread closes both.
+
 ### Not covered
 
 These do, or may do, Metal work on a thread other than the GPU worker:
@@ -511,20 +537,14 @@ These do, or may do, Metal work on a thread other than the GPU worker:
   third-party tag plugin's `setup()` and `init()` run there too. Measured on
   2026-09-27 (see "What reproduces where"): it overlapped CLIP on the worker in
   8 of 8 restarts with the CPU copies on, and nothing crashed.
-- **`GET /pictures/{id}/anomaly_region`.** On the request thread it loads the
-  tagger if it is not resident, then runs Grad-CAM, which casts the shared
-  model to fp32 and back around a forward and backward pass. Not measured.
-  Because the cast is in place on the shared model, a tag batch on the worker
-  at that moment would meet fp32 weights, on CUDA as well as Metal (the CPU
-  model is fp32 throughout).
 - **The idle sweep.** `Vault._maybe_aggressive_unload` runs `engine.close()`,
   which flushes with `torch.mps.empty_cache()` (cause 3). It runs from the
   worker-progress poll, on a request thread, and from `PATCH /users/me/config`
   when "keep models in memory" is switched off, on the event loop. It runs only
   with that setting off. Its idle check reads the planner's
   progress and whether a GPU task is running at that instant, so a batch the
-  worker starts just after the check can meet the flush, and it sees neither
-  the tagger preload nor the anomaly route. Nothing stops two polls sweeping at
+  worker starts just after the check can meet the flush, and it does not see
+  the tagger preload. Nothing stops two polls sweeping at
   once. Not measured.
 - **The face finder's end-of-work flush.** With "keep models in memory" off,
   `MissingFaceExtractionFinder.on_all_tasks_complete` runs
@@ -561,6 +581,8 @@ does not do.
 | Boot with the copies loaded inline in `create` | 2026-09-21 | **9.11 s** — they became the first models in the process and paid every import; `create` alone took 7.3 s |
 | The load itself, in a harness on throwaway libraries | 2026-09-27 | 4.9–7.1 s, cold imports included |
 | Memory the CPU copies hold, Metal hosts only | 2026-09-28 | About 0.7 GB: 696 MB of fp32 weights by parameter count (CLIP 605 MB, SBERT 91 MB); the process grew by 610 MB loading them. Kept resident (#1774) |
+| The anomaly route in a real server, before and after #1775: a throwaway library of 12 pictures, one thread queueing `POST /pictures/{id}/reset_tags` every 0.7 s, another calling `GET /pictures/{id}/anomaly_region` with the region cache cleared, 60 s per run. M1, macOS 15.7.3, torch 2.13.0, transformers 5.17.0 | 2026-10-06 | Before: **5 of 5 runs aborted** with `Cannot form weak reference to instance … of class MPSGraph` (cause 3), the request thread in `_compute_gradcam` and the GPU worker in `empty_device_cache` after a task. After: 0 of 5, with 64–72 tag tasks and 2–16 region calls per run; median call 3.7 s, but 53 s and 32 s in the one run where a Florence-2 caption batch held the worker |
+| The anomaly route's work before and after #1775: the real PixlStash tagger on Metal, tag batches of 8 on one thread and Grad-CAM on another, 20 s per process. M1, macOS 15.7.3, torch 2.13.0, transformers 5.17.0 | 2026-10-06 | **10 of 10 failed**, all `SIGABRT`: 9 with `Destination NDArray and Accumulator NDArray cannot have different datatype in MPSNDArrayMatrixMultiplication` (a tag batch meeting the model mid-cast to fp32), 1 with `original module failed verification`. The same work interleaved on one thread, as the GPU worker now runs it: 0 of 10 |
 | Do fp32 CLIP query vectors rank differently from the fp16 ones they replace? (SBERT was fp32 on Metal already.) | 2026-09-23 | No. 20 queries over a real library of several thousand pictures: top-1 identical 20/20, top-10 identical 20/20, largest rank move 1 place, max per-dim delta 4.91e-04 |
 
 torch 2.13.0, transformers 5.16.1, macOS 26.6.2, arm64, unless a row says
