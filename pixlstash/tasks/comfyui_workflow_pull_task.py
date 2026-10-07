@@ -353,7 +353,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
         missing_files: set[str] = set()
         workflow_ids: list[str] = []
         new_workflows = new_versions = written = 0
-        for entry in to_read:
+        for position, entry in enumerate(to_read):
             exhausted = _over_budget(new_workflows, new_versions, written, entry)
             if exhausted is not None:
                 result["budget_exhausted"] = exhausted
@@ -363,7 +363,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     "pull.",
                     origin,
                     exhausted,
-                    len(to_read) - to_read.index(entry),
+                    len(to_read) - position,
                 )
                 break
             try:

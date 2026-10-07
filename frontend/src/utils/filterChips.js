@@ -184,14 +184,24 @@ export function workflowFilterChips(filters, cards, setFilters) {
     push("checkpoint", "Checkpoint", filters.checkpoint, { checkpoint: null });
   }
   if (filters.source != null) {
-    push("source", "Source", WORKFLOW_SOURCE_LABELS[filters.source], {
-      source: null,
-    });
+    push(
+      "source",
+      "Source",
+      WORKFLOW_SOURCE_LABELS[filters.source] ?? filters.source,
+      {
+        source: null,
+      },
+    );
   }
   if (filters.origin != null) {
-    push("origin", "Origin", WORKFLOW_ORIGIN_LABELS[filters.origin], {
-      origin: null,
-    });
+    push(
+      "origin",
+      "Origin",
+      WORKFLOW_ORIGIN_LABELS[filters.origin] ?? filters.origin,
+      {
+        origin: null,
+      },
+    );
   }
   if (filters.minRating != null) {
     push("min-rating", "Rated", `${filters.minRating}★ and up`, {

@@ -140,6 +140,53 @@ describe("useWorkflowPullStore", () => {
     warn.mockRestore();
   });
 
+  it("a read that fails after unwatch schedules nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let fail;
+    getWorkflowPull.mockReturnValueOnce(new Promise((_r, j) => (fail = j)));
+    getWorkflowPull.mockResolvedValue({ status: "idle" });
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    await settle();
+    pull.unwatch();
+    fail(new Error("down"));
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS * 3);
+    expect(getWorkflowPull).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("keeps asking after an answer it cannot apply", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkflowPull.mockResolvedValueOnce({ status: "idle" });
+    getWorkflowPull.mockResolvedValueOnce({
+      status: "completed",
+      task_id: "t1",
+      get summary() {
+        throw new Error("unreadable");
+      },
+    });
+    getWorkflowPull.mockResolvedValue({ status: "running", task_id: "t2" });
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS * 2);
+    expect(getWorkflowPull).toHaveBeenCalledTimes(3);
+    expect(pull.phase).toBe("pulling");
+    warn.mockRestore();
+  });
+
+  it("reports a pull that was already running when watching started", async () => {
+    getWorkflowPull.mockResolvedValueOnce({ status: "running", task_id: "t1" });
+    getWorkflowPull.mockResolvedValue(done("t1", { listed: 2, pulled: 2 }));
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    await settle();
+    expect(pull.phase).toBe("pulling");
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
+    expect(pull.phase).toBe("done");
+    expect(pull.summary).toEqual({ listed: 2, pulled: 2 });
+    expect(fetchCards).toHaveBeenCalledTimes(1);
+  });
+
   it("a grid re-read that fails leaves the summary standing", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     fetchCards.mockRejectedValue(new Error("grid down"));

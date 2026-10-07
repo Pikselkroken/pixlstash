@@ -3362,7 +3362,7 @@ def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow) -> str:
     monkeypatch.setattr(
         comfyui_module, "_workflow_dirs", lambda: [("user", str(tmp_path))]
     )
-    workflows_routes._MODEL_WIDGETS.clear()
+    workflows_routes._model_widgets_at.cache_clear()
     return comfyui_module.store_manual_workflow(
         server.hub, name.removesuffix(".json"), workflow, "import"
     )
@@ -3827,18 +3827,22 @@ def test_pixlstashs_conversion_never_overwrites_one_the_node_stored_meanwhile(
         assert r.status_code == 200 and r.json()["workflow_id"] == manual, r.text
         return json.loads(json.dumps(RUN_OBJECT_INFO))
 
-    workflow_card_service.converted_manual_document(
+    document, version, problems = workflow_card_service.converted_manual_document(
         hub, manual, the_node_converts_meanwhile
     )
     assert _api_document(hub, manual) == theirs
     assert _version_api_document(hub, manual) == theirs
+    # And Run and Open are handed theirs, not the conversion that lost.
+    assert (version, problems) == (1, [])
+    assert document["3"]["inputs"]["steps"] == 31
 
 
 def test_a_conversion_never_lands_on_the_version_after_the_one_it_converted(
     workflow_env, tmp_path, monkeypatch
 ):
     """V6: a pull that makes a new version between the read and the store
-    leaves the new version unconverted, rather than carrying the old graph."""
+    never gets the old graph: the read starts again on the new version, and
+    that one's own conversion is what is stored and returned."""
     hub = workflow_env.server.hub
     manual = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "sampler.json", RUN_EDITOR_GRAPH
@@ -3854,18 +3858,18 @@ def test_a_conversion_never_lands_on_the_version_after_the_one_it_converted(
     document, version, problems = workflow_card_service.converted_manual_document(
         hub, manual, a_pull_lands_meanwhile
     )
-    # The read answers the version it read, converted...
-    assert (version, problems) == (1, [])
-    assert document["3"]["inputs"]["steps"] == 20
-    # ...and stores nothing on version 2, nor on version 1's leftover row.
-    assert _api_document(hub, manual) is None
-    assert _version_api_document(hub, manual) is None
+    # The read answers the current version, converted...
+    assert (version, problems) == (2, [])
+    assert document["3"]["inputs"]["steps"] == 40
+    # ...stored on version 2 only, never version 1's graph on it.
+    assert _api_document(hub, manual)["3"]["inputs"]["steps"] == 40
     rows = hub.fetchall(
         "SELECT version, api_document FROM workflow_version WHERE workflow_id = ? "
         "ORDER BY version",
         (manual,),
     )
-    assert [(row[0], row[1]) for row in rows] == [(1, None), (2, None)]
+    assert [(row[0], row[1] is None) for row in rows] == [(1, True), (2, False)]
+    assert json.loads(rows[1][1])["3"]["inputs"]["steps"] == 40
 
 
 def test_a_conversion_of_another_editor_document_is_not_run(workflow_env, converting):
@@ -4368,7 +4372,7 @@ def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
         conn.execute(
             "UPDATE workflow_document SET document = '{' WHERE workflow_id = ?", (key,)
         )
-    workflows_routes._MODEL_WIDGETS.clear()
+    workflows_routes._model_widgets_at.cache_clear()
     assert _by_key(_cards(workflow_env.owner))[key]["models"] == []
 
 

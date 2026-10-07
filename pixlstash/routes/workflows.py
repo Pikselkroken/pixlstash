@@ -648,6 +648,14 @@ class WorkflowCard(BaseModel):
             "automatic workflow."
         ),
     )
+    version: int = Field(
+        1,
+        description=(
+            "The current version's number. Versions are numbered for good, "
+            "so past the 50 kept it is more than `versions`. Always 1 for an "
+            "automatic workflow."
+        ),
+    )
     version_at: str | None = Field(
         None,
         description=(
@@ -2459,12 +2467,6 @@ def _display_names(figures) -> dict[str, str]:
     return names
 
 
-# ``{workflow id: (current version, models)}``: one entry per manual workflow,
-# replaced when a pull makes a new version (`hub/workflow_versions.py`). Keyed
-# on the version number, so no document is held in memory.
-_MODEL_WIDGETS: dict[str, tuple] = {}
-
-
 def _manual_model_widgets(hub, workflow_id: str) -> tuple:
     """``((widget, filename), ...)`` read off one manual workflow's document.
 
@@ -2473,25 +2475,34 @@ def _manual_model_widgets(hub, workflow_id: str) -> tuple:
     document itself is read only when its version is not cached.
     """
     row = hub.fetchone(
-        "SELECT (SELECT MAX(v.version) FROM workflow_version v "
-        "WHERE v.workflow_id = d.workflow_id) AS version "
-        "FROM workflow_document d WHERE d.workflow_id = ?",
+        "SELECT v.version, COALESCE(v.created_at, d.created_at) AS version_at "
+        "FROM workflow_document d LEFT JOIN workflow_version v "
+        "ON v.workflow_id = d.workflow_id AND v.version = (SELECT MAX(version) "
+        "FROM workflow_version WHERE workflow_id = d.workflow_id) "
+        "WHERE d.workflow_id = ?",
         (workflow_id,),
     )
     if row is None:
         return ()
-    cached = _MODEL_WIDGETS.get(workflow_id)
-    if cached is not None and cached[0] == row["version"]:
-        return cached[1]
+    return _model_widgets_at(hub, workflow_id, row["version"], row["version_at"])
+
+
+# Bounded, so a deleted workflow's entry ages out. Keyed on when the version
+# was stored as well as its number: a workflow made from a file reuses its id
+# (`hub/workflow_group_convert.py`), so a deleted one's version 1 and its
+# successor's must not share an entry.
+@functools.lru_cache(maxsize=512)
+def _model_widgets_at(
+    hub, workflow_id: str, version: int | None, version_at: str | None
+) -> tuple:
+    """:func:`_manual_model_widgets` of the version *version* stored at *version_at*."""
     document = hub.fetchone(
         "SELECT document FROM workflow_document WHERE workflow_id = ?",
         (workflow_id,),
     )
     if document is None:
         return ()
-    found = _model_widgets_of(workflow_id, document["document"])
-    _MODEL_WIDGETS[workflow_id] = (row["version"], found)
-    return found
+    return _model_widgets_of(workflow_id, document["document"])
 
 
 def _model_widgets_of(workflow_id: str, document: str) -> tuple:
@@ -2563,6 +2574,7 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         from_name=figure.card.from_name,
         origin_category=_origin_category(figure.card),
         versions=figure.card.versions,
+        version=figure.card.version,
         version_at=figure.card.version_at,
         hidden=figure.card.hidden,
         models=_slot_models(figure.models),

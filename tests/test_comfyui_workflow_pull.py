@@ -57,6 +57,7 @@ from pixlstash.tasks.comfyui_workflow_pull_task import (
     stored_name_for,
 )
 from pixlstash.utils.comfyui_utilities import loaded_model_widgets
+from pixlstash.utils.service.user_settings_utils import apply_user_config_patch
 
 BASE = "http://comfy.test:8188"
 # What the fake ComfyUI lists as every file's `modified` until it is edited.
@@ -1318,6 +1319,23 @@ def test_a_failed_poll_waits_ten_minutes_and_a_dropped_one_frees_the_gate(
     assert pulls.released == ["task"]
 
 
+def test_the_pull_setting_reads_the_string_false_as_off():
+    user = SimpleNamespace(pull_comfyui_workflows=True)
+    for value, expected in [
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        (0, False),
+        (False, False),
+        ("", True),
+        (None, True),
+        (True, True),
+    ]:
+        user.pull_comfyui_workflows = not expected
+        apply_user_config_patch(user, {"pull_comfyui_workflows": value})
+        assert user.pull_comfyui_workflows is expected, value
+
+
 def test_the_owner_setting_and_a_saved_address_gate_the_automatic_pulls():
     user = SimpleNamespace(comfyui_url=f"{BASE}/", pull_comfyui_workflows=True)
     server = SimpleNamespace(auth=SimpleNamespace(user=user))
@@ -1374,14 +1392,23 @@ def test_a_workflow_keeps_its_first_version_and_the_newest_49(folders, hub):
     assert len(kept) == workflow_versions.MAX_VERSIONS == 50
     assert kept == [1, *range(13, 62)]
     assert manual_document(hub, workflow_id)["extra"]["n"] == 59
+    # The card says which version is current, not how many are kept.
+    (card,) = [
+        card
+        for card in workflow_card_reads._manual_cards(hub)
+        if card.workflow_key == workflow_id
+    ]
+    assert (card.versions, card.version) == (50, 61)
 
 
 def test_a_pull_stops_at_its_budget_and_the_next_takes_the_rest(
-    comfy, folders, hub, monkeypatch
+    comfy, folders, hub, monkeypatch, caplog
 ):
     monkeypatch.setattr(pull_task_module, "MAX_NEW_WORKFLOWS_PER_PULL", 1)
-    first = _pull_with(hub)
+    with caplog.at_level("WARNING"):
+        first = _pull_with(hub)
     assert (first["pulled"], first["budget_exhausted"]) == (1, "1 new workflows")
+    assert "1 listed file(s) are left for the next pull" in caplog.text
     second = _pull_with(hub)
     assert (second["pulled"], second["unchanged"]) == (1, 1)
     assert second["budget_exhausted"] is None
@@ -1580,6 +1607,33 @@ def test_a_cached_description_follows_the_version(folders, hub):
     assert workflow_card_reads._manual_facts_of(workflow_id, "{", 1) == first
     assert workflow_card_reads._manual_facts_of(workflow_id, "{", 2) == (None, None)
     assert workflow_card_reads._MANUAL_FACTS[workflow_id] == (2, (None, None))
+
+
+def test_a_cached_description_is_not_handed_to_a_workflow_reusing_the_id(folders, hub):
+    # A workflow made from a file reuses its id after a delete: the same id at
+    # the same version number, stored at another time, is read afresh.
+    workflow_id = comfyui_module.store_manual_workflow(hub, "w", PLAIN, "pull")
+    first = workflows_routes._manual_model_widgets(hub, workflow_id)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_document SET document = ?, created_at = ? "
+            "WHERE workflow_id = ?",
+            (json.dumps(NEEDS_PACK), "2099-01-01T00:00:00+00:00", workflow_id),
+        )
+        conn.execute(
+            "UPDATE workflow_version SET created_at = ? WHERE workflow_id = ?",
+            ("2099-01-01T00:00:00+00:00", workflow_id),
+        )
+    again = workflows_routes._manual_model_widgets(hub, workflow_id)
+    assert again != first
+    assert ABSENT_MODEL in {name for _w, name in again}
+
+    # The grid's description of a workflow is dropped once it is gone.
+    workflow_card_reads._manual_cards(hub)
+    assert workflow_id in workflow_card_reads._MANUAL_FACTS
+    delete_manual_workflow(hub, workflow_id)
+    workflow_card_reads._manual_cards(hub)
+    assert workflow_id not in workflow_card_reads._MANUAL_FACTS
 
 
 def test_an_address_makes_no_new_workflow_past_its_card_cap(

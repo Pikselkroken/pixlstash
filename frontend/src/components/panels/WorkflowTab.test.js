@@ -352,6 +352,19 @@ describe("the version line", () => {
     expect(line(wrapper).text()).toContain("2026");
   });
 
+  it("names the current version's number, not how many are kept", async () => {
+    // Past the 50 kept, version 61 is the 50th row: the line says 61.
+    const pruned = card({
+      versions: 50,
+      version: 61,
+      version_at: "2026-10-06T09:30:00Z",
+      origin_category: "comfyui",
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: pruned }));
+    const { wrapper } = await mountWith([KEY], [pruned]);
+    expect(line(wrapper).text()).toMatch(/^Version 61 · /);
+  });
+
   it("shows it for a pulled card even at version 1", async () => {
     const pulled = card({
       versions: 1,

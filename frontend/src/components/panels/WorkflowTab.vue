@@ -1055,7 +1055,10 @@ const versionLine = computed(() => {
     return "";
   }
   const day = formatUserDay(c.version_at, userPrefs.dateFormat);
-  return day ? `Version ${c.versions ?? 1} · ${day}` : `Version ${c.versions ?? 1}`;
+  // `version`, the number, not `versions`, how many are kept: past the 50
+  // kept the two differ.
+  const number = c.version ?? c.versions ?? 1;
+  return day ? `Version ${number} · ${day}` : `Version ${number}`;
 });
 
 // All three read the MODEL SHELF's name where it has one, the same preference

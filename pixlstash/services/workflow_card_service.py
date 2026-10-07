@@ -1640,33 +1640,51 @@ def converted_manual_document(
     and returns the document as it was with the converter's sentences, so the
     next read tries again and the caller can say why.
 
+    A store that is refused because the workflow moved on meanwhile (a pull
+    made a new version, or ComfyUI's own conversion landed first) reads the
+    workflow again, so the caller gets what is stored now rather than this
+    read's conversion of what was.
+
     Returns:
         ``(document, version, problems)``; ``(None, None, [])`` for no such
         workflow.
     """
-    document, version = manual_document_and_version(hub, workflow_id)
-    if not document or api_graph(document) is not None:
-        return document, version, []
-    info = object_info() if callable(object_info) else object_info
-    graph, problems = convert_ui_graph_to_api(document, info)
-    if graph is None:
+    # Twice at most: a workflow a pull moves on again between the re-read and
+    # its store is answered with the re-read's own version, document and
+    # number together.
+    for attempt in range(2):
+        document, version = manual_document_and_version(hub, workflow_id)
+        if not document or api_graph(document) is not None:
+            return document, version, []
+        if callable(object_info):
+            object_info = object_info()
+        graph, problems = convert_ui_graph_to_api(document, object_info)
+        if graph is None:
+            logger.info(
+                "Manual workflow %s holds an editor workflow that will not convert: %s",
+                workflow_id,
+                "; ".join(problems),
+            )
+            return document, version, problems
+        if set_manual_api_document(
+            hub,
+            [workflow_id],
+            graph,
+            workflow_bindings.canonical(document),
+            keep_stored=True,
+        ):
+            logger.info(
+                "Converted manual workflow %s (version %s) and stored the conversion.",
+                workflow_id,
+                version,
+            )
+            break
         logger.info(
-            "Manual workflow %s holds an editor workflow that will not convert: %s",
-            workflow_id,
-            "; ".join(problems),
-        )
-        return document, version, problems
-    if set_manual_api_document(
-        hub,
-        [workflow_id],
-        graph,
-        workflow_bindings.canonical(document),
-        keep_stored=True,
-    ):
-        logger.info(
-            "Converted manual workflow %s (version %s) and stored the conversion.",
+            "Manual workflow %s (version %s) moved on while it was converted; "
+            "reading it again (attempt %d).",
             workflow_id,
             version,
+            attempt + 1,
         )
     return with_converted_graph(document, graph), version, []
 

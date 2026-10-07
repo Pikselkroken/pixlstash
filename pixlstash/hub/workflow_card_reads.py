@@ -107,9 +107,11 @@ class Card:
     # How a manual workflow arrived (``workflow_document.origin``: ``pull``,
     # ``import``, ``duplicate``, ...); ``None`` for an automatic one.
     origin: Optional[str] = None
-    # A manual workflow's versions (``workflow_version``): how many, and when
-    # the current one was made. A workflow made before versions has its one.
+    # A manual workflow's versions (``workflow_version``): how many are kept,
+    # the current one's number (past the 50 kept, more than ``versions``), and
+    # when it was made. A workflow made before versions has its one.
     versions: int = 1
+    version: int = 1
     version_at: Optional[str] = None
 
 
@@ -190,6 +192,20 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     variants: the document is the whole of it. Always ``imported``, so a
     stored workflow, pulled or otherwise, is never folded into the one-offs.
     """
+    rows = hub.fetchall(
+        "SELECT d.workflow_id, d.origin, d.from_name, d.document, "
+        "MAX(1, (SELECT COUNT(*) FROM workflow_version v "
+        "WHERE v.workflow_id = d.workflow_id)) AS versions, "
+        "COALESCE((SELECT v.created_at FROM workflow_version v "
+        "WHERE v.workflow_id = d.workflow_id ORDER BY v.version DESC LIMIT 1), "
+        "d.created_at) AS version_at, "
+        "(SELECT MAX(v.version) FROM workflow_version v "
+        "WHERE v.workflow_id = d.workflow_id) AS current_version "
+        "FROM workflow_document d ORDER BY d.workflow_id"
+    )
+    # A deleted workflow's description goes with it.
+    for gone in set(_MANUAL_FACTS) - {row["workflow_id"] for row in rows}:
+        _MANUAL_FACTS.pop(gone, None)
     return [
         Card(
             workflow_key=row["workflow_id"],
@@ -201,41 +217,38 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             from_name=row["from_name"],
             origin=row["origin"],
             versions=row["versions"],
+            version=row["current_version"] or 1,
             version_at=row["version_at"],
         )
-        for row in hub.fetchall(
-            "SELECT d.workflow_id, d.origin, d.from_name, d.document, "
-            "MAX(1, (SELECT COUNT(*) FROM workflow_version v "
-            "WHERE v.workflow_id = d.workflow_id)) AS versions, "
-            "COALESCE((SELECT v.created_at FROM workflow_version v "
-            "WHERE v.workflow_id = d.workflow_id ORDER BY v.version DESC LIMIT 1), "
-            "d.created_at) AS version_at, "
-            "(SELECT MAX(v.version) FROM workflow_version v "
-            "WHERE v.workflow_id = d.workflow_id) AS current_version "
-            "FROM workflow_document d ORDER BY d.workflow_id"
-        )
+        for row in rows
         for facts in (
             _manual_facts_of(
-                row["workflow_id"], row["document"], row["current_version"]
+                row["workflow_id"],
+                row["document"],
+                (row["current_version"], row["version_at"]),
             ),
         )
     ]
 
 
 # ``{workflow id: (version, (workflow_type, traits))}``: one entry per manual
-# workflow, replaced when a pull makes a new version (`hub/workflow_versions.py`),
-# so no document is held and an old version is never described.
-_MANUAL_FACTS: dict[str, tuple[Optional[int], tuple]] = {}
+# workflow, replaced when a pull makes a new version (`hub/workflow_versions.py`)
+# and dropped when the workflow is (`_manual_cards`), so no document is held
+# and an old version is never described.
+_MANUAL_FACTS: dict[str, tuple[object, tuple]] = {}
 
 
 def _manual_facts_of(
-    workflow_id: str, document: str, version: Optional[int] = None
+    workflow_id: str, document: str, version: object = None
 ) -> tuple[Optional[str], Optional[tuple[str, ...]]]:
     """``(workflow_type, traits)`` of a manual workflow, parsed once per version.
 
-    *version* is the current one's number, ``None`` for a workflow an older
-    build made (it has the one document). Both ``None`` for a graph that will
-    not reduce, as for an automatic card the backfill has not reached.
+    *version* names the current version: ``(number, stored at)`` from the
+    grid, the time because a workflow made from a file reuses its id
+    (`hub/workflow_group_convert.py`), so a deleted one's version 1 and its
+    successor's differ only in when they were stored. Both ``None`` for a
+    graph that will not reduce, as for an automatic card the backfill has not
+    reached.
     """
     cached = _MANUAL_FACTS.get(workflow_id)
     if cached is not None and cached[0] == version:

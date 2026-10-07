@@ -6103,7 +6103,8 @@ ComfyUI is configured the Workflows view calls `useWorkflowPullStore.watch()`,
 which asks the pull status every 5 s (`PULL_WATCH_MS`) until `unwatch()` on
 unmount; a permanently mounted `role="status"` in the toolbar reads *Checking
 ComfyUI…* only while a pull runs, and dims nothing. A pull already finished when
-watching starts is the baseline, not news. Only a pull that finished under watch
+watching starts is the baseline, not news; one still running then is reported
+when it ends. Only a pull that finished under watch
 and pulled or changed something shows `panels/WorkflowPullSummary.vue`, a band
 under the toolbar in the `.wfv-note` family that stays until dismissed (the
 counts are the point), and re-reads the grid; a pull that changed nothing, or
@@ -6123,7 +6124,7 @@ corner (`role="img"`, *From ComfyUI*, also appended to the card's accessible
 name). Filters › Origin narrows the grid to *ComfyUI*, *From pictures*
 (automatic cards) or *Our own* (clones, copies, imports, recipe extracts,
 built-ins), with counts and a chip, not persisted. The inspector shows
-*Version N · date* (`versions`, `version_at`) for a ComfyUI card or one with
+*Version N · date* (`version`, `version_at`) for a ComfyUI card or one with
 more than one version.
 
 **Running a workflow is the Run popup** (#1407, `io/RunDialog.vue`), described

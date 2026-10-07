@@ -1950,6 +1950,30 @@ describe("pulling from ComfyUI (#1440)", () => {
     expect(document.activeElement).toBe(wrapper.find(".wfv-scroll").element);
   });
 
+  it("hands focus to the empty state's first action when the band goes", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 0 });
+    getWorkflowPull.mockResolvedValue({ status: "idle" });
+    useFilterStore().comfyuiConfigured = true;
+    const wrapper = mountView();
+    await flush();
+    getWorkflowPull.mockResolvedValue({
+      status: "completed",
+      task_id: "t1",
+      comfyui_url: "http://127.0.0.1:8188",
+      summary: SUMMARY,
+    });
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
+    await flush();
+    expect(wrapper.find(".wfv-empty").exists()).toBe(true);
+    await wrapper
+      .find('[aria-label="Dismiss the ComfyUI pull result"]')
+      .trigger("click");
+    await flush();
+    expect(document.activeElement).toBe(
+      wrapper.find(".wfv-empty__actions button").element,
+    );
+  });
+
   it("shows nothing for a pull that changed nothing, or one that failed", async () => {
     getWorkflowPull.mockResolvedValue({ status: "idle" });
     useFilterStore().comfyuiConfigured = true;

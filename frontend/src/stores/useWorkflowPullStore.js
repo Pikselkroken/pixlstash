@@ -20,7 +20,8 @@ export const PULL_WATCH_MS = 5000;
  * band per minute would be noise. Failures are logged; the ComfyUI settings
  * section is where connection trouble is shown.
  *
- * A pull already finished when watching starts is the baseline, not news.
+ * A pull already finished when watching starts is the baseline, not news;
+ * one still running then is reported when it ends.
  */
 export const useWorkflowPullStore = defineStore("workflowPull", () => {
   // "idle" | "pulling" | "done"
@@ -49,19 +50,27 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
     try {
       state = await getWorkflowPull();
     } catch (err) {
-      if (mine !== epoch) return;
+      if (mine !== epoch || !watching) return;
       console.warn("[workflows] could not read the pull's state", err);
       schedule();
       return;
     }
     if (mine !== epoch || !watching) return;
-    await apply(state);
+    try {
+      await apply(state);
+    } catch (err) {
+      // One answer this cannot read must not end the watch.
+      console.warn("[workflows] could not apply the pull's state", state, err);
+    }
     if (mine === epoch && watching) schedule();
   }
 
   async function apply(state) {
     const status = state?.status;
     if (status === "pending" || status === "running") {
+      // Running when watching starts: its end is news, so the baseline is
+      // "nothing finished yet", as for `idle` below.
+      if (lastSeen === undefined) lastSeen = null;
       phase.value = "pulling";
       return;
     }

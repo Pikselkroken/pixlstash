@@ -122,7 +122,7 @@
       class="wfv-strip"
     />
 
-    <WorkflowPullSummary @dismissed="scrollEl?.focus()" />
+    <WorkflowPullSummary @dismissed="focusAfterPullDismissed" />
 
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
 
@@ -172,7 +172,7 @@
          one `--text-sm` line, then the routes out as plain buttons. Not the
          bordered option rows `LibraryEmptyState` uses — that screen explains
          three unfamiliar choices at first run; these three are one verb each. -->
-    <div v-if="showEmptyState" class="wfv-empty">
+    <div v-if="showEmptyState" ref="emptyEl" class="wfv-empty">
       <div class="wfv-empty__card">
         <div class="wfv-empty__illustration" aria-hidden="true">
           <img src="/Empty.png" alt="" />
@@ -481,6 +481,7 @@ const gridEl = ref(null);
 const fileInput = ref(null);
 const selBarRef = ref(null);
 const scrollEl = ref(null);
+const emptyEl = ref(null);
 const sortMenuOpen = ref(false);
 const filterMenuOpen = ref(false);
 const renameOpen = ref(false);
@@ -1178,6 +1179,15 @@ const renameFallback = computed(() => onlyCard.value?.name ?? "");
  * `document.body`: outside the grid, with the cursor's row still marked and
  * the next arrow key going nowhere (WCAG 2.4.3).
  */
+/**
+ * Where focus goes when the pull band is dismissed and unmounts: the grid's
+ * scroller, or, with the empty state drawn in its place, that state's first
+ * action, never `<body>`.
+ */
+function focusAfterPullDismissed() {
+  (scrollEl.value ?? emptyEl.value?.querySelector("button"))?.focus();
+}
+
 function focusCursorRow() {
   const entry = flatRows.value[cursorIndex.value];
   if (!entry) return;

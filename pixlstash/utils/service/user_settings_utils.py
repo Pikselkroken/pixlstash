@@ -317,7 +317,13 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 updated = True
             continue
         if key == "pull_comfyui_workflows":
-            new_value = True if value in ("", None, "null") else bool(value)
+            # On by default, and the string "false" is off, as for telemetry.
+            if value in ("", None, "null"):
+                new_value = True
+            elif value in ("false", "False", "0", 0):
+                new_value = False
+            else:
+                new_value = bool(value)
             if user.pull_comfyui_workflows != new_value:
                 user.pull_comfyui_workflows = new_value
                 updated = True
