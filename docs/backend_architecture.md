@@ -8875,8 +8875,14 @@ sampler, a hires pass, a detailer) starts a **lane** (`lanes`) with the loaders
 only it reads. Readers that are not loaders are grouped by the sampler they
 reach, so a guider and a scheduler feeding one `SamplerCustomAdvanced` stay one
 straight chain. A lane is named by the nearest sampler downstream of it (its
-ComfyUI title when it has one), and branches that meet again at one node (a
-model merge) are refused, since they are not separate passes. A workflow loading one model per pass (Wan 2.2 high/low noise) has no
+ComfyUI title when it has one). Branches that meet again at one node (a
+`Switch (Model)` choosing with or without a LoRA, a model merge, two models
+into one sampler) share that sampler, so each such lane is named by every input
+its model feeds instead (`Switch (Model) #22, on_true`), still pointing at the
+sampler, and edits like any other; edits address lanes by position, never by
+name. A node other than a sampler taking several models (a switch, a merge) is
+a lane per input it reads the fork on, so a switch side emptied of its LoRA
+stays a side a LoRA can go back on. A workflow loading one model per pass (Wan 2.2 high/low noise) has no
 trunk: `model_source` is null and each lane names its own, CLIP included when
 each pass encodes its own prompt (SDXL base and refiner). A lane off a trunk
 must take its CLIP from the trunk's CLIP end. Only a further fork inside a lane, or loaders
