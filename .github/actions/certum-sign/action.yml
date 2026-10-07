@@ -158,13 +158,18 @@ runs:
           done
         }
 
+        # Debug screenshots (may show the user id; the OTP field should be
+        # masked). Report a failed capture instead of claiming success.
+        shot() {
+          [ "$DEBUG_SCREENSHOTS" = "true" ] || return 0
+          if import -window root "$RUNNER_TEMP/$1.png"; then echo "screenshot $1.png"
+          else echo "::warning::screenshot $1.png failed"; fi
+        }
+
         login_failed() {
           echo "::error title=SimplySign login failed::$1"
           echo "--- simplysign.log tail ---"; tail -50 "$RUNNER_TEMP/simplysign.log" 2>/dev/null || true
-          if [ "$DEBUG_SCREENSHOTS" = "true" ]; then
-            import -window root "$RUNNER_TEMP/login-failure.png" 2>/dev/null || true
-            echo "screenshot saved to RUNNER_TEMP/login-failure.png (may show the user id; should not show the OTP, assuming SimplySign masks the field)"
-          fi
+          shot login-failure
         }
 
         token_active() {
@@ -198,8 +203,10 @@ runs:
           OTP="$(gen_otp)"
           echo "::add-mask::$OTP"
           xdotool type --clearmodifiers --delay 50 "$OTP"
+          shot "attempt-$attempt-filled"
           xdotool mousemove $((BX + BW/2)) $((BY + BH*76/100)) click 1
           sleep 8
+          shot "attempt-$attempt-result"
 
           # "Logon successful" dialog: the token does NOT activate until its
           # Close button (bottom-centre) is clicked. Re-find (content changed).
