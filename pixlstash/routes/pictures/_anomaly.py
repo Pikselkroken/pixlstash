@@ -21,7 +21,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import picture_service
-from pixlstash.tagger_plugins.pixlstash_tagger import UnknownAnomalyLabel
+from pixlstash.tasks.anomaly_region_task import (
+    AnomalyRegionOutcome,
+    AnomalyRegionTask,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.service.caption_utils import sanitise_tag
 
@@ -38,6 +41,11 @@ logger = get_logger(__name__)
 _ANOMALY_REGION_CACHE_MAX = 512
 _anomaly_region_cache: "OrderedDict[tuple, dict]" = OrderedDict()
 _anomaly_region_cache_lock = threading.Lock()
+
+# How long a request waits for its task: the GPU task already running and any
+# interactive work queued ahead of it, then a tagger load if it was
+# idle-unloaded, then the Grad-CAM pass itself.
+_ANOMALY_REGION_TIMEOUT_S = 120.0
 
 
 def _cache_get(key: tuple) -> Optional[dict]:
@@ -116,7 +124,8 @@ def register_routes(router, server):
             "the anomaly is diffuse (a global/surface defect), `box` and "
             "`heatmap` are null and `diffuse` is true. Returns 422 if the tag "
             "is not a label the model knows, 404 if the picture does not exist, "
-            "and 503 if the anomaly tagger model is not loaded."
+            "and 503 if the anomaly tagger model cannot be loaded or the GPU "
+            "worker does not reach the request in time."
         ),
         response_model=AnomalyRegionResponse,
     )
@@ -141,38 +150,16 @@ def register_routes(router, server):
 
         engine = getattr(server.vault, "_engine", None)
         service = getattr(engine, "pixlstash_tagger_service", None) if engine else None
-        if service is None:
+        task_runner = getattr(server.vault, "_task_runner", None)
+        if service is None or task_runner is None:
             raise HTTPException(
                 status_code=503, detail="Anomaly tagger is unavailable."
             )
-        # The tagger is idle-unloaded between tagging runs, so during review it is
-        # usually not resident. Load it on demand (mirrors how a tagging task brings
-        # it up) instead of failing - otherwise the review hint would 503 and the
-        # frontend would silently show nothing whenever the app is idle.
-        if not service.is_loaded():
-            ensure = getattr(engine, "ensure_pixlstash_tagger_ready", None)
-            if ensure is None or not ensure():
-                raise HTTPException(
-                    status_code=503,
-                    detail="Anomaly tagger model could not be loaded.",
-                )
 
-        if service.resolve_label_index(tag_clean) is None:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown anomaly tag: '{tag_clean}'",
-            )
-
-        cache_key = (pic_id, sanitise_tag(tag_clean), int(service.version()))
-        cached = _cache_get(cache_key)
+        tag_key = sanitise_tag(tag_clean)
+        cached = _cache_get((pic_id, tag_key, int(service.version())))
         if cached is not None:
             return {"picture_id": pic_id, "tag": tag_clean, **cached}
-        logger.debug(
-            "anomaly_region cache miss for picture=%s tag=%s version=%s",
-            pic_id,
-            tag_clean,
-            cache_key[2],
-        )
 
         rel_path = picture_service.fetch_picture_file_path(server.vault.db, pic_id)
         if rel_path is None:
@@ -186,35 +173,57 @@ def register_routes(router, server):
 
         try:
             with Image.open(file_path) as pil_img:
-                result = service.localize_anomaly(pil_img, tag_clean)
-        except UnknownAnomalyLabel as exc:
-            # Defensive: resolve_label_index already validated above.
-            raise HTTPException(
-                status_code=422, detail=f"Unknown anomaly tag: '{tag_clean}'"
-            ) from exc
+                rgb_image = pil_img.convert("RGB")
         except UnidentifiedImageError as exc:
             # The picture is not a still image PIL can decode (e.g. a video that
-            # still carries anomaly tags). There is nothing to localise, so degrade
-            # to a diffuse (no-region) result instead of 500 - the UI shows nothing.
+            # still carries anomaly tags). There is nothing to localise, so the
+            # task only validates the tag and answers diffuse - the UI shows
+            # nothing rather than a 500.
             logger.debug(
                 "anomaly_region: picture id=%s is not a decodable image: %s",
                 pic_id,
                 exc,
             )
-            result = {"boxes": [], "diffuse": True, "heatmap": None}
-        except HTTPException:
-            raise
-        except Exception as exc:
+            rgb_image = None
+
+        # The tagger load and the Grad-CAM pass run on the GPU worker, never on
+        # this request thread: see AnomalyRegionTask for why.
+        task = AnomalyRegionTask(engine, rgb_image, tag_clean)
+        try:
+            result = task_runner.submit_and_wait(task, _ANOMALY_REGION_TIMEOUT_S)
+        except TimeoutError as exc:
+            logger.warning(
+                "anomaly_region timed out for picture id=%s tag=%s: %s",
+                pic_id,
+                tag_clean,
+                exc,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Anomaly localisation timed out; the GPU is busy.",
+            ) from exc
+        except RuntimeError as exc:
+            # TaskCancelledError (the runner stopped) is a RuntimeError too.
             logger.error(
                 "Anomaly localisation failed for picture id=%s tag=%s: %s",
                 pic_id,
                 tag_clean,
                 exc,
-                exc_info=True,
             )
             raise HTTPException(
                 status_code=500, detail="Failed to localise anomaly region"
             ) from exc
 
-        _cache_put(cache_key, result)
-        return {"picture_id": pic_id, "tag": tag_clean, **result}
+        if result.outcome == AnomalyRegionOutcome.TAGGER_UNAVAILABLE:
+            raise HTTPException(
+                status_code=503,
+                detail="Anomaly tagger model could not be loaded.",
+            )
+        if result.outcome == AnomalyRegionOutcome.UNKNOWN_LABEL:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown anomaly tag: '{tag_clean}'",
+            )
+
+        _cache_put((pic_id, tag_key, result.version), result.region)
+        return {"picture_id": pic_id, "tag": tag_clean, **result.region}
