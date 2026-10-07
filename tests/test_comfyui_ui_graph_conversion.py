@@ -1168,6 +1168,17 @@ class TestSubgraphs:
         assert problems == []
         assert prompt["2:5"]["inputs"]["factor"] == 3.0
 
+    def test_an_instance_value_for_an_unnamed_input_is_refused(self):
+        """Not dropped: the inner node's own value is not what was set."""
+        graph = _subgraph_workflow(instance_values=[3.0])
+        inner = graph["definitions"]["subgraphs"][0]["nodes"][0]["inputs"][1]
+        # Still a widget input, so the instance's value reaches it; no name.
+        del inner["name"]
+        inner["widget"] = {"type": "FLOAT"}
+        prompt, problems = convert_ui_graph_to_api(graph, SUBGRAPH_OBJECT_INFO)
+        assert prompt is None
+        assert any("unnamed input fed by a subgraph" in p for p in problems)
+
     def test_a_class_named_like_a_uuid_but_not_one_is_a_node(self):
         """Only the 8-4-4-4-12 hex shape is read as a missing subgraph."""
         lookalike = "abcdefgh-ijkl-mnop-qrst-uvwxyz012345"

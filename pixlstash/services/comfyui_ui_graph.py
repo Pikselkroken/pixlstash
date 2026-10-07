@@ -442,9 +442,15 @@ class _Inliner:
                     widget = slot_entry.get("widget") or {}
                     # By the input's own name, which is what `_node_inputs`
                     # matches; the widget's name is only the fallback.
-                    overrides[str(slot_entry.get("name") or widget.get("name"))] = (
-                        found[1]
-                    )
+                    name = slot_entry.get("name") or widget.get("name")
+                    if name is None:
+                        # Dropping the value would run the inner node's own.
+                        self.problems.append(
+                            f"node {key} has an unnamed input fed by a subgraph "
+                            "instance's value, so the value cannot be placed"
+                        )
+                    else:
+                        overrides[str(name)] = found[1]
                 inputs.append(slot_entry)
             node["inputs"] = inputs
             if overrides:
