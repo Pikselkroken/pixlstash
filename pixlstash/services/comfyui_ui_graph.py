@@ -32,6 +32,7 @@ half, 0 wrong, 7 refused with a reason.
 from __future__ import annotations
 
 import logging
+import re
 
 from pixlstash.services.workflow_hash import (
     _MAX_INLINED_NODES,
@@ -439,7 +440,9 @@ class _Inliner:
                     slot_entry["link"] = link_id
                 elif found and found[0] == "value":
                     widget = slot_entry.get("widget") or {}
-                    overrides[str(widget.get("name") or slot_entry.get("name"))] = (
+                    # By the input's own name, which is what `_node_inputs`
+                    # matches; the widget's name is only the fallback.
+                    overrides[str(slot_entry.get("name") or widget.get("name"))] = (
                         found[1]
                     )
                 inputs.append(slot_entry)
@@ -462,8 +465,7 @@ def inline_subgraphs(workflow: dict) -> tuple[dict | None, list[str]]:
         node_type = str((entry.get("node") or {}).get("type") or "")
         if (
             entry["kind"] == "node"
-            and len(node_type) == 36
-            and node_type.count("-") == 4
+            and _SUBGRAPH_ID.fullmatch(node_type)
             and (entry["node"].get("mode") or 0) not in (_MODE_MUTED, _MODE_BYPASSED)
         ):
             inliner.problems.append(
@@ -473,6 +475,10 @@ def inline_subgraphs(workflow: dict) -> tuple[dict | None, list[str]]:
     if inliner.problems:
         return None, inliner.problems
     return dict(workflow, nodes=flat["nodes"], links=flat["links"], definitions={}), []
+
+
+# A subgraph instance's class is its definition's uuid.
+_SUBGRAPH_ID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
 def _index_links(workflow: dict) -> dict[object, tuple[object, int]]:

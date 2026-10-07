@@ -1159,6 +1159,28 @@ class TestSubgraphs:
         assert problems == []
         assert prompt["2:5"]["inputs"]["factor"] == 3.0
 
+    def test_the_instances_value_is_matched_by_the_input_name(self):
+        """A widget named apart from its input still takes the instance's value."""
+        graph = _subgraph_workflow(instance_values=[3.0])
+        inner = graph["definitions"]["subgraphs"][0]["nodes"][0]
+        inner["inputs"][1]["widget"] = {"name": "factor_widget"}
+        prompt, problems = convert_ui_graph_to_api(graph, SUBGRAPH_OBJECT_INFO)
+        assert problems == []
+        assert prompt["2:5"]["inputs"]["factor"] == 3.0
+
+    def test_a_class_named_like_a_uuid_but_not_one_is_a_node(self):
+        """Only the 8-4-4-4-12 hex shape is read as a missing subgraph."""
+        lookalike = "abcdefgh-ijkl-mnop-qrst-uvwxyz012345"
+        info = {
+            **SUBGRAPH_OBJECT_INFO,
+            lookalike: SUBGRAPH_OBJECT_INFO["SaveImage"],
+        }
+        graph = _subgraph_workflow()
+        graph["nodes"][2]["type"] = lookalike
+        prompt, problems = convert_ui_graph_to_api(graph, info)
+        assert problems == []
+        assert prompt["3"]["class_type"] == lookalike
+
     def test_a_slot_the_definition_does_not_declare_takes_no_unnamed_wire(self):
         """No name to match by is no match, not the first nameless input."""
         graph = _subgraph_workflow(factor_link=12)
