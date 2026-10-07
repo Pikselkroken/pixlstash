@@ -31,8 +31,8 @@ FROM ubuntu:24.04
 # manually when Certum ships a new build, then re-run the smoke test before
 # any release uses the new digest (the login automation's click coordinates
 # are validated against this exact version).
-ARG SIMPLYSIGN_VERSION=2.9.14-9.4.3.0
-ARG SIMPLYSIGN_SHA256=e462dc83679f9987d4e8419c9b4db30e11884bffd875e85e142ac77aad7233e8
+ARG SIMPLYSIGN_VERSION=2.9.15-9.4.5.0
+ARG SIMPLYSIGN_SHA256=274f3e0feb5ecd40c6acc75f383917ff80d91405d5a4b5c6c4c4a9e7203ed251
 # renovate: datasource=maven depName=net.jsign:jsign
 # 7.4 is the version the ReactiveUI signing flow was validated against; 7.5
 # exists — bump deliberately, together with a smoke-test run.
