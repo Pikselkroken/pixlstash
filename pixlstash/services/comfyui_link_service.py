@@ -450,8 +450,25 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         _revoke(server, request, public_id)
         _clear_comfyui_key(pinned, comfyui_url)
         raise
+    leftover = ""
     if old_token and old_token != public_id:
-        _revoke(server, request, old_token)
+        try:
+            _revoke(server, request, old_token)
+        except Exception:
+            # The new link is recorded and works; failing the request now would
+            # report a link that exists as broken. The replaced token is still
+            # a live full-access key, so say so here and in the reply.
+            logger.exception(
+                "ComfyUI is linked with token %s, but revoking the token it "
+                "replaced (public id %s) failed: that full-access token is "
+                "STILL LIVE. Delete it under Account > API Tokens.",
+                public_id,
+                old_token,
+            )
+            leftover = (
+                'The key "ComfyUI (linked)" it replaced could not be revoked '
+                "and still works: delete the older one under Account › API Tokens."
+            )
     logger.info(
         "ComfyUI at %s linked to %s with full access (token %s; replaced %s).",
         comfyui_url,
@@ -459,7 +476,10 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         minted["token_id"],
         previous.get("comfyui_url") or "no earlier link",
     )
-    steps["link"] = _step("done", f"Full access, through {pixlstash_url}")
+    steps["link"] = _step(
+        "done",
+        " ".join(filter(None, [f"Full access, through {pixlstash_url}.", leftover])),
+    )
 
     problem = _check_round_trip(pinned, minted["token"])
     if problem:
@@ -468,7 +488,12 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         # record says nothing useful about, and the status agrees with the
         # reply.
         _unlink(server, request)
-        steps["link"] = _step("failed", "Undone: ComfyUI could not use the key.")
+        steps["link"] = _step(
+            "failed",
+            " ".join(
+                filter(None, ["Undone: ComfyUI could not use the key.", leftover])
+            ),
+        )
         steps["check"] = _step("failed", problem, "check_failed")
         return reply()
     steps["check"] = _step("done", "ComfyUI reached PixlStash with its new key.")
