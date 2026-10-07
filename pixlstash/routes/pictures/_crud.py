@@ -28,6 +28,7 @@ from pixlstash.db_models import (
 )
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.scoring.prompt_match import looks_like_prompt
 from pixlstash.services import operation_log_service, scrapheap_service
 from pixlstash.services.set_lock_service import (
     enforce_pictures_not_locked,
@@ -160,6 +161,25 @@ class PictureFullMetadataResponse(BaseModel):
             "name of a locked set outside its grant, so this list can be empty "
             "while ``locked`` is true - render the 'Locked by <names>' detail only "
             "when it is non-empty, and never derive locked-ness from its length."
+        ),
+    )
+    prompt_match: Optional[float] = Field(
+        default=None,
+        description=(
+            "Whether the picture looks like its prompt at all, 0 to 1: the "
+            "share of a fixed bank of unrelated texts that CLIP finds less like "
+            "the picture than its own prompt. A sanity check for total failures "
+            "(noise, a blank frame, an unrelated picture), not a quality score. "
+            "Null without a prompt or before it is scored, -1 when scoring failed."
+        ),
+    )
+    looks_like_prompt: Optional[bool] = Field(
+        default=None,
+        description=(
+            "``prompt_match`` against its threshold. False means the picture "
+            "does not resemble its prompt at all; true means only that it does "
+            "not fail that check, never that it is good. Null when there is no "
+            "usable score."
         ),
     )
 
@@ -904,6 +924,7 @@ def register_routes(router, server):
 
         if smart_score:
             pic_dict["smartScore"] = pic.smart_score  # already stored in DB
+        pic_dict["looks_like_prompt"] = looks_like_prompt(pic.prompt_match)
 
         embedded_metadata = {}
         file_path = None

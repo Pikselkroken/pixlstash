@@ -691,6 +691,8 @@ class ImageEmbeddingTask(BaseTask):
             pic = session.get(Picture, pid)
             if pic:
                 pic.image_embedding = emb_bytes
+                # Scored against the embedding just replaced; re-queue it.
+                pic.prompt_match = None
                 if score is not None:
                     pic.aesthetic_score = score
                 pic.perceptual_hash = phash

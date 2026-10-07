@@ -1615,6 +1615,10 @@ _PICTURE_METADATA_FIELDS = {
     "perceptual_hash",
     "pixel_sha",
     "project_id",
+    # Whether the picture looks like its own prompt: a number derived from this
+    # picture's pixels and its prompt column (already in this payload), naming
+    # nothing else.
+    "prompt_match",
     "reference_folder_id",
     # The manual workflow a run of which made the picture (`manual:<uuid>`):
     # an opaque hub workflow id, the same class as the two workflow hashes

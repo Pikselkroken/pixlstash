@@ -32,6 +32,8 @@ from .reference_folder_scan_task import ReferenceFolderScanTask
 from .reference_folder_scan_finder import ReferenceFolderScanFinder
 from .text_score_task import TextScoreTask
 from .missing_text_score_finder import MissingTextScoreFinder
+from .prompt_match_task import PromptMatchTask
+from .missing_prompt_match_finder import MissingPromptMatchFinder
 from .ensure_gfs_snapshot_finder import EnsureGfsSnapshotFinder
 from .ensure_gfs_snapshot_task import EnsureGfsSnapshotTask
 from .tag_health_auto_rebuild_task import TagHealthAutoRebuildTask
@@ -81,6 +83,8 @@ __all__ = [
     "ReferenceFolderScanFinder",
     "TextScoreTask",
     "MissingTextScoreFinder",
+    "PromptMatchTask",
+    "MissingPromptMatchFinder",
     "EnsureGfsSnapshotFinder",
     "EnsureGfsSnapshotTask",
     "TagHealthAutoRebuildTask",

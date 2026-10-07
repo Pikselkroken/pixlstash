@@ -10,10 +10,11 @@
     "local run (2026-09-26): tests/test_frame_count.py, which this branch newly gates, --force-cpu --fast-captions to match CI",
     "local run (2026-09-27): tests/test_workflow_group_convert.py, which this branch newly gates, --force-cpu --fast-captions to match CI",
     "local run (2026-10-04): tests/test_cpu_query_encoders.py, which this branch newly gates, --force-cpu --fast-captions to match CI. Stubbed tests that load no models.",
-    "local run (2026-10-07): tests/test_task_runner_submit_and_wait.py, which #1788 newly gates, --force-cpu --fast-captions to match CI"
+    "local run (2026-10-07): tests/test_task_runner_submit_and_wait.py, which #1788 newly gates, --force-cpu --fast-captions to match CI",
+    "local run (2026-10-07): tests/test_prompt_match.py, which this branch newly gates, --force-cpu --fast-captions to match CI"
   ],
-  "test_count": 4234,
-  "total_seconds": 8032.56,
+  "test_count": 4251,
+  "total_seconds": 8042.72,
   "durations": {
     "tests/multi_project_authz/test_generic_field_reader_allowlist.py::test_bbox_is_serialised_exactly_as_the_relationship_path_did": 19.33,
     "tests/multi_project_authz/test_generic_field_reader_allowlist.py::test_character_relationships_are_refused": 14.27,
@@ -4248,6 +4249,23 @@
     "tests/test_ws_broadcaster.py::test_operation_log_undo_emits_origin_in_data_not_from_the_contextvar": 0.0,
     "tests/test_ws_broadcaster.py::test_origin_from_defaults_to_none_and_reads_data": 0.0,
     "tests/test_ws_broadcaster.py::test_source_from_defaults_to_external_and_reads_data": 0.0,
-    "tests/test_task_runner_submit_and_wait.py::test_a_timed_out_task_is_skipped_when_the_worker_reaches_it": 0.1
+    "tests/test_task_runner_submit_and_wait.py::test_a_timed_out_task_is_skipped_when_the_worker_reaches_it": 0.1,
+    "tests/test_prompt_match.py::test_a_new_image_embedding_queues_the_picture_again": 0.61,
+    "tests/test_prompt_match.py::test_cached_prompts_are_not_encoded_again": 0.02,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[((red hair)), [blue eyes:0.8], (x:.5)-red hair, blue eyes, x]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[(a red fox:1.2), snow-a red fox, snow]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[-]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[<lora:only:1>-]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[None-]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[a castle <lora:detail_tweaker:0.6>, night-a castle, night]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[a cat BREAK sitting AND a dog-a cat, sitting, a dog]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[artist \\\\(style\\\\)-artist style]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[cats and dogs, zxc_style-cats and dogs, zxc_style]": 0.0,
+    "tests/test_prompt_match.py::test_clean_prompt_keeps_the_words_and_drops_the_steering[embedding:easynegative, embedding:foo:1.2 sunset-sunset]": 0.0,
+    "tests/test_prompt_match.py::test_finder_picks_unscored_pictures_with_a_prompt_and_an_embedding": 3.28,
+    "tests/test_prompt_match.py::test_score_is_the_share_of_distractors_the_prompt_beats": 0.0,
+    "tests/test_prompt_match.py::test_task_scores_the_batch_and_the_metadata_serves_the_verdict": 0.31,
+    "tests/test_prompt_match.py::test_the_finder_probe_reads_the_partial_index": 0.0,
+    "tests/test_prompt_match.py::test_verdict_has_three_states": 0.0
   }
 }
