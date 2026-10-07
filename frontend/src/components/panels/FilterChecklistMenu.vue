@@ -75,10 +75,10 @@
         <p v-if="!shown.length" class="fm-empty">{{ emptyText }}</p>
       </div>
     </div>
-    <div v-if="footer" class="tbm-footer">{{ footer }}</div>
-    <div v-else-if="hasMore" class="tbm-footer">
+    <div v-if="hasMore" class="tbm-footer">
       Showing {{ shown.length }} of {{ matching.length }}. Type to narrow.
     </div>
+    <div v-else-if="footer" class="tbm-footer">{{ footer }}</div>
     <div v-else-if="hint" class="tbm-footer">
       <span class="fm-kbd">Enter</span> {{ hint }}
     </div>
@@ -105,7 +105,7 @@ const props = defineProps({
   clearable: { type: Boolean, default: false },
   hint: { type: String, default: "ticks the highlighted row." },
   emptyText: { type: String, default: "Nothing matches." },
-  // Replaces the footer's own text when set.
+  // Replaces the Enter hint when set; "Showing 50 of N" still wins.
   footer: { type: String, default: "" },
 });
 
@@ -175,7 +175,7 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   display: inline-grid;
   grid-template-columns: 2fr 1fr;
   grid-template-rows: 1fr 1fr;
-  gap: 1px;
+  gap: var(--space-1);
   width: 32px;
   height: 24px;
   margin-right: var(--space-3);
@@ -211,7 +211,7 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   padding: 0 var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
-  line-height: 16px;
+  line-height: var(--leading-snug);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-sm);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));

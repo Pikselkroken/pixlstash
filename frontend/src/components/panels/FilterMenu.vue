@@ -317,7 +317,7 @@
         :checked="store.workflowFilter.map((w) => w.id)"
         :clearable="store.workflowFilter.length > 0"
         :footer="workflowFooter"
-        empty-text="No workflows made pictures in this library."
+        empty-text="No workflow matches."
         @toggle="toggleWorkflow"
         @clear="clearWorkflows"
       />
@@ -701,20 +701,20 @@ const workflowFooter = computed(() => {
 
 function toggleWorkflow(id, on) {
   const current = store.workflowFilter || [];
-  let next;
-  if (on) {
-    if (current.some((w) => w.id === id)) return;
-    const card = workflowCards.value.find((c) => c.id === id);
-    next = [...current, { id, name: card?.name ?? "" }];
-  } else {
-    next = current.filter((w) => w.id !== id);
+  if (!on) {
+    // Through its chip, so a value the Workflow tab opened beside it goes
+    // too, as the chip's × takes it.
+    chips.value.find((c) => c.key === `workflow:${id}`)?.remove();
+    return;
   }
+  if (current.some((w) => w.id === id)) return;
+  const card = workflowCards.value.find((c) => c.id === id);
+  const next = [...current, { id, name: card?.name || "Unnamed workflow" }];
   // A LoRA narrows exactly one workflow (`workflowFilterParams`): with a
   // second ticked it is dropped, chip and all, rather than left to linger.
-  store.workflowFilter =
-    next.length === 1
-      ? next
-      : next.map(({ lora: _lora, loraName: _loraName, ...rest }) => rest);
+  store.workflowFilter = next.map(
+    ({ lora: _lora, loraName: _loraName, ...rest }) => rest,
+  );
 }
 
 // Through the chips, so a value the Workflow tab opened beside a workflow

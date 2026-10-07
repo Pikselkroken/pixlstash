@@ -4806,6 +4806,11 @@ def test_the_picture_grid_narrows_a_workflow_to_one_lora(workflow_env):
         # Several workflows are OR'd (#1797): the manual one's runs arrive by
         # its id, past the exclusion that keeps them off the automatic one.
         assert ids(workflow=[manual, FLIP_WF]) == a_ids | b_ids
+        # ...and without the manual one, its runs stay out of the automatic
+        # workflows however many are asked for together (and once each).
+        both = ids(workflow=[FLIP_WF, BUSY_WF, FLIP_WF])
+        assert (a_ids | b_ids) - {mine_a, mine_b} <= both
+        assert not both & {mine_a, mine_b}
     finally:
         delete_manual_workflow(server.hub, manual)
 

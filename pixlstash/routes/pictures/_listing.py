@@ -17,7 +17,10 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.hub import workflow_cards
-from pixlstash.hub.workflow_card_reads import manual_workflow_ids, variants_in_workflow
+from pixlstash.hub.workflow_card_reads import (
+    manual_workflow_ids,
+    variants_in_workflows,
+)
 from pixlstash.db_models import (
     Face,
     Picture,
@@ -438,7 +441,12 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     # are the same class; this closes the one the change adds.)
     query_params.pop("workflow_structural_hashes", None)
     raw = query_params.pop("workflow", None)
-    workflow_ids = [raw] if isinstance(raw, str) else raw
+    # Deduplicated, in order: a repeated id names the same workflow once.
+    workflow_ids = (
+        None
+        if raw is None
+        else list(dict.fromkeys([raw] if isinstance(raw, str) else raw))
+    )
     lora = query_params.pop("workflow_lora", None)
     if workflow_ids is None and lora is None:
         return None
@@ -454,12 +462,11 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
             live = manual_workflow_ids(hub)
             # A manual workflow's pictures are its runs'; an automatic one's
             # are its variants', less every live manual workflow's runs.
+            manual = {wid for wid in workflow_ids if wid in live}
             matched.append(
-                set().union(
-                    *(
-                        {wid} if wid in live else set(variants_in_workflow(hub, wid))
-                        for wid in workflow_ids
-                    )
+                manual
+                | variants_in_workflows(
+                    hub, [wid for wid in workflow_ids if wid not in manual]
                 )
             )
         if lora is not None:

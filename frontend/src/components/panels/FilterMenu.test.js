@@ -114,6 +114,22 @@ describe("FilterMenu", () => {
     await rows[1].find("input").setValue(false);
     expect(store.workflowFilter).toEqual([{ id: "auto:many", name: "Many" }]);
 
+    // A default-recipe row's value goes with its workflow, as on the chip's ×,
+    // or a checkpoint filter would be left narrowing the whole library.
+    store.workflowFilter = [
+      ...store.workflowFilter,
+      {
+        id: "auto:few",
+        name: "Few",
+        opened: { kind: "model", value: "x.safetensors", label: "X" },
+      },
+    ];
+    store.comfyuiModelFilter = ["x.safetensors"];
+    await flushPromises();
+    await rows[1].find("input").setValue(false);
+    expect(store.comfyuiModelFilter).toEqual([]);
+    expect(store.workflowFilter).toEqual([{ id: "auto:many", name: "Many" }]);
+
     await wrapper
       .findAll(".fm-sub button.tbm-ghost")
       .find((b) => b.text() === "Clear")

@@ -278,6 +278,17 @@ describe("the two menus cannot diverge", () => {
     expect(wrapper.emitted("show-pictures")).toHaveLength(2);
   });
 
+  it("refuses Show all pictures on a workflow with none to show", () => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("z", { picture_count: 0 })];
+    store.selectRange(["z"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    expect(enabled(wrapper, "show-pictures")).toBe(false);
+    expect(tooltip(wrapper, "show-pictures")).toBe(
+      "This workflow has no pictures to show",
+    );
+  });
+
   it("opens the picture the pointer was on, not always the cover", async () => {
     const { wrapper } = bar(["p"]);
     const label = () =>

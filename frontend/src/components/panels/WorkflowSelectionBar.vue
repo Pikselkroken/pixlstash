@@ -82,7 +82,7 @@
       icon="image-multiple-outline"
       data-verb="show-pictures"
       :aria-label="showPicturesLabel"
-      :disabled="!cards.length"
+      :disabled="!hasPictures"
       :tooltip="showPicturesTitle"
       @click="emit('show-pictures')"
     />
@@ -395,11 +395,21 @@ const showPicturesLabel = computed(() =>
     ? `Show all pictures using these ${cards.value.length.toLocaleString()} workflows`
     : "Show all pictures using this workflow",
 );
-const showPicturesTitle = computed(() =>
-  cards.value.length > 1
-    ? `Show the pictures of these ${cards.value.length.toLocaleString()} workflows`
-    : "Show the pictures of this workflow",
+// Nothing to show, so nothing to press: the view would be cleared for an
+// empty grid (the F7 figure is plain text on such a card for the same reason).
+const hasPictures = computed(() =>
+  cards.value.some((card) => (card.picture_count ?? 0) > 0),
 );
+const showPicturesTitle = computed(() => {
+  if (!hasPictures.value) {
+    return cards.value.length > 1
+      ? "These workflows have no pictures to show"
+      : "This workflow has no pictures to show";
+  }
+  return cards.value.length > 1
+    ? `Show the pictures of these ${cards.value.length.toLocaleString()} workflows`
+    : "Show the pictures of this workflow";
+});
 
 const renameTitle = computed(() =>
   single.value ? "Give this workflow a name" : oneOnly("rename"),
@@ -588,7 +598,7 @@ const VerbMenu = () => {
       }),
       item("mdi-image-multiple-outline", showPicturesLabel.value, {
         verb: "show-pictures",
-        disabled: !cards.value.length,
+        disabled: !hasPictures.value,
         title: showPicturesTitle.value,
       }),
       sep(),
