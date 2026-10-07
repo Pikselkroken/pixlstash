@@ -240,7 +240,7 @@ describe("useGridFetch streaming path", () => {
     streamPictures.mockResolvedValue({ pictures: [{ id: 51 }, { id: 52 }] });
 
     const { grid } = makeHarness();
-    useFilterStore().workflowFilter = { id: "auto:abc123", name: "Cinematic" };
+    useFilterStore().workflowFilter = [{ id: "auto:abc123", name: "Cinematic" }];
 
     await grid.fetchAllGridImages({ force: true });
 
@@ -248,16 +248,42 @@ describe("useGridFetch streaming path", () => {
     expect(getPictureCount.mock.calls[0][0]).toContain("workflow=auto%3Aabc123");
   });
 
+  it("sends one workflow param per ticked workflow, and no LoRA beside two (#1797)", async () => {
+    getPictureCount.mockResolvedValue({ count: 2 });
+    streamPictures.mockResolvedValue({ pictures: [{ id: 51 }, { id: 52 }] });
+
+    const { grid } = makeHarness();
+    useFilterStore().workflowFilter = [
+      { id: "auto:a", name: "A", lora: "asset:feed", loraName: "Ada" },
+      { id: "manual:b", name: "B" },
+    ];
+
+    await grid.fetchAllGridImages({ force: true });
+
+    for (const url of [
+      streamPictures.mock.calls[0][0],
+      getPictureCount.mock.calls[0][0],
+    ]) {
+      expect(new URLSearchParams(url).getAll("workflow")).toEqual([
+        "auto:a",
+        "manual:b",
+      ]);
+      expect(url).not.toContain("workflow_lora");
+    }
+  });
+
   it("sends the workflow and the LoRA for the Workflow tab's *Show N*", async () => {
     getPictureCount.mockResolvedValue({ count: 1 });
     streamPictures.mockResolvedValue({ pictures: [{ id: 51 }] });
 
     const { grid } = makeHarness();
-    useFilterStore().workflowFilter = {
-      id: "auto:core",
-      lora: "asset:feed",
-      name: "Ada in Cinematic",
-    };
+    useFilterStore().workflowFilter = [
+      {
+        id: "auto:core",
+        lora: "asset:feed",
+        name: "Ada in Cinematic",
+      },
+    ];
 
     await grid.fetchAllGridImages({ force: true });
 
@@ -278,15 +304,15 @@ describe("useGridFetch streaming path", () => {
 
     const { grid } = makeHarness();
     const filterStore = useFilterStore();
-    filterStore.workflowFilter = { id: "auto:abc123", name: "Cinematic" };
+    filterStore.workflowFilter = [{ id: "auto:abc123", name: "Cinematic" }];
     // What the chip's × does, through the same list the strip draws from.
     filterChips(filterStore)
-      .find((chip) => chip.key === "workflow")
+      .find((chip) => chip.key === "workflow:auto:abc123")
       .remove();
 
     await grid.fetchAllGridImages({ force: true });
 
-    expect(filterStore.workflowFilter).toBeNull();
+    expect(filterStore.workflowFilter).toEqual([]);
     expect(streamPictures.mock.calls[0][0]).not.toContain("workflow=");
     expect(getPictureCount.mock.calls[0][0]).not.toContain("workflow=");
   });

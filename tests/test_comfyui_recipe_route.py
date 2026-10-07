@@ -710,6 +710,23 @@ class TestPictureListWorkflowFilters:
         # assertions above are narrowing rather than describing an empty grid.
         assert {alpha, beta, pic_id} <= self._ids(client, "")
 
+    def test_several_workflows_list_any_of_their_pictures(self, env):
+        """`workflow` is repeatable and OR'd (#1797), like `comfyui_model`."""
+        server, client, pic_id = env
+        alpha, beta = self._two_carded_pictures(server, client, CORE_OTHER)
+        shared = auto_workflow_id(CORE_SHARED, "")
+        other = auto_workflow_id(CORE_OTHER, "")
+
+        assert self._ids(client, f"?workflow={shared}&workflow={other}") == {
+            alpha,
+            beta,
+        }
+        # One that matches nothing takes nothing away from the other.
+        assert self._ids(
+            client, f"?workflow={shared}&workflow=auto:{_core('nobody')}"
+        ) == {alpha}
+        assert pic_id not in self._ids(client, f"?workflow={shared}&workflow={other}")
+
     def test_an_automatic_workflow_lists_every_card_sharing_its_core_hash(self, env):
         server, client, _pic_id = env
         alpha, beta = self._two_carded_pictures(server, client)
@@ -743,6 +760,10 @@ class TestPictureListWorkflowFilters:
             assert self._ids(
                 client, "?workflow=" + auto_workflow_id(CORE_SHARED, "")
             ) == {beta}
+            assert self._ids(
+                client,
+                f"?workflow={MANUAL_ID}&workflow=" + auto_workflow_id(CORE_SHARED, ""),
+            ) == {alpha, beta}
         finally:
             with server.hub.transaction() as conn:
                 conn.execute(

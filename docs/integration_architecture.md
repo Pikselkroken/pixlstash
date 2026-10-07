@@ -1233,7 +1233,9 @@ workflow to the variants filed under its topologies
 filter on that route, so `workflow=<id>&comfyui_model=<value>` is "this
 workflow's pictures made with that checkpoint" - which is what a
 `recipe_values` entry is for - and `workflow_lora=<asset:…>` narrows it to one
-LoRA file. **A workflow no picture was made with answers with an empty grid,
+LoRA file. `workflow` is repeatable (#1797): `workflow=<a>&workflow=<b>` is the
+pictures of either, OR'd like `comfyui_model`; `workflow_lora` narrows only a
+single workflow and matches nothing beside several. **A workflow no picture was made with answers with an empty grid,
 never the whole library**; a client that treats "no results" as "filter
 ignored" would be reading it backwards. The id itself comes from a workflow
 read, or from `GET /api/v1/comfyui/pictures/{id}/recipe` (§11.2), which reports

@@ -55,26 +55,33 @@ NOT_MADE_BY = "!"
 ONLY_MADE_BY = "="
 
 
+def _in_json(column, values: Sequence[str]) -> ColumnElement:
+    """``column IN values`` as one bound JSON array, through ``json_each``.
+
+    An ``IN`` list would bind one parameter per value and meet SQLite's cap,
+    which several workflows' variants together can reach.
+    """
+    rows = func.json_each(json.dumps(sorted(values))).table_valued("value")
+    return column.in_(select(rows.c.value))
+
+
 def made_by_live_manual(live: Sequence[str]) -> ColumnElement:
     """``picture.run_workflow_id`` names one of the *live* manual workflows.
 
-    One bound JSON array, however many ids, through ``json_each``: an ``IN``
-    list would bind one parameter per id and meet SQLite's cap. A picture
-    naming a manual workflow that has since been deleted is in none.
+    A picture naming a manual workflow that has since been deleted is in none.
     """
-    ids = func.json_each(json.dumps(sorted(live))).table_valued("value")
-    return Picture.run_workflow_id.in_(select(ids.c.value))
+    return _in_json(Picture.run_workflow_id, live)
 
 
 def workflow_keys_predicate(keys: Sequence[str]) -> ColumnElement:
     """The pictures a resolved workflow filter names.
 
     *keys* is what ``routes/pictures/_listing._resolve_workflow_filter``
-    resolves ``?workflow=`` to: a manual workflow's own id (its runs, by
-    ``run_workflow_id``), or an automatic one's variants plus every live
-    manual id prefixed :data:`NOT_MADE_BY` - a manual run's picture is that
-    workflow's and never the automatic one's, while it lives. Empty matches
-    nothing.
+    resolves ``?workflow=`` to, for one workflow or several (OR'd): manual
+    workflows' own ids (their runs, by ``run_workflow_id``) and automatic
+    ones' variants, plus - when any are automatic - every live manual id
+    prefixed :data:`NOT_MADE_BY`: a manual run's picture is that workflow's
+    and never the automatic one's, while it lives. Empty matches nothing.
     """
     manual = [key for key in keys if key.startswith("manual:")]
     excluded = [key[1:] for key in keys if key.startswith(NOT_MADE_BY)]
@@ -84,7 +91,7 @@ def workflow_keys_predicate(keys: Sequence[str]) -> ColumnElement:
         for key in keys
         if key not in manual and key[:1] not in (NOT_MADE_BY, ONLY_MADE_BY)
     ]
-    auto = Picture.workflow_structural_hash.in_(variants)
+    auto = _in_json(Picture.workflow_structural_hash, variants)
     if only:
         auto = and_(auto, Picture.run_workflow_id.in_(only))
     if excluded:
@@ -92,7 +99,7 @@ def workflow_keys_predicate(keys: Sequence[str]) -> ColumnElement:
             auto,
             or_(Picture.run_workflow_id.is_(None), not_(made_by_live_manual(excluded))),
         )
-    return or_(Picture.run_workflow_id.in_(manual), auto) if manual else auto
+    return or_(_in_json(Picture.run_workflow_id, manual), auto) if manual else auto
 
 
 # Tag vocabularies for the live "Impossible tags" grid filters, lowercased once for

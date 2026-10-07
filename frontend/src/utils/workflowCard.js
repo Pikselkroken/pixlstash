@@ -370,6 +370,11 @@ export function baseModelText(models, label = modelDisplayName) {
  */
 const SHORT_TYPE_LABELS = { txt2img: "T2I", img2img: "I2I" };
 
+/** The type the way the card's chip spells it (`T2I`), or "" for none. */
+export function shortTypeLabel(card) {
+  return SHORT_TYPE_LABELS[card.type] || card.type_label || card.type || "";
+}
+
 /**
  * The special-facts row: the workflow's type, whether it is manual or was
  * imported, and what a manual one was made from. `short` spells the type the
@@ -394,7 +399,7 @@ export function factChips(card, { short = false } = {}) {
     // `txt2img` on row 4 - or its abbreviation, which a generated name
     // already spells out in full. Falls back to the token for a payload
     // that predates `type_label`.
-    (short && SHORT_TYPE_LABELS[card.type]) || card.type_label || card.type,
+    short ? shortTypeLabel(card) : card.type_label || card.type,
     card.imported && !card.manual ? "imported" : null,
     card.manual && card.from_name ? `from ${card.from_name}` : null,
   ].filter(Boolean);

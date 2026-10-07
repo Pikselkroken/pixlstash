@@ -826,6 +826,29 @@ def variants_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
     return sorted(found)
 
 
+def variants_in_workflows(hub: HubDatabase, workflow_ids: list[str]) -> set[str]:
+    """Every variant filed under any of several workflows.
+
+    One scan for all the automatic ones, however many: their ids are digests,
+    so :func:`variants_in_workflow` reads every variant per id.
+    """
+    auto = {wid for wid in workflow_ids if wid.startswith(AUTO_STACK_PREFIX)}
+    found = (
+        {
+            row["structural_hash"]
+            for row in hub.fetchall(
+                _AUTO_VARIANTS, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION)
+            )
+            if auto_workflow_id(row["core_hash"], row["families"]) in auto
+        }
+        if auto
+        else set()
+    )
+    for workflow_id in set(workflow_ids) - auto:
+        found.update(variants_in_workflow(hub, workflow_id))
+    return found
+
+
 def _auto_variants_of(hub: HubDatabase, workflow_id: str) -> list[tuple[str, str]]:
     """``[(structural_hash, topology_hash)]`` of one automatic workflow.
 
