@@ -1417,7 +1417,9 @@ def workflow_defaults(
                 # works out to (a ResolutionSelector, a primitive), so a run
                 # can set it on the latent.
                 if is_latent_size(node.get("class_type"), name):
-                    value = linked_size(document, value) or value
+                    resolved = linked_size(document, value)
+                    if resolved is not None:
+                        value = resolved
                 # The scalar check also rejects a wired input (a link list).
                 if name in FEATURED_NAMES and isinstance(
                     value, (bool, int, float, str)

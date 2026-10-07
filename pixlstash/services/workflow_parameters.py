@@ -93,17 +93,16 @@ def is_latent_size(class_type: Any, name: str) -> bool:
     """
     # ponytail: a name rule, like `is_picture_batch` offline; object_info's
     # LATENT output if a pack names its empty latent otherwise.
+    # Efficiency loaders name theirs `empty_latent_width`, so are not matched.
     cls = str(class_type or "")
-    return name in SIZE_NAMES and (
-        ("Empty" in cls and "Latent" in cls) or cls in _LATENT_LOADER_CLASSES
-    )
+    return name in SIZE_NAMES and "Empty" in cls and "Latent" in cls
 
 
 def linked_size(graph: dict, link: Any) -> Optional[int]:
     """The number a wired ``width`` / ``height`` carries, when it can be read.
 
     A ``ResolutionSelector`` is worked out the way ComfyUI works it out (its
-    output 0 is the width, 1 the height), and an integer primitive is its
+    output 0 is the width, 1 the height), and a ``PrimitiveInt`` is its
     ``value``. ``None`` for anything else, or a selector whose own inputs are
     wired: then there is no number to offer.
     """
@@ -130,10 +129,10 @@ def linked_size(graph: dict, link: Any) -> Optional[int]:
         scale = math.sqrt(megapixels * 1024 * 1024 / (ratio[0] * ratio[1]))
         # Python's round, as ComfyUI's is: halves go to even there too.
         return round(ratio[link[1]] * scale / multiple) * multiple
+    if node.get("class_type") != "PrimitiveInt" or link[1] != 0:
+        return None
     value = inputs.get("value")
-    if isinstance(value, int) and not isinstance(value, bool) and link[1] == 0:
-        return value
-    return None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def set_latent_size(graph: dict, node: dict, name: str, value: Any) -> None:
@@ -141,9 +140,10 @@ def set_latent_size(graph: dict, node: dict, name: str, value: Any) -> None:
 
     A wired size whose source already says *value* is left wired, so a run
     that did not change the size sends the graph as authored. Otherwise the
-    number replaces the link in **every** input reading that source output,
-    so the latent and anything else sized from the same selector stay in
-    step.
+    number replaces the link in every input *of the same name* reading that
+    source output, so the latent and anything else sized from the same
+    selector stay in step, while a primitive that also feeds a ``height`` or
+    a seed keeps driving it.
     """
     current = node["inputs"][name]
     if not is_link(current):
@@ -156,6 +156,6 @@ def set_latent_size(graph: dict, node: dict, name: str, value: Any) -> None:
         inputs = other.get("inputs") if isinstance(other, dict) else None
         if not isinstance(inputs, dict):
             continue
-        for field, wired in inputs.items():
-            if is_link(wired) and list(wired) == source:
-                inputs[field] = value
+        wired = inputs.get(name)
+        if is_link(wired) and list(wired) == source:
+            inputs[name] = value

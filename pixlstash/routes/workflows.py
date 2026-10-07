@@ -3759,7 +3759,9 @@ def create_router(server) -> APIRouter:
         Addressed by label because that is how a card's defaults are addressed:
         node ids are renumbered by every re-serialisation and a card's variants
         do not agree about them. A wired input is left alone - overwriting one
-        drops the link - and an input the graph does not have is not invented.
+        drops the link - except an empty latent's size, which
+        ``set_latent_size`` cuts only when the value differs from what the wire
+        carries. An input the graph does not have is not invented.
         """
         if not values:
             return
