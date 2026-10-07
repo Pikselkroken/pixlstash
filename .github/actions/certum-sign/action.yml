@@ -237,17 +237,31 @@ runs:
         for f in "${files[@]}"; do
           echo "::group::sign $f"
           # RFC3161 timestamp so the signature outlives the certificate.
-          # Retry: a transient timestamp-server failure should not require a
-          # manual job rerun.
-          ok=""
-          for try in 1 2 3; do
-            if java -jar "$JSIGN_JAR" --storetype PKCS11 --keystore "$CONF" --storepass "" \
-                 --alg SHA-256 --tsmode RFC3161 --tsaurl "$TS_URL" --replace \
-                 "${alias_args[@]}" "$f"; then ok=1; break; fi
-            echo "jsign attempt $try failed for $f, retrying in 10s"
-            sleep 10
+          # Two retry budgets. The token enumerates before its objects are
+          # populated, so jsign can report "No certificate found" for a while
+          # after login: retry that every 4s for ~60s (upstream ReactiveUI
+          # 27e44494). Anything else, e.g. a transient timestamp-server
+          # failure, gets 3 tries 10s apart.
+          ok=""; other=0
+          for try in $(seq 1 15); do
+            if out="$(java -jar "$JSIGN_JAR" --storetype PKCS11 --keystore "$CONF" --storepass "" \
+                        --alg SHA-256 --tsmode RFC3161 --tsaurl "$TS_URL" --replace \
+                        "${alias_args[@]}" "$f" 2>&1)"; then
+              printf '%s\n' "$out"; ok=1; break
+            fi
+            printf '%s\n' "$out"
+            case "$out" in
+              *'No certificate found'*)
+                echo "keystore not populated yet (attempt $try), retrying in 4s"
+                sleep 4 ;;
+              *)
+                other=$((other + 1))
+                [ "$other" -ge 3 ] && break
+                echo "jsign attempt $try failed for $f, retrying in 10s"
+                sleep 10 ;;
+            esac
           done
-          [ -n "$ok" ] || { echo "::error title=Signing failed::jsign failed 3 times for $f"; exit 1; }
+          [ -n "$ok" ] || { echo "::error title=Signing failed::jsign did not sign $f"; exit 1; }
 
           # Verify: structural signature check + timestamp presence.
           osslsigncode verify -in "$f" | tee "$RUNNER_TEMP/verify.out"
