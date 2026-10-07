@@ -20,6 +20,7 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import func, select
 
 import pixlstash.routes.pictures._anomaly as anomaly_module
 from pixlstash.server import Server
@@ -108,6 +109,7 @@ def _quiesce_background_work(server):
     runner = server.vault._task_runner
     runner.cancel_pending_tasks()
     deadline = time.monotonic() + 120.0
+    active = []
     while time.monotonic() < deadline:
         with runner._active_task_lock:
             active = list(runner._active_tasks.values())
@@ -161,16 +163,22 @@ def _assign_face_to_character(server, picture_id, character_id):
     The character scope check (``_picture_id_in_scoped_character``) only reads
     ``Face.picture_id`` + ``Face.character_id``, so a directly-inserted row is
     enough to make the picture in-scope for a character token, without relying on
-    background face extraction.
+    background face extraction. Face extraction may already have written face 0,
+    so the row takes the next free index.
     """
     from pixlstash.db_models import Face
 
     def _insert(session):
+        last = session.exec(
+            select(func.max(Face.face_index)).where(
+                Face.picture_id == picture_id, Face.frame_index == 0
+            )
+        ).one()
         session.add(
             Face(
                 picture_id=picture_id,
                 frame_index=0,
-                face_index=0,
+                face_index=0 if last is None else last + 1,
                 character_id=character_id,
                 bbox=[0, 0, 10, 10],
             )
