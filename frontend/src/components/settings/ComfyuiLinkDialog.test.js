@@ -300,6 +300,10 @@ describe("ComfyuiLinkDialog: installing the nodes", () => {
     expect(comfyui.linkComfyui).toHaveBeenCalledTimes(2);
     expect(stateOf(wrapper, "nodes")).toBe("done");
     expect(byTestId(wrapper, "comfyui-link-done").exists()).toBe(true);
+    // The re-link does not take away what the install moved to the trash.
+    expect(byTestId(wrapper, "comfyui-link-replaced").text()).toContain(
+      "/home/me/old/ComfyUI-PixlStash",
+    );
     // Linked: the polling is over.
     await vi.advanceTimersByTimeAsync(10000);
     expect(comfyui.getPixlstashNode).toHaveBeenCalledTimes(3);

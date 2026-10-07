@@ -2296,11 +2296,11 @@ class _FolderPaths:
         self.folder_paths = folder_paths
         self.urls: list[str] = []
 
-    def __call__(self, url, timeout=None):
+    def __call__(self, url, timeout=None, allow_redirects=True, proxies=None):
+        assert allow_redirects is False, "a redirect names a host nobody vetted"
+        assert proxies == comfyui_service.NO_PROXY
         self.urls.append(url)
-        return SimpleNamespace(
-            raise_for_status=lambda: None, json=lambda: self.folder_paths
-        )
+        return SimpleNamespace(status_code=200, json=lambda: self.folder_paths)
 
 
 def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
@@ -2324,8 +2324,28 @@ def test_comfyui_model_roots_collapse_categories_to_their_root(monkeypatch):
     assert fake.urls == ["http://comfy:8188/internal/folder_paths"]
 
 
+def test_comfyui_model_roots_group_by_category_not_by_folder_count(monkeypatch):
+    """Two folders of one category under a parent are not a models root: the
+    parent is somebody's home or data drive. A Windows ComfyUI's paths group
+    the same way on any backend."""
+    fake = _FolderPaths(
+        {
+            "loras": ["/home/me/loras-a", "/home/me/loras-b"],
+            "checkpoints": ["C:\\ComfyUI\\models\\checkpoints"],
+            "vae": ["C:\\ComfyUI\\models\\vae"],
+        }
+    )
+    monkeypatch.setattr(comfyui_service.requests, "get", fake)
+    assert comfyui_service.comfyui_model_roots("http://comfy:8188/") == [
+        "/home/me/loras-a",
+        "/home/me/loras-b",
+        "C:\\ComfyUI\\models",
+    ]
+    assert fake.urls == ["http://comfy:8188/internal/folder_paths"]
+
+
 def test_comfyui_model_roots_is_empty_when_comfyui_cannot_be_asked(monkeypatch):
-    def refuse(url, timeout=None):
+    def refuse(url, **kwargs):
         raise comfyui_service.requests.ConnectionError("refused")
 
     monkeypatch.setattr(comfyui_service.requests, "get", refuse)

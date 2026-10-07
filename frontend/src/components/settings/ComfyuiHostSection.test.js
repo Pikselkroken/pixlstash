@@ -39,6 +39,7 @@ vi.mock("../../stores/useUserPrefsStore", () => ({
 }));
 
 import ComfyuiHostSection from "./ComfyuiHostSection.vue";
+import ComfyuiLinkDialog from "./ComfyuiLinkDialog.vue";
 
 async function mountPane() {
   const wrapper = mount(ComfyuiHostSection, { props: { open: true } });
@@ -289,6 +290,14 @@ describe("connecting ComfyUI", () => {
   });
 });
 
+it("says why when the saved address cannot be read, instead of hiding the card", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  config.getUserConfig.mockRejectedValue(new Error("server down"));
+  const wrapper = await mountPane();
+  expect(wrapper.find(".cf-card").exists()).toBe(true);
+  expect(wrapper.find('[role="alert"]').text()).toContain("server down");
+});
+
 describe("linking ComfyUI", () => {
   beforeEach(() => {
     comfyui.getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
@@ -370,14 +379,32 @@ describe("linking ComfyUI", () => {
     expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
   });
 
-  it("Disconnect keeps the URL when revoking fails", async () => {
+  it("Disconnect still clears the URL when revoking fails, and says the key is live", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     comfyui.getComfyuiLink.mockResolvedValue(LINKED);
     comfyui.unlinkComfyui.mockRejectedValue(new Error("revoke failed"));
+    probeAnswers({});
     const wrapper = await mountPane();
     await byTestId(wrapper, "comfyui-disconnect").trigger("click");
     await flushPromises();
-    expect(config.patchUserConfig).not.toHaveBeenCalled();
+    expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
+    expect(wrapper.emitted("update:comfyui-configured")).toEqual([[false]]);
     expect(wrapper.text()).toContain("revoke failed");
+    expect(wrapper.text()).toContain("delete it under Account › API Tokens");
+  });
+
+  it("closing the link dialog returns focus to Link ComfyUI", async () => {
+    const wrapper = mount(ComfyuiHostSection, {
+      props: { open: true },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await byTestId(wrapper, "comfyui-link").trigger("click");
+    await flushPromises();
+    wrapper.findComponent(ComfyuiLinkDialog).vm.$emit("close");
+    await flushPromises();
+    expect(document.activeElement).toBe(byTestId(wrapper, "comfyui-link").element);
+    wrapper.unmount();
   });
 
   it("Disconnect does not call DELETE when not linked", async () => {

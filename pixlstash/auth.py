@@ -1992,6 +1992,7 @@ class AuthService:
         return {
             "token": token_value,
             "token_id": token.id,
+            "public_id": token.public_id,
             "scope": token.scope,
             "resource_type": token.resource_type,
             "resource_id": token.resource_id,

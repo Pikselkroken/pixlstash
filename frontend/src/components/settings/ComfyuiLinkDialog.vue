@@ -15,7 +15,7 @@ import {
   installComfyuiPack,
   linkComfyui,
 } from "../../api/comfyui";
-import { errorDetail } from "../../utils/apiError";
+import { errorMessage } from "../../utils/apiError";
 import {
   PIXLSTASH_PACK_INSTALL,
   PIXLSTASH_PACK_URL,
@@ -58,10 +58,12 @@ const restartError = ref("");
 // `timeout` or `failed`.
 const install = ref(null);
 const showManual = ref(false);
+// The older copies the last install moved to the trash. Kept apart from
+// `install` so the automatic re-link after the install does not wipe the list.
+const replaced = ref([]);
 
 const linked = computed(() => reply.value?.linked === true);
 const canInstall = computed(() => reply.value?.can_install_pack === true);
-const replaced = computed(() => install.value?.replaced || []);
 
 // The nodes row while an install runs, keyed on the phase: what the row says
 // and which fix it carries (`reason`).
@@ -138,8 +140,7 @@ async function link() {
     reply.value = await linkComfyui();
   } catch (e) {
     reply.value = null;
-    requestError.value =
-      errorDetail(e) || e?.message || "Could not link ComfyUI.";
+    requestError.value = errorMessage(e, "Could not link ComfyUI.");
   } finally {
     pending.value = false;
   }
@@ -185,6 +186,7 @@ async function installPack() {
   stopPolling();
   showManual.value = false;
   install.value = { phase: "installing" };
+  replaced.value = [];
   const run = pollRun;
   try {
     const got = await installComfyuiPack();
@@ -193,17 +195,14 @@ async function installPack() {
       phase: "waiting",
       restart: got?.restart,
       detail: got?.detail || null,
-      replaced: got?.replaced || [],
     };
+    replaced.value = got?.replaced || [];
     pollForNodes();
   } catch (e) {
     if (run !== pollRun) return;
     install.value = {
       phase: "failed",
-      error:
-        errorDetail(e) ||
-        e?.message ||
-        "Could not install the PixlStash nodes.",
+      error: errorMessage(e, "Could not install the PixlStash nodes."),
     };
   }
 }
@@ -238,6 +237,7 @@ watch(
       return;
     }
     reply.value = null;
+    replaced.value = [];
     link();
   },
   { immediate: true },

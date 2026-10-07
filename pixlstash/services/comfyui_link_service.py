@@ -40,6 +40,7 @@ from pixlstash.db_models import UserToken
 from pixlstash.pixl_logging import get_logger
 from pixlstash.server_config_io import persist_server_config
 from pixlstash.services.comfyui_service import (
+    NO_PROXY,
     comfyui_can_open_workflows,
     normalize_comfyui_url,
     probe_comfyui,
@@ -57,11 +58,6 @@ SETTING_SSL = "PixlStash.VerifySSL"
 SETTING_CA = "PixlStash.CACertificate"
 
 STEP_IDS = ("reach", "nodes", "link", "check")
-
-# Requests carrying the token go straight to the vetted address. ``requests``
-# otherwise honours HTTP_PROXY / HTTPS_PROXY from the environment, and a proxy
-# is a host nobody checked.
-NO_PROXY = {"http": None, "https": None}
 
 # One link or unlink at a time: two concurrent links would each mint a token and
 # the second record would orphan the first.
@@ -134,11 +130,14 @@ def _address_toward(host: str, port: int) -> Optional[str]:
     """This machine's address on the interface that routes to *host*.
 
     A UDP ``connect`` sends nothing; it only asks the kernel for the route.
+    *host* is an IP literal (``locate`` pins it), IPv4 or IPv6.
     """
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        with socket.socket(family, socket.SOCK_DGRAM) as sock:
             sock.connect((host, port))
-            return sock.getsockname()[0]
+            # An IPv6 link-local answer carries its zone ("fe80::1%eth0").
+            return str(sock.getsockname()[0]).split("%")[0]
     except OSError as exc:
         logger.warning("No route from this machine to ComfyUI at %s: %s", host, exc)
         return None
@@ -156,9 +155,28 @@ def _cert_covers(cert_pem: bytes, ip: str) -> bool:
 
 
 def _read_cert(server) -> bytes:
+    """PixlStash's HTTPS certificate, which the pack verifies against.
+
+    Raises:
+        LinkRefused: HTTPS is on but the certificate is not configured or
+            cannot be read.
+    """
     certfile = server._server_config.get("ssl_certfile")
-    with open(certfile, "rb") as handle:
-        return handle.read()
+    if not certfile:
+        raise LinkRefused(
+            "certificate_missing",
+            "HTTPS is on, but PixlStash has no certificate configured to hand "
+            "ComfyUI. Restart PixlStash to make one.",
+        )
+    try:
+        with open(certfile, "rb") as handle:
+            return handle.read()
+    except OSError as exc:
+        logger.warning("Could not read the HTTPS certificate %s: %s", certfile, exc)
+        raise LinkRefused(
+            "certificate_missing",
+            f"PixlStash could not read its HTTPS certificate at {certfile}: {exc}",
+        ) from exc
 
 
 def _is_desktop() -> bool:
@@ -213,8 +231,10 @@ def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]
             "only linked over HTTPS.",
         )
     port = int(config.get("port", 9537))
-    comfy_host = (urlsplit(pinned_url).hostname or "").strip("[]")
-    address = _address_toward(comfy_host, urlsplit(pinned_url).port or 80)
+    comfy = urlsplit(pinned_url)
+    comfy_host = (comfy.hostname or "").strip("[]")
+    comfy_port = comfy.port or (443 if comfy.scheme == "https" else 80)
+    address = _address_toward(comfy_host, comfy_port)
     if address is None:
         raise LinkRefused("not_local", f"This computer has no route to {comfy_host}.")
     cert = _read_cert(server)
@@ -225,7 +245,8 @@ def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]
             "address ComfyUI would use. The address probably changed since the "
             "certificate was made; delete it and restart PixlStash to make a new one.",
         )
-    return f"https://{address}:{port}", cert.decode()
+    host = f"[{address}]" if ":" in address else address
+    return f"https://{host}:{port}", cert.decode()
 
 
 def link_status(server) -> dict:
@@ -267,14 +288,6 @@ def _write_settings(pinned_url: str, settings: dict) -> None:
         raise requests.HTTPError(
             f"ComfyUI answered HTTP {response.status_code} to the settings write"
         )
-
-
-def _public_id(server, token_id: int) -> Optional[str]:
-    def read(session):
-        token = session.get(UserToken, token_id)
-        return token.public_id if token else None
-
-    return server.auth._db.run_task(read, priority=DBPriority.IMMEDIATE)
 
 
 def _revoke(server, request: Request, public_id: str) -> None:
@@ -394,7 +407,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         return reply()
 
     minted = server.auth.create_token(request, TOKEN_DESCRIPTION, scope="ALL")
-    public_id = _public_id(server, minted["token_id"])
+    public_id = minted["public_id"]
     try:
         _write_settings(
             pinned,
@@ -413,19 +426,30 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         )
         return reply()
     previous = link_status(server)
-    old_token = (server._server_config.get(LINK_CONFIG_KEY) or {}).get(
-        "token_public_id"
-    )
-    _save_record(
-        server,
-        {
-            "token_public_id": public_id,
-            "comfyui_url": comfyui_url,
-            "pixlstash_url": pixlstash_url,
-            "where": where,
-            "linked_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    old_record = server._server_config.get(LINK_CONFIG_KEY)
+    old_token = (old_record or {}).get("token_public_id")
+    try:
+        _save_record(
+            server,
+            {
+                "token_public_id": public_id,
+                "comfyui_url": comfyui_url,
+                "pixlstash_url": pixlstash_url,
+                "where": where,
+                "linked_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        # ComfyUI holds the token but no record does, so nothing could ever
+        # revoke it: revoke it now, and take it back from ComfyUI.
+        logger.exception("Recording the ComfyUI link failed; revoking its token.")
+        if old_record is None:
+            server._server_config.pop(LINK_CONFIG_KEY, None)
+        else:
+            server._server_config[LINK_CONFIG_KEY] = old_record
+        _revoke(server, request, public_id)
+        _clear_comfyui_key(pinned, comfyui_url)
+        raise
     if old_token and old_token != public_id:
         _revoke(server, request, old_token)
     logger.info(
@@ -439,6 +463,12 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
 
     problem = _check_round_trip(pinned, minted["token"])
     if problem:
+        # ComfyUI holds a full-access token that does not work from there.
+        # Undo the link entirely, so no live token is left that the link
+        # record says nothing useful about, and the status agrees with the
+        # reply.
+        _unlink(server, request)
+        steps["link"] = _step("failed", "Undone: ComfyUI could not use the key.")
         steps["check"] = _step("failed", problem, "check_failed")
         return reply()
     steps["check"] = _step("done", "ComfyUI reached PixlStash with its new key.")
@@ -467,17 +497,22 @@ def _unlink(server, request: Request) -> dict:
         _revoke(server, request, record["token_public_id"])
     pinned = _pinned(record)
     if pinned:
-        try:
-            _write_settings(pinned, {SETTING_TOKEN: "", SETTING_CA: ""})
-        except requests.RequestException as exc:
-            logger.warning(
-                "Could not clear the PixlStash key from ComfyUI at %s (it is "
-                "revoked here, so it no longer works): %s",
-                record["comfyui_url"],
-                exc,
-            )
+        _clear_comfyui_key(pinned, record["comfyui_url"])
     _save_record(server, None)
     return {"linked": False}
+
+
+def _clear_comfyui_key(pinned: str, comfyui_url: str) -> None:
+    """Best effort: blank the key in ComfyUI's settings (it is revoked here)."""
+    try:
+        _write_settings(pinned, {SETTING_TOKEN: "", SETTING_CA: ""})
+    except requests.RequestException as exc:
+        logger.warning(
+            "Could not clear the PixlStash key from ComfyUI at %s (it is "
+            "revoked here, so it no longer works): %s",
+            comfyui_url,
+            exc,
+        )
 
 
 def reannounce(server) -> None:

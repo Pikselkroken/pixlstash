@@ -5,7 +5,7 @@
 // Invariant: an address is only ever saved after the backend has proven a
 // ComfyUI answers there (`POST /comfyui/probe`). On this machine nothing has
 // to be typed: the usual ports are probed on open.
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { VIcon, VProgressCircular } from "vuetify/components";
 import { isReadOnly } from "../../utils/apiClient";
 import { getUserConfig, patchUserConfig } from "../../api/config";
@@ -21,7 +21,7 @@ import FieldLabel from "../widgets/FieldLabel.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ComfyuiLinkDialog from "./ComfyuiLinkDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
-import { errorDetail } from "../../utils/apiError";
+import { errorMessage } from "../../utils/apiError";
 import {
   PIXLSTASH_PACK_INSTALL,
   PIXLSTASH_PACK_URL,
@@ -65,7 +65,8 @@ const unreachable = computed(() => lastProbe.value?.reachable === false);
 // A ComfyUI that is not on this computer is linked over the network, and its
 // own page is plain HTTP, so the key it is given can be read there. Said before
 // the person links, not only when a link step fails.
-const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]", "::1"];
+// `URL.hostname` keeps an IPv6 host in its brackets.
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
 const comfyuiOnNetwork = computed(() => {
   try {
     const hostname = new URL(comfyuiUrl.value).hostname.toLowerCase();
@@ -88,6 +89,8 @@ let detectRun = 0;
 // not be read (then the Access row is not shown rather than guessed).
 const link = ref(null);
 const linkDialogOpen = ref(false);
+const linkButton = ref(null);
+const checkAgainButton = ref(null);
 let linkCheck = 0;
 const userPrefs = useUserPrefsStore();
 const linkedOn = computed(() =>
@@ -106,9 +109,13 @@ async function refreshLink() {
   }
 }
 
-function closeLinkDialog() {
+// Focus goes back to the Link button that opened the dialog, or, once linked
+// and that button is gone, to Check again rather than to the page.
+async function closeLinkDialog() {
   linkDialogOpen.value = false;
-  refreshLink();
+  await refreshLink();
+  await nextTick();
+  (linkButton.value || checkAgainButton.value)?.focus();
 }
 
 async function checkPixlstashPack() {
@@ -173,6 +180,7 @@ async function fetchComfyuiUrl() {
     cfg = await getUserConfig();
   } catch (e) {
     console.warn("[settings] could not read the ComfyUI address", e);
+    actionError.value = errorMessage(e, "Could not read the ComfyUI address.");
     return;
   }
   comfyuiUrl.value = String(cfg?.comfyui_url || "").trim();
@@ -205,8 +213,7 @@ async function connectFound() {
   try {
     await save(foundUrl.value);
   } catch (e) {
-    actionError.value =
-      errorDetail(e) || e?.message || "Could not save the ComfyUI address.";
+    actionError.value = errorMessage(e, "Could not save the ComfyUI address.");
   } finally {
     busy.value = false;
   }
@@ -242,8 +249,7 @@ async function connectAddress() {
     }
     await save(reply.url);
   } catch (e) {
-    formError.value =
-      errorDetail(e) || e?.message || "Could not reach that address.";
+    formError.value = errorMessage(e, "Could not reach that address.");
   } finally {
     busy.value = false;
   }
@@ -257,7 +263,7 @@ async function checkAgain() {
   } catch (e) {
     lastProbe.value = {
       reachable: false,
-      detail: errorDetail(e) || e?.message || "Could not check ComfyUI.",
+      detail: errorMessage(e, "Could not check ComfyUI."),
     };
   } finally {
     busy.value = false;
@@ -268,9 +274,21 @@ async function checkAgain() {
 async function disconnect() {
   busy.value = true;
   actionError.value = "";
+  // Revoke the key before forgetting the address it was written to. A refusal
+  // does not keep the address: the key stays listed under API Tokens, where it
+  // can still be deleted, and the person is told so.
+  let keyLeft = "";
+  if (link.value?.linked) {
+    try {
+      await unlinkComfyui();
+    } catch (e) {
+      console.warn("[settings] could not revoke the ComfyUI key", e);
+      keyLeft =
+        `${errorMessage(e, "The ComfyUI key could not be revoked.")} ` +
+        'The key "ComfyUI (linked)" still works: delete it under Account › API Tokens.';
+    }
+  }
   try {
-    // Revoke the key before forgetting the address it was written to.
-    if (link.value?.linked) await unlinkComfyui();
     await patchUserConfig({ comfyui_url: null });
     link.value = null;
     comfyuiUrl.value = "";
@@ -280,11 +298,11 @@ async function disconnect() {
     checkPixlstashPack();
     detectLocal();
   } catch (e) {
-    actionError.value =
-      errorDetail(e) || e?.message || "Failed to clear ComfyUI URL.";
+    actionError.value = errorMessage(e, "Failed to clear ComfyUI URL.");
   } finally {
     busy.value = false;
   }
+  if (keyLeft) actionError.value = [keyLeft, actionError.value].join(" ").trim();
 }
 
 // ── Lifecycle: fetch data when the parent dialog opens ───────────────────────
@@ -309,7 +327,7 @@ watch(
     :first="first"
   >
     <div
-      v-if="state !== 'idle'"
+      v-if="state !== 'idle' || actionError"
       class="cf-card"
       :aria-busy="state === 'probing' ? 'true' : 'false'">
       <!-- The live region is always there, so a line that arrives in it is
@@ -468,6 +486,7 @@ watch(
           <template v-if="!link.linked">
             <div class="cf-row">
               <AppButton
+                ref="linkButton"
                 variant="primary"
                 :disabled="busy"
                 data-testid="comfyui-link"
@@ -492,6 +511,7 @@ watch(
         </div>
         <div class="cf-row">
           <AppButton
+            ref="checkAgainButton"
             variant="secondary"
             :loading="busy"
             data-testid="comfyui-check-again"

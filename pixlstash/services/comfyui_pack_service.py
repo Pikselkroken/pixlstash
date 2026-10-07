@@ -7,8 +7,10 @@ copy into ComfyUI's ``custom_nodes`` folder - the nodes need only ``requests``
 and ``Pillow``, which every ComfyUI has - followed by a restart of ComfyUI.
 
 Only for a ComfyUI on this computer: the copy writes this machine's disk, and
-the folder ComfyUI reports is on ComfyUI's machine. An older copy of the nodes
-goes to the system trash first, so two copies never load side by side.
+the folder ComfyUI reports is on ComfyUI's machine. The new copy is staged in
+full first; only then does an older copy go to the system trash and the new one
+take its place, so two copies never load side by side and a failed copy leaves
+the old nodes where they were.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from send2trash import send2trash
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import comfyui_link_service
+from pixlstash.services.comfyui_service import comfyui_folder_paths
 
 logger = get_logger(__name__)
 
@@ -97,13 +100,7 @@ def _is_pack(folder: Path) -> bool:
 
 def _custom_nodes_folder(pinned_url: str) -> Path:
     try:
-        response = requests.get(
-            f"{pinned_url}internal/folder_paths",
-            timeout=5,
-            allow_redirects=False,
-            proxies=comfyui_link_service.NO_PROXY,
-        )
-        folder_paths = response.json() if response.status_code == 200 else None
+        folder_paths = comfyui_folder_paths(pinned_url)
     except (requests.RequestException, ValueError) as exc:
         raise PackInstallRefused(
             f"ComfyUI did not say where its custom nodes live: {exc}"
@@ -178,6 +175,22 @@ def _restart_comfyui(pinned_url: str) -> Optional[str]:
     return last
 
 
+def _remove_partial(partial: Path) -> None:
+    """Delete a staging copy of PixlStash's own making. Raises ``OSError``."""
+    if partial.is_symlink() or partial.is_file():
+        partial.unlink()
+    elif partial.exists():
+        shutil.rmtree(partial)
+
+
+def _discard_partial(partial: Path) -> None:
+    """Best-effort :func:`_remove_partial` on a path that already failed."""
+    try:
+        _remove_partial(partial)
+    except OSError as exc:
+        logger.warning("Could not remove the staged nodes at %s: %s", partial, exc)
+
+
 def install(comfyui_url: Optional[str]) -> dict:
     """Install the bundled nodes into the saved ComfyUI and restart it.
 
@@ -200,9 +213,23 @@ def install(comfyui_url: Optional[str]) -> dict:
         raise PackInstallRefused("This PixlStash was built without the ComfyUI nodes.")
     custom_nodes = _custom_nodes_folder(pinned)
 
+    target = custom_nodes / PACK_FOLDER
+    partial = custom_nodes / f".{PACK_FOLDER}.installing"
+    # Stage the whole copy before anything is trashed: a copy that fails half
+    # way must leave ComfyUI with the nodes it had.
+    try:
+        _remove_partial(partial)
+        shutil.copytree(source, partial, ignore=shutil.ignore_patterns(*PACK_LEFT_OUT))
+    except OSError as exc:
+        logger.warning("Staging the PixlStash nodes in %s failed: %s", partial, exc)
+        _discard_partial(partial)
+        raise PackInstallRefused(
+            f"Could not write the nodes to {target}: {exc}"
+        ) from exc
+
     replaced = []
     for folder in sorted(custom_nodes.iterdir()):
-        if folder.is_dir() and _is_pack(folder):
+        if folder != partial and folder.is_dir() and _is_pack(folder):
             logger.info(
                 "Moving the older ComfyUI-PixlStash at %s to the trash.", folder
             )
@@ -211,22 +238,17 @@ def install(comfyui_url: Optional[str]) -> dict:
             except OSError as exc:
                 # Never fall back to deleting it: the trash is the undo.
                 logger.warning("Could not move %s to the trash: %s", folder, exc)
+                _discard_partial(partial)
                 raise PackInstallRefused(
                     f"Could not move the older copy at {folder} to the trash "
                     f"({exc}). Remove it yourself, then install again."
                 ) from exc
             replaced.append(str(folder))
-    target = custom_nodes / PACK_FOLDER
-    partial = custom_nodes / f".{PACK_FOLDER}.installing"
     try:
-        if partial.is_symlink() or partial.is_file():
-            partial.unlink()
-        elif partial.exists():
-            shutil.rmtree(partial)
-        shutil.copytree(source, partial, ignore=shutil.ignore_patterns(*PACK_LEFT_OUT))
         os.replace(partial, target)
     except OSError as exc:
         logger.warning("Copying the PixlStash nodes into %s failed: %s", target, exc)
+        _discard_partial(partial)
         raise PackInstallRefused(
             f"Could not write the nodes to {target}: {exc}"
         ) from exc

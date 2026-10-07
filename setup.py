@@ -84,14 +84,9 @@ def _build_frontend() -> None:
 # The ComfyUI-PixlStash nodes ride in the wheel, copied from the pinned
 # submodule, so PixlStash can install the exact version it is tested with.
 # Only what ComfyUI loads is copied; the pack's own tests and media stay out.
-_PACK_SOURCE = Path(__file__).resolve().parent / "integrations" / "ComfyUI-PixlStash"
-_PACK_STAGED = (
-    Path(__file__).resolve().parent
-    / "pixlstash"
-    / "data"
-    / "comfyui-pack"
-    / "ComfyUI-PixlStash"
-)
+_ROOT = Path(__file__).resolve().parent
+_PACK_SOURCE = _ROOT / "integrations" / "ComfyUI-PixlStash"
+_PACK_STAGED = _ROOT / "pixlstash" / "data" / "comfyui-pack" / "ComfyUI-PixlStash"
 # Kept equal to comfyui_pack_service.PACK_LEFT_OUT (a test holds them equal);
 # not imported from it, since importing pixlstash at build time pulls its deps.
 _PACK_LEFT_OUT = (
@@ -116,9 +111,14 @@ def _stage_comfyui_pack() -> None:
     then says it was built without the nodes.
     """
     if not (_PACK_SOURCE / "__init__.py").is_file():
-        if (_PACK_STAGED / "__init__.py").is_file():
-            # An unpacked sdist that already carries the staged copy.
-            return
+        # Only an unpacked sdist (it has PKG-INFO at its root) may build from
+        # the copy it carries. In a checkout a staged copy is left over from
+        # an earlier build, of whatever version the submodule was then.
+        if (_ROOT / "PKG-INFO").is_file():
+            if (_PACK_STAGED / "__init__.py").is_file():
+                return
+        elif _PACK_STAGED.exists():
+            shutil.rmtree(_PACK_STAGED)
         message = (
             f"{_PACK_SOURCE} is empty. Run `git submodule update --init`: "
             "the wheel carries the ComfyUI-PixlStash nodes."

@@ -1491,7 +1491,9 @@ def _system_stats_answer(monkeypatch, answer) -> list[str]:
     """Stand in for ComfyUI's ``GET /system_stats``; returns the URLs asked."""
     asked: list[str] = []
 
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, allow_redirects=True, proxies=None):
+        assert allow_redirects is False, "a redirect names a host nobody probed"
+        assert proxies == comfyui_service.NO_PROXY
         asked.append(url)
         if isinstance(answer, Exception):
             raise answer
@@ -1502,7 +1504,7 @@ def _system_stats_answer(monkeypatch, answer) -> list[str]:
                 raise body
             return body
 
-        return SimpleNamespace(ok=status == 200, status_code=status, json=json)
+        return SimpleNamespace(ok=status < 400, status_code=status, json=json)
 
     monkeypatch.setattr(comfyui_service.requests, "get", fake_get)
     return asked
@@ -1556,6 +1558,8 @@ def test_the_probe_recognises_comfyui_and_normalises_the_address(
         ((200, ValueError("not json")), "but it is not ComfyUI"),
         ((404, {"detail": "Not Found"}), "but it is not ComfyUI"),
         ((200, {"status": "ok"}), "but it is not ComfyUI"),
+        # A redirect is somewhere else answering, even with ComfyUI's body.
+        ((302, {"system": {}}), "but it is not ComfyUI"),
         (requests.ConnectionError("refused"), "Nothing answered at 127.0.0.1:8189"),
         (requests.Timeout("slow"), "did not answer within 2 seconds"),
         (requests.exceptions.SSLError("self-signed"), "certificate could not be"),
@@ -1572,6 +1576,33 @@ def test_the_probe_says_why_an_address_is_not_comfyui(
     assert r.status_code == 200, r.text
     assert r.json()["reachable"] is False
     assert says in r.json()["detail"], r.json()
+
+
+@pytest.mark.parametrize(
+    "typed, saved",
+    [
+        ("https://comfy.example.com:443", "https://comfy.example.com/"),
+        ("http://127.0.0.1:80/comfy/", "http://127.0.0.1/comfy/"),
+        ("http://[::1]:80", "http://[::1]/"),
+        ("https://comfy.example.com:80", "https://comfy.example.com:80/"),
+    ],
+)
+def test_the_scheme_default_port_is_dropped(typed, saved):
+    assert comfyui_service.normalize_comfyui_url(typed) == saved
+
+
+def test_no_proxy_from_the_environment_reaches_a_comfyui_request(monkeypatch):
+    """``ALL_PROXY`` is honoured by ``requests`` unless ``all`` is overridden
+    too; a proxy would receive the link token."""
+    for name in ("ALL_PROXY", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        monkeypatch.setenv(name, "http://203.0.113.9:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    for url in ("http://127.0.0.1:8188/settings", "https://192.0.2.4:8188/settings"):
+        merged = requests.Session().merge_environment_settings(
+            url, comfyui_link_service.NO_PROXY, None, None, None
+        )
+        assert requests.utils.select_proxy(url, merged["proxies"]) is None, merged
 
 
 @pytest.mark.parametrize("url", ["127.0.0.1:8188", "ftp://comfy.example.com/", ""])
@@ -1608,10 +1639,19 @@ class _FakeComfyUI:
     so "the token works" is the server's own answer, not an assumption.
     """
 
-    def __init__(self, server, *, pack: bool = True, settings_status: int = 200):
+    def __init__(
+        self,
+        server,
+        *,
+        pack: bool = True,
+        settings_status: int = 200,
+        check_status: int | None = None,
+    ):
         self.server = server
         self.pack = pack
         self.settings_status = settings_status
+        # Answer the check with this instead of calling PixlStash.
+        self.check_status = check_status
         self.settings: dict = {}
         self.writes: list[dict] = []
         # What a client that follows redirects would have re-sent to the
@@ -1634,6 +1674,8 @@ class _FakeComfyUI:
             assert self.settings.get(comfyui_link_service.SETTING_URL), (
                 "the link was checked before ComfyUI was told where PixlStash is"
             )
+            if self.check_status is not None:
+                return _http_answer(self.check_status, {"error": "unreachable"})
             token = headers["Authorization"].split(" ", 1)[1]
             r = _bearer(self.server, token).get(f"{API}/sort_mechanisms")
             return _http_answer(r.status_code, r.json() if r.is_success else {})
@@ -1901,6 +1943,63 @@ def test_a_refused_settings_write_leaves_no_token_behind(workflow_env, comfy_at)
     assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
 
 
+def test_a_failed_check_undoes_the_link_and_leaves_no_token(workflow_env, comfy_at):
+    """ComfyUI cannot use the key it was handed: the reply, the link status and
+    the token table must all say "not linked", and ComfyUI's copy is blanked."""
+    fake = comfy_at("http://127.0.0.1:18188/", check_status=502)
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    steps = _steps(reply)
+    assert (steps["check"]["state"], steps["check"]["reason"]) == (
+        "failed",
+        "check_failed",
+    )
+    assert reply["linked"] is False
+    assert reply["link"]["linked"] is False, reply
+    assert _link_tokens(workflow_env.server) == []
+    assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
+    assert fake.settings[comfyui_link_service.SETTING_TOKEN] == ""
+
+
+def test_a_link_that_cannot_be_recorded_revokes_its_token(
+    workflow_env, comfy_at, monkeypatch
+):
+    """The settings write succeeded, so ComfyUI holds a full-access token; if
+    no record names it, nothing could revoke it later."""
+    fake = comfy_at("http://127.0.0.1:18188/")
+    real_save = comfyui_link_service._save_record
+
+    def failing_save(server, record):
+        if record is not None:
+            raise OSError("disk full")
+        real_save(server, record)
+
+    monkeypatch.setattr(comfyui_link_service, "_save_record", failing_save)
+    with pytest.raises(OSError):
+        workflow_env.owner.post(f"{API}/comfyui/link")
+    assert _link_tokens(workflow_env.server) == []
+    assert fake.settings[comfyui_link_service.SETTING_TOKEN] == ""
+    assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
+
+
+def test_the_link_records_the_public_id_create_token_returns(workflow_env, comfy_at):
+    comfy_at("http://127.0.0.1:18188/")
+    assert workflow_env.owner.post(f"{API}/comfyui/link").json()["linked"] is True
+
+    def public_ids(session):
+        return list(
+            session.exec(
+                select(UserToken.public_id).where(
+                    UserToken.description == comfyui_link_service.TOKEN_DESCRIPTION
+                )
+            ).all()
+        )
+
+    recorded = workflow_env.server._server_config[comfyui_link_service.LINK_CONFIG_KEY]
+    assert workflow_env.server.auth._db.run_task(
+        public_ids, priority=DBPriority.IMMEDIATE
+    ) == [recorded["token_public_id"]]
+
+
 def _self_signed(path, *ips: str) -> str:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
@@ -1956,6 +2055,64 @@ def test_a_local_network_link_hands_over_the_certificate_that_covers_it(
             server, "local_network", f"http://{PRIVATE_10_IPV4}:8188/"
         )
     assert refused.value.reason == "certificate_mismatch"
+
+
+@pytest.mark.parametrize("certfile", [None, "missing.pem"])
+def test_https_without_a_readable_certificate_is_a_refusal(
+    tmp_path, monkeypatch, certfile
+):
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    config = {"host": "0.0.0.0", "port": 9537, "require_ssl": True}
+    if certfile:
+        config["ssl_certfile"] = str(tmp_path / certfile)
+    server = SimpleNamespace(_server_config=config)
+    monkeypatch.setattr(comfyui_link_service, "_address_toward", lambda h, p: LAN_IPV4)
+    for where, url in (
+        ("this_computer", "http://127.0.0.1:8188/"),
+        ("local_network", f"http://{LAN_IPV4}:8188/"),
+    ):
+        with pytest.raises(comfyui_link_service.LinkRefused) as refused:
+            comfyui_link_service.link_target(server, where, url)
+        assert refused.value.reason == "certificate_missing"
+
+
+def test_an_ipv6_comfyui_is_routed_over_ipv6_on_the_scheme_port(tmp_path, monkeypatch):
+    """The route is asked over the address family of the pinned host, at the
+    port its scheme implies; the URL handed back brackets an IPv6 address."""
+    monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    asked = []
+
+    class Probe:
+        def __init__(self, family, kind):
+            self.family = family
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def connect(self, address):
+            asked.append((self.family, address))
+
+        def getsockname(self):
+            return ("fd00::5%eth0", 1, 0, 0)
+
+    monkeypatch.setattr(comfyui_link_service.socket, "socket", Probe)
+    certfile = _self_signed(tmp_path / "cert.pem", "fd00::5")
+    server = SimpleNamespace(
+        _server_config={
+            "host": "::",
+            "port": 9537,
+            "require_ssl": True,
+            "ssl_certfile": certfile,
+        }
+    )
+    url, _ = comfyui_link_service.link_target(
+        server, "local_network", "https://[fd00::7]/"
+    )
+    assert asked == [(socket.AF_INET6, ("fd00::7", 443))]
+    assert url == "https://[fd00::5]:9537"
 
 
 def test_the_desktop_needs_remote_access_and_a_password_for_a_network_link(
@@ -2033,6 +2190,30 @@ def _fake_pack(root: Path) -> Path:
         '[project]\nname = "pixlstash"\nversion = "9.9.9"\n'
     )
     return pack
+
+
+def test_a_failed_copy_leaves_the_older_nodes_in_place(install_env, monkeypatch):
+    """The new copy is staged before anything is trashed: a copy that fails
+    half way must not leave ComfyUI without PixlStash nodes."""
+    older = install_env.custom_nodes / "ComfyUI-PixlStash"
+    older.mkdir()
+    (older / "__init__.py").write_text("# the working install\n")
+    real_copytree = shutil.copytree
+
+    def half_a_copy(src, dst, *args, **kwargs):
+        real_copytree(src, dst, *args, **kwargs)
+        if Path(dst).parent == install_env.custom_nodes:
+            raise OSError("disk full")
+
+    monkeypatch.setattr(comfyui_pack_service.shutil, "copytree", half_a_copy)
+    install_env.with_comfy({"POST v2/manager/reboot": 200})
+    with pytest.raises(comfyui_pack_service.PackInstallRefused):
+        comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert install_env.trashed == []
+    assert (older / "__init__.py").read_text() == "# the working install\n"
+    assert [p.name for p in install_env.custom_nodes.iterdir()] == [
+        "ComfyUI-PixlStash"
+    ], "the half-staged copy is cleaned up"
 
 
 class _FakeComfyForInstall:
@@ -2129,7 +2310,7 @@ def test_a_failed_move_to_the_trash_installs_nothing_and_deletes_nothing(
     with pytest.raises(comfyui_pack_service.PackInstallRefused):
         comfyui_pack_service.install("http://127.0.0.1:18188/")
     assert (older / "__init__.py").is_file(), "the older copy must survive"
-    assert not (install_env.custom_nodes / "ComfyUI-PixlStash").exists()
+    assert [p.name for p in install_env.custom_nodes.iterdir()] == [older.name]
 
 
 @pytest.mark.parametrize("url", ["http://8.8.8.8:8188/", f"http://{LAN_IPV4}:8188/"])
@@ -2213,6 +2394,37 @@ def test_the_wheel_and_the_install_leave_out_the_same_files():
     setup_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(setup_module)
     assert setup_module._PACK_LEFT_OUT == comfyui_pack_service.PACK_LEFT_OUT
+
+
+@pytest.mark.parametrize("from_sdist", [False, True])
+def test_a_release_build_never_ships_a_stale_staged_copy(
+    tmp_path, monkeypatch, from_sdist
+):
+    """A strict build with an empty submodule may use the staged copy only when
+    it is an unpacked sdist; in a checkout that copy is an earlier build's."""
+    spec = importlib.util.spec_from_file_location(
+        "pixlstash_setup", Path(__file__).resolve().parent.parent / "setup.py"
+    )
+    setup_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(setup_module)
+    staged = tmp_path / "pixlstash" / "data" / "comfyui-pack" / "ComfyUI-PixlStash"
+    staged.mkdir(parents=True)
+    (staged / "__init__.py").write_text("# an earlier build\n")
+    (tmp_path / "integrations" / "ComfyUI-PixlStash").mkdir(parents=True)
+    if from_sdist:
+        (tmp_path / "PKG-INFO").write_text("Name: pixlstash\n")
+    monkeypatch.setattr(setup_module, "_ROOT", tmp_path)
+    monkeypatch.setattr(
+        setup_module, "_PACK_SOURCE", tmp_path / "integrations" / "ComfyUI-PixlStash"
+    )
+    monkeypatch.setattr(setup_module, "_PACK_STAGED", staged)
+    monkeypatch.setenv("PIXLSTASH_REQUIRE_COMFYUI_PACK", "1")
+    if from_sdist:
+        setup_module._stage_comfyui_pack()
+        assert (staged / "__init__.py").is_file()
+    else:
+        with pytest.raises(FileNotFoundError):
+            setup_module._stage_comfyui_pack()
 
 
 def test_the_install_route_is_loopback_only_and_refuses_with_409(workflow_env):
