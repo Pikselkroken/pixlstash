@@ -68,7 +68,9 @@ class PromptMatchTask(BaseTask):
         bank = self._distractor_bank()
         texts = self._text_embeddings({text for text in cleaned.values() if text})
 
-        updates: list[tuple[int, float]] = []
+        # Each score carries the inputs it was computed from, so _persist can
+        # refuse it if they were replaced (and the score reset) meanwhile.
+        updates: list[tuple[int, str, bytes, float]] = []
         for pid, prompt, image_blob in rows:
             text = cleaned[pid]
             text_embedding = texts.get(text)
@@ -84,7 +86,7 @@ class PromptMatchTask(BaseTask):
                     "missing" if bank is None else "ok",
                     PROMPT_MATCH_FAILED,
                 )
-                updates.append((pid, PROMPT_MATCH_FAILED))
+                updates.append((pid, prompt, image_blob, PROMPT_MATCH_FAILED))
                 continue
             if image.shape[0] != text_embedding.shape[0]:
                 logger.warning(
@@ -95,9 +97,16 @@ class PromptMatchTask(BaseTask):
                     text_embedding.shape[0],
                     PROMPT_MATCH_FAILED,
                 )
-                updates.append((pid, PROMPT_MATCH_FAILED))
+                updates.append((pid, prompt, image_blob, PROMPT_MATCH_FAILED))
                 continue
-            updates.append((pid, prompt_match_score(image, text_embedding, bank)))
+            updates.append(
+                (
+                    pid,
+                    prompt,
+                    image_blob,
+                    prompt_match_score(image, text_embedding, bank),
+                )
+            )
 
         changed = self._db.run_task(_persist, updates, priority=DBPriority.LOW)
         logger.debug(
@@ -144,11 +153,27 @@ def _fetch_inputs(session: Session, picture_ids: list[int]) -> list[tuple]:
     ]
 
 
-def _persist(session: Session, updates: list[tuple[int, float]]) -> list:
+def _persist(session: Session, updates: list[tuple[int, str, bytes, float]]) -> list:
+    """Store each score only if its prompt and image embedding are still current.
+
+    Extraction and re-embedding reset ``prompt_match`` to NULL when they replace
+    an input; writing a score computed from the old one would undo that reset
+    and the new inputs would never be scored.
+    """
     changed = []
-    for picture_id, score in updates:
+    for picture_id, prompt, image_blob, score in updates:
         pic = session.get(Picture, picture_id)
         if pic is None:
+            continue
+        if pic.comfyui_positive_prompt != prompt or (
+            pic.image_embedding is None or bytes(pic.image_embedding) != image_blob
+        ):
+            logger.debug(
+                "prompt_match: picture %s changed its prompt or image embedding "
+                "while it was scored; dropping the stale score, the finder "
+                "picks it up again",
+                picture_id,
+            )
             continue
         pic.prompt_match = score
         session.add(pic)

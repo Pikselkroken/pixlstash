@@ -257,3 +257,34 @@ def test_a_new_image_embedding_queues_the_picture_again(server, pictures):
     )
     assert _scores(server, pictures)["scored"] is None
     assert pictures["scored"] in _candidates(server, pictures)
+
+
+def test_a_score_for_replaced_inputs_is_not_stored(server, pictures):
+    """Inputs replaced while being scored: the reset must survive the old score."""
+
+    def new_prompt(session: Session):
+        # What ComfyuiExtractionTask writes for a changed prompt.
+        pic = session.get(Picture, pictures["off"])
+        pic.comfyui_positive_prompt = "a blue whale"
+        pic.prompt_match = None
+        session.commit()
+
+    class RacingClip(FakeClip):
+        def encode_texts(self, texts):
+            if texts != list(DISTRACTOR_PROMPTS):
+                server.vault.db.run_task(
+                    ImageEmbeddingTask._save_results,
+                    [(pictures["fox"], (-FOX).tobytes(), None, None)],
+                )
+                server.vault.db.run_task(new_prompt)
+            return super().encode_texts(texts)
+
+    due = [Picture(id=pictures[name]) for name in ("fox", "off", "syntax_only")]
+    result = PromptMatchTask(server.vault.db, RacingClip(), due)._run_task()
+
+    scores = _scores(server, pictures)
+    assert scores["fox"] is None
+    assert scores["off"] is None
+    assert scores["syntax_only"] == PROMPT_MATCH_FAILED
+    assert result["changed_count"] == 1
+    assert {pictures["fox"], pictures["off"]} <= _candidates(server, pictures)
