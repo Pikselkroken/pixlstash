@@ -1932,7 +1932,7 @@ class TestLoraChain:
         graph["5"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
         graph["7"]["inputs"]["model2"] = ["5", 0]
         lanes = read_lora_chain(graph, self.INFO)["lanes"]
-        assert sorted(pass_label(lane) for lane in lanes) == [
+        assert [pass_label(lane) for lane in lanes] == [
             "TwinSampler #7, model1",
             "TwinSampler #7, model2",
         ]
@@ -1983,6 +1983,104 @@ class TestLoraChain:
         assert "10" not in graph
         assert graph["22"]["inputs"]["on_true"] == ["4", 0]
         assert graph["22"]["inputs"]["on_false"] == ["4", 0]
+        # Read again, the emptied side is still a side of its own, so a LoRA
+        # can go back on on_true alone.
+        chain = read_lora_chain(graph, info)
+        assert [pass_label(lane) for lane in chain["lanes"]] == [
+            "Switch (Model) #22, on_false",
+            "Switch (Model) #22, on_true",
+        ]
+        plan = plan_lora_chain(
+            graph, chain, [], info, [[], [{"node_id": None, "adapter": self.NEW}]]
+        )
+        apply_lora_chain(graph, plan, info)
+        new = str(max(int(n) for n in graph))
+        assert graph[new]["inputs"]["model"] == ["4", 0]
+        assert graph["22"]["inputs"]["on_true"] == [new, 0]
+        assert graph["22"]["inputs"]["on_false"] == ["4", 0]
+
+    def test_a_meeting_lane_is_named_by_every_input_it_feeds(self):
+        """#10 feeds a scheduler and the merge: both are what an edit rewires."""
+        graph = self._graph(loaders=())
+        del graph["7"]
+        info = {
+            **self.INFO,
+            "ModelMergeSimple": {"output": ["MODEL"]},
+            "BasicScheduler": {"output": ["SIGMAS"]},
+        }
+        graph["10"] = self._loader("a.safetensors", 1.0, ["4", 0], ["4", 1])
+        graph["11"] = self._loader("b.safetensors", 1.0, ["4", 0], ["4", 1])
+        graph["17"] = {"class_type": "BasicScheduler", "inputs": {"model": ["10", 0]}}
+        graph["20"] = {
+            "class_type": "ModelMergeSimple",
+            "inputs": {"model1": ["10", 0], "model2": ["11", 0]},
+        }
+        graph["7"] = {
+            "class_type": "TwinSampler",
+            "inputs": {"model1": ["20", 0], "sigmas": ["17", 0]},
+        }
+        lanes = read_lora_chain(graph, info)["lanes"]
+        assert [pass_label(lane) for lane in lanes] == [
+            "BasicScheduler #17, model and ModelMergeSimple #20, model1",
+            "ModelMergeSimple #20, model2",
+        ]
+
+    def test_switch_inputs_stay_lanes_of_their_own_across_an_edit(self):
+        """Two switches and a scheduler into one sampler: a lane per input, each
+        pointing at the sampler, listed alike before and after the LoRA goes."""
+        graph = self._graph(loaders=())
+        del graph["7"]
+        switch = {
+            "input": {"required": {"switch": ["BOOLEAN", {}]}},
+            "output": ["*"],
+        }
+        info = {
+            **self.INFO,
+            "ComfySwitchNode": switch,
+            "BasicScheduler": {"output": ["SIGMAS"]},
+        }
+        graph["10"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": ["4", 0],
+                "lora_name": "a.safetensors",
+                "strength_model": 0.8,
+            },
+        }
+        graph["17"] = {"class_type": "BasicScheduler", "inputs": {"model": ["4", 0]}}
+        graph["22"] = {
+            "class_type": "ComfySwitchNode",
+            "inputs": {"on_false": ["4", 0], "on_true": ["10", 0], "switch": False},
+            "_meta": {"title": "Switch (Model)"},
+        }
+        graph["23"] = {
+            "class_type": "ComfySwitchNode",
+            "inputs": {
+                "input2": ["4", 0],
+                "input10": ["4", 0],
+                "on_false": ["4", 0],
+                "switch": True,
+            },
+        }
+        graph["7"] = {
+            "class_type": "TwinSampler",
+            "inputs": {"model1": ["22", 0], "model2": ["23", 0], "sigmas": ["17", 0]},
+        }
+        labels = [
+            "BasicScheduler #17, model",
+            "ComfySwitchNode #23, input2",
+            "ComfySwitchNode #23, input10",
+            "ComfySwitchNode #23, on_false",
+            "Switch (Model) #22, on_false",
+            "Switch (Model) #22, on_true",
+        ]
+        chain = read_lora_chain(graph, info)
+        assert [pass_label(lane) for lane in chain["lanes"]] == labels
+        assert {lane["pass"]["node_id"] for lane in chain["lanes"]} == {"7"}
+        plan = plan_lora_chain(graph, chain, [], info, [[] for _ in range(6)])
+        apply_lora_chain(graph, plan, info)
+        chain = read_lora_chain(graph, info)
+        assert [pass_label(lane) for lane in chain["lanes"]] == labels
 
     def _base_and_refiner(self):
         """Two checkpoints, each with its own CLIP: #4 → #10 → #3, #5 → #11 → #15.
