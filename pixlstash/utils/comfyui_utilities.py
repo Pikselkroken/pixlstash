@@ -13,7 +13,7 @@ from typing import Any
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import model_filename_fields
-from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SHELF_ID_FIELD
+from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SHELF_ID_FIELD, is_link
 
 logger = get_logger(__name__)
 
@@ -417,6 +417,45 @@ def _follow_prompt_api(
     return None
 
 
+def _dead_loader_ids(workflow: dict) -> set[str]:
+    """The model and LoRA loaders of an API graph that feed nothing.
+
+    A loader only other such loaders read, transitively: a left-over UNET and
+    the LoRA on it, wired into nothing. ComfyUI runs backwards from its outputs,
+    so those never ran, and crediting them shows a LoRA the picture never
+    loaded. Any other node nothing reads is taken for an output: plenty of
+    savers (a sampler that saves its own picture, a pack's previewer) carry no
+    name that says so, and dropping a LoRA that did run is the worse mistake.
+    A graph with no such node (loaders alone) says nothing about what ran, so
+    nothing in it is dead.
+    """
+    nodes = {
+        str(node_id): node
+        for node_id, node in workflow.items()
+        if isinstance(node, dict)
+    }
+    loaders = {
+        node_id
+        for node_id, node in nodes.items()
+        if node.get("class_type") in _CHECKPOINT_CLASSES | _UNET_CLASSES | _LORA_CLASSES
+    }
+    if not nodes.keys() - loaders:
+        return set()
+    dead: set[str] = set()
+    while True:
+        read = {
+            str(value[0])
+            for node_id, node in nodes.items()
+            if node_id not in dead
+            for value in (node.get("inputs") or {}).values()
+            if is_link(value)
+        }
+        newly_dead = loaders - dead - read
+        if not newly_dead:
+            return dead
+        dead |= newly_dead
+
+
 def _extract_generation_info_api(workflow: dict) -> dict:
     """Extract models, LoRAs, and positive prompt from an API-format workflow.
 
@@ -427,12 +466,15 @@ def _extract_generation_info_api(workflow: dict) -> dict:
     loras: list[str] = []
     positive_prompt: str | None = None
     seed: int | None = None
+    dead = _dead_loader_ids(workflow)
 
-    for node in workflow.values():
+    for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
         class_type = node.get("class_type", "")
         inputs = node.get("inputs") or {}
+        if str(node_id) in dead:
+            continue
 
         if class_type in _CHECKPOINT_CLASSES:
             name = inputs.get("ckpt_name")
