@@ -209,6 +209,7 @@ from pixlstash.services.workflow_inputs import (
     resolve_fills,
 )
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.services.workflow_parameters import is_latent_size, set_latent_size
 from pixlstash.services.workflow_library_service import (
     read_best_picture_ids,
     read_card_picture_ids,
@@ -3758,7 +3759,9 @@ def create_router(server) -> APIRouter:
         Addressed by label because that is how a card's defaults are addressed:
         node ids are renumbered by every re-serialisation and a card's variants
         do not agree about them. A wired input is left alone - overwriting one
-        drops the link - and an input the graph does not have is not invented.
+        drops the link - except an empty latent's size, which
+        ``set_latent_size`` cuts only when the value differs from what the wire
+        carries. An input the graph does not have is not invented.
         """
         if not values:
             return
@@ -3780,15 +3783,21 @@ def create_router(server) -> APIRouter:
                 addressed_as.append(CORE_ADDRESS_PREFIX + core[node_id])
             for name in list(inputs):
                 # A wired input is left alone - overwriting drops the link -
-                # so it counts as not applied and is logged below.
-                if isinstance(inputs[name], list):
+                # so it counts as not applied and is logged below. Except the
+                # latent's size: the one wire a run cuts on purpose.
+                latent_size = is_latent_size(node.get("class_type"), name)
+                if isinstance(inputs[name], list) and not latent_size:
                     continue
                 matches = [
                     (label, name) for label in addressed_as if (label, name) in wanted
                 ]
                 if matches:
                     found.update(matches)
-                    inputs[name] = wanted[max(matches, key=order.__getitem__)]
+                    value = wanted[max(matches, key=order.__getitem__)]
+                    if latent_size:
+                        set_latent_size(graph, node, name, value)
+                    else:
+                        inputs[name] = value
         for slot_label, input_name in sorted(set(wanted) - found):
             # Not an error: a card's defaults are read off every variant, and a
             # stage-node address goes stale when the base topology changes

@@ -2327,9 +2327,11 @@ function runBody() {
   // picture made at 45 steps on a card whose best picture used 20, press Run
   // untouched, and the form said 45 while the run did 20.
   //
-  // Safe to send the lot: `_apply_addressed` leaves a wired input alone and
-  // "an input the graph does not have is not invented", so an address this
-  // graph lacks is inert rather than an error.
+  // Safe to send the lot: `_apply_addressed` leaves a wired input alone (a
+  // latent's size only when it equals what the wire carries, which is why the
+  // picture's recipe reports the latent's own size) and "an input the graph
+  // does not have is not invented", so an address this graph lacks is inert
+  // rather than an error.
   const values = displayedValues();
   const body = {
     // `null` means "leave the graph's own text alone"; `""` means "blank it",

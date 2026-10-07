@@ -774,10 +774,17 @@ def extract_recipe_extras(workflow: dict) -> dict:
         report the second pass's step count beside the first's CFG. Reading it
         as "the settings of the pass that made the picture" is therefore wrong;
         it is "what this graph says", which is what a recipe read can honestly
-        offer without walking the execution graph.
+        offer without walking the execution graph. The size is the exception:
+        an empty latent's, worked out from a Resolution Selector when wired,
+        wins over another node's ``width`` (an SDXL text encoder's 4096),
+        because a run writes it back onto that latent.
     """
+    # Local: workflow_parameters -> workflow_io -> this module is a cycle.
+    from pixlstash.services.workflow_parameters import is_latent_size, linked_size
+
     negative_prompt: str | None = None
     settings: dict[str, Any] = {}
+    latent_size: dict[str, int] = {}
     try:
         for node in workflow.values():
             if not isinstance(node, dict):
@@ -795,14 +802,21 @@ def extract_recipe_extras(workflow: dict) -> dict:
                         str(ref[0]), workflow, side="negative"
                     )
             for field, kind in _SETTING_FIELDS.items():
+                value = inputs.get(field)
+                if is_latent_size(node.get("class_type"), field):
+                    linked = linked_size(workflow, value)
+                    size = _typed_setting(value if linked is None else linked, kind)
+                    if size is not None:
+                        latent_size.setdefault(field, size)
                 if field in settings:
                     continue
-                value = _typed_setting(inputs.get(field), kind)
+                value = _typed_setting(value, kind)
                 if value is not None:
                     settings[field] = value
     except Exception:
         logger.warning("Failed to extract recipe extras from workflow", exc_info=True)
         return {"negative_prompt": None, "settings": {}}
+    settings.update(latent_size)
     return {"negative_prompt": negative_prompt, "settings": settings}
 
 

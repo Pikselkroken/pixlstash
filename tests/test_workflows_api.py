@@ -6054,6 +6054,58 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
         assert graph["9"]["inputs"]["batch_size"] == 8
 
 
+def test_a_run_sets_the_latent_size_a_resolution_selector_drives(runnable, monkeypatch):
+    """The size is written on the latent and the selector's wire is cut there.
+
+    Wrong if the latent still reads the selector (the run makes the selector's
+    size, not the one asked for), or if the height wire went too: only width
+    was asked for.
+    """
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["49"] = {
+        "class_type": "ResolutionSelector",
+        "inputs": {
+            "aspect_ratio": "16:9 (Widescreen)",
+            "megapixels": 1.0,
+            "multiple": 8,
+        },
+    }
+    embedded["5"] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": ["49", 0], "height": ["49", 1], "batch_size": 1},
+    }
+    embedded["3"]["inputs"]["latent_image"] = ["5", 0]
+    # Labelled off the stored form, as the card is; then the files filled in.
+    latent = "core:" + core_node_labels(embedded)["5"]
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    object_info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    object_info["ResolutionSelector"] = {
+        "input": {"required": {}},
+        "output": ["INT", "INT"],
+    }
+    object_info["EmptyLatentImage"] = {"input": {"required": {}}, "output": ["LATENT"]}
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (object_info, None)
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (embedded, []),
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "picture_ids": [runnable.picture_id],
+            "values": [{"slot_label": latent, "input_name": "width", "value": 1024}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[0]["graph"]
+    assert graph["5"]["inputs"]["width"] == 1024
+    assert graph["5"]["inputs"]["height"] == ["49", 1]
+
+
 def test_a_picture_whose_file_has_gone_falls_through_instead_of_erroring(
     runnable, monkeypatch
 ):

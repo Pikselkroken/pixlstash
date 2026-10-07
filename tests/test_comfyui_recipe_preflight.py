@@ -738,6 +738,29 @@ class TestRecipeExtras:
         assert settings == {"sampler_name": "euler"}
         json.dumps(settings, allow_nan=False)  # would raise if one got through
 
+    def test_the_size_is_the_latent_s_own_even_when_a_selector_drives_it(self):
+        """A rerun sends this size back onto the latent, so it must be the latent's.
+
+        Another node's ``width`` met first (an SDXL encoder's 4096) would cut
+        the selector's wire and run at that size.
+        """
+        graph = {
+            "6": {
+                "class_type": "CLIPTextEncodeSDXL",
+                "inputs": {"width": 4096, "height": 4096},
+            },
+            "49": {
+                "class_type": "ResolutionSelector",
+                "inputs": {"aspect_ratio": "1:1 (Square)", "megapixels": 1.0},
+            },
+            "5": {
+                "class_type": "EmptyLatentImage",
+                "inputs": {"width": ["49", 0], "height": ["49", 1], "batch_size": 1},
+            },
+        }
+        settings = extract_recipe_extras(graph)["settings"]
+        assert (settings["width"], settings["height"]) == (1024, 1024)
+
     def test_a_graph_with_nothing_to_say_says_nothing(self):
         assert extract_recipe_extras({}) == {"negative_prompt": None, "settings": {}}
         assert extract_recipe_extras({"1": "not a node"}) == {
