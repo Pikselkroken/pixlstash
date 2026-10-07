@@ -13,11 +13,7 @@ from typing import Any
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import model_filename_fields
-from pixlstash.services.workflow_hash import (
-    MODEL_EXTENSIONS,
-    SHELF_ID_FIELD,
-    WorkflowGraphError,
-)
+from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SHELF_ID_FIELD
 
 logger = get_logger(__name__)
 
@@ -421,44 +417,63 @@ def _follow_prompt_api(
     return None
 
 
+def _dead_loader_ids(workflow: dict) -> set[str]:
+    """The model and LoRA loaders of an API graph that feed nothing.
+
+    A loader only other such loaders read, transitively: a left-over UNET and
+    the LoRA on it, wired into nothing. ComfyUI runs backwards from its outputs,
+    so those never ran, and crediting them shows a LoRA the picture never
+    loaded. Any other node nothing reads is taken for an output: plenty of
+    savers (a sampler that saves its own picture, a pack's previewer) carry no
+    name that says so, and dropping a LoRA that did run is the worse mistake.
+    A graph with no such node (loaders alone) says nothing about what ran, so
+    nothing in it is dead.
+    """
+    nodes = {
+        str(node_id): node
+        for node_id, node in workflow.items()
+        if isinstance(node, dict)
+    }
+    loaders = {
+        node_id
+        for node_id, node in nodes.items()
+        if node.get("class_type") in _CHECKPOINT_CLASSES | _UNET_CLASSES | _LORA_CLASSES
+    }
+    if not nodes.keys() - loaders:
+        return set()
+    dead: set[str] = set()
+    while True:
+        read = {
+            str(value[0])
+            for node_id, node in nodes.items()
+            if node_id not in dead
+            for value in (node.get("inputs") or {}).values()
+            if _is_api_ref(value)
+        }
+        newly_dead = loaders - dead - read
+        if not newly_dead:
+            return dead
+        dead |= newly_dead
+
+
 def _extract_generation_info_api(workflow: dict) -> dict:
     """Extract models, LoRAs, and positive prompt from an API-format workflow.
 
     API format stores each node as a top-level dict keyed by node id, with
     named ``inputs`` dicts rather than positional widget arrays.
     """
-    # Local for the cycle: `workflow_identity` imports `workflow_io`, which
-    # imports `is_api_format` from this module.
-    from pixlstash.services.workflow_identity import live_api_node_ids
-
     models: list[str] = []
     loras: list[str] = []
     positive_prompt: str | None = None
     seed: int | None = None
-
-    # A loader no output reads never ran: ComfyUI executes backwards from its
-    # outputs, so a left-over UNET and LoRA wired into nothing are not what the
-    # picture was made with, and crediting them shows a LoRA it never loaded.
-    try:
-        live = live_api_node_ids(workflow)
-    except WorkflowGraphError as exc:
-        logger.warning(
-            "Could not tell which loaders of this graph run (%s); every loader "
-            "is credited.",
-            exc,
-        )
-        live = {str(node_id) for node_id in workflow}
+    dead = _dead_loader_ids(workflow)
 
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
         class_type = node.get("class_type", "")
         inputs = node.get("inputs") or {}
-        if str(node_id) not in live and (
-            class_type in _CHECKPOINT_CLASSES
-            or class_type in _UNET_CLASSES
-            or class_type in _LORA_CLASSES
-        ):
+        if str(node_id) in dead:
             continue
 
         if class_type in _CHECKPOINT_CLASSES:

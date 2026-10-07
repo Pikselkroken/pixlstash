@@ -323,21 +323,6 @@ def live_slots(document: dict) -> list[Slot]:
     return [slot for slot in _slots(nodes) if slot.node_id in live]
 
 
-def live_api_node_ids(graph: dict) -> set[str]:
-    """The ids of an API-format graph's nodes some output reads, offline.
-
-    :func:`_prune`'s rule, for a caller holding the raw ``prompt`` graph and no
-    ``object_info``: a loader wired into nothing never runs, so the models and
-    LoRAs a picture is credited with must not include it. A graph the prune
-    refuses (no sink, or every sampler dead) comes back whole.
-
-    Raises:
-        WorkflowGraphError: The graph holds no usable node.
-    """
-    live, _pruned, _refused = _prune(reduce_api_graph(graph))
-    return set(live)
-
-
 def _slots(nodes: dict[str, ReducedNode]) -> list[Slot]:
     """:func:`slots` over an already-reduced document.
 

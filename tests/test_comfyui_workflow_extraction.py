@@ -393,6 +393,43 @@ def test_a_loader_wired_into_nothing_is_not_credited():
     assert result["loras"] == ["unused.safetensors"]
 
 
+def test_a_lora_feeding_an_unnamed_saver_is_still_credited():
+    """A sampler that saves its own picture (Easy-Use's, with image_output
+    "Save") is read by nothing and is named like no saver; beside a live
+    branch, its LoRA must still count."""
+    graph = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "a.ckpt"},
+        },
+        "2": {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["1", 0]}},
+        "3": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}},
+        "4": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "style.safetensors", "model": ["1", 0]},
+        },
+        "5": {"class_type": "easy kSampler", "inputs": {"model": ["4", 0]}},
+    }
+    assert extract_generation_info(graph)["loras"] == ["style.safetensors"]
+
+
+def test_a_graph_of_loaders_alone_credits_them_all():
+    """Nothing in it says what ran, so nothing is taken out."""
+    graph = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "a.ckpt"},
+        },
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "b.safetensors", "model": ["1", 0]},
+        },
+    }
+    result = extract_generation_info(graph)
+    assert result["models"] == ["a.ckpt"]
+    assert result["loras"] == ["b.safetensors"]
+
+
 def test_a_graph_with_no_seed_has_no_seed_text_rather_than_the_string_none():
     graph = {"9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}}}
     info = extract_comfy_workflow_info({"prompt": json.dumps(graph)})
