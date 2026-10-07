@@ -364,6 +364,35 @@ def test_the_seed_is_carried_as_text_so_a_64_bit_one_survives_javascript():
     assert int(info["seed_text"]) == info["seed"]
 
 
+def test_a_loader_wired_into_nothing_is_not_credited():
+    """A left-over UNET and LoRA no output reads never ran, so the picture was
+    not made with them: crediting them showed a LoRA on a look that never
+    loaded one."""
+    graph = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "live.safetensors"}},
+        "2": {
+            "class_type": "KSampler",
+            "inputs": {"seed": 1, "model": ["1", 0], "positive": ["6", 0]},
+        },
+        "3": {"class_type": "VAEDecode", "inputs": {"samples": ["2", 0]}},
+        "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a castle"}},
+        "8": {"class_type": "UNETLoader", "inputs": {"unet_name": "dead.safetensors"}},
+        "9": {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"lora_name": "unused.safetensors", "model": ["8", 0]},
+        },
+    }
+    result = extract_generation_info(graph)
+    assert result["models"] == ["live.safetensors"]
+    assert result["loras"] == []
+    # The same LoRA wired into the sampler is credited.
+    graph["2"]["inputs"]["model"] = ["9", 0]
+    result = extract_generation_info(graph)
+    assert result["models"] == ["dead.safetensors"]
+    assert result["loras"] == ["unused.safetensors"]
+
+
 def test_a_graph_with_no_seed_has_no_seed_text_rather_than_the_string_none():
     graph = {"9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}}}
     info = extract_comfy_workflow_info({"prompt": json.dumps(graph)})

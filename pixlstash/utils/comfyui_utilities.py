@@ -13,7 +13,11 @@ from typing import Any
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import model_filename_fields
-from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, SHELF_ID_FIELD
+from pixlstash.services.workflow_hash import (
+    MODEL_EXTENSIONS,
+    SHELF_ID_FIELD,
+    WorkflowGraphError,
+)
 
 logger = get_logger(__name__)
 
@@ -423,16 +427,39 @@ def _extract_generation_info_api(workflow: dict) -> dict:
     API format stores each node as a top-level dict keyed by node id, with
     named ``inputs`` dicts rather than positional widget arrays.
     """
+    # Local for the cycle: `workflow_identity` imports `workflow_io`, which
+    # imports `is_api_format` from this module.
+    from pixlstash.services.workflow_identity import live_api_node_ids
+
     models: list[str] = []
     loras: list[str] = []
     positive_prompt: str | None = None
     seed: int | None = None
 
-    for node in workflow.values():
+    # A loader no output reads never ran: ComfyUI executes backwards from its
+    # outputs, so a left-over UNET and LoRA wired into nothing are not what the
+    # picture was made with, and crediting them shows a LoRA it never loaded.
+    try:
+        live = live_api_node_ids(workflow)
+    except WorkflowGraphError as exc:
+        logger.warning(
+            "Could not tell which loaders of this graph run (%s); every loader "
+            "is credited.",
+            exc,
+        )
+        live = {str(node_id) for node_id in workflow}
+
+    for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
         class_type = node.get("class_type", "")
         inputs = node.get("inputs") or {}
+        if str(node_id) not in live and (
+            class_type in _CHECKPOINT_CLASSES
+            or class_type in _UNET_CLASSES
+            or class_type in _LORA_CLASSES
+        ):
+            continue
 
         if class_type in _CHECKPOINT_CLASSES:
             name = inputs.get("ckpt_name")
