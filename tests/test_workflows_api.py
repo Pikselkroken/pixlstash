@@ -1822,6 +1822,16 @@ def test_linking_a_comfyui_on_this_computer_writes_a_working_full_access_token(
     assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
 
 
+def test_unlinking_with_no_link_is_a_quiet_no_op(workflow_env, caplog):
+    """Settings' Disconnect unlinks whenever it cannot read the link status."""
+    assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
+    with caplog.at_level(logging.WARNING, logger=comfyui_link_service.logger.name):
+        r = workflow_env.owner.delete(f"{API}/comfyui/link")
+    assert r.status_code == 200, r.text
+    assert r.json()["linked"] is False
+    assert not [rec for rec in caplog.records if rec.levelno >= logging.WARNING]
+
+
 def test_no_token_is_minted_when_the_nodes_are_missing(workflow_env, comfy_at):
     fake = comfy_at("http://127.0.0.1:18188/", pack=False)
     reply = workflow_env.owner.post(f"{API}/comfyui/link").json()

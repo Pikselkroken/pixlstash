@@ -495,7 +495,8 @@ def _unlink(server, request: Request) -> dict:
     record = server._server_config.get(LINK_CONFIG_KEY) or {}
     if record.get("token_public_id"):
         _revoke(server, request, record["token_public_id"])
-    pinned = _pinned(record)
+    # No record is no link: Disconnect asks whenever it cannot tell.
+    pinned = _pinned(record) if record.get("comfyui_url") else None
     if pinned:
         _clear_comfyui_key(pinned, record["comfyui_url"])
     _save_record(server, None)

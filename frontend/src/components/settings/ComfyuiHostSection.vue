@@ -276,9 +276,11 @@ async function disconnect() {
   actionError.value = "";
   // Revoke the key before forgetting the address it was written to. A refusal
   // does not keep the address: the key stays listed under API Tokens, where it
-  // can still be deleted, and the person is told so.
+  // can still be deleted, and the person is told so. Skipped only when the
+  // link is known to be absent: a status that could not be read may hide a
+  // live key, and the DELETE is a no-op when there is none.
   let keyLeft = "";
-  if (link.value?.linked) {
+  if (link.value?.linked !== false) {
     try {
       await unlinkComfyui();
     } catch (e) {

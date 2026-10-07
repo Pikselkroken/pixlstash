@@ -407,6 +407,17 @@ describe("linking ComfyUI", () => {
     wrapper.unmount();
   });
 
+  it("Disconnect revokes when the link status could not be read", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    comfyui.getComfyuiLink.mockRejectedValue(new Error("server busy"));
+    probeAnswers({});
+    const wrapper = await mountPane();
+    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
+    await flushPromises();
+    expect(comfyui.unlinkComfyui).toHaveBeenCalled();
+    expect(config.patchUserConfig).toHaveBeenCalledWith({ comfyui_url: null });
+  });
+
   it("Disconnect does not call DELETE when not linked", async () => {
     probeAnswers({});
     const wrapper = await mountPane();
