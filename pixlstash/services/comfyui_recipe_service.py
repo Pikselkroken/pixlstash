@@ -2429,6 +2429,26 @@ def _pass_of(graph: dict, links: list[dict], starts: list[str]) -> dict:
     }
 
 
+def _meeting_of(graph: dict, sinks: list[dict]) -> dict | None:
+    """A lane named by the input its model enters, for lanes that meet again.
+
+    ``Switch (Model) #22, on_true``: the node is the one both sides reach, and
+    the input is what tells the two apart. ``None`` when nothing reads the
+    lane's model.
+    """
+    sink = next((s for s in sinks if s["type"] == "MODEL"), None)
+    if sink is None:
+        return None
+    node = graph.get(sink["node_id"]) or {}
+    class_type = node.get("class_type")
+    title = str((node.get("_meta") or {}).get("title") or "").strip() or class_type
+    return {
+        "node_id": sink["node_id"],
+        "class_type": class_type,
+        "title": f"{title} #{sink['node_id']}, {sink['field']}",
+    }
+
+
 def _samples(class_type: Any) -> bool:
     """Whether *class_type* reads as a sampler a pass is named by.
 
@@ -2792,18 +2812,23 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
     if not lanes and off_chain:
         note_for(model_end[0], sinks)
     named = [lane["pass"]["node_id"] for lane in read_lanes]
-    for node_id in named:
-        if named.count(node_id) > 1:
-            # Two branches that meet again (a model merge) are one pass, and
-            # a move "to KSampler #3 only" would name both sides alike.
-            raise LookupError(
-                f"The branches of this workflow's model meet again at #{node_id} "
-                f"{graph[node_id].get('class_type')}, so there are no separate "
-                "passes to edit their LoRAs by. Change them in ComfyUI."
-            )
+    for lane in read_lanes:
+        if named.count(lane["pass"]["node_id"]) > 1:
+            # Branches that meet again (a switch, a model merge, two models into
+            # one sampler) share a sampler, so "KSampler #3 only" would name
+            # both sides alike. Each is named by the input it meets the others
+            # at instead: edits address lanes by position, never by this name.
+            lane["pass"] = _meeting_of(graph, lane["sinks"]) or lane["pass"]
     # "In the order ComfyUI runs them" as near as ids say it: the base sampler
     # is normally the lower id.
-    read_lanes.sort(key=lambda lane: _node_order_key(lane["pass"]["node_id"]))
+    # Lanes meeting at one node keep the order of their names (model1 before
+    # model2), so the same graph always lists them alike.
+    read_lanes.sort(
+        key=lambda lane: (
+            _node_order_key(lane["pass"]["node_id"]),
+            lane["pass"].get("title") or "",
+        )
+    )
     return {
         "model_source": model_source,
         "clip_source": clip_source,
