@@ -8502,7 +8502,9 @@ def test_a_file_whose_bindings_opted_out_of_its_picture_is_not_filled(i2i):
 
 
 def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
-    """A card whose only source is a UI export says which format it is in."""
+    """A card whose only source is a UI export that will not rebuild says which
+    format it is in. The node is one this ComfyUI lacks: a known node with no
+    widget values now rebuilds from its defaults, as ComfyUI loads it."""
     monkeypatch.setattr(
         workflows_routes,
         "_resolve_workflow_path",
@@ -8511,7 +8513,7 @@ def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
     monkeypatch.setattr(
         workflows_routes,
         "_load_workflow_json",
-        lambda path: {"nodes": [{"id": 1, "type": "KSampler"}], "links": []},
+        lambda path: {"nodes": [{"id": 1, "type": "NotInstalledNode"}], "links": []},
     )
     with runnable.server.hub.transaction() as conn:
         conn.execute(
