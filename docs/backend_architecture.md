@@ -603,6 +603,10 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
 | GET    | /api/v1/models/workflow-sets                                                  | model_shelf     | Which models have actually run together                     |
 | POST   | /api/v1/models/workflow-sets                                                  | model_shelf     | Make a workflow set by hand                                 |
+| PUT    | /api/v1/models/workflow-sets/verdicts/{combo_key}                             | model_shelf     | Record the owner's verdict on a workflow set                |
+| DELETE | /api/v1/models/workflow-sets/verdicts/{combo_key}                             | model_shelf     | Clear the owner's verdict on a workflow set                 |
+| PUT    | /api/v1/models/workflow-sets/verdicts/{combo_key}/members/{model_id}          | model_shelf     | Record whether a member is a problem in a workflow set      |
+| DELETE | /api/v1/models/workflow-sets/verdicts/{combo_key}/members/{model_id}          | model_shelf     | Clear whether a member is a problem in a workflow set       |
 | PATCH  | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Rename a workflow set                                       |
 | DELETE | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Delete a workflow set                                       |
 | PUT    | /api/v1/models/workflow-sets/{set_id}/declines                                | model_shelf     | Keep models out of a workflow set's merge offer             |
