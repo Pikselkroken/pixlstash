@@ -43,3 +43,79 @@ def test_a_picture_batch_is_a_latents_batch_size(
 def test_api_graph_stays_importable_for_the_comfyui_routes():
     """``routes/comfyui.py`` reads ``workflow_parameters.api_graph``."""
     assert wp.api_graph({"1": {"class_type": "X", "inputs": {}}}) is not None
+
+
+def _selector(aspect_ratio="16:9 (Widescreen)", megapixels=1.0, multiple=8):
+    return {
+        "class_type": "ResolutionSelector",
+        "inputs": {
+            "aspect_ratio": aspect_ratio,
+            "megapixels": megapixels,
+            "multiple": multiple,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "source, output, expected",
+    [
+        # What ComfyUI's own ResolutionSelector.execute returns for these.
+        (_selector(), 0, 1368),
+        (_selector(), 1, 768),
+        (_selector("1:1 (Square)"), 0, 1024),
+        (_selector("2:3 (Portrait Photo)", 2.0, 64), 1, 1792),
+        ({"class_type": "PrimitiveInt", "inputs": {"value": 832}}, 0, 832),
+        # Nothing to read: an unknown node, a selector whose ratio is wired.
+        ({"class_type": "SomePackSize", "inputs": {"w": 640}}, 0, None),
+        # A node that computes from its `value` is not a passthrough.
+        ({"class_type": "IntMultiply", "inputs": {"value": 832}}, 0, None),
+        (_selector(aspect_ratio=["9", 0]), 0, None),
+    ],
+)
+def test_a_wired_size_reads_as_the_number_its_source_works_out_to(
+    source, output, expected
+):
+    assert wp.linked_size({"49": source}, ["49", output]) == expected
+
+
+def _sized_graph():
+    return {
+        "49": _selector(),
+        "5": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": ["49", 0], "height": ["49", 1], "batch_size": 1},
+        },
+        # Sized from the same selector, as an upscale target might be.
+        "11": {"class_type": "ImageScale", "inputs": {"width": ["49", 0]}},
+    }
+
+
+def test_a_run_at_the_selector_s_own_size_leaves_the_wires_alone():
+    graph = _sized_graph()
+    wp.set_latent_size(graph, graph["5"], "width", 1368)
+    assert graph == _sized_graph()
+
+
+def test_a_run_at_another_size_cuts_every_reader_of_that_output():
+    graph = _sized_graph()
+    wp.set_latent_size(graph, graph["5"], "width", 1024)
+    assert graph["5"]["inputs"]["width"] == 1024
+    assert graph["11"]["inputs"]["width"] == 1024
+    # The selector's other output still drives the height.
+    assert graph["5"]["inputs"]["height"] == ["49", 1]
+
+
+def test_a_square_primitive_keeps_driving_the_height_when_only_width_changes():
+    graph = {
+        "7": {"class_type": "PrimitiveInt", "inputs": {"value": 1024}},
+        "5": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": ["7", 0], "height": ["7", 0], "batch_size": 1},
+        },
+        "3": {"class_type": "KSampler", "inputs": {"seed": ["7", 0]}},
+    }
+    # Height first, unchanged, so its wire stays; then a new width.
+    wp.set_latent_size(graph, graph["5"], "height", 1024)
+    wp.set_latent_size(graph, graph["5"], "width", 1216)
+    assert graph["5"]["inputs"] == {"width": 1216, "height": ["7", 0], "batch_size": 1}
+    assert graph["3"]["inputs"]["seed"] == ["7", 0]

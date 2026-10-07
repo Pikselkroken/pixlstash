@@ -40,7 +40,9 @@
       <div class="tbm-section">
         <span class="tbm-label">Content</span>
         <template v-for="k in CONTENT_KINDS" :key="k.id">
+          <!-- The Workflows grid is the owner's: a share token cannot read it. -->
           <button
+            v-if="k.id !== 'workflow' || !isReadOnly"
             :ref="(el) => (rowRefs[k.id] = el)"
             class="fm-row"
             type="button"
@@ -306,6 +308,19 @@
         @toggle="(v, on) => toggleIn('comfyuiLoraFilter', v, on)"
         @clear="store.comfyuiLoraFilter = []"
       />
+
+      <FilterChecklistMenu
+        v-else-if="sub === 'workflow'"
+        title="Workflow"
+        placeholder="Find a workflow…"
+        :items="workflowItems"
+        :checked="store.workflowFilter.map((w) => w.id)"
+        :clearable="store.workflowFilter.length > 0"
+        :footer="workflowFooter"
+        empty-text="No workflow matches."
+        @toggle="toggleWorkflow"
+        @clear="clearWorkflows"
+      />
     </div>
   </div>
 </template>
@@ -324,6 +339,7 @@ import FilterTagField from "./FilterTagField.vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
 import { listComfyuiLoras, listComfyuiModels } from "../../api/pictures";
+import { listWorkflowCards, workflowCoverUrl } from "../../api/workflows";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { PIL_IMAGE_EXTENSIONS, VIDEO_EXTENSIONS } from "../../utils/media.js";
@@ -345,6 +361,7 @@ import {
   parseConfidenceEntry,
   scoreChipValue,
 } from "../../utils/filterChips";
+import { shortTypeLabel } from "../../utils/workflowCard";
 
 const props = defineProps({
   // The grid's view with no filters, pre-encoded (buildFilterCountBaseQuery).
@@ -369,6 +386,8 @@ const CONTENT_KINDS = [
   // The checkpoint glyph is the model shelf's (CAPABILITY_ICONS).
   { id: "model", label: "Checkpoint", icon: "mdi-package-variant-closed" },
   { id: "lora", label: "LoRA", icon: "mdi-puzzle-outline" },
+  // The Workflows screen's own glyph for a workflow.
+  { id: "workflow", label: "Workflow", icon: "mdi-sitemap-outline" },
 ];
 
 const formatParams = (exts) =>
@@ -478,6 +497,7 @@ const KIND_OF_CHIP = {
   "Doubtful tag": "confidence",
   Checkpoint: "model",
   LoRA: "lora",
+  Workflow: "workflow",
   Problem: "problems",
 };
 
@@ -635,6 +655,73 @@ async function loadLists() {
   } catch (err) {
     // The lists stay as they were; the other filters still work.
     console.warn("Failed to load filter menu lists", err);
+  }
+  if (isReadOnly.value) return;
+  try {
+    // Hidden and one-off workflows too: their pictures are still here.
+    const body = await listWorkflowCards({
+      includeHidden: true,
+      includeOneOffs: true,
+    });
+    workflowCards.value = body.cards;
+  } catch (err) {
+    console.warn("Failed to load the workflows for the filter menu", err);
+  }
+}
+
+// ── Workflow (#1797): ticked workflows are OR'd, one chip each ──────────────
+const workflowCards = ref([]);
+
+// Most pictures first, as the Workflows screen opens; hidden ones after the
+// rest. A ticked row stays where it is, so it does not move from the pointer.
+const workflowItems = computed(() =>
+  [...workflowCards.value]
+    .sort(
+      (a, b) =>
+        Number(Boolean(a.hidden)) - Number(Boolean(b.hidden)) ||
+        (b.picture_count ?? 0) - (a.picture_count ?? 0),
+    )
+    .map((card) => ({
+      value: card.id,
+      label: card.name || "Unnamed workflow",
+      count: card.picture_count ?? 0,
+      covers: (card.covers ?? [])
+        .filter((cover) => cover?.url)
+        .slice(0, 3)
+        .map(workflowCoverUrl),
+      tag: shortTypeLabel(card),
+      hidden: Boolean(card.hidden),
+    })),
+);
+
+const workflowFooter = computed(() => {
+  const n = workflowCards.value.length;
+  return `Pictures made by any ticked workflow. ${n.toLocaleString()} in this library; type to narrow.`;
+});
+
+function toggleWorkflow(id, on) {
+  const current = store.workflowFilter || [];
+  if (!on) {
+    // Through its chip, so a value the Workflow tab opened beside it goes
+    // too, as the chip's × takes it.
+    chips.value.find((c) => c.key === `workflow:${id}`)?.remove();
+    return;
+  }
+  if (current.some((w) => w.id === id)) return;
+  const card = workflowCards.value.find((c) => c.id === id);
+  const next = [...current, { id, name: card?.name || "Unnamed workflow" }];
+  // A LoRA narrows exactly one workflow (`workflowFilterParams`): with a
+  // second ticked it is dropped, chip and all, rather than left to linger.
+  store.workflowFilter = next.map(
+    ({ lora: _lora, loraName: _loraName, ...rest }) => rest,
+  );
+}
+
+// Through the chips, so a value the Workflow tab opened beside a workflow
+// goes with it, as its chip's × takes it.
+function clearWorkflows() {
+  for (const chip of chips.value.filter((c) => c.kind === "Workflow")) {
+    chip.remove();
   }
 }
 

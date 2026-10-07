@@ -34,7 +34,12 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.query.predicate_filter import (
+    NOT_MADE_BY,
+    workflow_keys_predicate,
+)
 from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 from pixlstash.services.workflow_hash import normalized_filename
 
 logger = get_logger(__name__)
@@ -288,9 +293,16 @@ def counts_by_workflow_id(session: Session) -> dict[str, int]:
 
 
 def credit_groups_in_session(
-    session: Session, structural_hashes: list[str]
+    session: Session, keys: list[str]
 ) -> list[tuple[Optional[str], Optional[str], int, Optional[int]]]:
-    """Kept pictures of these variants, grouped by what credit matches on.
+    """Kept pictures of these workflow keys, grouped by what credit matches on.
+
+    *keys* are what a workflow's pictures are filed under, as the grid's
+    workflow filter resolves them (``workflow_keys_predicate``): a live manual
+    workflow's own id for its runs, an automatic one's variants less every
+    live manual workflow's runs. Matching a manual workflow by its member
+    topologies instead missed its runs, whose graphs the run's repairs (a
+    bypassed LoRA, a replaced Seed node) give a topology of their own.
 
     **Only pictures that have been read for ComfyUI metadata.** A NULL
     ``comfyui_loras`` is the "never checked" sentinel (``db_models/picture.py``)
@@ -306,7 +318,10 @@ def credit_groups_in_session(
     it. ``MAX(id)`` rather than a rating: a group is one look, so any of its
     pictures represents it, and the newest is the one the owner just made.
     """
-    if not structural_hashes:
+    manual = [key for key in keys if key.startswith(MANUAL_PREFIX)]
+    excluded = [key for key in keys if key.startswith(NOT_MADE_BY)]
+    variants = [key for key in keys if key not in manual and key not in excluded]
+    if not manual and not variants:
         return []
     # **Chunked, and the chunks are merged rather than concatenated.** One
     # card accumulates a variant per structural change, so a selection of a
@@ -315,9 +330,14 @@ def credit_groups_in_session(
     # surfacing as a 500 that ``MAX_REORDER_IDS`` exists to prevent. A group
     # can also straddle two chunks, so the counts are summed and the newest
     # picture is taken across all of them; concatenating would list one look
-    # twice with its pictures split.
+    # twice with its pictures split. The manual ids are chunked with the
+    # variants, each in exactly one chunk: while a manual workflow lives,
+    # ``excluded`` keeps its runs out of every variant, so no picture matches
+    # two chunks. ``excluded`` goes in every chunk and is one bound JSON array,
+    # however many ids.
     merged: dict[tuple[Optional[str], Optional[str]], list] = {}
-    for chunk in chunked(list(structural_hashes)):
+    for chunk in chunked([*variants, *manual]):
+        chunk_keys = [*chunk, *excluded]
         rows = session.exec(
             select(
                 Picture.comfyui_positive_prompt,
@@ -325,7 +345,7 @@ def credit_groups_in_session(
                 func.count(Picture.id),
                 func.max(Picture.id),
             )
-            .where(Picture.workflow_structural_hash.in_(chunk))
+            .where(workflow_keys_predicate(chunk_keys))
             .where(Picture.comfyui_loras.is_not(None))
             .where(Picture.deleted.is_(False))
             .group_by(Picture.comfyui_positive_prompt, Picture.comfyui_loras)
@@ -610,10 +630,10 @@ def read_workflow_keys(vault) -> dict[int, str]:
 
 
 def read_credit_groups(
-    vault, structural_hashes: list[str]
+    vault, keys: list[str]
 ) -> list[tuple[Optional[str], Optional[str], int, Optional[int]]]:
     """The grouped picture rows :func:`credit_by_recipe` matches against."""
-    return vault.db.run_immediate_read_task(credit_groups_in_session, structural_hashes)
+    return vault.db.run_immediate_read_task(credit_groups_in_session, keys)
 
 
 def create_recipe(vault, fields: dict) -> dict:

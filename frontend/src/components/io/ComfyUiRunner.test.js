@@ -54,4 +54,36 @@ describe("ComfyUiRunner", () => {
     wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-2" }] });
     expect(wrapper.vm.progress.status).toBe("queued");
   });
+
+  // `progress` is one node's sampler. A graph with a second pass (I2I plus an
+  // upscale) reports 100% at the end of its first sampler, long before the
+  // prompt is done.
+  it("does not finish a prompt when one sampler reaches its max", () => {
+    const wrapper = mountRunner();
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-1" }] });
+    wrapper.vm.handleComfyuiPayload({
+      type: "progress",
+      data: { prompt_id: "p-1", node: "3", value: 20, max: 20 },
+    });
+    expect(wrapper.vm.progress.status).toBe("running");
+
+    wrapper.vm.handleComfyuiPayload({
+      type: "executing",
+      data: { prompt_id: "p-1", node: null },
+    });
+    expect(wrapper.vm.progress.status).toBe("completed");
+  });
+
+  it("keeps the row while another of its prompts is still active", () => {
+    const wrapper = mountRunner();
+    wrapper.vm.handleComfyuiRun({
+      prompts: [{ prompt_id: "p-1" }, { prompt_id: "p-2" }],
+    });
+    wrapper.vm.handleComfyuiPayload({
+      type: "execution_success",
+      data: { prompt_id: "p-1" },
+    });
+    expect(wrapper.vm.progress.visible).toBe(true);
+    expect(wrapper.vm.progress.status).toBe("running");
+  });
 });

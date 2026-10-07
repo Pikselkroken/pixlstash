@@ -2429,6 +2429,23 @@ def _pass_of(graph: dict, links: list[dict], starts: list[str]) -> dict:
     }
 
 
+def _meeting_of(graph: dict, sinks: list[dict]) -> str | None:
+    """A lane's name by the inputs its model enters, for lanes that meet again.
+
+    ``Switch (Model) #22, on_true``: the input is what tells the sides apart.
+    Every input the lane's model feeds is named, since an edit to the lane
+    rewires them all. ``None`` when nothing reads the lane's model.
+    """
+    named = []
+    for sink in sinks:
+        if sink["type"] != "MODEL":
+            continue
+        meta = (graph.get(sink["node_id"]) or {}).get("_meta") or {}
+        title = str(meta.get("title") or "").strip() or sink["class_type"] or "node"
+        named.append(f"{title} #{sink['node_id']}, {sink['field']}")
+    return " and ".join(named) or None
+
+
 def _samples(class_type: Any) -> bool:
     """Whether *class_type* reads as a sampler a pass is named by.
 
@@ -2617,17 +2634,32 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
             if trunk:
                 fork = (trunk[-1], loaders[trunk[-1]]["model_out"])
                 by_node = readers_by_node(fork)
-        if len(by_node) > 1:
+        if len(readers.get(fork, [])) > 1:
             # A lane per loader run off the fork, and one per sampler for the
             # readers that are not loaders: a guider and a scheduler reading
             # the same model are one pass (SamplerCustomAdvanced's), while a
-            # base and a hires sampler reading it straight are two.
-            plain: dict[str, set[str]] = {}
-            for node_id in by_node:
-                order = run_from({node_id: by_node[node_id]})
+            # base and a hires sampler reading it straight are two. A node
+            # other than a sampler taking several models (a switch picking the
+            # model with or without a LoRA, a merge) is a lane per input it
+            # reads the fork on, whatever its other inputs read, so emptying
+            # one side keeps it a side of its own.
+            plain: dict[tuple, set[tuple]] = {}
+            model_inputs: dict[str, int] = {}
+            for link in links:
+                if link["type"] == "MODEL":
+                    model_inputs[link["node_id"]] = (
+                        model_inputs.get(link["node_id"], 0) + 1
+                    )
+            for node_id, reads in by_node.items():
+                order = run_from({node_id: reads})
                 if not order:
                     sampler = _pass_of(graph, links, [node_id])["node_id"]
-                    plain.setdefault(sampler, set()).add(node_id)
+                    split = model_inputs.get(node_id, 0) > 1 and not _samples(
+                        graph[node_id].get("class_type")
+                    )
+                    for link in reads:
+                        key = (sampler, (node_id, link["field"]) if split else None)
+                        plain.setdefault(key, set()).add((node_id, link["field"]))
                     continue
                 lanes.append(
                     {"source": None, "start": fork, "order": order, "own": None}
@@ -2708,7 +2740,7 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
             {key: link[key] for key in ("node_id", "class_type", "field", "type")}
             for link in (readers.get(end, []) if end is not None else [])
             if link["node_id"] not in members
-            and (own is None or link["node_id"] in own)
+            and (own is None or (link["node_id"], link["field"]) in own)
         ]
 
     def in_order(sinks: list[dict]) -> list[dict]:
@@ -2786,24 +2818,39 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
             }
         )
         note_for(
-            order[-1] if order else min(lane["own"] or {end[0]}, key=_node_order_key),
+            order[-1]
+            if order
+            else min(
+                {n for n, _ in lane["own"] or ()} or {end[0]}, key=_node_order_key
+            ),
             lane_sinks,
         )
     if not lanes and off_chain:
         note_for(model_end[0], sinks)
     named = [lane["pass"]["node_id"] for lane in read_lanes]
-    for node_id in named:
-        if named.count(node_id) > 1:
-            # Two branches that meet again (a model merge) are one pass, and
-            # a move "to KSampler #3 only" would name both sides alike.
-            raise LookupError(
-                f"The branches of this workflow's model meet again at #{node_id} "
-                f"{graph[node_id].get('class_type')}, so there are no separate "
-                "passes to edit their LoRAs by. Change them in ComfyUI."
-            )
+    for lane in read_lanes:
+        if named.count(lane["pass"]["node_id"]) > 1:
+            # Branches that meet again (a switch, a model merge, two models into
+            # one sampler) share a sampler, so "KSampler #3 only" would name
+            # both sides alike. Each is named by the input it meets the others
+            # at instead: edits address lanes by position, never by this name.
+            # The pass still points at the sampler; only its name changes.
+            meeting = _meeting_of(graph, lane["sinks"])
+            if meeting:
+                lane["pass"] = {**lane["pass"], "title": meeting}
     # "In the order ComfyUI runs them" as near as ids say it: the base sampler
     # is normally the lower id.
-    read_lanes.sort(key=lambda lane: _node_order_key(lane["pass"]["node_id"]))
+    # Lanes meeting at one node keep the order of their names (input2 before
+    # input10), so the same graph always lists them alike.
+    read_lanes.sort(
+        key=lambda lane: (
+            _node_order_key(lane["pass"]["node_id"]),
+            [
+                int(part) if part.isdigit() else part
+                for part in re.split(r"(\d+)", lane["pass"].get("title") or "")
+            ],
+        )
+    )
     return {
         "model_source": model_source,
         "clip_source": clip_source,

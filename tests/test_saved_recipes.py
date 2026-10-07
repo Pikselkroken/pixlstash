@@ -1440,6 +1440,43 @@ def test_a_look_names_a_cover_picture_to_read_its_strengths_back_from(recipe_env
     assert "a_binned.png" not in covers, covers
 
 
+def test_a_manual_workflows_runs_are_its_looks_whatever_their_graph(recipe_env):
+    """A run's repairs (a dropped Seed node, a bypassed LoRA) give its output a
+    topology the manual workflow does not hold, so matching by topology left
+    the run out of the tab while the card counted it. Filing is by
+    ``run_workflow_id``, and exclusive: the automatic workflow whose variant
+    the output landed on no longer shows it."""
+    manual = create_manual_workflow(
+        recipe_env.server.hub, "Mine", {"1": {"class_type": "X"}}, "import"
+    )
+
+    def write(session):
+        session.add(
+            Picture(
+                file_path="run.png",
+                created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                workflow_structural_hash=VARIANT_C,
+                workflow_hash_version="v1",
+                run_workflow_id=manual,
+                comfyui_positive_prompt=OTHER_PROMPT,
+                comfyui_loras=json.dumps([]),
+                comfyui_models=json.dumps([]),
+            )
+        )
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+    looks = _used(recipe_env.owner, manual)
+    assert [(look["prompt"], look["pictures"]) for look in looks] == [(OTHER_PROMPT, 1)]
+    assert OTHER_PROMPT not in [
+        look["prompt"] for look in _used(recipe_env.owner, WF_C)
+    ]
+    saved = _save(recipe_env.owner, manual, prompt=OTHER_PROMPT, loras=[])
+    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": manual})
+    assert [(r["id"], r["pictures"]) for r in listed.json()] == [(saved["id"], 1)]
+
+
 def test_used_looks_need_a_workflow_and_answer_empty_without_one(recipe_env):
     """No key is no question: this route never lists the whole library.
 
@@ -1583,6 +1620,13 @@ def test_used_looks_survive_sqlites_variable_ceiling(recipe_env):
                 "VALUES (?, ?, ?, 'v1')",
                 (structural, TOPO_A, CARD_A),
             )
+            # Without its family row an automatic workflow does not count the
+            # variant, and the selection stays two hashes long.
+            conn.execute(
+                "INSERT INTO workflow_variant_family (structural_hash, families) "
+                "VALUES (?, '')",
+                (structural,),
+            )
 
     engine = recipe_env.server.vault.db._engine
 
@@ -1602,6 +1646,39 @@ def test_used_looks_survive_sqlites_variable_ceiling(recipe_env):
         ]
         listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": WF_AB})
         assert listed.status_code == 200, listed.text
+        # A manual workflow's id shares the first chunk's query with a full
+        # chunk of variants, so the most a selection can name (one automatic,
+        # 99 manual) must still fit under the floor.
+        manuals = [
+            create_manual_workflow(
+                recipe_env.server.hub, f"Mine {i}", {"1": {"class_type": "X"}}, "import"
+            )
+            for i in range(99)
+        ]
+
+        # One manual run landed on a variant of the selected stack. The manual
+        # ids share chunks with the variants now, so the run's id and its hash
+        # sit in different queries; it must still be one picture, not two.
+        def write_run(session):
+            session.add(
+                Picture(
+                    file_path="ceiling_run.png",
+                    created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                    workflow_structural_hash=VARIANT_A,
+                    workflow_hash_version="v1",
+                    run_workflow_id=manuals[-1],
+                    comfyui_positive_prompt="a manual run",
+                    comfyui_loras=json.dumps([]),
+                    comfyui_models=json.dumps([]),
+                )
+            )
+            session.commit()
+
+        recipe_env.server.vault.db.run_task(write_run, priority=DBPriority.IMMEDIATE)
+        looks = _used(recipe_env.owner, WF_AB, *manuals)
+        assert sorted((look["prompt"], look["pictures"]) for look in looks) == sorted(
+            [("a manual run", 1), (OTHER_PROMPT, 1), (PROMPT, 1), (PROMPT, 2)]
+        )
     finally:
         sa_event.remove(engine, "connect", _set_limit)
         engine.dispose()

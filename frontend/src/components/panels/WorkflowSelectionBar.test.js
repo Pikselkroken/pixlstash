@@ -246,10 +246,46 @@ describe("the two menus cannot diverge", () => {
     expect(labels).toEqual(
       expect.arrayContaining([
         "Run…",
+        "Show all pictures using this workflow",
         "Rename",
         "Hide",
         "Delete…",
       ]),
+    );
+  });
+
+  it("shows the pictures of every selected workflow, after Run (#1797)", async () => {
+    const { wrapper } = bar(["a", "b", "p"]);
+    expect(enabled(wrapper, "show-pictures")).toBe(true);
+    expect(tooltip(wrapper, "show-pictures")).toBe(
+      "Show the pictures of these 3 workflows",
+    );
+    const menu = verbMenus(wrapper)[1];
+    expect(rowVerbs(menu).slice(0, 3)).toEqual([
+      "open-cover",
+      "run",
+      "show-pictures",
+    ]);
+    const row = menu
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === "show-pictures");
+    expect(row.find(".ctx-label-text").text()).toBe(
+      "Show all pictures using these 3 workflows",
+    );
+    await row.trigger("click");
+    expect(wrapper.emitted("show-pictures")).toHaveLength(1);
+    await verb(wrapper, "show-pictures").trigger("click");
+    expect(wrapper.emitted("show-pictures")).toHaveLength(2);
+  });
+
+  it("refuses Show all pictures on a workflow with none to show", () => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("z", { picture_count: 0 })];
+    store.selectRange(["z"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    expect(enabled(wrapper, "show-pictures")).toBe(false);
+    expect(tooltip(wrapper, "show-pictures")).toBe(
+      "This workflow has no pictures to show",
     );
   });
 

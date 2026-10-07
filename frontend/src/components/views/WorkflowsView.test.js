@@ -242,6 +242,26 @@ afterEach(() => {
   while (mounted.length) mounted.pop().unmount();
 });
 
+describe("Show all pictures using these workflows (#1797)", () => {
+  it("lands on the grid with one Workflow entry per selected card, and a clean view", async () => {
+    const wrapper = await grid();
+    const filters = useFilterStore();
+    filters.tagFilter = ["hat"];
+    useWorkflowsStore().selectRange(["a", "c"]);
+    await flush();
+
+    await wrapper.find('[data-verb="show-pictures"]').trigger("click");
+
+    // "All pictures" says all: the tag filter goes, the two workflows stay.
+    expect(filters.tagFilter).toEqual([]);
+    expect(filters.workflowFilter).toEqual([
+      { id: "a", name: "a" },
+      { id: "c", name: "c" },
+    ]);
+    expect(push).toHaveBeenCalledWith("/");
+  });
+});
+
 describe("Ctrl+A", () => {
   it("selects every card from the empty background, with nothing selected", async () => {
     const wrapper = await grid(1008);

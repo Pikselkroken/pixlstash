@@ -693,10 +693,12 @@ describe("a number field that has been emptied", () => {
     const wrapper = await mountRun();
     const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
 
-    wrapper.vm.setValue(steps, wrapper.vm.coerce(steps, ""));
+    wrapper.vm.typeValue(steps, "");
     await wrapper.vm.$nextTick();
 
-    expect(wrapper.vm.currentValue(steps)).toBe(12);
+    // Still empty while the owner is in it: putting 12 back would undo the
+    // keystroke that cleared it, and the next digit would land after the 12.
+    expect(wrapper.vm.currentValue(steps)).toBe("");
     expect(wrapper.findAllComponents({ name: "RunResetChip" })).toHaveLength(0);
 
     await wrapper.vm.submit();
@@ -709,8 +711,54 @@ describe("a number field that has been emptied", () => {
   it("does not record an unparseable value either", async () => {
     const wrapper = await mountRun();
     const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
-    wrapper.vm.setValue(steps, wrapper.vm.coerce(steps, "twelve"));
+    wrapper.vm.typeValue(steps, "twelve");
+    expect(wrapper.vm.isEdited(steps)).toBe(false);
+    // Leaving the box shows what the run will use.
+    wrapper.vm.settleDraft(steps);
     expect(wrapper.vm.currentValue(steps)).toBe(12);
+  });
+
+  it("can be typed into again without the default coming back", async () => {
+    const wrapper = await mountRun();
+    const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
+    wrapper.vm.typeValue(steps, "");
+    wrapper.vm.typeValue(steps, "3");
+    wrapper.vm.typeValue(steps, "30");
+    expect(wrapper.vm.currentValue(steps)).toBe(30);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(sentValue(runWorkflowCard.mock.calls[0][0], "steps").value).toBe(30);
+  });
+});
+
+describe("the Size boxes", () => {
+  it("stay empty while cleared and typed into, and refill only on leaving", async () => {
+    // The report: deleting the last digit put the default straight back, so
+    // a new width could only be typed by selecting the old one first. The
+    // real AppInput, since its round trip through the DOM is the bug.
+    const wrapper = mount(RunDialog, {
+      props: { source: { kind: "picture", pictureIds: [42] } },
+      global: {
+        stubs: { ...globalOpts.global.stubs, AppInput: false },
+      },
+    });
+    await flushPromises();
+    const box = wrapper.find('input[aria-label="Width"]');
+    expect(box.element.value).toBe("832");
+
+    // Backspaced the way a person does it: the last digit out is the edit
+    // going away, which is when the default used to be written back.
+    await box.setValue("83");
+    await box.setValue("8");
+    await box.setValue("");
+    expect(box.element.value).toBe("");
+    await box.setValue("1");
+    await box.setValue("1024");
+    expect(box.element.value).toBe("1024");
+
+    await box.setValue("");
+    await box.trigger("blur");
+    expect(box.element.value).toBe("832");
   });
 });
 

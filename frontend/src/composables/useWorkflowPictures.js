@@ -50,6 +50,19 @@ export function useWorkflowPictures() {
   }
 
   /**
+   * *Show all pictures using these workflows* on the Workflows screen
+   * (#1797): the same arrival, with one Workflow chip per card, OR'd.
+   *
+   * @param {Array<{id: string, name: string}>} cards
+   */
+  function showWorkflowsPictures(cards) {
+    const list = (cards || [])
+      .filter((card) => card?.id)
+      .map((card) => ({ id: card.id, name: card.name }));
+    if (list.length) showFilteredList(list);
+  }
+
+  /**
    * *Show N* on the Workflow tab's LoRA pile: the pictures of one workflow
    * that loaded one LoRA.
    *
@@ -82,6 +95,10 @@ export function useWorkflowPictures() {
   }
 
   function showFiltered(filter, narrow = null) {
+    showFilteredList([filter], narrow);
+  }
+
+  function showFilteredList(list, narrow = null) {
     selectionStore.selectedCharacter = ALL_PICTURES_ID;
     selectionStore.selectedSet = null;
     selectionStore.selectedSetIds = [];
@@ -94,11 +111,16 @@ export function useWorkflowPictures() {
     // `workflowFilter` too, so the order is what decides whether this
     // navigates to one workflow's pictures or to the whole library.
     filterStore.resetFilters();
-    filterStore.workflowFilter = filter;
+    filterStore.workflowFilter = list;
     narrow?.();
     gridStore.refreshGridVersion();
     router.push("/");
   }
 
-  return { showPictures, showLoraPictures, showValuePictures };
+  return {
+    showPictures,
+    showWorkflowsPictures,
+    showLoraPictures,
+    showValuePictures,
+  };
 }

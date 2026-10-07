@@ -124,7 +124,9 @@ describe("scoreChipValue", () => {
 describe("a workflow and the value opened with it (#1653)", () => {
   function opened(kind, value, label) {
     const s = useFilterStore();
-    s.workflowFilter = { id: "w1", name: "Portrait", opened: { kind, value, label } };
+    s.workflowFilter = [
+      { id: "w1", name: "Portrait", opened: { kind, value, label } },
+    ];
     if (kind === "model") s.comfyuiModelFilter = [value];
     else s.comfyuiLoraFilter = [value];
     return s;
@@ -139,28 +141,57 @@ describe("a workflow and the value opened with it (#1653)", () => {
     const s = opened("lora", "bo.safetensors", "Bo");
     filterChips(s).find((c) => c.key === "lora:bo.safetensors").remove();
     expect(s.comfyuiLoraFilter).toEqual([]);
-    expect(s.workflowFilter).toEqual({
-      id: "w1",
-      name: "Portrait",
-      opened: { kind: "lora", value: "bo.safetensors", label: "Bo" },
-    });
+    expect(s.workflowFilter).toEqual([
+      {
+        id: "w1",
+        name: "Portrait",
+        opened: { kind: "lora", value: "bo.safetensors", label: "Bo" },
+      },
+    ]);
   });
 
   it("takes the value it was opened with on the Workflow chip's ×, and only that", () => {
     const s = opened("model", "a.safetensors", "A");
     s.comfyuiModelFilter = ["a.safetensors", "b.safetensors"];
     s.comfyuiLoraFilter = ["a.safetensors"];
-    filterChips(s).find((c) => c.key === "workflow").remove();
-    expect(s.workflowFilter).toBeNull();
+    filterChips(s).find((c) => c.key === "workflow:w1").remove();
+    expect(s.workflowFilter).toEqual([]);
     expect(s.comfyuiModelFilter).toEqual(["b.safetensors"]);
     expect(s.comfyuiLoraFilter).toEqual(["a.safetensors"]);
   });
 
   it("splits the pile's LoRA into a chip of its own (F-4)", () => {
     const s = useFilterStore();
-    s.workflowFilter = { id: "w1", name: "Portrait", lora: "asset:abc", loraName: "Bo" };
+    s.workflowFilter = [
+      { id: "w1", name: "Portrait", lora: "asset:abc", loraName: "Bo" },
+    ];
     expect(chipText(s)).toEqual(["Workflow Portrait", "LoRA Bo"]);
     filterChips(s).find((c) => c.key === "workflow-lora").remove();
-    expect(s.workflowFilter).toEqual({ id: "w1", name: "Portrait" });
+    expect(s.workflowFilter).toEqual([{ id: "w1", name: "Portrait" }]);
+  });
+
+  it("Clear all, chip by chip, leaves no workflow behind a LoRA chip", () => {
+    const s = useFilterStore();
+    s.workflowFilter = [
+      { id: "w1", name: "Portrait", lora: "asset:abc", loraName: "Bo" },
+    ];
+    // What Clear all does: every chip of the list taken at the start.
+    for (const chip of filterChips(s)) chip.remove();
+    expect(s.workflowFilter).toEqual([]);
+  });
+
+  it("gives each of several workflows a chip, and × takes only its own (#1797)", () => {
+    const s = useFilterStore();
+    s.workflowFilter = [
+      { id: "w1", name: "Portrait", lora: "asset:abc", loraName: "Bo" },
+      { id: "w2", name: "Flux product shot" },
+    ];
+    // The pile's LoRA narrows one workflow only, so beside two it has no chip.
+    expect(chipText(s)).toEqual([
+      "Workflow Portrait",
+      "Workflow Flux product shot",
+    ]);
+    filterChips(s).find((c) => c.key === "workflow:w2").remove();
+    expect(s.workflowFilter.map((w) => w.id)).toEqual(["w1"]);
   });
 });

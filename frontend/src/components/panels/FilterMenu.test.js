@@ -28,6 +28,30 @@ vi.mock("../../api/pictures", () => ({
   getPictureCount: vi.fn().mockResolvedValue({ count: 3 }),
 }));
 
+vi.mock("../../api/workflows", () => ({
+  listWorkflowCards: vi.fn().mockResolvedValue({
+    cards: [
+      { id: "auto:few", name: "Few", type: "img2img", picture_count: 3 },
+      {
+        id: "auto:hid",
+        name: "Hidden one",
+        hidden: true,
+        picture_count: 90,
+      },
+      {
+        id: "auto:many",
+        name: "Many",
+        type: "txt2img",
+        picture_count: 40,
+        covers: [{ url: "/c/1.webp" }, { url: "/c/2.webp" }],
+      },
+    ],
+    one_offs: 0,
+    hidden: 1,
+  }),
+  workflowCoverUrl: (cover) => `http://api${cover.url}`,
+}));
+
 async function mountMenu() {
   const wrapper = mount(FilterMenu, {
     props: { countBaseQuery: "set_id=4", open: true },
@@ -53,6 +77,67 @@ beforeEach(() => {
 });
 
 describe("FilterMenu", () => {
+  it("ticks any number of workflows, one chip each, and drops a lone LoRA beside a second (#1797)", async () => {
+    const store = useFilterStore();
+    // The Workflow tab's LoRA pile: one workflow narrowed to one LoRA.
+    store.workflowFilter = [
+      { id: "auto:few", name: "Few", lora: "asset:feed", loraName: "Bo" },
+    ];
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Workflow");
+
+    // Most pictures first, hidden after the rest; type and covers on the row.
+    const rows = wrapper.findAll(".fm-sub label.fm-check");
+    expect(rows.map((r) => r.find(".fm-check-label").text())).toEqual([
+      "Many",
+      "Few",
+      "Hidden one",
+    ]);
+    expect(rows[0].find(".fm-check-tag").text()).toBe("T2I");
+    expect(rows[0].findAll(".fm-mosaic img").map((i) => i.attributes("src"))).toEqual([
+      "http://api/c/1.webp",
+      "http://api/c/2.webp",
+    ]);
+    expect(rows[2].find(".fm-check-hidden").exists()).toBe(true);
+    expect(rows[1].find("input").element.checked).toBe(true);
+
+    await rows[0].find("input").setValue(true);
+    expect(store.workflowFilter).toEqual([
+      { id: "auto:few", name: "Few" },
+      { id: "auto:many", name: "Many" },
+    ]);
+    const workflowRow = wrapper
+      .findAll("button.fm-row")
+      .find((b) => b.find(".fm-row-label").text() === "Workflow");
+    expect(workflowRow.find(".fm-n").text()).toBe("2");
+
+    await rows[1].find("input").setValue(false);
+    expect(store.workflowFilter).toEqual([{ id: "auto:many", name: "Many" }]);
+
+    // A default-recipe row's value goes with its workflow, as on the chip's ×,
+    // or a checkpoint filter would be left narrowing the whole library.
+    store.workflowFilter = [
+      ...store.workflowFilter,
+      {
+        id: "auto:few",
+        name: "Few",
+        opened: { kind: "model", value: "x.safetensors", label: "X" },
+      },
+    ];
+    store.comfyuiModelFilter = ["x.safetensors"];
+    await flushPromises();
+    await rows[1].find("input").setValue(false);
+    expect(store.comfyuiModelFilter).toEqual([]);
+    expect(store.workflowFilter).toEqual([{ id: "auto:many", name: "Many" }]);
+
+    await wrapper
+      .findAll(".fm-sub button.tbm-ghost")
+      .find((b) => b.text() === "Clear")
+      .trigger("click");
+    expect(store.workflowFilter).toEqual([]);
+    wrapper.unmount();
+  });
+
   it("shows no counts during a search, where the view cannot be counted", async () => {
     const wrapper = mount(FilterMenu, {
       props: { countBaseQuery: null, open: true },

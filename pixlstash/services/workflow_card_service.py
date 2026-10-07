@@ -92,7 +92,12 @@ from pixlstash.services.workflow_library_service import (
     read_variant_picture_counts,
 )
 from pixlstash.services.workflow_io import api_graph
-from pixlstash.services.workflow_parameters import FEATURED_NAMES, FEATURED_ORDER
+from pixlstash.services.workflow_parameters import (
+    FEATURED_NAMES,
+    FEATURED_ORDER,
+    is_latent_size,
+    linked_size,
+)
 from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_TEXT_ENCODER, FILE_UNKNOWN
 from pixlstash.utils.known_base_models import fold
 from pixlstash.utils.model_utils import (
@@ -1408,6 +1413,13 @@ def workflow_defaults(
             else:
                 continue
             for name, value in inputs.items():
+                # A wired picture size is offered as the number its source
+                # works out to (a ResolutionSelector, a primitive), so a run
+                # can set it on the latent.
+                if is_latent_size(node.get("class_type"), name):
+                    resolved = linked_size(document, value)
+                    if resolved is not None:
+                        value = resolved
                 # The scalar check also rejects a wired input (a link list).
                 if name in FEATURED_NAMES and isinstance(
                     value, (bool, int, float, str)

@@ -664,12 +664,16 @@ class TaskRunner:
 
         Raises:
             TimeoutError: The task did not complete within *timeout_s* seconds.
+                It is cancelled, so if it had not started it never runs.
             TaskCancelledError: The task was cancelled before completing
                 (e.g. the runner was stopped).
             RuntimeError: The task failed; the original error message is included.
         """
         self.submit(task)
         if not task._done_event.wait(timeout=timeout_s):
+            # Nobody is waiting any more: a task still queued is skipped when the
+            # worker reaches it, rather than running for no one.
+            task.on_cancel()
             raise TimeoutError(
                 f"Task {task.id} ({task.type}) did not complete within {timeout_s}s"
             )

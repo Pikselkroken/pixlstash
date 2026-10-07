@@ -74,6 +74,19 @@
          so a screen reader hears a stable name; the tooltip is the REFUSAL and
          changes with the selection. A tooltip alone is not an accessible name
          a reader can rely on. -->
+    <!-- The way out to the pictures (#1797): the picture grid's own
+         "pictures" glyph, first because it reads the selection rather than
+         changing it. -->
+    <AppBarButton
+      shape="round"
+      icon="image-multiple-outline"
+      data-verb="show-pictures"
+      :aria-label="showPicturesLabel"
+      :disabled="!hasPictures"
+      :tooltip="showPicturesTitle"
+      @click="emit('show-pictures')"
+    />
+
     <AppBarButton
       shape="round"
       icon="play"
@@ -196,6 +209,7 @@ const emit = defineEmits([
   "select-all",
   "menu-closed",
   "open-cover",
+  "show-pictures",
   "run",
   "rename",
   "hide",
@@ -370,6 +384,32 @@ const openTarget = computed(() => {
 });
 
 const coverOpenable = computed(() => openTarget.value.id != null);
+
+/**
+ * The pictures of every selected workflow, OR'd, on All Pictures (#1797).
+ * The row says it in full; the pill has no room for words, so its tooltip
+ * carries the count of workflows.
+ */
+const showPicturesLabel = computed(() =>
+  cards.value.length > 1
+    ? `Show all pictures using these ${cards.value.length.toLocaleString()} workflows`
+    : "Show all pictures using this workflow",
+);
+// Nothing to show, so nothing to press: the view would be cleared for an
+// empty grid (the F7 figure is plain text on such a card for the same reason).
+const hasPictures = computed(() =>
+  cards.value.some((card) => (card.picture_count ?? 0) > 0),
+);
+const showPicturesTitle = computed(() => {
+  if (!hasPictures.value) {
+    return cards.value.length > 1
+      ? "These workflows have no pictures to show"
+      : "This workflow has no pictures to show";
+  }
+  return cards.value.length > 1
+    ? `Show the pictures of these ${cards.value.length.toLocaleString()} workflows`
+    : "Show the pictures of this workflow";
+});
 
 const renameTitle = computed(() =>
   single.value ? "Give this workflow a name" : oneOnly("rename"),
@@ -555,6 +595,11 @@ const VerbMenu = () => {
         verb: "run",
         disabled: !runnable.value,
         title: runTitle.value,
+      }),
+      item("mdi-image-multiple-outline", showPicturesLabel.value, {
+        verb: "show-pictures",
+        disabled: !hasPictures.value,
+        title: showPicturesTitle.value,
       }),
       sep(),
       item("mdi-pencil-outline", "Rename", {

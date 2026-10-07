@@ -28,12 +28,12 @@ from pydantic import BaseModel, Field, StringConstraints, field_validator
 from pixlstash.hub.workflow_card_reads import (
     card_index,
     find_workflow,
-    variants_in_workflow,
     workflow_index,
 )
 from pixlstash.hub.workflows import shelf_model_names
 from pixlstash.routes._helpers import require_hub
 from pixlstash.routes.comfyui import _picture_workflow_key
+from pixlstash.routes.pictures._listing import _resolve_workflow_filter
 from pixlstash.routes.workflows import RunModel
 from pixlstash.services.workflow_library_service import read_variant_picture_counts
 from pixlstash.services.workflow_export import download_name
@@ -306,11 +306,13 @@ def create_router(server) -> APIRouter:
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
 
-    def _variants(hub, workflow_ids: list[str]) -> list[str]:
-        """Every variant the named workflows hold; an unknown id adds none."""
+    def _keys(workflow_ids: list[str]) -> list[str]:
+        """What the named workflows' pictures are filed under, as the grid's
+        workflow filter resolves it, so the tab counts the pictures the
+        workflow's card does; an unknown id adds none."""
         found: set[str] = set()
         for workflow_id in workflow_ids:
-            found.update(variants_in_workflow(hub, workflow_id))
+            found.update(_resolve_workflow_filter(server, {"workflow": workflow_id}))
         return sorted(found)
 
     # Without a hub there are no workflows, so nothing to resolve or credit.
@@ -384,12 +386,12 @@ def create_router(server) -> APIRouter:
             # credit, always names its workflow.
             return saved_recipe_service.read_recipes(server.vault)
 
-        hub = _hub()
+        _hub()
         recipes = saved_recipe_service.read_recipes(server.vault, workflow_ids)
         if not recipes:
             return []
         groups = saved_recipe_service.read_credit_groups(
-            server.vault, _variants(hub, workflow_ids)
+            server.vault, _keys(workflow_ids)
         )
         credit = saved_recipe_service.credit_by_recipe(recipes, groups)
         for recipe in recipes:
@@ -499,10 +501,10 @@ def create_router(server) -> APIRouter:
         workflow_ids = list(dict.fromkeys(workflow_id))
         if not workflow_ids:
             return []
-        hub = _hub()
+        _hub()
         recipes = saved_recipe_service.read_recipes(server.vault, workflow_ids)
         groups = saved_recipe_service.read_credit_groups(
-            server.vault, _variants(hub, workflow_ids)
+            server.vault, _keys(workflow_ids)
         )
         return saved_recipe_service.used_looks(groups, recipes)
 
