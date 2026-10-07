@@ -35,16 +35,24 @@ class MissingPromptMatchFinder(SimpleMissingFinder):
         return session.exec(self.candidate_query(limit)).all()
 
     @staticmethod
+    def candidate_filter() -> tuple:
+        """What this finder will still score, as WHERE terms. Anything counting
+        "awaiting a score" must use these, or it waits on rows never picked up."""
+        return (
+            Picture.prompt_match.is_(None),
+            Picture.comfyui_positive_prompt.is_not(None),
+            Picture.deleted.is_(False),
+            Picture.image_embedding.is_not(None),
+        )
+
+    @staticmethod
     def candidate_query(limit: int):
         """The probe. Served by ix_picture_prompt_match_missing, whose WHERE
-        its first two terms repeat exactly so SQLite can use it."""
+        the filter's first two terms repeat exactly so SQLite can use it."""
         return (
             select(Picture)
             .options(load_only(Picture.id))
-            .where(Picture.prompt_match.is_(None))
-            .where(Picture.comfyui_positive_prompt.is_not(None))
-            .where(Picture.deleted.is_(False))
-            .where(Picture.image_embedding.is_not(None))
+            .where(*MissingPromptMatchFinder.candidate_filter())
             .order_by(Picture.id)
             .limit(limit)
         )

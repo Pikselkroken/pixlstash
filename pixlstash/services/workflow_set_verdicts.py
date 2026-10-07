@@ -28,13 +28,14 @@ from datetime import datetime, timezone
 from fractions import Fraction
 from typing import Iterable, Optional
 
-from sqlalchemy import case, func
+from sqlalchemy import and_, case, func
 from sqlmodel import Session, select
 
 from pixlstash.db_models.picture import Picture
 from pixlstash.pixl_logging import get_logger
 from pixlstash.scoring.prompt_match import PROMPT_MATCH_THRESHOLD
 from pixlstash.services.model_shelf_service import _SET_BASE_KINDS, _set_kind_rank
+from pixlstash.tasks.missing_prompt_match_finder import MissingPromptMatchFinder
 from pixlstash.tasks.task_type import TaskType
 
 logger = get_logger(__name__)
@@ -97,8 +98,8 @@ def recipe_evidence(session: Session) -> dict[str, tuple[int, int, int, int]]:
     *checked* is a usable score (not NULL, not the -1.0 failure marker);
     *passing* agrees with :func:`~pixlstash.scoring.prompt_match.looks_like_prompt`
     (``score >= PROMPT_MATCH_THRESHOLD``); *awaiting* is what
-    ``MissingPromptMatchFinder`` would still score (NULL with a prompt). A
-    picture with no prompt is kept but never checked and never awaited.
+    ``MissingPromptMatchFinder`` would still score, by its own filter. A
+    picture with no prompt, or no image embedding, is kept but never awaited.
     """
     score = Picture.prompt_match
     rows = session.exec(
@@ -109,10 +110,7 @@ def recipe_evidence(session: Session) -> dict[str, tuple[int, int, int, int]]:
             func.sum(case((score >= PROMPT_MATCH_THRESHOLD, 1), else_=0)),
             func.sum(
                 case(
-                    (
-                        score.is_(None) & Picture.comfyui_positive_prompt.is_not(None),
-                        1,
-                    ),
+                    (and_(*MissingPromptMatchFinder.candidate_filter()), 1),
                     else_=0,
                 )
             ),

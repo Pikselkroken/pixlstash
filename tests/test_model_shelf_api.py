@@ -2329,6 +2329,25 @@ def _adapter_row(shelf_env, filename: str) -> dict:
     return next(row for row in rows if row["filename"] == filename)
 
 
+def test_only_what_the_scorer_will_pick_up_is_awaiting(shelf_env):
+    """A prompted, unscored picture without an image embedding is never
+    scored, so it must not hold its sets pending forever."""
+    server = shelf_env.server
+    try:
+        _seed_picture(server, "sh-await", comfyui_positive_prompt="a cat")
+        _seed_picture(
+            server,
+            "sh-await",
+            comfyui_positive_prompt="a cat",
+            image_embedding=b"\x00" * 8,
+        )
+        evidence = server.vault.db.run_immediate_read_task(verdicts.recipe_evidence)
+        # (kept, checked, passing, awaiting)
+        assert evidence["sh-await"] == (2, 0, 0, 1)
+    finally:
+        _wipe_recipes(server)
+
+
 def test_the_grid_serves_each_cards_check_and_the_verdicts_round_trip(shelf_env):
     """Through the route: the card's members are the union of its
     combinations, the counts skip the unscorable, and every verdict written is
