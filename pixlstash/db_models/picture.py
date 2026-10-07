@@ -356,6 +356,13 @@ class Picture(SQLModel, table=True):
             "run_workflow_id", String, default=None, nullable=True, index=True
         ),
     )
+    # Which version of ``run_workflow_id``'s document made it (hub
+    # ``workflow_version.version``): the one a PixlStash Run submitted, or for
+    # a picture made in ComfyUI the version its embedded editor workflow equals
+    # by content. NULL is "not known": an automatic workflow, an older picture,
+    # or a ComfyUI graph with edits no version holds. Written once. The version
+    # may since have been pruned from the hub; the number still says which.
+    run_workflow_version: Optional[int] = Field(default=None)
     # The scanned-marker, and the re-hash selector when the rule changes.
     # NULL means never scanned; set means scanned, with ALL THREE
     # `workflow_*_hash` columns above NULL when the picture carried no

@@ -93,32 +93,17 @@ describe("pullSummaryLines", () => {
     );
   });
 
-  it("says where new workflows went, and that a hand-deleted file returns", () => {
+  it("says a deleted workflow stays out, and that a hand-deleted file returns", () => {
     const report = pullSummaryLines(
       { listed: 2, pulled: 1, skipped_dismissed: 1, nodes_checked: true },
       URL,
     );
     const text = report.lines.map((l) => l.text).join(" ");
-    expect(text).toContain(
-      "A pulled workflow with no pictures yet counts as a one-off",
-    );
-    expect(report.lines.find((l) => l.action).action).toBe("show-one-offs");
+    // Pulled workflows are listed straight away, never folded into one-offs.
+    expect(text).not.toMatch(/one-off/);
     expect(text).toContain("1 workflow you deleted here was left out");
     expect(text).toContain(
       "One removed by hand from PixlStash's workflows folder comes back.",
-    );
-  });
-
-  it("says nothing about hidden one-offs while the grid shows them", () => {
-    const report = pullSummaryLines(
-      { listed: 2, pulled: 2, nodes_checked: true },
-      URL,
-      { hideOneOffs: false },
-    );
-    expect(report.lines.some((l) => l.action)).toBe(false);
-    // The delete rule is still said: it is true whatever the filter.
-    expect(report.lines.map((l) => l.text).join(" ")).toContain(
-      "stays out of later pulls",
     );
   });
 

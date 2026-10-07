@@ -84,6 +84,13 @@
             :sampled="Boolean(defaultRecipe?.sampled) && !card.manual"
           />
         </p>
+        <p
+          v-if="versionLine"
+          class="wftab-sublabel"
+          data-testid="wftab-version"
+        >
+          {{ versionLine }}
+        </p>
       </div>
 
       <!-- What a run starts from (#1653), as three bordered panels: Models,
@@ -650,9 +657,9 @@
           class="wftab-note wftab-quiet"
           data-testid="wftab-editor-only"
         >
-          Parameters are not available yet. This is a ComfyUI editor file:
-          open it in ComfyUI and use <strong>Convert for PixlStash</strong> to
-          hand PixlStash the graph it runs.
+          Parameters are not available yet: PixlStash could not convert this
+          ComfyUI workflow. Open it in ComfyUI from here and it is converted
+          there.
         </p>
         <p v-else class="wftab-note wftab-quiet">
           Nothing this workflow made records a setting yet, so it has no
@@ -841,6 +848,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { modelLabel } from "../../utils/filterChips";
@@ -862,6 +870,7 @@ import {
 } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
 import { pictureCount } from "../../utils/workflowSets";
+import { formatUserDay } from "../../utils/utils";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import AppSelect from "../widgets/AppSelect.vue";
@@ -1036,6 +1045,18 @@ const recipesName = computed(() =>
 // Split from its prefix so the figure alone is F7's *Show all N pictures*
 // link, and the words that place the card stay text.
 const picturesLabel = computed(() => pictureCount(card.value?.picture_count));
+
+// "Version 3 · 2026-10-06": only where there is a history to speak of, a
+// workflow that was pulled from ComfyUI or has been stored more than once.
+const userPrefs = useUserPrefsStore();
+const versionLine = computed(() => {
+  const c = card.value;
+  if (!c || !((c.versions ?? 1) > 1 || c.origin_category === "comfyui")) {
+    return "";
+  }
+  const day = formatUserDay(c.version_at, userPrefs.dateFormat);
+  return day ? `Version ${c.versions ?? 1} · ${day}` : `Version ${c.versions ?? 1}`;
+});
 
 // All three read the MODEL SHELF's name where it has one, the same preference
 // the card's name row was built from, so the panel and the row do not describe
@@ -1928,10 +1949,11 @@ watch(
 );
 
 /**
- * A workflow file with no recipe: an editor-format file ComfyUI has not
- * converted yet (#1530). An API file always files a recipe, and a converted
- * editor file files its converted graph, so `variant_count: 0` on an imported
- * card is exactly the editor file PixlStash cannot run or parameterise.
+ * An imported workflow with no recipe, shown only when it has no defaults
+ * either: an editor-format file nothing has converted yet (#1530). The server
+ * converts one on the first read that needs its graph, with ComfyUI's
+ * `object_info`, and stores it, so this is what is left when ComfyUI could not
+ * be asked or could not run it.
  */
 const editorOnly = computed(
   () => Boolean(card.value?.imported) && card.value?.variant_count === 0,

@@ -1,15 +1,13 @@
-// The pull's lifecycle (#1440): start, poll until the server task ends, then
-// re-read the grid once. The failure paths matter more than the happy one:
-// each must end in a stated reason, never in a band that says "pulling"
-// forever.
+// Watching the server's automatic pulls (#1440): ask while watched, report
+// only what changed, stop when told to. The failure paths matter more than
+// the happy one: nothing may keep asking, or keep a band, after the screen or
+// the session is gone.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
-const startWorkflowPull = vi.fn();
 const getWorkflowPull = vi.fn();
 vi.mock("../api/comfyui", () => ({
-  startWorkflowPull: (...args) => startWorkflowPull(...args),
   getWorkflowPull: (...args) => getWorkflowPull(...args),
 }));
 const fetchCards = vi.fn();
@@ -17,21 +15,19 @@ vi.mock("./useWorkflowsStore", () => ({
   useWorkflowsStore: () => ({ fetchCards }),
 }));
 
-import {
-  PULL_POLL_MAX_MISSES,
-  PULL_POLL_MS,
-  useWorkflowPullStore,
-} from "./useWorkflowPullStore";
+import { PULL_WATCH_MS, useWorkflowPullStore } from "./useWorkflowPullStore";
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
+const done = (task_id, summary) => ({
+  status: "completed",
+  task_id,
+  comfyui_url: "http://127.0.0.1:8188",
+  summary,
+});
 
 beforeEach(() => {
   vi.useFakeTimers();
   setActivePinia(createPinia());
-  startWorkflowPull.mockReset().mockResolvedValue({
-    status: "started",
-    task_id: "t1",
-  });
   getWorkflowPull.mockReset();
   fetchCards.mockReset();
 });
@@ -41,196 +37,143 @@ afterEach(() => {
 });
 
 describe("useWorkflowPullStore", () => {
-  it("polls a running pull until it completes, then re-reads the grid once", async () => {
-    getWorkflowPull
-      .mockResolvedValueOnce({ status: "pending", task_id: "t1" })
-      .mockResolvedValueOnce({ status: "running", task_id: "t1" })
-      .mockResolvedValueOnce({
-        status: "completed",
-        task_id: "t1",
-        comfyui_url: "http://127.0.0.1:8188",
-        summary: { listed: 2, pulled: 2 },
-      });
+  it("is pulling while the server runs one, idle once it ends", async () => {
+    getWorkflowPull.mockResolvedValueOnce({ status: "running", task_id: "t1" });
+    getWorkflowPull.mockResolvedValue({ status: "idle" });
     const pull = useWorkflowPullStore();
-    pull.start();
+    pull.watch();
     await settle();
     expect(pull.phase).toBe("pulling");
-    await vi.advanceTimersByTimeAsync(PULL_POLL_MS);
-    expect(pull.phase).toBe("pulling");
-    await vi.advanceTimersByTimeAsync(PULL_POLL_MS);
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
+    expect(pull.phase).toBe("idle");
+  });
+
+  it("asks every PULL_WATCH_MS and stops on unwatch", async () => {
+    getWorkflowPull.mockResolvedValue({ status: "idle" });
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    pull.watch();
+    await settle();
+    expect(getWorkflowPull).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS * 2);
+    expect(getWorkflowPull).toHaveBeenCalledTimes(3);
+    pull.unwatch();
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS * 5);
+    expect(getWorkflowPull).toHaveBeenCalledTimes(3);
+  });
+
+  it("an answer that lands after unwatch is dropped and schedules nothing", async () => {
+    let answer;
+    getWorkflowPull.mockReturnValue(new Promise((r) => (answer = r)));
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    await settle();
+    pull.unwatch();
+    answer({ status: "running", task_id: "t1" });
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS * 3);
+    expect(pull.phase).toBe("idle");
+    expect(getWorkflowPull).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a new pull that changed something, once, and re-reads the grid", async () => {
+    getWorkflowPull.mockResolvedValueOnce(done("old", { listed: 3, pulled: 3 }));
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    await settle();
+    // Finished before we looked: the baseline, not news.
+    expect(pull.phase).toBe("idle");
+    expect(fetchCards).not.toHaveBeenCalled();
+
+    getWorkflowPull.mockResolvedValue(done("t2", { listed: 5, changed: 2 }));
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
     expect(pull.phase).toBe("done");
-    expect(pull.summary).toEqual({ listed: 2, pulled: 2 });
+    expect(pull.summary).toEqual({ listed: 5, changed: 2 });
     expect(pull.comfyuiUrl).toBe("http://127.0.0.1:8188");
     expect(fetchCards).toHaveBeenCalledTimes(1);
-    expect(getWorkflowPull).toHaveBeenCalledTimes(3);
-    // Stopped: no further asks once it is done.
-    await vi.advanceTimersByTimeAsync(PULL_POLL_MS * 5);
-    expect(getWorkflowPull).toHaveBeenCalledTimes(3);
+
+    // The same pull answered again is not reported again.
+    pull.dismiss();
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS * 2);
+    expect(pull.phase).toBe("idle");
+    expect(fetchCards).toHaveBeenCalledTimes(1);
   });
 
-  it("a second press while pulling starts nothing", async () => {
+  it("reports nothing for a pull that changed nothing", async () => {
+    getWorkflowPull.mockResolvedValueOnce({ status: "idle" });
+    getWorkflowPull.mockResolvedValue(
+      done("t1", { listed: 5, matched: 5, unchanged: 5 }),
+    );
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
+    expect(pull.phase).toBe("idle");
+    expect(pull.summary).toBeNull();
+    expect(fetchCards).not.toHaveBeenCalled();
+  });
+
+  it("logs, and shows nothing, for a failed pull", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkflowPull.mockResolvedValueOnce({ status: "idle" });
+    getWorkflowPull.mockResolvedValue({
+      status: "failed",
+      task_id: "t1",
+      error: "ComfyUI runs with --multi-user",
+    });
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
+    expect(pull.phase).toBe("idle");
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("keeps asking after a read fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    getWorkflowPull.mockRejectedValueOnce(new Error("down"));
     getWorkflowPull.mockResolvedValue({ status: "running", task_id: "t1" });
     const pull = useWorkflowPullStore();
-    pull.start();
-    pull.start();
+    pull.watch();
     await settle();
-    expect(startWorkflowPull).toHaveBeenCalledTimes(1);
-    pull.dismiss();
+    expect(pull.phase).toBe("idle");
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
     expect(pull.phase).toBe("pulling");
-  });
-
-  it("a refused start is a stated failure", async () => {
-    startWorkflowPull.mockRejectedValue(new Error("503"));
-    const pull = useWorkflowPullStore();
-    await pull.start();
-    expect(pull.phase).toBe("failed");
-    expect(pull.error).toBeTruthy();
-    expect(getWorkflowPull).not.toHaveBeenCalled();
-  });
-
-  it("gives up with a reason after the server stops answering", async () => {
-    getWorkflowPull.mockRejectedValue(new Error("offline"));
-    const pull = useWorkflowPullStore();
-    pull.start();
-    await settle();
-    await vi.advanceTimersByTimeAsync(PULL_POLL_MS * PULL_POLL_MAX_MISSES);
-    expect(pull.phase).toBe("failed");
-    expect(getWorkflowPull).toHaveBeenCalledTimes(PULL_POLL_MAX_MISSES);
-  });
-
-  it("does not report a pull it did not start, or one a restart forgot", async () => {
-    getWorkflowPull.mockResolvedValue({ status: "completed", task_id: "other" });
-    const pull = useWorkflowPullStore();
-    pull.start();
-    await settle();
-    expect(pull.phase).toBe("failed");
-    expect(pull.summary).toBeNull();
-    expect(fetchCards).not.toHaveBeenCalled();
-
-    getWorkflowPull.mockResolvedValue({ status: "idle" });
-    pull.dismiss();
-    pull.start();
-    await settle();
-    expect(pull.phase).toBe("failed");
-    expect(pull.error).toContain("restarted");
-  });
-
-  it("dismissing a finished pull forgets it", async () => {
-    getWorkflowPull.mockResolvedValue({
-      status: "completed",
-      task_id: "t1",
-      summary: { listed: 1 },
-    });
-    const pull = useWorkflowPullStore();
-    pull.start();
-    await settle();
-    pull.dismiss();
-    expect(pull.phase).toBe("idle");
-    expect(pull.summary).toBeNull();
-  });
-});
-
-describe("a session change mid-pull", () => {
-  it("drops an answer that arrives after the reset", async () => {
-    let answer;
-    getWorkflowPull.mockImplementation(
-      () => new Promise((resolve) => (answer = resolve)),
-    );
-    const pull = useWorkflowPullStore();
-    pull.start();
-    await settle();
-    pull.reset();
-    answer({
-      status: "completed",
-      task_id: "t1",
-      comfyui_url: "http://owner-comfy:8188",
-      summary: { listed: 1, missing_node_classes: ["OwnersPackNode"] },
-    });
-    await settle();
-    expect(pull.phase).toBe("idle");
-    expect(pull.summary).toBeNull();
-    expect(pull.comfyuiUrl).toBeNull();
-    expect(fetchCards).not.toHaveBeenCalled();
-  });
-
-  it("drops a start that answers after the reset", async () => {
-    let started;
-    startWorkflowPull.mockImplementation(
-      () => new Promise((resolve) => (started = resolve)),
-    );
-    const pull = useWorkflowPullStore();
-    pull.start();
-    pull.reset();
-    started({ status: "started", task_id: "t1" });
-    await settle();
-    expect(getWorkflowPull).not.toHaveBeenCalled();
-    expect(pull.phase).toBe("idle");
-  });
-});
-
-describe("the review's store findings", () => {
-  it("a poll that fails after a reset asks nothing more", async () => {
-    let fail;
-    getWorkflowPull.mockImplementationOnce(
-      () => new Promise((_resolve, reject) => (fail = reject)),
-    );
-    getWorkflowPull.mockResolvedValue({
-      status: "completed",
-      task_id: "t1",
-      comfyui_url: "http://owner-comfy:8188",
-      summary: { listed: 1 },
-    });
-    const pull = useWorkflowPullStore();
-    pull.start();
-    await settle();
-    pull.reset();
-    fail(new Error("offline"));
-    await settle();
-    await vi.advanceTimersByTimeAsync(PULL_POLL_MS * 3);
-    // Wrong if a second ask goes out: it would run under the new session and
-    // write the owner's ComfyUI into it.
-    expect(getWorkflowPull).toHaveBeenCalledTimes(1);
-    expect(pull.phase).toBe("idle");
-    expect(pull.comfyuiUrl).toBeNull();
+    warn.mockRestore();
   });
 
   it("a grid re-read that fails leaves the summary standing", async () => {
-    fetchCards.mockRejectedValue(new Error("500"));
-    getWorkflowPull.mockResolvedValue({
-      status: "completed",
-      task_id: "t1",
-      summary: { listed: 2 },
-    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchCards.mockRejectedValue(new Error("grid down"));
+    getWorkflowPull.mockResolvedValueOnce({ status: "idle" });
+    getWorkflowPull.mockResolvedValue(done("t1", { listed: 1, pulled: 1 }));
     const pull = useWorkflowPullStore();
-    pull.start();
-    await settle();
+    pull.watch();
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
     expect(pull.phase).toBe("done");
-    expect(pull.summary).toEqual({ listed: 2 });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 
-  it("resumes a pull already running on the server, and adopts no finished one", async () => {
-    getWorkflowPull.mockResolvedValueOnce({ status: "running", task_id: "t9" });
+  it("dismiss only closes a finished report", async () => {
+    getWorkflowPull.mockResolvedValue({ status: "running", task_id: "t1" });
     const pull = useWorkflowPullStore();
-    await pull.resume();
+    pull.watch();
+    await settle();
+    pull.dismiss();
     expect(pull.phase).toBe("pulling");
-    getWorkflowPull.mockResolvedValue({
-      status: "completed",
-      task_id: "t9",
-      summary: { listed: 4 },
-    });
-    await vi.advanceTimersByTimeAsync(PULL_POLL_MS);
-    expect(pull.phase).toBe("done");
+  });
 
-    setActivePinia(createPinia());
-    getWorkflowPull.mockResolvedValue({
-      status: "completed",
-      task_id: "t9",
-      summary: { listed: 4 },
-    });
-    const fresh = useWorkflowPullStore();
-    await fresh.resume();
-    expect(fresh.phase).toBe("idle");
-    expect(fresh.summary).toBeNull();
-    expect(startWorkflowPull).not.toHaveBeenCalled();
+  it("drops an answer that arrives after the reset", async () => {
+    let answer;
+    getWorkflowPull.mockReturnValue(new Promise((r) => (answer = r)));
+    const pull = useWorkflowPullStore();
+    pull.watch();
+    await settle();
+    pull.reset();
+    answer(done("t1", { listed: 1, pulled: 1, missing_node_classes: ["X"] }));
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS * 2);
+    expect(pull.phase).toBe("idle");
+    expect(pull.summary).toBeNull();
+    expect(pull.comfyuiUrl).toBeNull();
+    expect(getWorkflowPull).toHaveBeenCalledTimes(1);
   });
 });

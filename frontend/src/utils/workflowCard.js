@@ -463,6 +463,7 @@ export function cardAccessibleName(card) {
     facts.length ? `facts: ${facts.join(", ")}` : null,
     count === 1 ? "1 picture" : `${count} pictures`,
     ratingLabel(card.rating) ? `rated ${ratingLabel(card.rating)}` : null,
+    card.origin_category === "comfyui" ? "from ComfyUI" : null,
   ];
   return parts.filter(Boolean).join(", ");
 }

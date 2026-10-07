@@ -160,6 +160,7 @@ describe("the Workflows filter menu", () => {
       "Type",
       "Checkpoint",
       "Source",
+      "Origin",
       "Rating",
       "One-offs",
       "Hidden",
@@ -425,6 +426,24 @@ describe("the Workflows filter menu", () => {
     expect(document.activeElement).toBe(rootRow(wrapper, "checkpoint").element);
   });
 
+  it("keeps only the cards of the origin picked, All lifting it", async () => {
+    const origins = ["comfyui", "pictures", "own"];
+    const { wrapper, store } = await mountMenu({
+      cards: CARDS.map((entry, i) => ({
+        ...entry,
+        origin_category: origins[i],
+      })),
+    });
+    await pick(wrapper, "origin", "From pictures");
+    expect(store.filters.origin).toBe("pictures");
+    expect(store.filteredCards.map((entry) => entry.name)).toEqual([
+      "Upscale 2×",
+    ]);
+    await pick(wrapper, "origin", "All");
+    expect(store.filters.origin).toBeNull();
+    expect(store.filteredCards).toHaveLength(3);
+  });
+
   it("keeps a card at or above the minimum rating, unrated ones included out", async () => {
     const { wrapper, store } = await mountMenu();
     await pick(wrapper, "minRating", "At least 4 stars");
@@ -438,7 +457,7 @@ describe("the Workflows filter menu", () => {
     const { wrapper, store } = await mountMenu();
     rootRow(wrapper, "source").element.focus();
     await rootRow(wrapper, "source").trigger("keydown", { key: "ArrowDown" });
-    expect(document.activeElement).toBe(rootRow(wrapper, "minRating").element);
+    expect(document.activeElement).toBe(rootRow(wrapper, "origin").element);
     await rootRow(wrapper, "type").trigger("keydown", { key: "ArrowUp" });
     expect(document.activeElement).toBe(rootRow(wrapper, "ghosts").element);
 

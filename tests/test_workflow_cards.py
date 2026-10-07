@@ -783,32 +783,6 @@ def test_a_workflow_file_past_the_cap_is_refused_by_the_loader(tmp_path, monkeyp
         comfyui_routes._load_workflow_json(str(path))
 
 
-def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
-    """#1440: ``hand_imported`` off a legacy file row on an automatic card.
-
-    A file a pull wrote is not hand-imported; a second, hand-dropped file on
-    the same card makes it so.
-    """
-    keys = record_api_graph(hub, _graph())
-    workflow_cards.record_identity(hub, keys.structural_hash)
-    api_key = _legacy_file(hub, "api.json", keys.topology_hash, keys.structural_hash)
-
-    def pulled(name):
-        with hub.transaction() as conn:
-            conn.execute(
-                "INSERT INTO workflow_pulled_file (workflow_name) VALUES (?)", (name,)
-            )
-
-    def hand():
-        return {card.workflow_key: card.hand_imported for card in card_index(hub)}
-
-    assert hand() == {api_key: True}
-    pulled("api.json")
-    assert hand()[api_key] is False
-    _legacy_file(hub, "api copy.json", keys.topology_hash, keys.structural_hash)
-    assert hand()[api_key] is True
-
-
 def _base_slot_label(hub, topology_hash, widget="ckpt_name"):
     slots = json.loads(
         hub.fetchone(
@@ -1699,7 +1673,7 @@ def test_a_manual_workflow_is_its_own_record_and_never_an_automatic_ones(hub):
     assert topologies_in_workflow(hub, manual) == []
     (card,) = [card for card in card_index(hub) if card.manual]
     assert (card.workflow_key, card.topology_hash) == (manual, manual)
-    assert (card.imported, card.hand_imported, card.variants) == (True, True, [])
+    assert (card.imported, card.variants) == (True, [])
     assert manual_document(hub, manual) == _graph(ckpt="a.safetensors")
 
     with hub.transaction() as conn:
@@ -1733,12 +1707,12 @@ def test_a_manual_workflow_is_its_own_record_and_never_an_automatic_ones(hub):
     assert manual_documents_holding(hub, "{}") == []
 
 
-def test_a_pulled_manual_workflow_is_not_hand_imported(hub):
-    """The one-off rule keeps its #1440 reading: a pull is not a statement."""
+def test_a_pulled_manual_workflow_is_imported_like_any_other(hub):
+    """One-offs are workflows known from pictures alone, so a pull is imported."""
     pulled = create_manual_workflow(hub, "p", _graph(), "pull")
     dropped = create_manual_workflow(hub, "d", _graph(), "inbox")
-    hand = {c.workflow_key: c.hand_imported for c in card_index(hub) if c.manual}
-    assert hand == {pulled: False, dropped: True}
+    imported = {c.workflow_key: c.imported for c in card_index(hub) if c.manual}
+    assert imported == {pulled: True, dropped: True}
 
 
 def test_a_manual_default_recipe_is_its_own_graph_by_its_own_slot_labels(

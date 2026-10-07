@@ -63,7 +63,6 @@ from pixlstash.hub.workflow_card_reads import (
     group_picture_inputs,
     group_pins,
     instance_documents,
-    manual_document,
     manual_workflow_ids,
     model_fix_labels,
     model_fixes,
@@ -142,6 +141,7 @@ from pixlstash.services.workflow_card_service import (
     SHELF_MODEL_GONE,
     SHELF_MODEL_UNNAMED,
     DefaultRecipe,
+    converted_manual_document,
     read_grid,
     slot_kind,
     lora_modal_strength,
@@ -247,7 +247,7 @@ from pixlstash.utils.adapter_header import (
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import family_of, modality_of
 from pixlstash.utils.comfyui_utilities import NotAWorkflowError
-from pixlstash.hub.workflow_origin import FILE_ORIGIN, INBOX_ORIGIN
+from pixlstash.hub.workflow_origin import FILE_ORIGIN, INBOX_ORIGIN, live_file
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX, WORKFLOW_ID_PATTERN
 from send2trash import TrashPermissionError
 
@@ -626,6 +626,33 @@ class WorkflowCard(BaseModel):
             "The name of the workflow or recipe a manual workflow was made "
             "from (duplicate, fixed copy, clone, LoRA edit, extract), as it "
             "was called then; null for an imported or pulled one."
+        ),
+    )
+    origin_category: Literal["comfyui", "pictures", "own"] = Field(
+        "pictures",
+        description=(
+            "Where the workflow came from, for the Workflows view's filter: "
+            "`comfyui` for one pulled from ComfyUI's saved workflows, "
+            "`pictures` for an automatic one (`auto:`, known from pictures), "
+            "`own` for every other manual one (imported, dropped in the "
+            "inbox, a built-in, a duplicate, a fixed copy, a clone, a chain "
+            "edit, an extract)."
+        ),
+    )
+    versions: int = Field(
+        1,
+        description=(
+            "How many versions of the workflow's document are kept: a ComfyUI "
+            "file that changed is a new version of its workflow, and at most "
+            "50 are kept (version 1 and the newest 49). Always 1 for an "
+            "automatic workflow."
+        ),
+    )
+    version_at: str | None = Field(
+        None,
+        description=(
+            "When the current version was stored (ISO 8601). Null for an "
+            "automatic workflow."
         ),
     )
     hidden: bool = Field(
@@ -1362,6 +1389,10 @@ class RunGroup(BaseModel):
     # The workflow this group runs: the one named, or for a picture-sourced
     # run the workflow of the picture's variant. Null for a picture in none.
     workflow_id: str | None = None
+    # The version of a manual workflow's document this group runs, after Run
+    # and Open's check against ComfyUI; what its pictures record
+    # (`picture.run_workflow_version`). Null for an automatic workflow.
+    workflow_version: int | None = None
     source: str | None = None
     source_picture_id: int | None = None
     picture_ids: list[int] = Field(default_factory=list)
@@ -1466,8 +1497,24 @@ class WorkflowRunnableGraph(BaseModel):
     """
 
     name: str = Field(description="What to call the workflow in ComfyUI.")
-    workflow: dict = Field(description="The ComfyUI API-format graph.")
-    source: str = Field(
+    workflow: dict | None = Field(
+        description=(
+            "The ComfyUI API-format graph, or null when `needs_conversion`: "
+            "there is only an editor file, for the node to open and convert."
+        )
+    )
+    needs_conversion: bool = Field(
+        False,
+        description=(
+            "True when PixlStash could not build a runnable graph but the "
+            "workflow has a live ComfyUI file (`comfyui_file`): the node opens "
+            "that file and converts it in ComfyUI. `detail` says why."
+        ),
+    )
+    detail: str | None = Field(
+        None, description="With `needs_conversion`: why the file did not convert."
+    )
+    source: str | None = Field(
         description="Where the graph was resolved from: file, picture or instance."
     )
     seedless: bool = Field(
@@ -1480,6 +1527,18 @@ class WorkflowRunnableGraph(BaseModel):
     forgotten: int = Field(
         0,
         description="How many model names the library could no longer name.",
+    )
+    comfyui_file: str | None = Field(
+        None,
+        description=(
+            "The ComfyUI file this workflow was pulled from, relative to "
+            "ComfyUI's `workflows/` user folder (`portraits/flux.json`), "
+            "when it has one there that is neither gone nor deleted here, at "
+            "the owner's ComfyUI address. The node opens that file, so Save "
+            "writes back to it, and falls back to `workflow` without it. "
+            "Checked against ComfyUI before this answer, so it is the version "
+            "`workflow` was built from."
+        ),
     )
 
 
@@ -2400,28 +2459,51 @@ def _display_names(figures) -> dict[str, str]:
     return names
 
 
-# ponytail: one entry per manual workflow, keyed on its id alone because a
-# row's `document` is never rewritten (a conversion fills `api_document`).
-@functools.lru_cache(maxsize=512)
+# ``{workflow id: (current version, models)}``: one entry per manual workflow,
+# replaced when a pull makes a new version (`hub/workflow_versions.py`). Keyed
+# on the version number, so no document is held in memory.
+_MODEL_WIDGETS: dict[str, tuple] = {}
+
+
 def _manual_model_widgets(hub, workflow_id: str) -> tuple:
     """``((widget, filename), ...)`` read off one manual workflow's document.
 
-    Cached, so the grid parses each document once rather than once per
-    request, and a document that will not read is logged once.
+    Cached per version, so the grid parses each document once rather than
+    once per request, a document that will not read is logged once, and the
+    document itself is read only when its version is not cached.
+    """
+    row = hub.fetchone(
+        "SELECT (SELECT MAX(v.version) FROM workflow_version v "
+        "WHERE v.workflow_id = d.workflow_id) AS version "
+        "FROM workflow_document d WHERE d.workflow_id = ?",
+        (workflow_id,),
+    )
+    if row is None:
+        return ()
+    cached = _MODEL_WIDGETS.get(workflow_id)
+    if cached is not None and cached[0] == row["version"]:
+        return cached[1]
+    document = hub.fetchone(
+        "SELECT document FROM workflow_document WHERE workflow_id = ?",
+        (workflow_id,),
+    )
+    if document is None:
+        return ()
+    found = _model_widgets_of(workflow_id, document["document"])
+    _MODEL_WIDGETS[workflow_id] = (row["version"], found)
+    return found
+
+
+def _model_widgets_of(workflow_id: str, document: str) -> tuple:
+    """The models one stored *document* loads, as :func:`_manual_model_widgets`.
 
     In the automatic path's order (``asset_names``: widget, then lowercased
     filename), and a model two loaders spell in two cases read once, so a
     pair reads the same on a manual card as on an automatic one. LoRAs keep
     every loader: two holding one file are two slots here.
     """
-    row = hub.fetchone(
-        "SELECT document FROM workflow_document WHERE workflow_id = ?",
-        (workflow_id,),
-    )
-    if row is None:
-        return ()
     try:
-        loaded = loaded_model_widgets(json.loads(row["document"]))
+        loaded = loaded_model_widgets(json.loads(document))
     except Exception as exc:
         # The reader indexes into whatever the document holds, so a malformed
         # one raises something other than a ValueError. A workflow described
@@ -2479,6 +2561,9 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         imported=figure.card.imported,
         manual=figure.card.manual,
         from_name=figure.card.from_name,
+        origin_category=_origin_category(figure.card),
+        versions=figure.card.versions,
+        version_at=figure.card.version_at,
         hidden=figure.card.hidden,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
@@ -2507,6 +2592,13 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         ),
         default_recipe=_recipe_payload(recipe) if recipe else None,
     )
+
+
+def _origin_category(card) -> str:
+    """``WorkflowCard.origin_category``: ``comfyui``, ``pictures`` or ``own``."""
+    if not card.manual:
+        return "pictures"
+    return "comfyui" if card.origin == "pull" else "own"
 
 
 def _defaults_payload(values) -> list[WorkflowDefault]:
@@ -2652,6 +2744,20 @@ def create_router(server) -> APIRouter:
     def _manual_models(workflow_id: str) -> tuple:
         return _manual_model_widgets(_hub(), workflow_id)
 
+    def _owner_object_info() -> dict | None:
+        """The owner's ComfyUI ``object_info`` (cached), or ``None`` (logged).
+
+        What a read of a workflow's defaults converts a stored editor document
+        with the first time it needs its graph
+        (``workflow_card_service.converted_manual_document``), which stores the
+        conversion so no later read asks again.
+        """
+        return _read_object_info(_comfyui_url(server.auth.user), cached=True)[0]
+
+    def _defaults(hub, workflow_id: str) -> DefaultRecipe | None:
+        """``workflow_defaults``, converting a manual editor document on first read."""
+        return workflow_defaults(hub, server.vault, workflow_id, _owner_object_info)
+
     def _workflow_id(workflow_id: str) -> str:
         if not _WORKFLOW_ID_RE.fullmatch(workflow_id):
             raise HTTPException(
@@ -2753,7 +2859,7 @@ def create_router(server) -> APIRouter:
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow.")
         workflow = figure.workflow
-        recipe = workflow_defaults(hub, server.vault, workflow_id)
+        recipe = _defaults(hub, workflow_id)
         pins = group_pins(hub, workflow_id)
         graph_models = (
             None
@@ -3461,7 +3567,7 @@ def create_router(server) -> APIRouter:
         if payload.include is None:
             # Dropping an edit needs no shelf: the edit names its own digest,
             # so one stays removable after its file leaves the shelf.
-            recipe = workflow_defaults(hub, server.vault, workflow_id)
+            recipe = _defaults(hub, workflow_id)
             sha256 = next(
                 (
                     lora.sha256
@@ -3701,8 +3807,12 @@ def create_router(server) -> APIRouter:
 
     def _converted_document(
         card, document: dict | None, object_info: dict | None, comfyui_url
-    ) -> dict | None:
+    ) -> tuple[dict | None, list[str]]:
         """*document*, with an editor graph converted to the API graph it runs as.
+
+        For a workflow FILE, whose conversion is not stored. A manual
+        workflow's document goes through ``converted_manual_document``
+        instead, which stores the conversion on its version.
 
         A document ComfyUI's *Convert for PixlStash* already converted reads as
         that conversion and is returned as is. One that was never sent through
@@ -3711,14 +3821,17 @@ def create_router(server) -> APIRouter:
         the caller had none and there is an editor graph to read. A refusal
         leaves the document as it was, so the resolver still reports
         ``ui_format``.
+
+        Returns ``(document, problems)``: *problems* are the converter's
+        sentences when it refused, so the reason can say why.
         """
         if not document or api_graph(document) is not None:
-            return document
+            return document, []
         if object_info is None and comfyui_url:
             object_info, _error = _read_object_info(comfyui_url, cached=True)
         if object_info is None:
             # Nothing to convert against; the failed read logged why.
-            return document
+            return document, []
         graph, problems = convert_ui_graph_to_api(document, object_info)
         if graph is None:
             logger.info(
@@ -3726,8 +3839,25 @@ def create_router(server) -> APIRouter:
                 card.workflow_key,
                 "; ".join(problems),
             )
-            return document
-        return with_converted_graph(document, graph)
+            return document, problems
+        return with_converted_graph(document, graph), []
+
+    def _freshen(user, workflow_id: str) -> None:
+        """Take a pulled workflow's ComfyUI file now if it changed there.
+
+        Run and Open only, before the workflow is read: one listing of the
+        file's folder, and a newer file becomes the workflow's next version,
+        which the default recipe and the resolve then read. Not for an
+        automatic workflow, one with no live ComfyUI file, or an owner who
+        turned "Pull workflows from ComfyUI" off. Any failure leaves the stored
+        version to run (``WorkflowPulls.freshen`` logs it and never raises).
+        """
+        pulls = getattr(server, "workflow_pulls", None)
+        if pulls is None or not workflow_id.startswith(MANUAL_PREFIX):
+            return
+        if not getattr(user, "pull_comfyui_workflows", True):
+            return
+        pulls.freshen(_comfyui_url(user), workflow_id)
 
     def _source_graph_for(
         card, object_info: dict | None = None, comfyui_url: str | None = None
@@ -3744,21 +3874,31 @@ def create_router(server) -> APIRouter:
         """
         if card.manual:
             # Its own row and nothing else: no file, no picture, no instance.
-            return run_service.resolve_source(
-                card,
-                file_document=_converted_document(
-                    card,
-                    manual_document(_hub(), card.workflow_key),
-                    object_info,
-                    comfyui_url,
-                ),
+            # Converted, and the conversion stored, if it is an editor document
+            # nothing has converted yet; ComfyUI is asked only then.
+            def read_object_info() -> dict | None:
+                if object_info is not None or not comfyui_url:
+                    return object_info
+                return _read_object_info(comfyui_url, cached=True)[0]
+
+            converted, version, problems = converted_manual_document(
+                _hub(), card.workflow_key, read_object_info
             )
+            source, reason = run_service.resolve_source(
+                card, file_document=converted, file_problems=problems
+            )
+            if source is not None:
+                # The version read with the document, so the number the run
+                # records is the graph it built.
+                source.workflow_version = version
+            return source, reason
         file_document = None
+        file_problems: list[str] = []
         if card.file_name:
             path, _source = _resolve_workflow_path(card.file_name)
             if path:
                 try:
-                    file_document = _converted_document(
+                    file_document, file_problems = _converted_document(
                         card,
                         runnable_document(path, _load_workflow_json(path)),
                         object_info,
@@ -3801,6 +3941,7 @@ def create_router(server) -> APIRouter:
             picture_id=picture_id,
             instance_documents=instances,
             asset_names=names,
+            file_problems=file_problems,
         )
 
     def _apply_addressed(graph: dict, values: list[RunValue]) -> None:
@@ -4739,7 +4880,7 @@ def create_router(server) -> APIRouter:
 
     def _workflow_recipe(workflow_id: str) -> DefaultRecipe:
         """A workflow's default recipe, or the 404 / 422 saying why not."""
-        recipe = workflow_defaults(_hub(), server.vault, _workflow_id(workflow_id))
+        recipe = _defaults(_hub(), _workflow_id(workflow_id))
         if recipe is None or recipe.base_card is None:
             raise HTTPException(status_code=404, detail="Unknown workflow.")
         return recipe
@@ -4891,12 +5032,15 @@ def create_router(server) -> APIRouter:
                 workflow_id,
             )
             workflow_id = None
+        user = _user(request)
+        if workflow_id and not extract:
+            # Before the default recipe, which is read off the graph too.
+            _freshen(user, workflow_id)
         recipe = _workflow_recipe(workflow_id) if workflow_id else None
         if recipe is not None:
             body = _under_defaults(body, recipe)
             if not body.loras and not recipe_loras:
                 recipe_loras = recipe.recipe_loras()
-        user = _user(request)
         configured = bool(getattr(user, "comfyui_url", None))
         comfyui_url = _comfyui_url(user)
         object_info, object_info_error = (
@@ -5048,6 +5192,7 @@ def create_router(server) -> APIRouter:
                 continue
             group.source = source.origin
             group.source_picture_id = source.picture_id
+            group.workflow_version = source.workflow_version
 
             graph = source.graph
             # Enumerated from the graph as it was resolved, BEFORE anything
@@ -5673,6 +5818,7 @@ def create_router(server) -> APIRouter:
                 if (group.workflow_id or "").startswith(MANUAL_PREFIX)
                 else None
             )
+            run_workflow_version = group.workflow_version if run_workflow_id else None
             # A selection feeding an input is the run's repeat axis: one pass
             # per picture, each its own source and, with `stack`, its own
             # stack. Otherwise one pass, and the group's first picture is the
@@ -5741,6 +5887,7 @@ def create_router(server) -> APIRouter:
                                 "origin_generation": lease.generation,
                                 "origin_library_uuid": lease.library_uuid,
                                 "run_workflow_id": run_workflow_id,
+                                "run_workflow_version": run_workflow_version,
                                 "rejected": rejected,
                             },
                             daemon=True,
@@ -5831,6 +5978,14 @@ def create_router(server) -> APIRouter:
     # meant to be run. A copy written for the owner (duplicate, clone, a chain
     # edit) is the graph as it is.
 
+    def _no_graph_sentence(reason: dict | None) -> str:
+        """The 409 sentence for a card with no graph: the code, and why if known."""
+        code = (reason or {}).get("code") or run_service.NO_RUNNABLE_SOURCE
+        why = (reason or {}).get("detail")
+        return f"PixlStash has no graph for this workflow ({code})." + (
+            f" {why}" if why else ""
+        )
+
     def _card_source(
         card, *, object_info: dict | None = None, comfyui_url: str | None = None
     ):
@@ -5868,10 +6023,7 @@ def create_router(server) -> APIRouter:
         if source is None:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "PixlStash has no graph for this workflow "
-                    f"({reason.code if reason else run_service.NO_RUNNABLE_SOURCE})."
-                ),
+                detail=_no_graph_sentence(reason.as_dict() if reason else None),
             )
         return source
 
@@ -5995,7 +6147,7 @@ def create_router(server) -> APIRouter:
         # recipe instead.
         object_info, _error = _read_object_info(_comfyui_url(_user(request)))
         source = _card_source(card, object_info=object_info)
-        recipe = workflow_defaults(hub, server.vault, workflow.workflow_id)
+        recipe = _defaults(hub, workflow.workflow_id)
         graph = deepcopy(source.graph)
         try:
             keep, bypassed = (
@@ -6100,19 +6252,30 @@ def create_router(server) -> APIRouter:
                 ),
             ) from exc
         if not plan.built:
-            codes = [r["code"] for group in plan.groups for r in group.reasons]
+            reasons = [r for group in plan.groups for r in group.reasons]
             logger.info(
                 "[workflows] Nothing to open for %s: no graph was built (%s).",
                 workflow_id,
-                codes,
+                [r["code"] for r in reasons],
             )
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "PixlStash has no graph for this workflow "
-                    f"({codes[0] if codes else run_service.NO_RUNNABLE_SOURCE})."
-                ),
+            first = reasons[0] if reasons else None
+            # An editor file ComfyUI itself can open and convert is not a
+            # dead end: answer with the file and let the node do it.
+            link = (
+                live_file(hub, _comfyui_url(_user(request)), _card.workflow_key)
+                if _card.manual
+                else None
             )
+            if link:
+                return WorkflowRunnableGraph(
+                    name=_file_stem(_card, workflow.name),
+                    workflow=None,
+                    needs_conversion=True,
+                    detail=(first or {}).get("detail") or _no_graph_sentence(first),
+                    source=None,
+                    comfyui_file=link["remote_path"],
+                )
+            raise HTTPException(status_code=409, detail=_no_graph_sentence(first))
         # One entry: a body naming a `workflow_id` resolves to exactly one
         # group (`_groups_for`), the workflow's base card, so there is no
         # second graph for Run to have preferred.
@@ -6146,12 +6309,18 @@ def create_router(server) -> APIRouter:
             for name, value in inputs.items():
                 if isinstance(value, str) and SECRET_FIELD_RE.search(name):
                     inputs[name] = ""
+        link = (
+            live_file(hub, _comfyui_url(_user(request)), card.workflow_key)
+            if card.manual
+            else None
+        )
         return WorkflowRunnableGraph(
             name=_file_stem(card, workflow.name),
             workflow=graph,
             source=source.origin,
             seedless=False,
             forgotten=source.forgotten,
+            comfyui_file=link["remote_path"] if link else None,
         )
 
     @router.post(

@@ -175,6 +175,15 @@ def create_router(server) -> APIRouter:
         date_format: Optional[str] = None
         theme_mode: Optional[str] = None
         comfyui_url: Optional[str] = None
+        pull_comfyui_workflows: Optional[bool] = Field(
+            default=None,
+            description=(
+                '"Pull workflows from ComfyUI": while a ComfyUI address is '
+                "saved, its saved workflows are checked once a minute and once "
+                "after a Link, a changed file becoming a new version of its "
+                "workflow. On by default."
+            ),
+        )
         public_url: Optional[str] = None
         similarity_character: Optional[int] = None
         stack_strictness: Optional[float] = None

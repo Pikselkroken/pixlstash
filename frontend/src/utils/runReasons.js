@@ -358,7 +358,9 @@ export function readReason(reason) {
       return read("This picture was made in A1111 or Forge, so there is no ComfyUI graph to run.");
     case "ui_format":
       return read(
-        "This workflow is an editor export PixlStash could not rebuild: ComfyUI did not answer, or the graph uses a node or subgraph it cannot read. Open it in ComfyUI and use Convert for PixlStash.",
+        reason.detail
+          ? `PixlStash could not turn this ComfyUI workflow into one it can run: ${reason.detail}. Open it in ComfyUI from here and PixlStash converts it there.`
+          : "PixlStash could not turn this ComfyUI workflow into one it can run. Open it in ComfyUI from here and PixlStash converts it there.",
       );
     case PICTURE_INPUT_UNFILLED: {
       // Named by `title`, never by `slot_label`: the label is a topology hash.

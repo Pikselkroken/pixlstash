@@ -94,11 +94,6 @@ class Card:
     notes: Optional[str] = None
     hidden: bool = False
     imported: bool = False
-    # At least one of its files was put here by the owner rather than written
-    # by a pull from ComfyUI (#1440). What keeps a card out of the one-offs:
-    # a file dropped by hand is a statement, eighty pulled in one gesture are
-    # not. ``imported`` keeps its meaning, "this card has a file".
-    hand_imported: bool = False
     file_name: Optional[str] = None
     variants: list[str] = field(default_factory=list)
     # Each variant's base-model families (``workflow_variant_family``), None
@@ -109,6 +104,13 @@ class Card:
     # the id as both key and topology, and the workflow it was made from.
     manual: bool = False
     from_name: Optional[str] = None
+    # How a manual workflow arrived (``workflow_document.origin``: ``pull``,
+    # ``import``, ``duplicate``, ...); ``None`` for an automatic one.
+    origin: Optional[str] = None
+    # A manual workflow's versions (``workflow_version``): how many, and when
+    # the current one was made. A workflow made before versions has its one.
+    versions: int = 1
+    version_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -124,16 +126,6 @@ class StackRows:
     core_hashes: dict[str, Optional[str]]
     members: dict[str, list[tuple[int, str]]]
     unstacked: frozenset[str]
-
-
-# A file row the owner put there: no pull from ComfyUI wrote it
-# (``workflow_pulled_file``, #1440). Per file, so it holds whatever ComfyUI
-# later does to the path the file came from, and a file a pull only MATCHED is
-# never in it.
-_HAND_IMPORTED = (
-    "NOT EXISTS (SELECT 1 FROM workflow_pulled_file p "
-    "WHERE p.workflow_name = workflow_file.workflow_name)"
-)
 
 
 def card_index(hub: HubDatabase) -> list[Card]:
@@ -153,7 +145,6 @@ def card_index(hub: HubDatabase) -> list[Card]:
         "c.specials AS specials, c.traits AS traits, "
         "a.name AS name, a.notes AS notes, "
         "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported, "
-        "COALESCE(f.hand_imported, 0) AS hand_imported, "
         "f.workflow_name AS file_name, vf.families AS families "
         "FROM workflow_variant v "
         "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
@@ -161,8 +152,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
         "LEFT JOIN workflow_variant_family vf "
         "ON vf.structural_hash = v.structural_hash "
         "LEFT JOIN workflow_attr a ON a.workflow_key = v.workflow_key "
-        "LEFT JOIN (SELECT workflow_key, MIN(workflow_name) AS workflow_name, "
-        f"MAX({_HAND_IMPORTED}) AS hand_imported "
+        "LEFT JOIN (SELECT workflow_key, MIN(workflow_name) AS workflow_name "
         "FROM workflow_file GROUP BY workflow_key) f "
         "ON f.workflow_key = v.workflow_key "
         "WHERE v.key_version = ? ORDER BY v.workflow_key, v.structural_hash",
@@ -184,7 +174,6 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 notes=row["notes"],
                 hidden=bool(row["hidden"]),
                 imported=bool(row["imported"]),
-                hand_imported=bool(row["hand_imported"]),
                 file_name=row["file_name"],
             )
         card.variants.append(row["structural_hash"])
@@ -198,9 +187,8 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     **Never on a topology.** ``topology_hash`` is the workflow's own id, so
     nothing keyed per topology (a model fix, a slot mark, a core hash) can
     reach it from an automatic workflow or reach an automatic one from it. No
-    variants: the document is the whole of it. ``hand_imported`` for anything
-    but a pull, so an imported, duplicated or extracted workflow is never
-    folded into the one-offs.
+    variants: the document is the whole of it. Always ``imported``, so a
+    stored workflow, pulled or otherwise, is never folded into the one-offs.
     """
     return [
         Card(
@@ -209,38 +197,53 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             workflow_type=facts[0],
             traits=facts[1],
             imported=True,
-            hand_imported=row["origin"] != "pull",
             manual=True,
             from_name=row["from_name"],
+            origin=row["origin"],
+            versions=row["versions"],
+            version_at=row["version_at"],
         )
         for row in hub.fetchall(
-            "SELECT workflow_id, origin, from_name, document FROM workflow_document "
-            "ORDER BY workflow_id"
+            "SELECT d.workflow_id, d.origin, d.from_name, d.document, "
+            "MAX(1, (SELECT COUNT(*) FROM workflow_version v "
+            "WHERE v.workflow_id = d.workflow_id)) AS versions, "
+            "COALESCE((SELECT v.created_at FROM workflow_version v "
+            "WHERE v.workflow_id = d.workflow_id ORDER BY v.version DESC LIMIT 1), "
+            "d.created_at) AS version_at, "
+            "(SELECT MAX(v.version) FROM workflow_version v "
+            "WHERE v.workflow_id = d.workflow_id) AS current_version "
+            "FROM workflow_document d ORDER BY d.workflow_id"
         )
-        for facts in (_manual_facts_of(row["workflow_id"], row["document"]),)
+        for facts in (
+            _manual_facts_of(
+                row["workflow_id"], row["document"], row["current_version"]
+            ),
+        )
     ]
 
 
-# ponytail: one entry per manual workflow, keyed on its id alone because a
-# row's `document` is never rewritten (as `_manual_model_widgets`); unbounded,
-# but there are as many entries as manual workflows.
-_MANUAL_FACTS: dict[str, tuple[Optional[str], Optional[tuple[str, ...]]]] = {}
+# ``{workflow id: (version, (workflow_type, traits))}``: one entry per manual
+# workflow, replaced when a pull makes a new version (`hub/workflow_versions.py`),
+# so no document is held and an old version is never described.
+_MANUAL_FACTS: dict[str, tuple[Optional[int], tuple]] = {}
 
 
 def _manual_facts_of(
-    workflow_id: str, document: str
+    workflow_id: str, document: str, version: Optional[int] = None
 ) -> tuple[Optional[str], Optional[tuple[str, ...]]]:
-    """``(workflow_type, traits)`` of a manual workflow, parsed once per process.
+    """``(workflow_type, traits)`` of a manual workflow, parsed once per version.
 
-    Both ``None`` for a graph that will not reduce, as for an automatic card
-    the backfill has not reached.
+    *version* is the current one's number, ``None`` for a workflow an older
+    build made (it has the one document). Both ``None`` for a graph that will
+    not reduce, as for an automatic card the backfill has not reached.
     """
-    if workflow_id not in _MANUAL_FACTS:
-        nodes = _manual_reduction(workflow_id, document)
-        _MANUAL_FACTS[workflow_id] = (
-            (None, None) if nodes is None else _manual_facts(workflow_id, nodes)
-        )
-    return _MANUAL_FACTS[workflow_id]
+    cached = _MANUAL_FACTS.get(workflow_id)
+    if cached is not None and cached[0] == version:
+        return cached[1]
+    nodes = _manual_reduction(workflow_id, document)
+    facts = (None, None) if nodes is None else _manual_facts(workflow_id, nodes)
+    _MANUAL_FACTS[workflow_id] = (version, facts)
+    return facts
 
 
 def _manual_facts(
@@ -395,12 +398,33 @@ def manual_document(hub: HubDatabase, workflow_id: str) -> Optional[dict]:
     row that will not parse is logged and answers ``None``: the caller then
     reports no runnable source rather than raising.
     """
+    return manual_document_and_version(hub, workflow_id)[0]
+
+
+def manual_document_and_version(
+    hub: HubDatabase, workflow_id: str
+) -> tuple[Optional[dict], Optional[int]]:
+    """:func:`manual_document`, and the number of the version it is.
+
+    Read in one statement, so the number is the version of the document
+    returned even while a pull appends another. A workflow an older build made
+    has no version row: its document is version 1. ``(None, None)`` for no
+    such workflow.
+    """
     row = hub.fetchone(
-        "SELECT document, api_document FROM workflow_document WHERE workflow_id = ?",
+        "SELECT d.document, d.api_document, "
+        "COALESCE((SELECT MAX(v.version) FROM workflow_version v "
+        "WHERE v.workflow_id = d.workflow_id), 1) AS version "
+        "FROM workflow_document d WHERE d.workflow_id = ?",
         (workflow_id,),
     )
     if row is None:
-        return None
+        return None, None
+    return _runnable(workflow_id, row), row["version"]
+
+
+def _runnable(workflow_id: str, row) -> Optional[dict]:
+    """The runnable document of one ``workflow_document`` row (:func:`manual_document`)."""
     try:
         document = json.loads(row["document"])
     except json.JSONDecodeError as exc:

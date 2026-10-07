@@ -7,12 +7,14 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Generation, Picture
+from pixlstash.hub import workflow_versions
 from pixlstash.hub.workflow_card_reads import is_manual_workflow, workflow_of_variant
 from pixlstash.hub.workflows import record_api_graph, record_reduction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.workflow_ghost_service import enqueue_ghost_cascade_in_session
 from pixlstash.services.workflow_hash import HASH_VERSION, WorkflowGraphError
+from pixlstash.services.workflow_inbox import content_hash as document_content_hash
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.utils.comfyui_utilities import (
     extract_comfy_workflow_info,
@@ -83,6 +85,10 @@ class ComfyUIExtractionTask(BaseTask):
         self._on_hub_failure = on_hub_failure
         self._library_uuid = library_uuid
         self._stop_event = threading.Event()
+        # {picture id: content hash of its embedded editor workflow}, read by
+        # the scan and compared at persist against the versions of the manual
+        # workflow the picture is filed on (`picture.run_workflow_version`).
+        self._editor_hashes: dict[int, str] = {}
 
     def on_cancel(self) -> None:
         self._stop_event.set()
@@ -273,6 +279,14 @@ class ComfyUIExtractionTask(BaseTask):
                     )
                     if newly_tagged:
                         db_pic.run_workflow_id = run_workflow_id
+                    # Which version made it, when ComfyUI ran it rather than a
+                    # PixlStash Run (which records the version it submitted):
+                    # the version whose content the embedded editor workflow
+                    # is, exactly, or nothing.
+                    if db_pic.run_workflow_id and db_pic.run_workflow_version is None:
+                        db_pic.run_workflow_version = self._version_made_with(
+                            db_pic.run_workflow_id, self._editor_hashes.get(pid)
+                        )
                     # Never replaced by NULL: nothing found this time is a fact
                     # about the read, and the keys came from a read that worked.
                     # Written for 0118's same-version revisit. A HASH_VERSION
@@ -376,6 +390,9 @@ class ComfyUIExtractionTask(BaseTask):
             return
         try:
             run_tag = self._run_workflow_tag(picture_id, embedded_metadata)
+            editor_hash = _editor_content_hash(picture_id, embedded_metadata)
+            if editor_hash is not None:
+                self._editor_hashes[picture_id] = editor_hash
             api_graph = find_comfy_api_prompt(embedded_metadata)
             a1111 = None if api_graph else reduce_a1111(embedded_metadata)
             if api_graph is None and a1111 is None:
@@ -430,6 +447,27 @@ class ComfyUIExtractionTask(BaseTask):
             )
         )
 
+    def _version_made_with(
+        self, workflow_id: str, editor_hash: str | None
+    ) -> int | None:
+        """The version of *workflow_id* the picture's editor graph is, or ``None``."""
+        if editor_hash is None or self._hub is None:
+            return None
+        try:
+            return workflow_versions.version_with_content(
+                self._hub, workflow_id, editor_hash
+            )
+        except Exception as exc:
+            # The version is a fact about history, recorded once; a hub read
+            # that fails leaves it unknown rather than failing the filing.
+            logger.warning(
+                "ComfyUIExtractionTask: could not read the versions of workflow "
+                "%s, so the version a picture was made with is not recorded: %s",
+                workflow_id,
+                exc,
+            )
+            return None
+
     def _run_workflow_tag(self, picture_id: int, embedded_metadata) -> str | None:
         """The manual workflow the picture's ComfyUI run was tagged with, if held.
 
@@ -478,3 +516,26 @@ class ComfyUIExtractionTask(BaseTask):
         )
         if self._on_hub_failure is not None:
             self._on_hub_failure()
+
+
+def _editor_content_hash(picture_id: int, embedded_metadata) -> str | None:
+    """The content hash of the editor workflow a picture embeds, or ``None``.
+
+    ``workflow_inbox.content_hash``, the one ``workflow_version.content_hash``
+    holds, so a ComfyUI run of a saved version matches that version exactly.
+    """
+    if not embedded_metadata:
+        return None
+    workflow = find_comfy_workflow(embedded_metadata)
+    if workflow is None or is_api_format(workflow):
+        return None
+    try:
+        return document_content_hash(workflow)
+    except (RecursionError, TypeError, ValueError, AttributeError) as exc:
+        logger.info(
+            "Picture %s: its editor workflow will not hash, so the version it "
+            "was made with is not recorded: %s",
+            picture_id,
+            exc,
+        )
+        return None

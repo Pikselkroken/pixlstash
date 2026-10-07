@@ -1621,6 +1621,9 @@ _PICTURE_METADATA_FIELDS = {
     # below that already ride here. Every route that resolves one is
     # OWNER_ONLY, so a scoped token learns an id it cannot open.
     "run_workflow_id",
+    # Which version of that workflow's document made it: a small integer
+    # about the same opaque id, which a scoped token cannot open either.
+    "run_workflow_version",
     "score",
     "size_bin_index",
     "size_bytes",

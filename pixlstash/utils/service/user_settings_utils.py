@@ -78,6 +78,7 @@ def serialize_user_config(user) -> dict:
         "telemetry_consent_prompted",
         "show_keyboard_hint",
         "embed_watermark",
+        "pull_comfyui_workflows",
     }
 
     # ``getattr(..., None)`` (not bare ``getattr``) so a source object that
@@ -199,6 +200,7 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "telemetry_consent_prompted",
         "show_keyboard_hint",
         "embed_watermark",
+        "pull_comfyui_workflows",
         "tagger_settings",
     }
 
@@ -312,6 +314,12 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = bool(value)
             if user.keep_models_in_memory != new_value:
                 user.keep_models_in_memory = new_value
+                updated = True
+            continue
+        if key == "pull_comfyui_workflows":
+            new_value = True if value in ("", None, "null") else bool(value)
+            if user.pull_comfyui_workflows != new_value:
+                user.pull_comfyui_workflows = new_value
                 updated = True
             continue
         if key == "max_vram_gb":

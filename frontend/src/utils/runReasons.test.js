@@ -137,3 +137,29 @@ describe("loras_fetched", () => {
     expect(read.text).toMatch(/^A LoRA this ComfyUI does not have loads through/);
   });
 });
+
+describe("ui_format", () => {
+  it("includes the detail when provided", () => {
+    const read = readReason({
+      code: "ui_format",
+      detail:
+        "TextGenerate (node 30:16) has 0.7 where its 'use_default_template' input takes a BOOLEAN, so its widget values do not line up with the node this ComfyUI has.",
+    });
+    expect(read.text).toContain(
+      "PixlStash could not turn this ComfyUI workflow into one it can run:",
+    );
+    expect(read.text).toContain("TextGenerate (node 30:16)");
+    expect(read.text).toContain(
+      "Open it in ComfyUI from here and PixlStash converts it there.",
+    );
+    expect(read.blocking).toBe(true);
+  });
+
+  it("still reads when no detail is provided", () => {
+    const read = readReason({ code: "ui_format" });
+    expect(read.text).toBe(
+      "PixlStash could not turn this ComfyUI workflow into one it can run. Open it in ComfyUI from here and PixlStash converts it there.",
+    );
+    expect(read.blocking).toBe(true);
+  });
+});

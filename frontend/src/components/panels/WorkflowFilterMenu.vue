@@ -162,6 +162,7 @@ const KINDS = {
   // The checkpoint glyph is the model shelf's, as in the grid's menu.
   checkpoint: { label: "Checkpoint", icon: "mdi-package-variant-closed" },
   source: { label: "Source", icon: "mdi-file-import-outline" },
+  origin: { label: "Origin", icon: "mdi-source-branch" },
   minRating: { label: "Rating", icon: "mdi-star-outline" },
   hideOneOffs: { label: "One-offs", icon: "mdi-numeric-1-circle-outline" },
   showHidden: { label: "Hidden", icon: "mdi-eye-off-outline" },
@@ -171,7 +172,7 @@ const KINDS = {
 // What a workflow is, how you judged it, and the flags that change which
 // cards exist at all — last, where the grid puts Problems.
 const SECTIONS = [
-  { label: "Workflow", kinds: ["type", "checkpoint", "source"] },
+  { label: "Workflow", kinds: ["type", "checkpoint", "source", "origin"] },
   { label: "Quality", kinds: ["minRating"] },
   { label: "Show", kinds: ["hideOneOffs", "showHidden", "ghosts"] },
 ];
@@ -236,6 +237,8 @@ function rows(kind) {
       ];
     case "source":
       return [{ id: null, label: "Any", count: total }, ...opts.sources];
+    case "origin":
+      return [{ id: null, label: "All", count: total }, ...opts.origins];
     case "minRating":
       return [
         { id: null, label: "Any", ariaLabel: "Any rating", count: total },

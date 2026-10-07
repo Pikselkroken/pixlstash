@@ -5,9 +5,11 @@ store an import uses, which matches by **content**. This module remembers the
 other identity, the **path** over there, and what was read from it:
 
 * **new** - a path with no row;
-* **changed** - a row whose path now holds different content;
+* **changed** - a row whose path now holds different content: a new version
+  of the workflow the row names (``hub/workflow_versions.py``);
 * **gone from ComfyUI** - a row whose path the listing no longer holds. The row
-  is pruned; the local file is never touched;
+  is kept and marked ``gone_at``, so its workflow keeps its versions and Open
+  can tell the file is gone; listed again, the mark clears;
 * **deleted here** - the owner deleted the file a pull stored. The rows naming
   it are marked ``dismissed`` and keep the content they held, and a later pull
   skips any document with that content **at any path and any origin**: a
@@ -38,6 +40,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Optional
 
 from pixlstash.hub.db import HubDatabase
+from pixlstash.services.comfyui_userdata import is_safe_workflow_path
 
 # The origin a watched-inbox file is recorded under, keyed by its content hash
 # (``remote_path`` is the hash too): one row per content, so a restart that
@@ -51,6 +54,23 @@ FILE_ORIGIN = "file"
 # The origin a built-in stored as a manual workflow is recorded under, keyed by
 # its file name, so ``POST /comfyui/workflows/{name}/card`` makes it once.
 BUILTIN_ORIGIN = "builtin"
+
+
+# The most live workflows a pull may have made from one ComfyUI address. The
+# per-pull budget bounds one pull; this bounds them all, since ComfyUI is
+# written by whoever reaches it and every new path there is a new card here.
+# At the cap a pull makes no new card; existing ones still take versions.
+MAX_PULL_CARDS_PER_ORIGIN = 2000
+
+
+def live_pull_cards(hub: HubDatabase, origin: str) -> int:
+    """How many live workflows a pull made from *origin* (deleted ones not)."""
+    return hub.fetchone(
+        "SELECT COUNT(DISTINCT o.workflow_name) FROM workflow_origin o "
+        "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
+        "WHERE o.origin = ? AND d.origin = 'pull'",
+        (origin,),
+    )[0]
 
 
 def _now() -> str:
@@ -84,13 +104,57 @@ def is_dismissed(
     )
 
 
-def last_content(hub: HubDatabase, origin: str, remote_path: str) -> Optional[str]:
-    """The content hash last read from this path, or ``None`` for a new one."""
-    row = hub.fetchone(
-        "SELECT content_hash FROM workflow_origin WHERE origin = ? AND remote_path = ?",
-        (origin, remote_path),
+def origin_rows(hub: HubDatabase, origin: str) -> dict[str, dict]:
+    """``{remote_path: row}`` of every row *origin* has, one read for a pull.
+
+    Each row carries ``workflow_name``, ``remote_modified``, ``content_hash``,
+    ``dismissed``, ``gone_at`` and ``live``: whether the workflow it names
+    still exists (always false for a row naming none, a built-in's copy).
+    """
+    return {
+        row["remote_path"]: dict(row)
+        for row in hub.fetchall(
+            "SELECT o.remote_path, o.workflow_name, o.remote_modified, "
+            "o.content_hash, o.dismissed, o.gone_at, "
+            "d.workflow_id IS NOT NULL AS live FROM workflow_origin o "
+            "LEFT JOIN workflow_document d ON d.workflow_id = o.workflow_name "
+            "WHERE o.origin = ?",
+            (origin,),
+        )
+    }
+
+
+def live_file(hub: HubDatabase, origin: str, workflow_id: str) -> Optional[dict]:
+    """The ComfyUI file at *origin* the live workflow *workflow_id* is linked to.
+
+    A row that is neither dismissed nor gone. Where several paths name the
+    workflow (a pull links a copy of a stored content to it), the one holding
+    its current version wins, then the most recently modified, then the path.
+    ``None`` when there is none. The row has ``remote_path``,
+    ``remote_modified`` and ``content_hash``.
+
+    **Only a workflow a pull made** (``origin`` ``pull``) has a ComfyUI file:
+    a path whose content matched a card the owner made never versions it, so
+    Open must not hand that card the file either. A row naming an unsafe path
+    (stored before listings were checked) is never answered.
+    """
+    rows = hub.fetchall(
+        "SELECT o.remote_path, o.remote_modified, o.content_hash "
+        "FROM workflow_origin o "
+        "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
+        "LEFT JOIN workflow_version v ON v.workflow_id = o.workflow_name "
+        "AND v.version = (SELECT MAX(version) FROM workflow_version "
+        "WHERE workflow_id = o.workflow_name) "
+        "WHERE o.origin = ? AND o.workflow_name = ? AND o.dismissed = 0 "
+        "AND o.gone_at IS NULL AND d.origin = 'pull' "
+        "ORDER BY (v.content_hash IS NOT NULL AND v.content_hash = o.content_hash) "
+        "DESC, o.remote_modified DESC, o.remote_path",
+        (origin, workflow_id),
     )
-    return row["content_hash"] if row else None
+    return next(
+        (dict(row) for row in rows if is_safe_workflow_path(row["remote_path"])),
+        None,
+    )
 
 
 def record_pulled(
@@ -119,7 +183,10 @@ def upsert(
     remote_modified: Optional[int],
     content_hash: Optional[str],
 ) -> None:
-    """:func:`record_pulled`'s write, inside the caller's transaction."""
+    """:func:`record_pulled`'s write, inside the caller's transaction.
+
+    A path read again is listed, so a ``gone_at`` mark clears.
+    """
     now = _now()
     conn.execute(
         "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
@@ -129,39 +196,54 @@ def upsert(
         "workflow_name = excluded.workflow_name, "
         "remote_modified = excluded.remote_modified, "
         "last_seen_at = excluded.last_seen_at, "
-        "content_hash = excluded.content_hash",
+        "content_hash = excluded.content_hash, "
+        "gone_at = NULL",
         (origin, remote_path, workflow_name, remote_modified, now, now, content_hash),
     )
 
 
-def prune_gone(hub: HubDatabase, origin: str, listed: Iterable[str]) -> int:
-    """Forget the rows for paths *origin* no longer lists. Returns how many.
+def mark_gone(hub: HubDatabase, origin: str, listed: Iterable[str]) -> int:
+    """Mark the rows for paths *origin* no longer lists, and clear the mark on
+    the ones it lists again. Returns how many were newly marked.
 
-    **Dismissed rows are kept**: they are the record of a delete, and a path
-    that is gone today can be listed again tomorrow. **An empty listing prunes
-    nothing**: an install that suddenly has no saved workflows (another user
-    directory, a proxy answering 404, another ComfyUI on the port) is far more
-    likely than one whose every workflow was deleted, and pruning on it would
-    forget every path at once. The stored files are never touched.
+    **Nothing is deleted**: the workflow a gone file was pulled as keeps its
+    versions, and its row says the link is gone. Dismissed rows are left as
+    they are. **An empty listing marks nothing**: an install that suddenly has
+    no saved workflows (another user directory, a proxy answering 404, another
+    ComfyUI on the port) is far more likely than one whose every workflow was
+    deleted.
     """
     listed = set(listed)
     if not listed:
         return 0
-    gone = {
+    rows = hub.fetchall(
+        "SELECT remote_path, gone_at FROM workflow_origin WHERE origin = ? "
+        "AND dismissed = 0",
+        (origin,),
+    )
+    gone = sorted(
         row["remote_path"]
-        for row in hub.fetchall(
-            "SELECT remote_path FROM workflow_origin WHERE origin = ? "
-            "AND dismissed = 0",
-            (origin,),
-        )
-    } - listed
-    if not gone:
+        for row in rows
+        if row["gone_at"] is None and row["remote_path"] not in listed
+    )
+    back = sorted(
+        row["remote_path"]
+        for row in rows
+        if row["gone_at"] is not None and row["remote_path"] in listed
+    )
+    if not gone and not back:
         return 0
+    now = _now()
     with hub.transaction() as conn:
         conn.executemany(
-            "DELETE FROM workflow_origin WHERE origin = ? AND remote_path = ? "
-            "AND dismissed = 0",
-            [(origin, path) for path in sorted(gone)],
+            "UPDATE workflow_origin SET gone_at = ? WHERE origin = ? "
+            "AND remote_path = ?",
+            [(now, origin, path) for path in gone],
+        )
+        conn.executemany(
+            "UPDATE workflow_origin SET gone_at = NULL, last_seen_at = ? "
+            "WHERE origin = ? AND remote_path = ?",
+            [(now, origin, path) for path in back],
         )
     return len(gone)
 
@@ -190,12 +272,19 @@ def dismiss_file(hub: HubDatabase, workflow_name: str) -> int:
         )
 
 
-def stored_as(hub: HubDatabase, content_hash: Optional[str]) -> Optional[str]:
+def stored_as(
+    hub: HubDatabase, content_hash: Optional[str], pulled_only: bool = False
+) -> Optional[str]:
     """The live manual workflow some origin already stored this content as.
 
     Any origin - a pull, the inbox, a built-in - and never a dismissed row, so
     a content the owner deleted is stored again when they hand it over again.
     The oldest wins, so two reads agree. ``None`` for no hash.
+
+    Args:
+        pulled_only: Only a workflow a pull made (``workflow_document.origin``
+            ``pull``): what a pull may link a path to. A path linked to a card
+            the owner made would version it on the file's next change.
     """
     if content_hash is None:
         return None
@@ -203,18 +292,26 @@ def stored_as(hub: HubDatabase, content_hash: Optional[str]) -> Optional[str]:
         "SELECT o.workflow_name FROM workflow_origin o "
         "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
         "WHERE o.content_hash = ? AND o.dismissed = 0 "
-        "ORDER BY o.first_pulled_at, o.origin, o.remote_path LIMIT 1",
+        + ("AND d.origin = 'pull' " if pulled_only else "")
+        + "ORDER BY o.first_pulled_at, o.origin, o.remote_path LIMIT 1",
         (content_hash,),
     )
     return row["workflow_name"] if row else None
 
 
-def stored_at(hub: HubDatabase, origin: str, remote_path: str) -> Optional[str]:
-    """The live manual workflow one origin's path is stored as, or ``None``."""
+def stored_at(
+    hub: HubDatabase, origin: str, remote_path: str, pulled_only: bool = False
+) -> Optional[str]:
+    """The live manual workflow one origin's path is stored as, or ``None``.
+
+    *pulled_only* as :func:`stored_as`: a link an earlier build made to a card
+    the owner made is not followed.
+    """
     row = hub.fetchone(
         "SELECT o.workflow_name FROM workflow_origin o "
         "JOIN workflow_document d ON d.workflow_id = o.workflow_name "
-        "WHERE o.origin = ? AND o.remote_path = ?",
+        "WHERE o.origin = ? AND o.remote_path = ?"
+        + (" AND d.origin = 'pull'" if pulled_only else ""),
         (origin, remote_path),
     )
     return row["workflow_name"] if row else None

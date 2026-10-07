@@ -20,9 +20,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub import workflow_origin
+from pixlstash.hub import workflow_origin, workflow_versions
 from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN, FILE_ORIGIN, INBOX_ORIGIN
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import workflow_bindings
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX, stamp_workflow_id
 
@@ -209,7 +210,9 @@ def create_manual_workflow(
     run of it started in ComfyUI files its pictures here.
     """
     workflow_id = f"{MANUAL_PREFIX}{uuid.uuid4().hex}"
-    document = stamp_workflow_id(document, workflow_id)
+    stored = json.dumps(stamp_workflow_id(document, workflow_id))
+    stored_api = json.dumps(api_document) if api_document is not None else None
+    created_at = datetime.now(timezone.utc).isoformat()
     with hub.transaction() as conn:
         conn.execute(
             "INSERT INTO workflow_document (workflow_id, document, api_document, "
@@ -217,13 +220,24 @@ def create_manual_workflow(
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 workflow_id,
-                json.dumps(document),
-                json.dumps(api_document) if api_document is not None else None,
+                stored,
+                stored_api,
                 origin,
                 from_workflow_id,
                 from_name,
-                datetime.now(timezone.utc).isoformat(),
+                created_at,
             ),
+        )
+        workflow_versions.insert_version(
+            conn,
+            workflow_id,
+            1,
+            stored,
+            stored_api,
+            origin,
+            content_hash=record[3] if record is not None else None,
+            remote_modified=record[2] if record is not None else None,
+            created_at=created_at,
         )
         conn.execute(
             "INSERT INTO workflow_group_attr (workflow_id, name) VALUES (?, ?) "
@@ -245,14 +259,68 @@ def create_manual_workflow(
 
 
 def set_manual_api_document(
-    hub: HubDatabase, workflow_ids: list[str], api_document: dict
-) -> None:
-    """Store ComfyUI's API conversion on each named manual workflow."""
+    hub: HubDatabase,
+    workflow_ids: list[str],
+    api_document: dict,
+    canonical: Optional[str] = None,
+    *,
+    keep_stored: bool = False,
+) -> list[str]:
+    """Store an API conversion on each named manual workflow.
+
+    On ``workflow_document`` and on the current version, which is the one it
+    converts. With *canonical* (``workflow_bindings.canonical`` of the document
+    that was converted), a workflow whose current document no longer is that
+    one - a pull made a new version since it was matched - is left alone, read
+    and written in one write transaction, so the conversion of one version
+    never lands on the next. Returns the ids it was stored on.
+
+    *keep_stored* is PixlStash's own conversion
+    (``workflow_card_service.converted_manual_document``): it fills only a
+    version with no conversion yet, so ComfyUI's (the node's *Convert for
+    PixlStash*, stored without it) always wins, whichever arrived first.
+    """
+    stored = json.dumps(api_document)
+    unset = " AND api_document IS NULL" if keep_stored else ""
     with hub.transaction() as conn:
-        conn.executemany(
-            "UPDATE workflow_document SET api_document = ? WHERE workflow_id = ?",
-            [(json.dumps(api_document), workflow_id) for workflow_id in workflow_ids],
-        )
+        written = []
+        for workflow_id in workflow_ids:
+            if canonical is not None:
+                row = conn.execute(
+                    "SELECT document FROM workflow_document WHERE workflow_id = ?",
+                    (workflow_id,),
+                ).fetchone()
+                if row is None or not _holds(row[0], canonical):
+                    logger.info(
+                        "Manual workflow %s changed since it matched a "
+                        "conversion; the conversion is not stored on it.",
+                        workflow_id,
+                    )
+                    continue
+            if not conn.execute(
+                "UPDATE workflow_document SET api_document = ? WHERE workflow_id = ?"
+                + unset,
+                (stored, workflow_id),
+            ).rowcount:
+                continue
+            # And on the version it converts: the current one.
+            conn.execute(
+                "UPDATE workflow_version SET api_document = ? WHERE workflow_id = ? "
+                "AND version = (SELECT MAX(version) FROM workflow_version "
+                "WHERE workflow_id = ?)" + unset,
+                (stored, workflow_id, workflow_id),
+            )
+            written.append(workflow_id)
+    return written
+
+
+def _holds(document: str, canonical: str) -> bool:
+    """Whether the stored *document* is *canonical* (logged when it will not read)."""
+    try:
+        return workflow_bindings.canonical(json.loads(document)) == canonical
+    except (ValueError, RecursionError, AttributeError) as exc:
+        logger.warning("A stored manual document will not read to compare: %s", exc)
+        return False
 
 
 def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
@@ -279,6 +347,7 @@ def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
             "workflow_group_pins",
             "workflow_group_picture_input",
             "workflow_group_attr",
+            "workflow_version",
             "workflow_document",
         ):
             conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (workflow_id,))

@@ -276,6 +276,10 @@ class Source:
     # import dialog stored says which picture inputs a run may fill: `[]` is a
     # file that opted out of every one. `None` is a file without the key.
     bindings: Optional[list] = None
+    # The version of a manual workflow's document this graph is
+    # (`hub/workflow_versions.py`), recorded on the pictures its run makes.
+    # None for every other source.
+    workflow_version: Optional[int] = None
 
 
 @dataclass
@@ -359,6 +363,7 @@ def resolve_source(
     picture_id: Optional[int] = None,
     instance_documents: Optional[list[tuple[str, dict]]] = None,
     asset_names: Optional[dict[str, list[tuple[str, str]]]] = None,
+    file_problems: Optional[list[str]] = None,
 ) -> tuple[Optional[Source], Optional[Reason]]:
     """What to submit for a card, in the order the brief fixes.
 
@@ -375,6 +380,10 @@ def resolve_source(
     but unusable (a UI-format file) falls through to the next rather than
     failing the card: the owner's question is "can this run", and one export in
     the wrong format is not an answer to it.
+
+    ``file_problems`` are the converter's sentences for an editor-format file
+    that would not convert; a ``ui_format`` reason carries them as ``detail``
+    (the first) and ``problems`` (all), so the owner is told why.
     """
     ui_only = False
     if file_document:
@@ -416,10 +425,13 @@ def resolve_source(
     # but when nothing else did, ``no_runnable_source`` would send the owner
     # looking for a workflow they are in fact holding, in the wrong format.
     # The card key is internal (#1623); the caller names the workflow.
-    return None, Reason(
-        UI_FORMAT if ui_only else NO_RUNNABLE_SOURCE,
-        {"file_name": getattr(card, "file_name", None)} if ui_only else {},
-    )
+    if not ui_only:
+        return None, Reason(NO_RUNNABLE_SOURCE, {})
+    detail: dict[str, Any] = {"file_name": getattr(card, "file_name", None)}
+    if file_problems:
+        detail["detail"] = file_problems[0]
+        detail["problems"] = list(file_problems)
+    return None, Reason(UI_FORMAT, detail)
 
 
 def judge(

@@ -6095,33 +6095,36 @@ with them, so navigating away would shut the popup the reader had just opened. `
 either way: it is one close's instruction, not a property of the route that
 later closes inherit.
 
-**Pulling ComfyUI's saved workflows** (#1440). *Pull from ComfyUI* sits beside
-*Add…* in the toolbar, and in the empty state in place of *Connect ComfyUI*,
-only once ComfyUI is connected (`filterStore.comfyuiConfigured`). It starts a
-server task (the Tasks tab draws its row, labelled `comfyui_workflow_pull`), and
-`useWorkflowPullStore` watches it. What it found is `panels/WorkflowPullSummary.vue`,
-a band under the toolbar in the `.wfv-note` family that stays until dismissed,
-because the counts are the point and a toast would take them away unread. The
-sentences are `utils/workflowPull.js` (pure, tested without a mount) and keep
-the issue's rules: every verdict names the machine (the ComfyUI's host), a
-workflow using nodes that ComfyUI lacks *won't run on it* (`error`, never
-"broken"), a model file it does not list is a `warning` because an editor
-file's model names are read by position, and anything not checked is its own
-`unchecked` kind, so it can never pass for fine. Each kind has its own glyph and
-the glyph carries the hue (`surface-<status>`); the text stays in the surface's
-ink. It also says where new workflows went: with no pictures they count as
-one-offs, which the grid hides while Filters › One-offs is on *Hide*, and it offers
-*Show one-offs* right there. A failed pull offers *Try again*. The band has no
-live region of its own: a permanently mounted `role="status"` is written on
-each phase change (a region that arrives already filled is skipped by several
-screen readers), the failure is a `role="alert"`, and Dismiss hands focus back
-to the toolbar's *Pull from ComfyUI* rather than dropping it to `<body>`. Both
-pull buttons use the shared `loading` prop, which refuses a second press.
-On mount the screen calls `resume()`, which adopts a pull already running on the
-server (a reload, another tab) so the button reads *Pulling…*, and never a
-finished one. `useWorkflowPullStore` bumps a session epoch on reset and checks it after every
-await, so an answer to the owner's poll that lands after a switch to a share
-session is dropped instead of writing the owner's ComfyUI into it.
+**ComfyUI's saved workflows come in by themselves** (#1440). There is no pull
+button: the server pulls every minute while a ComfyUI address is saved and the
+user setting `pull_comfyui_workflows` is on (the *Pull workflows from ComfyUI*
+switch in `ComfyuiHostSection.vue`, on by default), and once after Link. While
+ComfyUI is configured the Workflows view calls `useWorkflowPullStore.watch()`,
+which asks the pull status every 5 s (`PULL_WATCH_MS`) until `unwatch()` on
+unmount; a permanently mounted `role="status"` in the toolbar reads *Checking
+ComfyUI…* only while a pull runs, and dims nothing. A pull already finished when
+watching starts is the baseline, not news. Only a pull that finished under watch
+and pulled or changed something shows `panels/WorkflowPullSummary.vue`, a band
+under the toolbar in the `.wfv-note` family that stays until dismissed (the
+counts are the point), and re-reads the grid; a pull that changed nothing, or
+failed, shows nothing (a failure is a `console.warn`). The sentences are
+`utils/workflowPull.js` (pure, tested without a mount) and keep the issue's
+rules: every verdict names the machine, a workflow using nodes that ComfyUI
+lacks *won't run on it* (`error`, never "broken"), a model file it does not list
+is a `warning`, and anything not checked is its own `unchecked` kind. Each kind
+has its own glyph and the glyph carries the hue (`surface-<status>`). Dismiss
+hands focus to the grid. The store bumps a session epoch on reset and checks it
+after every await, so an answer landing after a switch to a share session is
+dropped.
+
+A card from ComfyUI (`origin_category === "comfyui"`) carries the ComfyUI
+logomark (`widgets/ComfyuiIcon.vue`, 12 px) as a scrim badge in its top-start
+corner (`role="img"`, *From ComfyUI*, also appended to the card's accessible
+name). Filters › Origin narrows the grid to *ComfyUI*, *From pictures*
+(automatic cards) or *Our own* (clones, copies, imports, recipe extracts,
+built-ins), with counts and a chip, not persisted. The inspector shows
+*Version N · date* (`versions`, `version_at`) for a ComfyUI card or one with
+more than one version.
 
 **Running a workflow is the Run popup** (#1407, `io/RunDialog.vue`), described
 in full under "The io/ dialogs" above. From this screen the Workflow tab's

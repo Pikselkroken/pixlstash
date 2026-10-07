@@ -34,7 +34,7 @@ from typing import List, Optional, Sequence
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, exists, func, not_, or_, text
+from sqlalchemy import and_, case, exists, func, not_, or_, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import select
 
@@ -71,6 +71,23 @@ def made_by_live_manual(live: Sequence[str]) -> ColumnElement:
     A picture naming a manual workflow that has since been deleted is in none.
     """
     return _in_json(Picture.run_workflow_id, live)
+
+
+def filed_as(live: Sequence[str]) -> ColumnElement:
+    """The key a kept picture is filed under: its live manual workflow, else its variant.
+
+    A picture a manual workflow's run made (``run_workflow_id``) belongs to
+    THAT workflow while it lives, not to the automatic one its variant is in.
+    Every per-workflow read of pictures (the grid's counts and covers, a
+    workflow's pictures, its recipes' credit and looks) groups or narrows by
+    this, so a manual workflow is one more key beside the variants.
+    """
+    if not live:
+        return Picture.workflow_structural_hash
+    return case(
+        (made_by_live_manual(live), Picture.run_workflow_id),
+        else_=Picture.workflow_structural_hash,
+    )
 
 
 def workflow_keys_predicate(keys: Sequence[str]) -> ColumnElement:

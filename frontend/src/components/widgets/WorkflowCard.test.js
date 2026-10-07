@@ -1133,3 +1133,36 @@ describe("the selection mark", () => {
     expect(rule(".wf-card").background).toBe("rgb(var(--v-theme-surface))");
   });
 });
+
+describe("the ComfyUI badge", () => {
+  const base = { id: "w", name: "Flux", picture_count: 2, covers: [] };
+  const badge = (w) => w.find('[data-testid="wf-card-comfyui"]');
+
+  it("marks a card pulled from ComfyUI, named for assistive tech", () => {
+    const wrapper = mountCard({ ...base, origin_category: "comfyui" });
+    expect(badge(wrapper).exists()).toBe(true);
+    expect(badge(wrapper).attributes("role")).toBe("img");
+    expect(badge(wrapper).attributes("aria-label")).toBe("From ComfyUI");
+    expect(badge(wrapper).find("svg").exists()).toBe(true);
+    // The card's own name says it too, since the rows are aria-hidden.
+    expect(wrapper.find("article").attributes("aria-label")).toContain(
+      "from ComfyUI",
+    );
+  });
+
+  it.each(["pictures", "own", undefined])(
+    "leaves a %s card unmarked",
+    (origin) => {
+      const wrapper = mountCard({ ...base, origin_category: origin });
+      expect(badge(wrapper).exists()).toBe(false);
+      expect(wrapper.find("article").attributes("aria-label")).not.toContain(
+        "ComfyUI",
+      );
+    },
+  );
+
+  it("sits top-start, the corner the cover's badges leave free", () => {
+    const css = styleBlock();
+    expect(css).toMatch(/\.wf-card__badge--origin\s*{[^}]*left:\s*var\(--space-3\)/);
+  });
+});

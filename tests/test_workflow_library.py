@@ -40,7 +40,7 @@ from sqlmodel import delete as sqlmodel_delete, select
 from pixlstash.db_models import DeletedFileLog, Generation, Picture
 from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub import workflow_card_reads
+from pixlstash.hub import workflow_card_reads, workflow_versions
 from pixlstash.hub.workflow_card_reads import workflow_of_variant
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
@@ -1682,6 +1682,73 @@ def test_the_tag_never_overwrites_the_workflow_pixlstash_ran(store, manual_flow)
     run_extraction(store, [picture_id])
 
     assert read_picture(store, picture_id).run_workflow_id == ran
+
+
+def _second_version(store, workflow_id):
+    """Make an edited copy of the workflow's document its version 2; return it."""
+    edited = copy.deepcopy(stored_document(store, workflow_id))
+    edited["nodes"][0]["pos"] = [321, 654]
+    with store.hub.transaction() as conn:
+        assert workflow_versions.append_version(conn, workflow_id, edited) == 2
+    return stored_document(store, workflow_id)
+
+
+def test_a_comfyui_run_records_the_version_its_graph_is(store, manual_flow):
+    """The editor graph a ComfyUI run embeds is compared with the workflow's
+    versions by content: equal to version 2 is 2, and the version 1 graph run
+    after version 2 landed is still 1."""
+    second = _second_version(store, manual_flow)
+    first = {
+        **copy.deepcopy(second),
+        "nodes": ui_workflow(TXT2IMG)["nodes"],
+    }
+    made = {}
+    for name, workflow in (("v2.png", second), ("v1.png", first)):
+        write_png(
+            Path(store.image_root), name, api=api_graph(TXT2IMG), workflow=workflow
+        )
+        made[name] = add_picture(store, name)
+
+    run_extraction(store, list(made.values()))
+
+    assert read_picture(store, made["v2.png"]).run_workflow_version == 2
+    assert read_picture(store, made["v1.png"]).run_workflow_version == 1
+
+
+def test_a_comfyui_graph_with_unsaved_edits_records_no_version(store, manual_flow):
+    """No version holds it: NULL, never the nearest one."""
+    edited = copy.deepcopy(_second_version(store, manual_flow))
+    edited["nodes"][0]["pos"] = [999, 999]
+    name = write_png(
+        Path(store.image_root), "edited.png", api=api_graph(TXT2IMG), workflow=edited
+    )
+    picture_id = add_picture(store, name)
+
+    run_extraction(store, [picture_id])
+
+    picture = read_picture(store, picture_id)
+    assert picture.run_workflow_id == manual_flow
+    assert picture.run_workflow_version is None
+
+
+def test_the_version_a_pixlstash_run_recorded_is_kept(store, manual_flow):
+    """A Run records what it submitted; the content comparison never replaces it."""
+    second = _second_version(store, manual_flow)
+    name = write_png(
+        Path(store.image_root), "ran-v.png", api=api_graph(TXT2IMG), workflow=second
+    )
+    picture_id = add_picture(store, name)
+
+    def ran(session):
+        picture = session.get(Picture, picture_id)
+        picture.run_workflow_id = manual_flow
+        picture.run_workflow_version = 7
+        session.commit()
+
+    store.vault.run_task(ran)
+    run_extraction(store, [picture_id])
+
+    assert read_picture(store, picture_id).run_workflow_version == 7
 
 
 def test_every_return_path_reports_the_same_keys(store):

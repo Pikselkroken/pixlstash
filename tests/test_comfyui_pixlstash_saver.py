@@ -292,8 +292,8 @@ class TestOutputProcessing:
         monkeypatch.setattr(
             comfyui_service,
             "_set_run_workflow_id",
-            lambda srv, workflow_id, ids: calls.__setitem__(
-                "filed", (workflow_id, ids)
+            lambda srv, workflow_id, ids, version=None: calls.__setitem__(
+                "filed", (workflow_id, ids, version)
             ),
         )
 
@@ -310,8 +310,10 @@ class TestOutputProcessing:
             pixlstash_ids=[41],
             imported=[40],
             run_workflow_id="manual:" + "a" * 32,
+            run_workflow_version=3,
         )
-        assert calls["filed"] == ("manual:" + "a" * 32, [40, 41])
+        # With the version of its document the run submitted.
+        assert calls["filed"] == ("manual:" + "a" * 32, [40, 41], 3)
         _server, calls = self._run(
             monkeypatch, images=[], pixlstash_ids=[41], imported=[]
         )

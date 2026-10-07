@@ -27,7 +27,7 @@ from sqlmodel import Session, select
 from pixlstash.db_models import Character, Picture, PictureSet, Project
 from pixlstash.services.saved_recipe_service import counts_by_workflow_id
 from pixlstash.stacking import get_or_create_stack_for_picture
-from pixlstash.utils.query.predicate_filter import made_by_live_manual
+from pixlstash.utils.query.predicate_filter import filed_as as _filed_as
 
 
 @dataclass(frozen=True)
@@ -164,16 +164,6 @@ _STARS = range(1, 6)
 # which is the manual id for such a picture and the variant otherwise, so a
 # manual workflow is one more key beside the variants.
 # ---------------------------------------------------------------------------
-
-
-def _filed_as(live: list[str]):
-    """The key a kept picture counts under: its live manual workflow, else its variant."""
-    if not live:
-        return Picture.workflow_structural_hash
-    return case(
-        (made_by_live_manual(live), Picture.run_workflow_id),
-        else_=Picture.workflow_structural_hash,
-    )
 
 
 @dataclass(frozen=True)
