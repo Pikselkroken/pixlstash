@@ -389,14 +389,16 @@ function markComfyuiPromptComplete(promptKey, reason) {
   emit("refresh-sidebar");
   scheduleComfyuiRefreshRetry(promptKey, pictureId, 1);
   clearComfyuiHideTimer();
-  progress.visible = false;
-  progress.status = "idle";
-  progress.percent = 0;
-  progress.message = "ComfyUI running...";
   if (comfyuiActivePromptIds.value.size === 0) {
     stopComfyuiWatchdog();
     finalizeComfyuiProgress({ refresh: false });
+    return;
   }
+  // Others of this tab's prompts are still queued or running: the row stays.
+  progress.visible = true;
+  progress.status = "running";
+  progress.percent = 0;
+  progress.message = "ComfyUI running...";
 }
 
 function markComfyuiPromptFailed(promptKey, reason, errorMessage) {
@@ -604,30 +606,15 @@ function handleComfyuiPayload(payload) {
     return;
   }
 
+  // Display only. A percent is one node's sampler (`progress` is per node), so
+  // 100 here is the first of a two-pass graph done, not the prompt: only
+  // `executing` with no node or `execution_success` end a prompt.
   const overallPercent = extractOverallComfyuiPercent(payload);
   if (overallPercent != null) {
     progress.percent = overallPercent;
     progress.visible = true;
     progress.status = "running";
     progress.message = "ComfyUI running...";
-    if (overallPercent >= 100) {
-      if (promptKey) {
-        logComfyuiDebug("finalize-from-percent", {
-          promptKey,
-          overallPercent,
-        });
-        markComfyuiPromptComplete(promptKey, "overall-percent");
-        pruneStaleComfyuiPrompts(now);
-        return;
-      }
-      if (active.size <= 1) {
-        active.clear();
-        comfyuiActivePromptIds.value = new Set(active);
-        finalizeComfyuiProgress({ refresh: true });
-        pruneStaleComfyuiPrompts(now);
-        return;
-      }
-    }
   }
 
   if (type === "progress") {
@@ -638,22 +625,9 @@ function handleComfyuiPayload(payload) {
       progress.visible = true;
       progress.status = "running";
       progress.message = "ComfyUI running...";
-      if (promptKey && value >= max) {
-        markComfyuiPromptComplete(promptKey, "progress-max");
-      }
     }
     pruneStaleComfyuiPrompts(now);
     return;
-  }
-
-  if (type === "progress_state") {
-    const value = Number(data?.value ?? data?.current ?? 0);
-    const max = Number(data?.max ?? data?.total ?? 0);
-    if (promptKey && max > 0 && value >= max) {
-      markComfyuiPromptComplete(promptKey, "progress-state-max");
-      pruneStaleComfyuiPrompts(now);
-      return;
-    }
   }
 
   if (type === "status" && overallPercent != null) {

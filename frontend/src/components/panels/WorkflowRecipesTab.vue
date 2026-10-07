@@ -7,7 +7,7 @@
       v-if="!unfiled || recipes.length"
       class="inspector-section wfrt-head"
     >
-      <p class="wfrt-title">{{ workflowName }}</p>
+      <BreakableTitle class="wfrt-title" :name="workflowName" />
       <p class="wfrt-sub">{{ subtitle }}</p>
     </div>
 
@@ -444,6 +444,7 @@ import MakeDefaultsDialog from "../io/MakeDefaultsDialog.vue";
 import SaveRecipeDialog from "../io/SaveRecipeDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
+import BreakableTitle from "../widgets/BreakableTitle.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
