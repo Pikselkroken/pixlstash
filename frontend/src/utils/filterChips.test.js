@@ -170,6 +170,16 @@ describe("a workflow and the value opened with it (#1653)", () => {
     expect(s.workflowFilter).toEqual([{ id: "w1", name: "Portrait" }]);
   });
 
+  it("Clear all, chip by chip, leaves no workflow behind a LoRA chip", () => {
+    const s = useFilterStore();
+    s.workflowFilter = [
+      { id: "w1", name: "Portrait", lora: "asset:abc", loraName: "Bo" },
+    ];
+    // What Clear all does: every chip of the list taken at the start.
+    for (const chip of filterChips(s)) chip.remove();
+    expect(s.workflowFilter).toEqual([]);
+  });
+
   it("gives each of several workflows a chip, and × takes only its own (#1797)", () => {
     const s = useFilterStore();
     s.workflowFilter = [

@@ -346,11 +346,13 @@ export function filterChips(store, { allPicturesView = true } = {}) {
   // workflow it is not sent (`workflowFilterParams`), so it gets no chip.
   const only = workflows.length === 1 ? workflows[0] : null;
   if (only?.lora) {
+    // Off the store as it is NOW, never the entry captured here: Clear all
+    // runs the Workflow chip's × first, and writing this one back would
+    // restore the workflow it just removed.
     push("workflow-lora", "LoRA", only.loraName || "A forgotten LoRA", () => {
-      const rest = { ...only };
-      delete rest.lora;
-      delete rest.loraName;
-      store.workflowFilter = [rest];
+      store.workflowFilter = (store.workflowFilter || []).map(
+        ({ lora: _lora, loraName: _loraName, ...rest }) => rest,
+      );
     });
   }
   /** The Workflow tab's short name for the value it opened, else the file's. */
