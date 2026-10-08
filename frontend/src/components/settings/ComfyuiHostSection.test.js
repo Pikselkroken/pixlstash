@@ -66,6 +66,9 @@ const LINKED = {
   pixlstash_url: "http://127.0.0.1:9537/",
   where: "this_computer",
   linked_at: "2026-10-06T09:30:00Z",
+  bound_address: "127.0.0.1",
+  refused_from: null,
+  exposure: null,
 };
 
 const status = (wrapper) => wrapper.find('[data-testid="comfyui-pack-status"]');
@@ -427,14 +430,92 @@ describe("linking ComfyUI", () => {
       comfyui_url: "http://comfy-box.local:8188/",
     });
     const onNetwork = await mountPane();
-    expect(byTestId(onNetwork, "comfyui-network-warning").text()).toContain(
-      "anyone on your network who opens it can see the key",
+    expect(byTestId(onNetwork, "comfyui-exposure-notice").text()).toContain(
+      "Link it only on a network you trust",
     );
     config.getUserConfig.mockResolvedValue({
       comfyui_url: "http://127.0.0.1:8188/",
     });
     const local = await mountPane();
-    expect(byTestId(local, "comfyui-network-warning").exists()).toBe(false);
+    expect(byTestId(local, "comfyui-exposure-notice").exists()).toBe(false);
+  });
+
+  it("warns before linking a ComfyUI here that was started with --listen", async () => {
+    comfyui.probeComfyui.mockResolvedValue({
+      reachable: true,
+      url: "http://127.0.0.1:8188/",
+      listens_on_network: true,
+    });
+    const wrapper = await mountPane();
+    expect(byTestId(wrapper, "comfyui-exposure-notice").text()).toContain(
+      "restart it without --listen",
+    );
+  });
+
+  it("keeps warning once linked when other computers can reach ComfyUI", async () => {
+    comfyui.getComfyuiLink.mockResolvedValue({ ...LINKED, exposure: "listening" });
+    const wrapper = await mountPane();
+    expect(byTestId(wrapper, "comfyui-exposure-notice").exists()).toBe(true);
+    expect(byTestId(wrapper, "comfyui-relink").exists()).toBe(false);
+  });
+
+  it("Check again clears the warning once ComfyUI stops listening on the network", async () => {
+    comfyui.getComfyuiLink.mockResolvedValue({ ...LINKED, exposure: "listening" });
+    comfyui.probeComfyui.mockResolvedValue({
+      reachable: true,
+      url: "http://127.0.0.1:8188/",
+      listens_on_network: true,
+    });
+    const wrapper = await mountPane();
+    expect(byTestId(wrapper, "comfyui-exposure-notice").exists()).toBe(true);
+    comfyui.probeComfyui.mockResolvedValue({
+      reachable: true,
+      url: "http://127.0.0.1:8188/",
+      listens_on_network: false,
+    });
+    await byTestId(wrapper, "comfyui-check-again").trigger("click");
+    await flushPromises();
+    expect(byTestId(wrapper, "comfyui-exposure-notice").exists()).toBe(false);
+  });
+
+  it("offers Link again when ComfyUI's key was refused from another address", async () => {
+    comfyui.getComfyuiLink.mockResolvedValue({
+      ...LINKED,
+      where: "local_network",
+      bound_address: "192.0.2.4",
+      refused_from: "192.0.2.7",
+    });
+    const wrapper = await mountPane();
+    const said = byTestId(wrapper, "comfyui-key-refused").text();
+    expect(said).toContain("refused ComfyUI's key from 192.0.2.7");
+    expect(said).toContain("only works from 192.0.2.4");
+    const relink = byTestId(wrapper, "comfyui-relink");
+    expect(relink.classes()).toContain("app-btn--primary");
+    await relink.trigger("click");
+    await flushPromises();
+    expect(comfyui.linkComfyui).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Link again, quietly, for a link made before keys were bound", async () => {
+    comfyui.getComfyuiLink.mockResolvedValue({ ...LINKED, bound_address: null });
+    const wrapper = await mountPane();
+    expect(byTestId(wrapper, "comfyui-key-unbound").exists()).toBe(true);
+    expect(byTestId(wrapper, "comfyui-relink").classes()).not.toContain(
+      "app-btn--primary",
+    );
+  });
+
+  it("Check again reads the link again", async () => {
+    comfyui.getComfyuiLink.mockResolvedValue(LINKED);
+    const wrapper = await mountPane();
+    expect(byTestId(wrapper, "comfyui-key-refused").exists()).toBe(false);
+    comfyui.getComfyuiLink.mockResolvedValue({
+      ...LINKED,
+      refused_from: "192.0.2.7",
+    });
+    await byTestId(wrapper, "comfyui-check-again").trigger("click");
+    await flushPromises();
+    expect(byTestId(wrapper, "comfyui-key-refused").exists()).toBe(true);
   });
 
   it("says Full access with the date when linked, with no primary", async () => {

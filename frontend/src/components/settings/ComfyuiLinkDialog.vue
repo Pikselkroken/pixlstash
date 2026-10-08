@@ -8,6 +8,9 @@
 // step offers to install the copy PixlStash ships, then polls
 // `GET /comfyui/pixlstash-node` until ComfyUI is back with them loaded and
 // links again by itself.
+//
+// When the reply says other computers can reach this ComfyUI (`exposure`), a
+// notice under the steps says what that lets them do and how to stop it.
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon, VProgressCircular } from "vuetify/components";
 import {
@@ -22,6 +25,7 @@ import {
 } from "../../utils/runReasons";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
+import ComfyuiExposureNotice from "./ComfyuiExposureNotice.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -325,10 +329,6 @@ onBeforeUnmount(stopPolling);
               is needed. {{ PIXLSTASH_PACK_INSTALL }}
             </p>
             <template v-else-if="REMOTE_REASONS.includes(row.reason)">
-              <p class="cl-fix__text">
-                ComfyUI's own page stays plain HTTP, so anyone on your network
-                who opens it can see the key.
-              </p>
               <p v-if="!desktop" class="cl-fix__text">
                 Turn on remote access with HTTPS in PixlStash's server
                 settings, then try again.
@@ -406,6 +406,12 @@ onBeforeUnmount(stopPolling);
         </div>
       </li>
     </ol>
+
+    <ComfyuiExposureNotice
+      v-if="reply?.exposure"
+      class="cl-exposure"
+      :exposure="reply.exposure"
+    />
 
     <div v-if="requestError" class="cl-fix">
       <p class="cl-error" role="alert" data-testid="comfyui-link-error">
@@ -505,6 +511,10 @@ onBeforeUnmount(stopPolling);
 .cl-step--not_run .cl-step__name {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   font-weight: var(--weight-regular);
+}
+
+.cl-exposure {
+  margin-top: var(--space-5);
 }
 
 .cl-fix {

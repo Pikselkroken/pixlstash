@@ -19,6 +19,7 @@ import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
 import FieldLabel from "../widgets/FieldLabel.vue";
 import Segmented from "../widgets/Segmented.vue";
+import ComfyuiExposureNotice from "./ComfyuiExposureNotice.vue";
 import ComfyuiLinkDialog from "./ComfyuiLinkDialog.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -51,6 +52,8 @@ const SCHEME_OPTIONS = [
 const state = ref("idle");
 const comfyuiUrl = ref("");
 const foundUrl = ref("");
+// The probe reply `foundUrl` came from, kept for what it says about --listen.
+let foundProbe = null;
 const busy = ref(false);
 const actionError = ref("");
 // The newest probe of the saved URL (on load, after a save, Check again);
@@ -81,10 +84,10 @@ async function setPullEnabled(value) {
 
 const unreachable = computed(() => lastProbe.value?.reachable === false);
 
-// A ComfyUI that is not on this computer is linked over the network, and its
-// own page is plain HTTP, so the key it is given can be read there. Said before
-// the person links, not only when a link step fails.
-// `URL.hostname` keeps an IPv6 host in its brackets.
+// A ComfyUI that other computers can reach lets them use PixlStash through
+// it. Said before the person links, not only in the Link dialog: one not on
+// this computer, or one here whose probe says it was started with a network
+// `--listen`. `URL.hostname` keeps an IPv6 host in its brackets.
 const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
 const comfyuiOnNetwork = computed(() => {
   try {
@@ -93,6 +96,16 @@ const comfyuiOnNetwork = computed(() => {
   } catch {
     return false;
   }
+});
+// The newest probe decides, so restarting ComfyUI without --listen and
+// pressing Check again clears the notice; the link record's `exposure`, from
+// link time, stands in only while no probe has said either way.
+const exposure = computed(() => {
+  if (comfyuiOnNetwork.value) return "other_computer";
+  const listens = lastProbe.value?.listens_on_network;
+  if (listens === true) return "listening";
+  if (listens === false) return null;
+  return link.value?.exposure || null;
 });
 
 // Whether the configured ComfyUI has the ComfyUI-PixlStash node pack: `true`,
@@ -109,6 +122,7 @@ let detectRun = 0;
 const link = ref(null);
 const linkDialogOpen = ref(false);
 const linkButton = ref(null);
+const relinkButton = ref(null);
 const checkAgainButton = ref(null);
 let linkCheck = 0;
 const userPrefs = useUserPrefsStore();
@@ -134,7 +148,7 @@ async function closeLinkDialog() {
   linkDialogOpen.value = false;
   await refreshLink();
   await nextTick();
-  (linkButton.value || checkAgainButton.value)?.focus();
+  (linkButton.value || relinkButton.value || checkAgainButton.value)?.focus();
 }
 
 async function checkPixlstashPack() {
@@ -174,6 +188,7 @@ async function detectLocal() {
       if (run !== detectRun) return;
       if (reply?.reachable) {
         foundUrl.value = reply.url;
+        foundProbe = reply;
         state.value = "found";
         return;
       }
@@ -226,11 +241,11 @@ async function fetchComfyuiUrl() {
   }
 }
 
-// Only ever called with the url a probe just answered for.
-async function save(url) {
+// Only ever called with the url a probe just answered for, and that answer.
+async function save(url, probe) {
   await patchUserConfig({ comfyui_url: url });
   comfyuiUrl.value = url;
-  lastProbe.value = { reachable: true, url };
+  lastProbe.value = probe || { reachable: true, url };
   state.value = "connected";
   useFilterStore().comfyuiUrl = url;
   emit("update:comfyui-configured", true);
@@ -242,7 +257,7 @@ async function connectFound() {
   busy.value = true;
   actionError.value = "";
   try {
-    await save(foundUrl.value);
+    await save(foundUrl.value, foundProbe);
   } catch (e) {
     actionError.value = errorMessage(e, "Could not save the ComfyUI address.");
   } finally {
@@ -279,7 +294,7 @@ async function connectAddress() {
         reply?.detail || `Nothing answered at ${hostPart}:${p}.`;
       return;
     }
-    await save(reply.url);
+    await save(reply.url, reply);
   } catch (e) {
     formError.value = errorMessage(e, "Could not reach that address.");
   } finally {
@@ -296,6 +311,7 @@ async function checkAgain() {
     busy.value = false;
   }
   checkPixlstashPack();
+  refreshLink();
 }
 
 async function disconnect() {
@@ -532,14 +548,41 @@ watch(
               Linking gives ComfyUI full access to this library so its
               PixlStash nodes can load and save pictures.
             </p>
+            <ComfyuiExposureNotice v-if="exposure" :exposure="exposure" />
+          </template>
+          <template v-else>
             <p
-              v-if="comfyuiOnNetwork"
-              class="cf-small cf-muted"
-              data-testid="comfyui-network-warning"
+              v-if="link.refused_from"
+              class="cf-small"
+              data-testid="comfyui-key-refused"
             >
-              ComfyUI's own page stays plain HTTP, so anyone on your network
-              who opens it can see the key.
+              PixlStash refused ComfyUI's key from {{ link.refused_from }}. It
+              only works from {{ link.bound_address }}, where ComfyUI was when
+              it was linked. If ComfyUI's address changed, link it again. If
+              {{ link.refused_from }} is not ComfyUI's computer, someone else
+              has the key: linking again replaces it.
             </p>
+            <p
+              v-else-if="!link.bound_address"
+              class="cf-small cf-muted"
+              data-testid="comfyui-key-unbound"
+            >
+              This link was made before PixlStash tied ComfyUI's key to
+              ComfyUI's address, so the key works from any computer. Link again
+              to tie it.
+            </p>
+            <div v-if="link.refused_from || !link.bound_address" class="cf-row">
+              <AppButton
+                ref="relinkButton"
+                :variant="link.refused_from ? 'primary' : 'secondary'"
+                :disabled="busy"
+                data-testid="comfyui-relink"
+                @click="linkDialogOpen = true"
+              >
+                Link again
+              </AppButton>
+            </div>
+            <ComfyuiExposureNotice v-if="exposure" :exposure="exposure" />
           </template>
         </div>
         <SettingsRow
