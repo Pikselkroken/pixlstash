@@ -268,6 +268,12 @@ class Picture(SQLModel, table=True):
     aesthetic_score: Optional[float] = None
     smart_score: Optional[float] = Field(default=None, index=True)
     text_score: Optional[float] = Field(default=None, index=True)
+    # Whether the picture looks like its prompt AT ALL: the fraction of a fixed
+    # bank of unrelated texts its CLIP image embedding is less similar to than
+    # to ``comfyui_positive_prompt`` (``pixlstash/scoring/prompt_match.py``).
+    # A sanity check for total failures, never a quality score. NULL when there
+    # is no prompt or it is not computed yet; -1.0 when it could not be.
+    prompt_match: Optional[float] = Field(default=None)
     # Text read out of the picture (#1197), words joined by spaces and lines by
     # newlines. NULL means not read; "" means read and nothing found. Kept out
     # of ``description`` so the caption embedding stays about meaning, and out
@@ -643,6 +649,19 @@ class Picture(SQLModel, table=True):
             "deleted",
             "text_score",
             sqlite_where=text("ocr_text IS NULL"),
+        ),
+        # MissingPromptMatchFinder: prompt_match IS NULL AND deleted IS 0 among
+        # pictures with a prompt. The prompt term is in the WHERE so the many
+        # pictures with no prompt, whose score stays NULL for good, are not in
+        # the index for the probe to walk.
+        Index(
+            "ix_picture_prompt_match_missing",
+            "prompt_match",
+            "deleted",
+            "id",
+            sqlite_where=text(
+                "prompt_match IS NULL AND comfyui_positive_prompt IS NOT NULL"
+            ),
         ),
     )
 

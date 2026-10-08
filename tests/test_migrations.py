@@ -1435,6 +1435,50 @@ def test_0127_adds_run_workflow_version_once_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
+    """Column and probe index arrive either way, existing pictures read NULL
+    (not scored), and a second upgrade over a vault that has both is a no-op."""
+
+    def shape(conn):
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(picture)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(picture)")}
+        return "prompt_match" in columns, "ix_picture_prompt_match_missing" in indexes
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert shape(conn) == (True, True), "the baseline's create_all()"
+
+        down = _run_alembic(
+            ["downgrade", "0127_add_picture_run_workflow_version"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert shape(conn) == (False, False)
+            _insert_minimal_row(conn, "picture", file_path="before.png")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert shape(conn) == (True, True), "migration 0128"
+            assert conn.execute(
+                "SELECT file_path, prompt_match FROM picture"
+            ).fetchall() == [("before.png", None)]
+            conn.execute(
+                "UPDATE alembic_version SET version_num = ?",
+                ("0127_add_picture_run_workflow_version",),
+            )
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0125_resets_only_recipes_on_a_hand_made_workflow():
     """A hand-made group id goes back to NULL for re-filing; an automatic id
     and an already-NULL one are left as they are."""

@@ -211,6 +211,37 @@ class ClipService:
             logger.error("ClipService: failed to encode text: %s", exc)
             return None
 
+    def encode_texts(self, texts: list[str]) -> Optional[np.ndarray]:
+        """Encode several texts in one forward pass into normalised embeddings.
+
+        Each text is truncated to CLIP's 77-token context by the tokenizer.
+
+        Args:
+            texts: Non-empty strings.
+
+        Returns:
+            Float32 array of shape ``(len(texts), D)``, or ``None`` on failure.
+        """
+        import torch
+
+        if not texts:
+            return None
+        self.ensure_ready()
+        try:
+            tokens = self._tokenizer(texts).to(self._device)
+            with torch.no_grad():
+                features = self._model.encode_text(tokens)
+                features = features / features.norm(dim=-1, keepdim=True)
+            return features.cpu().float().numpy()
+        except Exception as exc:
+            logger.error(
+                "ClipService: failed to encode %d texts on %s: %s",
+                len(texts),
+                self._device,
+                exc,
+            )
+            return None
+
     def encode_image_crops(
         self, crops: list, pic_desc: str = ""
     ) -> list[Optional[np.ndarray]]:

@@ -91,6 +91,9 @@ class WorkPlanner:
             ReferenceFolderScanFinder,
         )
         from pixlstash.tasks.missing_text_score_finder import MissingTextScoreFinder
+        from pixlstash.tasks.missing_prompt_match_finder import (
+            MissingPromptMatchFinder,
+        )
         from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
         from pixlstash.tasks.missing_thumbnail_finder import MissingThumbnailFinder
         from pixlstash.tasks.missing_pixel_sha_finder import MissingPixelShaFinder
@@ -172,6 +175,10 @@ class WorkPlanner:
             TaskType.REFERENCE_FOLDER_SCAN: reference_folder_scan_finder,
             TaskType.TEXT_SCORE: MissingTextScoreFinder(
                 database=database,
+            ),
+            TaskType.PROMPT_MATCH: MissingPromptMatchFinder(
+                database=database,
+                engine_getter=engine_getter,
             ),
             TaskType.OCR: MissingOcrFinder(
                 database=database,

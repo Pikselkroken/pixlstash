@@ -36,6 +36,7 @@
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
 25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439)
+26. [Prompt match](#26-prompt-match)
 
 ---
 
@@ -1017,6 +1018,7 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 | `LIKENESS_PARAMETERS` | CPU | `MissingLikenessParametersFinder` | Per-character similarity params |
 | `SMART_SCORE` | GPU | `MissingSmartScoreFinder` | Anchor-based heuristic score. Takes a full `Vault` (not just `database`) so it can resolve the tagger's per-label acceptance thresholds for the anomaly penalty, and is therefore registered in `vault.py` rather than `WorkPlanner.work_finders()` — same reason as `GFS_SNAPSHOT` and `TAG_HEALTH_AUTO_REBUILD`. |
 | `TEXT_SCORE` | CPU | `MissingTextScoreFinder` | MSER-based text-in-image score |
+| `PROMPT_MATCH` | GPU | `MissingPromptMatchFinder` | Whether a picture with a prompt looks like it at all (§26); text side of CLIP only, the image embedding is the stored one |
 | `OCR` | GPU | `MissingOcrFinder` | Reads the text in pictures with `text_score >= OCR_MIN_TEXT_SCORE` (0.01 — the scorer's hard gates do the selecting, returning exactly 0.0 for 98% of a library, so the constant only has to clear zero) into `Picture.ocr_text` / `ocr_words` (#1197). Florence-2 `<OCR_WITH_REGION>` via `InferenceEngine.read_text`, sharing the captioning model; it boxes lines, and each word gets the share of its line's box its characters take. Run on the picture as displayed (EXIF applied), so boxes are fractions of the displayed picture. `""` marks read-with-nothing, and a picture whose file could not be opened; a batch the reader returns nothing for fails the task and writes nothing, so a model that is not loaded or ran out of memory leaves the pictures for a later sweep. Reading is not tied to the captioning switch: `read_text` loads Florence-2 itself, so a library with captioning off or still captioning is read all the same, and the GPU queue plus `TaskPriority.LOW` keep a background read behind captioning. A failed task defers its pictures for the session (the `MissingCheckpointHashFinder` pattern), so a reader that cannot load is not handed the same batch every cycle. The probe reads `ix_picture_ocr_unread` (`ocr_text, deleted, text_score WHERE ocr_text IS NULL`), most text first so a batch holds pages of similar length. The VRAM gate is charged captioning's estimate times the three beams reading decodes with, and an out-of-memory error is re-raised to the runner's retry instead of falling back to CPU. Pictures are read at 1024 px on the long side, so body text on a large screenshot or photographed page can be too small to survive: such a picture is stored as read with nothing found and is not retried. `depends_on=[TEXT_SCORE]` only: the planner holds a finder until every finder it depends on reports no work left, so depending on `DESCRIPTION` as well meant no picture was read until the whole library was captioned. `POST /pictures/{id}/text/read` submits an URGENT task directly and keeps the stored text until that read succeeds; a rotate (`apply_orientation`) clears them too. Completion emits `pictures_changed` with `fields: ["ocr_text"]`. |
 | `WATCH_FOLDERS` | CPU | `MissingWatchFolderImportFinder` | Ingest from watch folders |
 | `COMFYUI_EXTRACTION` | CPU | `MissingComfyUIExtractionFinder` | Parse ComfyUI metadata, and file the picture's workflow in the hub (see *The workflow scan rides the ComfyUI extraction* below) |
@@ -9629,6 +9631,79 @@ names, after the only other copy was removed.
   already carried, and the row's note explains it — an ordinary `user` folder is
   forgettable without being relocatable, so a guard written only for Move left
   exactly those rows clickable and failing.
+
+
+---
+
+## 26. Prompt match
+
+`picture.prompt_match` answers one question: does this picture look like what
+its prompt asked for, **at all**. It is a sanity check for total failures
+(noise, a black or blank frame, mush from a broken LoRA, a picture with
+nothing to do with its prompt) and must never be presented as a quality
+score: passing means "recognisably about its prompt", not "good". It feeds
+the Model Shelf set panel's "M of N look like their prompt".
+
+**Method** (`pixlstash/scoring/prompt_match.py`). Raw CLIP cosine, the quantity
+CLIPScore rescales (Hessel et al. 2021, arXiv:2104.08718), is not comparable
+across prompts or across images, so the score is a rank: the share of a fixed
+bank of unrelated texts (`DISTRACTOR_PROMPTS`) that the picture's stored CLIP
+image embedding is less similar to than to its own prompt. Both biases cancel
+because each comparison shares the image and the bank is fixed. The bank
+includes texts describing the failures themselves ("random colorful noise",
+"a solid black image"), which a failed frame ranks above its prompt. The
+verdict, `looks_like_prompt`, is `prompt_match >= PROMPT_MATCH_THRESHOLD`
+(0.7). Changing the bank or the model changes every score: ship that with a
+migration that NULLs the column.
+
+- **Prompt source**: `picture.comfyui_positive_prompt`, the executed graph's
+  positive prompt. The negative prompt is never used. A1111 pictures carry no
+  stored prompt today, so they stay NULL.
+- **Cleaning** (`clean_prompt`): `<lora:…>`-style tags, `embedding:x`
+  references, attention weights and their brackets and `BREAK` / `AND` are
+  dropped; every word stays, LoRA trigger words included. A prompt that cleans
+  to nothing is stored as `-1.0`.
+- **77 tokens: truncate, not chunk-average.** CLIP's effective text length is
+  about 20 tokens (Long-CLIP, arXiv:2403.15378), and on the validation set
+  below, averaging 75-token chunks let 29% of all 1197 failure pairs (blurred
+  and fried copies included) pass at 0.7 against 16% for truncation, with no
+  matching pair gained: the tail of a long prompt is mostly generic quality
+  tags that look like everything.
+- **Values**: NULL is "no prompt" or "not scored yet"; `-1.0` is "has a prompt
+  that cannot be scored as it stands" (it cleans to nothing, or an embedding is
+  the wrong size, zero or not finite; the repo's failed-metric convention),
+  verdict `null`. A CLIP encoder failure stores nothing, since it may pass.
+
+**Pipeline.** `MissingPromptMatchFinder` selects `prompt_match IS NULL AND
+comfyui_positive_prompt IS NOT NULL AND deleted = 0 AND image_embedding IS NOT
+NULL`, served by `ix_picture_prompt_match_missing`, partial on the prompt as
+well so the pictures without one (whose score stays NULL for good) are not in
+it. `PromptMatchTask` (GPU queue) reuses the stored image embedding and runs one
+CLIP text forward pass (`ClipService.encode_texts`) for the batch's distinct
+cleaned prompts, cached per prompt for the process. `ImageEmbeddingTask` NULLs
+the score whenever it writes a new embedding, and `ComfyUIExtractionTask`
+whenever it writes a prompt, so a stale score re-queues itself. A task whose
+encoder fails raises, and the finder defers that batch for the session (the
+`MissingOcrFinder` pattern), so a broken text tower is not re-run every cycle
+and a restart retries it.
+
+**Served** as `prompt_match` in every payload built from
+`Picture.metadata_fields()`, and with the derived `looks_like_prompt` on
+`GET /pictures/{id}/metadata`.
+
+**Evidence and limits.** Validated 2026-10-07 on the 151 fixture images in
+`pictures/` and `test-data/` (CLIP ViT-B-32 laion2b_s34b_b79k, local GPU): at
+0.7 no matching pair was flagged (0 of 459: six real embedded prompts plus
+Florence-2 captions written as short, A1111-styled and long prompts) and 6.1%
+of 1031 failure pairs passed (noise, black, white, flat colour, colour blobs,
+a prompt from an unrelated picture or about something else). It does not catch
+failures that keep the subject visible: a heavily blurred copy still passed
+68%, a posterised, noise-blended "fried" copy 90%. CLIP is a bag of words on
+composition, counting and relations (arXiv:2404.01291), so a wrong attribute or
+a missing second subject passes. An edit or detailer prompt ("give him a
+beard", "perfect hands") describes a change, not the picture, and is scored
+as if it described it. The real-prompt sample is six pictures; the threshold
+wants recalibrating against the owner's ratings.
 
 ---
 
