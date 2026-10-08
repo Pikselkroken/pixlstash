@@ -1,3 +1,14 @@
+# [1.11.5]
+
+- Fixed: the Windows downloads are back. Certum changed its sign-in page, which
+  broke our release signing, so 1.11.4 shipped with no Windows installers and
+  1.11.3 without the Windows server installer. The desktop app and the server
+  installer are signed and published again.
+- Removed the python-jose package, which PixlStash installed but never used, so
+  security scanners no longer flag its unpatched advisory. Updated Vue to
+  3.5.43 for an advisory in its server-side renderer, which the app does not
+  use.
+
 # [1.11.4] [Security:High]
 - Desktop app: updated Electron to 42.11.10, which includes upstream Chromium security fixes, among them memory-safety fixes in image handling. Desktop users should update.
 - Updated the web UI's HTTP library to pick up upstream security fixes.
