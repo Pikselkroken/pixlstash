@@ -1,4 +1,4 @@
-# [1.11.5]
+# [1.11.5] [Security:Low]
 
 - Fixed: the Windows downloads are back. Certum changed its sign-in page, which
   broke our release signing, so 1.11.4 shipped with no Windows installers and
