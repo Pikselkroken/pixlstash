@@ -2069,8 +2069,9 @@ def test_the_link_token_works_only_from_comfyuis_address(
 
 def test_the_link_token_cannot_manage_tokens(workflow_env, comfy_at):
     """From ComfyUI's own address the link token is full access, but it never
-    mints, lists, changes or deletes tokens: a fresh unbound one would work
-    from anywhere and outlive the link. The owner still can."""
+    manages credentials: a fresh unbound token or a password would work from
+    anywhere and outlive the link, and the share-token listings and bulk
+    revoke are the owner's. The owner still can."""
     server = workflow_env.server
     fake = comfy_at("http://127.0.0.1:18188/")
     assert workflow_env.owner.post(f"{API}/comfyui/link").json()["linked"] is True
@@ -2088,14 +2089,35 @@ def test_the_link_token_cannot_manage_tokens(workflow_env, comfy_at):
             ("GET", f"{API}/users/me/token", None),
             ("PATCH", f"{API}/users/me/token/{owners}", {"watermark": True}),
             ("DELETE", f"{API}/users/me/token/{owners}", None),
+            ("GET", f"{API}/users/me/shared-resource-ids?resource_type=picture", None),
+            ("POST", f"{API}/users/me/shared-picture-ids/batch", {"picture_ids": [1]}),
+            (
+                "DELETE",
+                f"{API}/users/me/tokens/by-resource?resource_type=picture&resource_id=1",
+                None,
+            ),
+            (
+                "POST",
+                f"{API}/users/me/auth",
+                {"current_password": "example-wrong", "new_password": "example-new"},
+            ),
         )
         for method, path, body in attempts:
             r = linked.request(method, path, json=body)
             assert r.status_code == 403, (method, path, r.text)
             assert "ComfyUI link key cannot" in r.json()["detail"]
         assert len(_link_tokens(server)) == 1
-        # Positive control: the owner changes and deletes it. Not the list:
-        # it fails here for an unrelated reason (see ``_link_tokens``).
+        # Positive control: the owner reaches the listings, and changes and
+        # deletes the token. Not the token list: it fails here for an
+        # unrelated reason (see ``_link_tokens``).
+        r = workflow_env.owner.get(
+            f"{API}/users/me/shared-resource-ids?resource_type=picture"
+        )
+        assert r.status_code == 200, r.text
+        r = workflow_env.owner.post(
+            f"{API}/users/me/shared-picture-ids/batch", json={"picture_ids": [1]}
+        )
+        assert r.status_code == 200, r.text
         r = workflow_env.owner.patch(
             f"{API}/users/me/token/{owners}", json={"watermark": True}
         )
@@ -2103,6 +2125,19 @@ def test_the_link_token_cannot_manage_tokens(workflow_env, comfy_at):
     finally:
         r = workflow_env.owner.delete(f"{API}/users/me/token/{owners}")
         assert r.status_code == 200, r.text
+
+
+def test_a_token_revoked_while_it_binds_is_refused_and_not_recorded(workflow_env):
+    """A concurrent unlink can delete the row between the lookup and the
+    bind: the request is refused, and no refusal is recorded against it."""
+    gone = SimpleNamespace(
+        id=987654321, public_id="example-gone", bound_address=auth.TOKEN_BIND_PENDING
+    )
+    refusal = workflow_env.server.auth.source_refusal(
+        gone, "testclient", *auth.TOKEN_BIND_CHECK
+    )
+    assert refusal == "This key is not linked yet."
+    assert "example-gone" not in workflow_env.server.auth.bound_token_refusals
 
 
 def test_a_check_that_never_used_the_key_undoes_the_link(workflow_env, comfy_at):

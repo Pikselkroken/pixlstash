@@ -1596,6 +1596,10 @@ class AuthService:
                 )
                 return "This key is not linked yet."
             bound = self._bind_token(token.id, client_ip)
+            if bound is None:
+                # Revoked while it was being bound (a concurrent unlink):
+                # nothing to bind, and no refusal worth recording.
+                return "This key is not linked yet."
         if bound == client_ip:
             return None
         self.bound_token_refusals[token.public_id] = client_ip
@@ -1869,6 +1873,7 @@ class AuthService:
     def change_password(self, request: Request, payload) -> dict:
         self.ensure_secure_when_required(request)
         user = self.get_user_for_request(request)
+        self._refuse_bound_token(request, "change the password")
 
         self._validate_bcrypt_password_length(payload.current_password)
         self._validate_bcrypt_password_length(payload.new_password)
@@ -1946,14 +1951,16 @@ class AuthService:
 
     @staticmethod
     def _refuse_bound_token(request: Request, action: str) -> None:
-        """A source-bound token (the ComfyUI link token) never manages tokens:
-        minting would hand it an unbound replacement that works from anywhere
-        and outlives the link."""
-        matched = getattr(request.state, "matched_token", None)
+        """A source-bound token (the ComfyUI link token) never manages
+        credentials: a minted token or a password would work from anywhere and
+        outlive the link, and listing or revoking share tokens is the owner's
+        business, not ComfyUI's. Every token- and password-management method
+        calls this. A request with no ``state`` carried no token."""
+        matched = getattr(getattr(request, "state", None), "matched_token", None)
         if matched is not None and matched.bound_address is not None:
             raise HTTPException(
                 status_code=403,
-                detail=f"The ComfyUI link key cannot {action} tokens.",
+                detail=f"The ComfyUI link key cannot {action}.",
             )
 
     def create_token(
@@ -1976,7 +1983,7 @@ class AuthService:
             raise HTTPException(
                 status_code=403, detail="Scoped tokens cannot create new tokens"
             )
-        self._refuse_bound_token(request, "create")
+        self._refuse_bound_token(request, "create tokens")
 
         if scope not in ("ALL", "READ"):
             raise HTTPException(status_code=400, detail="scope must be 'ALL' or 'READ'")
@@ -2113,7 +2120,7 @@ class AuthService:
             raise HTTPException(
                 status_code=403, detail="Scoped tokens cannot list tokens"
             )
-        self._refuse_bound_token(request, "list")
+        self._refuse_bound_token(request, "list tokens")
 
         def fetch_tokens(session: Session, user_id: int):
             tokens = session.exec(
@@ -2158,7 +2165,7 @@ class AuthService:
     def delete_token(self, request: Request, token_id: int):
         self.ensure_secure_when_required(request)
         user_id = self.require_user_id(request)
-        self._refuse_bound_token(request, "delete")
+        self._refuse_bound_token(request, "delete tokens")
 
         def remove_token(session: Session, user_id: int, token_id: int):
             token = session.get(UserToken, token_id)
@@ -2207,7 +2214,7 @@ class AuthService:
             raise HTTPException(
                 status_code=403, detail="Scoped tokens cannot modify tokens"
             )
-        self._refuse_bound_token(request, "change")
+        self._refuse_bound_token(request, "change tokens")
 
         def _update(session: Session, user_id: int, token_id: int, watermark: bool):
             token = session.get(UserToken, token_id)
@@ -2241,6 +2248,7 @@ class AuthService:
             raise HTTPException(
                 status_code=403, detail="Scoped tokens cannot revoke tokens"
             )
+        self._refuse_bound_token(request, "revoke tokens")
 
         def _revoke(
             session: Session, user_id: int, rt: str, rid: int
@@ -2283,6 +2291,7 @@ class AuthService:
 
         if getattr(request.state, "token_scope", None) is not None:
             raise HTTPException(status_code=403, detail="Not allowed for scoped tokens")
+        self._refuse_bound_token(request, "list shared resources")
 
         def _fetch(session: Session, user_id: int, rt: str) -> list[int]:
             now = datetime.now(timezone.utc)
@@ -2312,6 +2321,7 @@ class AuthService:
 
         if getattr(request.state, "token_scope", None) is not None:
             raise HTTPException(status_code=403, detail="Not allowed for scoped tokens")
+        self._refuse_bound_token(request, "list shared resources")
 
         if not picture_ids:
             return {"shared_ids": []}
