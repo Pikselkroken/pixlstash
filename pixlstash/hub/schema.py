@@ -2176,7 +2176,8 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                 if data_version < 12:
                     # Workflow versions: every manual workflow's document is
                     # its version 1. After step 7, which makes manual
-                    # workflows of the old files.
+                    # workflows of the old files. Imported here: it imports
+                    # hub.db, which imports this module.
                     from pixlstash.hub.workflow_versions import backfill_first_versions
 
                     backfill_first_versions(conn)

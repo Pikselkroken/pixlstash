@@ -2500,6 +2500,23 @@ def test_a_failed_move_to_the_trash_installs_nothing_and_deletes_nothing(
     assert [p.name for p in install_env.custom_nodes.iterdir()] == [older.name]
 
 
+def test_a_file_in_the_nodes_place_is_refused_before_anything_is_trashed(
+    install_env,
+):
+    """The move into place would fail on the file, after the older copies had
+    gone to the trash, leaving ComfyUI with no PixlStash nodes."""
+    older = install_env.custom_nodes / "comfyui-pixlstash-main"
+    older.mkdir()
+    (older / "__init__.py").write_text("# the working install\n")
+    (install_env.custom_nodes / "ComfyUI-PixlStash").write_text("not a folder\n")
+    install_env.with_comfy({"POST v2/manager/reboot": 200})
+    with pytest.raises(comfyui_pack_service.PackInstallRefused) as refused:
+        comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert "is a file" in str(refused.value)
+    assert install_env.trashed == []
+    assert (older / "__init__.py").is_file(), "the older copy must survive"
+
+
 @pytest.mark.parametrize("url", ["http://8.8.8.8:8188/", f"http://{LAN_IPV4}:8188/"])
 def test_the_nodes_are_only_installed_into_a_comfyui_on_this_computer(install_env, url):
     fake = install_env.with_comfy({"POST v2/manager/reboot": 200})
