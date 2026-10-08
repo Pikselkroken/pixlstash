@@ -70,7 +70,6 @@ class LinkRefused(Exception):
     def __init__(self, reason: str, detail: str):
         super().__init__(detail)
         self.reason = reason
-        self.detail = detail
 
 
 def _step(state: str, detail: Optional[str] = None, reason: Optional[str] = None):
@@ -403,7 +402,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
     try:
         pixlstash_url, cert = link_target(server, where, pinned)
     except LinkRefused as refused:
-        steps["link"] = _step("needs_you", refused.detail, refused.reason)
+        steps["link"] = _step("needs_you", str(refused), refused.reason)
         return reply()
 
     minted = server.auth.create_token(request, TOKEN_DESCRIPTION, scope="ALL")
@@ -425,7 +424,6 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
             "failed", f"ComfyUI refused the settings: {exc}", "write_failed"
         )
         return reply()
-    previous = link_status(server)
     old_record = server._server_config.get(LINK_CONFIG_KEY)
     old_token = (old_record or {}).get("token_public_id")
     try:
@@ -474,7 +472,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         comfyui_url,
         pixlstash_url,
         minted["token_id"],
-        previous.get("comfyui_url") or "no earlier link",
+        (old_record or {}).get("comfyui_url") or "no earlier link",
     )
     steps["link"] = _step(
         "done",
@@ -497,7 +495,32 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         steps["check"] = _step("failed", problem, "check_failed")
         return reply()
     steps["check"] = _step("done", "ComfyUI reached PixlStash with its new key.")
+    _pull_after_link(server)
     return reply(linked=True)
+
+
+def _pull_after_link(server) -> None:
+    """Pull ComfyUI's saved workflows once, as the last step of a Link.
+
+    Only when the owner's "Pull workflows from ComfyUI" setting is on, through
+    the same gate as the minute poll. Never fails the link it follows: the
+    link is made, and the poll pulls later.
+    """
+    pulls = getattr(server, "workflow_pulls", None)
+    try:
+        comfyui_url = pulls.owner_wants_pulls() if pulls is not None else None
+        if comfyui_url is None:
+            return
+        status, task_id = pulls.start(comfyui_url)
+    except Exception as exc:
+        logger.warning(
+            "ComfyUI is linked, but its saved workflows could not be pulled "
+            "now; the minute poll pulls them later: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return
+    logger.info("Pull after Link from %s: %s (task %s).", comfyui_url, status, task_id)
 
 
 def unlink(server, request: Request) -> dict:

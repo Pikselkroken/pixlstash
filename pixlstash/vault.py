@@ -105,6 +105,7 @@ class Vault:
         scrapheap_retention_reduced_at: Optional[datetime.datetime] = None,
         db_filename: Optional[str] = None,
         ghost_retention: str = DEFAULT_GHOST_RETENTION,
+        workflow_pulls=None,
     ):
         """
         Initialize a Vault instance.
@@ -122,6 +123,9 @@ class Vault:
                 the vault is opened through one, which is what puts a library
                 still on its first import onto the temporary name without any
                 caller having to know. Falls back to ``vault.db``.
+            workflow_pulls: The server's ``WorkflowPulls``, which the minute
+                poll of ComfyUI's saved workflows offers its pulls through.
+                ``None`` registers no poll.
         """
         registered_hub = getattr(image_root, "hub", None)
         registered_library = getattr(image_root, "library", None)
@@ -379,6 +383,16 @@ class Vault:
                     library_uuid=self._library_uuid,
                     vault=self,
                 )
+            )
+        # The minute poll of ComfyUI's saved workflows. A pull is a fact about
+        # the machine (the hub), so it needs the server's gate, not a library.
+        if registered_hub is not None and workflow_pulls is not None:
+            from pixlstash.tasks.comfyui_workflow_poll_finder import (
+                ComfyUIWorkflowPollFinder,
+            )
+
+            self._planner_work_finders[TaskType.COMFYUI_WORKFLOW_PULL] = (
+                ComfyUIWorkflowPollFinder(workflow_pulls)
             )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,

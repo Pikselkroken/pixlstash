@@ -1110,20 +1110,38 @@ def _set_source_picture_id_on_pictures(
     server.vault.db.run_task(update)
 
 
-def _set_run_workflow_id(server, workflow_id: str, picture_ids: list[int]) -> None:
+def _set_run_workflow_id(
+    server,
+    workflow_id: str,
+    picture_ids: list[int],
+    version: int | None = None,
+) -> None:
     """File the pictures a manual workflow's run made on that workflow.
 
     Only the ones this run imported or its saver reported: a duplicate was
     already in the library, made by something else, and keeps its filing.
+    *version* is the version of the workflow's document the run submitted
+    (``Picture.run_workflow_version``), written with the id. A picture the
+    filename tag or the extraction already filed on this same workflow gets
+    the version too: they learn the id before this poller does, never the
+    version a Run submitted.
     """
 
     def update(session):
         for pid in picture_ids:
             pic = session.get(Picture, pid)
+            if pic is None:
+                continue
             # Written once: a saver can report a picture filed by another run.
-            if pic is not None and pic.run_workflow_id is None:
+            if pic.run_workflow_id is None:
                 pic.run_workflow_id = workflow_id
-                session.add(pic)
+            if (
+                pic.run_workflow_id == workflow_id
+                and pic.run_workflow_version is None
+                and version is not None
+            ):
+                pic.run_workflow_version = version
+            session.add(pic)
         session.commit()
 
     server.vault.db.run_task(update)
@@ -1141,6 +1159,7 @@ def _process_comfyui_outputs(
     origin_library_uuid: str | None = None,
     run_workflow_id: str | None = None,
     rejected: str | None = None,
+    run_workflow_version: int | None = None,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
 
@@ -1149,7 +1168,8 @@ def _process_comfyui_outputs(
     then produces nothing reports it instead of a bare "no outputs".
 
     *run_workflow_id* is the manual workflow that ran, whose pictures these
-    are (``Picture.run_workflow_id``). An output the watch folder imports
+    are (``Picture.run_workflow_id``), and *run_workflow_version* the version
+    of its document the run submitted (``Picture.run_workflow_version``). An output the watch folder imports
     before this poller sees it is filed by the tag ``_tag_for_workflow`` put
     in its filename instead.
 
@@ -1277,7 +1297,9 @@ def _process_comfyui_outputs(
             # for the node to report its target URL, not a heuristic here.
             new_ids = new_ids + [pid for pid in pixlstash_ids if pid not in new_ids]
         if run_workflow_id and new_ids:
-            _set_run_workflow_id(pinned_server, run_workflow_id, new_ids)
+            _set_run_workflow_id(
+                pinned_server, run_workflow_id, new_ids, run_workflow_version
+            )
         if stack_id and new_ids:
             _assign_outputs_to_stack_top(pinned_server, stack_id, new_ids)
         if new_ids:

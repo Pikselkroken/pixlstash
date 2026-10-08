@@ -45,7 +45,10 @@ from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, auto_workflow_id
-from pixlstash.hub.workflow_group_writes import create_manual_workflow
+from pixlstash.hub.workflow_group_writes import (
+    create_manual_workflow,
+    delete_manual_workflow,
+)
 from pixlstash.server import Server
 from pixlstash.services import saved_recipe_service
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
@@ -574,6 +577,72 @@ def test_a_recipe_saved_on_a_manual_workflow_runs_on_its_document(recipe_env):
     assert row.workflow_key == manual
     from_ab = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": WF_AB})
     assert saved["id"] not in [row["id"] for row in from_ab.json()]
+
+
+MANUAL_PROMPT = "a manual run, hard light"
+
+
+def _a_manual_run(server, manual: str) -> None:
+    """One kept picture a run of *manual* made, as the run and extraction file it.
+
+    On VARIANT_A, because a run's graph is an ordinary variant of some
+    automatic workflow: that is exactly what must NOT decide where it lists.
+    """
+
+    def write(session):
+        session.add(
+            Picture(
+                file_path="manual_run.png",
+                created_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
+                workflow_structural_hash=VARIANT_A,
+                workflow_hash_version="v1",
+                run_workflow_id=manual,
+                run_workflow_version=1,
+                comfyui_positive_prompt=MANUAL_PROMPT,
+                comfyui_loras=json.dumps([ADA]),
+                comfyui_models=json.dumps([]),
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def test_a_manual_workflows_runs_are_its_looks_and_credit_its_recipes(recipe_env):
+    """The owner's report: a manual workflow ran, made a picture, and its
+    Recipes tab said "No recipes here yet". Its pictures are filed under its
+    own id (`run_workflow_id`), as the grid files them, not under a variant."""
+    hub = recipe_env.server.hub
+    manual = create_manual_workflow(hub, "Mine", {"1": {"class_type": "X"}}, "import")
+    _a_manual_run(recipe_env.server, manual)
+
+    looks = _used(recipe_env.owner, manual)
+    assert [(look["prompt"], look["pictures"]) for look in looks] == [
+        (MANUAL_PROMPT, 1)
+    ], looks
+    # Not the automatic workflow's look too: the grid counts it on the manual.
+    assert MANUAL_PROMPT not in {
+        look["prompt"] for look in _used(recipe_env.owner, WF_AB)
+    }
+
+    saved = _save(recipe_env.owner, manual, prompt=MANUAL_PROMPT, loras=_ada())
+    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": manual})
+    assert listed.status_code == 200, listed.text
+    assert [(row["id"], row["pictures"]) for row in listed.json()] == [(saved["id"], 1)]
+
+
+def test_a_deleted_manual_workflows_runs_fall_back_to_their_variant(recipe_env):
+    """Deleting the manual workflow writes no picture: its runs list under the
+    automatic workflow their variant is in again."""
+    hub = recipe_env.server.hub
+    manual = create_manual_workflow(hub, "Mine", {"1": {"class_type": "X"}}, "import")
+    # Another one stays, so the filing rule has live ids to weigh at all.
+    create_manual_workflow(hub, "Other", {"1": {"class_type": "Y"}}, "import")
+    _a_manual_run(recipe_env.server, manual)
+    delete_manual_workflow(hub, manual)
+
+    assert _used(recipe_env.owner, manual) == []
+    assert MANUAL_PROMPT in {look["prompt"] for look in _used(recipe_env.owner, WF_AB)}
 
 
 def test_a_malformed_workflow_id_is_refused_on_the_reads(recipe_env):

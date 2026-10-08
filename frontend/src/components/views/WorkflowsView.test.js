@@ -93,12 +93,10 @@ vi.mock("../../api/recipes", () => ({
   extractRecipeWorkflow: vi.fn(),
   exportSavedRecipe: vi.fn(),
 }));
-const startWorkflowPull = vi.fn();
 const getWorkflowPull = vi.fn();
 const importWorkflow = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   importWorkflow: (...args) => importWorkflow(...args),
-  startWorkflowPull: (...args) => startWorkflowPull(...args),
   getWorkflowPull: (...args) => getWorkflowPull(...args),
 }));
 
@@ -107,7 +105,10 @@ import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useFilterStore } from "../../stores/useFilterStore";
-import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
+import {
+  PULL_WATCH_MS,
+  useWorkflowPullStore,
+} from "../../stores/useWorkflowPullStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 
 // `key` is the workflow's `id`; the grid row carries it as `data-key`.
@@ -1033,6 +1034,44 @@ describe("WorkflowsView filters", () => {
     expect(wrapper.find(".wfv-sub").text()).toBe("6 workflows · 7 one-offs");
   });
 
+  it("filters by origin: each option keeps only its own cards", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        card("a", { origin_category: "comfyui" }),
+        card("b", { origin_category: "pictures" }),
+        card("c", { origin_category: "own" }),
+        card("d", { origin_category: "comfyui" }),
+      ],
+      one_offs: 0,
+      hidden: 0,
+    });
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    const keys = () =>
+      wrapper.findAll(".wfv-row").map((row) => row.attributes("data-key"));
+    expect(keys()).toHaveLength(4);
+
+    for (const [origin, expected] of [
+      ["comfyui", ["a", "d"]],
+      ["pictures", ["b"]],
+      ["own", ["c"]],
+    ]) {
+      store.setFilters({ origin });
+      await flush();
+      expect([...keys()].sort()).toEqual(expected);
+      expect(wrapper.find(".filter-chip").text()).toContain(
+        { comfyui: "ComfyUI", pictures: "From pictures", own: "Our own" }[
+          origin
+        ],
+      );
+    }
+    // All: back to every card, no chip.
+    store.setFilters({ origin: null });
+    await flush();
+    expect(keys()).toHaveLength(4);
+    expect(wrapper.find(".filter-chip").exists()).toBe(false);
+  });
+
   it("says so when the filters leave nothing, rather than showing first-run help", async () => {
     const wrapper = await grid();
     useWorkflowsStore().setFilters({ minRating: 5 });
@@ -1802,66 +1841,96 @@ describe("pulling from ComfyUI (#1440)", () => {
     missing_model_files: ["flux-2-klein-9b-fp8.safetensors"],
     models_unread: 5,
   };
+  const checking = (wrapper) =>
+    wrapper.find('[data-testid="wfv-checking"]');
+
+  // Fake timers for the whole block: the poll is a timer, and one scheduled
+  // under real timers cannot be advanced. `flush` here lets them settle.
+  const flush = () => vi.advanceTimersByTimeAsync(0);
 
   beforeEach(() => {
+    vi.useFakeTimers();
     listWorkflowCards.mockResolvedValue({ cards: CARDS, one_offs: 0, hidden: 0 });
-    startWorkflowPull.mockResolvedValue({ status: "started", task_id: "t1" });
+    getWorkflowPull.mockResolvedValue({ status: "idle" });
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     useWorkflowPullStore().reset();
     useFilterStore().comfyuiConfigured = false;
   });
 
-  it("is offered only once ComfyUI is connected", async () => {
+  it("has no Pull button, connected or not, in the toolbar or the empty state", async () => {
+    useFilterStore().comfyuiConfigured = true;
     const wrapper = mountView();
     await flush();
+    expect(wrapper.text()).not.toContain("Pull from ComfyUI");
     expect(wrapper.find('[data-testid="wfv-pull"]').exists()).toBe(false);
 
-    useFilterStore().comfyuiConfigured = true;
+    listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 0 });
+    await useWorkflowsStore().fetchCards();
     await flush();
-    expect(wrapper.find('[data-testid="wfv-pull"]').text()).toContain(
-      "Pull from ComfyUI",
-    );
+    expect(wrapper.find(".wfv-empty").exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("Pull from ComfyUI");
+    expect(wrapper.find('[data-testid="wfv-empty-pull"]').exists()).toBe(false);
   });
 
-  it("offers the pull in the empty state instead of Connect ComfyUI", async () => {
-    listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 0 });
+  it("says Checking ComfyUI… only while a pull runs, and blocks nothing", async () => {
+    getWorkflowPull.mockResolvedValue({ status: "running", task_id: "t1" });
     useFilterStore().comfyuiConfigured = true;
     const wrapper = mountView();
     await flush();
-    const actions = wrapper
-      .findAll(".wfv-empty__actions button")
-      .map((el) => el.text())
-      .join(" | ");
-    expect(actions).toContain("Pull from ComfyUI");
-    expect(actions).not.toContain("Connect ComfyUI");
+    expect(checking(wrapper).attributes("role")).toBe("status");
+    expect(checking(wrapper).text()).toBe("Checking ComfyUI…");
+    expect(wrapper.find(".wfv-grid").attributes("aria-busy")).toBe("false");
+
+    getWorkflowPull.mockResolvedValue({ status: "idle" });
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
+    await flush();
+    expect(checking(wrapper).text()).toBe("");
   });
 
-  it("reports what the pull found, per machine, and re-reads the grid", async () => {
+  it("asks nothing while ComfyUI is not connected, and stops when the view goes", async () => {
+    const wrapper = mountView();
+    await flush();
+    expect(getWorkflowPull).not.toHaveBeenCalled();
+
+    useFilterStore().comfyuiConfigured = true;
+    await flush();
+    expect(getWorkflowPull).toHaveBeenCalledTimes(1);
+
+    wrapper.unmount();
+      await vi.advanceTimersByTimeAsync(PULL_WATCH_MS * 4);
+    expect(getWorkflowPull).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a pull that changed something, per machine, and re-reads the grid", async () => {
+    // A finished pull from before the view opened is the baseline, not news.
     getWorkflowPull.mockResolvedValue({
       status: "completed",
-      task_id: "t1",
-      comfyui_url: "http://127.0.0.1:8188",
-      summary: SUMMARY,
+      task_id: "old",
+      summary: { listed: 3, pulled: 3 },
     });
     useFilterStore().comfyuiConfigured = true;
     const wrapper = mountView();
     await flush();
+    expect(wrapper.find('[data-testid="wfpull"]').exists()).toBe(false);
     const reads = listWorkflowCards.mock.calls.length;
 
-    await wrapper.find('[data-testid="wfv-pull"]').trigger("click");
-    await flush();
+    getWorkflowPull.mockResolvedValue({
+      status: "completed",
+      task_id: "t2",
+      comfyui_url: "http://127.0.0.1:8188",
+      summary: SUMMARY,
+    });
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
     await flush();
 
-    expect(startWorkflowPull).toHaveBeenCalledTimes(1);
     expect(listWorkflowCards.mock.calls.length).toBe(reads + 1);
     const band = wrapper.find('[data-testid="wfpull"]');
     expect(band.find(".wfpull-headline").text()).toBe(
       "Found 82 workflows on 127.0.0.1:8188: 21 new, 61 already here.",
     );
-    // Said once, by the live region that was already mounted.
-    expect(wrapper.find('p[role="status"].visually-hidden').exists()).toBe(true);
     const kinds = band.findAll(".wfpull-line").map((li) => li.attributes("data-kind"));
     // Wrong if "won't run" and "not checked" ever share a kind: they must not
     // look alike (the issue's rule).
@@ -1870,43 +1939,57 @@ describe("pulling from ComfyUI (#1440)", () => {
     expect(kinds).toContain("unchecked");
     expect(band.text()).toContain("won't run on 127.0.0.1:8188");
     expect(band.text()).not.toMatch(/broken/i);
-    expect(band.text()).toContain("LoRACharacterPromptBuilder");
-
-    // The one-offs this pull added are hidden by default; the band lets them in.
-    await band.find('[data-testid="wfpull-show-one-offs"]').trigger("click");
-    expect(useWorkflowsStore().filters.hideOneOffs).toBe(false);
+    expect(band.text()).not.toMatch(/one-off/i);
 
     await band.find('[aria-label="Dismiss the ComfyUI pull result"]').trigger("click");
     await flush();
     expect(wrapper.find('[data-testid="wfpull"]').exists()).toBe(false);
-    // Focus goes back to the control that started it, not to <body>.
-    expect(document.activeElement).toBe(
-      wrapper.find('[data-testid="wfv-pull"]').element,
-    );
+    // Focus goes to the grid's scroller, not to <body>.
+    expect(document.activeElement).toBe(wrapper.find(".wfv-scroll").element);
   });
 
-  it("says why a pull failed, in an alert", async () => {
-    getWorkflowPull.mockResolvedValue({
-      status: "failed",
-      task_id: "t1",
-      comfyui_url: "http://127.0.0.1:8188",
-      error: "ComfyUI runs with --multi-user",
-    });
+  it("hands focus to the empty state's first action when the band goes", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 0 });
+    getWorkflowPull.mockResolvedValue({ status: "idle" });
     useFilterStore().comfyuiConfigured = true;
     const wrapper = mountView();
     await flush();
-    await wrapper.find('[data-testid="wfv-pull"]').trigger("click");
+    getWorkflowPull.mockResolvedValue({
+      status: "completed",
+      task_id: "t1",
+      comfyui_url: "http://127.0.0.1:8188",
+      summary: SUMMARY,
+    });
+    await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
     await flush();
-    const alert = wrapper.find('[data-testid="wfpull"] [role="alert"]');
-    expect(alert.text()).toContain(
-      "Couldn't pull from 127.0.0.1:8188: ComfyUI runs with --multi-user",
+    expect(wrapper.find(".wfv-empty").exists()).toBe(true);
+    await wrapper
+      .find('[aria-label="Dismiss the ComfyUI pull result"]')
+      .trigger("click");
+    await flush();
+    expect(document.activeElement).toBe(
+      wrapper.find(".wfv-empty__actions button").element,
     );
-    // A way to try again without hunting for the toolbar.
-    const retry = wrapper
-      .findAll('[data-testid="wfpull"] button')
-      .find((b) => b.text() === "Try again");
-    await retry.trigger("click");
-    expect(startWorkflowPull).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows nothing for a pull that changed nothing, or one that failed", async () => {
+    getWorkflowPull.mockResolvedValue({ status: "idle" });
+    useFilterStore().comfyuiConfigured = true;
+    const wrapper = mountView();
+    await flush();
+    const reads = listWorkflowCards.mock.calls.length;
+
+    for (const state of [
+      { status: "completed", task_id: "t1", summary: { listed: 5, matched: 5, unchanged: 5 } },
+      { status: "failed", task_id: "t2", error: "ComfyUI runs with --multi-user" },
+    ]) {
+      getWorkflowPull.mockResolvedValue(state);
+      await vi.advanceTimersByTimeAsync(PULL_WATCH_MS);
+      await flush();
+    }
+    expect(wrapper.find('[data-testid="wfpull"]').exists()).toBe(false);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(listWorkflowCards.mock.calls.length).toBe(reads);
   });
 });
 

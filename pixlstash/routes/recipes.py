@@ -6,8 +6,9 @@ overrides - and not the hub's ``workflow_recipe`` row, which new code calls a
 with a snapshot (``db_models/saved_recipe.py``).
 
 **A recipe belongs to one workflow** (#1623): ``GET /recipes?workflow_id=…``
-answers with that workflow's recipes, and credit counts its pictures, resolved
-through the hub (``variants_in_workflow``). The card a recipe was saved from
+answers with that workflow's recipes, and credit counts its pictures, filed as
+the grid files them: a manual workflow's runs under its own id, an automatic
+one's through its variants (``variants_in_workflow``). The card a recipe was saved from
 (``workflow_key``) is internal storage and never on the wire.
 
 **Every route here is ``OWNER_ONLY``, and that is a decision.** A recipe holds

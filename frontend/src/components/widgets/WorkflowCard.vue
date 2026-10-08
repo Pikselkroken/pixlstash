@@ -156,6 +156,22 @@
       </div>
     </div>
 
+    <!-- Pulled from ComfyUI (#1440). Top-start of the card, the one corner the
+         cover leaves free: the picture count is top-end, the rating
+         bottom-end and a superseded cover's flag bottom-start. The mark is
+         decoration for the sighted, so the name is on the span itself and in
+         the card's accessible name. -->
+    <span
+      v-if="card.origin_category === 'comfyui'"
+      class="wf-card__badge wf-card__badge--origin"
+      role="img"
+      aria-label="From ComfyUI"
+      data-testid="wf-card-comfyui"
+    >
+      <Tooltip text="From ComfyUI" activator="parent" :describe="false" />
+      <ComfyuiIcon :size="12" />
+    </span>
+
     <InfoPopover :card="card">
       <template #activator="{ props: popoverProps }">
         <AppButton
@@ -203,6 +219,7 @@ import {
   modelDisplayName,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
+import ComfyuiIcon from "./ComfyuiIcon.vue";
 import ChipRow from "./ChipRow.vue";
 import InfoPopover from "./InfoPopover.vue";
 import ModelMark from "./ModelMark.vue";
@@ -483,6 +500,12 @@ const accessibleName = computed(() => cardAccessibleName(props.card));
   left: var(--space-2);
   z-index: var(--z-raised);
   color: rgb(var(--v-theme-dark-surface-warning));
+  pointer-events: auto;
+}
+
+.wf-card__badge--origin {
+  left: var(--space-3);
+  z-index: var(--z-raised);
   pointer-events: auto;
 }
 

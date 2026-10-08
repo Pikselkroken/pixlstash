@@ -190,19 +190,64 @@ def list_saved_workflows(base_url: str) -> list[SavedWorkflow]:
     return sorted(entries, key=lambda entry: entry.path)
 
 
-def read_saved_workflow(base_url: str, relative_path: str) -> dict:
+def saved_workflow_info(
+    base_url: str, relative_path: str, timeout_s: float
+) -> Optional[SavedWorkflow]:
+    """One saved workflow's listing entry, from a listing of its own folder.
+
+    The one request Run and Open make before using a pulled workflow: the
+    folder is listed without recursion, so the answer is as small as the
+    folder, and ``modified`` is the very value a pull compares.
+
+    Args:
+        relative_path: A listing ``path``, relative to the workflows folder.
+        timeout_s: Bounds both the socket and the whole answer.
+
+    Returns:
+        ``None`` when the folder or the file is not there.
+
+    Raises:
+        RuntimeError: ComfyUI did not answer in time, or not with a listing.
+    """
+    folder, _, name = relative_path.rpartition("/")
+    directory = f"{WORKFLOWS_DIR}/{folder}" if folder else WORKFLOWS_DIR
+    url = f"{base_url}/api/userdata?dir={quote(directory, safe='')}&full_info=true"
+    status, body = _get(
+        url, "the workflow's folder", MAX_LISTING_BYTES, timeout_s=timeout_s
+    )
+    if status == 404:
+        return None
+    payload = _json(status, body, url, "the workflow's folder")
+    if not isinstance(payload, list):
+        raise RuntimeError("ComfyUI returned an unexpected folder listing")
+    for item in payload:
+        entry = _listing_entry(item)
+        if entry is not None and entry.path == name:
+            return SavedWorkflow(
+                path=relative_path, size=entry.size, modified_ms=entry.modified_ms
+            )
+    return None
+
+
+def read_saved_workflow(
+    base_url: str, relative_path: str, timeout_s: Optional[float] = None
+) -> dict:
     """The parsed document of one saved workflow.
 
     Args:
         base_url: The ComfyUI base URL, without a trailing slash.
         relative_path: A listing ``path``, relative to the workflows folder.
+        timeout_s: Bounds both the socket and the whole body; ``None`` keeps
+            the pull's limits.
 
     Raises:
         RuntimeError: ComfyUI is unreachable, answers non-200, or the file is
             too large, not JSON, or not a JSON object.
     """
     url = saved_workflow_url(base_url, relative_path)
-    status, body = _get(url, relative_path, MAX_SAVED_WORKFLOW_BYTES)
+    status, body = _get(
+        url, relative_path, MAX_SAVED_WORKFLOW_BYTES, timeout_s=timeout_s
+    )
     payload = _json(status, body, url, relative_path)
     if not isinstance(payload, dict):
         raise RuntimeError(f"{relative_path} is not a JSON object")
@@ -244,11 +289,33 @@ def _listing_entry(item) -> Optional[SavedWorkflow]:
         return None
     # ComfyUI builds the path with os.path.relpath, so a Windows host answers
     # with backslashes. The listing is ours to normalise; the file route takes
-    # either once encoded.
+    # either once encoded. Normalised BEFORE the check, so a backslash never
+    # reaches a stored path and `..\\x.json` is refused as `../x.json`.
     path = path.replace("\\", "/")
-    if not path.lower().endswith(".json"):
+    if not is_safe_workflow_path(path):
+        logger.warning(
+            "Skipped a ComfyUI workflow listing entry with an unsafe path: %r", path
+        )
         return None
     return SavedWorkflow(path=path, size=size, modified_ms=modified)
+
+
+def is_safe_workflow_path(path) -> bool:
+    """Whether *path* is a plain relative ``.json`` path under ``workflows/``.
+
+    The ComfyUI-PixlStash pack's ``isSafeWorkflowFile`` rule, held here because
+    the listing comes from a server anybody who reaches ComfyUI can write to:
+    no leading separator, drive letter, NUL or backslash, and no empty, ``.``
+    or ``..`` segment. What fails it is never stored, read or handed to Open as
+    ``comfyui_file``.
+    """
+    if not isinstance(path, str) or not path.lower().endswith(".json"):
+        return False
+    if "\\" in path or "\0" in path or path.startswith("/"):
+        return False
+    if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
+        return False
+    return all(segment not in ("", ".", "..") for segment in path.split("/"))
 
 
 def _int_or_none(value) -> Optional[int]:
@@ -259,8 +326,14 @@ def _int_or_none(value) -> Optional[int]:
     return None
 
 
-def _get(url: str, what: str, max_bytes: int) -> tuple[int, bytes]:
+def _get(
+    url: str, what: str, max_bytes: int, timeout_s: Optional[float] = None
+) -> tuple[int, bytes]:
     """GET *url* as ``(status, body)``; raise ``RuntimeError`` rather than wait.
+
+    *timeout_s*, when given, replaces both :data:`USERDATA_TIMEOUT_S` and
+    :data:`USERDATA_DEADLINE_S`: a caller that must answer quickly and falls
+    back on its own, so its failures are logged at info, not as warnings.
 
     Streamed with a running byte count and a whole-request deadline, because
     ``timeout`` bounds each socket read and not the download: a ComfyUI that
@@ -268,18 +341,23 @@ def _get(url: str, what: str, max_bytes: int) -> tuple[int, bytes]:
     forever. Redirects are refused rather than followed to another host.
     A 404 is returned for the caller to read; any other status past 299 raises.
     """
-    deadline = time.monotonic() + USERDATA_DEADLINE_S
+    allowed = USERDATA_DEADLINE_S if timeout_s is None else timeout_s
+    warn = logger.warning if timeout_s is None else logger.info
+    deadline = time.monotonic() + allowed
     try:
         response = requests.get(
-            url, timeout=USERDATA_TIMEOUT_S, stream=True, allow_redirects=False
+            url,
+            timeout=USERDATA_TIMEOUT_S if timeout_s is None else timeout_s,
+            stream=True,
+            allow_redirects=False,
         )
     except requests.RequestException as exc:
-        logger.warning("ComfyUI request for %s failed (%s): %s", what, url, exc)
+        warn("ComfyUI request for %s failed (%s): %s", what, url, exc)
         raise RuntimeError(f"Could not reach ComfyUI for {what}") from exc
     try:
         status = response.status_code
         if 300 <= status < 400:
-            logger.warning(
+            warn(
                 "ComfyUI redirected the request for %s (%s, status %s); not followed.",
                 what,
                 url,
@@ -296,16 +374,15 @@ def _get(url: str, what: str, max_bytes: int) -> tuple[int, bytes]:
                     )
                 if time.monotonic() > deadline:
                     raise RuntimeError(
-                        f"ComfyUI took longer than {USERDATA_DEADLINE_S:.0f} s "
-                        f"to send {what}"
+                        f"ComfyUI took longer than {allowed:.0f} s to send {what}"
                     )
         except requests.RequestException as exc:
-            logger.warning("ComfyUI stopped sending %s (%s): %s", what, url, exc)
+            warn("ComfyUI stopped sending %s (%s): %s", what, url, exc)
             raise RuntimeError(f"ComfyUI stopped sending {what}") from exc
     finally:
         response.close()
     if status >= 300 and status != 404:
-        logger.warning(
+        warn(
             "ComfyUI request for %s failed: url=%s status=%s detail=%s",
             what,
             url,

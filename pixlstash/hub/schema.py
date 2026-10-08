@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 11
+CURRENT_DATA_VERSION = 12
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -1078,10 +1078,10 @@ CREATE TABLE IF NOT EXISTS workflow_origin (
 
 # The stored workflow files a pull WROTE (#1440), as opposed to ones the owner
 # put there. Per FILE and not per path, so what a pull wrote stays pull-written
-# when ComfyUI renames, edits or stops listing the path it came from - the
-# one-off test reads it (``Card.hand_imported``). The owner handing a file over
-# (the import route, the watched inbox) takes it off; deleting the file does
-# too, since there is nothing left to describe.
+# when ComfyUI renames, edits or stops listing the path it came from. Legacy:
+# only data step 7 reads it, to tell a pulled file's origin. The owner handing
+# a file over (the import route, the watched inbox) takes it off; deleting the
+# file does too, since there is nothing left to describe.
 _V2_WORKFLOW_PULLED_FILE = """
 CREATE TABLE IF NOT EXISTS workflow_pulled_file (
     workflow_name  TEXT PRIMARY KEY
@@ -1354,6 +1354,33 @@ CREATE TABLE IF NOT EXISTS workflow_card_move (
 )
 """
 
+# Every version of a MANUAL workflow's document, 1 first. A ComfyUI file whose
+# content changed is a new version of the card its origin row names, not a new
+# card. **``workflow_document.document`` and ``api_document`` are a copy of the
+# highest version**, written in the same transaction as it
+# (``hub/workflow_versions.py``), so every reader of the current graph reads
+# the one row it always did and an older build sharing this hub still reads the
+# current graph. ``api_document`` belongs to a version: a conversion is of one
+# document. ``content_hash`` is ``workflow_inbox.content_hash``;
+# ``topology_hash`` is NULL where it was not computed (data step 12 leaves it);
+# ``remote_modified`` is ComfyUI's clock in milliseconds for a pulled version;
+# ``source`` is how the version arrived (the document's origin for version 1,
+# ``pull`` for every later one).
+_V2_WORKFLOW_VERSION = """
+CREATE TABLE IF NOT EXISTS workflow_version (
+    workflow_id      TEXT NOT NULL,
+    version          INTEGER NOT NULL,
+    document         TEXT NOT NULL,
+    api_document     TEXT,
+    content_hash     TEXT,
+    topology_hash    TEXT,
+    remote_modified  INTEGER,
+    source           TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    PRIMARY KEY (workflow_id, version)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1430,6 +1457,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_VARIANT_FAMILY,
     _V2_WORKFLOW_FAMILY_PASS,
     _V2_WORKFLOW_CARD_MOVE,
+    _V2_WORKFLOW_VERSION,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -1590,6 +1618,14 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     ):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} INTEGER")
+    # "Pull workflows from ComfyUI", on by default: NOT NULL DEFAULT 1, so an
+    # existing owner and a row an older build inserts both read on, where a
+    # nullable column would read None into the model's bool.
+    if "pull_comfyui_workflows" not in user_columns:
+        conn.execute(
+            "ALTER TABLE user ADD COLUMN pull_comfyui_workflows INTEGER "
+            "NOT NULL DEFAULT 1"
+        )
     conn.execute(
         "CREATE TABLE IF NOT EXISTS identity_migration_operation ("
         "library_uuid TEXT PRIMARY KEY REFERENCES library(uuid), "
@@ -1704,6 +1740,11 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "content_hash" not in origin_columns:
         conn.execute("ALTER TABLE workflow_origin ADD COLUMN content_hash TEXT")
+    # When the path was last missing from a listing; NULL while it is listed.
+    # A row whose file left ComfyUI is kept and marked, so its card keeps its
+    # versions and Open can tell the link is gone.
+    if "gone_at" not in origin_columns:
+        conn.execute("ALTER TABLE workflow_origin ADD COLUMN gone_at TEXT")
     # "Was this content dismissed, at any path or origin" - once per pulled
     # document. Here and not in `_V2_WORKFLOW_INDEXES`: those run before this
     # ALTER, and on a hub that needed it the column would not exist yet.
@@ -2132,6 +2173,14 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                         "UPDATE workflow_topology_core SET traits = NULL "
                         "WHERE traits LIKE '%references:%'"
                     )
+                if data_version < 12:
+                    # Workflow versions: every manual workflow's document is
+                    # its version 1. After step 7, which makes manual
+                    # workflows of the old files. Imported here: it imports
+                    # hub.db, which imports this module.
+                    from pixlstash.hub.workflow_versions import backfill_first_versions
+
+                    backfill_first_versions(conn)
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.

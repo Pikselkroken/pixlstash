@@ -1,9 +1,19 @@
 """Task that pulls every workflow a ComfyUI has saved into the library (#1440).
 
-User-triggered, so there is no finder: ``POST /comfyui/workflows/pull`` submits
-it straight to the ``TaskRunner``, the ``ModelFolderScanTask`` shape. Its
-counters feed the worker-progress snapshot, so the pull draws as a row on the
-Tasks tab.
+Offered once a minute by :class:`ComfyUIWorkflowPollFinder` while a ComfyUI
+address is saved and the owner's "Pull workflows from ComfyUI" setting is on,
+run once at the end of a Link, and still submitted by
+``POST /comfyui/workflows/pull``. All three go through
+:class:`~pixlstash.services.comfyui_workflow_pulls.WorkflowPulls`, which keeps
+one pull in flight. Its counters feed the worker-progress snapshot, so the
+pull draws as a row on the Tasks tab.
+
+**A quiet poll is one request.** The listing carries each file's ``modified``,
+and a path whose origin row holds that same time is not read: it is counted
+``unchanged``. Only when a file is read does the pull ask whether ComfyUI is
+multi-user, fetch ``object_info`` and (for a background poll) the run history.
+A path whose content changed becomes a new version of the workflow its origin
+row names (``store_pulled_workflow``), never a new workflow.
 
 **One-way.** It lists and reads over ComfyUI's userdata API
 (:mod:`pixlstash.services.comfyui_userdata`) and writes nothing back to ComfyUI.
@@ -30,6 +40,7 @@ bill of health.
 from __future__ import annotations
 
 import contextlib
+import json
 import re
 import sqlite3
 from typing import Any, Callable, ContextManager, Iterable, Optional
@@ -50,6 +61,7 @@ from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     reduce_ui_graph,
 )
+from pixlstash.services.workflow_card_service import converted_manual_document
 from pixlstash.services.workflow_io import api_graph
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.tasks.task_type import TaskType
@@ -80,7 +92,16 @@ _MAX_STEM_CHARS = 200
 # document, (origin, remote_path, remote_modified, content_hash))``.
 StoreFn = Callable[[str, dict, tuple], dict]
 
-# What `_pull_one` answers for a workflow the owner deleted here. A sentinel
+# What one pull may write before it stops and leaves the rest to the next one.
+# ComfyUI has no authentication, so its saved workflows are written by whoever
+# reaches it, and the poll takes them every minute without anybody pressing
+# anything: without a budget a listing of 5000 changing files grows the hub by
+# that much a minute. A pull that hits one is logged and the poll backs off.
+MAX_NEW_WORKFLOWS_PER_PULL = 100
+MAX_NEW_VERSIONS_PER_PULL = 200
+MAX_WRITTEN_BYTES_PER_PULL = 64 * 1024 * 1024
+
+# What `pull_entry` answers for a workflow the owner deleted here. A sentinel
 # rather than a string, so it can never be mistaken for a result.
 _DISMISSED = object()
 
@@ -219,6 +240,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
         store: StoreFn,
         lock: Optional[ContextManager] = None,
         announce: Optional[Callable[[list[str]], None]] = None,
+        background: bool = False,
     ):
         """Bind the task to one ComfyUI.
 
@@ -236,7 +258,11 @@ class ComfyUIWorkflowPullTask(BaseTask):
                 around its dismissal. Without it a workflow deleted mid-pull
                 is written straight back by the same pull.
             announce: Called once at the end with the workflow ids that changed,
-                so the Workflows screen looks again.
+                so the Workflows screen looks again. A background poll that
+                changed nothing does not call it, or every open tab would
+                reload its Workflows view once a minute.
+            background: The minute poll rather than somebody asking: low
+                priority, and the run history is read only when a file was.
         """
         super().__init__(
             task_type=TaskType.COMFYUI_WORKFLOW_PULL.value,
@@ -247,36 +273,27 @@ class ComfyUIWorkflowPullTask(BaseTask):
         self._store = store
         self._lock = lock if lock is not None else contextlib.nullcontext()
         self._announce = announce
+        self._background = background
         # Live progress, read by Vault._build_worker_progress_snapshot.
         self._total_count = 0
         self._processed_count = 0
 
     @property
     def priority(self) -> TaskPriority:
-        # User-initiated: the owner pressed the button and is watching.
-        return TaskPriority.HIGH
+        # Asked for (a press, a Link) is HIGH: the owner is watching. The poll
+        # is not.
+        return TaskPriority.LOW if self._background else TaskPriority.HIGH
 
     def _run_task(self) -> dict[str, Any]:
         origin = self._comfyui_url
-        comfyui_userdata.ensure_single_user(origin)
         entries = comfyui_userdata.list_saved_workflows(origin)
         self._total_count = len(entries)
-
-        object_info: Optional[dict]
-        try:
-            object_info = fetch_object_info(origin)
-        except RuntimeError as exc:
-            logger.info(
-                "Pulling ComfyUI workflows from %s without a node check: %s",
-                origin,
-                exc,
-            )
-            object_info = None
-
+        known = workflow_origin.origin_rows(self._hub, origin)
         result: dict[str, Any] = {
             "listed": len(entries),
             "pulled": 0,
             "changed": 0,
+            "unchanged": 0,
             "matched": 0,
             "already_shipped": 0,
             "skipped_dismissed": 0,
@@ -284,7 +301,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
             "gone": 0,
             "missing_nodes": 0,
             "nodes_unchecked": 0,
-            "nodes_checked": object_info is not None,
+            "nodes_checked": False,
             "missing_node_classes": [],
             "known_from_pictures": 0,
             "missing_models": 0,
@@ -292,34 +309,115 @@ class ComfyUIWorkflowPullTask(BaseTask):
             "models_unchecked": 0,
             "missing_model_files": [],
             "workflow_ids": [],
+            "budget_exhausted": None,
+            "card_cap_reached": False,
         }
+        to_read = []
+        for entry in entries:
+            row = known.get(entry.path)
+            if row is not None and row["dismissed"]:
+                # The path was deleted here; its content may be read under
+                # another path, where the content check below catches it.
+                result["skipped_dismissed"] += 1
+                self._processed_count += 1
+            elif row is not None and is_unchanged(row, entry):
+                result["unchanged"] += 1
+                self._processed_count += 1
+            else:
+                to_read.append(entry)
+        listed = {entry.path for entry in entries}
+        relinked = bool(listed) and any(
+            not row["dismissed"] and (row["gone_at"] is None) != (path in listed)
+            for path, row in known.items()
+        )
+        if to_read or relinked:
+            # Before anything is stored or a link moves: the listing of a
+            # multi-user ComfyUI is nobody's in particular.
+            comfyui_userdata.ensure_single_user(origin)
+
+        object_info: Optional[dict] = None
+        if to_read:
+            try:
+                object_info = fetch_object_info(origin)
+            except RuntimeError as exc:
+                logger.info(
+                    "Pulling ComfyUI workflows from %s without a node check: %s",
+                    origin,
+                    exc,
+                )
+        result["nodes_checked"] = object_info is not None
         advertised = (
             advertised_model_names(object_info) if object_info is not None else None
         )
         missing_classes: set[str] = set()
         missing_files: set[str] = set()
         workflow_ids: list[str] = []
-        for entry in entries:
+        new_workflows = new_versions = written = 0
+        for position, entry in enumerate(to_read):
+            exhausted = _over_budget(new_workflows, new_versions, written, entry)
+            if exhausted is not None:
+                result["budget_exhausted"] = exhausted
+                logger.warning(
+                    "Stopped pulling ComfyUI workflows from %s at the budget of "
+                    "%s for one pull; %d listed file(s) are left for the next "
+                    "pull.",
+                    origin,
+                    exhausted,
+                    len(to_read) - position,
+                )
+                # Left for the next pull, but this one's progress is complete.
+                self._processed_count += len(to_read) - position
+                break
             try:
-                pulled = self._pull_one(entry)
+                pulled = pull_entry(self._hub, origin, entry, self._store, self._lock)
                 if pulled is None:
                     result["failed"] += 1
                     continue
                 if pulled is _DISMISSED:
                     result["skipped_dismissed"] += 1
                     continue
-                document, outcome, changed = pulled
+                document, outcome = pulled
+                if outcome.get("capped"):
+                    if not result["card_cap_reached"]:
+                        logger.warning(
+                            "ComfyUI at %s already has %d pulled workflows, the "
+                            "most one address may; its new files make no "
+                            "workflow until some are deleted.",
+                            origin,
+                            workflow_origin.MAX_PULL_CARDS_PER_ORIGIN,
+                        )
+                    result["card_cap_reached"] = True
+                    continue
                 # One bucket per listed entry: shipped, matched, changed, new.
                 if outcome.get("builtin"):
                     result["already_shipped"] += 1
                 elif outcome.get("matched"):
                     result["matched"] += 1
-                elif changed:
+                elif outcome.get("versioned"):
                     result["changed"] += 1
+                    new_versions += 1
+                    written += len(json.dumps(document))
                 else:
                     result["pulled"] += 1
+                    new_workflows += 1
+                    written += len(json.dumps(document))
                 if outcome.get("workflow_id"):
                     workflow_ids.append(outcome["workflow_id"])
+                    if object_info is not None:
+                        # The map is in hand: convert an editor document now
+                        # and store it, as its first read otherwise would.
+                        try:
+                            converted_manual_document(
+                                self._hub, outcome["workflow_id"], object_info
+                            )
+                        except (sqlite3.Error, RecursionError) as exc:
+                            logger.warning(
+                                "Pulled %s as %s but could not store its "
+                                "conversion; its first read converts it: %s",
+                                entry.path,
+                                outcome["workflow_id"],
+                                exc,
+                            )
                 if self._topology_has_pictures(outcome.get("topology_hash")):
                     result["known_from_pictures"] += 1
                 if object_info is None:
@@ -345,26 +443,30 @@ class ComfyUIWorkflowPullTask(BaseTask):
                 self._processed_count += 1
 
         try:
-            result["gone"] = workflow_origin.prune_gone(
-                self._hub, origin, [entry.path for entry in entries]
-            )
+            result["gone"] = workflow_origin.mark_gone(self._hub, origin, listed)
         except sqlite3.Error as exc:
             logger.warning(
-                "Pulled ComfyUI workflows from %s but could not forget the paths "
-                "it no longer lists: %s",
+                "Pulled ComfyUI workflows from %s but could not mark the paths "
+                "it no longer lists as gone: %s",
                 origin,
                 exc,
             )
-        result["history_runs"] = self._read_history()
+        # The history is a large read: a poll pays it only when it read a
+        # workflow, which is when the owner has been working in ComfyUI.
+        result["history_runs"] = (
+            self._read_history() if to_read or not self._background else None
+        )
         result["missing_node_classes"] = sorted(missing_classes, key=str.lower)
         result["missing_model_files"] = sorted(missing_files, key=str.lower)
         result["workflow_ids"] = sorted(set(workflow_ids))
-        logger.info(
-            "Pulled ComfyUI workflows from %s: %d listed, %d new, %d changed, "
-            "%d already stored, %d shipped with PixlStash, %d deleted here and "
-            "skipped, %d failed, %d gone from ComfyUI.",
+        log = logger.info if to_read or result["gone"] else logger.debug
+        log(
+            "Pulled ComfyUI workflows from %s: %d listed, %d unchanged, %d new, "
+            "%d new versions, %d already stored, %d shipped with PixlStash, %d "
+            "deleted here and skipped, %d failed, %d gone from ComfyUI.",
             origin,
             result["listed"],
+            result["unchanged"],
             result["pulled"],
             result["changed"],
             result["matched"],
@@ -373,7 +475,9 @@ class ComfyUIWorkflowPullTask(BaseTask):
             result["failed"],
             result["gone"],
         )
-        if self._announce is not None:
+        if self._announce is not None and (
+            result["workflow_ids"] or not self._background
+        ):
             try:
                 self._announce(result["workflow_ids"])
             except Exception as exc:
@@ -441,96 +545,135 @@ class ComfyUIWorkflowPullTask(BaseTask):
             )
             return False
 
-    def _pull_one(self, entry):
-        """Read and file one saved workflow.
 
-        Returns:
-            ``None`` when it could not be read or stored (logged with the
-            path), :data:`_DISMISSED` when the owner deleted it here, else
-            ``(document, store result, changed)`` where *changed* says the
-            path held different content at the last pull.
-        """
-        if (
-            entry.size is not None
-            and entry.size > comfyui_userdata.MAX_SAVED_WORKFLOW_BYTES
-        ):
-            logger.warning(
-                "Skipped ComfyUI workflow %s: %d bytes, past the %d a pull reads.",
-                entry.path,
-                entry.size,
-                comfyui_userdata.MAX_SAVED_WORKFLOW_BYTES,
-            )
-            return None
+def _over_budget(
+    new_workflows: int, new_versions: int, written: int, entry
+) -> Optional[str]:
+    """The per-pull budget reading *entry* would pass, or ``None``.
+
+    The byte budget counts the documents stored so far plus the listed size of
+    the next, so a pull never starts a file it would end past it on.
+    """
+    if new_workflows >= MAX_NEW_WORKFLOWS_PER_PULL:
+        return f"{MAX_NEW_WORKFLOWS_PER_PULL} new workflows"
+    if new_versions >= MAX_NEW_VERSIONS_PER_PULL:
+        return f"{MAX_NEW_VERSIONS_PER_PULL} new versions"
+    if written + (entry.size or 0) > MAX_WRITTEN_BYTES_PER_PULL:
+        return f"{MAX_WRITTEN_BYTES_PER_PULL // (1024 * 1024)} MB written"
+    return None
+
+
+def is_unchanged(row: dict, entry) -> bool:
+    """Whether the listing *entry* is the file its origin *row* last read.
+
+    By ComfyUI's ``modified`` alone, so an unchanged file is never fetched. A
+    listing without times, or a row whose workflow is gone, reads as changed.
+    """
+    return (
+        entry.modified_ms is not None
+        and row["remote_modified"] == entry.modified_ms
+        and (bool(row["live"]) or row["workflow_name"] is None)
+    )
+
+
+def pull_entry(
+    hub: HubDatabase,
+    origin: str,
+    entry,
+    store: StoreFn,
+    lock: ContextManager,
+    *,
+    timeout_s: Optional[float] = None,
+):
+    """Read and file one saved workflow.
+
+    Shared by the pull and by the check Run and Open make on one file.
+
+    Args:
+        timeout_s: Bounds the read of the file (both the socket and the whole
+            body); ``None`` keeps the pull's own limits.
+
+    Returns:
+        ``None`` when it could not be read or stored (logged with the path),
+        :data:`_DISMISSED` when the owner deleted it here, else ``(document,
+        store result)``.
+    """
+    if (
+        entry.size is not None
+        and entry.size > comfyui_userdata.MAX_SAVED_WORKFLOW_BYTES
+    ):
+        logger.warning(
+            "Skipped ComfyUI workflow %s: %d bytes, past the %d a pull reads.",
+            entry.path,
+            entry.size,
+            comfyui_userdata.MAX_SAVED_WORKFLOW_BYTES,
+        )
+        return None
+    try:
+        document = comfyui_userdata.read_saved_workflow(
+            origin, entry.path, timeout_s=timeout_s
+        )
+    except RuntimeError as exc:
+        # A quick check (a timeout given) falls back to what is stored.
+        (logger.warning if timeout_s is None else logger.info)(
+            "Could not read ComfyUI workflow %s: %s", entry.path, exc
+        )
+        return None
+    try:
+        digest = workflow_inbox.content_hash(document)
+    except (RecursionError, TypeError, ValueError) as exc:
+        logger.warning(
+            "Could not hash ComfyUI workflow %s, so only its path is checked "
+            "against what was deleted here: %s",
+            entry.path,
+            exc,
+        )
+        digest = None
+    name = stored_name_for(entry.path)
+    # One lock around the check, the write and the record: the delete takes
+    # it around its dismissal, so a workflow deleted while this pull runs
+    # is either dismissed before its entry is checked or deleted after its
+    # origin row exists - never re-stored by the pull that was running.
+    with lock:
         try:
-            document = comfyui_userdata.read_saved_workflow(
-                self._comfyui_url, entry.path
-            )
-        except RuntimeError as exc:
-            logger.warning("Could not read ComfyUI workflow %s: %s", entry.path, exc)
-            return None
-        try:
-            digest = workflow_inbox.content_hash(document)
-        except (RecursionError, TypeError, ValueError) as exc:
-            logger.warning(
-                "Could not hash ComfyUI workflow %s, so only its path is checked "
-                "against what was deleted here: %s",
+            if workflow_origin.is_dismissed(hub, origin, entry.path, digest):
+                return _DISMISSED
+        except sqlite3.Error as exc:
+            logger.error(
+                "Could not ask whether ComfyUI workflow %s was deleted here, "
+                "so it is not pulled: %s",
                 entry.path,
                 exc,
             )
-            digest = None
-        name = stored_name_for(entry.path)
-        # One lock around the check, the write and the record: the delete takes
-        # it around its dismissal, so a workflow deleted while this pull runs
-        # is either dismissed before its entry is checked or deleted after its
-        # origin row exists - never re-stored by the pull that was running.
-        with self._lock:
-            try:
-                if workflow_origin.is_dismissed(
-                    self._hub, self._comfyui_url, entry.path, digest
-                ):
-                    return _DISMISSED
-                previous = workflow_origin.last_content(
-                    self._hub, self._comfyui_url, entry.path
-                )
-            except sqlite3.Error as exc:
-                logger.error(
-                    "Could not ask whether ComfyUI workflow %s was deleted here, "
-                    "so it is not pulled: %s",
-                    entry.path,
-                    exc,
-                )
-                return None
-            try:
-                # The origin row goes in with the workflow, in one transaction
-                # (#1694): one stored without it would come back after a delete.
-                outcome = self._store(
-                    name,
-                    document,
-                    (self._comfyui_url, entry.path, entry.modified_ms, digest),
-                )
-            except (
-                NotAWorkflowError,
-                RecursionError,
-                TypeError,
-                ValueError,
-                OSError,
-            ) as exc:
-                logger.warning(
-                    "Could not store ComfyUI workflow %s as %s: %s: %s",
-                    entry.path,
-                    name,
-                    type(exc).__name__,
-                    exc,
-                )
-                return None
-            except sqlite3.Error as exc:
-                logger.error(
-                    "Could not store ComfyUI workflow %s as %s with its origin "
-                    "row; no new workflow was stored: %s",
-                    entry.path,
-                    name,
-                    exc,
-                )
-                return None
-        changed = previous is not None and digest is not None and previous != digest
-        return document, outcome, changed
+            return None
+        try:
+            # The origin row goes in with the workflow, in one transaction
+            # (#1694): one stored without it would come back after a delete.
+            outcome = store(
+                name, document, (origin, entry.path, entry.modified_ms, digest)
+            )
+        except (
+            NotAWorkflowError,
+            RecursionError,
+            TypeError,
+            ValueError,
+            OSError,
+        ) as exc:
+            logger.warning(
+                "Could not store ComfyUI workflow %s as %s: %s: %s",
+                entry.path,
+                name,
+                type(exc).__name__,
+                exc,
+            )
+            return None
+        except sqlite3.Error as exc:
+            logger.error(
+                "Could not store ComfyUI workflow %s as %s with its origin "
+                "row; no new workflow or version was stored: %s",
+                entry.path,
+                name,
+                exc,
+            )
+            return None
+    return document, outcome

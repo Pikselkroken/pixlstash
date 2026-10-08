@@ -132,6 +132,17 @@ export const WORKFLOW_SOURCE_LABELS = Object.freeze({
 });
 
 /**
+ * Where a workflow card came from, by the server's `origin_category`: pulled
+ * from ComfyUI, made automatically from pictures, or one of the owner's own
+ * (a clone, import, edit or built-in).
+ */
+export const WORKFLOW_ORIGIN_LABELS = Object.freeze({
+  comfyui: "ComfyUI",
+  pictures: "From pictures",
+  own: "Our own",
+});
+
+/**
  * The Workflows screen's active filters as chips (v1.12 F7).
  *
  * Here rather than in `useWorkflowsStore` for this module's own reason: it is
@@ -175,6 +186,11 @@ export function workflowFilterChips(filters, cards, setFilters) {
   if (filters.source != null) {
     push("source", "Source", WORKFLOW_SOURCE_LABELS[filters.source], {
       source: null,
+    });
+  }
+  if (filters.origin != null) {
+    push("origin", "Origin", WORKFLOW_ORIGIN_LABELS[filters.origin], {
+      origin: null,
     });
   }
   if (filters.minRating != null) {

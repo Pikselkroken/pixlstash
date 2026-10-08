@@ -336,6 +336,60 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
+describe("the version line", () => {
+  const line = (wrapper) =>
+    wrapper.find('[data-testid="wftab-version"]');
+
+  it("says the version and its day for a card with more than one", async () => {
+    const versioned = card({
+      versions: 3,
+      version: 3,
+      version_at: "2026-10-06T09:30:00Z",
+      origin_category: "own",
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: versioned }));
+    const { wrapper } = await mountWith([KEY], [versioned]);
+    expect(line(wrapper).text()).toMatch(/^Version 3 · \S+/);
+    expect(line(wrapper).text()).toContain("2026");
+  });
+
+  it("names the current version's number, not how many are kept", async () => {
+    // Past the 50 kept, version 61 is the 50th row: the line says 61.
+    const pruned = card({
+      versions: 50,
+      version: 61,
+      version_at: "2026-10-06T09:30:00Z",
+      origin_category: "comfyui",
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: pruned }));
+    const { wrapper } = await mountWith([KEY], [pruned]);
+    expect(line(wrapper).text()).toMatch(/^Version 61 · /);
+  });
+
+  it("shows it for a pulled card even at version 1", async () => {
+    const pulled = card({
+      versions: 1,
+      version: 1,
+      version_at: "2026-10-06T09:30:00Z",
+      origin_category: "comfyui",
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: pulled }));
+    const { wrapper } = await mountWith([KEY], [pulled]);
+    expect(line(wrapper).text()).toMatch(/^Version 1 · /);
+  });
+
+  it("is absent for a card with a single version that did not come from ComfyUI", async () => {
+    const plain = card({
+      versions: 1,
+      version_at: "2026-10-06T09:30:00Z",
+      origin_category: "pictures",
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: plain }));
+    const { wrapper } = await mountWith([KEY], [plain]);
+    expect(line(wrapper).exists()).toBe(false);
+  });
+});
+
 describe("the models the panel names", () => {
   it("calls the checkpoint what the SHELF calls it, not what the file is", async () => {
     // The same preference the card's generated name row was built from
@@ -1975,11 +2029,14 @@ describe("a default's provenance and reset", () => {
 describe("an editor file ComfyUI has not converted (#1530)", () => {
   const editorFile = { imported: true, variant_count: 0 };
 
-  it("says its parameters are not available yet, and how to convert it", async () => {
+  it("says its parameters are not available yet, and that Open converts it", async () => {
     getWorkflowCard.mockResolvedValue(detail({ card: editorFile }));
     const { wrapper } = await mountWith([KEY], [card(editorFile)]);
     expect(wrapper.find('[data-testid="wftab-editor-only"]').exists()).toBe(true);
-    expect(textOf(wrapper)).toContain("Convert for PixlStash");
+    expect(textOf(wrapper)).toContain("PixlStash could not convert this ComfyUI workflow");
+    expect(textOf(wrapper)).toContain("Open it in ComfyUI from here");
+    // There is no manual step to send anybody to any more.
+    expect(textOf(wrapper)).not.toContain("Convert for PixlStash");
   });
 
   it("says nothing of converting a card its pictures made", async () => {

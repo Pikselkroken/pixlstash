@@ -33,7 +33,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional, Union
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import (
@@ -44,14 +44,16 @@ from pixlstash.hub.workflow_card_reads import (
     card_index,
     find_workflow,
     instance_documents,
-    manual_document,
+    manual_document_and_version,
     variant_documents,
     workflow_group_defaults,
     workflow_index,
 )
 from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, loader_swaps_of
+from pixlstash.hub.workflow_group_writes import set_manual_api_document
 from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services import workflow_bindings
 from pixlstash.services.comfyui_recipe_service import (
     LORA_DIGEST_FIELD_RE,
     sanitize_prompt_graph,
@@ -91,7 +93,8 @@ from pixlstash.services.workflow_library_service import (
     read_picture_variant,
     read_variant_picture_counts,
 )
-from pixlstash.services.workflow_io import api_graph
+from pixlstash.services.comfyui_ui_graph import convert_ui_graph_to_api
+from pixlstash.services.workflow_io import api_graph, with_converted_graph
 from pixlstash.services.workflow_parameters import (
     FEATURED_NAMES,
     FEATURED_ORDER,
@@ -109,6 +112,11 @@ from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 logger = get_logger(__name__)
+
+# ComfyUI's ``object_info`` for converting a manual workflow's editor document:
+# the map itself, or a call that reads it (and answers ``None`` when ComfyUI
+# cannot be asked), made only when a conversion is actually needed.
+ObjectInfo = Union[dict, Callable[[], Optional[dict]], None]
 
 # How many pictures a card's cover strip shows, and therefore how deep the
 # window pass goes per variant.
@@ -279,17 +287,15 @@ class WorkflowFigures:
 
     @property
     def one_off(self) -> bool:
-        """Too small, unrated, never imported by hand and never saved from.
+        """Too small, unrated, never imported and never saved from.
 
-        A file pulled from ComfyUI does not count as imported here (#1440):
-        a pull brings a whole install's experiments in one gesture, and
-        exempting all of them would bury the grid. A file the owner dropped
-        in, or one a pull merely matched, still does.
+        Only a workflow known from its pictures alone can be one: anything
+        stored here, a pull from ComfyUI included, is listed from the start.
         """
         return (
             self.pictures < ONE_OFF_PICTURES
             and self.rated == 0
-            and not self.card.hand_imported
+            and not self.card.imported
             and not self.saved_recipes
         )
 
@@ -355,7 +361,6 @@ def _figures(
             notes=workflow.notes,
             hidden=workflow.hidden,
             imported=any(member.imported for member in members),
-            hand_imported=any(member.hand_imported for member in members),
             file_name=files[0] if files else None,
             variants=variants,
         )
@@ -1329,9 +1334,12 @@ class _VariantRead:
 
 
 def workflow_defaults(
-    hub: HubDatabase, vault, workflow_id: str
+    hub: HubDatabase, vault, workflow_id: str, object_info: ObjectInfo = None
 ) -> Optional[DefaultRecipe]:
     """The default recipe of one workflow, or ``None`` for an unknown id.
+
+    *object_info* converts a manual workflow's editor document that has no
+    conversion stored yet (:func:`converted_manual_document`).
 
     Featured parameters and models are the mode per address; a LoRA is in when
     more than half the sampled instances loaded it, at its modal strength;
@@ -1353,7 +1361,7 @@ def workflow_defaults(
         # A manual workflow's sample is its own document, read by its own
         # slot labels: never a picture's run, and never a `core:` address.
         provenance = FROM_ALL
-        documents, reads, manual_names = _manual_sample(hub, workflow_id)
+        documents, reads, manual_names = _manual_sample(hub, workflow_id, object_info)
     else:
         if library_uuid:
             hashes = read_instance_hashes(
@@ -1612,17 +1620,88 @@ def workflow_defaults(
     return recipe
 
 
+def converted_manual_document(
+    hub: HubDatabase, workflow_id: str, object_info: ObjectInfo = None
+) -> tuple[Optional[dict], Optional[int], list[str]]:
+    """A manual workflow's runnable document, converted the first time one is needed.
+
+    **The one read every reader of a manual workflow's graph goes through**:
+    the Run, its preflight and Open (``routes/workflows._source_graph_for``),
+    the inspector's defaults (:func:`workflow_defaults`) and a pull that just
+    stored the workflow. A document with a conversion stored (ComfyUI's own, or
+    an earlier one of these) reads as that and converts nothing. An editor
+    document without one is converted with *object_info* and the conversion is
+    **stored on the version it was made from** (``set_manual_api_document``
+    with ``keep_stored``): only while that version is still the current one,
+    and never over a conversion already there, so the node's always wins.
+    Every later read then sees the same graph, whether or not ComfyUI answers.
+
+    A refusal (ComfyUI not answering, a node it does not have) stores nothing
+    and returns the document as it was with the converter's sentences, so the
+    next read tries again and the caller can say why.
+
+    A store that is refused because the workflow moved on meanwhile (a pull
+    made a new version, or ComfyUI's own conversion landed first) reads the
+    workflow again, so the caller gets what is stored now rather than this
+    read's conversion of what was.
+
+    Returns:
+        ``(document, version, problems)``; ``(None, None, [])`` for no such
+        workflow.
+    """
+    # Twice at most: a workflow a pull moves on again between the re-read and
+    # its store is answered with the re-read's own version, document and
+    # number together.
+    for attempt in range(2):
+        document, version = manual_document_and_version(hub, workflow_id)
+        if not document or api_graph(document) is not None:
+            return document, version, []
+        if callable(object_info):
+            object_info = object_info()
+        graph, problems = convert_ui_graph_to_api(document, object_info)
+        if graph is None:
+            logger.info(
+                "Manual workflow %s holds an editor workflow that will not convert: %s",
+                workflow_id,
+                "; ".join(problems),
+            )
+            return document, version, problems
+        if set_manual_api_document(
+            hub,
+            [workflow_id],
+            graph,
+            workflow_bindings.canonical(document),
+            keep_stored=True,
+        ):
+            logger.info(
+                "Converted manual workflow %s (version %s) and stored the conversion.",
+                workflow_id,
+                version,
+            )
+            break
+        logger.info(
+            "Manual workflow %s (version %s) moved on while it was converted; "
+            "reading it again (attempt %d).",
+            workflow_id,
+            version,
+            attempt + 1,
+        )
+    return with_converted_graph(document, graph), version, []
+
+
 def _manual_sample(
-    hub: HubDatabase, workflow_id: str
+    hub: HubDatabase, workflow_id: str, object_info: ObjectInfo = None
 ) -> tuple[list[tuple[str, dict]], dict[str, _VariantRead], dict[str, str]]:
     """``(documents, reads, names)`` of a manual workflow: its own graph, once.
 
     The one instance is the document's API graph, addressed by its own slot
     labels (no core), and its model names are the ones it spells. An editor
-    document nobody has converted, or one that will not reduce, has nothing
-    to sample, which leaves a default recipe of the owner's edits alone.
+    document is converted (and the conversion stored) on this read when
+    *object_info* can be had (:func:`converted_manual_document`); one that
+    will not convert, or will not reduce, has nothing to sample, which leaves
+    a default recipe of the owner's edits alone.
     """
-    graph = api_graph(manual_document(hub, workflow_id) or {})
+    graph = api_graph(converted_manual_document(hub, workflow_id, object_info)[0] or {})
     if graph is None:
         return [], {}, {}
     graph = sanitize_prompt_graph(graph)

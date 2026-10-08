@@ -87,9 +87,13 @@ from pixlstash.services.workflow_hash import (
     structural_document,
     topology_hash,
 )
+from pixlstash.hub import workflow_origin, workflow_versions
+from tests.test_comfyui_workflow_pull import BASE as FAKE_COMFYUI
+from tests.test_comfyui_workflow_pull import FakeComfyUI
 from pixlstash.services import (
     comfyui_link_service,
     comfyui_pack_service,
+    comfyui_userdata,
     workflow_card_service,
 )
 from pixlstash.services.workflow_run_service import (
@@ -149,6 +153,7 @@ from pixlstash.services import (
     workflow_inbox,
 )
 from pixlstash.server import Server
+from pixlstash.services.comfyui_ui_graph import NO_OBJECT_INFO
 from pixlstash.stacking import parse_workflow_tag_from_filename
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
@@ -1158,6 +1163,10 @@ def test_the_comfyui_pull_routes_are_the_owners_alone(workflow_env, monkeypatch)
         assert r.status_code == 200 and r.json()["status"] == "pending", r.text
     finally:
         server.authz._enforcing = previously_enforcing
+        # The stubbed runner never runs it, so it would hold the module's pull
+        # gate for every later test.
+        for task in queued:
+            server.workflow_pulls.release(task)
 
 
 def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
@@ -1827,6 +1836,38 @@ def test_the_link_routes_are_owner_only(workflow_env):
     assert workflow_env.owner.get(path).status_code == 200
 
 
+def test_a_link_ends_with_one_pull_when_the_owner_wants_pulls(
+    workflow_env, comfy_at, monkeypatch
+):
+    """The last step of a Link pulls ComfyUI's saved workflows, through the
+    poll's gate and only while "Pull workflows from ComfyUI" is on."""
+    pulls = workflow_env.server.workflow_pulls
+    started: list[str] = []
+    monkeypatch.setattr(pulls, "automatic", True)
+    monkeypatch.setattr(
+        pulls,
+        "start",
+        lambda url, origin_client_id=None: started.append(url) or ("started", "task"),
+    )
+    comfy_at("http://127.0.0.1:18188/")
+    owner = workflow_env.owner
+    assert owner.get(f"{API}/users/me/config").json()["pull_comfyui_workflows"] is True
+
+    assert owner.post(f"{API}/comfyui/link").json()["linked"] is True
+    assert started == ["http://127.0.0.1:18188"]
+
+    r = owner.patch(f"{API}/users/me/config", json={"pull_comfyui_workflows": False})
+    assert r.status_code == 200, r.text
+    assert owner.get(f"{API}/users/me/config").json()["pull_comfyui_workflows"] is False
+    try:
+        assert owner.post(f"{API}/comfyui/link").json()["linked"] is True
+        assert started == ["http://127.0.0.1:18188"]
+        assert pulls.owner_wants_pulls() is None
+    finally:
+        owner.patch(f"{API}/users/me/config", json={"pull_comfyui_workflows": True})
+    assert pulls.owner_wants_pulls() == "http://127.0.0.1:18188"
+
+
 def test_linking_a_comfyui_on_this_computer_writes_a_working_full_access_token(
     workflow_env, comfy_at
 ):
@@ -2457,6 +2498,31 @@ def test_a_failed_move_to_the_trash_installs_nothing_and_deletes_nothing(
         comfyui_pack_service.install("http://127.0.0.1:18188/")
     assert (older / "__init__.py").is_file(), "the older copy must survive"
     assert [p.name for p in install_env.custom_nodes.iterdir()] == [older.name]
+
+
+@pytest.mark.parametrize("occupant", ["file", "dangling link"])
+def test_a_file_in_the_nodes_place_is_refused_before_anything_is_trashed(
+    install_env, occupant
+):
+    """The move into place would fail on the file or link, after the older
+    copies had gone to the trash, leaving ComfyUI with no PixlStash nodes."""
+    older = install_env.custom_nodes / "comfyui-pixlstash-main"
+    older.mkdir()
+    (older / "__init__.py").write_text("# the working install\n")
+    target = install_env.custom_nodes / "ComfyUI-PixlStash"
+    if occupant == "file":
+        target.write_text("not a folder\n")
+    else:
+        try:
+            target.symlink_to(install_env.custom_nodes / "gone")
+        except OSError as exc:
+            pytest.skip(f"cannot make a symlink here: {exc}")
+    install_env.with_comfy({"POST v2/manager/reboot": 200})
+    with pytest.raises(comfyui_pack_service.PackInstallRefused) as refused:
+        comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert "not a folder" in str(refused.value)
+    assert install_env.trashed == []
+    assert (older / "__init__.py").is_file(), "the older copy must survive"
 
 
 @pytest.mark.parametrize("url", ["http://8.8.8.8:8188/", f"http://{LAN_IPV4}:8188/"])
@@ -3457,7 +3523,7 @@ def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow) -> str:
     monkeypatch.setattr(
         comfyui_module, "_workflow_dirs", lambda: [("user", str(tmp_path))]
     )
-    workflows_routes._manual_model_widgets.cache_clear()
+    workflows_routes._model_widgets_at.cache_clear()
     return comfyui_module.store_manual_workflow(
         server.hub, name.removesuffix(".json"), workflow, "import"
     )
@@ -3686,7 +3752,7 @@ def converting(workflow_env, tmp_path, monkeypatch):
     """An imported editor-format workflow, no ComfyUI."""
     _isolate_workflow_folders(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
     )
     manual = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
@@ -3767,8 +3833,204 @@ def test_an_editor_file_converts_itself_when_comfyui_answers(
     # A file gesture converts too, through `_card_source`.
     r = owner.get(f"{API}/workflows/{converting.manual}/export")
     assert r.status_code == 200, r.text
-    # Converted per read, never written back over the stored row.
-    assert _api_document(workflow_env.server.hub, converting.manual) is None
+    # Stored on the version it was made from, as the node's conversion is, so
+    # every later read sees this graph whether ComfyUI answers or not.
+    stored = _api_document(workflow_env.server.hub, converting.manual)
+    assert stored is not None
+    assert stored["2"]["inputs"]["lora_name"] == _EDITOR_UNRESOLVED
+    assert stored["2"]["inputs"]["model"] == ["1", 0]
+    assert _version_api_document(workflow_env.server.hub, converting.manual) == (stored)
+
+
+def _version_api_document(hub, workflow_id):
+    """The current version's stored conversion, which must mirror the row's."""
+    row = hub.fetchone(
+        "SELECT api_document FROM workflow_version WHERE workflow_id = ? "
+        "ORDER BY version DESC LIMIT 1",
+        (workflow_id,),
+    )
+    return json.loads(row[0]) if row and row[0] else None
+
+
+def _a_sampler_editor_workflow(workflow_env, tmp_path, monkeypatch, answers):
+    """A stored editor workflow with a sampler, and a ComfyUI that answers *answers*.
+
+    ``answers`` is a one-item list holding what ``object_info`` reads as (a
+    map, or ``None`` for ComfyUI not answering), swappable mid-test. Returns
+    ``(workflow id, how many conversions ran)``: the count is the converter's
+    calls, so "a second read does not reconvert" is measured, not inferred.
+    """
+    manual = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "sampler.json", RUN_EDITOR_GRAPH
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (
+            (json.loads(json.dumps(answers[0])), None)
+            if answers[0] is not None
+            else (None, "refused")
+        ),
+    )
+    calls = []
+    real = workflow_card_service.convert_ui_graph_to_api
+
+    def counting(document, object_info):
+        calls.append(object_info is not None)
+        return real(document, object_info)
+
+    monkeypatch.setattr(workflow_card_service, "convert_ui_graph_to_api", counting)
+    return manual, calls
+
+
+def _detail_defaults(owner, workflow_id) -> dict:
+    return {
+        (row["slot_label"], row["input_name"]): row["value"]
+        for row in _detail(owner, workflow_id)["card"]["defaults"]
+    }
+
+
+def test_the_inspectors_read_alone_converts_stores_and_answers_parameters(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The owner's report: a pulled editor workflow had no parameters until
+    *Convert for PixlStash*. The first read that needs the graph - here the
+    inspector's, with no Run and no Open - converts it and stores it."""
+    hub = workflow_env.server.hub
+    manual, calls = _a_sampler_editor_workflow(
+        workflow_env, tmp_path, monkeypatch, [RUN_OBJECT_INFO]
+    )
+    assert _api_document(hub, manual) is None
+
+    defaults = _detail_defaults(workflow_env.owner, manual)
+    assert sorted(name for _label, name in defaults) == ["cfg", "steps"], defaults
+    assert sorted(defaults.values()) == [7.0, 20], defaults
+    stored = _api_document(hub, manual)
+    assert stored is not None and stored["3"]["inputs"]["steps"] == 20, stored
+    assert _version_api_document(hub, manual) == stored
+    assert calls == [True]
+
+    # A second read reads the stored graph: nothing converts again.
+    assert _detail_defaults(workflow_env.owner, manual) == defaults
+    assert calls == [True]
+
+
+def test_comfyui_not_answering_stores_nothing_and_the_next_read_retries(
+    workflow_env, tmp_path, monkeypatch
+):
+    """A refusal is not a conversion: the inspector reads as it did, and the
+    read after ComfyUI comes back converts and stores."""
+    hub = workflow_env.server.hub
+    answers = [None]
+    manual, calls = _a_sampler_editor_workflow(
+        workflow_env, tmp_path, monkeypatch, answers
+    )
+    assert _detail_defaults(workflow_env.owner, manual) == {}
+    assert _api_document(hub, manual) is None
+    assert calls == [False]
+
+    answers[0] = RUN_OBJECT_INFO
+    assert len(_detail_defaults(workflow_env.owner, manual)) == 2
+    assert _api_document(hub, manual) is not None
+    assert calls == [False, True]
+
+
+def test_comfyuis_own_conversion_wins_over_pixlstashs(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The node's conversion is stored over ours; ours never over the node's."""
+    hub = workflow_env.server.hub
+    owner = workflow_env.owner
+    manual, _calls = _a_sampler_editor_workflow(
+        workflow_env, tmp_path, monkeypatch, [RUN_OBJECT_INFO]
+    )
+    _detail(owner, manual)
+    ours = _api_document(hub, manual)
+    assert ours["3"]["inputs"]["steps"] == 20
+
+    theirs = json.loads(json.dumps(ours))
+    theirs["3"]["inputs"]["steps"] = 31
+    r = owner.post(
+        f"{API}/comfyui/workflows/convert",
+        json={"name": "sampler.json", "workflow": RUN_EDITOR_GRAPH, "output": theirs},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["workflow_id"] == manual
+    assert _api_document(hub, manual) == theirs
+
+    # And a read after it reads theirs.
+    assert 31 in _detail_defaults(owner, manual).values()
+    assert _version_api_document(hub, manual) == theirs
+
+
+def test_pixlstashs_conversion_never_overwrites_one_the_node_stored_meanwhile(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The race: our read found no conversion, the node stored ComfyUI's while
+    we converted, and our store must then leave theirs alone."""
+    hub = workflow_env.server.hub
+    manual = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "sampler.json", RUN_EDITOR_GRAPH
+    )
+    theirs = {
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1, "steps": 31, "cfg": 7.0}}
+    }
+
+    def the_node_converts_meanwhile():
+        r = workflow_env.owner.post(
+            f"{API}/comfyui/workflows/convert",
+            json={
+                "name": "sampler.json",
+                "workflow": RUN_EDITOR_GRAPH,
+                "output": theirs,
+            },
+        )
+        assert r.status_code == 200 and r.json()["workflow_id"] == manual, r.text
+        return json.loads(json.dumps(RUN_OBJECT_INFO))
+
+    document, version, problems = workflow_card_service.converted_manual_document(
+        hub, manual, the_node_converts_meanwhile
+    )
+    assert _api_document(hub, manual) == theirs
+    assert _version_api_document(hub, manual) == theirs
+    # And Run and Open are handed theirs, not the conversion that lost.
+    assert (version, problems) == (1, [])
+    assert document["3"]["inputs"]["steps"] == 31
+
+
+def test_a_conversion_never_lands_on_the_version_after_the_one_it_converted(
+    workflow_env, tmp_path, monkeypatch
+):
+    """V6: a pull that makes a new version between the read and the store
+    never gets the old graph: the read starts again on the new version, and
+    that one's own conversion is what is stored and returned."""
+    hub = workflow_env.server.hub
+    manual = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "sampler.json", RUN_EDITOR_GRAPH
+    )
+    newer = json.loads(json.dumps(RUN_EDITOR_GRAPH))
+    newer["nodes"][1]["widgets_values"] = [123, 40, 7.0]
+
+    def a_pull_lands_meanwhile():
+        with hub.transaction() as conn:
+            workflow_versions.append_version(conn, manual, newer)
+        return json.loads(json.dumps(RUN_OBJECT_INFO))
+
+    document, version, problems = workflow_card_service.converted_manual_document(
+        hub, manual, a_pull_lands_meanwhile
+    )
+    # The read answers the current version, converted...
+    assert (version, problems) == (2, [])
+    assert document["3"]["inputs"]["steps"] == 40
+    # ...stored on version 2 only, never version 1's graph on it.
+    assert _api_document(hub, manual)["3"]["inputs"]["steps"] == 40
+    rows = hub.fetchall(
+        "SELECT version, api_document FROM workflow_version WHERE workflow_id = ? "
+        "ORDER BY version",
+        (manual,),
+    )
+    assert [(row[0], row[1] is None) for row in rows] == [(1, True), (2, False)]
+    assert json.loads(rows[1][1])["3"]["inputs"]["steps"] == 40
 
 
 def test_a_conversion_of_another_editor_document_is_not_run(workflow_env, converting):
@@ -3782,6 +4044,100 @@ def test_a_conversion_of_another_editor_document_is_not_run(workflow_env, conver
     assert r.json()["workflow_id"] != converting.manual
     assert _api_document(workflow_env.server.hub, converting.manual) is None
     assert owner.get(f"{API}/workflows/{converting.manual}/graph").status_code == 409
+
+
+def test_a_card_that_will_not_convert_says_why_in_its_409(workflow_env, converting):
+    """No live file to hand to ComfyUI: the 409 names the converter's sentence."""
+    r = workflow_env.owner.get(f"{API}/workflows/{converting.manual}/graph")
+    assert r.status_code == 409, r.text
+    assert "ui_format" in r.json()["detail"]
+    assert NO_OBJECT_INFO in r.json()["detail"]
+
+
+def _pulled_editor_card(workflow_env, monkeypatch, document=None):
+    """A pulled editor-format card with a live ComfyUI file, ComfyUI unasked."""
+    server = workflow_env.server
+    origin = comfyui_module._comfyui_url(server.auth.user)
+    document = document or _EDITOR_WORKFLOW
+    with workflow_inbox.INBOX_LOCK:
+        stored = comfyui_module.store_pulled_workflow(
+            server.hub,
+            "editor.json",
+            document,
+            (origin, "qa/editor.json", 1000, workflow_inbox.content_hash(document)),
+        )
+    monkeypatch.setattr(
+        comfyui_userdata,
+        "saved_workflow_info",
+        lambda base_url, path, timeout_s: comfyui_userdata.SavedWorkflow(
+            path, 10, 1000
+        ),
+    )
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
+    )
+    return stored["workflow_id"]
+
+
+def test_a_live_file_that_will_not_convert_opens_for_comfyui_to_convert(
+    workflow_env, tmp_path, monkeypatch
+):
+    """200 with no graph: the node opens the file and converts it in ComfyUI."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    key = _pulled_editor_card(workflow_env, monkeypatch)
+    r = workflow_env.owner.get(f"{API}/workflows/{key}/graph")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["workflow"] is None
+    assert body["needs_conversion"] is True
+    assert body["comfyui_file"] == "qa/editor.json"
+    assert body["detail"] == NO_OBJECT_INFO
+    # The plan carries the same sentence as a reason, for the run popup.
+    reason = next(
+        r_
+        for g in _preflight(workflow_env.owner, workflow_id=key)["groups"]
+        for r_ in g["reasons"]
+        if r_["code"] == "ui_format"
+    )
+    assert reason["detail"] == NO_OBJECT_INFO
+    assert reason["problems"] == [NO_OBJECT_INFO]
+
+
+def test_a_graph_that_opens_says_it_needs_no_conversion(workflow_env, converting):
+    _convert(workflow_env.owner)
+    r = workflow_env.owner.get(f"{API}/workflows/{converting.manual}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["needs_conversion"] is False
+
+
+def test_a_conversion_attaches_to_the_current_version_of_a_pulled_card(
+    workflow_env, tmp_path, monkeypatch
+):
+    """A file that changed in ComfyUI is version 2; opening it posts version 2's
+    content, which finds the card and converts that version, not version 1."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    hub = workflow_env.server.hub
+    key = _pulled_editor_card(workflow_env, monkeypatch)
+    edited = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    edited["nodes"][2]["widgets_values"] = ["version-two"]
+    with hub.transaction() as conn:
+        assert workflow_versions.append_version(conn, key, edited) == 2
+    r = _convert(workflow_env.owner, workflow=edited)
+    assert r.status_code == 200, r.text
+    assert (r.json()["matched"], r.json()["workflow_id"]) == (True, key)
+    rows = {
+        v: json.loads(a) if a else None
+        for v, a in hub.fetchall(
+            "SELECT version, api_document FROM workflow_version "
+            "WHERE workflow_id = ? ORDER BY version",
+            (key,),
+        )
+    }
+    assert rows[1] is None
+    assert rows[2] == _EDITOR_CONVERTED
+    assert _api_document(hub, key) == _EDITOR_CONVERTED
+    # The old version's content no longer finds the card: it is not current.
+    assert _convert(workflow_env.owner).json()["workflow_id"] != key
 
 
 def test_a_converted_file_runs_without_its_editor_bindings(workflow_env, converting):
@@ -3836,6 +4192,201 @@ def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
     assert r.json()["workflow"]["76"]["class_type"] == "LoadImage"
 
     assert owner.post(f"{API}/comfyui/workflows/nope.json/card").status_code == 404
+
+
+def _builtin_edit_graph(steps: int) -> dict:
+    """The built-in edit workflow with its own step count: not a copy of it."""
+    path = os.path.join(
+        comfyui_module._workflow_builtin_dir(), "Flux2-Klein-Image-Edit.json"
+    )
+    with open(path, encoding="utf-8") as handle:
+        graph = json.load(handle)
+    graph["75:62"]["inputs"]["steps"] = steps
+    return graph
+
+
+def test_a_pulled_workflow_opens_its_comfyui_file_at_its_newest_version(
+    workflow_env, tmp_path, monkeypatch
+):
+    """One card per ComfyUI file: Open names the file, a file saved again in
+    ComfyUI is taken as the next version first, and ComfyUI not answering
+    opens the stored one."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    server, owner = workflow_env.server, workflow_env.owner
+    origin = comfyui_module._comfyui_url(server.auth.user)
+    first = _builtin_edit_graph(7)
+    with workflow_inbox.INBOX_LOCK:
+        stored = comfyui_module.store_pulled_workflow(
+            server.hub,
+            "flux.json",
+            first,
+            (origin, "portraits/flux.json", 1000, workflow_inbox.content_hash(first)),
+        )
+    key = stored["workflow_id"]
+    imported = _file_a_workflow(
+        server, tmp_path, monkeypatch, "mine.json", _builtin_edit_graph(8)
+    )
+    asked: list[str] = []
+
+    def listing(base_url, relative_path, timeout_s):
+        asked.append(relative_path)
+        assert base_url == origin and 0 < timeout_s <= 2.0
+        return comfyui_userdata.SavedWorkflow(relative_path, 10, 1000)
+
+    monkeypatch.setattr(comfyui_userdata, "saved_workflow_info", listing)
+    r = owner.get(f"{API}/workflows/{key}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["comfyui_file"] == "portraits/flux.json"
+    assert r.json()["workflow"]["75:62"]["inputs"]["steps"] == 7
+    assert asked == ["portraits/flux.json"]
+    # A workflow with no ComfyUI file opens from its graph and asks nobody.
+    r = owner.get(f"{API}/workflows/{imported}/graph")
+    assert (r.status_code, r.json()["comfyui_file"]) == (200, None)
+    assert asked == ["portraits/flux.json"]
+
+    cards = _by_key(_cards(owner))
+    assert (cards[key]["origin_category"], cards[key]["versions"]) == ("comfyui", 1)
+    assert cards[imported]["origin_category"] == "own"
+    assert {
+        card["origin_category"]
+        for wid, card in cards.items()
+        if wid.startswith("auto:")
+    } <= {"pictures"}
+
+    # Saved again in ComfyUI: Open takes it first, as version 2 of this card.
+    def newer(base_url, relative_path, timeout_s):
+        return comfyui_userdata.SavedWorkflow(relative_path, 10, 2000)
+
+    monkeypatch.setattr(comfyui_userdata, "saved_workflow_info", newer)
+    monkeypatch.setattr(
+        comfyui_userdata,
+        "read_saved_workflow",
+        lambda base_url, path, timeout_s=None: _builtin_edit_graph(9),
+    )
+    r = owner.get(f"{API}/workflows/{key}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["workflow"]["75:62"]["inputs"]["steps"] == 9
+    card = _by_key(_cards(owner))[key]
+    assert (card["versions"], card["origin_category"]) == (2, "comfyui")
+
+    # ComfyUI not answering: the stored version opens, and nothing says so.
+    def down(base_url, relative_path, timeout_s):
+        raise RuntimeError("Could not reach ComfyUI")
+
+    monkeypatch.setattr(comfyui_userdata, "saved_workflow_info", down)
+    r = owner.get(f"{API}/workflows/{key}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["workflow"]["75:62"]["inputs"]["steps"] == 9
+    assert r.json()["comfyui_file"] == "portraits/flux.json"
+
+
+@pytest.fixture
+def comfy_saved(workflow_env, tmp_path, monkeypatch):
+    """The owner's ComfyUI as `test_comfyui_workflow_pull.FakeComfyUI`, at a
+    saved address, pulled from for real. The address and the pull setting are
+    put back for the rest of the module."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    fake = FakeComfyUI({})
+    monkeypatch.setattr(requests, "get", fake.get)
+    owner = workflow_env.owner
+    r = owner.patch(f"{API}/users/me/config", json={"comfyui_url": FAKE_COMFYUI})
+    assert r.status_code == 200, r.text
+    try:
+        yield fake
+    finally:
+        owner.patch(
+            f"{API}/users/me/config",
+            json={"comfyui_url": None, "pull_comfyui_workflows": True},
+        )
+
+
+def _pull_now(server) -> dict:
+    """One pull through the server's own gate, run here rather than queued."""
+    pulls = server.workflow_pulls
+    task, new = pulls.claim(FAKE_COMFYUI)
+    assert new, f"a pull an earlier test left holds the gate: {task}"
+    try:
+        return task._run_task()
+    finally:
+        pulls.release(task)
+
+
+def _opened(owner, workflow_id) -> tuple:
+    """``(the graph's step count, comfyui_file)`` as Open answers them."""
+    r = owner.get(f"{API}/workflows/{workflow_id}/graph")
+    assert r.status_code == 200, r.text
+    return r.json()["workflow"]["75:62"]["inputs"]["steps"], r.json()["comfyui_file"]
+
+
+def test_a_pulled_file_is_a_comfyui_card_that_opens_its_file_until_it_is_gone(
+    workflow_env, comfy_saved
+):
+    server, owner = workflow_env.server, workflow_env.owner
+    path = "qa-gone/flux.json"
+    comfy_saved.workflows = {
+        path: _builtin_edit_graph(701),
+        "qa-gone/keep.json": _builtin_edit_graph(702),
+    }
+    _pull_now(server)
+    key = workflow_origin.stored_at(server.hub, FAKE_COMFYUI, path)
+    card = _by_key(_cards(owner))[key]
+    assert (card["origin_category"], card["versions"]) == ("comfyui", 1)
+    assert _opened(owner, key) == (701, path)
+
+    # Deleted in ComfyUI, another file still listed: the card stays, and Open
+    # has no file to open, so it opens the stored graph.
+    saved = comfy_saved.workflows.pop(path)
+    _pull_now(server)
+    assert key in _by_key(_cards(owner))
+    assert _opened(owner, key) == (701, None)
+
+    # Saved there again: the link comes back.
+    comfy_saved.workflows[path] = saved
+    _pull_now(server)
+    assert _opened(owner, key) == (701, path)
+
+
+def test_a_duplicate_of_a_comfyui_card_is_its_own_and_never_versioned(
+    workflow_env, comfy_saved
+):
+    server, owner = workflow_env.server, workflow_env.owner
+    path = "qa-dup/flux.json"
+    comfy_saved.workflows = {path: _builtin_edit_graph(711)}
+    _pull_now(server)
+    key = workflow_origin.stored_at(server.hub, FAKE_COMFYUI, path)
+    r = owner.post(f"{API}/workflows/{key}/duplicate")
+    assert r.status_code == 201, r.text
+    dup = r.json()["workflow_id"]
+    card = _by_key(_cards(owner))[dup]
+    assert (card["origin_category"], card["versions"]) == ("own", 1)
+    assert _opened(owner, dup) == (711, None)
+
+    comfy_saved.edit(path, _builtin_edit_graph(712))
+    _pull_now(server)
+    cards = _by_key(_cards(owner))
+    assert (cards[key]["versions"], cards[dup]["versions"]) == (2, 1)
+    assert _opened(owner, key) == (712, path)
+    assert _opened(owner, dup) == (711, None)
+
+
+def test_open_does_not_check_comfyui_while_pulls_are_off(workflow_env, comfy_saved):
+    server, owner = workflow_env.server, workflow_env.owner
+    path = "qa-off/flux.json"
+    comfy_saved.workflows = {path: _builtin_edit_graph(721)}
+    _pull_now(server)
+    key = workflow_origin.stored_at(server.hub, FAKE_COMFYUI, path)
+    r = owner.patch(f"{API}/users/me/config", json={"pull_comfyui_workflows": False})
+    assert r.status_code == 200, r.text
+    comfy_saved.edit(path, _builtin_edit_graph(722))
+    comfy_saved.requested.clear()
+    assert _opened(owner, key) == (721, path)
+    assert not [url for url in comfy_saved.requested if "/api/userdata?" in url]
+    assert _by_key(_cards(owner))[key]["versions"] == 1
+
+    # On again, the same Open takes the saved file: the negative above is the
+    # setting, not a check that could never fire.
+    owner.patch(f"{API}/users/me/config", json={"pull_comfyui_workflows": True})
+    assert _opened(owner, key) == (722, path)
 
 
 def test_deleting_a_converted_workflow_takes_its_conversion_with_it(
@@ -3982,7 +4533,7 @@ def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
         conn.execute(
             "UPDATE workflow_document SET document = '{' WHERE workflow_id = ?", (key,)
         )
-    workflows_routes._manual_model_widgets.cache_clear()
+    workflows_routes._model_widgets_at.cache_clear()
     assert _by_key(_cards(workflow_env.owner))[key]["models"] == []
 
 
@@ -4424,20 +4975,12 @@ def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
     assert _by_key(payload)[BINNED_WF]["imported"] is True
 
 
-@pytest.mark.parametrize(
-    ("pull_wrote_it", "one_offs"),
-    [(True, 1), (False, 0)],
-    ids=["written-by-a-pull", "matched-by-a-pull"],
-)
-def test_a_pulled_file_does_not_take_a_card_out_of_the_one_offs(
-    workflow_env, pull_wrote_it, one_offs
-):
-    """#1440: a file a pull WROTE is not the owner's statement; one it matched is.
+def test_a_file_a_pull_wrote_takes_a_card_out_of_the_one_offs_too(workflow_env):
+    """One-offs are workflows known from their pictures alone.
 
-    The same file row as the test above. Written by a pull
-    (``workflow_pulled_file``), BINNED stays a one-off - eighty pulled
-    workflows must not all come out of the count. Matched by the pull, the
-    file was already the owner's, and it keeps the card in the grid.
+    The same file row as the test above, written by a pull from ComfyUI
+    (``workflow_pulled_file``): it is a stored workflow like any other, so
+    BINNED comes back into the grid.
     """
     with workflow_env.server.hub.transaction() as conn:
         conn.execute(
@@ -4446,13 +4989,11 @@ def test_a_pulled_file_does_not_take_a_card_out_of_the_one_offs(
             "VALUES ('binned.json', ?, ?, ?)",
             (BINNED_TOPOLOGY, BINNED_RECIPE, BINNED_CARD),
         )
-        if pull_wrote_it:
-            conn.execute(
-                "INSERT INTO workflow_pulled_file (workflow_name) "
-                "VALUES ('binned.json')"
-            )
-    payload = _cards(workflow_env.owner, "?include_one_offs=true")
-    assert payload["one_offs"] == one_offs
+        conn.execute(
+            "INSERT INTO workflow_pulled_file (workflow_name) VALUES ('binned.json')"
+        )
+    payload = _cards(workflow_env.owner)
+    assert payload["one_offs"] == 0
     assert _by_key(payload)[BINNED_WF]["imported"] is True
 
 
@@ -4825,13 +5366,13 @@ def test_a_manual_runs_pictures_count_on_it_and_fall_back_when_it_goes(
     assert pid not in pictures(BUSY_WF)
     assert filtered(manual) == {pid}
     assert pid not in filtered(BUSY_WF) and ids["busy_two.png"] in filtered(BUSY_WF)
-    assert comfyui_module._picture_workflow_id(server, pid) == manual
+    assert comfyui_module._picture_workflow(server, pid)["workflow_id"] == manual
 
     delete_manual_workflow(server.hub, manual)
 
     assert _by_key(_cards(owner))[BUSY_WF]["picture_count"] == before["picture_count"]
     assert pid in pictures(BUSY_WF) and pid in filtered(BUSY_WF)
-    assert comfyui_module._picture_workflow_id(server, pid) == BUSY_WF
+    assert comfyui_module._picture_workflow(server, pid)["workflow_id"] == BUSY_WF
 
     def run_workflow_id(session):
         return session.get(Picture, pid).run_workflow_id
@@ -6848,6 +7389,69 @@ def test_the_linked_imported_file_is_the_first_source_tried(runnable, monkeypatc
     assert r.json()["groups"][0]["source"] == "file", r.json()
     # The file's own values, not the instance document's 24/6.5.
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 11
+
+
+def test_a_run_records_the_version_it_submitted_on_its_pictures(runnable):
+    """The version `_plan` built is what the run's pictures record, and a
+    version that lands afterwards does not move it."""
+    server = runnable.server
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"]["steps"] = 31
+    document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    document["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    manual = create_manual_workflow(server.hub, "Versioned", document, "pull")
+    second = json.loads(json.dumps(document))
+    second["3"]["inputs"]["steps"] = 32
+    with server.hub.transaction() as conn:
+        workflow_versions.append_version(conn, manual, second)
+    importing: list[dict] = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_process_comfyui_outputs",
+        lambda *args, **kwargs: importing.append(kwargs),
+    )
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": manual})
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert (group["workflow_id"], group["workflow_version"]) == (manual, 2), group
+    assert not group["reasons"], group
+    assert runnable.submitted[-1]["graph"]["3"]["inputs"]["steps"] == 32
+    deadline = time.monotonic() + 5
+    while not importing and time.monotonic() < deadline:
+        time.sleep(0.01)  # the import runs on a thread of its own
+    assert [(k["run_workflow_id"], k["run_workflow_version"]) for k in importing] == [
+        (manual, 2)
+    ]
+
+    pid = runnable.picture_id
+
+    def recorded(session):
+        picture = session.get(Picture, pid)
+        return picture.run_workflow_id, picture.run_workflow_version
+
+    def forget(session):
+        picture = session.get(Picture, pid)
+        picture.run_workflow_id = picture.run_workflow_version = None
+        session.commit()
+
+    try:
+        comfyui_service._set_run_workflow_id(server, manual, [pid], 2)
+        third = json.loads(json.dumps(second))
+        third["3"]["inputs"]["steps"] = 33
+        with server.hub.transaction() as conn:
+            workflow_versions.append_version(conn, manual, third)
+        # A later report of the same picture does not move it either.
+        comfyui_service._set_run_workflow_id(server, manual, [pid], 3)
+        assert server.vault.db.run_task(recorded) == (manual, 2)
+        # What the picture's recipe answers (`GET /comfyui/pictures/{id}/recipe`).
+        assert comfyui_module._picture_workflow(server, pid) == {
+            "workflow_id": manual,
+            "workflow_version": 2,
+        }
+    finally:
+        server.vault.db.run_task(forget)
+        delete_manual_workflow(server.hub, manual)
 
 
 def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
@@ -9636,7 +10240,14 @@ def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
     monkeypatch.setattr(
         workflows_routes,
         "_load_workflow_json",
-        lambda path: {"nodes": [{"id": 1, "type": "NotInstalledNode"}], "links": []},
+        # A class this ComfyUI does not have: the one thing an editor file can
+        # carry that no conversion gets past. (A known class with no saved
+        # values converts now, its widgets at their defaults, as ComfyUI
+        # loads it.)
+        lambda path: {
+            "nodes": [{"id": 1, "type": "NodeThisComfyUIDoesNotHave"}],
+            "links": [],
+        },
     )
     with runnable.server.hub.transaction() as conn:
         conn.execute(
@@ -9648,6 +10259,11 @@ def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
     # HIDDEN has no instances in this library, so the file is its only tier.
     payload = _preflight(runnable.owner, workflow_id=HIDDEN_WF)
     assert "ui_format" in _reasons(payload), payload
+    reason = next(
+        r for g in payload["groups"] for r in g["reasons"] if r["code"] == "ui_format"
+    )
+    # The converter's own sentence, not just the code.
+    assert "NodeThisComfyUIDoesNotHave" in reason["detail"], reason
 
 
 def test_an_editor_file_converts_when_comfyui_answers(runnable, monkeypatch):
@@ -11308,7 +11924,7 @@ def test_without_comfyui_a_lora_outside_the_recipe_is_emptied_not_kept(
     what actually happened.
     """
     monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
     )
     payload = exportable.owner.get(f"{API}/workflows/{RUN_WF}/export").json()
     assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
@@ -11389,8 +12005,8 @@ def test_an_export_switches_off_the_stages_its_default_recipe_runs_without(
 
     real = workflow_card_service.workflow_defaults
 
-    def with_upscale_off(hub, vault, workflow_id):
-        recipe = real(hub, vault, workflow_id)
+    def with_upscale_off(hub, vault, workflow_id, object_info=None):
+        recipe = real(hub, vault, workflow_id, object_info)
         recipe.stages = {"upscale": False, "face_detailer": True}
         return recipe
 
@@ -11513,7 +12129,7 @@ def test_the_runnable_graph_of_a_card_without_one_is_a_409_and_unknown_a_404(
     workflow_env, monkeypatch
 ):
     monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
     )
     r = workflow_env.owner.get(f"{API}/workflows/{BINNED_WF}/graph")
     assert r.status_code == 409
@@ -11599,7 +12215,7 @@ def test_a_runnable_graph_from_a_stored_recipe_gets_a_seed_without_comfyui(
 
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
     monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
     )
     payload = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
     assert payload["source"] == "instance", payload
@@ -13256,7 +13872,7 @@ def test_every_added_lora_that_cannot_be_added_says_so(loaderless):
 def test_an_added_lora_without_comfyui_is_the_unreachable_reason(loaderless):
     """Not a 400: the pre-flight's own refusal, which the popup offers a Retry for."""
     loaderless.monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
     )
     payload = _preflight(
         loaderless.owner,
@@ -13471,7 +14087,7 @@ def test_a_fixed_copy_needs_comfyui(runnable, tmp_path):
     """What needs fixing is what this ComfyUI lacks: no ComfyUI, no answer."""
     _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
     runnable.monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
     )
     r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
     assert r.status_code == 503, r.text

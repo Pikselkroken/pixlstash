@@ -1,68 +1,47 @@
 import { onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
-import { getWorkflowPull, startWorkflowPull } from "../api/comfyui";
+import { getWorkflowPull } from "../api/comfyui";
 import { onSessionReset } from "../utils/apiClient";
-import { errorMessage } from "../utils/apiError";
 import { useWorkflowsStore } from "./useWorkflowsStore";
 
-/** How often a running pull is asked how it is going. */
-export const PULL_POLL_MS = 1000;
-/** Unanswered asks in a row before the pull is reported as lost. */
-export const PULL_POLL_MAX_MISSES = 30;
+/** How often the server is asked whether ComfyUI is being checked. */
+export const PULL_WATCH_MS = 5000;
 
 /**
- * Pulling ComfyUI's saved workflows into the library (#1440).
+ * Watching ComfyUI's saved workflows come into the library (#1440).
  *
- * A store rather than component state because the pull outlives the screen
- * that started it: it is a server task, the Tasks tab draws its progress, and
- * somebody who leaves Workflows mid-pull should find the summary waiting when
- * they come back.
+ * The server pulls on its own every minute (and after Link), so this store
+ * starts nothing: while the Workflows screen is mounted it asks how the latest
+ * pull is going and reports two things. `phase === "pulling"` while one runs,
+ * and, when one that finished while somebody was looking brought something
+ * new or changed, `phase === "done"` with its summary. A pull that changed
+ * nothing, or that failed, reports nothing: it happens every minute, and a
+ * band per minute would be noise. Failures are logged; the ComfyUI settings
+ * section is where connection trouble is shown.
  *
- * **The summary belongs to THIS pull.** The server remembers the last pull
- * since it started, but a summary shown on every visit would be a stale report
- * about a ComfyUI that has since changed, so only a pull started here is
- * reported, and dismissing it forgets it.
+ * A pull already finished when watching starts is the baseline, not news;
+ * one still running then is reported when it ends.
  */
 export const useWorkflowPullStore = defineStore("workflowPull", () => {
-  // "idle" | "pulling" | "done" | "failed"
+  // "idle" | "pulling" | "done"
   const phase = ref("idle");
   const summary = ref(null);
   const comfyuiUrl = ref(null);
-  const error = ref("");
-  let taskId = null;
   let timer = null;
-  let misses = 0;
+  let watching = false;
+  // The last finished pull's task id, so each one is reported once. Undefined
+  // until the first answer, which only sets the baseline.
+  let lastSeen;
   // Bumped by `reset()`. Every await re-checks it, because a request sent
   // with the owner's credential can answer AFTER the session changed, and
   // writing that answer would hand the new session the owner's ComfyUI URL
   // and the node and model names it lacks (the `useOperationStore` rule).
   let epoch = 0;
 
-  function stopPolling() {
+  function stopTimer() {
     if (timer !== null) clearTimeout(timer);
     timer = null;
-  }
-
-  async function start() {
-    if (phase.value === "pulling") return;
-    stopPolling();
-    misses = 0;
-    phase.value = "pulling";
-    summary.value = null;
-    error.value = "";
-    const mine = epoch;
-    try {
-      const started = await startWorkflowPull();
-      if (mine !== epoch) return;
-      taskId = started?.task_id ?? null;
-    } catch (err) {
-      if (mine !== epoch) return;
-      phase.value = "failed";
-      error.value = errorMessage(err, "The pull could not be started.");
-      return;
-    }
-    poll();
   }
 
   async function poll() {
@@ -70,106 +49,92 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
     let state;
     try {
       state = await getWorkflowPull();
-      if (mine !== epoch) return;
     } catch (err) {
-      if (mine !== epoch) return;
+      if (mine !== epoch || !watching) return;
       console.warn("[workflows] could not read the pull's state", err);
-      misses += 1;
-      if (misses >= PULL_POLL_MAX_MISSES) {
-        phase.value = "failed";
-        error.value = errorMessage(
-          err,
-          "PixlStash stopped answering while the pull was running.",
-        );
-        return;
-      }
       schedule();
       return;
     }
-    misses = 0;
-    // Another tab's pull, or one from before a restart: not ours to report.
-    if (taskId && state?.task_id && state.task_id !== taskId) {
-      phase.value = "failed";
-      error.value = "Another pull took this one's place before it finished.";
+    if (mine !== epoch || !watching) return;
+    try {
+      await apply(state);
+    } catch (err) {
+      // One answer this cannot read must not end the watch.
+      console.warn("[workflows] could not apply the pull's state", state, err);
+    }
+    if (mine === epoch && watching) schedule();
+  }
+
+  async function apply(state) {
+    const status = state?.status;
+    if (status === "pending" || status === "running") {
+      // Running when watching starts: its end is news, so the baseline is
+      // "nothing finished yet", as for `idle` below.
+      if (lastSeen === undefined) lastSeen = null;
+      phase.value = "pulling";
       return;
     }
-    if (state?.status === "completed") {
-      phase.value = "done";
-      summary.value = state.summary ?? null;
-      comfyuiUrl.value = state.comfyui_url ?? null;
-      try {
-        await useWorkflowsStore().fetchCards();
-      } catch (err) {
-        // The summary still stands; the grid shows its own read error.
-        console.warn("[workflows] could not re-read the grid after a pull", err);
-      }
+    if (phase.value === "pulling") phase.value = "idle";
+    // Nothing pulled yet is a baseline too: the first pull after it is news.
+    if (status === "idle" && lastSeen === undefined) lastSeen = null;
+    if (status !== "completed" && status !== "failed") return;
+    const id = state.task_id ?? null;
+    const first = lastSeen === undefined;
+    const isNew = id !== lastSeen;
+    lastSeen = id;
+    if (first || !isNew) return;
+    if (status === "failed") {
+      console.warn("[workflows] the ComfyUI pull failed", state.error);
       return;
     }
-    if (state?.status === "failed" || state?.status === "cancelled") {
-      phase.value = "failed";
-      comfyuiUrl.value = state.comfyui_url ?? null;
-      error.value = state.error || "The pull failed.";
-      return;
+    const found = state.summary ?? {};
+    if (!found.pulled && !found.changed) return;
+    summary.value = found;
+    comfyuiUrl.value = state.comfyui_url ?? null;
+    phase.value = "done";
+    try {
+      await useWorkflowsStore().fetchCards();
+    } catch (err) {
+      // The summary still stands; the grid shows its own read error.
+      console.warn("[workflows] could not re-read the grid after a pull", err);
     }
-    if (state?.status === "idle") {
-      // The server forgot it (a restart): nothing more will come.
-      phase.value = "failed";
-      error.value = "The server restarted before the pull finished.";
-      return;
-    }
-    schedule();
   }
 
   function schedule() {
-    stopPolling();
-    timer = setTimeout(poll, PULL_POLL_MS);
+    stopTimer();
+    timer = setTimeout(poll, PULL_WATCH_MS);
   }
 
-  /**
-   * Pick up a pull that is already running on the server - one started before
-   * a reload, or from another tab - so the button says "Pulling…" rather than
-   * offering to start what is already going. A finished pull is not adopted:
-   * its summary was somebody else's to read.
-   */
-  async function resume() {
-    if (phase.value !== "idle") return;
-    const mine = epoch;
-    let state;
-    try {
-      state = await getWorkflowPull();
-    } catch (err) {
-      console.warn("[workflows] could not ask whether a pull is running", err);
-      return;
-    }
-    if (mine !== epoch || phase.value !== "idle") return;
-    if (state?.status === "pending" || state?.status === "running") {
-      taskId = state.task_id ?? null;
-      misses = 0;
-      phase.value = "pulling";
-      schedule();
-    }
+  /** Start asking, now and every {@link PULL_WATCH_MS}. Idempotent. */
+  function watch() {
+    if (watching) return;
+    watching = true;
+    poll();
+  }
+
+  /** Stop asking (the Workflows screen unmounted). */
+  function unwatch() {
+    watching = false;
+    stopTimer();
   }
 
   function dismiss() {
-    if (phase.value === "pulling") return;
     phase.value = "idle";
     summary.value = null;
-    error.value = "";
     comfyuiUrl.value = null;
   }
 
   function reset() {
     epoch += 1;
-    stopPolling();
-    taskId = null;
+    unwatch();
+    lastSeen = undefined;
     phase.value = "idle";
     summary.value = null;
-    error.value = "";
     comfyuiUrl.value = null;
   }
 
   onScopeDispose(onSessionReset(reset));
-  onScopeDispose(stopPolling);
+  onScopeDispose(unwatch);
 
-  return { phase, summary, comfyuiUrl, error, start, resume, dismiss, reset };
+  return { phase, summary, comfyuiUrl, watch, unwatch, dismiss, reset };
 });

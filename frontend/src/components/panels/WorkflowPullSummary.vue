@@ -3,7 +3,7 @@
        arrives already holding its text is skipped by several screen readers,
        so the band's state is WRITTEN into this one rather than mounted with
        its own. Polling does not repeat it - the text only changes when the
-       phase does. The failure also gets `role="alert"` on the band below. -->
+       phase does. -->
   <p class="visually-hidden" role="status">{{ spoken }}</p>
 
   <!-- A band under the Workflows toolbar, in the `.wfv-note` family: it is
@@ -12,98 +12,48 @@
        counts are the point of the pull and a toast would take them away
        before they were read. -->
   <div
-    v-if="pull.phase !== 'idle'"
+    v-if="pull.phase === 'done'"
     class="wfpull"
     data-testid="wfpull"
   >
-    <p v-if="pull.phase === 'pulling'" class="wfpull-head">
+    <p class="wfpull-head">
       <v-icon size="16" class="wfpull-icon wfpull-icon--quiet" aria-hidden="true"
         >mdi-tray-arrow-down</v-icon
       >
-      <span
-        >Pulling the workflows ComfyUI has saved. Progress is in the
-        <button class="wfpull-link" type="button" @click="sidebar.showTasksTab()">
-          Tasks tab</button
-        >.</span
+      <span class="wfpull-headline">{{ report.headline }}</span>
+      <button
+        class="wfpull-link"
+        type="button"
+        aria-label="Dismiss the ComfyUI pull result"
+        @click="dismiss"
       >
+        Dismiss
+      </button>
     </p>
-
-    <p v-else-if="pull.phase === 'failed'" class="wfpull-head">
-      <v-icon
-        size="16"
-        class="wfpull-icon wfpull-icon--error"
-        aria-hidden="true"
-        >mdi-close-circle-outline</v-icon
+    <ul v-if="report.lines.length" class="wfpull-lines">
+      <li
+        v-for="(line, index) in report.lines"
+        :key="index"
+        class="wfpull-line"
+        :data-kind="line.kind"
       >
-      <span role="alert">Couldn't pull from {{ host }}: {{ pull.error }}</span>
-      <span class="wfpull-actions">
-        <button class="wfpull-link" type="button" @click="pull.start()">
-          Try again
-        </button>
-        <button
-          class="wfpull-link"
-          type="button"
-          aria-label="Dismiss the ComfyUI pull result"
-          @click="dismiss"
+        <v-icon
+          size="16"
+          :class="['wfpull-icon', `wfpull-icon--${line.kind}`]"
+          aria-hidden="true"
+          >{{ `mdi-${line.icon}` }}</v-icon
         >
-          Dismiss
-        </button>
-      </span>
-    </p>
-
-    <template v-else>
-      <p class="wfpull-head">
-        <v-icon size="16" class="wfpull-icon wfpull-icon--quiet" aria-hidden="true"
-          >mdi-tray-arrow-down</v-icon
-        >
-        <span class="wfpull-headline">{{ report.headline }}</span>
-        <span class="wfpull-actions">
-          <button
-            class="wfpull-link"
-            type="button"
-            aria-label="Dismiss the ComfyUI pull result"
-            @click="dismiss"
-          >
-            Dismiss
-          </button>
-        </span>
-      </p>
-      <ul v-if="report.lines.length" class="wfpull-lines">
-        <li
-          v-for="(line, index) in report.lines"
-          :key="index"
-          class="wfpull-line"
-          :data-kind="line.kind"
-        >
-          <v-icon
-            size="16"
-            :class="['wfpull-icon', `wfpull-icon--${line.kind}`]"
-            aria-hidden="true"
-            >{{ `mdi-${line.icon}` }}</v-icon
-          >
-          <div class="wfpull-body">
-            <span
-              >{{ line.text }}
-              <button
-                v-if="line.action === 'show-one-offs'"
-                class="wfpull-link"
-                type="button"
-                data-testid="wfpull-show-one-offs"
-                @click="workflows.setFilters({ hideOneOffs: false })"
-              >
-                Show one-offs
-              </button></span
-            >
-            <details v-if="line.names && line.names.length" class="wfpull-names">
-              <summary>{{ line.namesLabel }} ({{ line.names.length }})</summary>
-              <ul>
-                <li v-for="name in line.names" :key="name">{{ name }}</li>
-              </ul>
-            </details>
-          </div>
-        </li>
-      </ul>
-    </template>
+        <div class="wfpull-body">
+          <span>{{ line.text }}</span>
+          <details v-if="line.names && line.names.length" class="wfpull-names">
+            <summary>{{ line.namesLabel }} ({{ line.names.length }})</summary>
+            <ul>
+              <li v-for="name in line.names" :key="name">{{ name }}</li>
+            </ul>
+          </details>
+        </div>
+      </li>
+    </ul>
   </div>
 </template>
 
@@ -115,32 +65,22 @@
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
-import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
-import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
-import { comfyuiHost, pullSummaryLines } from "../../utils/workflowPull";
+import { pullSummaryLines } from "../../utils/workflowPull";
 
 // The band unmounts on Dismiss, which would drop focus to <body>; the host
-// puts it back on the control that started the pull.
+// puts it back somewhere sensible.
 const emit = defineEmits(["dismissed"]);
 
 const pull = useWorkflowPullStore();
-const sidebar = useSidebarStore();
-const workflows = useWorkflowsStore();
 
-const host = computed(() => comfyuiHost(pull.comfyuiUrl));
 const report = computed(() =>
-  pullSummaryLines(pull.summary, pull.comfyuiUrl, {
-    hideOneOffs: workflows.filters.hideOneOffs,
-  }),
+  pullSummaryLines(pull.summary, pull.comfyuiUrl),
 );
 
-// The failure is announced by its own `role="alert"`, so it is not said twice.
-const spoken = computed(() => {
-  if (pull.phase === "pulling") return "Pulling workflows from ComfyUI.";
-  if (pull.phase === "done") return report.value.headline;
-  return "";
-});
+const spoken = computed(() =>
+  pull.phase === "done" ? report.value.headline : "",
+);
 
 function dismiss() {
   pull.dismiss();
@@ -168,13 +108,6 @@ function dismiss() {
 
 .wfpull-headline {
   font-weight: var(--weight-semibold);
-}
-
-.wfpull-actions {
-  display: flex;
-  gap: var(--space-4);
-  margin-left: auto;
-  flex: none;
 }
 
 .wfpull-lines {
@@ -236,6 +169,8 @@ function dismiss() {
    scoped to the view: without `font: inherit` the button drops to the UA's
    size. */
 .wfpull-link {
+  margin-left: auto;
+  flex: none;
   padding: 0;
   font: inherit;
   color: rgb(var(--v-theme-on-surface));

@@ -1391,6 +1391,50 @@ def test_0126_adds_run_workflow_id_on_a_fresh_and_a_populated_vault():
             ).fetchall() == [("before.png", None)]
 
 
+def test_0127_adds_run_workflow_version_once_on_a_fresh_and_a_populated_vault():
+    """The column arrives either way, existing pictures read NULL (not known),
+    and a second upgrade over a vault that has it is a no-op."""
+
+    def has_column(conn):
+        return "run_workflow_version" in {
+            row[1] for row in conn.execute("PRAGMA table_info(picture)")
+        }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_column(conn), "the baseline's create_all()"
+
+        down = _run_alembic(
+            ["downgrade", "0126_add_picture_run_workflow_id"], db_url, _MIGRATIONS_DIR
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert not has_column(conn)
+            _insert_minimal_row(conn, "picture", file_path="before.png")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert has_column(conn), "migration 0127"
+            assert conn.execute(
+                "SELECT file_path, run_workflow_version FROM picture"
+            ).fetchall() == [("before.png", None)]
+            # Stamped back with the column still there: the guard makes the
+            # re-run a no-op rather than a duplicate-column error.
+            conn.execute(
+                "UPDATE alembic_version SET version_num = ?",
+                ("0126_add_picture_run_workflow_id",),
+            )
+            conn.commit()
+        again = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert again.returncode == 0, again.stderr
+
+
 def test_0125_resets_only_recipes_on_a_hand_made_workflow():
     """A hand-made group id goes back to NULL for re-filing; an automatic id
     and an already-NULL one are left as they are."""

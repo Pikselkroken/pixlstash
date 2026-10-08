@@ -5,7 +5,6 @@ import json
 import math
 import os
 import sqlite3
-import threading
 import time
 import uuid
 from collections import Counter
@@ -24,7 +23,7 @@ from pixlstash.db_models import (
     Picture,
     User,
 )
-from pixlstash.hub import workflow_cards, workflow_origin
+from pixlstash.hub import workflow_cards, workflow_origin, workflow_versions
 from pixlstash.hub.workflow_card_reads import (
     find_workflow,
     manual_documents_holding,
@@ -100,7 +99,6 @@ from pixlstash.services.workflow_io import (
     with_converted_graph,
 )
 from pixlstash.tasks.base_task import TaskStatus
-from pixlstash.tasks.comfyui_workflow_pull_task import ComfyUIWorkflowPullTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 
@@ -371,56 +369,90 @@ def store_pulled_workflow(
     workflow: dict,
     record: tuple[str, str, int | None, str | None],
 ) -> dict:
-    """File one document pulled from ComfyUI as a manual workflow (#1440).
+    """File one document pulled from ComfyUI (#1440): one workflow per file.
 
-    **The caller holds ``workflow_inbox.INBOX_LOCK``.** Deduplicated on
-    ``workflow_origin`` alone (:func:`workflow_origin.stored_as`): a content
-    some origin already stored as a live workflow is ``matched``. A copy of a
-    workflow PixlStash ships is not stored: ``builtin`` says so, and the pull
-    reports it apart.
+    **The caller holds ``workflow_inbox.INBOX_LOCK``.** In order:
+
+    * a content a pull already stored as a live workflow is ``matched`` and
+      the path is linked to it (:func:`workflow_origin.stored_as`). Only a
+      workflow whose origin is ``pull``: one the owner made (an import, the
+      inbox, a copy) is never linked, so never versioned, by a ComfyUI file;
+    * a copy of a workflow PixlStash ships is not stored: ``builtin``;
+    * a path already linked to a live pulled workflow is a **new version** of it
+      (``versioned``, ``version``): its pictures, recipes, defaults and pins
+      stay where they are;
+    * anything else is a new manual workflow, version 1, unless *origin*
+      already has ``MAX_PULL_CARDS_PER_ORIGIN`` live pulled workflows: then
+      nothing is stored (``capped``).
 
     *record* is ``(origin, remote_path, remote_modified, content_hash)`` of
     the ``workflow_origin`` row, written whatever the outcome; for a new
-    workflow in the same transaction as the row (#1694), since one stored
-    without it would come back after a delete.
+    workflow or version in the same transaction as the row (#1694), since one
+    stored without it would come back after a delete.
     """
     origin, remote_path, remote_modified, content_hash = record
     check_comfy_workflow(workflow)
     migrated, _ = workflow_bindings.migrate_placeholders(workflow)
     topology_hash = _topology_of(migrated, name)
-    stored = workflow_origin.stored_as(hub, workflow_inbox.content_hash(workflow))
+    digest = workflow_inbox.content_hash(workflow)
+    # Only a workflow a pull made is ever linked or versioned (`pulled_only`):
+    # ComfyUI is written by whoever reaches it, and a file holding a copy of
+    # a card the owner made must not become that card's next version. Such a
+    # file is a pulled workflow of its own.
+    linked = workflow_origin.stored_at(hub, origin, remote_path, pulled_only=True)
+    stored = workflow_origin.stored_as(hub, digest, pulled_only=True)
+    # The content is already this path's own workflow, but not its current
+    # version (an edit in ComfyUI undone): that is a version, not a match.
+    if (
+        stored is not None
+        and stored == linked
+        and workflow_versions.current_content_hash(hub, linked) != digest
+    ):
+        stored = None
+    base = {
+        "name": _stem(name),
+        "matched": False,
+        "builtin": False,
+        "topology_hash": topology_hash,
+    }
     if stored is not None:
         workflow_origin.record_pulled(
             hub, origin, remote_path, stored, remote_modified, content_hash
         )
-        return {
-            "name": _stem(name),
-            "matched": True,
-            "builtin": False,
-            "workflow_id": stored,
-            "topology_hash": topology_hash,
-        }
+        return {**base, "matched": True, "workflow_id": stored}
     if _builtin_copy(workflow_bindings.canonical(migrated)):
         workflow_origin.record_pulled(
             hub, origin, remote_path, None, remote_modified, content_hash
         )
-        return {
-            "name": _stem(name),
-            "matched": True,
-            "builtin": True,
-            "workflow_id": None,
-            "topology_hash": topology_hash,
-        }
+        return {**base, "matched": True, "builtin": True, "workflow_id": None}
     # The listing's size can be missing, so the stored row's cap is held here.
     _within_the_cap(migrated)
+    if linked is not None:
+        with hub.transaction() as conn:
+            version = workflow_versions.append_version(
+                conn,
+                linked,
+                migrated,
+                content_hash=digest,
+                topology_hash=topology_hash,
+                remote_modified=remote_modified,
+            )
+            workflow_origin.upsert(
+                conn, origin, remote_path, linked, remote_modified, content_hash
+            )
+        return {**base, "versioned": True, "version": version, "workflow_id": linked}
+    if (
+        workflow_origin.live_pull_cards(hub, origin)
+        >= workflow_origin.MAX_PULL_CARDS_PER_ORIGIN
+    ):
+        # Nothing stored and no origin row, so the file is read again by a
+        # later pull, once the owner has deleted some.
+        return {**base, "capped": True, "workflow_id": None}
     return {
-        "name": _stem(name),
-        "matched": False,
-        "builtin": False,
+        **base,
         "workflow_id": create_manual_workflow(
             hub, _stem(name), migrated, "pull", record=record
         ),
-        "topology_hash": topology_hash,
     }
 
 
@@ -1145,33 +1177,46 @@ def _picture_workflow_key(server, pic_id: int) -> str | None:
         return None
 
 
-def _picture_workflow_id(server, pic_id: int) -> str | None:
-    """The workflow this picture's variant is in, or ``None``; never raises.
+def _picture_workflow(server, pic_id: int) -> dict:
+    """``{workflow_id, workflow_version}`` of a picture; never raises.
 
-    The workflow the hub files the variant in (``workflow_of_variant``): the same resolution
-    ``GET /pictures?workflow=`` makes the other way, so a link built from this
-    id lists this picture. ``None`` for a variant not filed at the current key
-    version, or a topology in no workflow yet.
+    ``workflow_id`` is the workflow the hub files the variant in
+    (``workflow_of_variant``): the same resolution ``GET /pictures?workflow=``
+    makes the other way, so a link built from this id lists this picture.
+    ``None`` for a variant not filed at the current key version, or a topology
+    in no workflow yet. A picture a live manual workflow made is filed on that
+    workflow, and ``workflow_version`` is the version of its document that
+    made it (``picture.run_workflow_version``): null when that is not known,
+    and always null for an automatic workflow, which has no versions.
     """
+    found = {"workflow_id": None, "workflow_version": None}
     hub = getattr(server, "hub", None)
     if hub is None:
-        return None
+        return found
     try:
         pics = server.vault.db.run_immediate_read_task(
             Picture.find,
             id=pic_id,
-            select_fields=["id", "workflow_structural_hash", "run_workflow_id"],
+            select_fields=[
+                "id",
+                "workflow_structural_hash",
+                "run_workflow_id",
+                "run_workflow_version",
+            ],
         )
         made_by = getattr(pics[0], "run_workflow_id", None) if pics else None
         if made_by and made_by in manual_workflow_ids(hub):
             # Filed on the manual workflow that made it, while that lives.
-            return made_by
+            return {
+                "workflow_id": made_by,
+                "workflow_version": getattr(pics[0], "run_workflow_version", None),
+            }
         structural_hash = (
             getattr(pics[0], "workflow_structural_hash", None) if pics else None
         )
-        if not structural_hash:
-            return None
-        return workflow_of_variant(hub, structural_hash)
+        if structural_hash:
+            found["workflow_id"] = workflow_of_variant(hub, structural_hash)
+        return found
     except Exception as exc:
         logger.warning(
             "[comfyui] Could not read the workflow for picture id=%s: %s; "
@@ -1179,7 +1224,7 @@ def _picture_workflow_id(server, pic_id: int) -> str | None:
             pic_id,
             exc,
         )
-        return None
+        return {"workflow_id": None, "workflow_version": None}
 
 
 def _a1111_strengths(value) -> dict:
@@ -1640,9 +1685,18 @@ class ComfyUIWorkflowPullSummary(BaseModel):
     listed: int = 0
     # Stored here for the first time.
     pulled: int = 0
-    # A path pulled before that now holds different content, stored beside
-    # the earlier copy (which stays as it was).
+    # A path pulled before that now holds different content: a new version of
+    # the workflow it was pulled as.
     changed: int = 0
+    # Listed with the `modified` it had when last read, so not read again.
+    unchanged: int = 0
+    # The per-pull budget this pull stopped at ("100 new workflows", "200 new
+    # versions", "64 MB written"), the rest left for the next pull; null when
+    # it read everything.
+    budget_exhausted: Optional[str] = None
+    # This ComfyUI address already has as many pulled workflows as one may
+    # (2000), so new files made no workflow; existing ones still took versions.
+    card_cap_reached: bool = False
     # Already stored here, matched by content.
     matched: int = 0
     # Identical to a workflow PixlStash ships.
@@ -1651,7 +1705,8 @@ class ComfyUIWorkflowPullSummary(BaseModel):
     skipped_dismissed: int = 0
     # Could not be read from ComfyUI or stored here.
     failed: int = 0
-    # Pulled before and no longer listed by ComfyUI. The local file stays.
+    # Pulled before and no longer listed by ComfyUI: the workflow and its
+    # versions stay, and its link is marked gone.
     gone: int = 0
     # False when ComfyUI's node list could not be read, which makes every
     # workflow unchecked rather than fine.
@@ -1847,6 +1902,12 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     # filed or grouped it. `auto:<core and families digest>` or a manual group's uuid; what it
     # GROUPS is an owner-only question, asked elsewhere.
     workflow_id: Optional[str] = None
+    # Which version of that workflow's document made the picture, when it is a
+    # manual workflow and the version is known (`picture.run_workflow_version`):
+    # the one a PixlStash Run submitted, or the one a ComfyUI-made picture's
+    # editor graph equals exactly. Null otherwise. The version may since have
+    # been pruned (a workflow keeps version 1 and the newest 49).
+    workflow_version: Optional[int] = None
     models: list[str] = []
     loras: list[str] = []
     node_count: int = 0
@@ -1911,21 +1972,8 @@ def _recipe_extras(server, request, pic_id: int, graph: Optional[dict]) -> dict:
     }
 
 
-_PULL_IN_FLIGHT = (TaskStatus.PENDING, TaskStatus.RUNNING)
-
-
 def create_router(server) -> APIRouter:
     router = APIRouter()
-
-    # The most recent pull of ComfyUI's saved workflows, whatever state it
-    # ended in. It is the "already running" gate - a double-click must not list
-    # and read the whole folder twice - and where a finished pull's summary
-    # lives, because the TaskRunner forgets a task the moment it completes. Per
-    # router and so per server, and in memory on purpose, the
-    # `routes/model_folders.py::_scans` shape: after a restart nothing is
-    # pulling.
-    last_pull: dict[str, ComfyUIWorkflowPullTask] = {}
-    last_pull_lock = threading.Lock()
 
     @router.websocket("/ws/comfyui")
     async def comfyui_progress_proxy(websocket: WebSocket):
@@ -2424,11 +2472,14 @@ def create_router(server) -> APIRouter:
         try:
             migrated, _ = workflow_bindings.migrate_placeholders(workflow)
             _within_the_cap(output)
-            matched = manual_documents_holding(
-                hub, workflow_bindings.canonical(migrated)
-            )
+            canonical = workflow_bindings.canonical(migrated)
+            matched = manual_documents_holding(hub, canonical)
             if matched:
-                set_manual_api_document(hub, matched, output)
+                # Re-checked inside the write: a pull may have made a new
+                # version between the match and here.
+                matched = (
+                    set_manual_api_document(hub, matched, output, canonical) or matched
+                )
                 workflow_id = matched[0]
                 # Deleted since it matched: keep the derived name.
                 found = find_workflow(hub, workflow_id)
@@ -2461,10 +2512,16 @@ def create_router(server) -> APIRouter:
             "Lists the workflows the configured ComfyUI has saved, over its "
             "userdata API, and stores each one the way an import does: a copy "
             "of a workflow already stored is matched rather than stored twice, "
-            "so a pull is safe to repeat. A workflow deleted here after an "
-            "earlier pull is skipped rather than brought back. Nothing is "
-            "written to ComfyUI. Returns 202 with the id of the task now "
-            "queued; watch it in `GET /workers/progress` under "
+            "so a pull is safe to repeat, and a file whose content changed is "
+            "a new version of the workflow it was pulled as. A file whose "
+            "`modified` is unchanged is not read. A workflow deleted here "
+            "after an earlier pull is skipped rather than brought back. "
+            "Nothing is written to ComfyUI. The server also polls once a "
+            "minute while a ComfyUI address is saved and the owner's "
+            "`pull_comfyui_workflows` setting is on, and pulls at the end of "
+            "a Link; all share one gate. Returns 202 with the id of the task "
+            "now queued, or `already_running` with the one that holds the "
+            "gate; watch it in `GET /workers/progress` under "
             "`workers.ComfyUIWorkflowPullTask` and read its summary from "
             "`GET /comfyui/workflows/pull`."
         ),
@@ -2472,51 +2529,19 @@ def create_router(server) -> APIRouter:
         response_model=ComfyUIWorkflowPullStartResponse,
     )
     def pull_comfyui_workflows(request: Request):
-        hub = require_hub(
+        require_hub(
             server, "The workflow library is not open, so nothing can be pulled."
         )
         comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
-        origin_client_id = getattr(request.state, "origin_client_id", None)
-
-        def announce(keys: list[str]) -> None:
-            announce_changed_workflows(
-                server, keys, "imported", origin_client_id=origin_client_id
-            )
-
-        with last_pull_lock:
-            running = last_pull.get("task")
-            if running is not None and running.status in _PULL_IN_FLIGHT:
-                return {"status": "already_running", "task_id": running.id}
-            task = ComfyUIWorkflowPullTask(
-                hub,
-                comfyui_url,
-                store=functools.partial(store_pulled_workflow, hub),
-                lock=workflow_inbox.INBOX_LOCK,
-                announce=announce,
-            )
-            # Claimed before submission, so the gate covers the queued window.
-            last_pull["task"] = task
-        try:
-            task_id = server.vault.submit_task(task)
-        except RuntimeError as exc:
-            logger.error(
-                "Could not queue a pull of ComfyUI workflows from %s: %s",
-                comfyui_url,
-                exc,
-            )
-            task_id = None
-        if task_id is None:
-            with last_pull_lock:
-                if last_pull.get("task") is task:
-                    del last_pull["task"]
+        status, task_id = server.workflow_pulls.start(
+            comfyui_url, getattr(request.state, "origin_client_id", None)
+        )
+        if status == "unavailable":
             raise HTTPException(
                 status_code=503,
                 detail="The task runner is not available, so the pull cannot be queued.",
             )
-        logger.info(
-            "Pull of ComfyUI workflows from %s queued as task %s.", comfyui_url, task_id
-        )
-        return {"status": "started", "task_id": task_id}
+        return {"status": status, "task_id": task_id}
 
     @router.get(
         "/comfyui/workflows/pull",
@@ -2533,8 +2558,7 @@ def create_router(server) -> APIRouter:
         response_model=ComfyUIWorkflowPullStateResponse,
     )
     def get_comfyui_workflow_pull():
-        with last_pull_lock:
-            task = last_pull.get("task")
+        task = server.workflow_pulls.last
         if task is None:
             return {"status": "idle"}
         state = {
@@ -2691,7 +2715,7 @@ def create_router(server) -> APIRouter:
                     **_editor_graph_recipe_payload(editor_graph, conversion_problems),
                     "source_is_imported": source_is_imported,
                     "source_label": source_label,
-                    "workflow_id": _picture_workflow_id(server, pic_id),
+                    **_picture_workflow(server, pic_id),
                     **_recipe_extras(server, request, pic_id, None),
                     # After the extras on purpose: it replaces the stored
                     # column, which describes a different reading of this file.
@@ -2707,7 +2731,7 @@ def create_router(server) -> APIRouter:
                 **_a1111_recipe_payload(a1111),
                 "source_is_imported": source_is_imported,
                 "source_label": source_label,
-                "workflow_id": _picture_workflow_id(server, pic_id),
+                **_picture_workflow(server, pic_id),
                 **_recipe_extras(server, request, pic_id, None),
             }
 
@@ -2789,7 +2813,7 @@ def create_router(server) -> APIRouter:
             # families, which this same token can already read whole from the
             # `/workflow` sibling; a manual id is a random uuid and says only
             # that the owner grouped it with others.
-            "workflow_id": _picture_workflow_id(server, pic_id),
+            **_picture_workflow(server, pic_id),
             **_recipe_extras(server, request, pic_id, graph),
             # A rebuilt graph is keyed from the rebuild, not from the column
             # the extraction pass wrote about a chunk this picture does not

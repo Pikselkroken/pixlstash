@@ -12,10 +12,12 @@ import functools
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 from unittest.mock import MagicMock
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 import requests
@@ -24,11 +26,19 @@ from fastapi import HTTPException
 from pixlstash.hub import workflow_origin
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import card_index, manual_document
-from pixlstash.hub.workflow_group_writes import delete_manual_workflow
+from pixlstash.hub import workflow_card_reads, workflow_versions
+from pixlstash.hub.workflow_group_writes import (
+    delete_manual_workflow,
+    set_manual_api_document,
+)
 from pixlstash.routes import comfyui as comfyui_module
 from pixlstash.server import Server
 from pixlstash.utils.workflow_ids import tagged_workflow_id, untagged
 from pixlstash.services import comfyui_userdata, workflow_inbox
+from pixlstash.routes import workflows as workflows_routes
+from pixlstash.services import comfyui_workflow_pulls as pull_comfyui_module
+from pixlstash.services import workflow_bindings
+from pixlstash.services.comfyui_workflow_pulls import WorkflowPulls
 from pixlstash.services.comfyui_userdata import (
     MultiUserComfyUIError,
     list_saved_workflows,
@@ -36,7 +46,10 @@ from pixlstash.services.comfyui_userdata import (
     saved_workflow_url,
 )
 from pixlstash.services.workflow_hash import ui_topology_hash
+from pixlstash.task_runner import TaskCancelledError
+from pixlstash.tasks import base_task_finder
 from pixlstash.tasks import comfyui_workflow_pull_task as pull_task_module
+from pixlstash.tasks.comfyui_workflow_poll_finder import ComfyUIWorkflowPollFinder
 from pixlstash.tasks.comfyui_workflow_pull_task import (
     ComfyUIWorkflowPullTask,
     missing_node_classes,
@@ -44,8 +57,11 @@ from pixlstash.tasks.comfyui_workflow_pull_task import (
     stored_name_for,
 )
 from pixlstash.utils.comfyui_utilities import loaded_model_widgets
+from pixlstash.utils.service.user_settings_utils import apply_user_config_patch
 
 BASE = "http://comfy.test:8188"
+# What the fake ComfyUI lists as every file's `modified` until it is edited.
+MODIFIED = 1780844045116
 FIXTURES = Path(__file__).parent / "comfyui_workflows"
 
 # An editor-format workflow with a subgraph, and one using a class from a node
@@ -108,12 +124,30 @@ class FakeComfyUI:
         self.multi_user = False
         self.reachable = True
         self.object_info_up = True
+        # More node declarations `object_info` answers with, for a test that
+        # needs a workflow the converter can actually read.
+        self.extra_info: dict = {}
         self.classes = missing_node_classes(PLAIN, {}) + missing_node_classes(
             NEEDS_PACK, {}
         )
         self.requested: list[str] = []
         # `GET /history`; None answers 404, as a ComfyUI without the route.
         self.history: dict | None = None
+        # Each path's `modified`; an edit made here must move it, as saving
+        # in ComfyUI does.
+        self.modified: dict[str, int] = {}
+
+    def edit(self, path: str, document: dict) -> None:
+        """Save *document* at *path*, as ComfyUI would: a new `modified`."""
+        self.workflows[path] = document
+        self.modified[path] = self.modified.get(path, MODIFIED) + 1000
+
+    def _entry(self, path: str, relative_to: str = "") -> dict:
+        return {
+            "path": path[len(relative_to) :],
+            "size": 10,
+            "modified": self.modified.get(path, MODIFIED),
+        }
 
     def get(self, url, **_kwargs):
         self.requested.append(url)
@@ -128,15 +162,24 @@ class FakeComfyUI:
                 return _Response(500, text="boom")
             info = {name: {} for name in self.classes if name != ABSENT_CLASS}
             info.update(_LOADERS)
+            info.update(self.extra_info)
             return _Response(200, info)
         if url.startswith(f"{BASE}/history?") and self.history is not None:
             return _Response(200, self.history)
         if url.startswith(f"{BASE}/api/userdata?"):
+            query = parse_qs(urlsplit(url).query)
+            folder = query["dir"][0]
+            if query.get("recurse") == ["true"]:
+                return _Response(200, [self._entry(path) for path in self.workflows])
+            # One folder, as the check Run and Open make asks for.
+            prefix = folder.removeprefix("workflows").lstrip("/")
+            prefix = f"{prefix}/" if prefix else ""
             return _Response(
                 200,
                 [
-                    {"path": path, "size": 10, "modified": 1780844045116}
+                    self._entry(path, prefix)
                     for path in self.workflows
+                    if path.startswith(prefix) and "/" not in path[len(prefix) :]
                 ],
             )
         for path, document in self.workflows.items():
@@ -371,10 +414,13 @@ def test_a_pull_stores_every_workflow_and_a_second_matches_them(comfy, folders, 
     assert len(set(announced)) == 2
     assert all(workflow_id.startswith("manual:") for workflow_id in announced)
 
-    # A restart's pull re-imports nothing: the origin rows say what is stored.
+    # A restart's pull re-imports nothing, and reads no file: the origin rows
+    # hold each path's `modified`, and the listing says it did not move.
+    comfy.requested.clear()
     second = _pull(hub)
-    assert (second["pulled"], second["matched"]) == (0, 2)
+    assert (second["pulled"], second["matched"], second["unchanged"]) == (0, 0, 2)
     assert _stored(hub) == ["Plain", "Sub - Needs pack"]
+    assert not any("workflows%2F" in url for url in comfy.requested)
 
 
 def test_a_workflow_whose_origin_cannot_be_recorded_is_not_stored(
@@ -521,18 +567,32 @@ def test_a_workflow_deleted_here_is_not_pulled_back(comfy, folders, hub):
 
     again = _pull(hub)
     assert again["skipped_dismissed"] == 2
-    assert (again["pulled"], again["matched"]) == (0, 1)
+    assert (again["pulled"], again["matched"], again["unchanged"]) == (0, 0, 1)
     assert _stored(hub) == ["Sub - Needs pack"]
 
 
 def test_a_workflow_gone_from_comfyui_keeps_its_workflow(comfy, folders, hub):
     _pull(hub)
-    del comfy.workflows["Plain.json"]
+    plain = comfy.workflows.pop("Plain.json")
     result = _pull(hub)
     assert result["gone"] == 1
     assert _stored(hub) == ["Plain", "Sub - Needs pack"]
-    paths = [r["remote_path"] for r in hub.fetchall("SELECT * FROM workflow_origin")]
-    assert paths == ["Sub/Needs pack.json"]
+    # The link is kept and marked, so Open can tell the file is gone.
+    gone = {
+        row["remote_path"]: row["gone_at"] is not None
+        for row in hub.fetchall("SELECT remote_path, gone_at FROM workflow_origin")
+    }
+    assert gone == {"Plain.json": True, "Sub/Needs pack.json": False}
+    workflow_id = _manual_id(hub, "Plain")
+    assert workflow_origin.live_file(hub, BASE, workflow_id) is None
+
+    # Saved again unchanged, the mark clears without a read.
+    comfy.workflows["Plain.json"] = plain
+    back = _pull(hub)
+    assert (back["gone"], back["unchanged"]) == (0, 2)
+    assert workflow_origin.live_file(hub, BASE, workflow_id)["remote_path"] == (
+        "Plain.json"
+    )
 
 
 def test_a_workflow_pixlstash_ships_is_reported_apart(comfy, folders, hub):
@@ -615,7 +675,8 @@ def pull_routes(hub, monkeypatch):
         comfyui_url=f"{BASE}/"
     )
     server.vault.submit_task.side_effect = submit
-    # One router, and so one pull gate, for both routes: the gate lives in it.
+    # One gate for both routes, the poll and the Link: the server's.
+    server.workflow_pulls = WorkflowPulls(server, comfyui_module.store_pulled_workflow)
     router = comfyui_module.create_router(server)
     return server, _endpoint(router, "POST"), _endpoint(router, "GET"), submitted
 
@@ -657,6 +718,15 @@ def test_a_finished_pull_answers_its_summary_and_a_failed_one_its_reason(
     }
 
 
+def test_a_submit_that_raises_frees_the_gate(pull_routes):
+    server, start, _state, _submitted = pull_routes
+    server.vault.submit_task.side_effect = ValueError("a bug in the runner")
+    with pytest.raises(ValueError):
+        start(_request())
+    server.vault.submit_task.side_effect = lambda task: task.id
+    assert start(_request())["status"] == "started"
+
+
 def test_no_hub_or_no_runner_is_a_503_and_frees_the_gate(pull_routes):
     server, start, state, _submitted = pull_routes
     server.vault.submit_task.side_effect = None
@@ -689,14 +759,12 @@ def test_a_model_named_with_a_folder_comfyui_lists_flat_is_present():
     assert model_triage(moved, {"UNETLoader": {}}, advertised) == ([], 0)
 
 
-def test_a_pulled_manual_workflow_is_the_one_off_kind(comfy, folders, hub):
-    """``origin = 'pull'`` is what the one-off count reads (#1440): a pull is
-    not a statement, so its workflows fold away until they have pictures."""
+def test_a_pulled_workflow_is_imported_and_never_a_one_off(comfy, folders, hub):
+    """One-offs are workflows known from pictures alone: a pulled one is listed
+    the moment it arrives, so every card the pull stored reads as imported."""
     _pull(hub)
-    hand = {
-        card.name or card.workflow_key: card.hand_imported for card in card_index(hub)
-    }
-    assert set(hand.values()) == {False}
+    imported = [card.imported for card in card_index(hub) if card.manual]
+    assert imported and all(imported)
 
 
 def test_a_hub_made_before_content_hash_gains_the_column(tmp_path):
@@ -743,7 +811,9 @@ def _pull_with(hub, store=None, origin=BASE) -> dict:
         store=store or functools.partial(comfyui_module.store_pulled_workflow, hub),
         lock=workflow_inbox.INBOX_LOCK,
     )
-    return task._run_task()
+    result = task._run_task()
+    assert task._processed_count == task._total_count == result["listed"]
+    return result
 
 
 def _delete_pulled(hub, remote_path: str) -> str:
@@ -770,6 +840,8 @@ def test_a_delete_made_while_a_pull_runs_is_not_undone_by_it(comfy, folders, hub
     order = sorted(comfy.workflows)  # the listing is sorted
     assert order == ["Plain.json", "Sub/Needs pack.json"]
     comfy.workflows = {"A first.json": NEEDS_PACK, **comfy.workflows}
+    # Saved again in ComfyUI, so this pull reads it rather than passing it by.
+    comfy.edit("Plain.json", comfy.workflows["Plain.json"])
 
     def store_then_delete(name, doc, record):
         outcome = store(name, doc, record)
@@ -827,18 +899,171 @@ def test_a_deleted_workflow_renamed_in_comfyui_stays_out(comfy, folders, hub):
     assert _stored(hub) == ["Sub - Needs pack"]
 
 
-def test_a_workflow_edited_in_comfyui_is_changed_and_both_copies_stay_pulled(
+def _versions(hub, workflow_id: str) -> list[tuple[int, str]]:
+    return [
+        (row["version"], row["source"])
+        for row in hub.fetchall(
+            "SELECT version, source FROM workflow_version WHERE workflow_id = ? "
+            "ORDER BY version",
+            (workflow_id,),
+        )
+    ]
+
+
+def test_a_workflow_edited_in_comfyui_is_a_new_version_of_its_workflow(
     comfy, folders, hub
 ):
     _pull(hub)
+    plain = _manual_id(hub, "Plain")
+    assert _versions(hub, plain) == [(1, "pull")]
     edited = copy.deepcopy(PLAIN)
     edited["nodes"][0]["pos"] = [123, 456]
     edited["extra"] = {"edited": True}
-    comfy.workflows["Plain.json"] = edited
-    result = _pull(hub)
-    assert (result["changed"], result["pulled"]) == (1, 0)
-    # The copy the first pull stored stays, as a pulled workflow of its own.
-    assert _stored(hub) == ["Plain", "Plain", "Sub - Needs pack"]
+    comfy.edit("Plain.json", edited)
+    announced: list[str] = []
+    result = _pull(hub, announced)
+    assert (result["changed"], result["pulled"], result["unchanged"]) == (1, 0, 1)
+    # One workflow per file: the same card, now at version 2, which is what
+    # every reader of its graph reads.
+    assert _stored(hub) == ["Plain", "Sub - Needs pack"]
+    assert _versions(hub, plain) == [(1, "pull"), (2, "pull")]
+    assert untagged(manual_document(hub, plain))["nodes"][0]["pos"] == [123, 456]
+    assert tagged_workflow_id(manual_document(hub, plain)) == plain
+    assert announced == [plain]
+    link = workflow_origin.live_file(hub, BASE, plain)
+    assert link["remote_modified"] == comfy.modified["Plain.json"]
+
+    # Undone in ComfyUI: the first content again is version 3, not a match.
+    comfy.edit("Plain.json", copy.deepcopy(PLAIN))
+    undone = _pull(hub)
+    assert (undone["changed"], undone["matched"]) == (1, 0)
+    assert _versions(hub, plain)[-1] == (3, "pull")
+    assert untagged(manual_document(hub, plain)) == PLAIN
+
+
+# A small editor workflow the fake ComfyUI can convert once it declares it.
+_SAMPLER_EDITOR = {
+    "last_node_id": 2,
+    "last_link_id": 0,
+    "links": [],
+    "nodes": [
+        {
+            "id": 1,
+            "type": "KSampler",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": [123, 20, 7.0],
+        },
+        {
+            "id": 2,
+            "type": "SaveImage",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": ["ComfyUI"],
+        },
+    ],
+}
+_SAMPLER_INFO = {
+    "KSampler": {
+        "input": {
+            "required": {
+                "seed": ["INT", {"default": 0}],
+                "steps": ["INT", {"default": 20}],
+                "cfg": ["FLOAT", {"default": 7.0}],
+            }
+        }
+    },
+    "SaveImage": {"input": {"required": {"filename_prefix": ["STRING", {}]}}},
+}
+
+
+def _stored_conversion(hub, workflow_id: str) -> tuple:
+    """``(workflow_document's, the current version's)`` stored conversion."""
+    row = hub.fetchone(
+        "SELECT d.api_document, (SELECT v.api_document FROM workflow_version v "
+        "WHERE v.workflow_id = d.workflow_id ORDER BY v.version DESC LIMIT 1) "
+        "FROM workflow_document d WHERE d.workflow_id = ?",
+        (workflow_id,),
+    )
+    return tuple(json.loads(value) if value else None for value in row)
+
+
+def test_a_pull_stores_the_conversion_of_an_editor_workflow_it_can_read(
+    comfy, folders, hub
+):
+    """The pull has ComfyUI's `object_info` in hand, so a pulled editor file is
+    converted and stored then: it has parameters before anything reads it."""
+    comfy.extra_info = _SAMPLER_INFO
+    comfy.workflows["Sampler.json"] = copy.deepcopy(_SAMPLER_EDITOR)
+    _pull(hub)
+    sampler = _manual_id(hub, "Sampler")
+    on_row, on_version = _stored_conversion(hub, sampler)
+    assert on_row is not None and on_row == on_version
+    assert on_row["1"]["inputs"]["steps"] == 20
+    assert manual_document(hub, sampler)["1"]["class_type"] == "KSampler"
+
+    # An edit is a new version, converted by the pull that took it.
+    edited = copy.deepcopy(_SAMPLER_EDITOR)
+    edited["nodes"][0]["widgets_values"] = [123, 33, 7.0]
+    comfy.edit("Sampler.json", edited)
+    _pull(hub)
+    assert [version for version, _ in _versions(hub, sampler)] == [1, 2]
+    on_row, on_version = _stored_conversion(hub, sampler)
+    assert on_row == on_version and on_row["1"]["inputs"]["steps"] == 33
+
+
+def test_a_pull_without_object_info_stores_no_conversion(comfy, folders, hub):
+    """No map, no conversion: the workflow's first read converts it later."""
+    comfy.extra_info = _SAMPLER_INFO
+    comfy.object_info_up = False
+    comfy.workflows["Sampler.json"] = copy.deepcopy(_SAMPLER_EDITOR)
+    _pull(hub)
+    assert _stored_conversion(hub, _manual_id(hub, "Sampler")) == (None, None)
+
+
+def test_a_quiet_poll_reads_nothing_but_the_listing(comfy, folders, hub):
+    """The minute poll: an unchanged ComfyUI costs one request, and tells no
+    tab to reload."""
+    _pull(hub)
+    comfy.requested.clear()
+    announced: list[list[str]] = []
+    task = ComfyUIWorkflowPullTask(
+        hub,
+        BASE,
+        store=functools.partial(comfyui_module.store_pulled_workflow, hub),
+        announce=announced.append,
+        background=True,
+    )
+    result = task._run_task()
+    assert result["unchanged"] == 2
+    assert comfy.requested == [
+        f"{BASE}/api/userdata?dir=workflows&recurse=true&full_info=true"
+    ]
+    assert announced == []
+
+
+def test_an_edit_undone_in_comfyui_is_a_version_while_a_copy_holds_the_old(
+    comfy, folders, hub
+):
+    """A second path holding the first content is linked to the same
+    workflow, so the content is "already stored" - as this workflow's earlier
+    version, not its current one. Undone in ComfyUI, it is a version."""
+    comfy.workflows["Copy of plain.json"] = copy.deepcopy(PLAIN)
+    _pull(hub)
+    # Listed first, so the workflow is named for the copy; both paths name it.
+    plain = _manual_id(hub, "Copy of plain")
+    assert workflow_origin.live_file(hub, BASE, plain) is not None
+    edited = copy.deepcopy(PLAIN)
+    edited["extra"] = {"edited": True}
+    comfy.edit("Plain.json", edited)
+    _pull(hub)
+    comfy.edit("Plain.json", copy.deepcopy(PLAIN))
+    undone = _pull(hub)
+    assert (undone["changed"], undone["matched"]) == (1, 0)
+    assert [version for version, _ in _versions(hub, plain)] == [1, 2, 3]
+    assert untagged(manual_document(hub, plain)) == PLAIN
 
 
 def test_a_document_no_reader_can_read_is_unchecked_never_fine(
@@ -975,3 +1200,484 @@ def test_a_comfyui_without_history_still_pulls_its_workflows(comfy, folders, hub
 
     assert result["history_runs"] is None
     assert result["pulled"] == 2
+
+
+# ── versions in the hub ─────────────────────────────────────────────────────
+
+
+def test_every_way_in_stores_version_1_and_a_delete_takes_the_versions(folders, hub):
+    workflow_id = comfyui_module.store_manual_workflow(hub, "mine", PLAIN, "import")
+    assert _versions(hub, workflow_id) == [(1, "import")]
+    converted = {"1": {"class_type": "KSampler", "inputs": {}}}
+    set_manual_api_document(hub, [workflow_id], converted)
+    # The conversion belongs to the version it converts, and the card reads it.
+    row = hub.fetchone(
+        "SELECT api_document FROM workflow_version WHERE workflow_id = ?",
+        (workflow_id,),
+    )
+    assert json.loads(row[0]) == converted
+    delete_manual_workflow(hub, workflow_id)
+    assert _versions(hub, workflow_id) == []
+
+
+def test_a_new_version_of_a_workflow_an_older_build_made_keeps_its_first(folders, hub):
+    workflow_id = comfyui_module.store_manual_workflow(hub, "old", PLAIN, "import")
+    converted = {"1": {"class_type": "KSampler", "inputs": {}}}
+    set_manual_api_document(hub, [workflow_id], converted)
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_version")
+    edited = copy.deepcopy(PLAIN)
+    edited["extra"] = {"edited": True}
+    with hub.transaction() as conn:
+        assert workflow_versions.append_version(conn, workflow_id, edited) == 2
+    assert _versions(hub, workflow_id) == [(1, "import"), (2, "pull")]
+    first = hub.fetchone(
+        "SELECT document, api_document FROM workflow_version "
+        "WHERE workflow_id = ? AND version = 1",
+        (workflow_id,),
+    )
+    assert untagged(json.loads(first["document"])) == PLAIN
+    assert json.loads(first["api_document"]) == converted
+    # The card now reads version 2, with no conversion: that was of version 1.
+    current = hub.fetchone(
+        "SELECT document, api_document FROM workflow_document WHERE workflow_id = ?",
+        (workflow_id,),
+    )
+    assert json.loads(current["document"])["extra"]["edited"] is True
+    assert current["api_document"] is None
+    assert tagged_workflow_id(manual_document(hub, workflow_id)) == workflow_id
+
+
+def test_data_step_12_gives_every_manual_workflow_its_version_1(folders, hub, tmp_path):
+    workflow_id = comfyui_module.store_manual_workflow(hub, "mine", PLAIN, "inbox")
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_version")
+        conn.execute("PRAGMA user_version = 11")
+    path = hub.path
+    hub.close()
+    reopened = HubDatabase(path)
+    try:
+        assert _versions(reopened, workflow_id) == [(1, "inbox")]
+        row = reopened.fetchone(
+            "SELECT content_hash, document FROM workflow_version WHERE workflow_id = ?",
+            (workflow_id,),
+        )
+        assert row["content_hash"] == workflow_inbox.content_hash(PLAIN)
+        assert json.loads(row["document"]) == manual_document(reopened, workflow_id)
+    finally:
+        reopened.close()
+
+
+# ── the minute poll ─────────────────────────────────────────────────────────
+
+
+class _Pulls:
+    """`WorkflowPulls` as the finder sees it."""
+
+    def __init__(self, wants: Optional[str] = BASE):
+        self.wants = wants
+        self.claimed: list[bool] = []
+        self.released: list[object] = []
+        self.busy = False
+
+    def owner_wants_pulls(self):
+        return self.wants
+
+    def claim(self, comfyui_url, *, background=False):
+        self.claimed.append(background)
+        return ("running" if self.busy else "task"), not self.busy
+
+    def release(self, task):
+        self.released.append(task)
+
+
+def test_the_poll_offers_a_background_pull_at_most_once_a_minute(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(base_task_finder.time, "monotonic", lambda: clock[0])
+    pulls = _Pulls()
+    finder = ComfyUIWorkflowPollFinder(pulls)
+    assert finder.find_task() == "task"
+    assert pulls.claimed == [True]
+    clock[0] += 59
+    assert finder.find_task() is None
+    clock[0] += 1
+    pulls.busy = True
+    assert finder.find_task() is None  # one in flight: the gate refuses
+    clock[0] += 60
+    pulls.busy = False
+    pulls.wants = None  # no address saved, or the setting is off
+    assert finder.find_task() is None
+    assert len(pulls.claimed) == 2
+
+
+def test_a_failed_poll_waits_ten_minutes_and_a_dropped_one_frees_the_gate(
+    monkeypatch,
+):
+    clock = [1000.0]
+    monkeypatch.setattr(base_task_finder.time, "monotonic", lambda: clock[0])
+    pulls = _Pulls()
+    finder = ComfyUIWorkflowPollFinder(pulls)
+    finder.find_task()
+    finder.on_task_complete("task", RuntimeError("Could not reach ComfyUI"))
+    clock[0] += 60
+    assert finder.find_task() is None
+    clock[0] += 540
+    assert finder.find_task() == "task"
+    finder.on_task_complete("task", None)
+    clock[0] += 60
+    assert finder.find_task() == "task"
+    finder.on_task_complete("task", TaskCancelledError("dropped"))
+    assert pulls.released == ["task"]
+
+
+def test_the_pull_setting_reads_the_string_false_as_off():
+    user = SimpleNamespace(pull_comfyui_workflows=True)
+    for value, expected in [
+        ("false", False),
+        ("False", False),
+        ("0", False),
+        (0, False),
+        (False, False),
+        ("", True),
+        (None, True),
+        (True, True),
+    ]:
+        user.pull_comfyui_workflows = not expected
+        apply_user_config_patch(user, {"pull_comfyui_workflows": value})
+        assert user.pull_comfyui_workflows is expected, value
+
+
+def test_the_owner_setting_and_a_saved_address_gate_the_automatic_pulls():
+    user = SimpleNamespace(comfyui_url=f"{BASE}/", pull_comfyui_workflows=True)
+    server = SimpleNamespace(auth=SimpleNamespace(user=user))
+    pulls = WorkflowPulls(server, comfyui_module.store_pulled_workflow)
+    assert pulls.owner_wants_pulls() == BASE
+    user.pull_comfyui_workflows = False
+    assert pulls.owner_wants_pulls() is None
+    user.pull_comfyui_workflows = True
+    user.comfyui_url = None
+    assert pulls.owner_wants_pulls() is None
+    user.comfyui_url = BASE
+    pulls.automatic = False
+    assert pulls.owner_wants_pulls() is None
+
+
+def test_freshen_reads_a_file_only_when_comfyui_saved_it_since(comfy, folders, hub):
+    _pull(hub)
+    plain = _manual_id(hub, "Plain")
+    server = SimpleNamespace(hub=hub, vault=None)
+    pulls = WorkflowPulls(server, comfyui_module.store_pulled_workflow)
+    comfy.requested.clear()
+    assert pulls.freshen(BASE, plain) is None
+    assert comfy.requested == [f"{BASE}/api/userdata?dir=workflows&full_info=true"]
+
+    edited = copy.deepcopy(PLAIN)
+    edited["extra"] = {"edited": True}
+    comfy.edit("Plain.json", edited)
+    assert pulls.freshen(BASE, plain) == 2
+    assert manual_document(hub, plain)["extra"]["edited"] is True
+
+    # A file in a subfolder is asked for by its folder.
+    needs = _manual_id(hub, "Sub - Needs pack")
+    comfy.requested.clear()
+    assert pulls.freshen(BASE, needs) is None
+    assert comfy.requested == [
+        f"{BASE}/api/userdata?dir=workflows%2FSub&full_info=true"
+    ]
+
+    comfy.reachable = False
+    assert pulls.freshen(BASE, plain) is None
+
+
+# ── what the review of the versions and the poll asked for ──────────────────
+
+
+def test_a_workflow_keeps_its_first_version_and_the_newest_49(folders, hub):
+    workflow_id = comfyui_module.store_manual_workflow(hub, "w", PLAIN, "pull")
+    for n in range(60):
+        edited = copy.deepcopy(PLAIN)
+        edited["extra"] = {"n": n}
+        with hub.transaction() as conn:
+            workflow_versions.append_version(conn, workflow_id, edited)
+    kept = [version for version, _ in _versions(hub, workflow_id)]
+    assert len(kept) == workflow_versions.MAX_VERSIONS == 50
+    assert kept == [1, *range(13, 62)]
+    assert manual_document(hub, workflow_id)["extra"]["n"] == 59
+    # The card says which version is current, not how many are kept.
+    (card,) = [
+        card
+        for card in workflow_card_reads._manual_cards(hub)
+        if card.workflow_key == workflow_id
+    ]
+    assert (card.versions, card.version) == (50, 61)
+
+
+def test_a_pull_stops_at_its_budget_and_the_next_takes_the_rest(
+    comfy, folders, hub, monkeypatch, caplog
+):
+    monkeypatch.setattr(pull_task_module, "MAX_NEW_WORKFLOWS_PER_PULL", 1)
+    with caplog.at_level("WARNING"):
+        first = _pull_with(hub)
+    assert (first["pulled"], first["budget_exhausted"]) == (1, "1 new workflows")
+    assert "1 listed file(s) are left for the next pull" in caplog.text
+    second = _pull_with(hub)
+    assert (second["pulled"], second["unchanged"]) == (1, 1)
+    assert second["budget_exhausted"] is None
+    assert _stored(hub) == ["Plain", "Sub - Needs pack"]
+
+    monkeypatch.setattr(pull_task_module, "MAX_NEW_VERSIONS_PER_PULL", 1)
+    for path in ("Plain.json", "Sub/Needs pack.json"):
+        edited = copy.deepcopy(comfy.workflows[path])
+        edited["extra"] = {"edited": True}
+        comfy.edit(path, edited)
+    third = _pull_with(hub)
+    assert (third["changed"], third["budget_exhausted"]) == (1, "1 new versions")
+    assert _pull_with(hub)["changed"] == 1
+
+
+def test_a_pull_stops_before_a_file_that_would_pass_the_byte_budget(
+    comfy, folders, hub, monkeypatch
+):
+    # The fake lists every file at 10 bytes: the first stored (A.json) leaves
+    # 5 bytes, too few for the next file's listed size.
+    budget = len(json.dumps(NEEDS_PACK)) + 5
+    monkeypatch.setattr(pull_task_module, "MAX_WRITTEN_BYTES_PER_PULL", budget)
+    del comfy.workflows["Sub/Needs pack.json"]
+    comfy.workflows["A.json"] = NEEDS_PACK
+    comfy.workflows["B.json"] = PLAIN
+    result = _pull_with(hub)
+    assert result["pulled"] == 1
+    assert result["budget_exhausted"] == f"{budget // (1024 * 1024)} MB written"
+
+
+def test_a_poll_that_hit_its_budget_backs_off_like_a_failure(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(base_task_finder.time, "monotonic", lambda: clock[0])
+    finder = ComfyUIWorkflowPollFinder(_Pulls())
+    finder.find_task()
+    finder.on_task_complete(
+        SimpleNamespace(result={"budget_exhausted": "200 new versions"}), None
+    )
+    clock[0] += 60
+    assert finder.find_task() is None
+    clock[0] += 540
+    assert finder.find_task() == "task"
+
+
+@pytest.mark.parametrize("origin", ["inbox", "import", "clone"])
+def test_a_comfyui_file_never_versions_a_card_the_owner_made(
+    comfy, folders, hub, origin
+):
+    own = comfyui_module.store_manual_workflow(hub, "Mine", PLAIN, origin)
+    if origin == "inbox":
+        # As the inbox records it, so content matching can find it.
+        workflow_origin.record_pulled(
+            hub,
+            workflow_origin.INBOX_ORIGIN,
+            "h",
+            own,
+            None,
+            workflow_inbox.content_hash(PLAIN),
+        )
+    comfy.workflows = {"Copy.json": copy.deepcopy(PLAIN)}
+    first = _pull(hub)
+    # A pulled workflow of its own, not a link to the owner's card.
+    assert (first["pulled"], first["matched"]) == (1, 0)
+    edited = copy.deepcopy(PLAIN)
+    edited["extra"] = {"from comfyui": True}
+    comfy.edit("Copy.json", edited)
+    second = _pull(hub)
+    assert second["changed"] == 1
+    assert _versions(hub, own) == [(1, origin)]
+    assert untagged(manual_document(hub, own)) == PLAIN
+    assert workflow_origin.live_file(hub, BASE, own) is None
+
+
+def test_a_link_an_earlier_build_made_to_an_owners_card_is_not_followed(
+    comfy, folders, hub
+):
+    own = comfyui_module.store_manual_workflow(hub, "Mine", PLAIN, "import")
+    workflow_origin.record_pulled(
+        hub, BASE, "Copy.json", own, MODIFIED, workflow_inbox.content_hash(PLAIN)
+    )
+    assert workflow_origin.live_file(hub, BASE, own) is None
+    edited = copy.deepcopy(PLAIN)
+    edited["extra"] = {"from comfyui": True}
+    comfy.workflows = {"Copy.json": PLAIN}
+    comfy.edit("Copy.json", edited)
+    assert _pull(hub)["pulled"] == 1
+    assert _versions(hub, own) == [(1, "import")]
+
+
+@pytest.mark.parametrize(
+    "path, safe",
+    [
+        ("a.json", True),
+        ("Sub/b.json", True),
+        ("../../etc/x.json", False),
+        ("Sub/../x.json", False),
+        ("./x.json", False),
+        ("Sub//x.json", False),
+        ("/abs/y.json", False),
+        ("C:/w/z.json", False),
+        ("c:z.json", False),
+        ("Sub\\x.json", False),
+        ("x\x00.json", False),
+        ("notes.txt", False),
+    ],
+)
+def test_only_a_plain_relative_json_path_is_safe(path, safe):
+    assert comfyui_userdata.is_safe_workflow_path(path) is safe
+
+
+def test_an_unsafe_listed_path_is_never_stored_or_opened(comfy, folders, hub):
+    comfy.workflows = {
+        "../../etc/x.json": PLAIN,
+        "/abs/y.json": NEEDS_PACK,
+        "C:\\win\\z.json": PLAIN,
+        "Fine.json": PLAIN,
+    }
+    result = _pull(hub)
+    assert (result["listed"], result["pulled"]) == (1, 1)
+    assert [
+        r["remote_path"] for r in hub.fetchall("SELECT * FROM workflow_origin")
+    ] == ["Fine.json"]
+    # A row an earlier build stored is never answered as the file to open.
+    fine = _manual_id(hub, "Fine")
+    with hub.transaction() as conn:
+        conn.execute("UPDATE workflow_origin SET remote_path = '../../etc/x.json'")
+    assert workflow_origin.live_file(hub, BASE, fine) is None
+
+
+def test_the_run_and_open_check_is_bounded_as_a_whole(folders, hub, monkeypatch):
+    workflow_id = comfyui_module.store_manual_workflow(
+        hub, "w", PLAIN, "pull", record=(BASE, "w.json", 1000, None)
+    )
+    monkeypatch.setattr(pull_comfyui_module, "FRESHEN_TIMEOUT_S", 0.6)
+
+    def slow_listing(base_url, path, timeout_s):
+        time.sleep(0.4)
+        return comfyui_userdata.SavedWorkflow(path, 10, 2000)
+
+    def slow_read(base_url, path, timeout_s=None):
+        time.sleep(0.4)
+        raise RuntimeError("too slow")
+
+    monkeypatch.setattr(comfyui_userdata, "saved_workflow_info", slow_listing)
+    monkeypatch.setattr(comfyui_userdata, "read_saved_workflow", slow_read)
+    pulls = WorkflowPulls(
+        SimpleNamespace(hub=hub, vault=None), comfyui_module.store_pulled_workflow
+    )
+    started = time.monotonic()
+    assert pulls.freshen(BASE, workflow_id) is None
+    assert time.monotonic() - started < 0.75
+    time.sleep(0.3)  # let the abandoned check end before the hub closes
+
+
+def test_a_conversion_is_not_stored_on_a_version_made_since_it_matched(folders, hub):
+    workflow_id = comfyui_module.store_manual_workflow(hub, "w", PLAIN, "pull")
+    canonical = workflow_bindings.canonical(
+        workflow_bindings.migrate_placeholders(PLAIN)[0]
+    )
+    edited = copy.deepcopy(PLAIN)
+    edited["extra"] = {"edited": True}
+    with hub.transaction() as conn:
+        workflow_versions.append_version(conn, workflow_id, edited)
+    converted = {"1": {"class_type": "KSampler", "inputs": {}}}
+    assert set_manual_api_document(hub, [workflow_id], converted, canonical) == []
+    assert (
+        hub.fetchone(
+            "SELECT api_document FROM workflow_document WHERE workflow_id = ?",
+            (workflow_id,),
+        )[0]
+        is None
+    )
+    # Matching the current version, it is stored.
+    assert set_manual_api_document(
+        hub,
+        [workflow_id],
+        converted,
+        workflow_bindings.canonical(workflow_bindings.migrate_placeholders(edited)[0]),
+    ) == [workflow_id]
+
+
+def test_a_cached_description_follows_the_version(folders, hub):
+    workflow_id = comfyui_module.store_manual_workflow(hub, "w", PLAIN, "pull")
+    assert workflows_routes._manual_model_widgets(hub, workflow_id) == (
+        workflows_routes._model_widgets_of(workflow_id, json.dumps(PLAIN))
+    )
+    with hub.transaction() as conn:
+        workflow_versions.append_version(conn, workflow_id, NEEDS_PACK)
+    names = {
+        name for _w, name in workflows_routes._manual_model_widgets(hub, workflow_id)
+    }
+    assert ABSENT_MODEL in names
+    # Keyed on the version: the same id with another version is read afresh,
+    # and no document is held.
+    first = workflow_card_reads._manual_facts_of(workflow_id, json.dumps(PLAIN), 1)
+    assert workflow_card_reads._manual_facts_of(workflow_id, "{", 1) == first
+    assert workflow_card_reads._manual_facts_of(workflow_id, "{", 2) == (None, None)
+    assert workflow_card_reads._MANUAL_FACTS[workflow_id] == (2, (None, None))
+
+
+def test_a_cached_description_is_not_handed_to_a_workflow_reusing_the_id(folders, hub):
+    # A workflow made from a file reuses its id after a delete: the same id at
+    # the same version number, stored at another time, is read afresh.
+    workflow_id = comfyui_module.store_manual_workflow(hub, "w", PLAIN, "pull")
+    first = workflows_routes._manual_model_widgets(hub, workflow_id)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_document SET document = ?, created_at = ? "
+            "WHERE workflow_id = ?",
+            (json.dumps(NEEDS_PACK), "2099-01-01T00:00:00+00:00", workflow_id),
+        )
+        conn.execute(
+            "UPDATE workflow_version SET created_at = ? WHERE workflow_id = ?",
+            ("2099-01-01T00:00:00+00:00", workflow_id),
+        )
+    again = workflows_routes._manual_model_widgets(hub, workflow_id)
+    assert again != first
+    assert ABSENT_MODEL in {name for _w, name in again}
+
+    # The grid's description of a workflow is dropped once it is gone.
+    workflow_card_reads._manual_cards(hub)
+    assert workflow_id in workflow_card_reads._MANUAL_FACTS
+    delete_manual_workflow(hub, workflow_id)
+    workflow_card_reads._manual_cards(hub)
+    assert workflow_id not in workflow_card_reads._MANUAL_FACTS
+
+
+def test_an_address_makes_no_new_workflow_past_its_card_cap(
+    comfy, folders, hub, monkeypatch
+):
+    monkeypatch.setattr(workflow_origin, "MAX_PULL_CARDS_PER_ORIGIN", 2)
+    _pull(hub)
+    assert workflow_origin.live_pull_cards(hub, BASE) == 2
+    comfy.workflows["New.json"] = {**copy.deepcopy(PLAIN), "extra": {"new": 1}}
+    edited = copy.deepcopy(PLAIN)
+    edited["extra"] = {"edited": True}
+    comfy.edit("Plain.json", edited)
+    result = _pull(hub)
+    # The new file makes no card; the existing one still takes its version.
+    assert (result["pulled"], result["changed"]) == (0, 1)
+    assert result["card_cap_reached"] is True
+    assert _stored(hub) == ["Plain", "Sub - Needs pack"]
+    assert workflow_origin.live_pull_cards(hub, BASE) == 2
+    assert _versions(hub, _manual_id(hub, "Plain"))[-1] == (2, "pull")
+
+    # A deleted card frees its place, and the file left out comes in.
+    delete_manual_workflow(hub, _manual_id(hub, "Sub - Needs pack"))
+    again = _pull(hub)
+    assert (again["pulled"], again["card_cap_reached"]) == (1, False)
+
+
+def test_a_poll_that_met_the_card_cap_backs_off(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(base_task_finder.time, "monotonic", lambda: clock[0])
+    finder = ComfyUIWorkflowPollFinder(_Pulls())
+    finder.find_task()
+    finder.on_task_complete(SimpleNamespace(result={"card_cap_reached": True}), None)
+    clock[0] += 60
+    assert finder.find_task() is None
+    clock[0] += 540
+    assert finder.find_task() == "task"

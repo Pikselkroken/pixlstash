@@ -672,7 +672,7 @@ class TestRecipeReadsTheWholeRecipe:
     def test_a_picture_the_hub_has_no_workflow_for_gets_no_id(self, env):
         """The other direction: the read reports a workflow, never invents one."""
         server, _client, _pic_id = env
-        assert comfyui_module._picture_workflow_id(server, 10**9) is None
+        assert comfyui_module._picture_workflow(server, 10**9)["workflow_id"] is None
 
 
 class TestPictureListWorkflowFilters:

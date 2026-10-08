@@ -9,6 +9,7 @@ import {
   patchWorkflowCard,
 } from "../api/workflows";
 import {
+  WORKFLOW_ORIGIN_LABELS,
   WORKFLOW_SOURCE_LABELS,
   workflowFilterChips,
 } from "../utils/filterChips";
@@ -71,6 +72,8 @@ export const DEFAULT_FILTERS = Object.freeze({
   // `imported` (a workflow file on this machine runs it) or `found` (it came
   // in with the pictures it made).
   source: null,
+  // The server's `origin_category`: `comfyui`, `pictures` or `own`.
+  origin: null,
   minRating: null,
 });
 
@@ -181,6 +184,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         const imported = view.source === "imported";
         if (Boolean(card.imported) !== imported) return false;
       }
+      if (view.origin != null && card.origin_category !== view.origin) {
+        return false;
+      }
       if (view.minRating != null && (card.rating ?? 0) < view.minRating) {
         return false;
       }
@@ -241,6 +247,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     const checkpoints = new Map();
     let imported = 0;
     let ghosts = 0;
+    const origins = { comfyui: 0, pictures: 0, own: 0 };
     const ratings = [0, 0, 0, 0, 0];
     for (const card of cards.value) {
       if (card.type) {
@@ -262,6 +269,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         checkpoints.set(model.name, seen);
       }
       if (card.imported) imported += 1;
+      if (card.origin_category in origins) origins[card.origin_category] += 1;
       if (keepsGhost(card)) ghosts += 1;
       for (let star = 1; star <= 5; star += 1) {
         if ((card.rating ?? 0) >= star) ratings[star - 1] += 1;
@@ -285,6 +293,11 @@ export const useWorkflowsStore = defineStore("workflows", () => {
           count: cards.value.length - imported,
         },
       ],
+      origins: Object.entries(WORKFLOW_ORIGIN_LABELS).map(([id, label]) => ({
+        id,
+        label,
+        count: origins[id],
+      })),
       ratings: ratings.map((count, index) => ({
         id: index + 1,
         label: `${index + 1}★ and up`,

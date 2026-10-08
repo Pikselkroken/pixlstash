@@ -105,8 +105,6 @@ const rows = computed(() =>
       return {
         ...step,
         state: pending.value && i === 0 ? "working" : "not_run",
-        detail: null,
-        reason: null,
       };
     }
     const got = reply.value.steps?.find((s) => s.id === step.id) || {};
@@ -124,10 +122,11 @@ const rows = computed(() =>
 
 // Read per instance, not at module load, so the bridge is looked up where the
 // dialog actually runs.
-function desktopBridge() {
-  const d = typeof window !== "undefined" ? window.pixlstashDesktop : null;
-  return d?.getServerSettings && d?.setServerSettings ? d : null;
-}
+const desktop =
+  window.pixlstashDesktop?.getServerSettings &&
+  window.pixlstashDesktop?.setServerSettings
+    ? window.pixlstashDesktop
+    : null;
 
 async function link() {
   stopPolling();
@@ -173,7 +172,6 @@ function pollForNodes() {
     if (loaded) {
       link();
     } else if (Date.now() >= deadline) {
-      stopPolling();
       install.value = { ...install.value, phase: "timeout" };
     } else {
       pollTimer = setTimeout(tick, POLL_EVERY_MS);
@@ -211,8 +209,6 @@ async function installPack() {
 // server config and restarts the backend, which reloads this page. The port is
 // kept as it is; only remote access and HTTPS change.
 async function turnOnRemoteHttps() {
-  const desktop = desktopBridge();
-  if (!desktop) return;
   restarting.value = true;
   restartError.value = "";
   try {
@@ -333,7 +329,7 @@ onBeforeUnmount(stopPolling);
                 ComfyUI's own page stays plain HTTP, so anyone on your network
                 who opens it can see the key.
               </p>
-              <p v-if="!desktopBridge()" class="cl-fix__text">
+              <p v-if="!desktop" class="cl-fix__text">
                 Turn on remote access with HTTPS in PixlStash's server
                 settings, then try again.
               </p>
@@ -353,7 +349,7 @@ onBeforeUnmount(stopPolling);
             </p>
             <div class="cl-fix__actions">
               <AppButton
-                v-if="REMOTE_REASONS.includes(row.reason) && desktopBridge()"
+                v-if="REMOTE_REASONS.includes(row.reason) && desktop"
                 variant="primary"
                 :loading="restarting"
                 data-testid="comfyui-link-remote-https"

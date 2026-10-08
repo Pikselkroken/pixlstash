@@ -72,23 +72,14 @@
            has no drop handler, so `useWindowFileImport` no longer stands
            aside for it. -->
       <AppBarButton icon="plus" @click="fileInput?.click()">Add…</AppBarButton>
-      <!-- #1440: read every workflow ComfyUI has saved, over its own API.
-           Only offered once ComfyUI is connected - the empty state's
-           "Connect ComfyUI" is the way there - and it reads, never writes
-           back. What it found lands in the band below the toolbar. -->
-      <!-- `loading` rather than a hand-rolled busy state: it refuses the
-           second press, spins the glyph and gives focus back when done. -->
-      <AppBarButton
-        v-if="comfyuiConfigured"
-        ref="pullButton"
-        icon="tray-arrow-down"
-        :loading="pull.phase === 'pulling'"
-        data-testid="wfv-pull"
-        @click="pull.start()"
-        >{{
-          pull.phase === "pulling" ? "Pulling…" : "Pull from ComfyUI"
-        }}</AppBarButton
-      >
+      <!-- #1440: the server reads ComfyUI's saved workflows by itself every
+           minute, so there is nothing to press. This only says so while it is
+           happening: a live region that is always mounted (one that arrives
+           holding its text is skipped by some screen readers), empty when
+           idle, and it never dims or blocks anything. -->
+      <span class="wfv-checking" role="status" data-testid="wfv-checking">{{
+        pull.phase === "pulling" ? "Checking ComfyUI…" : ""
+      }}</span>
       <input
         ref="fileInput"
         class="wfv-file-input"
@@ -131,7 +122,7 @@
       class="wfv-strip"
     />
 
-    <WorkflowPullSummary @dismissed="pullButton?.focus()" />
+    <WorkflowPullSummary @dismissed="focusAfterPullDismissed" />
 
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
 
@@ -181,7 +172,7 @@
          one `--text-sm` line, then the routes out as plain buttons. Not the
          bordered option rows `LibraryEmptyState` uses — that screen explains
          three unfamiliar choices at first run; these three are one verb each. -->
-    <div v-if="showEmptyState" class="wfv-empty">
+    <div v-if="showEmptyState" ref="emptyEl" class="wfv-empty">
       <div class="wfv-empty__card">
         <div class="wfv-empty__illustration" aria-hidden="true">
           <img src="/Empty.png" alt="" />
@@ -212,19 +203,6 @@
             @click="openWatchedFolder"
           >
             Open watched folder
-          </AppButton>
-          <!-- The connected half of the pair below: somebody with ComfyUI
-               connected most likely has workflows saved there already. -->
-          <AppButton
-            v-if="comfyuiConfigured"
-            size="sm"
-            variant="secondary"
-            icon-left="tray-arrow-down"
-            :loading="pull.phase === 'pulling'"
-            data-testid="wfv-empty-pull"
-            @click="pull.start()"
-          >
-            {{ pull.phase === "pulling" ? "Pulling…" : "Pull from ComfyUI" }}
           </AppButton>
           <!-- Gone once connected: there is nothing to offer somebody who has
                already done it. -->
@@ -501,9 +479,9 @@ const { showWorkflowsPictures } = useWorkflowPictures();
 
 const gridEl = ref(null);
 const fileInput = ref(null);
-const pullButton = ref(null);
 const selBarRef = ref(null);
 const scrollEl = ref(null);
+const emptyEl = ref(null);
 const sortMenuOpen = ref(false);
 const filterMenuOpen = ref(false);
 const renameOpen = ref(false);
@@ -613,7 +591,16 @@ watch(gridEl, (element) => {
   measure();
 });
 
+// Pulls start on the server by themselves; ask after them only while this
+// screen is up and there is a ComfyUI to ask about.
+watch(
+  comfyuiConfigured,
+  (configured) => (configured ? pull.watch() : pull.unwatch()),
+  { immediate: true },
+);
+
 onBeforeUnmount(() => {
+  pull.unwatch();
   observer?.disconnect();
   observer = null;
 });
@@ -674,9 +661,6 @@ watch(
 
 onMounted(async () => {
   store.fetchCards();
-  // A pull started before a reload, or from another tab, is still running on
-  // the server: the button should say so rather than offer to start one.
-  if (comfyuiConfigured.value) pull.resume();
   try {
     const body = await listImportFolders();
     watchedFolder.value = (body?.folders ?? [])[0] ?? null;
@@ -1187,6 +1171,15 @@ async function hideSelected(unhide) {
 const renameFallback = computed(() => onlyCard.value?.name ?? "");
 
 /**
+ * Where focus goes when the pull band is dismissed and unmounts: the grid's
+ * scroller, or, with the empty state drawn in its place, that state's first
+ * action, never `<body>`.
+ */
+function focusAfterPullDismissed() {
+  (scrollEl.value ?? emptyEl.value?.querySelector("button"))?.focus();
+}
+
+/**
  * Put focus back on the roving cursor's row.
  *
  * Every surface this view opens is TELEPORTED — the context menu to a pair of
@@ -1621,6 +1614,12 @@ async function filesChosen(event) {
   flex-shrink: 6;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.wfv-checking {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-toolbar-text), 0.6);
+  white-space: nowrap;
 }
 
 .wfv-sub {

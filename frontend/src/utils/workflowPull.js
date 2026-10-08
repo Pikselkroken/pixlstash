@@ -30,16 +30,12 @@ const capital = (text) => text.charAt(0).toUpperCase() + text.slice(1);
  * `{headline, lines}` for a pull summary.
  *
  * Each line is `{kind: "error"|"warning"|"unchecked"|"info", icon, text,
- * names?, namesLabel?, action?}`. `names` is the list a line can be opened
- * to show; `action` names the one control a line offers
- * (`"show-one-offs"`).
+ * names?, namesLabel?}`. `names` is the list a line can be opened to show.
  *
  * @param {Object} summary - `GET /comfyui/workflows/pull`'s `summary`.
  * @param {?string} url - the ComfyUI it came from.
- * @param {{hideOneOffs?: boolean}} [grid] - the grid's filters, so a line
- *   about hidden one-offs is only shown while they ARE hidden.
  */
-export function pullSummaryLines(summary, url, { hideOneOffs = true } = {}) {
+export function pullSummaryLines(summary, url) {
   const s = summary || {};
   const host = comfyuiHost(url);
   const counted = [];
@@ -116,18 +112,6 @@ export function pullSummaryLines(summary, url, { hideOneOffs = true } = {}) {
     }
   }
   const written = (s.pulled || 0) + (s.changed || 0);
-  if (written && hideOneOffs) {
-    // Where they went: a pulled workflow with no pictures, rating or saved
-    // look is a one-off (`Card.hand_imported`), and the grid hides those while
-    // the filter is on. "Can", because a pulled file may land on a card that
-    // has pictures and is not a one-off at all.
-    lines.push({
-      kind: "info",
-      icon: "eye-off-outline",
-      text: "A pulled workflow with no pictures yet counts as a one-off, which the grid leaves out.",
-      action: "show-one-offs",
-    });
-  }
   if (s.changed) {
     lines.push({
       kind: "info",
