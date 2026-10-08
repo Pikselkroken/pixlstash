@@ -149,26 +149,18 @@ async function checkPixlstashPack() {
   }
 }
 
-function parseComfyuiUrl(value) {
-  try {
-    const parsed = new URL(value.includes("://") ? value : `http://${value}`);
-    return {
-      scheme: parsed.protocol === "https:" ? "https" : "http",
-      // URL keeps an IPv6 host in brackets; the field takes it bare.
-      host: parsed.hostname.replace(/^\[|\]$/g, "") || "127.0.0.1",
-      port: parsed.port || (parsed.protocol === "https:" ? "443" : "80"),
-    };
-  } catch {
-    return null;
-  }
-}
-
 function fillForm(url) {
-  const parsed = parseComfyuiUrl(url);
-  if (!parsed) return;
-  scheme.value = parsed.scheme;
-  host.value = parsed.host;
-  port.value = parsed.port;
+  let parsed;
+  try {
+    parsed = new URL(url.includes("://") ? url : `http://${url}`);
+  } catch {
+    return;
+  }
+  const https = parsed.protocol === "https:";
+  scheme.value = https ? "https" : "http";
+  // URL keeps an IPv6 host in brackets; the field takes it bare.
+  host.value = parsed.hostname.replace(/^\[|\]$/g, "") || "127.0.0.1";
+  port.value = parsed.port || (https ? "443" : "80");
 }
 
 // Probe the usual local addresses in order; the first that answers is offered.
@@ -230,7 +222,6 @@ async function fetchComfyuiUrl() {
     checkPixlstashPack();
     refreshLink();
   } else {
-    checkPixlstashPack();
     detectLocal();
   }
 }
@@ -334,7 +325,6 @@ async function disconnect() {
     lastProbe.value = null;
     useFilterStore().comfyuiUrl = "";
     emit("update:comfyui-configured", false);
-    checkPixlstashPack();
     detectLocal();
   } catch (e) {
     actionError.value = errorMessage(e, "Failed to clear ComfyUI URL.");

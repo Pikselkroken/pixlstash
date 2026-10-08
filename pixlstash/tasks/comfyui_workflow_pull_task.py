@@ -101,7 +101,7 @@ MAX_NEW_WORKFLOWS_PER_PULL = 100
 MAX_NEW_VERSIONS_PER_PULL = 200
 MAX_WRITTEN_BYTES_PER_PULL = 64 * 1024 * 1024
 
-# What `_pull_one` answers for a workflow the owner deleted here. A sentinel
+# What `pull_entry` answers for a workflow the owner deleted here. A sentinel
 # rather than a string, so it can never be mistaken for a result.
 _DISMISSED = object()
 
@@ -367,7 +367,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
                 )
                 break
             try:
-                pulled = self._pull_one(entry)
+                pulled = pull_entry(self._hub, origin, entry, self._store, self._lock)
                 if pulled is None:
                     result["failed"] += 1
                     continue
@@ -543,10 +543,6 @@ class ComfyUIWorkflowPullTask(BaseTask):
             )
             return False
 
-    def _pull_one(self, entry):
-        """Read and file one saved workflow (:func:`pull_entry`)."""
-        return pull_entry(self._hub, self._comfyui_url, entry, self._store, self._lock)
-
 
 def _over_budget(
     new_workflows: int, new_versions: int, written: int, entry
@@ -583,7 +579,7 @@ def pull_entry(
     origin: str,
     entry,
     store: StoreFn,
-    lock: Optional[ContextManager] = None,
+    lock: ContextManager,
     *,
     timeout_s: Optional[float] = None,
 ):
@@ -600,7 +596,6 @@ def pull_entry(
         :data:`_DISMISSED` when the owner deleted it here, else ``(document,
         store result)``.
     """
-    lock = lock if lock is not None else contextlib.nullcontext()
     if (
         entry.size is not None
         and entry.size > comfyui_userdata.MAX_SAVED_WORKFLOW_BYTES

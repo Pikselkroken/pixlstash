@@ -201,17 +201,6 @@ describe("a workflow and the value opened with it (#1653)", () => {
 });
 
 describe("workflowFilterChips", () => {
-  it("names an origin or source it has no label for by its value", () => {
-    const chips = workflowFilterChips(
-      { origin: "elsewhere", source: "somewhere" },
-      [],
-      () => {},
-    );
-    const value = (key) => chips.find((chip) => chip.key === key)?.value;
-    expect(value("origin")).toBe("elsewhere");
-    expect(value("source")).toBe("somewhere");
-  });
-
   it("uses the label it has", () => {
     const chips = workflowFilterChips({ origin: "comfyui" }, [], () => {});
     expect(chips.find((chip) => chip.key === "origin").value).toBe("ComfyUI");

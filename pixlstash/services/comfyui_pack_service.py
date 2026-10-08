@@ -105,11 +105,7 @@ def _custom_nodes_folder(pinned_url: str) -> Path:
         raise PackInstallRefused(
             f"ComfyUI did not say where its custom nodes live: {exc}"
         ) from exc
-    paths = (
-        (folder_paths or {}).get("custom_nodes")
-        if isinstance(folder_paths, dict)
-        else None
-    )
+    paths = folder_paths.get("custom_nodes") if isinstance(folder_paths, dict) else None
     for path in paths if isinstance(paths, list) else []:
         if not isinstance(path, str) or not os.path.isdir(path):
             continue

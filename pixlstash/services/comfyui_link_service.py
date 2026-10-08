@@ -70,7 +70,6 @@ class LinkRefused(Exception):
     def __init__(self, reason: str, detail: str):
         super().__init__(detail)
         self.reason = reason
-        self.detail = detail
 
 
 def _step(state: str, detail: Optional[str] = None, reason: Optional[str] = None):
@@ -403,7 +402,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
     try:
         pixlstash_url, cert = link_target(server, where, pinned)
     except LinkRefused as refused:
-        steps["link"] = _step("needs_you", refused.detail, refused.reason)
+        steps["link"] = _step("needs_you", str(refused), refused.reason)
         return reply()
 
     minted = server.auth.create_token(request, TOKEN_DESCRIPTION, scope="ALL")
@@ -425,7 +424,6 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
             "failed", f"ComfyUI refused the settings: {exc}", "write_failed"
         )
         return reply()
-    previous = link_status(server)
     old_record = server._server_config.get(LINK_CONFIG_KEY)
     old_token = (old_record or {}).get("token_public_id")
     try:
@@ -474,7 +472,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         comfyui_url,
         pixlstash_url,
         minted["token_id"],
-        previous.get("comfyui_url") or "no earlier link",
+        (old_record or {}).get("comfyui_url") or "no earlier link",
     )
     steps["link"] = _step(
         "done",

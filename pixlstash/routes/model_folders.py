@@ -637,16 +637,13 @@ def register_comfyui_model_folders(server, base_url: str) -> list[int]:
             )
             continue
         registered.append(folder_id)
-        folder = server.hub.fetchone(
-            "SELECT path FROM model_folder WHERE id = ?", (folder_id,)
-        )
         try:
-            queue_model_folder_scan(server, folder_id, folder["path"], "user")
+            queue_model_folder_scan(server, folder_id, resolved, "user")
         except HTTPException as exc:
             logger.warning(
                 "ComfyUI model folder %s (id=%s) registered but not scanned: %s. "
                 "Rescan it from the model folders dialog.",
-                folder["path"],
+                resolved,
                 folder_id,
                 exc.detail,
             )

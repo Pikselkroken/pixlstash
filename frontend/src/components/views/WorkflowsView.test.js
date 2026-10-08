@@ -93,12 +93,10 @@ vi.mock("../../api/recipes", () => ({
   extractRecipeWorkflow: vi.fn(),
   exportSavedRecipe: vi.fn(),
 }));
-const startWorkflowPull = vi.fn();
 const getWorkflowPull = vi.fn();
 const importWorkflow = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   importWorkflow: (...args) => importWorkflow(...args),
-  startWorkflowPull: (...args) => startWorkflowPull(...args),
   getWorkflowPull: (...args) => getWorkflowPull(...args),
 }));
 

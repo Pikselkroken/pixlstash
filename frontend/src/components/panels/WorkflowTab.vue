@@ -1051,13 +1051,13 @@ const picturesLabel = computed(() => pictureCount(card.value?.picture_count));
 const userPrefs = useUserPrefsStore();
 const versionLine = computed(() => {
   const c = card.value;
-  if (!c || !((c.versions ?? 1) > 1 || c.origin_category === "comfyui")) {
+  if (!c || !(c.versions > 1 || c.origin_category === "comfyui")) {
     return "";
   }
   const day = formatUserDay(c.version_at, userPrefs.dateFormat);
   // `version`, the number, not `versions`, how many are kept: past the 50
   // kept the two differ.
-  const number = c.version ?? c.versions ?? 1;
+  const number = c.version;
   return day ? `Version ${number} · ${day}` : `Version ${number}`;
 });
 

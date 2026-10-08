@@ -409,28 +409,22 @@ def store_pulled_workflow(
         and workflow_versions.current_content_hash(hub, linked) != digest
     ):
         stored = None
+    base = {
+        "name": _stem(name),
+        "matched": False,
+        "builtin": False,
+        "topology_hash": topology_hash,
+    }
     if stored is not None:
         workflow_origin.record_pulled(
             hub, origin, remote_path, stored, remote_modified, content_hash
         )
-        return {
-            "name": _stem(name),
-            "matched": True,
-            "builtin": False,
-            "workflow_id": stored,
-            "topology_hash": topology_hash,
-        }
+        return {**base, "matched": True, "workflow_id": stored}
     if _builtin_copy(workflow_bindings.canonical(migrated)):
         workflow_origin.record_pulled(
             hub, origin, remote_path, None, remote_modified, content_hash
         )
-        return {
-            "name": _stem(name),
-            "matched": True,
-            "builtin": True,
-            "workflow_id": None,
-            "topology_hash": topology_hash,
-        }
+        return {**base, "matched": True, "builtin": True, "workflow_id": None}
     # The listing's size can be missing, so the stored row's cap is held here.
     _within_the_cap(migrated)
     if linked is not None:
@@ -446,37 +440,19 @@ def store_pulled_workflow(
             workflow_origin.upsert(
                 conn, origin, remote_path, linked, remote_modified, content_hash
             )
-        return {
-            "name": _stem(name),
-            "matched": False,
-            "builtin": False,
-            "versioned": True,
-            "version": version,
-            "workflow_id": linked,
-            "topology_hash": topology_hash,
-        }
+        return {**base, "versioned": True, "version": version, "workflow_id": linked}
     if (
         workflow_origin.live_pull_cards(hub, origin)
         >= workflow_origin.MAX_PULL_CARDS_PER_ORIGIN
     ):
         # Nothing stored and no origin row, so the file is read again by a
         # later pull, once the owner has deleted some.
-        return {
-            "name": _stem(name),
-            "matched": False,
-            "builtin": False,
-            "capped": True,
-            "workflow_id": None,
-            "topology_hash": topology_hash,
-        }
+        return {**base, "capped": True, "workflow_id": None}
     return {
-        "name": _stem(name),
-        "matched": False,
-        "builtin": False,
+        **base,
         "workflow_id": create_manual_workflow(
             hub, _stem(name), migrated, "pull", record=record
         ),
-        "topology_hash": topology_hash,
     }
 
 

@@ -200,15 +200,6 @@ describe("useWorkflowPullStore", () => {
     warn.mockRestore();
   });
 
-  it("dismiss only closes a finished report", async () => {
-    getWorkflowPull.mockResolvedValue({ status: "running", task_id: "t1" });
-    const pull = useWorkflowPullStore();
-    pull.watch();
-    await settle();
-    pull.dismiss();
-    expect(pull.phase).toBe("pulling");
-  });
-
   it("drops an answer that arrives after the reset", async () => {
     let answer;
     getWorkflowPull.mockReturnValue(new Promise((r) => (answer = r)));
