@@ -1763,7 +1763,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     };
   }
 
-  /** Record (or clear, with null) the owner's verdict on a whole set. */
+  /** Record the owner's verdict on a whole set. */
   async function answerSetVerdict(key, verdict) {
     await putSetVerdict(key, verdict);
     patchCheck(key, (entry) => ({ ...entry, verdict }));
