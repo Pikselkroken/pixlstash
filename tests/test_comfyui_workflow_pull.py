@@ -718,6 +718,15 @@ def test_a_finished_pull_answers_its_summary_and_a_failed_one_its_reason(
     }
 
 
+def test_a_submit_that_raises_frees_the_gate(pull_routes):
+    server, start, _state, _submitted = pull_routes
+    server.vault.submit_task.side_effect = ValueError("a bug in the runner")
+    with pytest.raises(ValueError):
+        start(_request())
+    server.vault.submit_task.side_effect = lambda task: task.id
+    assert start(_request())["status"] == "started"
+
+
 def test_no_hub_or_no_runner_is_a_503_and_frees_the_gate(pull_routes):
     server, start, state, _submitted = pull_routes
     server.vault.submit_task.side_effect = None
@@ -802,7 +811,9 @@ def _pull_with(hub, store=None, origin=BASE) -> dict:
         store=store or functools.partial(comfyui_module.store_pulled_workflow, hub),
         lock=workflow_inbox.INBOX_LOCK,
     )
-    return task._run_task()
+    result = task._run_task()
+    assert task._processed_count == task._total_count == result["listed"]
+    return result
 
 
 def _delete_pulled(hub, remote_path: str) -> str:

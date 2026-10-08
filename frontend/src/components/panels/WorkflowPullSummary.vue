@@ -21,16 +21,14 @@
         >mdi-tray-arrow-down</v-icon
       >
       <span class="wfpull-headline">{{ report.headline }}</span>
-      <span class="wfpull-actions">
-        <button
-          class="wfpull-link"
-          type="button"
-          aria-label="Dismiss the ComfyUI pull result"
-          @click="dismiss"
-        >
-          Dismiss
-        </button>
-      </span>
+      <button
+        class="wfpull-link"
+        type="button"
+        aria-label="Dismiss the ComfyUI pull result"
+        @click="dismiss"
+      >
+        Dismiss
+      </button>
     </p>
     <ul v-if="report.lines.length" class="wfpull-lines">
       <li
@@ -112,13 +110,6 @@ function dismiss() {
   font-weight: var(--weight-semibold);
 }
 
-.wfpull-actions {
-  display: flex;
-  gap: var(--space-4);
-  margin-left: auto;
-  flex: none;
-}
-
 .wfpull-lines {
   display: flex;
   flex-direction: column;
@@ -178,6 +169,8 @@ function dismiss() {
    scoped to the view: without `font: inherit` the button drops to the UA's
    size. */
 .wfpull-link {
+  margin-left: auto;
+  flex: none;
   padding: 0;
   font: inherit;
   color: rgb(var(--v-theme-on-surface));

@@ -6263,6 +6263,12 @@ def create_router(server) -> APIRouter:
                     "too deeply to walk."
                 ),
             ) from exc
+        # The workflow's ComfyUI file, when it was pulled from one.
+        link = (
+            live_file(hub, _comfyui_url(_user(request)), _card.workflow_key)
+            if _card.manual
+            else None
+        )
         if not plan.built:
             reasons = [r for group in plan.groups for r in group.reasons]
             logger.info(
@@ -6273,11 +6279,6 @@ def create_router(server) -> APIRouter:
             first = reasons[0] if reasons else None
             # An editor file ComfyUI itself can open and convert is not a
             # dead end: answer with the file and let the node do it.
-            link = (
-                live_file(hub, _comfyui_url(_user(request)), _card.workflow_key)
-                if _card.manual
-                else None
-            )
             if link:
                 return WorkflowRunnableGraph(
                     name=_file_stem(_card, workflow.name),
@@ -6321,11 +6322,6 @@ def create_router(server) -> APIRouter:
             for name, value in inputs.items():
                 if isinstance(value, str) and SECRET_FIELD_RE.search(name):
                     inputs[name] = ""
-        link = (
-            live_file(hub, _comfyui_url(_user(request)), card.workflow_key)
-            if card.manual
-            else None
-        )
         return WorkflowRunnableGraph(
             name=_file_stem(card, workflow.name),
             workflow=graph,

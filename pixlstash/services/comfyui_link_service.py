@@ -70,7 +70,6 @@ class LinkRefused(Exception):
     def __init__(self, reason: str, detail: str):
         super().__init__(detail)
         self.reason = reason
-        self.detail = detail
 
 
 def _step(state: str, detail: Optional[str] = None, reason: Optional[str] = None):
@@ -403,7 +402,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
     try:
         pixlstash_url, cert = link_target(server, where, pinned)
     except LinkRefused as refused:
-        steps["link"] = _step("needs_you", refused.detail, refused.reason)
+        steps["link"] = _step("needs_you", str(refused), refused.reason)
         return reply()
 
     minted = server.auth.create_token(request, TOKEN_DESCRIPTION, scope="ALL")
@@ -425,7 +424,6 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
             "failed", f"ComfyUI refused the settings: {exc}", "write_failed"
         )
         return reply()
-    previous = link_status(server)
     old_record = server._server_config.get(LINK_CONFIG_KEY)
     old_token = (old_record or {}).get("token_public_id")
     try:
@@ -450,16 +448,36 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         _revoke(server, request, public_id)
         _clear_comfyui_key(pinned, comfyui_url)
         raise
+    leftover = ""
     if old_token and old_token != public_id:
-        _revoke(server, request, old_token)
+        try:
+            _revoke(server, request, old_token)
+        except Exception:
+            # The new link is recorded and works; failing the request now would
+            # report a link that exists as broken. The replaced token is still
+            # a live full-access key, so say so here and in the reply.
+            logger.exception(
+                "ComfyUI is linked with token %s, but revoking the token it "
+                "replaced (public id %s) failed: that full-access token is "
+                "STILL LIVE. Delete it under Account > API Tokens.",
+                public_id,
+                old_token,
+            )
+            leftover = (
+                'The key "ComfyUI (linked)" it replaced could not be revoked '
+                "and still works: delete the older one under Account › API Tokens."
+            )
     logger.info(
         "ComfyUI at %s linked to %s with full access (token %s; replaced %s).",
         comfyui_url,
         pixlstash_url,
         minted["token_id"],
-        previous.get("comfyui_url") or "no earlier link",
+        (old_record or {}).get("comfyui_url") or "no earlier link",
     )
-    steps["link"] = _step("done", f"Full access, through {pixlstash_url}")
+    steps["link"] = _step(
+        "done",
+        " ".join(filter(None, [f"Full access, through {pixlstash_url}.", leftover])),
+    )
 
     problem = _check_round_trip(pinned, minted["token"])
     if problem:
@@ -468,7 +486,12 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         # record says nothing useful about, and the status agrees with the
         # reply.
         _unlink(server, request)
-        steps["link"] = _step("failed", "Undone: ComfyUI could not use the key.")
+        steps["link"] = _step(
+            "failed",
+            " ".join(
+                filter(None, ["Undone: ComfyUI could not use the key.", leftover])
+            ),
+        )
         steps["check"] = _step("failed", problem, "check_failed")
         return reply()
     steps["check"] = _step("done", "ComfyUI reached PixlStash with its new key.")

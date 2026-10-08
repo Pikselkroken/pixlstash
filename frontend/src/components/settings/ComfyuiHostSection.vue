@@ -53,8 +53,10 @@ const comfyuiUrl = ref("");
 const foundUrl = ref("");
 const busy = ref(false);
 const actionError = ref("");
-// The last "Check again" answer for the saved URL; null until one is asked.
+// The newest probe of the saved URL (on load, after a save, Check again);
+// null while one is in flight, which the status shows as "Checking".
 const lastProbe = ref(null);
+let savedProbe = 0;
 
 const scheme = ref("http");
 const host = ref("127.0.0.1");
@@ -147,26 +149,18 @@ async function checkPixlstashPack() {
   }
 }
 
-function parseComfyuiUrl(value) {
-  try {
-    const parsed = new URL(value.includes("://") ? value : `http://${value}`);
-    return {
-      scheme: parsed.protocol === "https:" ? "https" : "http",
-      // URL keeps an IPv6 host in brackets; the field takes it bare.
-      host: parsed.hostname.replace(/^\[|\]$/g, "") || "127.0.0.1",
-      port: parsed.port || (parsed.protocol === "https:" ? "443" : "80"),
-    };
-  } catch {
-    return null;
-  }
-}
-
 function fillForm(url) {
-  const parsed = parseComfyuiUrl(url);
-  if (!parsed) return;
-  scheme.value = parsed.scheme;
-  host.value = parsed.host;
-  port.value = parsed.port;
+  let parsed;
+  try {
+    parsed = new URL(url.includes("://") ? url : `http://${url}`);
+  } catch {
+    return;
+  }
+  const https = parsed.protocol === "https:";
+  scheme.value = https ? "https" : "http";
+  // URL keeps an IPv6 host in brackets; the field takes it bare.
+  host.value = parsed.hostname.replace(/^\[|\]$/g, "") || "127.0.0.1";
+  port.value = parsed.port || (https ? "443" : "80");
 }
 
 // Probe the usual local addresses in order; the first that answers is offered.
@@ -191,6 +185,24 @@ async function detectLocal() {
   state.value = "address";
 }
 
+// "Connected" claims ComfyUI answers, so the saved address is asked before
+// the pip says so. An answer for an address no longer saved is dropped.
+async function probeSaved() {
+  const check = ++savedProbe;
+  lastProbe.value = null;
+  let answer;
+  try {
+    answer = await probeComfyui(comfyuiUrl.value);
+  } catch (e) {
+    console.warn("[settings] could not check the saved ComfyUI", e);
+    answer = {
+      reachable: false,
+      detail: errorMessage(e, "Could not check ComfyUI."),
+    };
+  }
+  if (check === savedProbe) lastProbe.value = answer;
+}
+
 async function fetchComfyuiUrl() {
   let cfg;
   try {
@@ -206,18 +218,19 @@ async function fetchComfyuiUrl() {
     detectRun++;
     state.value = "connected";
     fillForm(comfyuiUrl.value);
+    probeSaved();
     checkPixlstashPack();
     refreshLink();
   } else {
-    checkPixlstashPack();
     detectLocal();
   }
 }
 
+// Only ever called with the url a probe just answered for.
 async function save(url) {
   await patchUserConfig({ comfyui_url: url });
   comfyuiUrl.value = url;
-  lastProbe.value = null;
+  lastProbe.value = { reachable: true, url };
   state.value = "connected";
   useFilterStore().comfyuiUrl = url;
   emit("update:comfyui-configured", true);
@@ -246,7 +259,8 @@ function useAnotherAddress() {
 
 async function connectAddress() {
   formError.value = "";
-  const h = host.value.trim();
+  // Typed with or without brackets; wrapped once below.
+  const h = host.value.trim().replace(/^\[(.*)\]$/, "$1");
   const p = Number(String(port.value).trim());
   if (!h) {
     formError.value = "Enter the host ComfyUI runs on.";
@@ -277,12 +291,7 @@ async function checkAgain() {
   busy.value = true;
   actionError.value = "";
   try {
-    lastProbe.value = await probeComfyui(comfyuiUrl.value);
-  } catch (e) {
-    lastProbe.value = {
-      reachable: false,
-      detail: errorMessage(e, "Could not check ComfyUI."),
-    };
+    await probeSaved();
   } finally {
     busy.value = false;
   }
@@ -312,10 +321,10 @@ async function disconnect() {
     await patchUserConfig({ comfyui_url: null });
     link.value = null;
     comfyuiUrl.value = "";
+    savedProbe++;
     lastProbe.value = null;
     useFilterStore().comfyuiUrl = "";
     emit("update:comfyui-configured", false);
-    checkPixlstashPack();
     detectLocal();
   } catch (e) {
     actionError.value = errorMessage(e, "Failed to clear ComfyUI URL.");
@@ -462,6 +471,10 @@ watch(
           <span v-if="unreachable" class="cf-pip cf-pip--bad">
             <v-icon size="16">mdi-alert-rhombus-outline</v-icon>
             Not answering
+          </span>
+          <span v-else-if="!lastProbe" class="cf-pip">
+            <v-progress-circular indeterminate size="16" width="2" />
+            Checking
           </span>
           <span v-else class="cf-pip cf-pip--ok">
             <v-icon size="16">mdi-check-circle</v-icon>

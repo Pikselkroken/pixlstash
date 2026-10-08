@@ -157,6 +157,11 @@ class WorkflowPulls:
                 exc,
             )
             task_id = None
+        except Exception:
+            # Anything else is a bug, so it is raised; the gate is still given
+            # back, or every later pull answers "already_running".
+            self.release(task)
+            raise
         if task_id is None:
             self.release(task)
             return "unavailable", None

@@ -1171,15 +1171,6 @@ async function hideSelected(unhide) {
 const renameFallback = computed(() => onlyCard.value?.name ?? "");
 
 /**
- * Put focus back on the roving cursor's row.
- *
- * Every surface this view opens is TELEPORTED — the context menu to a pair of
- * coordinates, the rename dialog to the end of `<body>` — so none of them has
- * an activator the browser can restore focus to on close, and it lands on
- * `document.body`: outside the grid, with the cursor's row still marked and
- * the next arrow key going nowhere (WCAG 2.4.3).
- */
-/**
  * Where focus goes when the pull band is dismissed and unmounts: the grid's
  * scroller, or, with the empty state drawn in its place, that state's first
  * action, never `<body>`.
@@ -1188,6 +1179,15 @@ function focusAfterPullDismissed() {
   (scrollEl.value ?? emptyEl.value?.querySelector("button"))?.focus();
 }
 
+/**
+ * Put focus back on the roving cursor's row.
+ *
+ * Every surface this view opens is TELEPORTED — the context menu to a pair of
+ * coordinates, the rename dialog to the end of `<body>` — so none of them has
+ * an activator the browser can restore focus to on close, and it lands on
+ * `document.body`: outside the grid, with the cursor's row still marked and
+ * the next arrow key going nowhere (WCAG 2.4.3).
+ */
 function focusCursorRow() {
   const entry = flatRows.value[cursorIndex.value];
   if (!entry) return;

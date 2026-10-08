@@ -30,9 +30,6 @@ from pixlstash.utils.workflow_ids import stamp_workflow_id
 
 logger = get_logger(__name__)
 
-# What a version that came from a ComfyUI file says it is.
-PULL_SOURCE = "pull"
-
 # The most versions one workflow keeps: version 1 and the newest
 # ``MAX_VERSIONS - 1``. A ComfyUI file is written by whoever reaches ComfyUI,
 # and the poll takes every change, so history is bounded or the hub is not.
@@ -142,7 +139,6 @@ def append_version(
     workflow_id: str,
     document: dict,
     *,
-    source: str = PULL_SOURCE,
     content_hash: Optional[str] = None,
     topology_hash: Optional[str] = None,
     remote_modified: Optional[int] = None,
@@ -175,7 +171,7 @@ def append_version(
         version,
         stored,
         None,
-        source,
+        "pull",
         content_hash=content_hash,
         topology_hash=topology_hash,
         remote_modified=remote_modified,
@@ -191,10 +187,9 @@ def append_version(
         (workflow_id, version - (MAX_VERSIONS - 1)),
     ).rowcount
     logger.info(
-        "Manual workflow %s is now at version %d (%s)%s.",
+        "Manual workflow %s is now at version %d (pull)%s.",
         workflow_id,
         version,
-        source,
         f"; {pruned} older version(s) pruned" if pruned else "",
     )
     return version

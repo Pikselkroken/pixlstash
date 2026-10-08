@@ -119,7 +119,6 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
   }
 
   function dismiss() {
-    if (phase.value !== "done") return;
     phase.value = "idle";
     summary.value = null;
     comfyuiUrl.value = null;

@@ -62,8 +62,24 @@ def test_score_is_the_share_of_distractors_the_prompt_beats():
     assert prompt_match_score(image, FOX, bank) == 0.75
     # Unrelated image: every distractor is as close as the prompt (0), ties half.
     assert prompt_match_score(np.eye(DIM)[10], FOX, bank) == 0.5
-    # Unnormalised inputs, as stored, give the same answer.
-    assert prompt_match_score(FOX * 3, FOX * 0.2, bank * 5) == 1.0
+    # Unnormalised inputs, as stored, give the same answer: a long prompt
+    # vector must not beat distractors on length alone.
+    assert prompt_match_score(image * 3, FOX * 5, bank * 0.2) == 0.75
+    assert prompt_match_score(image, FOX * 0.2, bank * 5) == 0.75
+
+
+@pytest.mark.parametrize(
+    "image, prompt",
+    [
+        (np.zeros(DIM, dtype=np.float32), FOX),
+        (FOX, np.zeros(DIM, dtype=np.float32)),
+        (np.full(DIM, np.nan, dtype=np.float32), FOX),
+        (FOX, np.full(DIM, np.inf, dtype=np.float32)),
+    ],
+)
+def test_a_broken_embedding_fails_rather_than_scoring_low(image, prompt):
+    bank = np.eye(4, DIM, k=1, dtype=np.float32)
+    assert prompt_match_score(image, prompt, bank) == PROMPT_MATCH_FAILED
 
 
 def test_verdict_has_three_states():
@@ -241,6 +257,27 @@ def test_task_scores_the_batch_and_the_metadata_serves_the_verdict(
     assert verdict("off") == (0.0, False)
     assert verdict("syntax_only") == (PROMPT_MATCH_FAILED, None)
     assert verdict("no_prompt") == (None, None)
+
+
+def test_an_encoder_failure_stores_nothing_and_defers_the_batch(server, pictures):
+    """CLIP failing may pass (out of memory): no -1, and no batch every cycle."""
+
+    class BrokenClip(FakeClip):
+        def encode_texts(self, texts):
+            return None
+
+    due = [Picture(id=pictures[name]) for name in ("fox", "off")]
+    task = PromptMatchTask(server.vault.db, BrokenClip(), due)
+    with pytest.raises(RuntimeError, match="distractor bank"):
+        task._run_task()
+    assert _scores(server, pictures)["fox"] is None
+
+    finder = MissingPromptMatchFinder(server.vault.db, engine_getter=lambda: None)
+    finder.on_task_complete(task, RuntimeError("CLIP could not encode"))
+    found = server.vault.db.run_immediate_read_task(finder._fetch_candidates, 1000)
+    assert {pic.id for pic in found} & set(pictures.values()) == {
+        pictures["syntax_only"]
+    }
 
 
 def test_cached_prompts_are_not_encoded_again(server, pictures):

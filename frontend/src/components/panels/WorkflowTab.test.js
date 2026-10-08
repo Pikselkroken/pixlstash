@@ -343,6 +343,7 @@ describe("the version line", () => {
   it("says the version and its day for a card with more than one", async () => {
     const versioned = card({
       versions: 3,
+      version: 3,
       version_at: "2026-10-06T09:30:00Z",
       origin_category: "own",
     });
@@ -368,6 +369,7 @@ describe("the version line", () => {
   it("shows it for a pulled card even at version 1", async () => {
     const pulled = card({
       versions: 1,
+      version: 1,
       version_at: "2026-10-06T09:30:00Z",
       origin_category: "comfyui",
     });

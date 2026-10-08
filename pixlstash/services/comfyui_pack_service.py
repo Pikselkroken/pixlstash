@@ -105,11 +105,7 @@ def _custom_nodes_folder(pinned_url: str) -> Path:
         raise PackInstallRefused(
             f"ComfyUI did not say where its custom nodes live: {exc}"
         ) from exc
-    paths = (
-        (folder_paths or {}).get("custom_nodes")
-        if isinstance(folder_paths, dict)
-        else None
-    )
+    paths = folder_paths.get("custom_nodes") if isinstance(folder_paths, dict) else None
     for path in paths if isinstance(paths, list) else []:
         if not isinstance(path, str) or not os.path.isdir(path):
             continue
@@ -215,6 +211,13 @@ def install(comfyui_url: Optional[str]) -> dict:
 
     target = custom_nodes / PACK_FOLDER
     partial = custom_nodes / f".{PACK_FOLDER}.installing"
+    if os.path.lexists(target) and (target.is_symlink() or not target.is_dir()):
+        # Refused before anything is trashed: the move into place would fail
+        # after the older copies had gone, leaving ComfyUI with none.
+        raise PackInstallRefused(
+            f"Cannot install the nodes: {target} is a file or a link, not a folder. "
+            "Remove it yourself, then install again."
+        )
     # Stage the whole copy before anything is trashed: a copy that fails half
     # way must leave ComfyUI with the nodes it had.
     try:

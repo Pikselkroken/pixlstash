@@ -1757,6 +1757,62 @@ def _steps(reply: dict) -> dict:
     return {step["id"]: step for step in reply["steps"]}
 
 
+class _RunNow:
+    """``threading.Thread`` that runs its target at ``start()``, in the test."""
+
+    def __init__(self, target, args=(), **_kwargs):
+        self._target, self._args = target, args
+
+    def start(self):
+        self._target(*self._args)
+
+
+def test_saving_a_comfyui_address_registers_folders_only_where_host_ops_are_allowed(
+    workflow_env, monkeypatch
+):
+    """The config save must not get round ``LOCAL_OWNER_ONLY`` on the
+    model-folder routes: a remote owner saves the address, nothing is
+    registered; the same save from this computer registers."""
+    server = workflow_env.server
+    calls: list[str] = []
+    monkeypatch.setattr(
+        config_routes,
+        "register_comfyui_model_folders",
+        lambda _server, url: calls.append(url) or [],
+    )
+    monkeypatch.setattr(config_routes.threading, "Thread", _RunNow)
+    client_ip = ["8.8.8.8"]
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda r: client_ip[0])
+    monkeypatch.setattr(server.auth, "real_client_ip", lambda r: client_ip[0])
+    monkeypatch.setitem(server.auth._server_config, "allow_remote_host_ops", False)
+    try:
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": "http://127.0.0.1:18189/"}
+        )
+        assert r.status_code == 200, r.text
+        assert calls == []
+
+        # Positive control: the same save, from this computer.
+        client_ip[0] = "127.0.0.1"
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": "http://127.0.0.1:18190/"}
+        )
+        assert r.status_code == 200, r.text
+        assert calls == ["http://127.0.0.1:18190"]
+
+        # A remote owner the server config allows host operations to.
+        client_ip[0] = "8.8.8.8"
+        monkeypatch.setitem(server.auth._server_config, "allow_remote_host_ops", True)
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/config", json={"comfyui_url": "http://127.0.0.1:18191/"}
+        )
+        assert r.status_code == 200, r.text
+        assert calls[-1] == "http://127.0.0.1:18191"
+    finally:
+        client_ip[0] = "127.0.0.1"
+        workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+
+
 def test_the_link_routes_are_owner_only(workflow_env):
     """Declared owner-only, and a share token is refused on each verb while
     the owner reaches the read. The refused token is proven live first."""
@@ -2030,6 +2086,86 @@ def test_a_link_that_cannot_be_recorded_revokes_its_token(
     assert _link_tokens(workflow_env.server) == []
     assert fake.settings[comfyui_link_service.SETTING_TOKEN] == ""
     assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
+
+
+def test_the_link_and_probe_refuse_remote_plaintext_under_require_ssl(
+    workflow_env, comfy_at, monkeypatch
+):
+    """The same transport rule as POST/DELETE /users/me/token, enforced before
+    ComfyUI is asked anything; a local client is still served."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    asked: list[str] = []
+
+    def recording_get(url, **kwargs):
+        asked.append(url)
+        return fake.get(url, **kwargs)
+
+    monkeypatch.setattr(comfyui_link_service.requests, "get", recording_get)
+    monkeypatch.setitem(server.auth._server_config, "require_ssl", True)
+    client_ip = ["8.8.8.8"]
+    monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda r: client_ip[0])
+    link, probe = f"{API}/comfyui/link", f"{API}/comfyui/probe"
+    probe_body = {"url": "http://127.0.0.1:18188"}
+    for method, path, body in (
+        ("GET", link, None),
+        ("POST", link, None),
+        ("DELETE", link, None),
+        ("POST", probe, probe_body),
+    ):
+        r = workflow_env.owner.request(method, path, json=body)
+        assert r.status_code == 403 and "HTTPS is required" in r.text, (
+            f"{method} {path}: {r.status_code} {r.text}"
+        )
+    assert asked == [] and fake.writes == []
+    assert _link_tokens(server) == []
+
+    # A local client gets past the guard on every verb: the link goes on to
+    # ask ComfyUI (how far it gets under require_ssl is not under test).
+    client_ip[0] = "127.0.0.1"
+    assert workflow_env.owner.get(link).status_code == 200
+    r = workflow_env.owner.post(link)
+    assert r.status_code == 200 and _steps(r.json())["reach"]["state"] == "done"
+    assert asked, "the local link never reached ComfyUI"
+    r = workflow_env.owner.post(probe, json=probe_body)
+    assert r.status_code == 200 and r.json()["reachable"] is True, r.text
+    assert workflow_env.owner.delete(link).status_code == 200
+
+
+def test_a_replaced_token_that_cannot_be_revoked_is_reported_not_a_500(
+    workflow_env, comfy_at, monkeypatch, caplog
+):
+    """The new link is recorded and works, so the request succeeds; the old
+    full-access token is still live, so the log and the reply both say so."""
+    server = workflow_env.server
+    comfy_at("http://127.0.0.1:18188/")
+    assert workflow_env.owner.post(f"{API}/comfyui/link").json()["linked"] is True
+    old = server._server_config[comfyui_link_service.LINK_CONFIG_KEY]
+    old_public_id = old["token_public_id"]
+    real_revoke = comfyui_link_service._revoke
+
+    def revoke(server_, request, public_id):
+        if public_id == old_public_id:
+            raise RuntimeError("database is locked")
+        real_revoke(server_, request, public_id)
+
+    monkeypatch.setattr(comfyui_link_service, "_revoke", revoke)
+    try:
+        with caplog.at_level(logging.ERROR, logger=comfyui_link_service.logger.name):
+            r = workflow_env.owner.post(f"{API}/comfyui/link")
+        assert r.status_code == 200, r.text
+        reply = r.json()
+        assert reply["linked"] is True, reply
+        assert _steps(reply)["link"]["state"] == "done"
+        assert "still works" in _steps(reply)["link"]["detail"], reply
+        assert any(
+            old_public_id in rec.getMessage() and "STILL LIVE" in rec.getMessage()
+            for rec in caplog.records
+        ), [rec.getMessage() for rec in caplog.records]
+        assert len(_link_tokens(server)) == 2
+    finally:
+        for token_id in _link_tokens(server):
+            workflow_env.owner.delete(f"{API}/users/me/token/{token_id}")
 
 
 def test_the_link_records_the_public_id_create_token_returns(workflow_env, comfy_at):
@@ -2362,6 +2498,31 @@ def test_a_failed_move_to_the_trash_installs_nothing_and_deletes_nothing(
         comfyui_pack_service.install("http://127.0.0.1:18188/")
     assert (older / "__init__.py").is_file(), "the older copy must survive"
     assert [p.name for p in install_env.custom_nodes.iterdir()] == [older.name]
+
+
+@pytest.mark.parametrize("occupant", ["file", "dangling link"])
+def test_a_file_in_the_nodes_place_is_refused_before_anything_is_trashed(
+    install_env, occupant
+):
+    """The move into place would fail on the file or link, after the older
+    copies had gone to the trash, leaving ComfyUI with no PixlStash nodes."""
+    older = install_env.custom_nodes / "comfyui-pixlstash-main"
+    older.mkdir()
+    (older / "__init__.py").write_text("# the working install\n")
+    target = install_env.custom_nodes / "ComfyUI-PixlStash"
+    if occupant == "file":
+        target.write_text("not a folder\n")
+    else:
+        try:
+            target.symlink_to(install_env.custom_nodes / "gone")
+        except OSError as exc:
+            pytest.skip(f"cannot make a symlink here: {exc}")
+    install_env.with_comfy({"POST v2/manager/reboot": 200})
+    with pytest.raises(comfyui_pack_service.PackInstallRefused) as refused:
+        comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert "not a folder" in str(refused.value)
+    assert install_env.trashed == []
+    assert (older / "__init__.py").is_file(), "the older copy must survive"
 
 
 @pytest.mark.parametrize("url", ["http://8.8.8.8:8188/", f"http://{LAN_IPV4}:8188/"])
