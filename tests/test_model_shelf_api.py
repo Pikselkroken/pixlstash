@@ -2291,6 +2291,20 @@ def test_set_checks_sum_every_recipe_holding_the_whole_set():
     assert triple["member_verdicts"] == [{"model_id": 2, "verdict": "problem"}]
 
 
+def test_suspects_are_served_biggest_gap_first():
+    """Pure: 9 of 10 fail with all three. Without LoRA 2, 2 of 5 fail (a
+    50-point gap); without LoRA 3, none do (90 points), so 3 leads."""
+    (check,) = verdicts.set_checks(
+        [{1, 2, 3}],
+        {"all": {1, 2, 3}, "no-2": {1, 3}, "no-3": {1, 2}},
+        {"all": (10, 10, 1, 0), "no-2": (5, 5, 3, 0), "no-3": (5, 5, 5, 0)},
+        {},
+        {},
+        scorer_available=True,
+    )
+    assert [s["model_id"] for s in check["suspects"]] == [3, 2]
+
+
 def test_a_changed_member_set_has_no_verdict_and_the_old_one_is_kept():
     checks = verdicts.set_checks(
         [{1, 2, 3}],
@@ -2528,6 +2542,22 @@ def test_a_verdict_refuses_a_key_it_cannot_store_and_a_model_not_in_it(shelf_env
     assert r.status_code == 404, r.text
     r = shelf_env.owner.put(f"{root}/{base},999999", json={"verdict": "yes"})
     assert r.status_code == 404, r.text
+    assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_verdict") == []
+    assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_member_verdict") == []
+    # An answer naming a model that left the shelf can still be cleared.
+    gone = f"{base},999999"
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("INSERT INTO model_set_verdict VALUES (?, 'yes', 'then')", (gone,))
+        conn.execute(
+            "INSERT INTO model_set_member_verdict VALUES (?, 999999, 'problem', 'then')",
+            (gone,),
+        )
+    r = shelf_env.owner.delete(f"{root}/{gone}/members/999999")
+    assert r.status_code == 200, r.text
+    assert r.json()["previous"] == "problem"
+    r = shelf_env.owner.delete(f"{root}/{gone}")
+    assert r.status_code == 200, r.text
+    assert r.json()["previous"] == "yes"
     assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_verdict") == []
     assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_member_verdict") == []
 

@@ -232,7 +232,8 @@ def set_checks(
                             "verdict": answered.get(model_id),
                         }
                     )
-            # Biggest gap first, so the three the panel shows are the strongest.
+            # Biggest gap first, so the three the panel shows are the strongest:
+            # the key is without-rate minus with-rate, the gap negated.
             suspects.sort(
                 key=lambda s: (
                     Fraction(s["without_failed"], s["without_total"])
@@ -356,7 +357,10 @@ def write_set_verdict(hub, key: str, verdict: Optional[str]) -> Optional[str]:
     """
     ids = parse_combo_key(key)
     with hub.transaction() as conn:
-        _require_models(conn, ids, key)
+        # Clearing never checks the shelf: a member that left it must not pin
+        # the answer that names it.
+        if verdict is not None:
+            _require_models(conn, ids, key)
         row = conn.execute(
             "SELECT verdict FROM model_set_verdict WHERE combo_key = ?", (key,)
         ).fetchone()
@@ -385,7 +389,10 @@ def write_member_verdict(
     if model_id not in ids:
         raise VerdictTargetError(f"Model {model_id} is not a member of set {key}.")
     with hub.transaction() as conn:
-        _require_models(conn, ids, key)
+        # Clearing never checks the shelf: a member that left it must not pin
+        # the answer that names it.
+        if verdict is not None:
+            _require_models(conn, ids, key)
         row = conn.execute(
             "SELECT verdict FROM model_set_member_verdict "
             "WHERE combo_key = ? AND model_id = ?",
