@@ -365,6 +365,8 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     exhausted,
                     len(to_read) - position,
                 )
+                # Left for the next pull, but this one's progress is complete.
+                self._processed_count += len(to_read) - position
                 break
             try:
                 pulled = pull_entry(self._hub, origin, entry, self._store, self._lock)
