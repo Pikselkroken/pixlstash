@@ -80,7 +80,7 @@ RUN pip install --no-cache-dir \
     pillow-heif \
     "sqlmodel<0.0.45" \
     alembic \
-    "python-jose[cryptography]" \
+    cryptography \
     passlib \
     "bcrypt<4.0.0" \
     nvidia-ml-py \
