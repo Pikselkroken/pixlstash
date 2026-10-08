@@ -178,14 +178,14 @@ def prompt_match_score(
 ) -> float:
     """Fraction of distractors the image is less similar to than its prompt.
 
-    All three are CLIP embeddings from one model; they are normalised here so a
-    caller can pass them as stored. Returns a value in [0, 1].
+    All three are CLIP embeddings from one model, passed as stored. The texts
+    are normalised here; the image need not be, since scaling it scales every
+    similarity alike and leaves the rank alone. Returns a value in [0, 1].
     """
-    image = _unit(image_embedding.astype(np.float32).ravel())
-    prompt_sim = float(image @ _unit(prompt_embedding.astype(np.float32).ravel()))
-    bank = distractor_embeddings.astype(np.float32)
-    bank = bank / np.linalg.norm(bank, axis=1, keepdims=True)
-    sims = bank @ image
+    texts = np.vstack([prompt_embedding.ravel(), distractor_embeddings])
+    texts = texts.astype(np.float32) / np.linalg.norm(texts, axis=1, keepdims=True)
+    sims = texts @ image_embedding.astype(np.float32).ravel()
+    prompt_sim, sims = sims[0], sims[1:]
     below = float(np.sum(sims < prompt_sim)) + 0.5 * float(np.sum(sims == prompt_sim))
     return below / len(sims)
 
@@ -195,8 +195,3 @@ def looks_like_prompt(score: Optional[float]) -> Optional[bool]:
     if score is None or score < 0:
         return None
     return score >= PROMPT_MATCH_THRESHOLD
-
-
-def _unit(vector: np.ndarray) -> np.ndarray:
-    norm = float(np.linalg.norm(vector))
-    return vector / norm if norm > 0 else vector

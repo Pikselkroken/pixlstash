@@ -75,38 +75,27 @@ class PromptMatchTask(BaseTask):
             text = cleaned[pid]
             text_embedding = texts.get(text)
             image = np.frombuffer(image_blob, dtype=np.float32)
-            if not text or text_embedding is None or bank is None:
+            if (
+                text_embedding is None
+                or bank is None
+                or image.shape[0] != text_embedding.shape[0]
+            ):
                 logger.warning(
                     "prompt_match: cannot score picture %s (cleaned prompt %r from "
-                    "%r, text embedding %s, distractor bank %s); storing %s",
+                    "%r, text embedding %s, distractor bank %s, image embedding "
+                    "%d dims); storing %s",
                     pid,
                     text,
                     prompt[:120],
-                    "missing" if text_embedding is None else "ok",
+                    "missing" if text_embedding is None else text_embedding.shape,
                     "missing" if bank is None else "ok",
-                    PROMPT_MATCH_FAILED,
-                )
-                updates.append((pid, prompt, image_blob, PROMPT_MATCH_FAILED))
-                continue
-            if image.shape[0] != text_embedding.shape[0]:
-                logger.warning(
-                    "prompt_match: picture %s image embedding has %d dims, the "
-                    "CLIP text embedding %d; storing %s",
-                    pid,
                     image.shape[0],
-                    text_embedding.shape[0],
                     PROMPT_MATCH_FAILED,
                 )
-                updates.append((pid, prompt, image_blob, PROMPT_MATCH_FAILED))
-                continue
-            updates.append(
-                (
-                    pid,
-                    prompt,
-                    image_blob,
-                    prompt_match_score(image, text_embedding, bank),
-                )
-            )
+                score = PROMPT_MATCH_FAILED
+            else:
+                score = prompt_match_score(image, text_embedding, bank)
+            updates.append((pid, prompt, image_blob, score))
 
         changed = self._db.run_task(_persist, updates, priority=DBPriority.LOW)
         logger.debug(
