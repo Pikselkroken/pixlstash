@@ -1777,6 +1777,43 @@ proves ran together, with a model free to appear in more than one.
   companion because its kind is unticked would turn a view setting into a claim
   about the evidence.
 
+##### Set checks and the owner's verdicts
+
+PixlStash's check and the owner's verdict are said in different words and never
+merged (spec: `docs/ideas/workflow-set-verdicts.md`). `GET /models/workflow-sets`
+serves `set_checks`; the store keeps them as `workflowSets.setChecks` and joins
+one to a group by `combo_key` (`comboKey` in `utils/setVerdicts.js`: member ids
+ascending, comma-joined). **No entry means no check or verdict UI**, only the
+plain no-evidence sentence. Every threshold (3 checked, 5 and 5 pictures, 40
+points) lives on the server; `checkCopy` only words the finished `check` state,
+so no number is repeated in the frontend.
+
+- `VerdictIcon.vue` is the one mark: `mdi-check-circle` / `mdi-close-circle` in
+  the success / error text tokens, shape carrying the meaning. Display-only is a
+  `role="img"`; `interactive` is an `AppButton` whose click stops propagation.
+- `VerdictAsk.vue` is the one question: two equal secondary buttons with full
+  accessible names, collapsing to an interactive `VerdictIcon` once answered;
+  clicking it reopens with the answer `aria-pressed`, a Cancel and the help text.
+  Focus: the icon after an answer or Cancel, the pressed answer after Change.
+- `SetVerdictNotes.vue` (`panels/`) is the one set of note rows both trays draw:
+  the check note, up to three suspect notes (then "N more models flagged"), and
+  a persistent `role="status"` region announcing "Recorded: ...". It takes the
+  set's `check` and two save functions that return promises; a rejection shows
+  `Could not save your answer. Try again.` as a `role="alert"` beside the
+  question, which stays open. `ModelSetPanel` passes a plain "has run with"
+  sentence for when there is no evidence; `ModelSetSlotsPanel` (hand-made sets)
+  passes none. `ModelSetGrid.vue` supplies the saves (`answerSetVerdict` /
+  `answerMemberVerdict` on the store, which PUT and patch the local entry; a
+  member answer also refetches rows so the model's own row picks up its mark)
+  and logs a failure with its context before rethrowing it.
+- A member's icon (row and card, in both trays) is a button: it reopens that
+  member's question through `SetVerdictNotes.reopenMember`, on the suspect note
+  if it has one and on an extra note otherwise. Row icons are off the tab order
+  (the grid's cursor owns Tab), like the remove button beside them.
+- Where the marks appear: the panel, a member's row or card in either tray, the set card on the grid (the owner's set verdict only, never the
+  check), and a model's own shelf row from its `set_verdicts` (`modelVerdictMark`:
+  the cross wins and the tooltip lists both kinds).
+
 ##### Hand-made workflow sets (#1520)
 
 `ModelSetSlotsPanel.vue`, `WorkflowSetChooser.vue`, `WorkflowSetSelectionBar.vue`

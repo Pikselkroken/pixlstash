@@ -205,7 +205,29 @@ export async function fetchWorkflowSets() {
     combinations: Array.isArray(body?.combinations) ? body.combinations : [],
     no_set: Array.isArray(body?.no_set) ? body.no_set : [],
     hand_made: Array.isArray(body?.hand_made) ? body.hand_made : [],
+    set_checks: Array.isArray(body?.set_checks) ? body.set_checks : [],
   };
+}
+
+// ── The owner's verdicts on a set and its members ───────────────────────────
+//
+// A mark only: nothing else changes. `comboKey` is the set's sorted member ids,
+// comma-joined (`utils/setVerdicts.js`). Each answers `{combo_key, [model_id],
+// verdict, previous}`.
+
+const verdictPath = (comboKey) =>
+  `/models/workflow-sets/verdicts/${encodeURIComponent(comboKey)}`;
+
+/** Record the owner's answer to "does this set produce sensible output". */
+export async function putSetVerdict(comboKey, verdict) {
+  return unwrap(apiClient.put(verdictPath(comboKey), { verdict }));
+}
+
+/** Record the owner's answer about one member: `problem` | `not_problem`. */
+export async function putMemberVerdict(comboKey, modelId, verdict) {
+  return unwrap(
+    apiClient.put(`${verdictPath(comboKey)}/members/${modelId}`, { verdict }),
+  );
 }
 
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────

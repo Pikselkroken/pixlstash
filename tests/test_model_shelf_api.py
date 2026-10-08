@@ -65,6 +65,7 @@ from pixlstash.services import builtin_models, comfyui_service
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.model_mover import SHELF_IO_LOCK
+from pixlstash.services import workflow_set_verdicts as verdicts
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 from tests.network_vectors import LAN_IPV4
 from tests.test_model_folder_scanner import write_adapter, write_checkpoint
@@ -88,6 +89,13 @@ _SHELF_ROUTES = (
     ("POST", "/api/v1/models/workflow-sets/{set_id}/members"),
     ("POST", "/api/v1/models/workflow-sets/{set_id}/members/remove"),
     ("PUT", "/api/v1/models/workflow-sets/{set_id}/declines"),
+    ("PUT", "/api/v1/models/workflow-sets/verdicts/{combo_key}"),
+    ("DELETE", "/api/v1/models/workflow-sets/verdicts/{combo_key}"),
+    ("PUT", "/api/v1/models/workflow-sets/verdicts/{combo_key}/members/{model_id}"),
+    (
+        "DELETE",
+        "/api/v1/models/workflow-sets/verdicts/{combo_key}/members/{model_id}",
+    ),
 )
 
 
@@ -214,6 +222,11 @@ def _seed_hub(server) -> dict[str, int]:
         conn.execute("DELETE FROM model_capability")
         # ComfyUI runs name model ids, and the ids are about to be reissued.
         conn.execute("DELETE FROM comfyui_history_model")
+        # The owner's set verdicts are keyed by model ids too. AUTOINCREMENT
+        # never reissues one, but a verdict left by one test must not be
+        # served to the next.
+        conn.execute("DELETE FROM model_set_verdict")
+        conn.execute("DELETE FROM model_set_member_verdict")
         conn.execute("DELETE FROM model")
         conn.execute("DELETE FROM model_folder")
         conn.execute("DELETE FROM adapter_stack")
@@ -2162,6 +2175,438 @@ def test_declines_refuse_an_unknown_set_and_a_short_digest(shelf_env):
 # ===========================================================================
 
 
+# ===========================================================================
+# Workflow sets: PixlStash's check and the owner's verdicts
+# (docs/ideas/workflow-set-verdicts.md)
+# ===========================================================================
+
+
+def test_check_state_follows_the_spec_table_at_every_boundary():
+    """Pure: every state, and each threshold just above and just below."""
+    state = verdicts.check_state
+    # (together, checked, passing, awaiting, scorer running)
+    assert state(0, 0, 0, 0, True) == "none"
+    assert state(4, 1, 1, 3, True) == "pending"
+    # Nothing left that the scorer could ever score: not pending forever.
+    assert state(4, 3, 3, 0, True) == "pass"
+    # Still to score, but no scorer: says what it has, never "pending".
+    assert state(4, 0, 0, 4, False) == "unavailable"
+    # Kept but never checkable (no prompt, or -1.0): unavailable, not pending.
+    assert state(2, 0, 0, 0, True) == "unavailable"
+    assert state(5, 2, 2, 0, True) == "too_few"
+    assert state(5, 3, 0, 0, True) == "fail"
+    # The pass share is >= half: exactly half passes, one short of it fails.
+    assert state(10, 4, 2, 0, True) == "pass"
+    assert state(10, 5, 2, 0, True) == "fail"
+    assert state(10, 3, 2, 0, True) == "pass"
+    assert state(10, 3, 1, 0, True) == "fail"
+
+
+def test_a_suspect_needs_every_threshold_and_each_one_alone_refuses_it():
+    """Pure: the baseline sits ON every threshold; each case below misses
+    exactly one of them by one."""
+    suspect = verdicts.is_suspect
+    # with 3/5 = 60 % failing, without 1/5 = 20 %: a 40-point gap, 3 failures.
+    assert suspect(3, 5, 1, 5)
+    # Fewer than 5 pictures with it (3/4 = 75 % vs 20 %: the gap is not why).
+    assert not suspect(3, 4, 1, 5)
+    # Fewer than 5 without it (3/5 vs 0/4: 60 points, still refused).
+    assert not suspect(3, 5, 0, 4)
+    # Only 2 failures with it (2/5 = 40 % vs 0/5: 40 points, still refused).
+    assert not suspect(2, 5, 0, 5)
+    # A 39-point gap: 60 % vs 21 %; 20 % is the 40-point boundary again.
+    assert not suspect(3, 5, 21, 100)
+    assert suspect(3, 5, 20, 100)
+
+
+def test_combo_key_is_the_sorted_ids_and_only_that_spelling_is_accepted():
+    assert verdicts.combo_key([12, 3, 7]) == "3,7,12"
+    assert verdicts.combo_key({7, 12, 3}) == verdicts.combo_key((3, 12, 7, 3))
+    assert verdicts.parse_combo_key("3,7,12") == [3, 7, 12]
+    for bad in ("7,3", "3,3", "03,7", "", "3,,7", "a", "3, 7", "-1", "0"):
+        with pytest.raises(ValueError):
+            verdicts.parse_combo_key(bad)
+
+
+def test_set_checks_sum_every_recipe_holding_the_whole_set():
+    """Pure: evidence is the recipes whose models include ALL the members
+    (more is fine), a suspect compares those against the recipes holding every
+    other member but not it, and a verdict reads its exact key only."""
+    # Base 1 with LoRA 2 fails; base 1 alone, and base 1 with LoRA 3, pass.
+    recipe_models = {
+        "with-2": {1, 2},
+        "with-2-and-3": {1, 2, 3},
+        "base-only": {1},
+        "with-3": {1, 3},
+        "another-library": {1, 2},
+    }
+    evidence = {
+        # (kept, checked, passing, awaiting)
+        "with-2": (6, 5, 1, 0),
+        "with-2-and-3": (2, 2, 0, 0),
+        "base-only": (6, 6, 5, 0),
+        "with-3": (1, 1, 1, 0),
+        # "another-library" made no kept picture here: absent.
+    }
+    checks = {
+        check["combo_key"]: check
+        for check in verdicts.set_checks(
+            [{2, 1}, [1, 2], {1, 2, 3}, set()],
+            recipe_models,
+            evidence,
+            {"1,2": "no", "1,2,3": "yes"},
+            {"1,2": {1: "not_problem"}, "1,2,3": {2: "problem"}},
+            scorer_available=True,
+        )
+    }
+    # One entry per distinct set; the empty one is no set.
+    assert set(checks) == {"1,2", "1,2,3"}
+
+    pair = checks["1,2"]
+    assert pair["member_ids"] == [1, 2]
+    assert pair["evidence"] == {"together": 8, "checked": 7, "passing": 1}
+    assert pair["check"] == "fail"
+    assert pair["verdict"] == "no"
+    # LoRA 2: 6 of 7 fail with it, 1 of 7 without it (base-only + with-3).
+    assert pair["suspects"] == [
+        {
+            "model_id": 2,
+            "with_failed": 6,
+            "with_total": 7,
+            "without_failed": 1,
+            "without_total": 7,
+            "verdict": None,
+        }
+    ]
+    # Base 1 is no suspect (there is nothing "with 2, without 1"), but the
+    # owner's answer about it is still served: counts moving never drop one.
+    assert pair["member_verdicts"] == [{"model_id": 1, "verdict": "not_problem"}]
+
+    triple = checks["1,2,3"]
+    assert triple["evidence"] == {"together": 2, "checked": 2, "passing": 0}
+    assert triple["check"] == "too_few"
+    # The members changed, so the pair's "no" is not this set's verdict.
+    assert triple["verdict"] == "yes"
+    assert triple["suspects"] == []  # 2 checked: below every suspect floor
+    assert triple["member_verdicts"] == [{"model_id": 2, "verdict": "problem"}]
+
+
+def test_suspects_are_served_biggest_gap_first():
+    """Pure: 9 of 10 fail with all three. Without LoRA 2, 2 of 5 fail (a
+    50-point gap); without LoRA 3, none do (90 points), so 3 leads."""
+    (check,) = verdicts.set_checks(
+        [{1, 2, 3}],
+        {"all": {1, 2, 3}, "no-2": {1, 3}, "no-3": {1, 2}},
+        {"all": (10, 10, 1, 0), "no-2": (5, 5, 3, 0), "no-3": (5, 5, 5, 0)},
+        {},
+        {},
+        scorer_available=True,
+    )
+    assert [s["model_id"] for s in check["suspects"]] == [3, 2]
+
+
+def test_a_changed_member_set_has_no_verdict_and_the_old_one_is_kept():
+    checks = verdicts.set_checks(
+        [{1, 2, 3}],
+        {"r": {1, 2, 3}},
+        {"r": (1, 1, 1, 0)},
+        {"1,2": "yes"},
+        {"1,2": {2: "problem"}},
+        scorer_available=True,
+    )
+    assert checks[0]["verdict"] is None
+    assert checks[0]["member_verdicts"] == []
+
+
+def _scored(server, structural_hash: str, scores) -> list[int]:
+    """One picture per score: a float is its prompt match, ``"unscored"`` a
+    picture with a prompt not scored yet, ``"no prompt"`` one with none."""
+    ids = []
+    for score in scores:
+        fields = {"comfyui_positive_prompt": "a cat on a sofa"}
+        if score == "no prompt":
+            fields = {}
+        elif score != "unscored":
+            fields["prompt_match"] = score
+        ids.append(_seed_picture(server, structural_hash, **fields))
+    return ids
+
+
+def _checks(shelf_env) -> dict[str, dict]:
+    r = shelf_env.owner.get(f"{API}/models/workflow-sets")
+    assert r.status_code == 200, r.text
+    return {check["combo_key"]: check for check in r.json()["set_checks"]}
+
+
+def _adapter_row(shelf_env, filename: str) -> dict:
+    rows = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    return next(row for row in rows if row["filename"] == filename)
+
+
+def test_only_what_the_scorer_will_pick_up_is_awaiting(shelf_env):
+    """A prompted, unscored picture without an image embedding is never
+    scored, so it must not hold its sets pending forever."""
+    server = shelf_env.server
+    try:
+        _seed_picture(server, "sh-await", comfyui_positive_prompt="a cat")
+        _seed_picture(
+            server,
+            "sh-await",
+            comfyui_positive_prompt="a cat",
+            image_embedding=b"\x00" * 8,
+        )
+        evidence = server.vault.db.run_immediate_read_task(verdicts.recipe_evidence)
+        # (kept, checked, passing, awaiting)
+        assert evidence["sh-await"] == (2, 0, 0, 1)
+    finally:
+        _wipe_recipes(server)
+
+
+def test_the_grid_serves_each_cards_check_and_the_verdicts_round_trip(shelf_env):
+    """Through the route: the card's members are the union of its
+    combinations, the counts skip the unscorable, and every verdict written is
+    read back where the frontend looks for it, then cleared."""
+    ids = shelf_env.model_ids
+    base, alice = ids["base_xl.safetensors"], ids["alice.safetensors"]
+    try:
+        _seed_recipe(
+            shelf_env.server,
+            "sh-alice",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "alice.safetensors")],
+        )
+        # 3 pass, 1 fails, 1 failed to score (-1), 1 has no prompt: 6 kept,
+        # 4 checked, 3 passing. The scorer is detached in this module, so the
+        # unscored one cannot make it pending.
+        _scored(
+            shelf_env.server,
+            "sh-alice",
+            [0.9, 0.95, 0.8, 0.1, -1.0, "no prompt"],
+        )
+        _seed_recipe(
+            shelf_env.server, "sh-base", [("ckpt_name", "base_xl.safetensors")]
+        )
+        _scored(shelf_env.server, "sh-base", [0.9])
+
+        key = verdicts.combo_key([base, alice])
+        check = _checks(shelf_env)[key]
+        assert check["member_ids"] == sorted([base, alice])
+        assert check["evidence"] == {"together": 6, "checked": 4, "passing": 3}
+        assert check["check"] == "pass"
+        assert check["verdict"] is None
+        assert check["suspects"] == []
+
+        url = f"{API}/models/workflow-sets/verdicts/{key}"
+        r = shelf_env.owner.put(url, json={"verdict": "yes"})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"combo_key": key, "verdict": "yes", "previous": None}
+        r = shelf_env.owner.put(url, json={"verdict": "no"})
+        assert r.json()["previous"] == "yes"
+        assert _checks(shelf_env)[key]["verdict"] == "no"
+
+        member_url = f"{url}/members/{alice}"
+        r = shelf_env.owner.put(member_url, json={"verdict": "problem"})
+        assert r.status_code == 200, r.text
+        assert r.json() == {
+            "combo_key": key,
+            "model_id": alice,
+            "verdict": "problem",
+            "previous": None,
+        }
+        assert _checks(shelf_env)[key]["member_verdicts"] == [
+            {"model_id": alice, "verdict": "problem"}
+        ]
+        # The model's own card, on the list and on the detail, names the set
+        # base model first.
+        mark = {"combo_key": key, "names": ["Base XL", "Alice"], "verdict": "problem"}
+        assert _adapter_row(shelf_env, "alice.safetensors")["set_verdicts"] == [mark]
+        detail = shelf_env.owner.get(f"{API}/adapters/{ADAPTER_WITH_BASE}").json()
+        assert detail["set_verdicts"] == [mark]
+        # A member's answer marks THAT model, not the others in the set.
+        assert _adapter_row(shelf_env, "bob.safetensors")["set_verdicts"] == []
+
+        r = shelf_env.owner.delete(member_url)
+        assert r.json()["previous"] == "problem"
+        assert r.json()["verdict"] is None
+        assert _adapter_row(shelf_env, "alice.safetensors")["set_verdicts"] == []
+        r = shelf_env.owner.delete(url)
+        assert r.json() == {"combo_key": key, "verdict": None, "previous": "no"}
+        assert _checks(shelf_env)[key]["verdict"] is None
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def test_a_card_whose_members_change_has_no_verdict_and_keeps_the_old_row(
+    shelf_env,
+):
+    ids = shelf_env.model_ids
+    base, alice, dana = (
+        ids["base_xl.safetensors"],
+        ids["alice.safetensors"],
+        ids["dana.safetensors"],
+    )
+    try:
+        _seed_recipe(
+            shelf_env.server,
+            "sh-alice",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "alice.safetensors")],
+        )
+        _scored(shelf_env.server, "sh-alice", [0.9])
+        old = verdicts.combo_key([base, alice])
+        url = f"{API}/models/workflow-sets/verdicts/{old}"
+        assert shelf_env.owner.put(url, json={"verdict": "yes"}).status_code == 200
+
+        # Dana joins the card: a second combination under the same base.
+        _seed_recipe(
+            shelf_env.server,
+            "sh-dana",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "dana.safetensors")],
+        )
+        _scored(shelf_env.server, "sh-dana", [0.9])
+        checks = _checks(shelf_env)
+        new = verdicts.combo_key([base, alice, dana])
+        assert old not in checks
+        assert checks[new]["verdict"] is None
+        # No picture used all three together: the spec's "no evidence" state.
+        assert checks[new]["check"] == "none"
+        # Nothing auto-clears: the old combination's answer is still stored.
+        assert (
+            shelf_env.server.hub.fetchone(
+                "SELECT verdict FROM model_set_verdict WHERE combo_key = ?", (old,)
+            )["verdict"]
+            == "yes"
+        )
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def test_a_suspect_member_is_served_with_its_counts(shelf_env):
+    """Base alone passes; with Alice it fails. Alice is the suspect, the base
+    is not, and the owner's answer rides on the suspect entry."""
+    ids = shelf_env.model_ids
+    base, alice = ids["base_xl.safetensors"], ids["alice.safetensors"]
+    try:
+        _seed_recipe(
+            shelf_env.server,
+            "sh-alice",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "alice.safetensors")],
+        )
+        _scored(shelf_env.server, "sh-alice", [0.1, 0.1, 0.1, 0.1, 0.9])
+        _seed_recipe(
+            shelf_env.server, "sh-base", [("ckpt_name", "base_xl.safetensors")]
+        )
+        _scored(shelf_env.server, "sh-base", [0.9, 0.9, 0.9, 0.9, 0.1])
+        key = verdicts.combo_key([base, alice])
+        assert (
+            shelf_env.owner.put(
+                f"{API}/models/workflow-sets/verdicts/{key}/members/{alice}",
+                json={"verdict": "not_problem"},
+            ).status_code
+            == 200
+        )
+        check = _checks(shelf_env)[key]
+        assert check["check"] == "fail"
+        assert check["suspects"] == [
+            {
+                "model_id": alice,
+                "with_failed": 4,
+                "with_total": 5,
+                "without_failed": 1,
+                "without_total": 5,
+                "verdict": "not_problem",
+            }
+        ]
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def test_a_verdict_refuses_a_key_it_cannot_store_and_a_model_not_in_it(shelf_env):
+    ids = shelf_env.model_ids
+    base, alice, bob = (
+        ids["base_xl.safetensors"],
+        ids["alice.safetensors"],
+        ids["bob.safetensors"],
+    )
+    root = f"{API}/models/workflow-sets/verdicts"
+    unsorted = f"{max(base, alice)},{min(base, alice)}"
+    for path in (f"{root}/{unsorted}", f"{root}/{base},{base}", f"{root}/x"):
+        r = shelf_env.owner.put(path, json={"verdict": "yes"})
+        assert r.status_code == 422, f"{path}: {r.status_code} {r.text}"
+    key = verdicts.combo_key([base, alice])
+    # A verdict word from the other vocabulary is a 422 too.
+    assert (
+        shelf_env.owner.put(f"{root}/{key}", json={"verdict": "problem"}).status_code
+        == 422
+    )
+    # Bob is on the shelf but not in the set; 999999 is not on the shelf.
+    r = shelf_env.owner.put(f"{root}/{key}/members/{bob}", json={"verdict": "problem"})
+    assert r.status_code == 404, r.text
+    r = shelf_env.owner.put(f"{root}/{base},999999", json={"verdict": "yes"})
+    assert r.status_code == 404, r.text
+    assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_verdict") == []
+    assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_member_verdict") == []
+    # An answer naming a model that left the shelf can still be cleared.
+    gone = f"{base},999999"
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute("INSERT INTO model_set_verdict VALUES (?, 'yes', 'then')", (gone,))
+        conn.execute(
+            "INSERT INTO model_set_member_verdict VALUES (?, 999999, 'problem', 'then')",
+            (gone,),
+        )
+    r = shelf_env.owner.delete(f"{root}/{gone}/members/999999")
+    assert r.status_code == 200, r.text
+    assert r.json()["previous"] == "problem"
+    r = shelf_env.owner.delete(f"{root}/{gone}")
+    assert r.status_code == 200, r.text
+    assert r.json()["previous"] == "yes"
+    assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_verdict") == []
+    assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_member_verdict") == []
+
+
+def test_verdict_routes_answer_the_owner_and_refuse_tokens(shelf_env):
+    """Both directions on all four verdict routes, each against a real route,
+    with an in-scope read in front of every refusal."""
+    ids = shelf_env.model_ids
+    base, alice = ids["base_xl.safetensors"], ids["alice.safetensors"]
+    key = verdicts.combo_key([base, alice])
+    set_path = f"/api/v1/models/workflow-sets/verdicts/{key}"
+    member_path = f"{set_path}/members/{alice}"
+    set_template = "/api/v1/models/workflow-sets/verdicts/{combo_key}"
+    member_template = f"{set_template}/members/{{model_id}}"
+    routes = (
+        ("PUT", set_path, set_template, {"json": {"verdict": "yes"}}),
+        ("PUT", member_path, member_template, {"json": {"verdict": "problem"}}),
+        ("DELETE", member_path, member_template, {}),
+        ("DELETE", set_path, set_template, {}),
+    )
+    scoped = _bearer(
+        shelf_env.server,
+        _mint(
+            shelf_env.owner,
+            "verdicts character token",
+            resource_type="character",
+            resource_id=shelf_env.character_id,
+        ),
+    )
+    unscoped = _bearer(shelf_env.server, _mint(shelf_env.owner, "verdicts read token"))
+    anon = TestClient(shelf_env.server.api)
+    for client in (scoped, unscoped):
+        assert client.get(f"{API}/pictures").status_code == 200
+    for method, path, template, kwargs in routes:
+        assert_real_route(shelf_env.server.api, method, path, template)
+        for client in (scoped, unscoped):
+            r = client.request(method, path, **kwargs)
+            assert r.status_code == 403, f"{method} {path}: {r.status_code}"
+        r = anon.request(method, path, **kwargs)
+        assert r.status_code == 401, f"{method} {path}: {r.status_code}"
+        r = shelf_env.owner.request(method, path, **kwargs)
+        assert r.status_code == 200, f"{method} {path}: {r.text}"
+    # The refusals wrote nothing: only the owner's PUTs did, and the DELETEs
+    # took them out again.
+    assert shelf_env.server.hub.fetchall("SELECT * FROM model_set_verdict") == []
+    for client in (scoped, unscoped):
+        assert client.get(f"{API}/models/workflow-sets").status_code == 403
+
+
 def _new_folder_path(tmp_root: str, name: str) -> str:
     path = os.path.join(tmp_root, name)
     os.makedirs(path, exist_ok=True)
@@ -3212,7 +3657,9 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
     # tally is asserted to be an exact number, so a naming change that matched
     # nothing would fail loudly rather than pass silently.
     #
-    # That number is three: the rows, the locations, and the capabilities. What
+    # That number is four: the rows, the locations, the capabilities, and the
+    # owner's member verdicts for the cards' marks (one read while nobody has
+    # answered, as here; a second for the names once someone has). What
     # this test actually guards is that the tally does not MOVE WITH THE ROW
     # COUNT, which is why both sides are compared as well as pinned - a whole-
     # page query added on purpose changes the constant, a per-row lookup breaks
@@ -3264,7 +3711,7 @@ def test_sorting_by_an_aggregate_is_still_two_hub_queries(shelf_env):
         r = shelf_env.owner.get(f"{API}/adapters", params={"sort": "size"})
         assert r.status_code == 200, r.text
         assert len(r.json()["adapters"]) == 24
-        assert len(calls) == with_four_rows == 3, (
+        assert len(calls) == with_four_rows == 4, (
             f"{len(calls)} hub queries for 24 rows vs {with_four_rows} for 4 - "
             "the list has grown a per-row lookup"
         )

@@ -78,6 +78,12 @@
             :selected-ids="store.selectedIds"
             :selectable-ids="store.setGridModelIds"
             :marks="marksById"
+            :check="openHand.check"
+            :save-set="(verdict) => answerVerdict(openHand, verdict)"
+            :save-member="
+              (modelId, verdict) =>
+                answerMemberVerdict(openHand, modelId, verdict)
+            "
             :can-fill-from-set="fillSetItems.length > 0"
             :can-fill-from-pictures="fillPictureItems.length > 0"
             :base-offer="baseOffer"
@@ -120,6 +126,12 @@
             :selected-ids="store.selectedIds"
             :selectable-ids="store.setGridModelIds"
             :marks="marksById"
+            :check="openGroup?.check ?? null"
+            :save-set="(verdict) => answerVerdict(openGroup, verdict)"
+            :save-member="
+              (modelId, verdict) =>
+                answerMemberVerdict(openGroup, modelId, verdict)
+            "
             @close="closePanel"
             @view="(value) => store.setView({ trayView: value })"
             @pick="openWorksWith"
@@ -515,6 +527,38 @@ const openMembers = computed(() => {
     head: model.id === group.head?.id,
   }));
 });
+
+/**
+ * Record the owner's answer. A mark only, so a refusal costs nothing but the
+ * mark: it is logged with the set it was for and rethrown, so the panel keeps
+ * the question open and says it could not save.
+ */
+async function answerVerdict(group, verdict) {
+  const key = group?.check?.combo_key;
+  if (!key) return;
+  try {
+    await store.answerSetVerdict(key, verdict);
+  } catch (err) {
+    console.error("Could not record the set verdict", { key, verdict, err });
+    throw err; // the panel shows the refusal beside the question
+  }
+}
+
+async function answerMemberVerdict(group, modelId, verdict) {
+  const key = group?.check?.combo_key;
+  if (!key) return;
+  try {
+    await store.answerMemberVerdict(key, modelId, verdict);
+  } catch (err) {
+    console.error("Could not record the member verdict", {
+      key,
+      modelId,
+      verdict,
+      err,
+    });
+    throw err;
+  }
+}
 
 const openName = computed(
   () =>

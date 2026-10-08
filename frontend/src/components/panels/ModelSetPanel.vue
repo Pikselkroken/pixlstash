@@ -54,17 +54,20 @@
          recipes, so two files here may never have run together and nothing in the
          tray can tell which did. Without this line the tray reads as a
          reproducible set, which is the one claim this feature must not make. -->
-    <div class="msp__note" role="row" aria-level="2">
-      <div role="gridcell">
-        <v-icon size="16">mdi-information-outline</v-icon>
-        <span
-          >Each of these has run with <strong>{{ name }}</strong
-          >. They have not necessarily run with <em>each other</em> — for the
-          exact files one picture used, open a model and read what it works
-          with.</span
-        >
-      </div>
-    </div>
+    <SetVerdictNotes
+      ref="notes"
+      :check="check"
+      :members="members"
+      :save-set="saveSet"
+      :save-member="saveMember"
+    >
+      <template #plain
+        >Each of these has run with <strong>{{ name }}</strong
+        >. They have not necessarily run with <em>each other</em>. To see the
+        exact files one picture used, open a model and read what it works
+        with.</template
+      >
+    </SetVerdictNotes>
 
     <!-- The base model these pictures were made with is not on the shelf.
          Replacing it is a workflow's model fix, so the note links there; once
@@ -159,6 +162,10 @@
             :member="member"
             :shelf-mark="marks.get(member.id) ?? null"
             :selected="isSelected(member)"
+            :verdict="memberVerdict(member)"
+            :verdict-label="memberVerdictLabel(member)"
+            :possible-problem="possibleProblem(member)"
+            @reopen="reopen(member)"
             @pick="(model) => emit('pick', model)"
           />
         </div>
@@ -204,9 +211,10 @@
       >
         <!-- Everything the row draws is `aria-hidden`: the row's own label reads
              all of it, exactly as the card does in Grid. -->
-        <span class="msp__ident" role="gridcell" aria-hidden="true">
+        <span class="msp__ident" role="gridcell">
           <ModelMark
             v-if="marks.get(member.id)"
+            aria-hidden="true"
             :row="marks.get(member.id).row"
             :ring="marks.get(member.id).ring"
             :style="marks.get(member.id).style"
@@ -214,19 +222,36 @@
           <span
             v-else
             class="msp__mark"
+            aria-hidden="true"
             :style="{
               backgroundColor: markOf(member).color,
               color: markOf(member).ink,
             }"
             >{{ markOf(member).initials }}</span
           >
-          <span class="msp__rowname"
+          <span class="msp__rowname" aria-hidden="true"
             ><Tooltip
               :text="modelFileTitle(marks.get(member.id)?.row ?? member)"
               activator="parent"
             />{{ member.name }}</span
           >
-          <span v-if="member.head" class="msp__pill">Names this set</span>
+          <span v-if="member.head" class="msp__pill" aria-hidden="true"
+            >Names this set</span
+          >
+          <span v-if="possibleProblem(member)" class="msp__pill" aria-hidden="true"
+            >Possible problem</span
+          >
+          <!-- A button inside a row the grid's cursor owns: off the tab order
+               like the card's own buttons, and it stops its click. -->
+          <VerdictIcon
+            v-if="memberVerdict(member)"
+            interactive
+            tabindex="-1"
+            :data-verdict-member="member.id"
+            :verdict="memberVerdict(member)"
+            :label="memberVerdictLabel(member)"
+            @click="reopen(member)"
+          />
         </span>
         <span class="msp__kindcol" role="gridcell" aria-hidden="true">{{
           member.kindLabel
@@ -291,7 +316,7 @@
  * selection target and *Works with* is its default action - in Grid that question
  * keeps its own named button on the card.
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { VIcon } from "vuetify/components";
 
 import {
@@ -300,12 +325,19 @@ import {
   modelFileTitle,
 } from "../../utils/modelShelf";
 import { useWorkflowNames } from "../../composables/useWorkflowNames";
+import {
+  isOpenSuspect,
+  memberVerdictOf,
+  memberVerdictText,
+} from "../../utils/setVerdicts";
 import { pictureCount } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import SetVerdictNotes from "./SetVerdictNotes.vue";
 import ModelSetMemberCard from "../widgets/ModelSetMemberCard.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import VerdictIcon from "../widgets/VerdictIcon.vue";
 
 /** The two views, spelled as the Workflows stack panel spells them. */
 const VIEW_OPTIONS = [
@@ -355,6 +387,16 @@ const props = defineProps({
    * with no shelf row falls back to the generated initials.
    */
   marks: { type: Object, default: () => new Map() },
+  /**
+   * This group's `set_checks` entry (PixlStash's check and the owner's
+   * verdicts), or null when the server served none for exactly these members:
+   * then no check or verdict is drawn, only the plain no-evidence sentence.
+   */
+  check: { type: Object, default: null },
+  /** `(verdict) => Promise`: record the set's verdict; rejects on failure. */
+  saveSet: { type: Function, default: async () => {} },
+  /** `(modelId, verdict) => Promise`: the same for one member. */
+  saveMember: { type: Function, default: async () => {} },
 });
 
 const emit = defineEmits([
@@ -367,6 +409,28 @@ const emit = defineEmits([
 ]);
 
 const { nameOf } = useWorkflowNames();
+
+const notes = ref(null);
+
+function memberVerdict(member) {
+  return memberVerdictOf(props.check, member.id);
+}
+
+function memberVerdictLabel(member) {
+  const verdict = memberVerdict(member);
+  return verdict
+    ? `Your verdict: ${memberVerdictText(verdict, member.name)}`
+    : "";
+}
+
+function possibleProblem(member) {
+  return isOpenSuspect(props.check, member.id);
+}
+
+/** A member's icon was pressed: its question reopens in the notes above. */
+function reopen(member) {
+  notes.value?.reopenMember(member.id);
+}
 
 /**
  * The workflows Replace can write: not the manual ones, which change by
@@ -417,6 +481,8 @@ function rowName(member) {
   return [
     member.name,
     member.head ? "names this set" : null,
+    possibleProblem(member) ? "possible problem" : null,
+    memberVerdict(member) ? memberVerdictLabel(member) : null,
     member.kindLabel,
     formatModelSize(member.file_size),
     `${member.recipes} recipes`,

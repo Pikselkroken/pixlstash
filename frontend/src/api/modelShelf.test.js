@@ -25,6 +25,8 @@ import {
   forgetModels,
   listAdapters,
   listCheckpoints,
+  putMemberVerdict,
+  putSetVerdict,
   setAdapterAttachments,
 } from "./modelShelf";
 
@@ -144,5 +146,23 @@ describe("api/modelShelf the rest of the wire", () => {
   it("forgetModels posts to the forget route", async () => {
     await forgetModels([3]);
     expect(apiClient.post).toHaveBeenCalledWith("/models/forget", { ids: [3] });
+  });
+});
+
+describe("api/modelShelf verdicts", () => {
+  it("PUTs the set verdict under its combo key with the answer as the body", async () => {
+    await putSetVerdict("3,12", "no");
+    expect(apiClient.put).toHaveBeenCalledWith(
+      "/models/workflow-sets/verdicts/3%2C12",
+      { verdict: "no" },
+    );
+  });
+
+  it("PUTs a member verdict under the set and the model", async () => {
+    await putMemberVerdict("3,12", 12, "problem");
+    expect(apiClient.put).toHaveBeenCalledWith(
+      "/models/workflow-sets/verdicts/3%2C12/members/12",
+      { verdict: "problem" },
+    );
   });
 });

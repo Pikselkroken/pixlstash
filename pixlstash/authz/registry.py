@@ -555,6 +555,22 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     # The models kept out of a set's merge offer (#1523): same rows, same tier.
     ("PUT", "/api/v1/models/workflow-sets/{set_id}/declines"): RoutePolicy(_OWNER),
+    # The owner's verdicts on a set and on its members (workflow-set-verdicts
+    # spec). Hub rows keyed by a combination of `model.id`s, which no share
+    # token is ever scoped to, and the owner's own judgement about the
+    # machine's models: the grid's tier.
+    ("PUT", "/api/v1/models/workflow-sets/verdicts/{combo_key}"): RoutePolicy(_OWNER),
+    ("DELETE", "/api/v1/models/workflow-sets/verdicts/{combo_key}"): RoutePolicy(
+        _OWNER
+    ),
+    (
+        "PUT",
+        "/api/v1/models/workflow-sets/verdicts/{combo_key}/members/{model_id}",
+    ): RoutePolicy(_OWNER),
+    (
+        "DELETE",
+        "/api/v1/models/workflow-sets/verdicts/{combo_key}/members/{model_id}",
+    ): RoutePolicy(_OWNER),
     # The shelf's sixth verb, and the one route on this block that spawns a
     # process on the host's desktop. Same authority - and same red-line tier -
     # as POST /pictures/{id}/open-location: what it can do is bounded by what

@@ -535,6 +535,34 @@ CREATE TABLE IF NOT EXISTS model_workflow_set_decline (
 )
 """
 
+# The owner's verdict on a workflow set (docs/ideas/workflow-set-verdicts.md):
+# "does this set produce sensible output", yes or no. Keyed by the EXACT
+# combination, the sorted member `model.id`s comma-joined
+# (`services.workflow_set_verdicts.combo_key`), so a set whose members change
+# has no verdict and the old row is simply never read for it. No foreign key
+# to `model`: `model.id` is AUTOINCREMENT, so an id in a key never names a
+# different file, and a verdict is never cleared behind the owner's back.
+_V2_MODEL_SET_VERDICT = """
+CREATE TABLE IF NOT EXISTS model_set_verdict (
+    combo_key    TEXT PRIMARY KEY,
+    verdict      TEXT NOT NULL CHECK (verdict IN ('yes', 'no')),
+    answered_at  TEXT NOT NULL
+)
+"""
+
+# The owner's answer to "is this member a problem in this set". Same key and
+# same reasoning as the set's verdict above; `model_id` is one of the key's ids.
+# Also what the model's own shelf card marks itself with.
+_V2_MODEL_SET_MEMBER_VERDICT = """
+CREATE TABLE IF NOT EXISTS model_set_member_verdict (
+    combo_key    TEXT NOT NULL,
+    model_id     INTEGER NOT NULL,
+    verdict      TEXT NOT NULL CHECK (verdict IN ('problem', 'not_problem')),
+    answered_at  TEXT NOT NULL,
+    PRIMARY KEY (combo_key, model_id)
+)
+"""
+
 _V2_MODEL_SHELF_INDEXES = (
     # The scanner's hot path: "which files does this model have, and where".
     "CREATE INDEX IF NOT EXISTS ix_model_file_model ON model_file(model_id)",
@@ -564,6 +592,8 @@ _V2_MODEL_SHELF_TABLES = (
     # After the set: it references `model_workflow_set(id)`.
     _V2_MODEL_WORKFLOW_SET_MEMBER,
     _V2_MODEL_WORKFLOW_SET_DECLINE,
+    _V2_MODEL_SET_VERDICT,
+    _V2_MODEL_SET_MEMBER_VERDICT,
     *_V2_MODEL_SHELF_INDEXES,
 )
 

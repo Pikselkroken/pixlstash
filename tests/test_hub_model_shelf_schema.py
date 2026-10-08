@@ -957,6 +957,43 @@ class TestHandMadeWorkflowSets:
         assert "AUTOINCREMENT" in ddl_for(hub, "model_workflow_set")
         assert read_schema_version(hub) == 2
 
+    def test_the_verdict_tables_arrive_and_hold_only_their_vocabulary(self, hub):
+        """The owner's set verdicts: re-created on an existing v2 hub, and the
+        CHECK keeps PixlStash's words out of the owner's columns."""
+        apply_migrations(hub)
+        hub.execute("DROP TABLE model_set_verdict")
+        hub.execute("DROP TABLE model_set_member_verdict")
+        apply_migrations(hub)
+        assert {"model_set_verdict", "model_set_member_verdict"} <= table_names(hub)
+        assert read_schema_version(hub) == 2
+        hub.execute(
+            "INSERT INTO model_set_verdict (combo_key, verdict, answered_at) "
+            "VALUES ('1,2', 'yes', 't')"
+        )
+        hub.execute(
+            "INSERT INTO model_set_member_verdict "
+            "(combo_key, model_id, verdict, answered_at) "
+            "VALUES ('1,2', 2, 'not_problem', 't')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(
+                "INSERT INTO model_set_verdict (combo_key, verdict, answered_at) "
+                "VALUES ('1,3', 'pass', 't')"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(
+                "INSERT INTO model_set_member_verdict "
+                "(combo_key, model_id, verdict, answered_at) "
+                "VALUES ('1,2', 1, 'yes', 't')"
+            )
+        # One answer per member per set.
+        with pytest.raises(sqlite3.IntegrityError):
+            hub.execute(
+                "INSERT INTO model_set_member_verdict "
+                "(combo_key, model_id, verdict, answered_at) "
+                "VALUES ('1,2', 2, 'problem', 't')"
+            )
+
     def test_a_set_holds_two_checkpoints_on_a_hub_that_had_the_one_rule(self, hub):
         """#1690: a two-model workflow's pair. An earlier build's hub carries
         the unique index that held a set to one checkpoint; reopening drops it."""
