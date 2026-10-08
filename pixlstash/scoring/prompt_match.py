@@ -13,7 +13,7 @@ are near every text. So the score is the fraction of :data:`DISTRACTOR_PROMPTS`
 that the picture's CLIP image embedding is LESS similar to than to its own
 prompt. Both biases cancel, because every comparison shares the image and the
 bank is one fixed set of texts. The bank includes texts describing the failures
-themselves ("random noise", "a solid black image"), so a failed frame ranks
+themselves ("random colorful noise", "a solid black image"), so a failed frame ranks
 those above its prompt and lands near 0. Ties count half.
 
 CLIP is a bag-of-words matcher on composition, counting and relations
@@ -42,15 +42,17 @@ import numpy as np
 #: the owner's ratings before reading much into the boundary.
 PROMPT_MATCH_THRESHOLD = 0.7
 
-#: Stored when a prompt exists but could not be scored (no text embedding, an
-#: image embedding of the wrong size). Outside [0, 1], so it reads as "failed",
-#: and the verdict for it is None, not False.
+#: Stored when a prompt exists but can never be scored as it stands: it cleans
+#: to nothing, or an embedding is the wrong size, zero or not finite. Outside
+#: [0, 1], so it reads as "failed", and the verdict for it is None, not False.
+#: A CLIP encoder that fails stores nothing: that may pass, so the task fails
+#: and the finder defers the batch for the session instead.
 PROMPT_MATCH_FAILED = -1.0
 
 #: Short, concrete, mutually unrelated texts spanning what generated pictures
 #: are of, plus descriptions of the failure modes themselves. Fixed: changing
 #: it changes every score, so a change here needs a migration that NULLs
-#: ``picture.prompt_match`` (see 0128).
+#: ``picture.prompt_match``.
 DISTRACTOR_PROMPTS: tuple[str, ...] = (
     # Failure modes. A failed frame matches these better than its prompt.
     "random colorful noise",
@@ -180,11 +182,17 @@ def prompt_match_score(
 
     All three are CLIP embeddings from one model, passed as stored. The texts
     are normalised here; the image need not be, since scaling it scales every
-    similarity alike and leaves the rank alone. Returns a value in [0, 1].
+    similarity alike and leaves the rank alone. Returns a value in [0, 1], or
+    :data:`PROMPT_MATCH_FAILED` when an embedding is zero or not finite, which
+    would otherwise read as a confident "does not look like it".
     """
+    image = image_embedding.astype(np.float32).ravel()
     texts = np.vstack([prompt_embedding.ravel(), distractor_embeddings])
-    texts = texts.astype(np.float32) / np.linalg.norm(texts, axis=1, keepdims=True)
-    sims = texts @ image_embedding.astype(np.float32).ravel()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        texts = texts.astype(np.float32) / np.linalg.norm(texts, axis=1, keepdims=True)
+        sims = texts @ image
+    if not image.any() or not np.isfinite(sims).all():
+        return PROMPT_MATCH_FAILED
     prompt_sim, sims = sims[0], sims[1:]
     below = float(np.sum(sims < prompt_sim)) + 0.5 * float(np.sum(sims == prompt_sim))
     return below / len(sims)

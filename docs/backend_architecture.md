@@ -9669,8 +9669,10 @@ migration that NULLs the column.
   and fried copies included) pass at 0.7 against 16% for truncation, with no
   matching pair gained: the tail of a long prompt is mostly generic quality
   tags that look like everything.
-- **Values**: NULL is "no prompt" or "not scored yet"; `-1.0` is "has a prompt,
-  could not be scored" (the repo's failed-metric convention), verdict `null`.
+- **Values**: NULL is "no prompt" or "not scored yet"; `-1.0` is "has a prompt
+  that cannot be scored as it stands" (it cleans to nothing, or an embedding is
+  the wrong size, zero or not finite; the repo's failed-metric convention),
+  verdict `null`. A CLIP encoder failure stores nothing, since it may pass.
 
 **Pipeline.** `MissingPromptMatchFinder` selects `prompt_match IS NULL AND
 comfyui_positive_prompt IS NOT NULL AND deleted = 0 AND image_embedding IS NOT
@@ -9680,7 +9682,10 @@ it. `PromptMatchTask` (GPU queue) reuses the stored image embedding and runs one
 CLIP text forward pass (`ClipService.encode_texts`) for the batch's distinct
 cleaned prompts, cached per prompt for the process. `ImageEmbeddingTask` NULLs
 the score whenever it writes a new embedding, and `ComfyUIExtractionTask`
-whenever it writes a prompt, so a stale score re-queues itself.
+whenever it writes a prompt, so a stale score re-queues itself. A task whose
+encoder fails raises, and the finder defers that batch for the session (the
+`MissingOcrFinder` pattern), so a broken text tower is not re-run every cycle
+and a restart retries it.
 
 **Served** as `prompt_match` in every payload built from
 `Picture.metadata_fields()`, and with the derived `looks_like_prompt` on

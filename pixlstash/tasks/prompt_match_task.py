@@ -66,7 +66,16 @@ class PromptMatchTask(BaseTask):
 
         cleaned = {pid: clean_prompt(prompt) for pid, prompt, _ in rows}
         bank = self._distractor_bank()
-        texts = self._text_embeddings({text for text in cleaned.values() if text})
+        wanted = {text for text in cleaned.values() if text}
+        texts = self._text_embeddings(wanted)
+        if bank is None or len(texts) < len(wanted):
+            # The encoder failed (it logged why). It may well work later, so
+            # nothing is stored: failing defers the batch for the session.
+            raise RuntimeError(
+                f"CLIP could not encode the "
+                f"{'distractor bank' if bank is None else 'prompts'} for "
+                f"{len(rows)} picture(s)"
+            )
 
         # Each score carries the inputs it was computed from, so _persist can
         # refuse it if they were replaced (and the score reset) meanwhile.
@@ -75,26 +84,21 @@ class PromptMatchTask(BaseTask):
             text = cleaned[pid]
             text_embedding = texts.get(text)
             image = np.frombuffer(image_blob, dtype=np.float32)
-            if (
-                text_embedding is None
-                or bank is None
-                or image.shape[0] != text_embedding.shape[0]
-            ):
-                logger.warning(
-                    "prompt_match: cannot score picture %s (cleaned prompt %r from "
-                    "%r, text embedding %s, distractor bank %s, image embedding "
-                    "%d dims); storing %s",
-                    pid,
-                    text,
-                    prompt[:120],
-                    "missing" if text_embedding is None else text_embedding.shape,
-                    "missing" if bank is None else "ok",
-                    image.shape[0],
-                    PROMPT_MATCH_FAILED,
-                )
+            if text_embedding is None or image.shape[0] != text_embedding.shape[0]:
                 score = PROMPT_MATCH_FAILED
             else:
                 score = prompt_match_score(image, text_embedding, bank)
+            if score == PROMPT_MATCH_FAILED:
+                logger.warning(
+                    "prompt_match: cannot score picture %s (cleaned prompt %r from "
+                    "%r, text embedding %s, image embedding %d dims); storing %s",
+                    pid,
+                    text,
+                    prompt[:120],
+                    "none" if text_embedding is None else text_embedding.shape,
+                    image.shape[0],
+                    PROMPT_MATCH_FAILED,
+                )
             updates.append((pid, prompt, image_blob, score))
 
         changed = self._db.run_task(_persist, updates, priority=DBPriority.LOW)
