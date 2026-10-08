@@ -1481,6 +1481,9 @@ def comfyui_listens_on_network(argv) -> bool | None:
             listen = arg.split("=", 1)[1] or "0.0.0.0"
     if listen is None:
         return False
+    # Not skipping an empty entry (``--listen 127.0.0.1,``): ComfyUI binds
+    # every entry as given, and asyncio binds an empty host to every
+    # interface, so it falls through to "reachable" below.
     for host in (h.strip().strip("[]") for h in listen.split(",")):
         if host.lower() == "localhost":
             continue

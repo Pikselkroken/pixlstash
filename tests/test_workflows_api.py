@@ -2241,6 +2241,9 @@ def test_an_unbound_link_token_is_good_only_for_the_check(
         (["main.py", "--listen", "--port", "8188"], "this_computer", "listening"),
         (["main.py", "--listen=0.0.0.0"], "this_computer", "listening"),
         (["main.py", "--listen", "127.0.0.1,::"], "this_computer", "listening"),
+        # ComfyUI binds the empty entry too, and asyncio binds "" to every
+        # interface.
+        (["main.py", "--listen", "127.0.0.1,"], "this_computer", "listening"),
         (None, "this_computer", None),
     ],
 )
