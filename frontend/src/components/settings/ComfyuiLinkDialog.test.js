@@ -99,6 +99,35 @@ describe("ComfyuiLinkDialog", () => {
     expect(wrapper.emitted("close")).toHaveLength(1);
   });
 
+  it("warns, with what to do, when other computers can reach ComfyUI", async () => {
+    comfyui.linkComfyui.mockResolvedValue({
+      ...replyWith(step("link", "done")),
+      exposure: "listening",
+    });
+    const listening = await openDialog();
+    const notice = byTestId(listening, "comfyui-exposure-notice");
+    expect(notice.text()).toContain(
+      "Other computers can use PixlStash through ComfyUI",
+    );
+    expect(notice.text()).toContain("restart it without --listen");
+
+    comfyui.linkComfyui.mockResolvedValue({
+      ...replyWith(step("link", "done")),
+      exposure: "other_computer",
+    });
+    const elsewhere = await openDialog();
+    expect(byTestId(elsewhere, "comfyui-exposure-notice").text()).toContain(
+      "Link it only on a network you trust",
+    );
+
+    comfyui.linkComfyui.mockResolvedValue({
+      ...replyWith(step("link", "done")),
+      exposure: null,
+    });
+    const local = await openDialog();
+    expect(byTestId(local, "comfyui-exposure-notice").exists()).toBe(false);
+  });
+
   it("renders failed, needs_you and not_run", async () => {
     comfyui.linkComfyui.mockResolvedValue(
       replyWith(
@@ -159,9 +188,6 @@ describe("ComfyuiLinkDialog", () => {
     comfyui.linkComfyui.mockResolvedValue(remoteOff());
     const wrapper = await openDialog();
     const fix = byTestId(wrapper, "comfyui-link-fix-remote_access_off");
-    expect(fix.text()).toContain(
-      "ComfyUI's own page stays plain HTTP, so anyone on your network who opens it can see the key.",
-    );
     expect(wrapper.text()).toContain("Remote access is off.");
     expect(fix.text()).not.toContain("in PixlStash's server settings");
     const btn = byTestId(wrapper, "comfyui-link-remote-https");

@@ -162,7 +162,8 @@ export async function getPixlstashNode() {
  *
  * @param {string} url - e.g. `"http://127.0.0.1:8188/"`.
  * @returns {Promise<{reachable: boolean, url: string, version: ?string,
- *   detail: ?string}>}
+ *   detail: ?string, listens_on_network: ?boolean}>} `listens_on_network`:
+ *   whether ComfyUI's `--listen` lets other computers reach it, null unknown.
  */
 export async function probeComfyui(url) {
   return unwrap(apiClient.post(comfyUrl("/probe"), { url }));
@@ -171,17 +172,24 @@ export async function probeComfyui(url) {
 /**
  * Whether this PixlStash is linked to the saved ComfyUI. Owner-only.
  *
+ * `bound_address` is the address the link's key works from (null for a link
+ * made before keys were bound, which works from anywhere); `refused_from` the
+ * last other address it was refused from since PixlStash started; `exposure`
+ * `"other_computer"` or `"listening"` when other computers can reach ComfyUI.
+ *
  * @returns {Promise<{linked: boolean, comfyui_url: ?string,
  *   pixlstash_url: ?string, where: ?("this_computer"|"local_network"),
- *   linked_at: ?string}>}
+ *   linked_at: ?string, bound_address: ?string, refused_from: ?string,
+ *   exposure: ?("other_computer"|"listening")}>}
  */
 export async function getComfyuiLink() {
   return unwrap(apiClient.get(comfyUrl("/link")));
 }
 
 /**
- * Link the saved ComfyUI: mint a full-access token and write it, with
- * PixlStash's URL, into ComfyUI's settings. Owner-only.
+ * Link the saved ComfyUI: mint a full-access token that works only from
+ * ComfyUI's address and write it, with PixlStash's URL, into ComfyUI's
+ * settings. Local owner only.
  *
  * Always resolves 200 whether or not it linked. `steps` is exactly four, in
  * order `reach`, `nodes`, `link`, `check`, each `{id, state, detail, reason}`
@@ -190,7 +198,7 @@ export async function getComfyuiLink() {
  * saved ComfyUI is on this computer, so {@link installComfyuiPack} can run.
  *
  * @returns {Promise<{linked: boolean, link: Object, steps: Array<Object>,
- *   can_install_pack: boolean}>}
+ *   can_install_pack: boolean, exposure: ?string}>}
  */
 export async function linkComfyui() {
   return unwrap(apiClient.post(comfyUrl("/link")));

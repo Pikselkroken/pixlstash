@@ -8,7 +8,11 @@ settings written over ComfyUI's HTTP API; the pack needs no route of its own.
 
 Owner decisions (2026-10-06), which this module implements and nothing more:
 
-* The token is an ordinary ``ALL`` owner token. ComfyUI gets full access.
+* The token is an ``ALL`` owner token. ComfyUI gets full access.
+* The token works only from ComfyUI's own address (#1810). ComfyUI serves its
+  settings, token included, to anyone who can reach it, so the token is bound
+  to the source address PixlStash sees on the link's round-trip check, and
+  refused from anywhere else (see ``auth.TOKEN_BIND_PENDING``).
 * Automatic linking is for a ComfyUI on this computer (plain HTTP over the
   loopback listener) or on the local network (the external listener, which
   must be on **with HTTPS**; the pack is handed PixlStash's certificate and
@@ -34,7 +38,7 @@ from cryptography import x509
 from fastapi import HTTPException, Request
 from sqlmodel import select
 
-from pixlstash.auth import is_local_ip
+from pixlstash.auth import TOKEN_BIND_PENDING, is_local_ip
 from pixlstash.database import DBPriority
 from pixlstash.db_models import UserToken
 from pixlstash.pixl_logging import get_logger
@@ -249,14 +253,47 @@ def link_target(server, where: str, pinned_url: str) -> tuple[str, Optional[str]
 
 
 def link_status(server) -> dict:
+    """The live link. ``bound_address`` is where its token works from;
+    ``refused_from`` the last other address it was used from since start-up
+    (ComfyUI's address changed, or somebody else has the key); ``exposure``
+    whether other computers can reach the linked ComfyUI (see :func:`exposure`).
+    """
     record = server._server_config.get(LINK_CONFIG_KEY) or {}
+    public_id = record.get("token_public_id")
     return {
-        "linked": bool(record.get("token_public_id")),
+        "linked": bool(public_id),
         "comfyui_url": record.get("comfyui_url"),
         "pixlstash_url": record.get("pixlstash_url"),
         "where": record.get("where"),
         "linked_at": record.get("linked_at"),
+        "bound_address": record.get("bound_address"),
+        "refused_from": (
+            server.auth.bound_token_refusals.get(public_id) if public_id else None
+        ),
+        "exposure": record.get("exposure"),
     }
+
+
+def exposure(where: Optional[str], probe: dict) -> Optional[str]:
+    """Whether computers other than ComfyUI's own can reach it, and so can use
+    PixlStash through the pack's routes: ``"other_computer"`` (ComfyUI is on
+    another computer, so it listens on the network), ``"listening"`` (on this
+    computer, started with ``--listen``), or None (this computer only, or not
+    known)."""
+    if where == "local_network":
+        return "other_computer"
+    if probe.get("listens_on_network"):
+        return "listening"
+    return None
+
+
+def _bound_address(server, public_id: str) -> Optional[str]:
+    def find(session):
+        return session.exec(
+            select(UserToken.bound_address).where(UserToken.public_id == public_id)
+        ).first()
+
+    return server.auth._db.run_task(find, priority=DBPriority.IMMEDIATE)
 
 
 def _save_record(server, record: Optional[dict]) -> None:
@@ -352,11 +389,14 @@ def link(server, request: Request, saved_url: Optional[str]) -> dict:
 def _link(server, request: Request, saved_url: Optional[str]) -> dict:
     steps = {step: _step("not_run") for step in STEP_IDS}
 
+    exposed = None
+
     def reply(linked: bool = False) -> dict:
         return {
             "linked": linked,
             "link": link_status(server),
             "steps": [{"id": step, **steps[step]} for step in STEP_IDS],
+            "exposure": exposed,
         }
 
     if not saved_url:
@@ -372,6 +412,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         steps["reach"] = _step("failed", probe["detail"])
         return reply()
     comfyui_url = probe["url"]
+    exposed = exposure(where, probe)
     place = {
         "this_computer": "on this computer",
         "local_network": "on your local network",
@@ -405,7 +446,9 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         steps["link"] = _step("needs_you", str(refused), refused.reason)
         return reply()
 
-    minted = server.auth.create_token(request, TOKEN_DESCRIPTION, scope="ALL")
+    minted = server.auth.create_token(
+        request, TOKEN_DESCRIPTION, scope="ALL", bound_address=TOKEN_BIND_PENDING
+    )
     public_id = minted["public_id"]
     try:
         _write_settings(
@@ -426,17 +469,16 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         return reply()
     old_record = server._server_config.get(LINK_CONFIG_KEY)
     old_token = (old_record or {}).get("token_public_id")
+    record = {
+        "token_public_id": public_id,
+        "comfyui_url": comfyui_url,
+        "pixlstash_url": pixlstash_url,
+        "where": where,
+        "linked_at": datetime.now(timezone.utc).isoformat(),
+        "exposure": exposed,
+    }
     try:
-        _save_record(
-            server,
-            {
-                "token_public_id": public_id,
-                "comfyui_url": comfyui_url,
-                "pixlstash_url": pixlstash_url,
-                "where": where,
-                "linked_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+        _save_record(server, record)
     except Exception:
         # ComfyUI holds the token but no record does, so nothing could ever
         # revoke it: revoke it now, and take it back from ComfyUI.
@@ -480,6 +522,17 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
     )
 
     problem = _check_round_trip(pinned, minted["token"])
+    bound = None if problem else _bound_address(server, public_id)
+    if not problem and bound in (None, TOKEN_BIND_PENDING):
+        # A 200 that did not come through PixlStash with this token: nothing
+        # bound it, so it is not ComfyUI's.
+        logger.warning(
+            "ComfyUI link check at %s answered 200 but token %s was never "
+            "used; undoing the link.",
+            pinned,
+            public_id,
+        )
+        problem = "ComfyUI answered the check without using its new key."
     if problem:
         # ComfyUI holds a full-access token that does not work from there.
         # Undo the link entirely, so no live token is left that the link
@@ -494,7 +547,13 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         )
         steps["check"] = _step("failed", problem, "check_failed")
         return reply()
-    steps["check"] = _step("done", "ComfyUI reached PixlStash with its new key.")
+    _save_record(server, {**record, "bound_address": bound})
+    logger.info("ComfyUI link token %s is bound to %s.", public_id, bound)
+    steps["check"] = _step(
+        "done",
+        f"ComfyUI reached PixlStash with its new key, which now works only "
+        f"from {bound}.",
+    )
     _pull_after_link(server)
     return reply(linked=True)
 

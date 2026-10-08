@@ -1816,6 +1816,14 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         if column not in model_columns:
             conn.execute(f"ALTER TABLE model ADD COLUMN {column} TEXT")
 
+    # The ComfyUI link token's source binding (#1810), guarded the same way.
+    # NULL, every existing token, means "from any address".
+    token_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(usertoken)").fetchall()
+    }
+    if "bound_address" not in token_columns:
+        conn.execute("ALTER TABLE usertoken ADD COLUMN bound_address TEXT")
+
     # Rows from the earliest feature-lane v1 may predate the column entirely.
     # Backfill in Python so every library gets a distinct cryptographic value;
     # SQLite has no suitable random-hex default for ALTER TABLE.

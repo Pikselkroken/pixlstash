@@ -85,6 +85,10 @@ class UserToken(SQLModel, table=True):
     )
     include_attachments: bool = Field(default=False)
     watermark: bool = Field(default=True)
+    # The one client address this token is good from, or None for any. The
+    # ComfyUI link token is minted ``"pending"`` and bound to the address its
+    # first (round-trip check) request came from; see ``AuthService``.
+    bound_address: Optional[str] = Field(default=None)
 
     user: Optional["User"] = Relationship(
         back_populates="tokens",

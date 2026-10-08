@@ -1594,6 +1594,8 @@ class ComfyUIProbeResponse(BaseModel):
     url: str
     version: Optional[str] = None
     detail: Optional[str] = None
+    # Whether ComfyUI's --listen lets other computers reach it; None unknown.
+    listens_on_network: Optional[bool] = None
 
 
 class ComfyUILinkStatus(BaseModel):
@@ -1604,6 +1606,13 @@ class ComfyUILinkStatus(BaseModel):
     pixlstash_url: Optional[str] = None
     where: Optional[str] = None
     linked_at: Optional[str] = None
+    # The address the link token works from (None: a link made before #1810,
+    # whose token works from anywhere), and the last other address it was
+    # refused from since start-up.
+    bound_address: Optional[str] = None
+    refused_from: Optional[str] = None
+    # "other_computer", "listening" or None: see comfyui_link_service.exposure.
+    exposure: Optional[str] = None
 
 
 class ComfyUILinkStep(BaseModel):
@@ -1622,6 +1631,7 @@ class ComfyUILinkResponse(BaseModel):
     link: ComfyUILinkStatus
     steps: list[ComfyUILinkStep]
     can_install_pack: bool = False
+    exposure: Optional[str] = None
 
 
 class ComfyUIPackInstallResponse(BaseModel):
@@ -2216,14 +2226,16 @@ def create_router(server) -> APIRouter:
         "/comfyui/link",
         summary="Link the saved ComfyUI with a full-access token",
         description=(
-            "For a ComfyUI on this computer or the local network: mints an "
-            "ordinary full-access token and writes it, with the PixlStash URL "
+            "For a ComfyUI on this computer or the local network, from a local "
+            "owner: mints a full-access token that works only from ComfyUI's "
+            "address (bound by the check) and writes it, with the PixlStash URL "
             "ComfyUI should call (and PixlStash's certificate over HTTPS), into "
             "ComfyUI's settings for the ComfyUI-PixlStash nodes. Then checks "
             "that ComfyUI reaches PixlStash with it. Always 200: `steps` says "
             "how far it got (`reach`, `nodes`, `link`, `check`), and `reason` "
             "why a step needs the person. A ComfyUI on the local network needs "
-            "remote access on with HTTPS."
+            "remote access on with HTTPS. `exposure` says whether other "
+            "computers can reach that ComfyUI."
         ),
         response_model=ComfyUILinkResponse,
     )

@@ -375,6 +375,7 @@ class _FakeHandshake:
         self.query_params = query or {}
         self.headers = Headers(headers or {})
         self.client = types.SimpleNamespace(host=client_ip) if client_ip else None
+        self.url = types.SimpleNamespace(path=WS_UPDATES)
 
 
 def test_authenticate_websocket_cookie_is_owner(server):

@@ -455,6 +455,11 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     ComfyUI-PixlStash nodes) into a ComfyUI ``custom_nodes`` folder on this
     machine and restarts ComfyUI, the host-shell class, so loopback only.
 
+    59 = 51 + 8 with ``POST`` and ``DELETE /comfyui/link`` retargeted from
+    ``OWNER_ONLY`` (#1810): linking has this server push a full-access token to
+    whatever answers at the saved ComfyUI address on its own network, and
+    saving that address is allowed remotely, so a remote owner could aim it.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -468,7 +473,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 8, sorted(loopback)
-    assert len(local) == 49, sorted(local)
+    assert len(local) == 51, sorted(local)
 
 
 # ===========================================================================

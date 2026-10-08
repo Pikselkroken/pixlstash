@@ -51,6 +51,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.websockets import WebSocketDisconnect
 from sqlmodel import delete, select, update
 
 from pixlstash import auth, mcp_server
@@ -1556,6 +1558,8 @@ def test_the_probe_recognises_comfyui_and_normalises_the_address(
         "url": "https://comfy.example.com:8188/",
         "version": "0.3.62",
         "detail": None,
+        # system_stats carried no argv, so whether it listens is not known.
+        "listens_on_network": None,
     }
     assert asked == ["https://comfy.example.com:8188/system_stats"]
 
@@ -1655,9 +1659,16 @@ class _FakeComfyUI:
         pack: bool = True,
         settings_status: int = 200,
         check_status: int | None = None,
+        argv: list | None = None,
+        steal_from: str | None = None,
     ):
         self.server = server
         self.pack = pack
+        # ComfyUI's command line, as its system_stats reports it.
+        self.argv = argv
+        # Somebody at this address reads the token off ComfyUI's settings and
+        # uses it before ComfyUI's own check does.
+        self.steal_from = steal_from
         self.settings_status = settings_status
         # Answer the check with this instead of calling PixlStash.
         self.check_status = check_status
@@ -1670,7 +1681,10 @@ class _FakeComfyUI:
     def get(self, url, timeout=None, headers=None, **kwargs):
         path = urlsplit(url).path
         if path.endswith("/system_stats"):
-            return _http_answer(200, {"system": {"comfyui_version": "0.38.2"}})
+            system = {"comfyui_version": "0.38.2"}
+            if self.argv is not None:
+                system["argv"] = self.argv
+            return _http_answer(200, {"system": system})
         if path.endswith("/extensions"):
             scripts = ["/extensions/ComfyUI-PixlStash/open_workflow.js"]
             return _http_answer(200, scripts if self.pack else [])
@@ -1686,6 +1700,12 @@ class _FakeComfyUI:
             if self.check_status is not None:
                 return _http_answer(self.check_status, {"error": "unreachable"})
             token = headers["Authorization"].split(" ", 1)[1]
+            if self.steal_from is not None:
+                stolen = _bearer(self.server, token).get(
+                    f"{API}/sort_mechanisms",
+                    headers={"X-Forwarded-For": self.steal_from},
+                )
+                assert stolen.status_code == 200, stolen.text
             r = _bearer(self.server, token).get(f"{API}/sort_mechanisms")
             return _http_answer(r.status_code, r.json() if r.is_success else {})
         raise AssertionError(f"unexpected GET {url}")
@@ -1814,12 +1834,17 @@ def test_saving_a_comfyui_address_registers_folders_only_where_host_ops_are_allo
 
 
 def test_the_link_routes_are_owner_only(workflow_env):
-    """Declared owner-only, and a share token is refused on each verb while
-    the owner reaches the read. The refused token is proven live first."""
+    """The read is owner-only and the link and unlink local-owner-only (#1810),
+    and a share token is refused on each verb while the owner reaches the
+    read. The refused token is proven live first."""
     path = f"{API}/comfyui/link"
-    for method in ("GET", "POST", "DELETE"):
+    for method, policy in (
+        ("GET", AccessPolicy.OWNER_ONLY),
+        ("POST", AccessPolicy.LOCAL_OWNER_ONLY),
+        ("DELETE", AccessPolicy.LOCAL_OWNER_ONLY),
+    ):
         assert_real_route(workflow_env.server.api, method, path)
-        assert ROUTE_POLICIES[(method, path)].policy is AccessPolicy.OWNER_ONLY
+        assert ROUTE_POLICIES[(method, path)].policy is policy
     token = _mint(
         workflow_env.owner,
         "link check",
@@ -1927,6 +1952,316 @@ def test_unlinking_with_no_link_is_a_quiet_no_op(workflow_env, caplog):
     assert r.status_code == 200, r.text
     assert r.json()["linked"] is False
     assert not [rec for rec in caplog.records if rec.levelno >= logging.WARNING]
+
+
+@pytest.fixture
+def forwarded_for(workflow_env, monkeypatch):
+    """Let a test name the client address with ``X-Forwarded-For``.
+
+    The in-process client connects as ``testclient``; trusting it as a proxy
+    makes the header the real client address, the way a reverse proxy would.
+    Without the header a request comes from ``testclient``, which is where
+    the fake ComfyUI's check comes from.
+    """
+    monkeypatch.setitem(
+        workflow_env.server.auth._server_config, "trusted_proxies", ["testclient"]
+    )
+
+
+def _from(server, token: str, address: str) -> TestClient:
+    client = _bearer(server, token)
+    client.headers.update({"X-Forwarded-For": address})
+    return client
+
+
+def test_a_remote_owner_cannot_link_or_unlink_and_a_local_one_can(
+    workflow_env, comfy_at, forwarded_for, monkeypatch
+):
+    """``POST`` and ``DELETE /comfyui/link`` are local-owner-only (#1810): a
+    remote owner session is refused both, with nothing minted, while the same
+    session from this computer links and unlinks. The read stays open."""
+    server = workflow_env.server
+    owner = workflow_env.owner
+    comfy_at("http://127.0.0.1:18188/")
+    monkeypatch.setitem(server.auth._server_config, "allow_remote_host_ops", False)
+    remote = {"X-Forwarded-For": "8.8.8.8"}
+
+    r = owner.post(f"{API}/comfyui/link", headers=remote)
+    assert r.status_code == 403, r.text
+    assert _link_tokens(server) == []
+    assert owner.get(f"{API}/comfyui/link", headers=remote).status_code == 200
+
+    # Positive control: the same owner, from this computer.
+    assert owner.post(f"{API}/comfyui/link").json()["linked"] is True
+    assert len(_link_tokens(server)) == 1
+
+    r = owner.delete(f"{API}/comfyui/link", headers=remote)
+    assert r.status_code == 403, r.text
+    assert len(_link_tokens(server)) == 1
+    assert owner.delete(f"{API}/comfyui/link").status_code == 200
+    assert _link_tokens(server) == []
+
+
+def test_the_link_token_works_only_from_comfyuis_address(
+    workflow_env, comfy_at, forwarded_for
+):
+    """The check binds the token to the address ComfyUI called from; from
+    anywhere else it is refused, said in the link status, and never exchanged
+    for a session. An ordinary full-access token from the same other address
+    still works, so the refusals are the binding, not the locality belt."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    assert reply["linked"] is True, reply
+    assert "works only from testclient" in _steps(reply)["check"]["detail"]
+    token = fake.settings[comfyui_link_service.SETTING_TOKEN]
+    status = workflow_env.owner.get(f"{API}/comfyui/link").json()
+    assert (status["bound_address"], status["refused_from"]) == ("testclient", None)
+
+    # From ComfyUI's own address it is full access.
+    assert _bearer(server, token).get(f"{API}/sort_mechanisms").status_code == 200
+    assert _bearer(server, token).get(f"{API}/comfyui/link").status_code == 200
+
+    elsewhere = _from(server, token, LAN_IPV4)
+    for method, path in (
+        ("GET", f"{API}/sort_mechanisms"),
+        ("GET", f"{API}/comfyui/link"),
+        ("GET", f"{API}/pictures"),
+    ):
+        assert_real_route(server.api, method, path)
+        r = elsewhere.request(method, path)
+        assert r.status_code == 403, (path, r.text)
+        assert "only works from the ComfyUI" in r.json()["detail"]
+    status = workflow_env.owner.get(f"{API}/comfyui/link").json()
+    assert status["refused_from"] == LAN_IPV4
+    assert status["bound_address"] == "testclient"
+
+    # Never a login credential, from anywhere.
+    for address in ("testclient", LAN_IPV4):
+        login = TestClient(server.api)
+        login.headers.update({"X-Forwarded-For": address})
+        assert login.post(f"{API}/login", json={"token": token}).status_code == 401
+
+    # Nor a WebSocket from elsewhere; from ComfyUI's address it opens.
+    with _bearer(server, token).websocket_connect(f"{API}/ws/updates") as ws:
+        ws.send_json({"type": "set_filters"})
+    with pytest.raises(WebSocketDisconnect):
+        with elsewhere.websocket_connect(f"{API}/ws/updates"):
+            pass
+
+    # Positive control: an unbound full-access token from that same address
+    # works and signs in.
+    r = workflow_env.owner.post(
+        f"{API}/users/me/token", json={"description": "control", "scope": "ALL"}
+    )
+    assert r.status_code == 200, r.text
+    control = r.json()["token"]
+    try:
+        assert (
+            _from(server, control, LAN_IPV4).get(f"{API}/pictures").status_code == 200
+        )
+        login = TestClient(server.api)
+        login.headers.update({"X-Forwarded-For": LAN_IPV4})
+        assert login.post(f"{API}/login", json={"token": control}).status_code == 200
+    finally:
+        workflow_env.owner.delete(f"{API}/users/me/token/{r.json()['token_id']}")
+
+
+def test_the_link_token_cannot_manage_tokens(workflow_env, comfy_at):
+    """From ComfyUI's own address the link token is full access, but it never
+    manages credentials: a fresh unbound token or a password would work from
+    anywhere and outlive the link, and the share-token listings and bulk
+    revoke are the owner's. The owner still can."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    assert workflow_env.owner.post(f"{API}/comfyui/link").json()["linked"] is True
+    linked = _bearer(server, fake.settings[comfyui_link_service.SETTING_TOKEN])
+    assert linked.get(f"{API}/sort_mechanisms").status_code == 200
+
+    r = workflow_env.owner.post(
+        f"{API}/users/me/token", json={"description": "owner's", "scope": "ALL"}
+    )
+    assert r.status_code == 200, r.text
+    owners = r.json()["token_id"]
+    try:
+        attempts = (
+            ("POST", f"{API}/users/me/token", {"description": "x", "scope": "ALL"}),
+            ("GET", f"{API}/users/me/token", None),
+            ("PATCH", f"{API}/users/me/token/{owners}", {"watermark": True}),
+            ("DELETE", f"{API}/users/me/token/{owners}", None),
+            ("GET", f"{API}/users/me/shared-resource-ids?resource_type=picture", None),
+            ("POST", f"{API}/users/me/shared-picture-ids/batch", {"picture_ids": [1]}),
+            (
+                "DELETE",
+                f"{API}/users/me/tokens/by-resource?resource_type=picture&resource_id=1",
+                None,
+            ),
+            (
+                "POST",
+                f"{API}/users/me/auth",
+                {"current_password": "example-wrong", "new_password": "example-new"},
+            ),
+        )
+        for method, path, body in attempts:
+            r = linked.request(method, path, json=body)
+            assert r.status_code == 403, (method, path, r.text)
+            assert "ComfyUI link key cannot" in r.json()["detail"]
+        assert len(_link_tokens(server)) == 1
+        # Positive control: the owner reaches the listings, and changes and
+        # deletes the token. Not the token list: it fails here for an
+        # unrelated reason (see ``_link_tokens``).
+        r = workflow_env.owner.get(
+            f"{API}/users/me/shared-resource-ids?resource_type=picture"
+        )
+        assert r.status_code == 200, r.text
+        r = workflow_env.owner.post(
+            f"{API}/users/me/shared-picture-ids/batch", json={"picture_ids": [1]}
+        )
+        assert r.status_code == 200, r.text
+        r = workflow_env.owner.patch(
+            f"{API}/users/me/token/{owners}", json={"watermark": True}
+        )
+        assert r.status_code == 200, r.text
+    finally:
+        r = workflow_env.owner.delete(f"{API}/users/me/token/{owners}")
+        assert r.status_code == 200, r.text
+
+
+def test_a_token_revoked_while_it_binds_is_refused_and_not_recorded(workflow_env):
+    """A concurrent unlink can delete the row between the lookup and the
+    bind: the request is refused, and no refusal is recorded against it."""
+    gone = SimpleNamespace(
+        id=987654321, public_id="example-gone", bound_address=auth.TOKEN_BIND_PENDING
+    )
+    refusal = workflow_env.server.auth.source_refusal(
+        gone, "testclient", *auth.TOKEN_BIND_CHECK
+    )
+    assert refusal == "This key is not linked yet."
+    assert "example-gone" not in workflow_env.server.auth.bound_token_refusals
+
+
+def test_a_check_that_never_used_the_key_undoes_the_link(workflow_env, comfy_at):
+    """A 200 from the check that did not come through PixlStash leaves the
+    token pending, which the first caller from anywhere would bind."""
+    comfy_at("http://127.0.0.1:18188/", check_status=200)
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    assert reply["linked"] is False, reply
+    assert _steps(reply)["check"]["detail"] == (
+        "ComfyUI answered the check without using its new key."
+    )
+    assert _link_tokens(workflow_env.server) == []
+
+
+def test_the_bearer_fallback_refuses_a_bound_token_from_elsewhere(
+    workflow_env, comfy_at, forwarded_for
+):
+    """``_user_id_from_bearer`` serves a route the middleware skipped; it
+    applies the same binding."""
+    server = workflow_env.server
+    fake = comfy_at("http://127.0.0.1:18188/")
+    assert workflow_env.owner.post(f"{API}/comfyui/link").json()["linked"] is True
+    token = fake.settings[comfyui_link_service.SETTING_TOKEN]
+
+    def request(address):
+        return Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": f"{API}/pictures",
+                "query_string": b"",
+                "headers": [
+                    (b"authorization", f"Bearer {token}".encode()),
+                    (b"x-forwarded-for", address.encode()),
+                ],
+                "client": ("testclient", 50000),
+            }
+        )
+
+    owner_id = server.auth.get_user().id
+    assert server.auth._user_id_from_bearer(request("testclient")) == owner_id
+    assert server.auth._user_id_from_bearer(request(LAN_IPV4)) is None
+
+
+def test_an_unbound_link_token_is_good_only_for_the_check(
+    workflow_env, comfy_at, forwarded_for
+):
+    """Between minting and the check, the token answers only the check's own
+    request, and that request binds it: a copy taken in that window gets a
+    sort-order list, and ComfyUI's check is then refused, so the link is undone
+    and no token is left."""
+    server = workflow_env.server
+    comfy_at("http://127.0.0.1:18188/", steal_from=LAN_IPV4)
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    steps = _steps(reply)
+    assert reply["linked"] is False, reply
+    assert (steps["check"]["state"], steps["check"]["reason"]) == (
+        "failed",
+        "check_failed",
+    )
+    assert _link_tokens(server) == []
+    assert workflow_env.owner.get(f"{API}/comfyui/link").json()["linked"] is False
+
+    # Pending, every other request is refused and leaves it unbound.
+    r = workflow_env.owner.post(
+        f"{API}/users/me/token", json={"description": "pending", "scope": "ALL"}
+    )
+    assert r.status_code == 200, r.text
+    token, token_id = r.json()["token"], r.json()["token_id"]
+
+    def make_pending(session):
+        session.exec(
+            update(UserToken)
+            .where(UserToken.id == token_id)
+            .values(bound_address=auth.TOKEN_BIND_PENDING)
+        )
+        session.commit()
+
+    server.auth._db.run_task(make_pending, priority=DBPriority.IMMEDIATE)
+    server.auth._flush_token_cache()
+    try:
+        r = _from(server, token, LAN_IPV4).get(f"{API}/pictures")
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"] == "This key is not linked yet."
+        assert _bearer(server, token).get(f"{API}/pictures").status_code == 403
+        # The check's request binds it, to the address it came from.
+        bind = _from(server, token, LAN_IPV4).get(f"{API}/sort_mechanisms")
+        assert bind.status_code == 200, bind.text
+        assert _from(server, token, LAN_IPV4).get(f"{API}/pictures").status_code == 200
+        assert _bearer(server, token).get(f"{API}/sort_mechanisms").status_code == 403
+    finally:
+        workflow_env.owner.delete(f"{API}/users/me/token/{token_id}")
+
+
+@pytest.mark.parametrize(
+    "argv, where, exposure",
+    [
+        (["main.py"], "this_computer", None),
+        (["main.py", "--listen", "127.0.0.1"], "this_computer", None),
+        (["main.py", "--listen"], "this_computer", "listening"),
+        (["main.py", "--listen", "--port", "8188"], "this_computer", "listening"),
+        (["main.py", "--listen=0.0.0.0"], "this_computer", "listening"),
+        (["main.py", "--listen", "127.0.0.1,::"], "this_computer", "listening"),
+        # ComfyUI binds the empty entry too, and asyncio binds "" to every
+        # interface.
+        (["main.py", "--listen", "127.0.0.1,"], "this_computer", "listening"),
+        (None, "this_computer", None),
+    ],
+)
+def test_the_link_says_when_other_computers_can_reach_comfyui(
+    workflow_env, comfy_at, argv, where, exposure
+):
+    comfy_at("http://127.0.0.1:18188/", argv=argv)
+    reply = workflow_env.owner.post(f"{API}/comfyui/link").json()
+    assert reply["linked"] is True, reply
+    assert reply["exposure"] == exposure
+    status = workflow_env.owner.get(f"{API}/comfyui/link").json()
+    assert (status["where"], status["exposure"]) == (where, exposure)
+
+
+def test_a_comfyui_on_another_computer_is_always_reachable_by_others():
+    probe = {"listens_on_network": False}
+    assert comfyui_link_service.exposure("local_network", probe) == "other_computer"
+    assert comfyui_link_service.exposure("this_computer", probe) is None
 
 
 def test_no_token_is_minted_when_the_nodes_are_missing(workflow_env, comfy_at):
