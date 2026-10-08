@@ -186,19 +186,25 @@ runs:
           fi
           echo "login window $WID ${BW}x${BH}"
 
+          # fbsetbg's missing-wallpaper xmessage still appears despite the
+          # rootCommand override and overlaps the form; close it.
+          pkill -x xmessage || true
           xdotool windowactivate --sync "$WID" || xdotool windowactivate "$WID" || true
           xdotool windowraise "$WID" || true
           sleep 1
-          # Click E-MAIL field, type id; Tab; type OTP; click Login. The click
-          # points are height fractions validated against the pinned SimplySign
-          # version — an image version bump must re-validate via the smoke test.
-          xdotool mousemove $((BX + BW/2)) $((BY + BH*39/100)) click 1; sleep 1
+          # Click the E-mail field, type id; click the One-time code field, type
+          # OTP; Enter submits. The login form is a web page served by Certum,
+          # so its layout can change without any client update (it did in
+          # Oct 2026: fields moved from 39%/Tab to 45%/55%, and the Sign In
+          # button went right-aligned, hence Enter rather than a click).
+          # Re-validate with a local replay (docs/windows-signing-setup.md).
+          xdotool mousemove $((BX + BW/2)) $((BY + BH*45/100)) click 1; sleep 1
           xdotool type --clearmodifiers --delay 50 "$CERTUM_USER_ID"
-          xdotool key Tab; sleep 1
+          xdotool mousemove $((BX + BW/2)) $((BY + BH*55/100)) click 1; sleep 1
           OTP="$(gen_otp)"
           echo "::add-mask::$OTP"
           xdotool type --clearmodifiers --delay 50 "$OTP"
-          xdotool mousemove $((BX + BW/2)) $((BY + BH*76/100)) click 1
+          xdotool key Return
           sleep 8
 
           # "Logon successful" dialog: the token does NOT activate until its
