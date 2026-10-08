@@ -2301,8 +2301,9 @@ def create_router(server) -> APIRouter:
         "`combo_key` names (the sorted member model ids, comma-joined, as "
         "`GET /models/workflow-sets` serves it under `set_checks`); a set "
         "whose members change has a different key and so no verdict, and "
-        "nothing clears one when the check later changes. Every id must be on "
-        "the shelf (404). Returns the answer it replaced as `previous`, so "
+        "nothing clears one when the check later changes. Recording needs every "
+        "id on the shelf (404); clearing does not, so an answer naming a model "
+        "that left can still go. Returns the answer it replaced as `previous`, so "
         "writing that back undoes the call."
     )
 

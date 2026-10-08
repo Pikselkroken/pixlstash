@@ -102,13 +102,14 @@ function choose(value) {
   emit("answer", value);
 }
 
-// A save that failed leaves the old answer standing: ask again, not the icon.
+// A save that failed leaves the old answer standing: ask again, not the icon,
+// with focus on the standing answer, since the button pressed is gone.
 watch(
   () => props.error,
   (error) => {
     if (!error) return;
     focusIconWhenDrawn = false;
-    if (props.verdict) reopened.value = true;
+    if (props.verdict) reopen();
   },
 );
 

@@ -106,6 +106,19 @@ describe("VerdictAsk refused save", () => {
     w.unmount();
   });
 
+  it("puts focus back on the standing answer when a change is refused", async () => {
+    const w = mountAsk({ verdict: "yes" });
+    await w.get("button").trigger("click");
+    await nextTick();
+    await w.get('[data-testid="verdict-no"]').trigger("click");
+    await w.setProps({ error: "Could not save." });
+    await nextTick();
+    expect(document.activeElement).toBe(
+      w.get('[data-testid="verdict-yes"]').element,
+    );
+    w.unmount();
+  });
+
   it("emits cancel", async () => {
     const w = mountAsk({ verdict: "yes" });
     await w.get("button").trigger("click");

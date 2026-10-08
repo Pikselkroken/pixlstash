@@ -620,8 +620,9 @@ Rules neither side may drift from:
    "problem"|"not_problem"}`), cleared by `DELETE` on the same paths, all
    owner-only. Each answers `{combo_key, [model_id,] verdict, previous}`;
    writing `previous` back (or `DELETE` when it is null) is the undo. A
-   non-canonical key or a wrong verdict word is a 422; an id not on the shelf,
-   or a `model_id` not in the key, a 404. A verdict belongs to its exact key:
+   non-canonical key or a wrong verdict word is a 422; a `model_id` not in the
+   key is a 404, and so is an id not on the shelf when recording (clearing
+   skips that check, so an answer naming a model that left can still go). A verdict belongs to its exact key:
    members change, no verdict, and the server clears nothing. The model's own
    shelf row (`GET /adapters`, `GET /adapters/{sha256}`, `GET /checkpoints`)
    carries `set_verdicts: [{combo_key, names, verdict}]`, the owner's member
