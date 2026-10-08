@@ -215,11 +215,11 @@ def install(comfyui_url: Optional[str]) -> dict:
 
     target = custom_nodes / PACK_FOLDER
     partial = custom_nodes / f".{PACK_FOLDER}.installing"
-    if target.exists() and not target.is_dir():
+    if os.path.lexists(target) and (target.is_symlink() or not target.is_dir()):
         # Refused before anything is trashed: the move into place would fail
         # after the older copies had gone, leaving ComfyUI with none.
         raise PackInstallRefused(
-            f"Cannot install the nodes: {target} is a file, not a folder. "
+            f"Cannot install the nodes: {target} is a file or a link, not a folder. "
             "Remove it yourself, then install again."
         )
     # Stage the whole copy before anything is trashed: a copy that fails half
