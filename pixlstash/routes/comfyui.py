@@ -2232,7 +2232,8 @@ def create_router(server) -> APIRouter:
         summary="Whether ComfyUI is linked to PixlStash",
         response_model=ComfyUILinkStatus,
     )
-    def get_comfyui_link():
+    def get_comfyui_link(request: Request):
+        server.auth.ensure_secure_when_required(request)
         return comfyui_link_service.link_status(server)
 
     @router.post(
@@ -2251,6 +2252,7 @@ def create_router(server) -> APIRouter:
         response_model=ComfyUILinkResponse,
     )
     def link_comfyui(request: Request):
+        server.auth.ensure_secure_when_required(request)
         user = server.auth.get_user_for_request(request)
         saved = getattr(user, "comfyui_url", None) if user else None
         reply = comfyui_link_service.link(server, request, saved)
@@ -2293,6 +2295,7 @@ def create_router(server) -> APIRouter:
         response_model=ComfyUILinkStatus,
     )
     def unlink_comfyui(request: Request):
+        server.auth.ensure_secure_when_required(request)
         return comfyui_link_service.unlink(server, request)
 
     @router.post(
@@ -2307,7 +2310,10 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUIProbeResponse,
     )
-    def probe_comfyui_address(payload: ComfyUIProbeRequest = Body(...)):
+    def probe_comfyui_address(
+        request: Request, payload: ComfyUIProbeRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
         try:
             return probe_comfyui(payload.url)
         except ValueError as exc:

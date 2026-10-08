@@ -271,17 +271,77 @@ describe("connecting ComfyUI", () => {
     });
   });
 
-  it("loads a saved https URL straight into connected, without probing", async () => {
+  it("asks the saved address before saying Connected", async () => {
     config.getUserConfig.mockResolvedValue({
       comfyui_url: "https://comfy.example.com/",
     });
+    let answer;
+    comfyui.probeComfyui.mockReturnValue(new Promise((r) => (answer = r)));
     const wrapper = await mountPane();
-    expect(comfyui.probeComfyui).not.toHaveBeenCalled();
+    expect(comfyui.probeComfyui).toHaveBeenCalledWith(
+      "https://comfy.example.com/",
+    );
     expect(byTestId(wrapper, "comfyui-connected-url").text()).toBe(
       "https://comfy.example.com/",
     );
+    expect(wrapper.text()).toContain("Checking");
+    expect(wrapper.text()).not.toContain("Connected");
+    answer({ reachable: true, url: "https://comfy.example.com/" });
+    await flushPromises();
     expect(wrapper.text()).toContain("Connected");
+    expect(wrapper.text()).not.toContain("Checking");
   });
+
+  it("says Not answering when the saved address does not answer on load", async () => {
+    config.getUserConfig.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188/",
+    });
+    probeAnswers({});
+    const wrapper = await mountPane();
+    expect(wrapper.text()).toContain("Not answering");
+    expect(wrapper.text()).toContain("No answer at http://127.0.0.1:8188/");
+    expect(wrapper.text()).not.toContain("Connected");
+  });
+
+  it("drops a load-time answer that lands after a newer save", async () => {
+    // The saved address's probe answers only after the person has
+    // disconnected and connected the ComfyUI found on this computer.
+    config.getUserConfig.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188/",
+    });
+    let late;
+    comfyui.probeComfyui
+      .mockReturnValueOnce(new Promise((r) => (late = r)))
+      .mockResolvedValue({
+        reachable: true,
+        url: "http://comfy-box.local:8189/",
+      });
+    const wrapper = await mountPane();
+    await byTestId(wrapper, "comfyui-disconnect").trigger("click");
+    await flushPromises();
+    await byTestId(wrapper, "comfyui-connect-found").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Connected");
+    late({ reachable: false, url: "http://127.0.0.1:8188/", detail: "down" });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Connected");
+    expect(wrapper.text()).not.toContain("Not answering");
+  });
+
+  it.each(["[::1]", "::1"])(
+    "wraps an IPv6 host typed as %s in one pair of brackets",
+    async (typed) => {
+      probeAnswers({ "http://[::1]:8188/": "http://[::1]:8188/" });
+      const wrapper = await mountPane();
+      await fillAddress(wrapper, { host: typed, port: "8188" });
+      expect(comfyui.probeComfyui).toHaveBeenLastCalledWith(
+        "http://[::1]:8188/",
+      );
+      expect(config.patchUserConfig).toHaveBeenCalledWith({
+        comfyui_url: "http://[::1]:8188/",
+      });
+    },
+  );
 
   it("disconnect clears the saved URL", async () => {
     config.getUserConfig.mockResolvedValue({
