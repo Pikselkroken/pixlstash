@@ -1495,12 +1495,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         justification="Whether the owner's ComfyUI is linked and through which URL; owner only",
     ),
     ("POST", "/api/v1/comfyui/link"): RoutePolicy(
-        _OWNER,
-        justification="Mints a full-access token and writes it into the owner's ComfyUI; the authority POST /users/me/token already has; owner only",
+        _LOCAL,
+        justification="Mints a full-access token and has this server push it to whatever answers at the saved ComfyUI address on its own network: the server's network position is the authority, so a local owner only (§16.3, #1810)",
     ),
     ("DELETE", "/api/v1/comfyui/link"): RoutePolicy(
-        _OWNER,
-        justification="Revokes the ComfyUI link token; the authority DELETE /users/me/token already has; owner only",
+        _LOCAL,
+        justification="Revokes the ComfyUI link token and has this server write into the saved ComfyUI's settings on its own network; a local owner only, like the link it undoes (§16.3, #1810)",
     ),
     ("POST", "/api/v1/comfyui/pack/install"): RoutePolicy(
         _LOOPBACK,

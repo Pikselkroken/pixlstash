@@ -11,6 +11,7 @@ exception to the origin-aware event envelope; its contract is documented on the
 function itself and in ``docs/backend_architecture.md`` §15. Preserve it exactly.
 """
 
+import ipaddress
 import json
 import mimetypes
 import ntpath
@@ -1460,6 +1461,38 @@ def normalize_comfyui_url(url: str) -> str:
     return f"{parts.scheme}://{netloc}{parts.path.rstrip('/')}/"
 
 
+def comfyui_listens_on_network(argv) -> bool | None:
+    """Whether ComfyUI's ``--listen`` lets other computers reach it.
+
+    Read from the ``argv`` ComfyUI's ``system_stats`` reports. ``--listen``
+    alone means every interface (ComfyUI's ``0.0.0.0,::``); its value is a
+    comma-separated list of addresses; without it ComfyUI listens on
+    127.0.0.1. None when ComfyUI did not report its arguments.
+    """
+    if not isinstance(argv, list):
+        return None
+    args = [str(arg) for arg in argv]
+    listen = None
+    for i, arg in enumerate(args):
+        if arg == "--listen":
+            value = args[i + 1] if i + 1 < len(args) else ""
+            listen = value if value and not value.startswith("-") else "0.0.0.0"
+        elif arg.startswith("--listen="):
+            listen = arg.split("=", 1)[1] or "0.0.0.0"
+    if listen is None:
+        return False
+    for host in (h.strip().strip("[]") for h in listen.split(",")):
+        if host.lower() == "localhost":
+            continue
+        try:
+            if not ipaddress.ip_address(host).is_loopback:
+                return True
+        except ValueError:
+            # A host name: it may name any interface, so it may be reachable.
+            return True
+    return False
+
+
 def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
     """Whether ComfyUI answers at *url*, asked from this server.
 
@@ -1469,16 +1502,24 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
     address the browser can reach and the server cannot is no use.
 
     Returns:
-        ``{"reachable", "url", "version", "detail"}``: ``url`` normalised,
-        ``version`` ComfyUI's own when it reports one, ``detail`` the reason
-        when not reachable, written for the person who typed the address.
+        ``{"reachable", "url", "version", "detail", "listens_on_network"}``:
+        ``url`` normalised, ``version`` ComfyUI's own when it reports one,
+        ``detail`` the reason when not reachable, written for the person who
+        typed the address, ``listens_on_network`` from
+        :func:`comfyui_listens_on_network` (None when not known).
 
     Raises:
         ValueError: *url* is not an http(s) URL with a host.
     """
     base = normalize_comfyui_url(url)
     where = urlsplit(base).netloc
-    result = {"reachable": False, "url": base, "version": None, "detail": None}
+    result = {
+        "reachable": False,
+        "url": base,
+        "version": None,
+        "detail": None,
+        "listens_on_network": None,
+    }
     try:
         # A redirect is not ComfyUI answering: it is another host's address.
         response = requests.get(
@@ -1520,6 +1561,7 @@ def probe_comfyui(url: str, timeout: float = 2.0) -> dict:
     version = system.get("comfyui_version")
     result["reachable"] = True
     result["version"] = str(version) if version else None
+    result["listens_on_network"] = comfyui_listens_on_network(system.get("argv"))
     return result
 
 

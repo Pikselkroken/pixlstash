@@ -435,6 +435,17 @@ def is_unscoped_owner_token(token: UserToken) -> bool:
     return token.scope == "ALL" and token.resource_type is None
 
 
+# ``UserToken.bound_address`` of a source-bound token nothing has used yet (the
+# ComfyUI link token, between minting and its round-trip check). Until a
+# request binds it, it is good for exactly one request, :data:`TOKEN_BIND_CHECK`
+# (what the link check makes), and that request binds it to its own address.
+# A copy read off ComfyUI's settings in that window therefore buys a list of
+# sort orders, and binds the token to the wrong address, so ComfyUI's own
+# check is refused and the link is undone.
+TOKEN_BIND_PENDING = "pending"
+TOKEN_BIND_CHECK = ("GET", "/api/v1/sort_mechanisms")
+
+
 def is_token_expired(token: UserToken, now: Optional[datetime] = None) -> bool:
     """Return True when *token* has passed its ``expires_at`` timestamp.
 
@@ -538,6 +549,11 @@ class AuthService:
         # Cache of recently-verified tokens: digest(token_value) → (UserToken, expiry_monotonic)
         # Avoids a bcrypt.verify() call on every authenticated request.
         self._token_cache: dict[str, tuple[UserToken, float]] = {}
+        # The last address each source-bound token was refused from, by
+        # ``public_id``, so the ComfyUI link status can say its key is being
+        # used from somewhere else (ComfyUI's address changed, or someone else
+        # has the key). In memory: the next refused call records it again.
+        self.bound_token_refusals: dict[str, str] = {}
         self._TOKEN_CACHE_TTL = 300.0  # seconds
         self._token_cache_lock = threading.Lock()
         # Revocation generation counter, bumped by every _flush_token_cache().
@@ -1555,6 +1571,63 @@ class AuthService:
                 exc,
             )
 
+    def source_refusal(
+        self, token: UserToken, client_ip: str, method: str, path: str
+    ) -> Optional[str]:
+        """Why *token* is refused from *client_ip*, or None when it is not.
+
+        Only a source-bound token (``bound_address`` set, today only the
+        ComfyUI link token) is ever refused here. A pending one is bound by
+        the request :data:`TOKEN_BIND_CHECK` names, to that request's address,
+        and refused for anything else.
+        """
+        bound = token.bound_address
+        if bound is None:
+            return None
+        if bound == TOKEN_BIND_PENDING:
+            if (method, path) != TOKEN_BIND_CHECK:
+                self._logger.warning(
+                    "Refused unbound link token %s for %s %s from %s: it is "
+                    "good only for the link check until that binds it.",
+                    token.public_id,
+                    method,
+                    path,
+                    client_ip,
+                )
+                return "This key is not linked yet."
+            bound = self._bind_token(token.id, client_ip)
+        if bound == client_ip:
+            return None
+        self.bound_token_refusals[token.public_id] = client_ip
+        self._logger.warning(
+            "Refused token %s from %s: it only works from %s, the address of "
+            "the ComfyUI it was linked to.",
+            token.public_id,
+            client_ip,
+            bound,
+        )
+        return "This key only works from the ComfyUI it was linked to."
+
+    def _bind_token(self, token_id: int, client_ip: str) -> Optional[str]:
+        """Bind a pending token to *client_ip*; return the address it is bound
+        to now, which is another one when a concurrent request won."""
+
+        def bind(session: Session):
+            token = session.get(UserToken, token_id)
+            if token is None:
+                return None
+            if token.bound_address == TOKEN_BIND_PENDING:
+                token.bound_address = client_ip
+                session.add(token)
+                session.commit()
+            return token.bound_address
+
+        bound = self._db.run_task(bind, priority=DBPriority.IMMEDIATE)
+        # The cached row still says pending.
+        self._flush_token_cache()
+        self._logger.info("Token id %s is bound to %s.", token_id, bound)
+        return bound
+
     def _user_id_from_bearer(self, request: Request) -> Optional[int]:
         """Validate a Bearer token from the Authorization header and return the user id."""
         auth_header = request.headers.get("Authorization", "")
@@ -1562,6 +1635,13 @@ class AuthService:
             return None
         token_value = auth_header[len("Bearer ") :]
         matched = self._token_from_value(token_value)
+        if matched is not None and self.source_refusal(
+            matched,
+            self._get_real_client_ip(request),
+            request.method,
+            request.url.path,
+        ):
+            return None
         if matched is not None:
             user = self.get_user()
             return user.id if user else None
@@ -1717,6 +1797,13 @@ class AuthService:
         if matched is not None:
             if getattr(matched, "library_uuid", None) != self.active_library_uuid():
                 return None
+            if self.source_refusal(
+                matched,
+                self._get_real_client_ip_ws(websocket),
+                "WEBSOCKET",
+                websocket.url.path,
+            ):
+                return None
             if (
                 is_unscoped_owner_token(matched)
                 and self._server_config.get("require_local_for_write", True)
@@ -1857,6 +1944,18 @@ class AuthService:
             return None
         return self.library_uuid_provider()
 
+    @staticmethod
+    def _refuse_bound_token(request: Request, action: str) -> None:
+        """A source-bound token (the ComfyUI link token) never manages tokens:
+        minting would hand it an unbound replacement that works from anywhere
+        and outlives the link."""
+        matched = getattr(request.state, "matched_token", None)
+        if matched is not None and matched.bound_address is not None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"The ComfyUI link key cannot {action} tokens.",
+            )
+
     def create_token(
         self,
         request: Request,
@@ -1867,6 +1966,7 @@ class AuthService:
         expires_at: Optional[datetime] = None,
         include_attachments: bool = False,
         watermark: bool = False,
+        bound_address: Optional[str] = None,
     ):
         self.ensure_secure_when_required(request)
         user_id = self.require_user_id(request)
@@ -1876,6 +1976,7 @@ class AuthService:
             raise HTTPException(
                 status_code=403, detail="Scoped tokens cannot create new tokens"
             )
+        self._refuse_bound_token(request, "create")
 
         if scope not in ("ALL", "READ"):
             raise HTTPException(status_code=400, detail="scope must be 'ALL' or 'READ'")
@@ -1951,6 +2052,7 @@ class AuthService:
             expires_at: Optional[datetime],
             include_attachments: bool,
             watermark: bool,
+            bound_address: Optional[str],
         ):
             user = session.get(User, user_id)
             if user is None:
@@ -1968,6 +2070,7 @@ class AuthService:
                 expires_at=expires_at,
                 include_attachments=include_attachments,
                 watermark=watermark,
+                bound_address=bound_address,
             )
             session.add(token)
             session.commit()
@@ -1986,6 +2089,7 @@ class AuthService:
             expires_at,
             include_attachments,
             watermark,
+            bound_address,
             priority=DBPriority.IMMEDIATE,
         )
 
@@ -2009,6 +2113,7 @@ class AuthService:
             raise HTTPException(
                 status_code=403, detail="Scoped tokens cannot list tokens"
             )
+        self._refuse_bound_token(request, "list")
 
         def fetch_tokens(session: Session, user_id: int):
             tokens = session.exec(
@@ -2053,6 +2158,7 @@ class AuthService:
     def delete_token(self, request: Request, token_id: int):
         self.ensure_secure_when_required(request)
         user_id = self.require_user_id(request)
+        self._refuse_bound_token(request, "delete")
 
         def remove_token(session: Session, user_id: int, token_id: int):
             token = session.get(UserToken, token_id)
@@ -2101,6 +2207,7 @@ class AuthService:
             raise HTTPException(
                 status_code=403, detail="Scoped tokens cannot modify tokens"
             )
+        self._refuse_bound_token(request, "change")
 
         def _update(session: Session, user_id: int, token_id: int, watermark: bool):
             token = session.get(UserToken, token_id)
@@ -2307,20 +2414,25 @@ class AuthService:
             # is_token_expired). A narrower or expired token is refused with
             # the same status and body as an unrecognised one, so the response
             # does not tell the two apart.
+            # A source-bound token is never a login credential: the session
+            # it would mint works from any address.
             if (
                 matched_token is None
                 or is_token_expired(matched_token)
                 or not is_unscoped_owner_token(matched_token)
+                or matched_token.bound_address is not None
             ):
                 if matched_token is not None:
                     self._logger.warning(
                         "Refused a session for token id %s: logging in requires "
-                        "an unexpired, unrestricted owner token (scope=%s, "
-                        "resource_type=%s, expires_at=%s).",
+                        "an unexpired, unrestricted owner token not bound to one "
+                        "address (scope=%s, resource_type=%s, expires_at=%s, "
+                        "bound_address=%s).",
                         matched_token.id,
                         matched_token.scope,
                         matched_token.resource_type,
                         matched_token.expires_at,
+                        matched_token.bound_address,
                     )
                 raise HTTPException(status_code=401, detail="Invalid token")
             if matched_token.public_id is None:
@@ -2588,6 +2700,16 @@ class AuthService:
                         return JSONResponse(
                             status_code=403,
                             content={"detail": "Token belongs to a different library"},
+                        )
+                    refusal = self.source_refusal(
+                        matched_token,
+                        self._get_real_client_ip(request),
+                        request.method,
+                        request.url.path,
+                    )
+                    if refusal:
+                        return JSONResponse(
+                            status_code=403, content={"detail": refusal}
                         )
                     user = self.get_user()
                     user_id = user.id if user else None
