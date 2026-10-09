@@ -1987,7 +1987,8 @@ the core rule groups workflows instead (there is no merge or split), and a check
 LoRA that used to be a member is a recipe value the workflow's pictures are
 filtered by.
 
-- **Toolbar**: Sort (Your ratings / Recently used / Picture count / Name) in the
+- **Toolbar**: Sort (Your ratings / Recently used / Recently changed /
+  Recently created / Picture count / Name) in the
   shipped `.tbm` popover, *Add…*, which is today's workflow import
   (`POST /comfyui/workflows/import`) rather than anything new, and then the
   app-wide tail — `[separator] [TbGlobalActions]` in its own `--space-3`

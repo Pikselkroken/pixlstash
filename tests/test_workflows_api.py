@@ -3218,6 +3218,48 @@ def test_a_card_says_when_it_was_last_used_so_the_grid_can_sort_by_it(
     assert _detail(workflow_env.owner, BINNED_WF)["card"]["last_used"] is None
 
 
+def test_a_card_says_when_it_was_created_and_last_changed(workflow_env):
+    """`created_at` and `changed_at`, for the grid's *Recently created* and
+    *Recently changed* sorts.
+
+    An automatic workflow is dated by its recipes: the first the hub saw and
+    the newest. A manual one by its document and its newest version, so a
+    pull of a changed ComfyUI file moves it up.
+    """
+    server, owner = workflow_env.server, workflow_env.owner
+    busy = _by_key(_cards(owner))[BUSY_WF]
+    # BUSY_RECIPE_A was first seen on the 1st and BUSY_RECIPE_B on the 2nd.
+    assert (busy["created_at"], busy["changed_at"]) == (
+        "2026-08-01T00:00:00Z",
+        "2026-08-02T00:00:00Z",
+    )
+
+    manual = create_manual_workflow(
+        server.hub, "Dated", {"1": {"class_type": "SaveImage", "inputs": {}}}, "pull"
+    )
+    with server.hub.transaction() as conn:
+        workflow_versions.append_version(
+            conn, manual, {"1": {"class_type": "SaveImage", "inputs": {"x": 1}}}
+        )
+    # Fixed and a day apart, so two writes in one clock tick cannot make a
+    # card that ignores the version read the same as one that reads it.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_document SET created_at = ? WHERE workflow_id = ?",
+            ("2026-09-01T00:00:00+00:00", manual),
+        )
+        conn.execute(
+            "UPDATE workflow_version SET created_at = ? "
+            "WHERE workflow_id = ? AND version = 2",
+            ("2026-09-02T00:00:00+00:00", manual),
+        )
+    card = _detail(owner, manual)["card"]
+    assert (card["created_at"], card["changed_at"]) == (
+        "2026-09-01T00:00:00+00:00",
+        "2026-09-02T00:00:00+00:00",
+    )
+
+
 def test_a_card_is_never_nameless(workflow_env):
     """`name` may not be null, and most cards have no name of their own.
 

@@ -724,6 +724,21 @@ class WorkflowCard(BaseModel):
             "workflow. Null when it has no kept pictures."
         ),
     )
+    created_at: str | None = Field(
+        None,
+        description=(
+            "When this machine first had the workflow (ISO 8601): a manual "
+            "one's storing, an automatic one's first recipe."
+        ),
+    )
+    changed_at: str | None = Field(
+        None,
+        description=(
+            "When the workflow last changed (ISO 8601): a manual one's newest "
+            "version, an automatic one's newest recipe. The owner's own edits "
+            "to name or defaults do not count."
+        ),
+    )
     rank: float = Field(
         0.0,
         description=(
@@ -2591,6 +2606,8 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         variant_count=len(workflow.variants),
         rank=figure.rank,
         last_used=_iso(figure.last_used),
+        created_at=figure.created_at,
+        changed_at=figure.changed_at,
         ghosts=figure.ghosts,
         model_ghosts=figure.model_ghosts,
         recipe_values=RecipeValues(

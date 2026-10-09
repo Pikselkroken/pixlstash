@@ -28,6 +28,8 @@ const CARDS = [
     rating: null,
     picture_count: 0,
     last_used: null,
+    created_at: "2026-09-10T00:00:00+00:00",
+    changed_at: "2026-09-10T00:00:00+00:00",
   },
   {
     id: "few-but-loved",
@@ -36,6 +38,8 @@ const CARDS = [
     rating: 5,
     picture_count: 2,
     last_used: "2026-01-04T00:00:00Z",
+    created_at: "2026-02-01T00:00:00+00:00",
+    changed_at: "2026-08-01T00:00:00+00:00",
     topologies: ["t1", "t2"],
   },
   {
@@ -45,6 +49,8 @@ const CARDS = [
     rating: 4.2,
     picture_count: 90,
     last_used: "2026-06-30T00:00:00Z",
+    created_at: null,
+    changed_at: null,
   },
   {
     id: "the-stack",
@@ -53,6 +59,8 @@ const CARDS = [
     rating: 3.5,
     picture_count: 40,
     last_used: "2026-09-01T00:00:00Z",
+    created_at: "2026-05-01T00:00:00+00:00",
+    changed_at: "2026-05-02T00:00:00+00:00",
   },
 ];
 
@@ -96,6 +104,23 @@ describe("the sort keys", () => {
       // "never" is not a date, and reading it as one is how a workflow with
       // no kept pictures would outrank every workflow made before 1970.
       "never-kept-a-picture",
+    ]);
+
+    // The workflow's own dates, newest first and undated last, the same rule
+    // as last use. Changed and created disagree on the middle two on purpose.
+    store.setSortKey("changed");
+    expect(order(store)).toEqual([
+      "never-kept-a-picture",
+      "few-but-loved",
+      "the-stack",
+      "workhorse",
+    ]);
+    store.setSortKey("created");
+    expect(order(store)).toEqual([
+      "never-kept-a-picture",
+      "the-stack",
+      "few-but-loved",
+      "workhorse",
     ]);
 
     // Name reads A to Z, the one ascending key: numbers compare as numbers
