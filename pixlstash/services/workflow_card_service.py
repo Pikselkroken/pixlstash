@@ -258,6 +258,11 @@ class WorkflowFigures:
     # Pictures per star, 1★ first (:attr:`VariantActivity.stars`).
     stars: list[int] = field(default_factory=lambda: [0] * 5)
     last_used: Optional[datetime] = None
+    # When the hub first had the workflow and when it last changed, ISO
+    # (:func:`_describe_dates`). ``None`` only for a workflow with no variant
+    # the hub has a recipe row for.
+    created_at: Optional[str] = None
+    changed_at: Optional[str] = None
     rank: float = 0.0
     covers: list[CoverCandidate] = field(default_factory=list)
     saved_recipes: int = 0
@@ -563,7 +568,32 @@ def read_grid(
     _describe_slots(hub, figures, names, _recovered_slots(figures, manual_models))
     _describe_ghosts(hub, vault, figures, names)
     _describe_recipe_values(figures, model_values)
+    _describe_dates(hub, figures)
     return Grid(cards=drawn, one_offs=one_offs, hidden=hidden, figures=figures)
+
+
+def _describe_dates(hub: HubDatabase, figures: list[WorkflowFigures]) -> None:
+    """Fill in when each workflow was created and when it last changed.
+
+    A manual workflow: its document's row, and its newest version (a pull of
+    a changed ComfyUI file). An automatic one: the first and the newest recipe
+    of it the hub has seen, a new variant being the workflow changing. The
+    owner's own edits (name, notes, defaults) carry no date and do not count.
+    """
+    first_seen = {
+        row["structural_hash"]: row["first_seen_at"]
+        for row in hub.fetchall(
+            "SELECT structural_hash, first_seen_at FROM workflow_recipe"
+        )
+    }
+    for figure in figures:
+        if figure.card.manual:
+            figure.created_at = figure.card.created_at
+            figure.changed_at = figure.card.version_at or figure.card.created_at
+            continue
+        seen = [first_seen[v] for v in figure.card.variants if v in first_seen]
+        if seen:
+            figure.created_at, figure.changed_at = min(seen), max(seen)
 
 
 def _describe_recipe_values(

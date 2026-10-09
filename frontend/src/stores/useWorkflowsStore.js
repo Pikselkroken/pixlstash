@@ -27,11 +27,20 @@ import { errorMessage } from "../utils/apiError";
  * split.
  */
 
-export const SORT_KEYS = ["rating", "used", "pictures", "name"];
+export const SORT_KEYS = [
+  "rating",
+  "used",
+  "changed",
+  "created",
+  "pictures",
+  "name",
+];
 
 export const SORT_LABELS = {
   rating: { label: "Your ratings" },
   used: { label: "Recently used" },
+  changed: { label: "Recently changed" },
+  created: { label: "Recently created" },
   pictures: { label: "Picture count" },
   name: { label: "Name" },
 };
@@ -46,6 +55,9 @@ const SORT_VALUES = {
   // A card whose pictures are all binned has no last use. It sorts BELOW
   // every dated card rather than being read as a date of its own.
   used: (card) => (card.last_used ? Date.parse(card.last_used) : -Infinity),
+  // The same rule for the two dates the server keeps of the workflow itself.
+  changed: (card) => (card.changed_at ? Date.parse(card.changed_at) : -Infinity),
+  created: (card) => (card.created_at ? Date.parse(card.created_at) : -Infinity),
   pictures: (card) => card.picture_count ?? 0,
 };
 

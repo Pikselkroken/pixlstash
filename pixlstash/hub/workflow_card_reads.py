@@ -113,6 +113,8 @@ class Card:
     versions: int = 1
     version: int = 1
     version_at: Optional[str] = None
+    # When a manual workflow was stored (``workflow_document.created_at``).
+    created_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -193,7 +195,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     stored workflow, pulled or otherwise, is never folded into the one-offs.
     """
     rows = hub.fetchall(
-        "SELECT d.workflow_id, d.origin, d.from_name, d.document, "
+        "SELECT d.workflow_id, d.origin, d.from_name, d.document, d.created_at, "
         "MAX(1, (SELECT COUNT(*) FROM workflow_version v "
         "WHERE v.workflow_id = d.workflow_id)) AS versions, "
         "COALESCE((SELECT v.created_at FROM workflow_version v "
@@ -219,6 +221,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
             versions=row["versions"],
             version=row["current_version"] or 1,
             version_at=row["version_at"],
+            created_at=row["created_at"],
         )
         for row in rows
         for facts in (
