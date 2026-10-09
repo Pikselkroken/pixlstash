@@ -229,7 +229,7 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | Web framework | **FastAPI** ≥ 0.135 | Async REST + WebSocket, auto OpenAPI |
 | ASGI server | **Uvicorn** ≥ 0.41 | Lifespan hooks for startup/shutdown |
 | Multipart | **python-multipart** | Image upload |
-| Auth | **python-jose**, **passlib[bcrypt]**, **cryptography** | JWT + bcrypt |
+| Auth | **passlib[bcrypt]**, **cryptography** | bcrypt; self-signed TLS certs (`ssl_setup.py`) |
 | Rate limit | Custom middleware in `utils/rate_limiter.py` | IP-based throttling |
 
 ### Persistence

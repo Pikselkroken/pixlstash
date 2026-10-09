@@ -152,9 +152,11 @@ the Windows exes get an explicit `-unsigned` suffix and a workflow warning
 | Symptom | Likely cause / fix |
 |---|---|
 | "login window did not appear" | SimplySign needs longer to start: raise the action's `launch-seconds`. Re-run the smoke test with `debug-screenshots: true` and check the diagnostics artifact (screenshots may show the account e-mail; they should not show the OTP, assuming SimplySign masks the field — treat them as sensitive regardless). |
-| Login submitted but "token not active" | The "Logon successful" dialog's Close button wasn't hit (the token stays inactive until it is closed) — usually SimplySign UI drift after an image bump. Re-validate coordinates via the smoke test. |
+| Login submitted but "token not active" | The clicks missed the form. The login form is a web page served by Certum and its layout changes without any client update (Oct 2026: fields moved, Sign In went right-aligned). Run `.github/actions/certum-sign/local-replay.sh` (usage in its header) with a code from the phone app: it screenshots each step locally, so you can see where the clicks land and fix the fractions in `action.yml`. Prefer this to CI debug screenshots, which become a public artifact. |
 | OTP rejected | Seed mismatch (compare generator vs phone app) or container clock skew. |
 | Segfault at launch, empty log | `$USER` unset — baked into the image (`ENV USER=root`); if it recurs, something cleared the environment. |
+| jsign "No certificate found in the keystore" | The token enumerates before its certificate is populated. The action retries that message for ~60 s; if it still fails, re-run the job. |
+| Login worked before, now fails at a new point each run | Certum likely shipped a new SimplySign Desktop; check `files.certum.eu/software/SimplySignDesktop/Linux-Ubuntu/` and bump the image (2.9.14 → 2.9.15 in Oct 2026). |
 | jsign timestamp errors | `time.certum.pl` hiccup; the action already retries 3×. Persistent failures: try re-running the job. |
 | Signing job waits forever | The `windows-signing` environment has no required reviewer, so this is normally the shared `certum-simplysign-session` concurrency group: the other workflow's sign job holds it and this one queues (expected, never cancelled). If the run instead shows a "Review deployments" prompt, a reviewer rule was re-added. |
 
