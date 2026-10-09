@@ -19,6 +19,10 @@ test("shortcuts dialog opens on F1 and lists the grid shortcuts", async ({
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".shortcuts-table tr")).not.toHaveCount(0);
   await expect(dialog.getByText("Open search")).toBeVisible();
+  // Every AppDialog centres on the window, not on the overlay's left edge.
+  const box = await dialog.boundingBox();
+  const { width } = page.viewportSize();
+  expect(Math.abs(box.x + box.width / 2 - width / 2)).toBeLessThan(2);
   await page.keyboard.press("F1");
   await expect(dialog).toBeHidden();
 });
