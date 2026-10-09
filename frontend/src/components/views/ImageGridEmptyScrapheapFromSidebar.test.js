@@ -227,6 +227,26 @@ describe('sidebar "Empty Scrapheap" opens the delete-forever confirm', () => {
     wrapper.unmount();
   });
 
+  it("refreshes the sidebar counts when the purge itself fails", async () => {
+    // A 500 from the purge can come after rows were already destroyed, so the
+    // sidebar must re-read its counts rather than keep the stale one.
+    apiDelete.mockRejectedValue(new Error("Internal Server Error"));
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const wrapper = mountGrid({ selectedCharacter: SCRAPHEAP_PICTURES_ID });
+    await nextTick();
+    wrapper.vm.deleteForeverMode = "all";
+
+    await wrapper.vm.confirmDeleteForever({ includeProtected: false });
+
+    expect(apiDelete).toHaveBeenCalledTimes(1);
+    expect(wrapper.emitted("refresh-sidebar")).toHaveLength(1);
+
+    consoleError.mockRestore();
+    wrapper.unmount();
+  });
+
   it("ignores a second request while a purge is already running", async () => {
     const wrapper = mountGrid({ selectedCharacter: SCRAPHEAP_PICTURES_ID });
     await nextTick();

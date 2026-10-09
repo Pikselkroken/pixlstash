@@ -1103,6 +1103,53 @@ def test_the_stricter_picture_input_check_is_rebuilt_with_its_rows(tmp_path):
         reopened.close()
 
 
+def test_an_integer_ghost_seed_is_rebuilt_as_text_with_its_rows(tmp_path):
+    """Development builds created the ghost seed as INTEGER, which overflows on
+    a seed above 2**63 - 1; a hub with that shape is rebuilt on its next open."""
+    path = str(tmp_path / "hub.db")
+    HubDatabase(path).close()
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE workflow_picture_ghost")
+    conn.execute(
+        "CREATE TABLE workflow_picture_ghost (library_uuid TEXT NOT NULL, "
+        "pixel_sha TEXT NOT NULL, instance_hash TEXT NOT NULL, "
+        "structural_hash TEXT, positive_prompt TEXT, seed INTEGER, "
+        "thumbnail BLOB NOT NULL, created_at TEXT NOT NULL, "
+        "PRIMARY KEY (library_uuid, pixel_sha))"
+    )
+    conn.execute(
+        "INSERT INTO workflow_picture_ghost VALUES ('lib', 'old', 'inst', NULL, "
+        "'a prompt', 42, x'00', 'then')"
+    )
+    conn.commit()
+    conn.close()
+
+    reopened = HubDatabase(path)
+    try:
+        record_picture_ghosts(
+            reopened,
+            [
+                PictureGhost(
+                    library_uuid="lib",
+                    pixel_sha="new",
+                    instance_hash="inst",
+                    thumbnail=b"\x01",
+                    seed=str(2**64 - 1),
+                )
+            ],
+        )
+        rows = reopened.fetchall(
+            "SELECT pixel_sha, seed, typeof(seed) AS kind FROM "
+            "workflow_picture_ghost ORDER BY pixel_sha"
+        )
+        assert [tuple(row) for row in rows] == [
+            ("new", str(2**64 - 1), "text"),
+            ("old", "42", "text"),
+        ]
+    finally:
+        reopened.close()
+
+
 def test_recording_the_same_graph_twice_writes_one_row(hub):
     """Idempotent, so the backfill can be re-run without a reconciliation pass.
 
@@ -3391,9 +3438,32 @@ def test_a_ghost_carries_the_thumbnail_and_the_prompt_together(store):
     # The seed is the ONLY thing distinguishing this ghost from its cover, and
     # it is not a picture column — it is re-read from the file the purge is
     # about to delete.
-    assert ghost["seed"] == 42
+    assert ghost["seed"] == "42"
     assert ghost["structural_hash"] == structural_hash(api_graph(TXT2IMG))
     assert ghost["instance_hash"] == instance_hash(api_graph(TXT2IMG))
+
+
+def test_a_ghost_keeps_a_seed_beyond_sqlite_integer(store):
+    """ComfyUI draws seeds up to 2**64 - 1; SQLite's INTEGER stops at 2**63 - 1.
+
+    Written as an INTEGER, about half of all real seeds failed the ghost write
+    with an OverflowError, which turned emptying the Scrapheap into a 500.
+    """
+    big = 2**64 - 1
+    kept = write_png(
+        Path(store.image_root),
+        "bigseed-a.png",
+        api=api_graph(edited(TXT2IMG, 5, seed=big)),
+    )
+    cover = write_png(Path(store.image_root), "bigseed-b.png", api=api_graph(TXT2IMG))
+    kept_id, cover_id = (add_picture(store, name) for name in (kept, cover))
+    run_extraction(store, [kept_id, cover_id])
+    scrapheap(store, kept_id, pixel_sha="sha-bigseed")
+
+    outcome = purge(store, [kept_id], retention=GHOST_RETENTION_COVERED)
+
+    assert outcome.ghosts_kept == 1
+    assert ghosts(store)["sha-bigseed"]["seed"] == str(big)
 
 
 def test_a_picture_with_no_workflow_leaves_no_ghost(store):

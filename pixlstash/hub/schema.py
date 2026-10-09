@@ -796,7 +796,9 @@ CREATE TABLE IF NOT EXISTS workflow_picture_ghost (
     -- that one was dropped -- nothing between the vault column and this row can
     -- lose it.
     positive_prompt  TEXT,
-    seed             INTEGER,
+    -- TEXT, as `generation.seed` is: ComfyUI draws seeds up to 2**64 - 1 and
+    -- SQLite's INTEGER stops at 2**63 - 1.
+    seed             TEXT,
     -- NOT NULL, because this is the half the rule is actually about. A row with
     -- no thumbnail would be a retained prompt on its own, which is the exact
     -- artefact §5 forbids, and it would also destroy the argument that makes
@@ -1742,6 +1744,33 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             "VALUES (?, ?, ?, ?, ?)",
             [tuple(row) for row in rows],
         )
+
+    # The ghost's seed first shipped as INTEGER, which about half of all
+    # ComfyUI seeds overflow, failing the purge that writes the ghost. Rebuilt
+    # with its rows; False on a fresh hub and on every re-run after.
+    ghost_seed_type = next(
+        (
+            row[2]
+            for row in conn.execute(
+                "PRAGMA table_info(workflow_picture_ghost)"
+            ).fetchall()
+            if row[1] == "seed"
+        ),
+        None,
+    )
+    if ghost_seed_type is not None and ghost_seed_type.upper() != "TEXT":
+        conn.execute(
+            "ALTER TABLE workflow_picture_ghost RENAME TO workflow_picture_ghost_old"
+        )
+        conn.execute(_V2_WORKFLOW_PICTURE_GHOST)
+        conn.execute(
+            "INSERT INTO workflow_picture_ghost (library_uuid, pixel_sha, "
+            "instance_hash, structural_hash, positive_prompt, seed, thumbnail, "
+            "created_at) SELECT library_uuid, pixel_sha, instance_hash, "
+            "structural_hash, positive_prompt, CAST(seed AS TEXT), thumbnail, "
+            "created_at FROM workflow_picture_ghost_old"
+        )
+        conn.execute("DROP TABLE workflow_picture_ghost_old")
 
     for statement in _V2_WORKFLOW_TABLES:
         conn.execute(statement)

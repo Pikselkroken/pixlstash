@@ -5339,6 +5339,8 @@ async function runScrapheapSelectionPurge(idsToRemove, includeProtected) {
     );
   } catch (err) {
     console.error("Scrapheap purge failed", err);
+    // A failed purge can still have destroyed rows, so the counts are re-read.
+    emit("refresh-sidebar");
     noticeStore.error(`Couldn't delete those pictures. ${errorDetail(err)}`, {
       key: "scrapheap-purge",
     });
@@ -5404,6 +5406,8 @@ async function runEmptyScrapheap(includeProtected) {
     showSnapshotsWithDeleted(resp);
   } catch (e) {
     console.error("Failed to empty the scrapheap", e);
+    // A failed purge can still have destroyed rows, so the counts are re-read.
+    emit("refresh-sidebar");
     noticeStore.error(`Couldn't empty the scrapheap. ${errorDetail(e)}`, {
       key: "scrapheap-empty",
     });

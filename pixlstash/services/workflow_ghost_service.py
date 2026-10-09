@@ -339,7 +339,7 @@ def _thumbnail_bytes(image_root: str, file_path: Optional[str]) -> Optional[byte
         return None
 
 
-def _seed(image_root: str, file_path: Optional[str]) -> Optional[int]:
+def _seed(image_root: str, file_path: Optional[str]) -> Optional[str]:
     """The generation seed, re-read from the file the purge is about to delete.
 
     The seed is not a picture column — the instance hash excludes it on purpose,
@@ -363,7 +363,8 @@ def _seed(image_root: str, file_path: Optional[str]) -> Optional[int]:
     if not info:
         return None
     seed = info.get("seed")
-    return seed if isinstance(seed, int) else None
+    # Text, as ``generation.seed`` is: a seed above 2**63 - 1 overflows SQLite.
+    return str(seed) if isinstance(seed, int) else None
 
 
 def cascade_uncovered_ghosts(
