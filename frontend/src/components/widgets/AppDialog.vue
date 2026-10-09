@@ -1,6 +1,10 @@
 <template>
+  <!-- width="auto": Vuetify's overlay box is otherwise nearly full-width, and
+       the card's own --dialog-w-* width then sits at its left edge instead of
+       the centre of the window. -->
   <v-dialog
     :model-value="open"
+    width="auto"
     :scrim="true"
     :persistent="persistent"
     :transition="reducedMotion ? false : undefined"
