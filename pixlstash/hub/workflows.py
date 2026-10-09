@@ -719,7 +719,7 @@ class PictureGhost:
     thumbnail: bytes
     structural_hash: Optional[str] = None
     positive_prompt: Optional[str] = None
-    seed: Optional[int] = None
+    seed: Optional[str] = None
 
 
 def record_picture_ghosts(hub: HubDatabase, ghosts: list[PictureGhost]) -> int:
