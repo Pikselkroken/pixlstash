@@ -248,7 +248,7 @@ runs:
           # after login: retry that every 4s for ~60s (upstream ReactiveUI
           # 27e44494). Anything else, e.g. a transient timestamp-server
           # failure, gets 3 tries 10s apart.
-          ok=""; other=0
+          ok=""; other=0; last_err=""
           for try in $(seq 1 15); do
             if out="$(java -jar "$JSIGN_JAR" --storetype PKCS11 --keystore "$CONF" --storepass "" \
                         --alg SHA-256 --tsmode RFC3161 --tsaurl "$TS_URL" --replace \
@@ -256,6 +256,8 @@ runs:
               printf '%s\n' "$out"; ok=1; break
             fi
             printf '%s\n' "$out"
+            # One line for the annotation: a workflow command ends at a newline.
+            last_err="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1 || true)"
             case "$out" in
               *'No certificate found'*)
                 echo "keystore not populated yet (attempt $try), retrying in 4s"
@@ -267,7 +269,7 @@ runs:
                 sleep 10 ;;
             esac
           done
-          [ -n "$ok" ] || { echo "::error title=Signing failed::jsign did not sign $f"; exit 1; }
+          [ -n "$ok" ] || { echo "::error title=Signing failed::jsign did not sign $f (last error: ${last_err:-unknown})"; exit 1; }
 
           # Verify: structural signature check + timestamp presence.
           osslsigncode verify -in "$f" | tee "$RUNNER_TEMP/verify.out"
