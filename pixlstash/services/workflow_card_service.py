@@ -580,16 +580,29 @@ def _describe_dates(hub: HubDatabase, figures: list[WorkflowFigures]) -> None:
     of it the hub has seen, a new variant being the workflow changing. The
     owner's own edits (name, notes, defaults) carry no date and do not count.
     """
-    first_seen = {
-        row["structural_hash"]: row["first_seen_at"]
-        for row in hub.fetchall(
-            "SELECT structural_hash, first_seen_at FROM workflow_recipe"
+    wanted = sorted(
+        {
+            v
+            for figure in figures
+            if not figure.card.manual
+            for v in figure.card.variants
+        }
+    )
+    first_seen: dict[str, str] = {}
+    for batch in chunked(wanted):
+        placeholders = ",".join("?" * len(batch))
+        first_seen.update(
+            hub.fetchall(
+                "SELECT structural_hash, first_seen_at FROM workflow_recipe "
+                f"WHERE structural_hash IN ({placeholders})",
+                batch,
+            )
         )
-    }
     for figure in figures:
         if figure.card.manual:
+            # `version_at` already falls back to the document's own date.
             figure.created_at = figure.card.created_at
-            figure.changed_at = figure.card.version_at or figure.card.created_at
+            figure.changed_at = figure.card.version_at
             continue
         seen = [first_seen[v] for v in figure.card.variants if v in first_seen]
         if seen:

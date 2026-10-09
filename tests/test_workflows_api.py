@@ -3241,14 +3241,23 @@ def test_a_card_says_when_it_was_created_and_last_changed(workflow_env):
         workflow_versions.append_version(
             conn, manual, {"1": {"class_type": "SaveImage", "inputs": {"x": 1}}}
         )
-    stored = dict(
-        server.hub.fetchall(
-            "SELECT version, created_at FROM workflow_version WHERE workflow_id = ?",
-            (manual,),
+    # Fixed and a day apart, so two writes in one clock tick cannot make a
+    # card that ignores the version read the same as one that reads it.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_document SET created_at = ? WHERE workflow_id = ?",
+            ("2026-09-01T00:00:00+00:00", manual),
         )
-    )
+        conn.execute(
+            "UPDATE workflow_version SET created_at = ? "
+            "WHERE workflow_id = ? AND version = 2",
+            ("2026-09-02T00:00:00+00:00", manual),
+        )
     card = _detail(owner, manual)["card"]
-    assert (card["created_at"], card["changed_at"]) == (stored[1], stored[2])
+    assert (card["created_at"], card["changed_at"]) == (
+        "2026-09-01T00:00:00+00:00",
+        "2026-09-02T00:00:00+00:00",
+    )
 
 
 def test_a_card_is_never_nameless(workflow_env):

@@ -137,6 +137,12 @@
 //     last_used,                        // ISO, or null when the card has no
 //                                       // kept pictures. The *Recently used*
 //                                       // sort; null sorts below every date.
+//     created_at, changed_at,           // ISO: when the hub first had the
+//                                       // workflow and when it last changed
+//                                       // (a manual one's newest version, an
+//                                       // automatic one's newest recipe). The
+//                                       // *Recently created* / *changed*
+//                                       // sorts, with last_used's null rule.
 //     variant_count,                    // how many recipes the card is made
 //                                       // of. ZERO IS A REAL CARD (#1466): a
 //                                       // stored editor-format workflow file
