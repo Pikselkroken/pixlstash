@@ -35,7 +35,7 @@
           size="sm"
           @click="emit('settings')"
         >
-          Settings › Compute
+          Settings › ComfyUI
         </AppButton>
         <!-- Beside Settings, not instead of it: the fix happens in another
              dialog stacked over this one, and nothing here is told when it is

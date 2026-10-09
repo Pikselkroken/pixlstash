@@ -648,7 +648,7 @@
           :key="`${index}:${reason.code}`"
           :reason="reason"
           :busy="preflighting"
-          @settings="emit('open-settings', 'compute')"
+          @settings="emit('open-settings', 'comfyui')"
           @retry="runPreflight()"
           @drop-lora="dropLoras"
           @edit-loras="editLoras"
