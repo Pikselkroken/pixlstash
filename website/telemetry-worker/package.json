@@ -14,7 +14,7 @@
   },
   "overrides": {
     "undici": "7.30.0",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "miniflare": "https://registry.npmjs.org/miniflare/-/miniflare-5.20260730.0-alpha.tgz",
