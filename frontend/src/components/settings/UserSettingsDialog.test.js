@@ -150,13 +150,19 @@ describe("UserSettingsDialog library navigation", () => {
 
       expect(
         wrapper.findAll(".settings-nav-item").map((n) => n.attributes("id")),
-      ).toEqual(
-        expect.arrayContaining([
-          "settings-nav-comfyui",
-          "settings-nav-compute",
-          "settings-nav-backend",
-        ]),
-      );
+      ).toEqual([
+        "settings-nav-appearance",
+        "settings-nav-behaviour",
+        "settings-nav-smart-score",
+        "settings-nav-libraries",
+        "settings-nav-scrapheap",
+        "settings-nav-snapshots",
+        "settings-nav-privacy",
+        "settings-nav-comfyui",
+        "settings-nav-compute",
+        "settings-nav-backend",
+        "settings-nav-account",
+      ]);
       expect(wrapper.find("#settings-nav-compute").attributes("aria-current")).toBe(
         "page",
       );
