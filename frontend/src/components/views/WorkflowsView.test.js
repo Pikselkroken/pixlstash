@@ -368,6 +368,50 @@ describe("the cursor survives the list being rebuilt", () => {
     expect(cursorKey(wrapper)).toBe("a");
   });
 
+  // Falling back to the first row focused it after a Delete, and the browser
+  // scrolled the grid to the top to show it.
+  it.each([
+    [["d"], "d", "e"],
+    [["f"], "f", "e"],
+    [["d", "e"], "d", "f"],
+    [["d", "e"], null, "f"],
+  ])(
+    "moves beside %j, not to the first card, when deleted (cursor on %s)",
+    async (gone, clicked, next) => {
+      const manual = CARDS.map((entry) => ({ ...entry, manual: true }));
+      listWorkflowCards.mockImplementation(() =>
+        Promise.resolve({
+          cards: manual.filter((entry) => !gone.includes(entry.id)),
+          one_offs: 0,
+          hidden: 0,
+        }),
+      );
+      const wrapper = await grid(1008);
+      const store = useWorkflowsStore();
+      store.cards = manual;
+      await flush();
+      // `null`: selected without the cursor ever landing, as Ctrl+A does.
+      if (clicked) {
+        await wrapper.find(`.wfv-row[data-key="${clicked}"]`).trigger("click");
+        expect(cursorKey(wrapper)).toBe(clicked);
+      }
+      store.selectRange(gone);
+
+      const ask = vi.spyOn(window, "confirm").mockReturnValue(true);
+      deleteWorkflow.mockResolvedValue({});
+      await wrapper
+        .findComponent({ name: "WorkflowSelectionBar" })
+        .vm.$emit("delete");
+      await flush();
+      expect(cardKeys(wrapper)).toEqual(
+        CARDS.map((entry) => entry.id).filter((id) => !gone.includes(id)),
+      );
+      expect(cursorKey(wrapper)).toBe(next);
+      expect(document.activeElement.dataset.key).toBe(next);
+      ask.mockRestore();
+    },
+  );
+
 });
 
 describe("the empty state", () => {

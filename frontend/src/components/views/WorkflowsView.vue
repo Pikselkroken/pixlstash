@@ -568,6 +568,22 @@ const cursorIndex = computed(() => {
   return at >= 0 ? at : 0;
 });
 
+// When the cursor's card leaves the grid (deleted, hidden, filtered out), the
+// cursor moves to the card that took its place, as a file manager's does.
+// Falling back to the first row instead put focus there after a Delete and
+// scrolled the grid to the top.
+watch(flatRows, (rows, previous) => {
+  if (!cursorId.value || rows.some((entry) => entry.id === cursorId.value))
+    return;
+  const at = previous?.findIndex((entry) => entry.id === cursorId.value) ?? -1;
+  if (at < 0) return;
+  const alive = new Set(rows.map((entry) => entry.id));
+  const next =
+    previous.slice(at + 1).find((entry) => alive.has(entry.id)) ??
+    previous.slice(0, at).findLast((entry) => alive.has(entry.id));
+  if (next) cursorId.value = next.id;
+});
+
 // ── Columns from the real container width ─────────────────────────────────
 // The count the grid is TOLD to draw, so `auto-fill` cannot disagree with the
 // arithmetic the cursor and the notch are built on.
@@ -1427,6 +1443,9 @@ async function confirmDelete() {
     danger: true,
   });
   if (!ok) return;
+  // A selection made without the cursor (Ctrl+A, the rail) still leaves it on
+  // a deleted card, so it lands beside them rather than on the first row.
+  if (!cursorId.value) cursorId.value = `card:${cards[0].id}`;
   const { refused } = await store.deleteSelected();
   // The focused row may have just gone, even in a partial delete, which drops
   // focus to <body>, where the next key reaches nothing.
