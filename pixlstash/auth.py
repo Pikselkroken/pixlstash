@@ -2144,45 +2144,58 @@ class AuthService:
         self._refuse_bound_token(request, "list tokens")
 
         def fetch_tokens(session: Session, user_id: int):
-            tokens = session.exec(
+            return session.exec(
                 select(UserToken)
                 .where(UserToken.user_id == user_id)
                 .order_by(UserToken.created_at.desc())
             ).all()
-            result = []
-            for token in tokens:
-                resource_name = None
-                if token.resource_type == "character" and token.resource_id is not None:
-                    obj = session.get(Character, token.resource_id)
-                    resource_name = obj.name if obj else None
-                elif (
-                    token.resource_type == "picture_set"
-                    and token.resource_id is not None
-                ):
-                    obj = session.get(PictureSet, token.resource_id)
-                    resource_name = obj.name if obj else None
-                elif token.resource_type == "project" and token.resource_id is not None:
-                    obj = session.get(Project, token.resource_id)
-                    resource_name = obj.name if obj else None
-                result.append(
-                    {
-                        "id": token.id,
-                        "description": token.description,
-                        "scope": token.scope,
-                        "resource_type": token.resource_type,
-                        "resource_id": token.resource_id,
-                        "resource_name": resource_name,
-                        "expires_at": token.expires_at,
-                        "created_at": token.created_at,
-                        "last_used_at": token.last_used_at,
-                        "include_attachments": token.include_attachments,
-                        "watermark": token.watermark,
-                        "all_libraries": token_follows_active_library(token),
-                    }
-                )
-            return result
 
-        return self._db.run_task(fetch_tokens, user_id, priority=DBPriority.IMMEDIATE)
+        tokens = self._db.run_task(fetch_tokens, user_id, priority=DBPriority.IMMEDIATE)
+
+        # The tokens are in the hub; the sets, characters and projects they
+        # name are in the library. And only in *their* library: the same id is
+        # a different set in the next one, so a share link for a library that
+        # is not open is listed without a name rather than under a wrong one.
+        # Read through the request's lease when it has one, as the guest
+        # lookup in the middleware does, so a switch cannot land in between.
+        lease = getattr(getattr(request, "state", None), "library_lease", None)
+        active_uuid = lease.library_uuid if lease else self.active_library_uuid()
+        vault_db = lease.db if lease else (self.vault_db or self._db)
+        models = {"character": Character, "picture_set": PictureSet, "project": Project}
+        named = [
+            token
+            for token in tokens
+            if token.resource_type in models
+            and token.resource_id is not None
+            and token.library_uuid == active_uuid
+        ]
+
+        def fetch_names(session: Session):
+            names = {}
+            for token in named:
+                obj = session.get(models[token.resource_type], token.resource_id)
+                if obj is not None:
+                    names[token.id] = obj.name
+            return names
+
+        names = vault_db.run_immediate_read_task(fetch_names) if named else {}
+        return [
+            {
+                "id": token.id,
+                "description": token.description,
+                "scope": token.scope,
+                "resource_type": token.resource_type,
+                "resource_id": token.resource_id,
+                "resource_name": names.get(token.id),
+                "expires_at": token.expires_at,
+                "created_at": token.created_at,
+                "last_used_at": token.last_used_at,
+                "include_attachments": token.include_attachments,
+                "watermark": token.watermark,
+                "all_libraries": token_follows_active_library(token),
+            }
+            for token in tokens
+        ]
 
     def delete_token(self, request: Request, token_id: int):
         self.ensure_secure_when_required(request)

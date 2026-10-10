@@ -320,6 +320,44 @@ class TestPinnedRoutes:
             server.library_registry.detach(other.id)
 
 
+class TestTheTokenList:
+    def test_a_share_link_is_named_from_its_own_library_only(
+        self, server, other_library
+    ):
+        """The list is read from the hub and the names from the library.
+
+        Looking the name up in the hub, which has no sets, answered 500 for
+        the whole list as soon as one share link existed. And a link for a
+        library that is not open gets no name: its id is another set here.
+        """
+        owner = _owner_client(server)
+        made = owner.post(f"{API}/picture_sets", json={"name": "Pinned set"})
+        assert made.status_code == 200, made.text
+        set_id = made.json()["picture_set"]["id"]
+        try:
+            minted = owner.post(
+                "/users/me/token",
+                json={
+                    "description": "pin test",
+                    "scope": "READ",
+                    "resource_type": "picture_set",
+                    "resource_id": set_id,
+                },
+            )
+            assert minted.status_code == 200, minted.text
+
+            listed = owner.get(f"{API}/users/me/token")
+            assert listed.status_code == 200, listed.text
+            assert [row["resource_name"] for row in listed.json()] == ["Pinned set"]
+
+            _restamp_tokens(server, other_library)
+            listed = owner.get(f"{API}/users/me/token")
+            assert listed.status_code == 200, listed.text
+            assert [row["resource_name"] for row in listed.json()] == [None]
+        finally:
+            owner.delete(f"{API}/picture_sets/{set_id}")
+
+
 def _token_row(server, description="pin test") -> UserToken:
     """The one token a test minted, as the hub has it now."""
     return server.hub_engine.run_immediate_read_task(
