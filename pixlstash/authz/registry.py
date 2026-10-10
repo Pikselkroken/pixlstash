@@ -1909,6 +1909,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Dry run of the above; same disclosure, submits nothing; owner only",
     ),
+    ("GET", "/api/v1/workflows/runs/{prompt_id}"): RoutePolicy(
+        _OWNER,
+        justification="How a run the owner started ended: ComfyUI's error text and the ids of the pictures it added, whichever part of the library they landed in; owner only",
+    ),
     # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
     # OWNER_ONLY throughout, and a decision rather than a default. A saved
     # recipe holds the owner's prompt and names the models they run, and the

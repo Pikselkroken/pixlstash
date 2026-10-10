@@ -18,6 +18,7 @@ import ntpath
 import os
 import posixpath
 import re
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -84,6 +85,66 @@ VHS_FILES_KEY = "gifs"
 # environment's entry for that key, so ``all`` must be named as well.
 NO_PROXY = {"http": None, "https": None, "all": None}
 
+# How many followed prompts' endings are kept for GET /workflows/runs/{id}.
+MAX_RUN_OUTCOMES = 500
+_run_outcomes: dict[str, dict] = {}
+_run_outcomes_lock = threading.Lock()
+
+# The most of ComfyUI's own exception text a failure sentence carries: a
+# state_dict size mismatch runs to kilobytes, and the sentence is drawn on a
+# card and spoken as part of its name.
+MAX_FAILURE_REASON = 300
+
+# Bumped each time PixlStash itself clears ComfyUI's queue, so every poller
+# asks the queue about its prompt at once instead of at its next check.
+_queue_cleared = 0
+
+
+class ComfyUIRunStopped(RuntimeError):
+    """A run that was stopped (interrupted, or taken off ComfyUI's queue)
+    rather than one a node failed in."""
+
+
+def record_run_outcome(
+    prompt_id: str,
+    status: str,
+    message: str | None = None,
+    stopped: bool = False,
+    picture_ids: list[int] | None = None,
+    library_uuid: str | None = None,
+) -> None:
+    """Remember how a followed prompt stands: ``running``, ``completed`` or
+    ``failed``. In memory, the newest ``MAX_RUN_OUTCOMES``.
+
+    *library_uuid* is the library the run was started in, given when it is
+    queued and kept by every later update: its picture ids mean nothing in
+    another library. A run still going is the last to be dropped.
+    """
+    with _run_outcomes_lock:
+        previous = _run_outcomes.pop(prompt_id, None) or {}
+        _run_outcomes[prompt_id] = {
+            "prompt_id": prompt_id,
+            "status": status,
+            "message": message,
+            "stopped": stopped,
+            "picture_ids": list(picture_ids or []),
+            "library_uuid": library_uuid or previous.get("library_uuid"),
+        }
+        while len(_run_outcomes) > MAX_RUN_OUTCOMES:
+            ended = (
+                key
+                for key, outcome in _run_outcomes.items()
+                if outcome["status"] != "running"
+            )
+            del _run_outcomes[next(ended, None) or next(iter(_run_outcomes))]
+
+
+def run_outcome(prompt_id: str) -> dict | None:
+    """What ``record_run_outcome`` last said of *prompt_id*, or None."""
+    with _run_outcomes_lock:
+        outcome = _run_outcomes.get(prompt_id)
+        return dict(outcome) if outcome else None
+
 
 def _extract_history_entry(history_payload: dict, prompt_id: str) -> dict:
     if not isinstance(history_payload, dict):
@@ -133,9 +194,66 @@ def _extract_text_from_value(value) -> str:
     return str(value)
 
 
+def _node_label(entry: dict, event: dict) -> str:
+    """``Title (Class)`` for the node an execution event names.
+
+    The class is the event's ``node_type``; the title is the node's own in the
+    graph the history entry carries (``prompt[2]``), left out where it only
+    repeats the class. Empty when the event names no node.
+    """
+    class_type = str(event.get("node_type") or "").strip()
+    prompt = entry.get("prompt")
+    graph = prompt[2] if isinstance(prompt, (list, tuple)) and len(prompt) > 2 else None
+    node = graph.get(str(event.get("node_id"))) if isinstance(graph, dict) else None
+    title = ""
+    if isinstance(node, dict):
+        meta = node.get("_meta")
+        title = str((meta.get("title") if isinstance(meta, dict) else "") or "").strip()
+        class_type = class_type or str(node.get("class_type") or "").strip()
+    if title and class_type and title != class_type:
+        return f"{title} ({class_type})"
+    return title or class_type
+
+
+def _describe_execution_event(entry: dict, name: str, event) -> str:
+    """Which node ended a prompt and why, from ComfyUI's own account of it.
+
+    ``Load Diffusion Model (UNETLoader) failed: KeyError 'asym_w4a8_int8'`` for
+    an ``execution_error``, ``Interrupted at <node>`` for an
+    ``execution_interrupted``. Empty when the event does not say enough, and
+    the caller falls back to whatever text it holds.
+    """
+    if not isinstance(event, dict):
+        return ""
+    node = _node_label(entry, event)
+    if name == "execution_interrupted":
+        return f"Interrupted at {node}" if node else "Interrupted"
+    if name != "execution_error":
+        return ""
+    # The exception's message alone can be a bare key ("'asym_w4a8_int8'" for
+    # a KeyError), so its type goes in front. One line: a traceback-style
+    # message would otherwise fill the card it is shown on.
+    reason = " ".join(
+        " ".join(str(event.get(key) or "").split())
+        for key in ("exception_type", "exception_message")
+        if str(event.get(key) or "").strip()
+    )
+    if len(reason) > MAX_FAILURE_REASON:
+        reason = reason[:MAX_FAILURE_REASON].rstrip() + "…"
+    if not node:
+        return reason
+    return f"{node} failed: {reason}" if reason else f"{node} failed"
+
+
 def _extract_history_status_and_error(
     history_payload: dict, prompt_id: str
 ) -> tuple[str | None, str | None]:
+    """A prompt's status and, where it ended badly, the sentence that says why.
+
+    An interrupted prompt answers ``interrupted`` whatever ComfyUI's own
+    ``status_str`` (it files one under ``error``), so the caller can tell a
+    stopped run from a failed one.
+    """
     entry = _extract_history_entry(history_payload, prompt_id)
     status = entry.get("status") or {}
     status_str = None
@@ -162,9 +280,13 @@ def _extract_history_status_and_error(
                 "error",
                 "execution_interrupted",
             }:
-                if status_str is None:
+                if event_name == "execution_interrupted":
+                    status_str = "interrupted"
+                elif status_str is None:
                     status_str = "error"
-                error_text = _extract_text_from_value(event_payload)
+                error_text = _describe_execution_event(
+                    entry, event_name, event_payload
+                ) or _extract_text_from_value(event_payload)
                 if error_text:
                     break
 
@@ -586,7 +708,7 @@ def _fetch_comfyui_history(base_url: str, prompt_id: str) -> dict:
         logger.warning("ComfyUI history request failed: %s", exc)
         raise HTTPException(
             status_code=502,
-            detail="ComfyUI history request failed",
+            detail="ComfyUI stopped answering before the run finished",
         ) from exc
     if response.status_code >= 300:
         detail = (response.text or "").strip()
@@ -738,24 +860,39 @@ def _wait_for_comfyui_outputs(
     base_url: str,
     prompt_id: str,
     output_node_ids: list[str] | None,
-    timeout_s: float = 300.0,
+    timeout_s: float = 30.0,
     poll_s: float = 1.0,
 ) -> tuple[list[dict], list[int] | None]:
     """Poll history until the prompt produces output.
 
-    *timeout_s* is how long a prompt ComfyUI no longer holds is waited for, not
-    a cap on the run: a video, or a prompt behind others in the queue, takes
-    longer than any fixed budget, so while ComfyUI still lists the prompt as
-    running or pending the wait goes on.
+    *timeout_s* is how often ComfyUI's queue is asked whether it still holds
+    the prompt, not a cap on the run: a video, or a prompt behind others in
+    the queue, takes longer than any fixed budget, so while ComfyUI still lists
+    the prompt as running or pending the wait goes on.
 
     Returns the files to download and import, plus the picture ids a PixlStash
     saver node imported on its own (None when no such node ran).
+
+    Raises ``ComfyUIRunStopped`` for a prompt that was interrupted, and for one
+    ComfyUI holds neither in its queue nor in its history: taken off the queue
+    before its turn, or lost to a restart. Any other failure is a
+    ``RuntimeError`` carrying the sentence to show.
+
+    ponytail: one ``GET /queue`` per followed prompt per *timeout_s*, and the
+    answer carries every queued graph. Fine for tens of prompts; a 200-run
+    batch wants one shared queue read instead of one per poller.
     """
     deadline = time.time() + timeout_s
+    cleared = _queue_cleared
     while True:
         # Asked BEFORE the history read, so a prompt that finishes in between
         # is still collected by this pass rather than given up on.
         gone = False
+        if cleared != _queue_cleared:
+            # PixlStash's own Abort just emptied the queue: say so now, not
+            # up to *timeout_s* after the owner has moved on to the next run.
+            cleared = _queue_cleared
+            deadline = 0.0
         if time.time() >= deadline:
             if _comfyui_prompt_queued(base_url, prompt_id):
                 deadline = time.time() + timeout_s
@@ -778,18 +915,34 @@ def _wait_for_comfyui_outputs(
             # and its status together, so polling on would only wait out the
             # timeout before saying the same thing.
             return [], None
-        if status_str in {"error", "failed", "failure", "interrupted", "cancelled"}:
+        if status_str in {"interrupted", "cancelled"}:
+            raise ComfyUIRunStopped(error_text or "Interrupted")
+        if status_str in {"error", "failed", "failure"}:
             raise RuntimeError(error_text or f"ComfyUI status={status_str}")
         if error_text and status_str != "success":
             raise RuntimeError(error_text)
         if gone:
+            if not _extract_history_entry(history_payload, prompt_id):
+                raise ComfyUIRunStopped(
+                    "ComfyUI no longer has this run: it was taken off the "
+                    "queue, or ComfyUI restarted"
+                )
             return [], None
         time.sleep(poll_s)
 
 
 def _emit_comfyui_progress(
-    server, prompt_id: str, status: str, message: str, progress: int = 0
+    server,
+    prompt_id: str,
+    status: str,
+    message: str,
+    progress: int = 0,
+    workflow_id: str | None = None,
+    stopped: bool = False,
 ) -> None:
+    """Say how a prompt's run ended. *workflow_id* is the workflow that ran,
+    so the failure can be shown on it; *stopped* marks a failure that is a
+    run somebody stopped."""
     try:
         server.vault.notify(
             EventType.PLUGIN_PROGRESS,
@@ -797,6 +950,8 @@ def _emit_comfyui_progress(
                 "plugin": "ComfyUI",
                 "status": status,
                 "run_id": f"comfyui-{prompt_id}",
+                "workflow_id": workflow_id,
+                "stopped": stopped,
                 "message": message,
                 "current": 0,
                 "total": 0,
@@ -812,20 +967,35 @@ def _emit_comfyui_progress(
         )
 
 
-def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:
+def _emit_comfyui_failure_progress(
+    server,
+    prompt_id: str,
+    message: str,
+    workflow_id: str | None = None,
+    stopped: bool = False,
+) -> None:
     _emit_comfyui_progress(
-        server, prompt_id, "failed", str(message or "ComfyUI failed")
+        server,
+        prompt_id,
+        "failed",
+        str(message or "ComfyUI failed"),
+        workflow_id=workflow_id,
+        stopped=stopped,
     )
 
 
-def _emit_comfyui_completed_progress(server, prompt_id: str) -> None:
+def _emit_comfyui_completed_progress(
+    server, prompt_id: str, workflow_id: str | None = None
+) -> None:
     """Say a prompt's run is over, once what it made is in the library.
 
     The tab following a run cannot learn this from ComfyUI's socket: ComfyUI
     sends ``execution_success`` and the closing ``executing`` only to the
     client a prompt named, and a run names none.
     """
-    _emit_comfyui_progress(server, prompt_id, "completed", "ComfyUI complete", 100)
+    _emit_comfyui_progress(
+        server, prompt_id, "completed", "ComfyUI complete", 100, workflow_id
+    )
 
 
 def _download_comfyui_image(base_url: str, entry: dict) -> tuple[bytes, str]:
@@ -1252,8 +1422,14 @@ def _process_comfyui_outputs(
     run_workflow_id: str | None = None,
     rejected: str | None = None,
     run_workflow_version: int | None = None,
+    workflow_id: str | None = None,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and say how it ended.
+
+    *workflow_id* is the workflow the run was of, manual or automatic; it
+    travels on the ending's event so a failure is shown on that workflow.
+    Every ending is also recorded (``record_run_outcome``) for
+    ``GET /workflows/runs/{prompt_id}``.
 
     *rejected* is ComfyUI's account of the outputs it dropped at validation
     while still accepting the prompt (``format_prompt_rejection``); a run that
@@ -1284,6 +1460,9 @@ def _process_comfyui_outputs(
 
     Failures emit a ``PLUGIN_PROGRESS`` failure event via
     ``_emit_comfyui_failure_progress`` and never a ``PICTURE_IMPORTED`` event.
+    Its ``message`` names the node that failed and why
+    (``_describe_execution_event``), and ``stopped`` is true for a run that was
+    interrupted or taken off ComfyUI's queue (``ComfyUIRunStopped``).
 
     A run that did not fail ends with a ``PLUGIN_PROGRESS`` ``completed`` event
     (``_emit_comfyui_completed_progress``), after the import event and also
@@ -1319,8 +1498,13 @@ def _process_comfyui_outputs(
 
         return candidate, PinnedServer(server, candidate.vault)
 
-    def emit_failure_if_current(message: str) -> None:
-        failure_lease, failure_server = acquire_origin()
+    def emit_failure(message: str, stopped: bool = False) -> None:
+        """Say the run failed: on the library already pinned, else on the
+        origin if it is still the current one."""
+        record_run_outcome(prompt_id, "failed", message=message, stopped=stopped)
+        failure_lease, failure_server = None, pinned_server
+        if failure_server is None:
+            failure_lease, failure_server = acquire_origin()
         if failure_server is None:
             logger.info(
                 "Discarding stale ComfyUI failure for prompt %s after library change",
@@ -1328,7 +1512,13 @@ def _process_comfyui_outputs(
             )
             return
         try:
-            _emit_comfyui_failure_progress(failure_server, prompt_id, message)
+            _emit_comfyui_failure_progress(
+                failure_server,
+                prompt_id,
+                message,
+                workflow_id=workflow_id,
+                stopped=stopped,
+            )
         finally:
             if failure_lease is not None:
                 server.library_coordinator.release_read(failure_lease)
@@ -1339,7 +1529,7 @@ def _process_comfyui_outputs(
         )
         if not images and pixlstash_ids is None:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
-            emit_failure_if_current(rejected or "ComfyUI finished without outputs.")
+            emit_failure(rejected or "ComfyUI finished without outputs.")
             return
         entries = []
         for entry in images:
@@ -1352,6 +1542,11 @@ def _process_comfyui_outputs(
             logger.info(
                 "Discarding stale ComfyUI outputs for prompt %s after library change",
                 prompt_id,
+            )
+            record_run_outcome(
+                prompt_id,
+                "failed",
+                message="The library changed before this run's outputs were imported",
             )
             return
 
@@ -1441,19 +1636,20 @@ def _process_comfyui_outputs(
                     "change_kind": "added",
                 },
             )
-        _emit_comfyui_completed_progress(pinned_server, prompt_id)
+        record_run_outcome(prompt_id, "completed", picture_ids=new_ids)
+        _emit_comfyui_completed_progress(pinned_server, prompt_id, workflow_id)
+    except ComfyUIRunStopped as exc:
+        logger.warning("ComfyUI prompt %s was stopped: %s", prompt_id, exc)
+        emit_failure(str(exc), stopped=True)
     except RuntimeError as exc:
         logger.warning("ComfyUI prompt %s failed before outputs: %s", prompt_id, exc)
-        if pinned_server is not None:
-            _emit_comfyui_failure_progress(pinned_server, prompt_id, str(exc))
-        else:
-            emit_failure_if_current(str(exc))
+        emit_failure(str(exc))
     except Exception as exc:
-        logger.warning("Failed to import ComfyUI outputs: %s", exc)
-        if pinned_server is not None:
-            _emit_comfyui_failure_progress(pinned_server, prompt_id, str(exc))
-        else:
-            emit_failure_if_current(str(exc))
+        logger.warning(
+            "Failed to import ComfyUI outputs of prompt %s: %s", prompt_id, exc
+        )
+        # An HTTPException's str() is "502: <detail>"; the detail is the sentence.
+        emit_failure(str(getattr(exc, "detail", None) or exc))
     finally:
         if lease is not None:
             server.library_coordinator.release_read(lease)
@@ -1466,6 +1662,7 @@ def _comfyui_abort(base_url: str) -> dict:
     ``POST /queue`` with ``{"clear": true}`` to remove pending items.
     Returns a dict with ``interrupted`` and ``queue_cleared`` booleans.
     """
+    global _queue_cleared
     result = {"interrupted": False, "queue_cleared": False}
     try:
         resp = requests.post(f"{base_url}/interrupt", timeout=10)
@@ -1491,6 +1688,7 @@ def _comfyui_abort(base_url: str) -> dict:
     except requests.RequestException as exc:
         logger.warning("ComfyUI /queue clear request failed: %s", exc)
 
+    _queue_cleared += 1
     return result
 
 

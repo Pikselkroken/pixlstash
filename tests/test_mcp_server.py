@@ -681,6 +681,7 @@ def test_every_tool_path_resolves_to_a_mounted_route(env, tmp_path):
     _write(fetch, "import_workflow_graph", name="x.json", workflow={})
     _write(fetch, "preflight_workflow", workflow_id=WORKFLOW_ID)
     _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID)
+    _write(fetch, "get_workflow_run", prompt_id="prompt-1")
     # Every tool is exercised, so a new one cannot skip this check by
     # forgetting to be listed here.
     assert len(requests) == len(mcp_server.tools_for(allow_write=True))
@@ -787,6 +788,7 @@ WRITE_TOOL_NAMES = {
     "import_workflow_graph",
     "preflight_workflow",
     "run_workflow",
+    "get_workflow_run",
 }
 
 
@@ -831,6 +833,7 @@ def test_the_workflow_tools_exist_only_with_allow_write():
         "import_workflow_graph": (False, False),
         "preflight_workflow": (True, None),
         "run_workflow": (False, True),
+        "get_workflow_run": (True, None),
     }
 
     # Not offered, and not callable either: it never reaches the transport.
@@ -848,6 +851,108 @@ def test_the_workflow_tools_exist_only_with_allow_write():
     write = _instructions(True)
     assert "Everything is read-only" not in write
     assert "validate" in write.lower() and "run_workflow" in write
+
+
+def _run_fetch(endings: dict[str, list[dict]], prompts=None):
+    """A PixlStash that queues *prompts* and answers each one's ending from
+    *endings*, one answer per read and the last one from then on."""
+    seen = []
+
+    def fetch(path, params, method="GET", body=None):
+        seen.append((method, path, body))
+        if path == "/workflows/run":
+            answer = {
+                "status": "success",
+                "prompts": prompts
+                or [{"workflow_id": WORKFLOW_ID, "prompt_id": key} for key in endings],
+            }
+            return 200, "application/json", json.dumps(answer).encode()
+        prompt_id = path.removeprefix("/workflows/runs/")
+        if prompt_id not in endings:
+            return 404, "application/json", b'{"detail": "not followed"}'
+        answers = endings[prompt_id]
+        answer = answers.pop(0) if len(answers) > 1 else answers[0]
+        return 200, "application/json", json.dumps(answer).encode()
+
+    return fetch, seen
+
+
+FAILED = {
+    "status": "failed",
+    "message": "Load Diffusion Model (UNETLoader) failed: KeyError 'asym_w4a8_int8'",
+    "stopped": False,
+    "picture_ids": [],
+}
+RUNNING = {"status": "running", "message": None, "stopped": False, "picture_ids": []}
+
+
+def test_a_failed_run_answers_with_the_node_that_failed(monkeypatch):
+    """The message the app shows is the tool's answer, as an error (#1839).
+
+    It was "queued": the run route answers once ComfyUI has the prompt, and a
+    node that raises two seconds later was never heard of.
+    """
+    monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
+    fetch, seen = _run_fetch({"p1": [dict(RUNNING), dict(FAILED)]})
+    result = _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID, wait_seconds=5)
+    assert result["isError"] is True
+    assert result["content"][0]["text"] == (
+        "The run failed: Load Diffusion Model (UNETLoader) failed: "
+        "KeyError 'asym_w4a8_int8'"
+    )
+    # `wait_seconds` is this tool's, not the route's.
+    assert seen[0] == ("POST", "/workflows/run", {"workflow_id": WORKFLOW_ID})
+    assert [path for _m, path, _b in seen[1:]] == ["/workflows/runs/p1"] * 2
+
+
+def test_a_run_reports_each_prompts_ending(monkeypatch):
+    monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
+    done = {"status": "completed", "message": None, "stopped": False}
+    fetch, _seen = _run_fetch(
+        {"p1": [{**done, "picture_ids": [41]}], "p2": [dict(FAILED)]}
+    )
+    result = _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID)
+    # One of two made its picture, so this is an answer, not an error.
+    assert result["isError"] is False, result
+    first, second = json.loads(result["content"][0]["text"])["prompts"]
+    assert (first["status"], first["picture_ids"]) == ("completed", [41])
+    assert (second["status"], second["message"]) == ("failed", FAILED["message"])
+
+
+def test_a_run_still_going_when_the_wait_is_over_answers_running():
+    fetch, seen = _run_fetch({"p1": [dict(RUNNING)]})
+    result = _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID, wait_seconds=0)
+    assert result["isError"] is False, result
+    (prompt,) = json.loads(result["content"][0]["text"])["prompts"]
+    assert prompt["status"] == "running"
+    # No wait is still one read: the run, then how it stands.
+    assert len(seen) == 2, seen
+    # And the ending is read later with the id the answer carries.
+    fetch, _seen = _run_fetch({"p1": [dict(FAILED)]})
+    result = _write(fetch, "get_workflow_run", prompt_id=prompt["prompt_id"])
+    assert json.loads(result["content"][0]["text"])["message"] == FAILED["message"]
+
+
+def test_a_run_whose_ending_cannot_be_read_is_still_reported_queued(monkeypatch):
+    """An older PixlStash without the route: the run is queued all the same."""
+    monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
+    fetch, _seen = _run_fetch({}, prompts=[{"prompt_id": "p9"}])
+    result = _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID)
+    assert result["isError"] is False, result
+    (prompt,) = json.loads(result["content"][0]["text"])["prompts"]
+    assert prompt["status"] == "unknown" and "404" in prompt["message"]
+
+
+@pytest.mark.parametrize("wait", [-1, "soon", True, float("nan")])
+def test_a_wait_that_is_not_a_time_is_refused_before_anything_runs(wait):
+    result = _write(
+        lambda *a, **k: pytest.fail("reached the transport"),
+        "run_workflow",
+        workflow_id=WORKFLOW_ID,
+        wait_seconds=wait,
+    )
+    assert result["isError"] is True
+    assert "wait_seconds" in result["content"][0]["text"]
 
 
 def test_import_posts_json_through_http_fetch(monkeypatch):

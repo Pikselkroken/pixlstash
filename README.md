@@ -843,7 +843,8 @@ these tools, and `pixlstash-mcp` says so at start-up. The flag decides which
 tools are offered; it does not limit the token, which can do anything you can.
 
 Extra tools: `list_workflows`, `get_workflow`, `export_workflow_graph`,
-`import_workflow_graph`, `preflight_workflow`, `run_workflow`.
+`import_workflow_graph`, `preflight_workflow`, `run_workflow`,
+`get_workflow_run`.
 
 An import never changes a stored workflow in place: importing an edited graph makes a
 new workflow card, and importing an unchanged one matches the stored copy and
@@ -864,7 +865,8 @@ between them:
    values for it.
 3. ComfyUI's server validates the edited file. Do not store one that fails.
 4. `import_workflow_graph` (PixlStash) stores it as a new workflow card.
-5. `preflight_workflow` checks it would run; `run_workflow` runs it.
+5. `preflight_workflow` checks it would run; `run_workflow` runs it and
+   says how each run ended: a failed one names the node that failed and why.
 
 Run through PixlStash, not through ComfyUI's server: a run there goes straight
 to ComfyUI, and its pictures never reach your library.

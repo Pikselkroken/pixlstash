@@ -196,6 +196,8 @@ _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/workflows/{workflow_id}/graph"),
     # Clone with new models: the card's files, the whole shelf and the recipes.
     ("GET", "/api/v1/workflows/{workflow_id}/model-swap"),
+    # How a run ended (#1839): ComfyUI's error text and the pictures it added.
+    ("GET", "/api/v1/workflows/runs/{prompt_id}"),
 )
 
 # The workflow writes (#1623), pinned in their own tuple: the reads above are
@@ -1034,6 +1036,7 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
             f"{API}/workflows/{BUSY_WF}/model-swap",
             API + "/workflows/{workflow_id}/model-swap",
         ),
+        (f"{API}/workflows/runs/prompt-1", API + "/workflows/runs/{prompt_id}"),
     )
     for path, template in paths:
         assert_real_route(workflow_env.server.api, "GET", path, template)
@@ -1105,7 +1108,12 @@ def test_the_workflow_reads_refuse_remote_plaintext_under_require_ssl(
     server = workflow_env.server
     monkeypatch.setitem(server.auth._server_config, "require_ssl", True)
     monkeypatch.setattr(server.auth, "_get_real_client_ip", lambda request: "8.8.8.8")
-    for path in (f"{API}/workflows", *(p for p, _t in _TEMPLATED_PATHS)):
+    for path in (
+        f"{API}/workflows",
+        # A failed run's message is ComfyUI's own text about the owner's files.
+        f"{API}/workflows/runs/prompt-1",
+        *(p for p, _t in _TEMPLATED_PATHS),
+    ):
         r = workflow_env.owner.get(path)
         assert r.status_code == 403 and "HTTPS is required" in r.text, (
             f"GET {path}: {r.status_code} {r.text}"
@@ -6183,6 +6191,9 @@ _EVERY_WORKFLOW_ROUTE = (
     ),
     ("GET", "/workflows/{workflow_id}/export", f"/workflows/{BUSY_WF}/export", None),
     ("GET", "/workflows/{workflow_id}/graph", f"/workflows/{BUSY_WF}/graph", None),
+    # How a run ended (#1839). The owner's answer is a 404 here, since nobody
+    # queued this prompt: reached, which is all the positive control asks.
+    ("GET", "/workflows/runs/{prompt_id}", "/workflows/runs/gate-probe", None),
     (
         "GET",
         "/workflows/{workflow_id}/lora-chain",
@@ -12355,6 +12366,107 @@ def test_a_failure_part_way_through_still_reports_what_was_queued(runnable):
     assert r.json()["status"] == "partial", r.json()
     assert [p["prompt_id"] for p in r.json()["prompts"]] == ["prompt-1", "prompt-2"]
     assert r.json()["runs"] == 2
+    # And why the third was not, in words rather than "502: ...".
+    assert r.json()["error"] == "ComfyUI prompt request failed"
+
+
+def test_a_queued_run_is_followed_and_its_ending_can_be_read(runnable):
+    """``GET /workflows/runs/{prompt_id}`` (#1839): what MCP's run_workflow
+    answers with. Known from the moment the run is queued, and the poller is
+    told which workflow ran so a failure is shown on it."""
+    following: list[dict] = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_process_comfyui_outputs",
+        lambda *args, **kwargs: following.append(kwargs),
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_submit_comfyui_prompt",
+        lambda *a, **k: {"prompt_id": "followed-run-1"},
+    )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    path = f"{API}/workflows/runs/followed-run-1"
+    assert_real_route(
+        runnable.server.api, "GET", path, API + "/workflows/runs/{prompt_id}"
+    )
+    r = runnable.owner.get(path)
+    assert r.status_code == 200, r.text
+    assert r.json() == {
+        "prompt_id": "followed-run-1",
+        "status": "running",
+        "message": None,
+        "stopped": False,
+        "picture_ids": [],
+    }
+    # Filed under the library it was started in, which is what lets the route
+    # refuse it from another one (below).
+    assert (
+        comfyui_service.run_outcome("followed-run-1")["library_uuid"]
+        == runnable.server.vault.library_uuid
+    )
+    deadline = time.monotonic() + 5
+    while not following and time.monotonic() < deadline:
+        time.sleep(0.01)  # the poller runs on a thread of its own
+    assert following[0]["workflow_id"] == RUN_WF
+
+    comfyui_service.record_run_outcome(
+        "followed-run-1",
+        "failed",
+        message="Load Diffusion Model (UNETLoader) failed: KeyError 'x'",
+    )
+    r = runnable.owner.get(path)
+    assert (r.json()["status"], r.json()["message"]) == (
+        "failed",
+        "Load Diffusion Model (UNETLoader) failed: KeyError 'x'",
+    )
+    # A prompt nobody queued here is not "running".
+    assert runnable.owner.get(f"{API}/workflows/runs/never-queued").status_code == 404
+    # Nor is a run of another library: its picture ids name other pictures here.
+    comfyui_service.record_run_outcome(
+        "followed-run-elsewhere",
+        "completed",
+        picture_ids=[1],
+        library_uuid="another-library",
+    )
+    r = runnable.owner.get(f"{API}/workflows/runs/followed-run-elsewhere")
+    assert r.status_code == 404, r.text
+
+
+def test_a_runs_ending_stays_closed_with_the_gate_rolled_back(workflow_env):
+    """The belt behind the gate: ``/api/v1/workflows/`` in
+    ``READ_BLOCKED_GET_PREFIXES`` refuses a share token when
+    ``AUTHZ_GATE_ENFORCING`` is off. The gate itself is measured, both
+    directions, by the ``_EVERY_WORKFLOW_ROUTE`` row."""
+    server = workflow_env.server
+    comfyui_service.record_run_outcome("authz-run-1", "running")
+    path = f"{API}/workflows/runs/authz-run-1"
+    assert_real_route(server.api, "GET", path, API + "/workflows/runs/{prompt_id}")
+    clients = {
+        "unscoped": _bearer(server, _mint(workflow_env.owner, "run ending unscoped")),
+        "scoped": _bearer(
+            server,
+            _mint(
+                workflow_env.owner,
+                "run ending scoped",
+                resource_type="character",
+                resource_id=workflow_env.character_id,
+            ),
+        ),
+    }
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = False
+    try:
+        for label, client in clients.items():
+            assert client.get(f"{API}/pictures").status_code == 200, (
+                f"the {label} token is dead; the refusal below would prove nothing"
+            )
+            r = client.get(path)
+            assert r.status_code == 403, f"{label} rollback: {r.status_code} {r.text}"
+        assert workflow_env.owner.get(path).status_code == 200
+    finally:
+        server.authz._enforcing = previously_enforcing
 
 
 def test_the_body_takes_an_inputs_field_and_the_schema_says_so(runnable):
