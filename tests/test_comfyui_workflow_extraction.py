@@ -17,9 +17,11 @@ from pixlstash.services.workflow_card_service import slot_kind
 from pixlstash.services.workflow_identity import is_lora_widget
 from pixlstash.utils.comfyui_utilities import _NOT_A_MODEL_WIDGET
 from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
+from pixlstash.services.workflow_io import detect_workflow_io
 from pixlstash.utils.comfyui_utilities import (
     extract_comfy_workflow_info,
     extract_generation_info,
+    extract_recipe_extras,
     find_comfy_workflow,
     loaded_model_widgets,
 )
@@ -564,3 +566,104 @@ def test_a_file_with_only_an_editor_view_still_reads_what_it_can():
     assert info["positive_prompt"] == "a lighthouse in fog"
     # `extract_recipe_extras` reads the API format only, so there is none.
     assert info["negative_prompt"] is None
+
+
+# ===========================================================================
+# The recipe finds a prompt wherever the Run popup would write one
+#
+# The recipe's reader and `workflow_io`'s detector used to disagree: a video
+# graph (a `BasicGuider` fed by an encoder that is not a `CLIPTextEncode`) ran
+# with a prompt the Run popup could set and the recipe then reported none, and
+# a look with no prompt and no LoRA is listed nowhere.
+# ===========================================================================
+
+_VIDEO_GRAPH = {
+    "14": {"class_type": "SamplerCustomAdvanced", "inputs": {"guider": ["16", 0]}},
+    "16": {
+        "class_type": "BasicGuider",
+        "inputs": {"model": ["6", 0], "conditioning": ["104", 0]},
+    },
+    "104": {
+        "class_type": "MiniMaxH3ImageToVideo",
+        "inputs": {
+            "prompt": "a lighthouse turning in fog",
+            "width": 640,
+            "clip": ["13", 0],
+            "vae": ["11", 0],
+            "first_frame": ["114", 0],
+        },
+    },
+}
+
+
+def test_a_video_graphs_prompt_is_read_off_its_own_encoder():
+    info = extract_generation_info(_VIDEO_GRAPH)
+    assert info["positive_prompt"] == "a lighthouse turning in fog"
+    # The node the Run popup writes a prompt into is the one read back.
+    assert detect_workflow_io(_VIDEO_GRAPH).positive_prompts == ("104",)
+
+
+def test_an_edit_encoder_keeps_its_prompt_in_a_field_of_its_own():
+    graph = {
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {"positive": ["6", 0], "negative": ["6", 1]},
+        },
+        "6": {
+            "class_type": "TextEncodeBooguEdit",
+            "inputs": {
+                "prompt": "make it night",
+                "negative_prompt": "daylight",
+                "clip": ["1", 0],
+            },
+        },
+    }
+    assert extract_generation_info(graph)["positive_prompt"] == "make it night"
+    # Never its positive: that is what the negative walk would otherwise find.
+    assert extract_recipe_extras(graph)["negative_prompt"] == "daylight"
+
+
+def test_a_node_that_takes_clip_and_conditioning_is_walked_through_not_read():
+    graph = {
+        "3": {"class_type": "KSampler", "inputs": {"positive": ["8", 0]}},
+        "8": {
+            "class_type": "SomePackStyleApply",
+            "inputs": {
+                "text": "the style, not the prompt",
+                "clip": ["1", 0],
+                "conditioning": ["6", 0],
+            },
+        },
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a castle"}},
+    }
+    assert extract_generation_info(graph)["positive_prompt"] == "a castle"
+
+
+def test_the_editor_view_of_a_video_graph_reads_the_same_prompt():
+    ui_only = {
+        "last_node_id": 104,
+        "last_link_id": 2,
+        "nodes": [
+            {
+                "id": 16,
+                "type": "BasicGuider",
+                "inputs": [
+                    {"name": "model", "link": 1, "type": "MODEL"},
+                    {"name": "conditioning", "link": 2, "type": "CONDITIONING"},
+                ],
+            },
+            {
+                "id": 104,
+                "type": "MiniMaxH3ImageToVideo",
+                "inputs": [
+                    {"name": "clip", "link": 3, "type": "CLIP"},
+                    {"name": "prompt", "type": "STRING", "widget": {"name": "prompt"}},
+                    {"name": "width", "type": "INT", "widget": {"name": "width"}},
+                ],
+                "widgets_values": ["a lighthouse turning in fog", 640],
+            },
+        ],
+        "links": [[2, 104, 0, 16, 1, "CONDITIONING"]],
+    }
+    info = extract_generation_info(ui_only)
+    assert info["positive_prompt"] == "a lighthouse turning in fog"

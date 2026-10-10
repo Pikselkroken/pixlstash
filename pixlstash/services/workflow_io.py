@@ -33,20 +33,9 @@ from pixlstash.services.workflow_hash import (
     reduce_api_graph,
     reduce_ui_graph,
 )
-from pixlstash.utils.comfyui_utilities import is_api_format
+from pixlstash.utils.comfyui_utilities import PROMPT_FIELDS, is_api_format
 
 _PROMPT_SIDES = ("positive", "negative")
-
-# The input a prompt node keeps its text in, first found: ``text`` on core's
-# encoders, ``prompt`` on the edit and video ones, ``value`` on a primitive
-# feeding one. One rule for the run and the bindings (#1832).
-# ponytail: one field per node. An encoder with a field per model (SDXL's
-# ``text_g``/``text_l``, Flux's ``clip_l``/``t5xxl``) has no place for a run's
-# prompt, and the Run popup says so; write every field when that is wanted.
-PROMPT_FIELDS = ("text", "prompt", "value")
-# Where an encoder that makes both sides (``TextEncodeBooguEdit``) keeps the
-# negative. Never ``PROMPT_FIELDS`` for it: that is its positive.
-NEGATIVE_FIELDS = ("negative_prompt", "negative")
 
 
 def prompt_field(inputs: dict, fields: tuple[str, ...] = PROMPT_FIELDS) -> str | None:

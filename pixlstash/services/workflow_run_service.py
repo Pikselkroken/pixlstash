@@ -50,8 +50,6 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.services.workflow_io import (
-    NEGATIVE_FIELDS,
-    PROMPT_FIELDS,
     WorkflowIO,
     api_graph,
     detect_workflow_io,
@@ -59,7 +57,12 @@ from pixlstash.services.workflow_io import (
 )
 from pixlstash.services.workflow_parameters import is_picture_batch
 from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER, FILE_VAE
-from pixlstash.utils.comfyui_utilities import collect_seed_inputs, iter_model_fields_api
+from pixlstash.utils.comfyui_utilities import (
+    NEGATIVE_FIELDS,
+    PROMPT_FIELDS,
+    collect_seed_inputs,
+    iter_model_fields_api,
+)
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
