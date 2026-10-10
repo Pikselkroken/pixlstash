@@ -111,8 +111,10 @@ from pixlstash.services.model_shelf_service import (
     FILE_KINDS,
     UnknownAttachmentEntityError,
     attached_hashes,
+    effective_trigger_words,
     fetch_attachments,
     fetch_capabilities,
+    fetch_character_names,
     fetch_companions,
     fetch_distinct_base_models,
     fetch_locations,
@@ -422,7 +424,25 @@ class ModelResponse(BaseModel):
             "repack that adds tensors gets a different one."
         ),
     )
-    trigger_words: Optional[str] = None
+    trigger_words: list[str] = Field(
+        default_factory=list,
+        description=(
+            "What to type in a prompt to call this model up. The words the "
+            "file's header or the owner recorded, most significant first; with "
+            "none recorded, the name of the person it is attached to in the "
+            "active library. `trigger_words_source` says which. Empty when "
+            "there is neither."
+        ),
+    )
+    trigger_words_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "`recorded` when `trigger_words` came from the file or the owner, "
+            "`character` when it is a person's name standing in for a word "
+            "nobody recorded, null when the list is empty. A default is served "
+            "rather than stored, so it follows a rename and a reassignment."
+        ),
+    )
     provenance: str = Field(
         description="``external`` for anything found on disk; ``trained`` for a run we ran."
     )
@@ -527,14 +547,21 @@ class AttachmentsResponse(BaseModel):
     attachments: list[ModelAttachment]
 
 
+# Ceilings on one PATCH's trigger words. A header's tag table runs to a few
+# hundred entries and the dialog sends back what it was seeded with, so the list
+# bound sits above that; the per-word bound is a prompt phrase, not a document.
+MAX_TRIGGER_WORDS = 1000
+MAX_TRIGGER_WORD_LENGTH = 200
+
+
 class ModelEditRequest(BaseModel):
     """Body of ``PATCH /models``: the verbs that write a curated column.
 
     Every field is optional and **only the fields actually sent are written**,
-    which is what lets one route carry Rename, Set base model and Set kind
-    without each of them blanking the other two. A field sent explicitly as
-    ``null`` IS written: clearing a wrong base model back to "not set" is a
-    correction the owner is entitled to make.
+    which is what lets one route carry Rename, Set base model, Set kind and Set
+    trigger words without each of them blanking the others. A field sent
+    explicitly as ``null`` IS written: clearing a wrong base model back to "not
+    set" is a correction the owner is entitled to make.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -586,6 +613,20 @@ class ModelEditRequest(BaseModel):
             "What the file IS: `adapter`, `checkpoint` or `unknown`. This is "
             "the correction `unknown` exists for. Never null, and never "
             "re-derived away by a later scan."
+        ),
+    )
+    trigger_words: Optional[
+        list[Annotated[str, Field(max_length=MAX_TRIGGER_WORD_LENGTH)]]
+    ] = Field(
+        default=None,
+        max_length=MAX_TRIGGER_WORDS,
+        description=(
+            "What to type in a prompt to call the model up, most significant "
+            "first. The complete list for every id sent. Blank entries and "
+            "repeats are dropped. `[]` or null clears it, and the clearing is "
+            "stored: a later scan does not put the file's own tags back. A "
+            "model with none recorded is served the name of the person it is "
+            "attached to instead."
         ),
     )
     capabilities: Optional[list[str]] = Field(
@@ -1448,8 +1489,13 @@ def _to_response(
     capabilities: dict[int, list[str]],
     picture_counts: dict[int, dict[str, int]],
     marks: dict[int, list[dict]],
+    character_names: dict[int, str],
 ) -> ModelResponse:
     counts = picture_counts.get(int(row["id"]), {})
+    attached = attachments.get(row["sha256"] or "", [])
+    trigger_words, trigger_words_source = effective_trigger_words(
+        row["trigger_words"], attached, character_names
+    )
     return ModelResponse(
         id=int(row["id"]),
         sha256=row["sha256"],
@@ -1466,7 +1512,8 @@ def _to_response(
         base_model_family=base_model_family(row),
         quant=canonical_quant(row["quant"]),
         weights_id=row["weights_id"],
-        trigger_words=row["trigger_words"],
+        trigger_words=trigger_words,
+        trigger_words_source=trigger_words_source,
         provenance=row["provenance"],
         training_run_id=row["training_run_id"],
         training_step=row["training_step"],
@@ -1483,9 +1530,7 @@ def _to_response(
         total_size=row["total_size"],
         newest_member_at=row["newest_member_at"],
         locations=[ModelLocation(**loc) for loc in locations.get(int(row["id"]), [])],
-        attachments=[
-            ModelAttachment(**att) for att in attachments.get(row["sha256"] or "", [])
-        ],
+        attachments=[ModelAttachment(**att) for att in attached],
         capabilities=capabilities.get(int(row["id"]), []),
         pictures_verified=counts.get("verified", 0),
         pictures_by_filename=counts.get("by_filename", 0),
@@ -1554,9 +1599,16 @@ def create_router(server) -> APIRouter:
         capabilities = fetch_capabilities(server.hub)
         picture_counts = fetch_picture_counts(server.hub, server.vault)
         marks = fetch_model_marks(server.hub)
+        character_names = fetch_character_names(server.vault)
         return [
             _to_response(
-                row, locations, attachments, capabilities, picture_counts, marks
+                row,
+                locations,
+                attachments,
+                capabilities,
+                picture_counts,
+                marks,
+                character_names,
             )
             for row in rows
         ]
@@ -1670,6 +1722,7 @@ def create_router(server) -> APIRouter:
             fetch_capabilities(server.hub, int(row["id"])),
             fetch_picture_counts(server.hub, server.vault),
             fetch_model_marks(server.hub),
+            fetch_character_names(server.vault),
         )
 
     @router.get(
@@ -1875,10 +1928,11 @@ def create_router(server) -> APIRouter:
         "/models",
         summary="Correct what the shelf records about one or more models",
         description=(
-            "Three of the shelf's five verbs on one route, because all three "
+            "Four of the shelf's verbs on one route, because all of them "
             "write a curated column and differ only in which one: **Rename** "
-            "(`display_name`, one id), **Set base model** (`base_model`) and "
-            "**Set kind** (`kind`, `file_kind`, `capabilities`). Only the "
+            "(`display_name`, one id), **Set base model** (`base_model`), "
+            "**Set kind** (`kind`, `file_kind`, `capabilities`) and **Set "
+            "trigger words** (`trigger_words`). Only the "
             "fields present in the body are written, so setting a base model "
             "across a selection cannot blank the names in it.\n\n"
             "Every column here is upserted with `COALESCE` by the folder "

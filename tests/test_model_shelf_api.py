@@ -5286,6 +5286,122 @@ def test_an_explicit_null_clears_the_column(shelf_env):
     assert _model_row(shelf_env, alice)["base_model"] is None
 
 
+def _adapter(shelf_env, sha256: str) -> dict:
+    r = shelf_env.owner.get(f"{API}/adapters/{sha256}")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_trigger_words_are_set_across_a_selection_and_served_as_a_list(shelf_env):
+    """One training run's checkpoints share a trigger, so this verb is a bulk
+    one. Blanks and repeats are dropped; the order the owner gave is kept."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    bob = shelf_env.model_ids["bob.safetensors"]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models",
+        json={"ids": [alice, bob], "trigger_words": [" ohwx ", "", "woman", "ohwx"]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"updated": sorted([alice, bob]), "fields": ["trigger_words"]}
+
+    for sha256 in (ADAPTER_WITH_BASE, ADAPTER_WITH_BASE_2):
+        served = _adapter(shelf_env, sha256)
+        assert served["trigger_words"] == ["ohwx", "woman"]
+        assert served["trigger_words_source"] == "recorded"
+    assert _model_row(shelf_env, alice)["display_name"] == "Alice", (
+        "an unmentioned column was written"
+    )
+    # Untouched rows say nothing rather than an empty default of some kind.
+    untouched = _adapter(shelf_env, ADAPTER_NO_BASE)
+    assert untouched["trigger_words"] == []
+    assert untouched["trigger_words_source"] is None
+
+
+@pytest.mark.parametrize("cleared", [[], None, ["  "]])
+def test_cleared_trigger_words_are_stored_as_none_not_left_for_a_scan(
+    shelf_env, cleared
+):
+    """The scanner upserts ``COALESCE(model.trigger_words, excluded…)``, so a
+    NULL here would have the next scan put the header's tag table straight
+    back. "None" has to be a stored answer."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET trigger_words = ? WHERE id = ?",
+            ('["portrait", "solo"]', alice),
+        )
+    assert _adapter(shelf_env, ADAPTER_WITH_BASE)["trigger_words"] == [
+        "portrait",
+        "solo",
+    ]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": cleared}
+    )
+    assert r.status_code == 200, r.text
+    assert _model_row(shelf_env, alice)["trigger_words"] == "[]"
+    served = _adapter(shelf_env, ADAPTER_WITH_BASE)
+    assert served["trigger_words"] == []
+    assert served["trigger_words_source"] is None
+
+
+def test_a_model_with_no_trigger_word_takes_its_persons_name(shelf_env):
+    """The default is served, never stored: it has to follow the assignment.
+    A set is not a subject, and a recorded word always wins."""
+    server = shelf_env.server
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _attach(server, ADAPTER_WITH_BASE, "character", shelf_env.character_id)
+    # A set carrying the person's own row id: ids are per table, and reading
+    # this one as a character would hand a set's LoRA that person's name.
+    _attach(server, ADAPTER_WITH_BASE_2, "set", shelf_env.character_id)
+    # An attachment whose person is gone names nobody.
+    _attach(server, ADAPTER_NO_BASE, "character", 999999)
+
+    rows = {
+        row["filename"]: (row["trigger_words"], row["trigger_words_source"])
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    assert rows["alice.safetensors"] == (["Shelf Character"], "character")
+    assert rows["bob.safetensors"] == ([], None)
+    assert rows["sd_xl_noname.safetensors"] == ([], None)
+    assert rows["dana.safetensors"] == ([], None)
+    assert _model_row(shelf_env, alice)["trigger_words"] is None, (
+        "the default was written to the row"
+    )
+    # The detail route answers the same way as the list.
+    assert _adapter(shelf_env, ADAPTER_WITH_BASE)["trigger_words"] == [
+        "Shelf Character"
+    ]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": ["ohwx"]}
+    )
+    assert r.status_code == 200, r.text
+    served = _adapter(shelf_env, ADAPTER_WITH_BASE)
+    assert served["trigger_words"] == ["ohwx"]
+    assert served["trigger_words_source"] == "recorded"
+
+    # Cleared, the person's name is what is left.
+    shelf_env.owner.patch(f"{API}/models", json={"ids": [alice], "trigger_words": []})
+    assert _adapter(shelf_env, ADAPTER_WITH_BASE)["trigger_words"] == [
+        "Shelf Character"
+    ]
+
+
+def test_trigger_words_are_bounded(shelf_env):
+    alice = shelf_env.model_ids["alice.safetensors"]
+    limit = model_shelf_routes.MAX_TRIGGER_WORD_LENGTH
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": ["x" * (limit + 1)]}
+    )
+    assert r.status_code == 422, r.text
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": ["x" * limit]}
+    )
+    assert r.status_code == 200, r.text
+
+
 def test_a_rename_is_refused_across_a_selection(shelf_env):
     """A name is a fact about one file. In bulk it would give every selected row
     the same name, and there is no undo to walk that back."""

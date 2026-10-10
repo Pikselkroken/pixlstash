@@ -428,6 +428,32 @@ describe("the selection bar", () => {
   });
 });
 
+describe("Set trigger words", () => {
+  const item = (wrapper) =>
+    wrapper
+      .findAll(".ctx-item")
+      .find((mi) => mi.text().includes("Set trigger words"));
+
+  it("is offered on adapters and emits its verb", async () => {
+    selectRows([row(1, "present"), row(2, "present", { file_kind: "unknown" })]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper).attributes("disabled")).toBeUndefined();
+    await item(wrapper).trigger("click");
+    expect(wrapper.emitted("set-trigger-words")).toHaveLength(1);
+  });
+
+  it("stays listed, disabled, on a selection holding a base model", async () => {
+    selectRows([
+      row(1, "present"),
+      row(2, "present", { file_kind: "checkpoint", kind: null }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(item(wrapper).attributes("disabled")).toBeDefined();
+    await item(wrapper).trigger("click");
+    expect(wrapper.emitted("set-trigger-words")).toBeUndefined();
+  });
+});
+
 describe("the delete verb", () => {
   /**
    * Register folder 1, which every `row()` above puts its copy in.

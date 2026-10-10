@@ -290,6 +290,82 @@ describe("what the dialog sends", () => {
   });
 });
 
+describe("Set trigger words", () => {
+  const recorded = (words) => ({
+    trigger_words: words,
+    trigger_words_source: "recorded",
+  });
+  const open = async () => {
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "trigger-words" },
+    });
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  };
+
+  it("sends the words as a list, split on commas and never on spaces", async () => {
+    // "photo of ohwx" is one trigger. Splitting on whitespace would store
+    // three words nobody types on their own.
+    const store = select([row(1, recorded(["old"]))]);
+    const wrapper = await open();
+    expect(wrapper.find("textarea").element.value).toBe("old");
+
+    await wrapper.find("textarea").setValue(" photo of ohwx, woman ,\n,style ");
+    await submitButton(wrapper).trigger("click");
+
+    expect(store.editSelected).toHaveBeenCalledWith({
+      trigger_words: ["photo of ohwx", "woman", "style"],
+    });
+  });
+
+  it("does not seed a person's name, and says an empty field means it", async () => {
+    // The name is a default the server serves, not a stored word. Seeded, the
+    // first Enter would store it and it would stop following a rename.
+    const store = select([
+      row(1, { trigger_words: ["Ada"], trigger_words_source: "character" }),
+    ]);
+    const wrapper = await open();
+    expect(wrapper.find("textarea").element.value).toBe("");
+    expect(wrapper.find(".sed-hint").text()).toContain("Leave empty to use Ada");
+
+    await submitButton(wrapper).trigger("click");
+    expect(store.editSelected).toHaveBeenCalledWith({ trigger_words: [] });
+  });
+
+  it("will not apply an untouched empty field across rows that disagree", async () => {
+    // It opens empty because the rows differ, and an empty field applied
+    // across them clears every one - on a dialog the reader only opened.
+    const store = select([
+      row(1, recorded(["ohwx"])),
+      row(2, recorded(["zxc"])),
+    ]);
+    const wrapper = await open();
+    expect(wrapper.find("textarea").element.value).toBe("");
+    expect(wrapper.find(".sed-hint").text()).toContain("do not share");
+    expect(submitButton(wrapper).attributes("disabled")).toBeDefined();
+    await submitButton(wrapper).trigger("click");
+    expect(store.editSelected).not.toHaveBeenCalled();
+
+    await wrapper.find("textarea").setValue("ohwx");
+    expect(submitButton(wrapper).attributes("disabled")).toBeUndefined();
+    // One of the two already says `ohwx`; the other is what gets replaced.
+    expect(wrapper.find(".sed-warning").text()).toContain("1 of them");
+    await submitButton(wrapper).trigger("click");
+    expect(store.editSelected).toHaveBeenCalledWith({ trigger_words: ["ohwx"] });
+  });
+
+  it("does not warn about writing over a default nobody recorded", async () => {
+    select([
+      row(1, { trigger_words: ["Ada"], trigger_words_source: "character" }),
+      row(2, { trigger_words: [], trigger_words_source: null }),
+    ]);
+    const wrapper = await open();
+    await wrapper.find("textarea").setValue("ohwx");
+    expect(wrapper.find(".sed-warning").exists()).toBe(false);
+  });
+});
+
 describe("the bulk overwrite warning", () => {
   it("counts the values it will destroy, not the rows on screen", async () => {
     // "12 selected" is something the reader can already see. The number that

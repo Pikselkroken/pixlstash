@@ -419,6 +419,38 @@ describe("a row with nothing in its header", () => {
     expect(row.find(".shelf-chip--quant").text()).toBe("FP8");
   });
 
+  it("puts the trigger word on the row, and marks a default as one", async () => {
+    const wrapper = await mountShelf([
+      adapter({
+        id: 1,
+        filename: "a.safetensors",
+        trigger_words: ["ohwx", "woman"],
+        trigger_words_source: "recorded",
+      }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        filename: "b.safetensors",
+        trigger_words: ["Ada"],
+        trigger_words_source: "character",
+      }),
+      adapter({ id: 3, sha256: "c".repeat(64), filename: "c.safetensors" }),
+    ]);
+    const chips = Object.fromEntries(
+      wrapper.findAll(".shelf-row").map((row) => [
+        row.find(".shelf-row-file").text(),
+        row.find(".shelf-chip--trigger"),
+      ]),
+    );
+    expect(chips["a.safetensors"].text()).toBe("Trigger word: ohwx +1");
+    expect(chips["a.safetensors"].classes()).not.toContain("shelf-chip--none");
+    // The person's name is not a word out of the file, so it takes the dashed
+    // "nothing recorded" chip rather than the mono one.
+    expect(chips["b.safetensors"].text()).toBe("Trigger word: Ada");
+    expect(chips["b.safetensors"].classes()).toContain("shelf-chip--none");
+    expect(chips["c.safetensors"].exists()).toBe(false);
+  });
+
   it("draws no quant chip on a row that records no precision", async () => {
     const wrapper = await mountShelf([
       adapter({ display_name: null, filename: "Foxglove.safetensors" }),

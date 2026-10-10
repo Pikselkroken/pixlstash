@@ -7909,11 +7909,15 @@ lives beside are the rest of §13.
 
 ### 25.1 The shelf's five verbs (shelf plan F3)
 
-**Five verbs, two new routes.** Assign was already `PUT /adapters/{sha256}/attachments`. Rename, Set base model and Set kind write one curated hub column each and differ in nothing else, so they share `PATCH /models`; Forget is `POST /models/forget`. Adding three routes that ran the same UPDATE with a different column name would have been three sets of guards to keep in step.
+**Five verbs, two new routes.** Assign was already `PUT /adapters/{sha256}/attachments`. Rename, Set base model and Set kind write one curated hub column each and differ in nothing else, so they share `PATCH /models` (Set trigger words joined them later, as a fourth field on the same route); Forget is `POST /models/forget`. Adding three routes that ran the same UPDATE with a different column name would have been three sets of guards to keep in step.
 
 **Addressed by `model.id`, never by hash.** A 24 GB checkpoint is listable the moment it is registered and stays `sha256 NULL` until `MissingCheckpointHashFinder` reads it, so a hash-addressed verb layer would leave the largest files on the shelf as the only ones that cannot be corrected. `model.id` is AUTOINCREMENT and never reissued.
 
 **`PATCH /models` writes only the fields the body carries**, using `model_fields_set` rather than a null check, so an explicit `null` is a *clear* (a wrong base model back to unset, which returns the row to the filter's "not set" bucket) while an absent field is untouched. That distinction is what lets one route carry three verbs without Set base model blanking the names in the selection.
+
+**Trigger words are a list on the wire and a default on the way out.** `model.trigger_words` stores a JSON list. `ModelResponse.trigger_words` serves it decoded, and when it is empty serves the name of the person the model is attached to in the active library instead, with `trigger_words_source` saying which (`recorded` / `character` / null). The default is computed per response (`effective_trigger_words`, one `fetch_character_names` read per page) and never written: attachments live in the vault and the model in the hub, so a stored default would name a person from whichever library was open when it was written, and would not follow a rename or a reassignment. With several people attached the lowest character id wins, so the answer does not move between requests.
+
+`PATCH /models` takes `trigger_words` as the complete list. Clearing it (`[]` or `null`) stores `[]`, not NULL: the scanner upserts `COALESCE(model.trigger_words, excluded.trigger_words)`, so a NULL would have the next scan put a kohya header's whole tag table back. An ai-toolkit import takes the config's `trigger_word` ahead of the header's `ss_tag_frequency` (`RunImporter._register`), the reverse of the base model's order: the config names the word the trainer was told to use, and the frequency table is every caption tag with the commonest first.
 
 Three guards on it, none of them authz:
 

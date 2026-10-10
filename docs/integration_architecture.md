@@ -630,6 +630,13 @@ Rules neither side may drift from:
    carries `set_verdicts: [{combo_key, names, verdict}]`, the owner's member
    answers about that model, `names` being the set's members in shelf names,
    base model first.
+   The same rows carry `trigger_words` as a **list** (it was a JSON string
+   before trigger words could be set) and `trigger_words_source`: `recorded`
+   for what the file or the owner stored, `character` when the list is the name
+   of the person the model is attached to standing in for a word nobody
+   recorded, null when it is empty. `PATCH /models` takes `trigger_words` as
+   the complete list; `[]` clears it. A client seeds an editor from `recorded`
+   rows only (`recordedTriggerWords`), or the default is stored on save.
 
 ### 2.3 The `/workflows` contract
 

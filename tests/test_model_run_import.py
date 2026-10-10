@@ -61,13 +61,15 @@ def _tensor(shape):
     return {"dtype": "F16", "shape": list(shape), "data_offsets": [0, 0]}
 
 
-def write_adapter(path, *, name=None, seed=b""):
+def write_adapter(path, *, name=None, seed=b"", tag_frequency=None):
     """A header-only safetensors with LoRA markers, so it parses as an adapter."""
     header = {f"blocks.{i}.lora_A.weight": _tensor([8, 16]) for i in range(2)}
     header["blocks.0.lora_B.weight"] = _tensor([16, 8])
     metadata = {"format": "pt"}
     if name:
         metadata["ss_output_name"] = name
+    if tag_frequency:
+        metadata["ss_tag_frequency"] = json.dumps(tag_frequency)
     header["__metadata__"] = metadata
     blob = json.dumps(header).encode("utf-8")
     # The seed goes in the payload, so two steps of one run are two different
@@ -297,6 +299,20 @@ def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):
     assert json.loads(row["trigger_words"]) == ["clemntn"]
     assert row["run_key"] == "Clementine"
     assert row["file_kind"] == "adapter"
+
+
+def test_the_configs_trigger_word_beats_the_headers_tag_table(shelf):
+    """The config names the word the trainer was told to use. The header's
+    frequency table is every tag in the captions, with the commonest first -
+    which is not the trigger whenever a caption tag outnumbers it."""
+    write_adapter(
+        shelf["run_dir"] / "Clementine.safetensors",
+        seed=b"final",
+        tag_frequency={"1_clementine": {"portrait": 9, "clemntn": 3}},
+    )
+    RunImporter(shelf["hub"]).import_run(str(shelf["run_dir"]), shelf["destination_id"])
+    row = models(shelf["hub"])["Clementine.safetensors"]
+    assert json.loads(row["trigger_words"]) == ["clemntn"]
 
 
 def test_delete_after_import_off_keeps_the_run_and_makes_a_second_copy(shelf):

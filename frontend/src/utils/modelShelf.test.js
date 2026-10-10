@@ -25,6 +25,8 @@ import {
   modelFileTitle,
   dateColumnKey,
   quantBadge,
+  recordedTriggerWords,
+  triggerChip,
   quantFromFilename,
   modelDate,
   withEmptyFolders,
@@ -174,6 +176,59 @@ describe("the quant postfix", () => {
       text: "nvfp4_awq.safetensors",
       state: "from-file",
     });
+  });
+});
+
+describe("triggerChip", () => {
+  it("draws nothing for a model with no trigger word at all", () => {
+    expect(triggerChip({ trigger_words: [] })).toBeNull();
+    // A row from before the field was a list, or one that never carried it.
+    expect(triggerChip({})).toBeNull();
+    expect(triggerChip({ trigger_words: "ohwx" })).toBeNull();
+  });
+
+  it("shows the first recorded word and counts the rest", () => {
+    expect(
+      triggerChip({ trigger_words: ["ohwx"], trigger_words_source: "recorded" }),
+    ).toEqual({ label: "ohwx", title: "Trigger word: ohwx", isDefault: false });
+    expect(
+      triggerChip({
+        trigger_words: ["ohwx", "woman", "portrait"],
+        trigger_words_source: "recorded",
+      }),
+    ).toEqual({
+      label: "ohwx +2",
+      title: "Trigger words: ohwx, woman, portrait",
+      isDefault: false,
+    });
+  });
+
+  it("caps the hover list of a file that records its whole tag table", () => {
+    const words = Array.from({ length: 40 }, (_, i) => `tag${i}`);
+    const chip = triggerChip({
+      trigger_words: words,
+      trigger_words_source: "recorded",
+    });
+    expect(chip.label).toBe("tag0 +39");
+    expect(chip.title).toContain("tag11 and 28 more");
+    expect(chip.title).not.toContain("tag12");
+  });
+
+  it("marks a person's name as the default it is, and never as on record", () => {
+    const row = { trigger_words: ["Ada"], trigger_words_source: "character" };
+    const chip = triggerChip(row);
+    expect(chip.isDefault).toBe(true);
+    expect(chip.label).toBe("Ada");
+    expect(chip.title).toContain("the name of the person");
+    // What an editor seeds from: a default is not stored, so seeding it would
+    // store it on the first Enter.
+    expect(recordedTriggerWords(row)).toEqual([]);
+    expect(
+      recordedTriggerWords({
+        trigger_words: ["ohwx"],
+        trigger_words_source: "recorded",
+      }),
+    ).toEqual(["ohwx"]);
   });
 });
 
