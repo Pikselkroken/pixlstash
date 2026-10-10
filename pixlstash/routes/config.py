@@ -280,6 +280,8 @@ def create_router(server) -> APIRouter:
         include_attachments: bool
         watermark: bool
         all_libraries: bool = False
+        # Bound to one client address (the ComfyUI link key): never widened.
+        source_bound: bool = False
 
     class DeleteTokenResponse(BaseModel):
         model_config = ConfigDict(extra="allow")
@@ -821,8 +823,8 @@ def create_router(server) -> APIRouter:
             "`all_libraries: true` lets it work in whichever library is open, "
             "so an agent's token keeps working when the library is switched; "
             "`false` pins it to the library that is open now. Share links "
-            "cannot be widened. Only the owner's own session, on the local "
-            "network, may call this; a token cannot."
+            "and the ComfyUI link key cannot be widened. Only the owner's own "
+            "session, on the local network, may call this; a token cannot."
         ),
     )
     def put_me_token_libraries(

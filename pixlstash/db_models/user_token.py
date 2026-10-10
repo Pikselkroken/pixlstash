@@ -93,7 +93,8 @@ class UserToken(SQLModel, table=True):
     # The owner's opt-out from the library pin (#1787): the token works in
     # whichever library is active. Only ever honoured on a token with no
     # ``resource_type`` (a share link names ids that mean something else in the
-    # next library), and only set through ``AuthService.set_token_libraries``.
+    # next library) and no ``bound_address``, and only set through
+    # ``AuthService.set_token_libraries``.
     # ``library_uuid`` keeps the library it was minted in; see
     # ``auth.token_covers_library``, the one place the two are read together.
     #

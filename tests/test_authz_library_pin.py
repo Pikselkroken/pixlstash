@@ -591,6 +591,52 @@ class TestATokenThatCoversEveryLibrary:
         # And is told nothing about how the owner could change that.
         assert refused.json()["detail"] == "Token belongs to a different library"
 
+    def test_a_token_bound_to_one_address_cannot_be_widened(
+        self, server, other_library
+    ):
+        """The ComfyUI link key names no resource, but it is not the owner's
+        to spread: it was handed to one integration for one library."""
+        owner = _owner_client(server)
+        token = _mint(owner)
+        bearer = {"Authorization": f"Bearer {token}"}
+        token_id = _token_row(server).id
+
+        def _write(**values):
+            def _apply(session: Session):
+                row = session.get(UserToken, token_id)
+                for name, value in values.items():
+                    setattr(row, name, value)
+                session.add(row)
+                session.commit()
+
+            server.hub_engine.run_task(_apply)
+            server.auth._flush_token_cache()
+
+        # Bound to the address these requests come from, so it still works.
+        _write(bound_address="testclient")
+        client = TestClient(server.api)
+        assert client.get(f"{API}/pictures", headers=bearer).status_code == 200
+
+        refused = _cover(owner, token_id, True)
+        assert refused.status_code == 400, refused.text
+        assert "ComfyUI link key" in refused.json()["detail"]
+        assert _token_row(server).all_libraries is False
+        listed = owner.get(f"{API}/users/me/token").json()
+        assert [row["source_bound"] for row in listed] == [True]
+
+        # A row carrying the flag anyway stays pinned, and is not told how the
+        # owner could change that.
+        _write(all_libraries=True)
+        assert client.get(f"{API}/pictures", headers=bearer).status_code == 200
+        _restamp_tokens(server, other_library)
+        elsewhere = client.get(f"{API}/pictures", headers=bearer)
+        assert elsewhere.status_code == 403
+        assert elsewhere.json()["detail"] == "Token belongs to a different library"
+
+        # The same row with no address is an ordinary token: the flag counts.
+        _write(bound_address=None)
+        assert client.get(f"{API}/pictures", headers=bearer).status_code == 200
+
     def test_only_the_owner_on_the_local_network_may_set_it(self, server):
         owner = _owner_client(server)
         token_id = owner.post(

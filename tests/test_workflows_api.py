@@ -2095,6 +2095,14 @@ def test_the_link_token_cannot_manage_tokens(workflow_env, comfy_at):
             f"{API}/users/me/token/{owners}/libraries", json={"all_libraries": True}
         )
         assert r.status_code == 200, r.text
+        # The owner may widen their own token, but not the link's: that one
+        # stays with the library ComfyUI was linked in.
+        (link_id,) = _link_tokens(server)
+        r = workflow_env.owner.put(
+            f"{API}/users/me/token/{link_id}/libraries", json={"all_libraries": True}
+        )
+        assert r.status_code == 400, r.text
+        assert "ComfyUI link key" in r.json()["detail"]
         r = workflow_env.owner.get(
             f"{API}/users/me/shared-resource-ids?resource_type=picture"
         )

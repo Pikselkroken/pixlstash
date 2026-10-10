@@ -126,8 +126,8 @@ again when you switch back. An API token for a script or an AI agent can be set
 to work in every library instead (the **Every library** switch in the token
 list, or **Use in every library** in **Connect AI agent**); it then acts on
 whichever library is open. Only the owner, signed in from the local network,
-can change that (a token cannot change it, its own included), and a share link
-always stays with its library.
+can change that (a token cannot change it, its own included). A share link and
+the ComfyUI link key always stay with their library.
 
 **Settings → Libraries** does all of it: add a library, rename one, switch
 between them, and stop using one. **Add a library…** takes a single folder and

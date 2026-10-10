@@ -1414,7 +1414,7 @@ detail goes on to say how to lift that. `PUT /users/me/token/{token_id}/librarie
 with `{"all_libraries": true}` makes the token act on whichever library is
 active; `false` pins it to the library active now. It answers `{status, id,
 all_libraries}`, `400` for a share link (its ids mean something else in the
-next library) and `403` to anyone but the owner's own session on the local
+next library) or the ComfyUI link key (`source_bound` in the list), and `403` to anyone but the owner's own session on the local
 network (`LOCAL_OWNER_ONLY`, and never a token, not even a full-access one
 asking about itself), which is why minting cannot set it and the client makes
 two calls. `GET

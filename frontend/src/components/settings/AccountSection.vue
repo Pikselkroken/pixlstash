@@ -358,6 +358,8 @@ const librariesUpdating = reactive(new Set());
 function librariesLockedReason(token) {
   if (token.resource_type)
     return "A share link stays with the library it was made in";
+  if (token.source_bound)
+    return "The ComfyUI link key stays with the library it was linked in";
   if (!librariesStore.canManage)
     return "Sign in from the local network to change this";
   return "";

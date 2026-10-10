@@ -427,18 +427,33 @@ def is_unscoped_owner_token(token: UserToken) -> bool:
     return token.scope == "ALL" and token.resource_type is None
 
 
+def token_may_cover_every_library(token: UserToken) -> bool:
+    """Return True for the kind of token the owner is allowed to widen.
+
+    Two kinds never are. A share link names a resource, and its ids mean a
+    different set, character or project in the next library. A source-bound
+    token (``bound_address`` set, today the ComfyUI link key) was handed to
+    one integration for the library it was linked in, and anything on that
+    machine can use it; narrowing it further is #1811, so it is not widened
+    here either.
+
+    The single spelling of that rule: what may be set, what is honoured, what
+    the refusal tells the caller and what the token list reports all ask it.
+    """
+    return token.resource_type is None and getattr(token, "bound_address", None) is None
+
+
 def token_follows_active_library(token: UserToken) -> bool:
     """Return True when the owner has set *token* to cover every library.
 
     The opt-out from the library pin (#1787). Honoured only on a token that
-    names no resource: a share link's ids mean something else in the next
-    library, so a resource-scoped row carrying the flag (which
-    :meth:`AuthService.set_token_libraries` never writes) stays pinned. Fails
-    closed: anything but an explicit ``True`` is "pinned".
+    :func:`token_may_cover_every_library`: a row of any other kind carrying
+    the flag (which :meth:`AuthService.set_token_libraries` never writes)
+    stays pinned. Fails closed: anything but an explicit ``True`` is "pinned".
     """
-    return getattr(token, "all_libraries", False) is True and (
-        token.resource_type is None
-    )
+    if getattr(token, "all_libraries", False) is not True:
+        return False
+    return token_may_cover_every_library(token)
 
 
 def token_covers_library(token: UserToken, library_uuid: Optional[str]) -> bool:
@@ -2231,6 +2246,7 @@ class AuthService:
                 "include_attachments": token.include_attachments,
                 "watermark": token.watermark,
                 "all_libraries": token_follows_active_library(token),
+                "source_bound": token.bound_address is not None,
             }
             for token in tokens
         ]
@@ -2315,9 +2331,11 @@ class AuthService:
         which is the one the owner is looking at when they say "only this
         library".
 
-        Only a token that names no resource can be widened. A share link's
+        Only a token that names no resource and is not bound to an address
+        can be widened (:func:`token_may_cover_every_library`). A share link's
         ``resource_id`` means a different set, character or project in every
-        other library, so widening one would serve somebody else's pictures.
+        other library, so widening one would serve somebody else's pictures;
+        the ComfyUI link key stays with the library it was linked in.
 
         Where it may be called from is the authz gate's business
         (``LOCAL_OWNER_ONLY``: an unscoped owner on the local network). What
@@ -2340,6 +2358,14 @@ class AuthService:
                     detail=(
                         "A share link belongs to the library its pictures are "
                         "in and cannot cover other libraries."
+                    ),
+                )
+            if not token_may_cover_every_library(token):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "The ComfyUI link key works in the library it was "
+                        "linked in and cannot cover other libraries."
                     ),
                 )
             token.all_libraries = all_libraries
@@ -2858,8 +2884,9 @@ class AuthService:
                         detail = "Token belongs to a different library"
                         # The way out is the owner's to take, so only a token
                         # that could be widened is told about it; a share link
-                        # learns nothing about how this server is set up.
-                        if matched_token.resource_type is None:
+                        # or the ComfyUI link key learns nothing about how this
+                        # server is set up.
+                        if token_may_cover_every_library(matched_token):
                             detail += (
                                 ". Switch to that library, or let the token "
                                 "cover every library under API Tokens in "

@@ -27,6 +27,7 @@ vi.mock("../../api/users", () => ({
   listTokens: vi.fn(async () => [
     { id: 1, description: "agent", scope: "ALL", resource_type: null, all_libraries: false },
     { id: 2, description: "share", scope: "READ", resource_type: "picture_set", resource_id: 3, all_libraries: false },
+    { id: 3, description: "ComfyUI link", scope: "ALL", resource_type: null, all_libraries: false, source_bound: true },
   ]),
   createToken: vi.fn(),
   patchToken: vi.fn(),
@@ -127,6 +128,13 @@ describe("the Every library switch", () => {
     expect(librarySwitch(wrapper, 1).attributes("disabled")).toBeDefined();
     expect(lockedReason(wrapper, 1)).toMatch(/share link stays/i);
     expect(lockedReason(wrapper, 0)).toBe("");
+  });
+
+  it("is locked on the ComfyUI link key, which names no resource either", async () => {
+    const wrapper = await table();
+
+    expect(librarySwitch(wrapper, 2).attributes("disabled")).toBeDefined();
+    expect(lockedReason(wrapper, 2)).toMatch(/ComfyUI link key stays/i);
   });
 
   it("is locked for a caller the server would refuse, and says why", async () => {
