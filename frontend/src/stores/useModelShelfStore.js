@@ -2534,20 +2534,35 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @param {Object} group - an entry of `setGroups`, never a missing-base one.
    * @returns {Promise<Object|null>} the new set.
    */
-  function cloneSetFromPictures(group) {
-    if (!group?.head || group.head.missing) return Promise.resolve(null);
-    return createHandMadeSet({
-      cloned: true,
-      members: group.models
-        // An engine is not a file a workflow loads, so no set holds one.
-        .filter((model) => model.kind !== "engine")
-        .map((model) => ({
-          model_id: model.id,
-          slot:
-            model.id === group.head.id ? "checkpoint" : defaultSlot(model.kind),
-        })),
-    });
+  async function cloneSetFromPictures(group) {
+    if (!group?.head || group.head.missing || cloning.has(group.key)) {
+      return null;
+    }
+    // One clone per card: a second press while the first is on the wire would
+    // make a twin of the clone, and neither would ever give way.
+    cloning.add(group.key);
+    try {
+      return await createHandMadeSet({
+        cloned: true,
+        members: group.models
+          // An engine is not a file a workflow loads, so no set holds one, and
+          // the pictures that ran with it stay on the card.
+          .filter((model) => model.kind !== "engine")
+          .map((model) => ({
+            model_id: model.id,
+            slot:
+              model.id === group.head.id
+                ? "checkpoint"
+                : defaultSlot(model.kind),
+          })),
+      });
+    } finally {
+      cloning.delete(group.key);
+    }
   }
+
+  /** The keys of the sets from pictures a clone is being made of. */
+  const cloning = new Set();
 
   /** The `cloned` mark as a create body carries it: only when it is set. */
   function clonedBack(set) {

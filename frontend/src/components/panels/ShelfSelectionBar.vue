@@ -275,10 +275,7 @@ import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
-import {
-  GRID_GROUP_BY,
-  useModelShelfStore,
-} from "../../stores/useModelShelfStore";
+import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import {
@@ -306,6 +303,7 @@ const emit = defineEmits([
   "forget",
   "delete",
   "new-set",
+  "clone-set",
   "remove-from-set",
 ]);
 
@@ -322,6 +320,8 @@ const countMenuOpen = ref(false);
 const assignMenuOpen = ref(false);
 const moreMenuOpen = ref(false);
 const contextOpen = ref(false);
+/** The set-grid card the context menu was opened on, by group key, or "". */
+const contextSetKey = ref("");
 /** `[x, y]` in client coordinates - what v-menu's `target` takes. */
 const contextAt = ref([0, 0]);
 
@@ -335,7 +335,8 @@ const contextAt = ref([0, 0]);
  * @param {number} x - clientX.
  * @param {number} y - clientY.
  */
-function openContextMenu(x, y) {
+function openContextMenu(x, y, setKey = "") {
+  contextSetKey.value = setKey;
   contextAt.value = [x, y];
   contextOpen.value = true;
 }
@@ -361,17 +362,19 @@ const newSetTitle = computed(() => {
 });
 
 /**
- * "Clone set to edit": on the set grid, the set from pictures the one
- * selected file heads - the card this menu was opened on. A set from pictures
- * cannot be edited; its clone is the owner's and can.
+ * "Clone set to edit": the set from pictures whose CARD the context menu was
+ * opened on. Keyed by the card and not by the selected file, because the same
+ * file is drawn in other trays too, where "this set" would be another one.
+ * A set from pictures cannot be edited; its clone is the owner's and can.
  */
-const clonableSet = computed(() => {
-  if (store.view?.groupBy !== GRID_GROUP_BY || store.selectedRows.length !== 1) {
-    return null;
-  }
-  const id = store.selectedRows[0].id;
-  return store.setGroups?.find((group) => group.head?.id === id) ?? null;
-});
+const clonableSet = computed(
+  () =>
+    (contextOpen.value &&
+      store.setGroups?.find(
+        (group) => group.key === contextSetKey.value && !group.head?.missing,
+      )) ||
+    null,
+);
 
 /**
  * Remove from set: offered while every selected file is a member of the OPEN
@@ -977,6 +980,8 @@ const verbHandlers = computed(() => ({
   deleteLabel: deleteLabel.value,
   deleteTitle: deleteTitle.value,
   onVerb: (verb, event) => {
+    // Read before the menu closes: it is the open menu's card.
+    const cloned = clonableSet.value;
     contextOpen.value = false;
     moreMenuOpen.value = false;
     if (verb === "copy-filenames")
@@ -990,8 +995,7 @@ const verbHandlers = computed(() => ({
     // label and nothing else, so a stale one can never turn a trash into an
     // unlink.
     else if (verb === "delete") emit("delete", Boolean(event?.shiftKey));
-    else if (verb === "clone-set")
-      store.cloneSetFromPictures(clonableSet.value);
+    else if (verb === "clone-set") emit("clone-set", cloned);
     else emit(verb);
   },
   onAttach,

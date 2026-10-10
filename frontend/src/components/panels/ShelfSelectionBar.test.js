@@ -871,19 +871,27 @@ describe("Clone set to edit", () => {
     return store;
   }
 
-  it("is on the menu of a card on the set grid, and clones that card's set", async () => {
-    const store = selectHead();
-    store.view.groupBy = "workflow_set";
-    store.cloneSetFromPictures = vi.fn();
-    const wrapper = mount(ShelfSelectionBar, globalOpts);
-    await cloneItem(wrapper).trigger("click");
-    expect(store.cloneSetFromPictures).toHaveBeenCalledTimes(1);
-    expect(store.cloneSetFromPictures.mock.calls[0][0].key).toBe("model:1");
-  });
-
-  it("is not on the row list's menu, where no set is in front of the reader", () => {
+  it("is on the menu opened on a card, and names that card's set", async () => {
     selectHead();
     const wrapper = mount(ShelfSelectionBar, globalOpts);
+    wrapper.vm.openContextMenu(1, 2, "model:1");
+    await wrapper.vm.$nextTick();
+    await cloneItem(wrapper).trigger("click");
+    expect(wrapper.emitted("clone-set")).toHaveLength(1);
+    expect(wrapper.emitted("clone-set")[0][0].key).toBe("model:1");
+  });
+
+  it("is not on a menu opened on anything else, though the same file is selected", async () => {
+    // A tray row, a row of the list: the head file selected, but no card.
+    selectHead();
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    wrapper.vm.openContextMenu(1, 2);
+    await wrapper.vm.$nextTick();
+    expect(cloneItem(wrapper)).toBeUndefined();
+    // Nor under the pill's ⋯ once a card's menu has closed.
+    wrapper.vm.openContextMenu(1, 2, "model:1");
+    wrapper.vm.contextOpen = false;
+    await wrapper.vm.$nextTick();
     expect(cloneItem(wrapper)).toBeUndefined();
   });
 });

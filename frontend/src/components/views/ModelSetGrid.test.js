@@ -1116,7 +1116,18 @@ describe("selection and the verbs", () => {
       .trigger("contextmenu", { clientX: 120, clientY: 340 });
 
     expect([...store.selectedIds]).toEqual([3]);
-    expect(wrapper.emitted("menu")[0][0]).toEqual({ x: 120, y: 340 });
+    // A tray row is a file in somebody's set, not a set: no card is named.
+    expect(wrapper.emitted("menu")[0][0]).toEqual({ x: 120, y: 340, setKey: "" });
+
+    // A card names its set, which is what Clone set to edit is about.
+    await wrapper
+      .find('[data-testid="model-set-card"]')
+      .trigger("contextmenu", { clientX: 5, clientY: 6 });
+    expect(wrapper.emitted("menu")[1][0]).toEqual({
+      x: 5,
+      y: 6,
+      setKey: "model:1",
+    });
   });
 
   it("leaves a selection of forty alone when one of them is right-clicked", async () => {

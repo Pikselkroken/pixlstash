@@ -403,7 +403,7 @@ def _shape(entry: dict) -> dict:
         "name": entry["name"],
         "created_at": entry["created_at"],
         "updated_at": entry["updated_at"],
-        "cloned": bool(entry.get("cloned")),
+        "cloned": bool(entry["cloned"]),
         "incomplete": not checkpoints,
         "checkpoint_ids": [m["id"] for m in checkpoints if m["on_shelf"]],
         "picture_count": 0,

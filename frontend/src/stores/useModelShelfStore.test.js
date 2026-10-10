@@ -3584,6 +3584,31 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(store.handMadeSets.map((set) => set.id)).toEqual([7]);
   });
 
+  it("makes one clone when the button is pressed twice", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    const [group] = store.setGroups;
+    await Promise.all([
+      store.cloneSetFromPictures(group),
+      store.cloneSetFromPictures(group),
+    ]);
+    expect(createWorkflowSet).toHaveBeenCalledTimes(1);
+    // Free again once the first has answered.
+    await store.cloneSetFromPictures(group);
+    expect(createWorkflowSet).toHaveBeenCalledTimes(2);
+  });
+
+  it("copies a clone as a clone, and a set made by hand as one made by hand", async () => {
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    await store.duplicateHandMadeSet(handSet(7, [], { cloned: true }));
+    expect(createWorkflowSet.mock.calls[0][0].cloned).toBe(true);
+    await store.duplicateHandMadeSet(handSet(8));
+    expect(createWorkflowSet.mock.calls[1][0]).not.toHaveProperty("cloned");
+  });
+
   it("puts a deleted clone back as a clone", async () => {
     useOperationStore().setLocalReceiptHost(true);
     const set = handSet(7, [], { cloned: true });

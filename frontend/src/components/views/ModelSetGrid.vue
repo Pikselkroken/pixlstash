@@ -1687,7 +1687,8 @@ function openMenu(entry, x, y) {
   const id = modelIdOf(entry);
   if (!selectable(id)) return false;
   if (!store.isSelected(id)) selectEntry(entry, {});
-  emit("menu", { x, y });
+  // The card, when it is one: Clone set to edit is about that card's set.
+  emit("menu", { x, y, setKey: entry.kind === "card" ? entry.key : "" });
   return true;
 }
 

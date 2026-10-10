@@ -5675,6 +5675,17 @@ describe("the set grid is what the shelf opens on", () => {
     // that can drift. The menu is its own, opened through its exposed method.
     expect(bar.vm.contextOpen).toBe(true);
     expect(bar.vm.contextAt).toEqual([210, 64]);
+
+    // A card's menu says which card, and its Clone set to edit reaches the
+    // store with the set the bar named.
+    await wrapper
+      .findComponent({ name: "ModelSetGrid" })
+      .vm.$emit("menu", { x: 1, y: 2, setKey: "model:1" });
+    expect(bar.vm.contextSetKey).toBe("model:1");
+    store.cloneSetFromPictures = vi.fn();
+    const group = { key: "model:1" };
+    await bar.vm.$emit("clone-set", group);
+    expect(store.cloneSetFromPictures).toHaveBeenCalledWith(group);
   });
 
   it("takes Ctrl+A to mean the models the GRID draws", async () => {
