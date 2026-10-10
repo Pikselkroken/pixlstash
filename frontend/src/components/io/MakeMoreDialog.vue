@@ -90,7 +90,7 @@
         :reason="entry.reason"
         :subject="entry.subject"
         :busy="loading"
-        @settings="emit('open-settings', 'compute')"
+        @settings="emit('open-settings', 'comfyui')"
         @retry="load"
       />
       </div>

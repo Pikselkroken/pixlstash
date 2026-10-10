@@ -278,7 +278,7 @@ run with workers ON.
 
 Requires a live ComfyUI server.
 
-- [ ] Settings → **Compute** (**ComfyUI** in a browser, where the pane holds only this), no address saved, ComfyUI running locally: "Found ComfyUI on this computer" offers its address → **Connect** → Connected, with the node-pack line
+- [ ] Settings → **ComfyUI**, no address saved, ComfyUI running locally: "Found ComfyUI on this computer" offers its address → **Connect** → Connected, with the node-pack line
 - [ ] Same, ComfyUI stopped: the address form appears; a wrong port shows "Nothing answered at …" and saves nothing (reopen Settings: still not connected)
 - [ ] Toolbar ComfyUI menu: run a text-to-image workflow with a prompt — progress shows; the output picture appears in the grid
 - [ ] Run an image-to-image workflow from a source picture — output appears and is linked to the source

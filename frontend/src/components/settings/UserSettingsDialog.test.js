@@ -36,7 +36,7 @@ vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComfyuiHostSection.vue", () => ({
   default: {
-    props: ["first"],
+    props: { first: Boolean },
     template: '<div class="comfyui-host-stub" :data-first="String(first)" />',
   },
 }));
@@ -82,8 +82,8 @@ describe("UserSettingsDialog library navigation", () => {
 
     // The whole order, not an adjacency: an index comparison between two
     // entries also holds when one of them is missing from the rail entirely.
-    // Backend is desktop-only and absent under jsdom; Compute stays, because
-    // the ComfyUI host lives there.
+    // Compute and Backend are desktop-only and absent under jsdom; ComfyUI
+    // stays, because a browser connects ComfyUI too.
     expect(
       wrapper.findAll(".settings-nav-item").map((n) => n.attributes("id")),
     ).toEqual([
@@ -97,9 +97,7 @@ describe("UserSettingsDialog library navigation", () => {
       "settings-nav-scrapheap",
       "settings-nav-snapshots",
       "settings-nav-privacy",
-      // Labelled "ComfyUI" here: no desktop bridge, so the pane holds only the
-      // ComfyUI host. The id stays `compute`.
-      "settings-nav-compute",
+      "settings-nav-comfyui",
       "settings-nav-account",
     ]);
   });
@@ -117,23 +115,26 @@ describe("UserSettingsDialog library navigation", () => {
     }
   });
 
-  it("keeps the ComfyUI host on Compute in a browser, without acceleration", async () => {
-    // Acceleration needs the desktop bridge; the ComfyUI host does not, and
-    // Compute is the only place left to set it.
+  it("gives the ComfyUI host its own pane in a browser", async () => {
     sessionContext.value = { scope: "ALL" };
-    const wrapper = mountDialog();
+    const wrapper = mount(UserSettingsDialog, {
+      props: { open: true, initialTab: "comfyui" },
+      global: { stubs: { VIcon: true } },
+    });
     await nextTick();
 
-    expect(wrapper.find("#settings-nav-compute").text()).toContain("ComfyUI");
-    const pane = wrapper.find("#settings-pane-compute");
-    // First in the pane, so it carries no divider above nothing.
+    expect(wrapper.find("#settings-nav-comfyui").attributes("aria-current")).toBe(
+      "page",
+    );
+    const pane = wrapper.find("#settings-pane-comfyui");
+    // Alone in the pane, so it carries no divider above nothing.
     expect(pane.find(".comfyui-host-stub").attributes("data-first")).toBe(
       "true",
     );
-    expect(pane.find(".compute-stub").exists()).toBe(false);
+    expect(wrapper.find(".compute-stub").exists()).toBe(false);
   });
 
-  it("gives the desktop both halves of Compute, the host below acceleration", async () => {
+  it("splits ComfyUI and Compute into two desktop panes", async () => {
     // `isDesktop` is read when the module is evaluated, so the bridge has to
     // be in place before the import.
     sessionContext.value = { scope: "ALL" };
@@ -147,16 +148,32 @@ describe("UserSettingsDialog library navigation", () => {
       });
       await nextTick();
 
-      const pane = wrapper.find("#settings-pane-compute");
-      expect(pane.find(".compute-stub").exists()).toBe(true);
-      // Acceleration is above it, so the host section is not the pane's first.
-      expect(pane.find(".comfyui-host-stub").attributes("data-first")).toBe(
-        "false",
+      expect(
+        wrapper.findAll(".settings-nav-item").map((n) => n.attributes("id")),
+      ).toEqual([
+        "settings-nav-appearance",
+        "settings-nav-behaviour",
+        "settings-nav-smart-score",
+        "settings-nav-libraries",
+        "settings-nav-scrapheap",
+        "settings-nav-snapshots",
+        "settings-nav-privacy",
+        "settings-nav-comfyui",
+        "settings-nav-compute",
+        "settings-nav-backend",
+        "settings-nav-account",
+      ]);
+      expect(wrapper.find("#settings-nav-compute").attributes("aria-current")).toBe(
+        "page",
       );
-      expect(wrapper.find("#settings-nav-compute").text()).toContain(
-        "Compute",
+      const compute = wrapper.find("#settings-pane-compute");
+      expect(compute.find(".compute-stub").exists()).toBe(true);
+      expect(compute.find(".comfyui-host-stub").exists()).toBe(false);
+      const comfyui = wrapper.find("#settings-pane-comfyui");
+      expect(comfyui.find(".comfyui-host-stub").attributes("data-first")).toBe(
+        "true",
       );
-      expect(wrapper.find("#settings-nav-backend").exists()).toBe(true);
+      expect(comfyui.find(".compute-stub").exists()).toBe(false);
     } finally {
       delete window.pixlstashDesktop;
       vi.resetModules();

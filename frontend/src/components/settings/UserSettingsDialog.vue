@@ -18,7 +18,7 @@ import { VIcon } from "vuetify/components";
 const appVersion = __APP_VERSION__;
 
 // The desktop app injects this bridge (Electron preload); a plain browser does
-// not, so the Backend tab and Compute's acceleration section are desktop-only.
+// not, so the Backend and Compute tabs are desktop-only.
 const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 
 const props = defineProps({
@@ -109,14 +109,18 @@ const navItems = computed(() =>
       show: !isReadOnly.value,
     },
     {
-      // Named for what the pane holds. On the desktop that is the acceleration
-      // runtime with the ComfyUI host under it; in a browser there is no
-      // runtime to manage and the ComfyUI host is the whole pane, so a rail
-      // item reading "Compute" would be the wrong word to hunt for.
-      id: "compute",
-      icon: isDesktop ? "expansion-card-variant" : "sitemap-outline",
-      label: isDesktop ? "Compute" : "ComfyUI",
+      // Its own pane rather than a section under Compute: the acceleration
+      // runtime alone fills that pane, and a browser has no runtime at all.
+      id: "comfyui",
+      icon: "sitemap-outline",
+      label: "ComfyUI",
       show: !isReadOnly.value,
+    },
+    {
+      id: "compute",
+      icon: "expansion-card-variant",
+      label: "Compute",
+      show: isDesktop && !isReadOnly.value,
     },
     {
       id: "backend",
@@ -286,18 +290,27 @@ watch(
       </div>
       <div
         v-if="!isReadOnly"
+        v-show="settingsTab === 'comfyui'"
+        id="settings-pane-comfyui"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-comfyui"
+      >
+        <ComfyuiHostSection
+          :open="dialogOpen"
+          first
+          @update:comfyui-configured="emit('update:comfyui-configured', $event)"
+        />
+      </div>
+      <div
+        v-if="isDesktop && !isReadOnly"
         v-show="settingsTab === 'compute'"
         id="settings-pane-compute"
         class="settings-pane"
         role="region"
         aria-labelledby="settings-nav-compute"
       >
-        <ComputeSection v-if="isDesktop" :open="dialogOpen" view="compute" />
-        <ComfyuiHostSection
-          :open="dialogOpen"
-          :first="!isDesktop"
-          @update:comfyui-configured="emit('update:comfyui-configured', $event)"
-        />
+        <ComputeSection :open="dialogOpen" view="compute" />
       </div>
       <div
         v-if="isDesktop && !isReadOnly"
