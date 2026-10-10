@@ -114,6 +114,12 @@ LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
 # Deliberately NOT used by `detect_lora_targets` above, which wants ONE digest
 # slot per node whatever the pack spelled it, and says so.
 LORA_DIGEST_FIELD_RE = re.compile(r"^(adapter|lora)_sha256(_\d+)?$")
+# A digest row past a node's first: `PixlStashMultiAdapterLoader` holds one
+# adapter per row (`adapter_sha256`, `adapter_sha256_2`, ...), each a slot.
+_NUMBERED_DIGEST_FIELD_RE = re.compile(r"^(adapter|lora)_sha256_\d+$")
+# The loader with several digest rows. A row can be emptied and the node still
+# runs: with every row empty it passes MODEL and CLIP straight through.
+PIXLSTASH_MULTI_ADAPTER_LOADER = "PixlStashMultiAdapterLoader"
 
 # How hard a LoRA slot is applied, reported beside it. ``strength`` is the
 # model-only loaders' single widget, so it fills ``model`` when the two-widget
@@ -1287,9 +1293,11 @@ def detect_lora_targets(prompt_graph: dict) -> list[dict]:
         # the widget both things, and a node carrying two names is still one
         # adapter to load.
         digest = next((f for f in LORA_DIGEST_FIELDS if f in inputs), None)
-        if digest is not None:
-            fields.append(digest)
-        for field in fields:
+        digests = [] if digest is None else [digest]
+        # A numbered digest field is a row of its own, as a stacker's
+        # `lora_name_2` is: the multi-adapter loader holds one adapter per row.
+        digests += [f for f in inputs if _NUMBERED_DIGEST_FIELD_RE.match(str(f))]
+        for field in fields + digests:
             value = inputs.get(field)
             if not isinstance(value, str):
                 continue
@@ -1299,7 +1307,7 @@ def detect_lora_targets(prompt_graph: dict) -> list[dict]:
                     "class_type": node.get("class_type"),
                     "field": field,
                     "value": value,
-                    "by": "digest" if field == digest else "filename",
+                    "by": "digest" if field in digests else "filename",
                     "strengths": _lora_strengths(inputs, field),
                 }
             )
@@ -1321,7 +1329,10 @@ def _lora_strengths(inputs: dict, field: str) -> dict:
         ``{"model": float, "clip": float}``, either key absent when the node
         does not carry it.
     """
-    suffix = field[len("lora_name") :] if field.startswith("lora_name") else ""
+    # The row's own number, off whichever field names the slot: a stacker's
+    # `lora_name_2` and the multi-adapter loader's `adapter_sha256_2` alike.
+    row = re.search(r"_\d+$", field)
+    suffix = row.group(0) if row else ""
     strengths: dict[str, float] = {}
     for key, widget in _LORA_STRENGTH_FIELDS:
         value = inputs.get(f"{widget}{suffix}")
