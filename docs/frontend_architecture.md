@@ -1504,7 +1504,10 @@ in the Workflow tab's Models panel head, both through
   the whole pairing as `picks` and replaces the set's plan with the answer, so
   the diff, the fit and the `swaps` Clone sends stay the server's. The selects
   are not disabled while that is asked (disabling the focused one drops focus
-  to the page); Clone is. A pick ComfyUI will not load shows the plan's
+  to the page); Clone is, and the rows are `aria-busy`. A pick made meanwhile
+  waits and is asked next, against the plan the answer left, the latest one
+  winning: the select already shows it, so dropping it would turn the select
+  back unexplained. A pick ComfyUI will not load shows the plan's
   `reason` beside the diff and Clone waits for another pick.
 - **LoRAs go only when the base model changes** (`keeps_loras`, the server's
   rule). Then "Removed <checkpoint> LoRAs" with a struck chip per loader and a

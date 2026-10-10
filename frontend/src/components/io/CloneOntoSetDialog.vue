@@ -112,7 +112,11 @@
         </p>
         <template v-else>
           <span id="cos-diff-label" class="section-label">What the clone changes</span>
-          <ul class="cos-rows" data-testid="cos-loaders">
+          <ul
+            class="cos-rows"
+            data-testid="cos-loaders"
+            :aria-busy="String(replanning)"
+          >
             <li
               v-for="row in chosen.plan.loaders"
               :key="row.node_id"
@@ -396,6 +400,8 @@ const cloning = ref(false);
 const swapNotice = ref("");
 /** A pick is being re-planned: the diff on show is about to be replaced. */
 const replanning = ref(false);
+/** The pick made while one was being re-planned: `{key, slot, id}`, or null. */
+let queuedPick = null;
 const cloneError = ref("");
 const editOpen = ref(false);
 /** Edit LoRAs' Done for the chosen set: `{key, rows, body}`, or null. */
@@ -760,6 +766,7 @@ async function load() {
   loadError.value = "";
   cloneError.value = "";
   replanning.value = false;
+  queuedPick = null;
   swapNotice.value = "";
   sets.value = [];
   chain.value = null;
@@ -841,14 +848,20 @@ function choose(key) {
  * two. The whole pairing is sent, and the server's plan for it replaces the
  * one on show; a refused re-plan leaves that one as it was. The selects stay
  * enabled meanwhile (disabling the focused one drops focus to the page), so a
- * pick made before the answer is dropped rather than queued: the redraw the
- * answer causes puts every select back on what the plan says.
+ * pick made before the answer waits for it and is asked next, against the
+ * plan that answer left: the select already shows it, and dropping it would
+ * turn the select back without a word. The latest one waiting wins.
  */
 async function pick(slot, modelId) {
   const set = chosen.value;
-  if (replanning.value) return;
   // A native select hands its value back as text.
   const id = Number(modelId);
+  if (replanning.value) {
+    queuedPick = { key: set.key, slot, id };
+    return;
+  }
+  // Already so: a pick that waited may ask for what the answer brought.
+  if (set.plan.takes?.[slot] === id) return;
   const picks = { ...set.plan.takes };
   const other = Object.keys(picks).find((file) => picks[file] === id);
   if (other) picks[other] = picks[slot];
@@ -883,7 +896,13 @@ async function pick(slot, modelId) {
     );
     cloneError.value = errorMessage(err, "Could not change that file.");
   } finally {
-    if (mine === token) replanning.value = false;
+    if (mine === token) {
+      replanning.value = false;
+      const next = queuedPick;
+      queuedPick = null;
+      // Only on the set it was made on, if that is still the one on show.
+      if (next && next.key === chosenKey.value) void pick(next.slot, next.id);
+    }
   }
 }
 

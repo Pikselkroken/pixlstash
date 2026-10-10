@@ -1644,7 +1644,8 @@ describe("Clone onto a workflow set", () => {
     );
   });
 
-  it("puts a pick the server refused back and keeps the plan it had", async () => {
+  /** hand:7 holding two VAEs and one text encoder, open on its plan. */
+  async function openOnTwoVaes() {
     const sets = await fetchWorkflowSets();
     fetchWorkflowSets.mockResolvedValue({
       ...sets,
@@ -1682,19 +1683,25 @@ describe("Clone onto a workflow set", () => {
     const wrapper = await grid();
     await openOn(wrapper);
     await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
-    planSetClones.mockRejectedValue(new Error("offline"));
-    const pickVideo = () =>
-      wrapper
-        .find('[data-testid="cos-pick-video.safetensors"] select')
-        .setValue("31");
-    await pickVideo();
-    await flush();
-    expect(wrapper.find('[role="alert"]').text()).toContain("offline");
-    expect(
+    const values = () =>
       wrapper
         .findAll('[data-testid="cos-loaders"] select')
-        .map((s) => s.element.value),
-    ).toEqual(["32", "31"]);
+        .map((s) => s.element.value);
+    const pickFile = (file, id) =>
+      wrapper
+        .find(`[data-testid="cos-pick-${file}.safetensors"] select`)
+        .setValue(id);
+    const pickVideo = (id) => pickFile("video", id);
+    return { wrapper, reply, plan, values, pickVideo, pickFile };
+  }
+
+  it("puts a pick the server refused back and keeps the plan it had", async () => {
+    const { wrapper, reply, plan, values, pickVideo } = await openOnTwoVaes();
+    planSetClones.mockRejectedValue(new Error("offline"));
+    await pickVideo("31");
+    await flush();
+    expect(wrapper.find('[role="alert"]').text()).toContain("offline");
+    expect(values()).toEqual(["32", "31"]);
 
     // A pick ComfyUI refuses: the reason is said beside the diff, where the
     // owner is looking, and Clone waits for another pick.
@@ -1704,12 +1711,61 @@ describe("Clone onto a workflow set", () => {
         { ...plan, fit: "wont_load", reason: "ComfyUI does not list audio" },
       ],
     });
-    await pickVideo();
+    await pickVideo("31");
     await flush();
     expect(wrapper.find('[data-testid="cos-reason"]').text()).toContain(
       "ComfyUI does not list audio",
     );
     expect(cloneButton(wrapper).attributes("disabled")).toBeDefined();
+  });
+
+  it("applies a pick made while another is still being re-planned", async () => {
+    const { wrapper, reply, plan, values, pickVideo, pickFile } =
+      await openOnTwoVaes();
+    const crossed = {
+      ...plan,
+      takes: { ...plan.takes, "video.safetensors": 31, "audio.safetensors": 32 },
+    };
+    let answer;
+    const held = () =>
+      planSetClones.mockReturnValueOnce(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      );
+    planSetClones.mockClear();
+    held();
+    await pickVideo("31");
+    // Before the server has answered, the owner changes their mind.
+    expect(
+      wrapper.find('[data-testid="cos-loaders"]').attributes("aria-busy"),
+    ).toBe("true");
+    await pickVideo("32");
+    expect(planSetClones).toHaveBeenCalledTimes(1);
+    planSetClones.mockResolvedValue({ ...reply, plans: [plan] });
+    answer({ ...reply, plans: [crossed] });
+    await flush();
+    await flush();
+    // Their last pick is asked for, against the plan the first one left, and
+    // is what the selects end on. It took nothing from another loader that
+    // the first pick had not put there, and it was not the same file again.
+    expect(planSetClones).toHaveBeenCalledTimes(2);
+    expect(planSetClones.mock.calls[1][1][0].picks).toEqual(plan.takes);
+    expect(values()).toEqual(["32", "31"]);
+    expect(
+      wrapper.find('[data-testid="cos-loaders"]').attributes("aria-busy"),
+    ).toBe("false");
+
+    // A pick that waited for what the answer brought anyway asks nothing: the
+    // swap already gave the audio loader the video VAE.
+    held();
+    await pickVideo("31");
+    await pickFile("audio", "32");
+    answer({ ...reply, plans: [crossed] });
+    await flush();
+    await flush();
+    expect(planSetClones).toHaveBeenCalledTimes(3);
+    expect(values()).toEqual(["31", "32"]);
   });
 
   it("names the clone after the model the plan loads and marks a set with no cover", async () => {
