@@ -133,6 +133,7 @@
                 answerMemberVerdict(openGroup, modelId, verdict)
             "
             @close="closePanel"
+            @clone="store.cloneSetFromPictures(openGroup)"
             @view="(value) => store.setView({ trayView: value })"
             @pick="openWorksWith"
             @select="onMemberClick"

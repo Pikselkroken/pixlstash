@@ -275,7 +275,10 @@ import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
-import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import {
+  GRID_GROUP_BY,
+  useModelShelfStore,
+} from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import {
@@ -355,6 +358,19 @@ const newSetTitle = computed(() => {
     return "This checkpoint is still being hashed, and a set keeps its models by hash. Try again in a moment.";
   }
   return "";
+});
+
+/**
+ * "Clone set to edit": on the set grid, the set from pictures the one
+ * selected file heads - the card this menu was opened on. A set from pictures
+ * cannot be edited; its clone is the owner's and can.
+ */
+const clonableSet = computed(() => {
+  if (store.view?.groupBy !== GRID_GROUP_BY || store.selectedRows.length !== 1) {
+    return null;
+  }
+  const id = store.selectedRows[0].id;
+  return store.setGroups?.find((group) => group.head?.id === id) ?? null;
 });
 
 /**
@@ -927,6 +943,7 @@ const verbHandlers = computed(() => ({
   rows: store.selectedRows,
   newSetTitle: newSetTitle.value,
   removableFromSet: removableFromSet.value,
+  clonable: Boolean(clonableSet.value),
   renameTitle: renameTitle.value,
   iconTitle: iconTitle.value,
   clearIconTitle: clearIconTitle.value,
@@ -973,6 +990,8 @@ const verbHandlers = computed(() => ({
     // label and nothing else, so a stale one can never turn a trash into an
     // unlink.
     else if (verb === "delete") emit("delete", Boolean(event?.shiftKey));
+    else if (verb === "clone-set")
+      store.cloneSetFromPictures(clonableSet.value);
     else emit(verb);
   },
   onAttach,
@@ -1139,6 +1158,13 @@ const VerbMenu = (props) => {
           on: () => props.onVerb("new-set"),
           disabled: Boolean(props.newSetTitle),
           title: props.newSetTitle,
+        })
+      : null,
+    props.clonable
+      ? item("mdi-content-duplicate", "Clone set to edit", {
+          on: () => props.onVerb("clone-set"),
+          title:
+            'A "Grouped by you" copy of this set, which you can edit. No file is touched.',
         })
       : null,
     item(

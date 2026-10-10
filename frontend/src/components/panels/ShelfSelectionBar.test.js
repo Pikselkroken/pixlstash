@@ -837,3 +837,53 @@ describe("Keep one copy", () => {
     expect(wrapper.vm.mergeable).toBe(false);
   });
 });
+
+describe("Clone set to edit", () => {
+  const cloneItem = (wrapper) =>
+    wrapper
+      .findAll(".ctx-item")
+      .find((b) => b.text().includes("Clone set to edit"));
+
+  /** A checkpoint that ran with one LoRA, the checkpoint selected. */
+  function selectHead() {
+    const store = selectRows([
+      row(1, "present", { file_kind: "checkpoint", kind: null }),
+      row(2, "present"),
+    ]);
+    store.toggleSelected(2);
+    store.workflowSets = {
+      combinations: [
+        {
+          key: "1+2",
+          models: [
+            { id: 1, name: "m1.safetensors", kind: "checkpoint" },
+            { id: 2, name: "m2.safetensors", kind: "adapter" },
+          ],
+          recipes: 1,
+          picture_count: 1,
+          covers: [],
+        },
+      ],
+      noSet: [],
+      handMade: [],
+      setChecks: [],
+    };
+    return store;
+  }
+
+  it("is on the menu of a card on the set grid, and clones that card's set", async () => {
+    const store = selectHead();
+    store.view.groupBy = "workflow_set";
+    store.cloneSetFromPictures = vi.fn();
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    await cloneItem(wrapper).trigger("click");
+    expect(store.cloneSetFromPictures).toHaveBeenCalledTimes(1);
+    expect(store.cloneSetFromPictures.mock.calls[0][0].key).toBe("model:1");
+  });
+
+  it("is not on the row list's menu, where no set is in front of the reader", () => {
+    selectHead();
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(cloneItem(wrapper)).toBeUndefined();
+  });
+});

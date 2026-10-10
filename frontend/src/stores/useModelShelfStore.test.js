@@ -3530,4 +3530,69 @@ describe("sets from pictures are hidden, never deleted", () => {
     await flush();
     expect(deleteWorkflowSet).not.toHaveBeenCalled();
   });
+
+  it("clones a set from pictures into a set of the owner's, marked as one", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+
+    await store.cloneSetFromPictures(store.setGroups[0]);
+
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      cloned: true,
+      members: [
+        { model_id: 1, slot: "checkpoint" },
+        { model_id: 2, slot: "lora" },
+      ],
+    });
+    expect(store.openSetKey).toBe("hand:9");
+  });
+
+  it("clones a diffusion-file head as the checkpoint, and never an engine", async () => {
+    const store = shelfWithASet();
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
+    await store.cloneSetFromPictures({
+      head: { id: 1 },
+      models: [
+        { id: 1, kind: "unknown" },
+        { id: 4, kind: "engine" },
+        { id: 2, kind: "vae" },
+      ],
+    });
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      cloned: true,
+      members: [
+        { model_id: 1, slot: "checkpoint" },
+        { model_id: 2, slot: "vae" },
+      ],
+    });
+
+    // A set named after a file the shelf does not hold has nothing to clone.
+    createWorkflowSet.mockClear();
+    await store.cloneSetFromPictures({ head: { missing: true }, models: [] });
+    expect(createWorkflowSet).not.toHaveBeenCalled();
+  });
+
+  it("keeps a cloned set that still matches the set from pictures", async () => {
+    // The same set as the swap test above, but for the mark.
+    const store = await openOn([handSet(7, [], { cloned: true })]);
+    store.toggleSet("hand:7");
+    await flush();
+    await flush();
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+    expect(store.handMadeSets.map((set) => set.id)).toEqual([7]);
+  });
+
+  it("puts a deleted clone back as a clone", async () => {
+    useOperationStore().setLocalReceiptHost(true);
+    const set = handSet(7, [], { cloned: true });
+    const store = await openOn([set]);
+    await store.deleteHandMadeSets([set]);
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 9 });
+    await useOperationStore().takeLocalReceiptAction();
+    expect(createWorkflowSet).toHaveBeenCalledWith(
+      expect.objectContaining({ cloned: true }),
+    );
+  });
 });

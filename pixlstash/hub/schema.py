@@ -491,13 +491,16 @@ CREATE TABLE IF NOT EXISTS adapter_stack (
 # from `adapter_stack` above and from the recipe evidence in the workflow tables.
 # In the hub for the shelf's own reason: which files go together is a fact about
 # this machine's models, not about a library. AUTOINCREMENT so a deleted set's id
-# is never reissued to a client still holding it for an undo.
+# is never reissued to a client still holding it for an undo. `cloned` marks a
+# set the owner copied from a set from pictures on purpose, which is why it is
+# kept while it still holds exactly that set's models.
 _V2_MODEL_WORKFLOW_SET = """
 CREATE TABLE IF NOT EXISTS model_workflow_set (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT,
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    cloned      INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -1844,6 +1847,17 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     for column in ("base_model_canonical", "base_model_source"):
         if column not in model_columns:
             conn.execute(f"ALTER TABLE model ADD COLUMN {column} TEXT")
+
+    # A hand-made set's `cloned` mark, guarded the same way.
+    set_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(model_workflow_set)").fetchall()
+    }
+    if "cloned" not in set_columns:
+        conn.execute(
+            "ALTER TABLE model_workflow_set "
+            "ADD COLUMN cloned INTEGER NOT NULL DEFAULT 0"
+        )
 
     # The ComfyUI link token's source binding (#1810), guarded the same way.
     # NULL, every existing token, means "from any address".

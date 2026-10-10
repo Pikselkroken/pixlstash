@@ -3148,6 +3148,24 @@ describe("hiding a set from pictures", () => {
     expect(store.setGroups).toHaveLength(1);
   });
 
+  it("clones the open set into a set of the owner's from its tray", async () => {
+    const { wrapper, store } = await mountOneSet();
+    createWorkflowSet.mockResolvedValue({ id: 12, members: [] });
+    // Offered in the tray, where the set's models are in front of the reader.
+    expect(wrapper.find('[data-testid="set-clone"]').exists()).toBe(false);
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-testid="set-clone"]').trigger("click");
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      cloned: true,
+      members: [
+        { model_id: 1, slot: "checkpoint" },
+        { model_id: 3, slot: "lora" },
+      ],
+    });
+    wrapper.unmount();
+  });
+
   it("keeps the grid and its Show them line when every set is hidden", async () => {
     const { wrapper } = await mountOneSet();
     await wrapper.find('[data-testid="set-hide"]').trigger("click");
