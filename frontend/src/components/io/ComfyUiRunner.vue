@@ -147,6 +147,8 @@ const comfyuiFailureLocked = ref(false);
 // (a cached graph, a batch still submitting), so its registration arrives
 // after the failure and must not paper over it with "queued".
 const comfyuiFailedPromptMessages = new Map();
+// The prompt the failure on screen is about, or null when it names none.
+let comfyuiShownFailureKey = null;
 // Prompts the backend said were over before `/workflows/run` registered them.
 const comfyuiFinishedEarlyPromptIds = new Set();
 const comfyuiWsState = reactive({
@@ -417,12 +419,21 @@ function markComfyuiPromptFailed(promptKey, reason, errorMessage) {
   const nextLower = message.toLowerCase();
   const currentLower = currentMessage.toLowerCase();
 
-  // Keep the first failure sticky, only allowing an upgrade to a clearer OOM cause.
+  // Keep the first failure sticky, only allowing an upgrade to a clearer OOM
+  // cause, or to the backend's account of the same prompt: ComfyUI's socket
+  // says a node raised, and the backend's sentence names the node.
   if (comfyuiFailureLocked.value && progress.status === "failed") {
     const currentIsOom = currentLower.includes("out of memory");
     const nextIsOom = nextLower.includes("out of memory");
-    if (!currentIsOom && nextIsOom) {
+    const backendOnSamePrompt =
+      reason === "plugin-progress-failed" &&
+      promptKey != null &&
+      promptKey === comfyuiShownFailureKey;
+    if ((!currentIsOom && nextIsOom) || backendOnSamePrompt) {
       progress.message = message;
+      // What a later registration of that prompt reads, so the stored reason
+      // and the shown one cannot drift apart.
+      if (promptKey != null) comfyuiFailedPromptMessages.set(promptKey, message);
       logComfyuiDebug("prompt-failed-upgraded", {
         promptKey,
         reason,
@@ -433,6 +444,7 @@ function markComfyuiPromptFailed(promptKey, reason, errorMessage) {
   }
 
   comfyuiFailureLocked.value = true;
+  comfyuiShownFailureKey = promptKey;
 
   if (promptKey) {
     comfyuiFailedPromptMessages.set(promptKey, message);
@@ -908,11 +920,22 @@ watch(
       }
       return;
     }
-    const resolvedPromptKey = resolveErrorPromptKey(
-      promptKey,
-      comfyuiActivePromptIds.value,
-    );
     const message = String(payload.message || "").trim() || "ComfyUI failed";
+    // Every tab hears every failure. While this runner follows prompts of its
+    // own, the failure of some other prompt (another tab's, or a batch
+    // aborted a moment ago) must not end them. It is kept in case that prompt
+    // is registered here after all, and its workflow's card says so either way.
+    const active = comfyuiActivePromptIds.value;
+    if (promptKey && active.size > 0 && !active.has(promptKey)) {
+      comfyuiFailedPromptMessages.set(promptKey, message);
+      if (comfyuiFailedPromptMessages.size > 100) {
+        comfyuiFailedPromptMessages.delete(
+          comfyuiFailedPromptMessages.keys().next().value,
+        );
+      }
+      return;
+    }
+    const resolvedPromptKey = resolveErrorPromptKey(promptKey, active);
     markComfyuiPromptFailed(
       resolvedPromptKey,
       "plugin-progress-failed",
@@ -1069,8 +1092,10 @@ defineExpose({
 <style scoped>
 .comfyui-progress {
   position: absolute;
-  bottom: 12px;
-  right: 12px;
+  /* Above the row the keyboard-shortcuts button and the selection pill share
+     at the bottom of the view: at 12px its Dismiss sat under the button. */
+  bottom: var(--space-9);
+  right: var(--space-4);
   z-index: var(--z-floating);
   background: rgba(var(--v-theme-dark-surface), 0.75);
   color: rgb(var(--v-theme-on-dark-surface));

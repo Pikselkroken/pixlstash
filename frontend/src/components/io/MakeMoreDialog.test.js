@@ -194,6 +194,23 @@ describe("a selection every picture of which can run", () => {
       seed_mode: "new",
     });
     expect(wrapper.emitted("run")[0][0].pictureIds).toEqual([1, 2, 3]);
+    // A batch that queued whole carries no reason for stopping.
+    expect(wrapper.emitted("run")[0][0]).not.toHaveProperty("error");
+  });
+
+  it("passes on why ComfyUI stopped taking the batch part-way", async () => {
+    runWorkflowCard.mockResolvedValue({
+      status: "partial",
+      prompts: [{ workflow_id: GOOD, prompt_id: "p1" }],
+      groups: [{ workflow_id: GOOD, picture_ids: [1, 2] }],
+      error: "ComfyUI prompt failed: 400 Value not in list",
+    });
+    const wrapper = await mountMakeMore();
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(wrapper.emitted("run")[0][0].error).toBe(
+      "ComfyUI prompt failed: 400 Value not in list",
+    );
   });
 
   it("labels each prompt by its workflow, or as a clone on a kept seed", async () => {

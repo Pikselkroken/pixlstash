@@ -88,7 +88,7 @@ import { fitChipCount } from "../../utils/workflowCard";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
-  /** `{ key?, label, icon?, dashed?, fact?, badge?, title? }`; `title` is a tooltip. */
+  /** `{ key?, label, icon?, dashed?, fact?, badge?, error?, title? }`; `title` is a tooltip. */
   items: { type: Array, default: () => [] },
 });
 
@@ -98,6 +98,7 @@ const chipClass = (item) => [
     "chip-row__chip--dashed": item.dashed,
     "chip-row__chip--fact": item.fact,
     "chip-row__chip--badge": item.badge,
+    "chip-row__chip--error": item.error,
   },
 ];
 
@@ -222,6 +223,15 @@ defineExpose({ measure });
 .chip-row__chip--badge {
   border-radius: var(--radius-pill);
   font-weight: var(--weight-semibold);
+}
+
+/* The design system's `error_soft` Badge, for a status that went wrong ("Run
+   failed"): a wash of the error hue with the word in `surface-error`, never
+   the deep hue as text. After `--fact`, whose transparent ground it replaces. */
+.chip-row__chip--error {
+  border-color: transparent;
+  background: rgba(var(--v-theme-error), 0.14);
+  color: rgb(var(--v-theme-surface-error));
 }
 
 /* An overflow count, not a thing: a fact chip with the count muted. */

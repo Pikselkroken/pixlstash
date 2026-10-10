@@ -2112,6 +2112,24 @@ describe("the body it sends", () => {
     expect(useRunDialogStore().editRun).toBe(null);
   });
 
+  // ComfyUI took the first of a batch and refused the next: the popup still
+  // closes on what was queued, and says why the rest was not.
+  it("passes on why a batch stopped part-way", async () => {
+    runWorkflowCard.mockResolvedValue({
+      status: "partial",
+      prompts: [{ prompt_id: "p1" }],
+      groups: [{ workflow_id: KEY }],
+      error: "ComfyUI prompt failed: 400 Value not in list",
+    });
+    const wrapper = await mountRun();
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(wrapper.emitted("run")[0][0].error).toBe(
+      "ComfyUI prompt failed: 400 Value not in list",
+    );
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
   // What the Tasks tab calls the run: a clone, else the saved recipe, else
   // the workflow.
   async function labelOf(wrapper) {

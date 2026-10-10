@@ -37,6 +37,7 @@ import os
 import re
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -65,6 +66,14 @@ SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", PROTOCOL_VERSION}
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
 TIMEOUT_SECONDS = 60
+# How long run_workflow waits for its runs to end before it answers with
+# whatever is still running, and the most a caller may ask it to wait. The
+# server answers one message at a time, so a wait holds every other call on
+# the connection behind it: two minutes at most, and get_workflow_run for a
+# run that takes longer.
+RUN_WAIT_SECONDS = 30
+MAX_RUN_WAIT_SECONDS = 120
+RUN_POLL_SECONDS = 1.0
 # ponytail: a real graph is 50-500 KB; this only stops a stray path at a huge file.
 MAX_GRAPH_BYTES = 16 * 1024 * 1024
 
@@ -134,7 +143,9 @@ disk (search_models), or set widget values with it (set_workflow_slot).
 before importing. Do not store a graph that does not validate.
 4. import_workflow_graph stores it and answers with its workflow_id.
 5. preflight_workflow with that id says whether it would run; then \
-run_workflow runs it.
+run_workflow runs it and says how each run ended. A failed run answers with \
+the node that failed and why; one still going when the wait is over answers \
+running, and get_workflow_run reads how it ended.
 
 Run here, not with the ComfyUI MCP server's own run tool: that submits \
 straight to ComfyUI, and its pictures never reach PixlStash. run_workflow \
@@ -456,13 +467,42 @@ WORKFLOW_TOOLS = [
         "time and makes new pictures, which PixlStash imports into the "
         "library tied to the workflow, filed per destination. prompt, seed, "
         "loras and values override the workflow for this run only. Call "
-        "preflight_workflow first.",
-        "inputSchema": _RUN_SCHEMA,
+        "preflight_workflow first. Waits up to wait_seconds for the runs to "
+        "end, and each entry of prompts says how its run stands: completed "
+        "with the picture_ids it added (none when every output was already "
+        "in the library), failed with a message naming the node that "
+        "failed and why (stopped true for a run that was interrupted), or "
+        "running, which get_workflow_run reads later. A call whose every run "
+        "failed is an error carrying that message.",
+        "inputSchema": {
+            **_RUN_SCHEMA,
+            "properties": {
+                **_RUN_SCHEMA["properties"],
+                "wait_seconds": {
+                    "type": "number",
+                    "description": "How long to wait for the runs to end "
+                    f"(default {RUN_WAIT_SECONDS}, at most "
+                    f"{MAX_RUN_WAIT_SECONDS}). 0 answers at once.",
+                },
+            },
+        },
         "annotations": {
             "readOnlyHint": False,
             "destructiveHint": True,
             "openWorldHint": True,
         },
+    },
+    {
+        "name": "get_workflow_run",
+        "description": "How one run stands, by a prompt_id run_workflow "
+        "answered with: {status, message, stopped, picture_ids}, status "
+        "running, completed or failed. Kept for recent runs only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"prompt_id": {"type": "string"}},
+            "required": ["prompt_id"],
+        },
+        "annotations": {"readOnlyHint": True, "openWorldHint": False},
     },
 ]
 
@@ -494,6 +534,10 @@ def _build_opener(
 
 class ToolError(Exception):
     """A tool call that failed in a way the agent should be told about."""
+
+
+class NotFoundError(ToolError):
+    """PixlStash answered 404: an answer, where any other failure may pass."""
 
 
 def unreachable_message(base: str, reason) -> str:
@@ -720,7 +764,8 @@ def _checked(status: int, content_type: str, body: bytes) -> tuple[str, bytes]:
                 "PIXLSTASH_TOKEN only when it starts, so after changing the "
                 "token, restart or reconnect this MCP server in the client."
             )
-        raise ToolError(f"PixlStash answered {status}: {detail}")
+        kind = NotFoundError if status == 404 else ToolError
+        raise kind(f"PixlStash answered {status}: {detail}")
     return content_type, body
 
 
@@ -838,8 +883,72 @@ def _call_workflow_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict] 
             _send(fetch, "POST", "/workflows/run/preflight", arguments)
         )
     if name == "run_workflow":
-        return _json_content(_send(fetch, "POST", "/workflows/run", arguments))
+        wait = arguments.get("wait_seconds", RUN_WAIT_SECONDS)
+        # `not wait >= 0` rather than `wait < 0`: NaN is neither, and a NaN
+        # deadline would never pass.
+        if (
+            isinstance(wait, bool)
+            or not isinstance(wait, (int, float))
+            or not wait >= 0
+        ):
+            raise ToolError("wait_seconds must be a number of seconds, 0 or more")
+        # Not the route's field: it would be dropped there without a word.
+        body = {key: value for key, value in arguments.items() if key != "wait_seconds"}
+        answer = json.loads(_send(fetch, "POST", "/workflows/run", body))
+        _follow_runs(fetch, answer, min(wait, MAX_RUN_WAIT_SECONDS))
+        return [{"type": "text", "text": json.dumps(answer, indent=1)}]
+    if name == "get_workflow_run":
+        return _json_content(_get(fetch, _run_path(arguments.get("prompt_id")))[1])
     return None
+
+
+def _run_path(prompt_id) -> str:
+    if not isinstance(prompt_id, str) or not prompt_id:
+        raise ToolError("prompt_id must be a non-empty string")
+    return f"/workflows/runs/{urllib.parse.quote(prompt_id, safe='')}"
+
+
+def _follow_runs(fetch: Fetch, answer, wait_seconds: float) -> None:
+    """Write how each run *answer* queued stands onto its ``prompts`` entry.
+
+    Polls until every run has ended or *wait_seconds* is up, so a run that
+    fails in its first seconds (a model ComfyUI cannot load, a node that
+    raises) is answered with its reason rather than with "queued". Raises
+    ``ToolError`` with the reasons when every run failed.
+    """
+    prompts = answer.get("prompts") if isinstance(answer, dict) else None
+    entries = [
+        entry
+        for entry in prompts or []
+        if isinstance(entry, dict) and entry.get("prompt_id")
+    ]
+    pending = list(entries)
+    deadline = time.monotonic() + wait_seconds
+    while pending:
+        for entry in list(pending):
+            try:
+                outcome = json.loads(_get(fetch, _run_path(entry["prompt_id"]))[1])
+            except ToolError as exc:
+                # The run is queued all the same; only its ending is unread.
+                entry.update(status="unknown", message=str(exc))
+                if isinstance(exc, NotFoundError):
+                    # Not on record (an older PixlStash, or one restarted
+                    # since): asking again will not change the answer.
+                    pending.remove(entry)
+                # Anything else may be a blip, so the run is asked about
+                # again until the wait is over.
+                continue
+            for key in ("status", "message", "stopped", "picture_ids"):
+                entry[key] = outcome.get(key)
+            if outcome.get("status") != "running":
+                pending.remove(entry)
+        if not pending or time.monotonic() >= deadline:
+            break
+        # Never past the deadline: the wait asked for is the wait given.
+        time.sleep(min(RUN_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+    if entries and all(entry.get("status") == "failed" for entry in entries):
+        reasons = dict.fromkeys(str(entry.get("message")) for entry in entries)
+        raise ToolError("The run failed: " + "; ".join(reasons))
 
 
 def handle_message(

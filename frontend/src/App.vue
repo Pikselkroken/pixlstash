@@ -417,9 +417,20 @@ function onRestoreConfirmed() {
  * for progress, and the toast says where the pictures will turn up: the Tasks
  * tab, which is where a run this app started is followed.
  */
-function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
+function onRunStarted({ prompts = [], pictureIds = [], error = "" } = {}) {
+  // ComfyUI took some of the batch and refused the next: the ones it took are
+  // followed as usual, and the rest must not vanish without a word. Ahead of
+  // the Edit tab's return on purpose: that tab tells the runs that were
+  // queued, and nothing but this says some were not.
+  if (error) {
+    noticeStore.error(
+      `ComfyUI stopped taking runs after ${prompts.length}: ${error}`,
+      { key: `comfyui-run-partial-${error}` },
+    );
+  }
   // From the lightbox's Edit tab: no picture ids, so the runner leaves the
-  // lightbox on the original, and no toast, because the tab tells the run.
+  // lightbox on the original, and no "started" toast, because the tab tells
+  // the run.
   if (runDialogStore.source?.fromEditTab) {
     runDialogStore.started(prompts, []);
     return;
@@ -446,14 +457,18 @@ function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
 watch(
   () => wsStore.wsPluginProgress,
   (wrapped) => {
-    const payload = wrapped?.payload;
-    if (runDialogStore.hasRunner) return;
-    if (String(payload?.plugin || "").toLowerCase() !== "comfyui") return;
-    if (payload.status !== "failed") return;
-    const message = String(payload.message || "").trim() || "ComfyUI failed";
+    // On the workflow that ran, whatever view is up: its card and the
+    // Workflow tab keep saying so until it is dismissed or run again.
+    const failure = runDialogStore.runEvent(wrapped?.payload);
+    if (!failure || runDialogStore.hasRunner) return;
     // Keyed by the message, not the run: a batch whose every prompt failed
-    // the same way is one card with a count, not one card per prompt.
-    noticeStore.error(message, { key: `comfyui-failed-${message}` });
+    // the same way is one card with a count, not one card per prompt. A run
+    // somebody stopped is news, not an error, so it does not stay up.
+    noticeStore.push({
+      level: failure.stopped ? "info" : "error",
+      text: failure.message,
+      key: `comfyui-failed-${failure.message}`,
+    });
   },
 );
 

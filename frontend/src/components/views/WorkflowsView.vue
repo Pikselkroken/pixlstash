@@ -273,6 +273,7 @@
               <WorkflowCard
                 :card="entry.card"
                 :selected="cardSelected(entry.key)"
+                :run-failure="runDialog.failures[entry.card.id] ?? null"
                 @run="runCard(entry.card)"
               />
             </div>

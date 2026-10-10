@@ -93,6 +93,38 @@
         </p>
       </div>
 
+      <!-- This workflow's last run ended without a picture (#1839). First in
+           the body, so it is on screen with the name whatever the panels
+           below scroll to, and kept until dismissed or the workflow runs
+           again: the Run popup closes on submit, so this and the card's chip
+           are where the run was started. `status`, not `alert`: the panel is
+           mounted again each time the workflow is selected, and an alert
+           would interrupt with the same sentence every time. -->
+      <section
+        v-if="runFailure"
+        class="wftab-panel wftab-run-failure"
+        :class="{ 'wftab-run-failure--stopped': runFailure.stopped }"
+        role="status"
+        data-testid="wftab-run-failure"
+      >
+        <div class="wftab-sec-head">
+          <span class="section-label" role="heading" aria-level="3">{{
+            runFailure.stopped ? "Last run stopped" : "Last run failed"
+          }}</span>
+          <AppButton
+            size="sm"
+            variant="ghost"
+            data-testid="wftab-run-failure-dismiss"
+            @click="dismissRunFailure"
+          >
+            Dismiss
+          </AppButton>
+        </div>
+        <p class="wftab-note wftab-run-failure__message">
+          {{ runFailure.message }}
+        </p>
+      </section>
+
       <!-- What a run starts from (#1653), as three bordered panels: Models,
            LoRAs and Parameters, each with its verb in its own head. Inside a
            panel, label-and-value rows on a 64px label column; a row says
@@ -748,6 +780,7 @@
         class="wftab-foot"
       >
         <AppButton
+          ref="runButton"
           variant="primary"
           icon-left="play"
           block
@@ -1066,6 +1099,22 @@ const card = computed(() => {
   if (detail.value?.card?.id === key) return detail.value.card;
   return null;
 });
+
+/** The shown workflow's last run, when it ended without a picture. */
+const runFailure = computed(
+  () => (card.value && runDialog.failures[card.value.id]) || null,
+);
+
+const runButton = ref(null);
+/**
+ * Dismiss takes its own button away, so focus goes to Run…: the other thing
+ * that clears a failure, and never the page body.
+ */
+async function dismissRunFailure() {
+  runDialog.dismissFailure(card.value.id);
+  await nextTick();
+  runButton.value?.focus();
+}
 
 /**
  * Whether the Recipes list is the body on screen.
@@ -2817,6 +2866,23 @@ async function checkInstalled(key) {
   border: 1px solid rgb(var(--v-theme-divider));
   border-radius: var(--radius-md);
   background: rgba(var(--v-theme-on-surface), 0.025);
+}
+
+/* A panel like the three below it, on the error wash where a node failed: the
+   `error_soft` ground, the label in `surface-error`, the sentence at full ink.
+   A run somebody stopped keeps the plain panel. */
+.wftab-run-failure:not(.wftab-run-failure--stopped) {
+  border-color: transparent;
+  background: rgba(var(--v-theme-error), 0.14);
+}
+
+.wftab-run-failure:not(.wftab-run-failure--stopped) .section-label {
+  color: rgb(var(--v-theme-surface-error));
+}
+
+/* ComfyUI's own words can be one long token (a path, a tensor shape). */
+.wftab-run-failure__message {
+  overflow-wrap: anywhere;
 }
 
 /* One hairline between the two kinds of member of a group: Default and Also

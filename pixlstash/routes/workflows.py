@@ -131,6 +131,8 @@ from pixlstash.services.comfyui_service import (
     _submit_comfyui_prompt,
     _upload_image_to_comfyui,
     library_ids_named,
+    record_run_outcome,
+    run_outcome,
     swap_pixlstash_savers,
     unfed_picture_loaders,
 )
@@ -1569,6 +1571,37 @@ class RunResult(BaseModel):
     runs: int = 0
     groups: list[RunGroup] = Field(default_factory=list)
     prompts: list[dict] = Field(default_factory=list)
+    error: str | None = Field(
+        default=None,
+        description=(
+            "With status partial: why the submission after the last of "
+            "prompts was not queued."
+        ),
+    )
+
+
+class RunOutcome(BaseModel):
+    """``GET /workflows/runs/{prompt_id}``: how one submitted run stands."""
+
+    prompt_id: str
+    status: str = Field(description="running, completed or failed.")
+    message: str | None = Field(
+        default=None,
+        description=(
+            "For a failed run, the node that failed and why, as the app shows it."
+        ),
+    )
+    stopped: bool = Field(
+        default=False,
+        description=(
+            "A failed run that was interrupted or taken off ComfyUI's queue, "
+            "rather than one a node failed in."
+        ),
+    )
+    picture_ids: list[int] = Field(
+        default_factory=list,
+        description="The pictures a completed run added to the library.",
+    )
 
 
 class WorkflowExport(BaseModel):
@@ -6129,10 +6162,39 @@ def create_router(server) -> APIRouter:
                 runs=len(prompts),
                 groups=groups,
                 prompts=prompts,
+                error=str(getattr(exc, "detail", None) or exc),
             )
         return RunResult(
             status="success", runs=len(prompts), groups=groups, prompts=prompts
         )
+
+    @router.get(
+        "/workflows/runs/{prompt_id}",
+        summary="How a run ended",
+        description=(
+            "One run POST /workflows/run submitted, by the prompt_id it "
+            "answered with: running, completed (with the pictures it added) "
+            "or failed, with the message the app shows - the node that failed "
+            "and why. stopped marks a failed run that was interrupted or "
+            "taken off ComfyUI's queue. Kept in memory for the most recent "
+            "runs only, so a restart, or enough later runs, answers 404; so "
+            "does a run started in another library."
+        ),
+        response_model=RunOutcome,
+    )
+    def run_outcome_of(request: Request, prompt_id: str):
+        server.auth.ensure_secure_when_required(request)
+        outcome = run_outcome(prompt_id)
+        # A run of another library: its picture ids name other pictures here.
+        started_in = (outcome or {}).get("library_uuid")
+        if started_in and started_in != request.state.library_lease.library_uuid:
+            outcome = None
+        if outcome is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No run with that prompt id is being followed.",
+            )
+        return outcome
 
     def _submit_every(
         request: Request,
@@ -6228,6 +6290,11 @@ def create_router(server) -> APIRouter:
                         )
                     if prompt_id:
                         lease = request.state.library_lease
+                        # Before the thread, so a read straight after this
+                        # answer never finds the run unknown.
+                        record_run_outcome(
+                            str(prompt_id), "running", library_uuid=lease.library_uuid
+                        )
                         threading.Thread(
                             target=_process_comfyui_outputs,
                             args=(
@@ -6245,6 +6312,7 @@ def create_router(server) -> APIRouter:
                                 "run_workflow_id": run_workflow_id,
                                 "run_workflow_version": run_workflow_version,
                                 "rejected": rejected,
+                                "workflow_id": group.workflow_id,
                             },
                             daemon=True,
                         ).start()

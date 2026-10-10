@@ -524,12 +524,81 @@ class TestWaitingOutARun:
         assert [image["filename"] for image in images] == ["out_00001_.mp4"]
         assert asked == ["prompt-1"] * 3
 
-    def test_a_prompt_gone_from_the_queue_ends_the_wait(self, monkeypatch):
+    def test_a_prompt_comfyui_no_longer_has_is_a_stopped_run(self, monkeypatch):
+        """In neither the queue nor the history: taken off the queue before
+        its turn, or lost to a restart. Said so, not "finished"."""
         asked = self._clock(monkeypatch, [{}, {}], [False])
+        with pytest.raises(comfyui_service.ComfyUIRunStopped, match="no longer has"):
+            comfyui_service._wait_for_comfyui_outputs("http://comfy", "prompt-1", ["7"])
+        assert asked == ["prompt-1"]
+
+    def test_the_apps_own_abort_is_noticed_at_once(self, monkeypatch):
+        """Abort clears ComfyUI's queue, and a prompt that was waiting in it
+        never reaches the history: its poller asks the queue on its next pass
+        rather than at its next check, so the run is said to have stopped
+        before the owner has started the next one."""
+        asked = []
+        monkeypatch.setattr(
+            comfyui_service,
+            "_comfyui_prompt_queued",
+            lambda *a: asked.append(1) or False,
+        )
+        monkeypatch.setattr(comfyui_service, "_fetch_comfyui_history", lambda *a: {})
+        monkeypatch.setattr(
+            comfyui_service.requests,
+            "post",
+            lambda *a, **k: type("R", (), {"status_code": 200, "text": ""})(),
+        )
+        # The first pass finds nothing and sleeps; the abort lands meanwhile.
+        # A second sleep means the abort went unnoticed.
+        slept = []
+
+        def abort_while_asleep(_s):
+            assert not slept, "kept waiting after the queue was cleared"
+            slept.append(1)
+            comfyui_service._comfyui_abort("http://comfy")
+
+        monkeypatch.setattr(comfyui_service.time, "sleep", abort_while_asleep)
+        with pytest.raises(comfyui_service.ComfyUIRunStopped):
+            comfyui_service._wait_for_comfyui_outputs(
+                "http://comfy", "prompt-1", None, timeout_s=3600
+            )
+        assert asked == [1]
+
+    @pytest.mark.parametrize("status, cleared", [(200, True), (500, False)])
+    def test_only_a_queue_that_was_cleared_sends_the_pollers_to_ask(
+        self, monkeypatch, status, cleared
+    ):
+        """A clear ComfyUI refused emptied nothing, so there is nothing new
+        for a poller to learn from the queue."""
+        monkeypatch.setattr(
+            comfyui_service.requests,
+            "post",
+            lambda *a, **k: type("R", (), {"status_code": status, "text": ""})(),
+        )
+        before = comfyui_service._queue_cleared
+        assert (
+            comfyui_service._comfyui_abort("http://comfy")["queue_cleared"] is cleared
+        )
+        assert (comfyui_service._queue_cleared != before) is cleared
+
+    def test_a_clear_that_never_reached_comfyui_sends_nobody(self, monkeypatch):
+        def refuse(*a, **k):
+            raise comfyui_service.requests.ConnectionError("refused")
+
+        monkeypatch.setattr(comfyui_service.requests, "post", refuse)
+        before = comfyui_service._queue_cleared
+        comfyui_service._comfyui_abort("http://comfy")
+        assert comfyui_service._queue_cleared == before
+
+    def test_a_prompt_in_the_history_with_no_ending_finishes_empty(self, monkeypatch):
+        # ComfyUI still has it on record, so it ran: nothing to import, and
+        # the caller says "finished without outputs".
+        unfinished = {"prompt-1": {"outputs": {}}}
+        self._clock(monkeypatch, [unfinished, unfinished], [False])
         assert comfyui_service._wait_for_comfyui_outputs(
             "http://comfy", "prompt-1", ["7"]
         ) == ([], None)
-        assert asked == ["prompt-1"]
 
     def test_a_prompt_that_finishes_as_it_leaves_the_queue_is_collected(
         self, monkeypatch
@@ -583,6 +652,291 @@ class TestWaitingOutARun:
         assert (
             comfyui_service._comfyui_prompt_queued("http://comfy", "prompt-1") is True
         )
+
+
+ERROR_EVENT = {
+    "prompt_id": "prompt-1",
+    "node_id": "12",
+    "node_type": "UNETLoader",
+    "exception_message": "'asym_w4a8_int8'",
+    "exception_type": "KeyError",
+    "traceback": ["..."],
+}
+TITLED_GRAPH = {
+    "12": {
+        "class_type": "UNETLoader",
+        "inputs": {},
+        "_meta": {"title": "Load Diffusion Model"},
+    }
+}
+
+
+def _ended(event_name: str, event: dict, graph: dict | None = TITLED_GRAPH) -> dict:
+    """A history answer for a prompt ComfyUI ended with *event_name*."""
+    entry = {
+        "outputs": {},
+        "status": {
+            "status_str": "error",
+            "completed": False,
+            "messages": [
+                ["execution_start", {"prompt_id": "prompt-1"}],
+                [event_name, event],
+            ],
+        },
+    }
+    if graph is not None:
+        entry["prompt"] = [3, "prompt-1", graph, {}, ["9"]]
+    return {"prompt-1": entry}
+
+
+class TestHowARunEnded:
+    """A run that ends without a picture says which node ended it and why."""
+
+    def _read(self, *args, **kwargs):
+        return comfyui_service._extract_history_status_and_error(
+            _ended(*args, **kwargs), "prompt-1"
+        )
+
+    def test_a_failed_node_is_named_with_its_title_class_and_exception(self):
+        # A KeyError's message is the bare key, which says nothing alone.
+        assert self._read("execution_error", ERROR_EVENT) == (
+            "error",
+            "Load Diffusion Model (UNETLoader) failed: KeyError 'asym_w4a8_int8'",
+        )
+
+    @pytest.mark.parametrize(
+        "event, graph, expected",
+        [
+            # A title that only repeats the class is said once.
+            (
+                ERROR_EVENT,
+                {"12": {"class_type": "UNETLoader", "_meta": {"title": "UNETLoader"}}},
+                "UNETLoader failed: KeyError 'asym_w4a8_int8'",
+            ),
+            # No graph on the history entry: the class the event names.
+            (ERROR_EVENT, None, "UNETLoader failed: KeyError 'asym_w4a8_int8'"),
+            # The event names no class: the graph's.
+            (
+                {**ERROR_EVENT, "node_type": None},
+                TITLED_GRAPH,
+                "Load Diffusion Model (UNETLoader) failed: KeyError 'asym_w4a8_int8'",
+            ),
+            # No node at all: the exception still carries its type.
+            (
+                {"exception_type": "KeyError", "exception_message": "'x'"},
+                None,
+                "KeyError 'x'",
+            ),
+            # One line, however ComfyUI wrapped it.
+            (
+                {**ERROR_EVENT, "exception_message": "CUDA out of memory.\n  Tried\n"},
+                None,
+                "UNETLoader failed: KeyError CUDA out of memory. Tried",
+            ),
+            # A graph that is not shaped like one is not read, and not raised on.
+            (
+                ERROR_EVENT,
+                ["not", "a", "graph"],
+                "UNETLoader failed: KeyError 'asym_w4a8_int8'",
+            ),
+        ],
+    )
+    def test_the_sentence_is_built_from_what_comfyui_gave(self, event, graph, expected):
+        assert self._read("execution_error", event, graph)[1] == expected
+
+    def test_a_long_exception_is_cut_to_what_a_card_can_carry(self):
+        # A state_dict size mismatch lists every tensor.
+        event = {**ERROR_EVENT, "exception_message": "size mismatch " * 200}
+        _status, text = self._read("execution_error", event)
+        assert text.startswith(
+            "Load Diffusion Model (UNETLoader) failed: KeyError size"
+        )
+        assert text.endswith("…")
+        prefix = len("Load Diffusion Model (UNETLoader) failed: ")
+        assert len(text) - prefix == comfyui_service.MAX_FAILURE_REASON + 1
+
+    def test_an_interrupt_is_a_stopped_run_and_names_where(self):
+        """ComfyUI files an interrupt under status ``error``; it is told apart
+        here, and never shown as the event's JSON."""
+        event = {"prompt_id": "prompt-1", "node_id": "12", "node_type": "UNETLoader"}
+        assert self._read("execution_interrupted", event) == (
+            "interrupted",
+            "Interrupted at Load Diffusion Model (UNETLoader)",
+        )
+        assert self._read("execution_interrupted", {"prompt_id": "prompt-1"}, None) == (
+            "interrupted",
+            "Interrupted",
+        )
+
+    def test_the_wait_tells_a_stopped_run_from_a_failed_one(self, monkeypatch):
+        monkeypatch.setattr(
+            comfyui_service,
+            "_fetch_comfyui_history",
+            lambda *a: _ended("execution_error", ERROR_EVENT),
+        )
+        with pytest.raises(RuntimeError, match="UNETLoader\\) failed") as failed:
+            comfyui_service._wait_for_comfyui_outputs("http://comfy", "prompt-1", None)
+        assert not isinstance(failed.value, comfyui_service.ComfyUIRunStopped)
+
+        monkeypatch.setattr(
+            comfyui_service,
+            "_fetch_comfyui_history",
+            lambda *a: _ended("execution_interrupted", {"node_type": "KSampler"}),
+        )
+        with pytest.raises(comfyui_service.ComfyUIRunStopped, match="at KSampler"):
+            comfyui_service._wait_for_comfyui_outputs("http://comfy", "prompt-1", None)
+
+    def test_comfyui_going_away_says_so(self, monkeypatch):
+        def refuse(*a, **k):
+            raise comfyui_service.requests.ConnectionError("refused")
+
+        monkeypatch.setattr(comfyui_service.requests, "get", refuse)
+        with pytest.raises(comfyui_service.HTTPException) as gone:
+            comfyui_service._fetch_comfyui_history("http://comfy", "prompt-1")
+        assert gone.value.detail == "ComfyUI stopped answering before the run finished"
+
+
+class TestTheEndingIsToldAndKept:
+    """Each ending reaches the tab as an event and is kept for the route."""
+
+    def _end(self, monkeypatch, prompt_id, wait, **kwargs):
+        server = _FakeServer()
+        monkeypatch.setattr(comfyui_service, "_wait_for_comfyui_outputs", wait)
+        comfyui_service._process_comfyui_outputs(
+            server, "http://comfy", prompt_id, None, None, None, **kwargs
+        )
+        (event,) = server.vault.events
+        return event[1], comfyui_service.run_outcome(prompt_id)
+
+    @staticmethod
+    def _raises(exc):
+        def wait(*a, **k):
+            raise exc
+
+        return wait
+
+    def test_a_failure_names_its_workflow_and_is_not_a_stopped_run(self, monkeypatch):
+        payload, outcome = self._end(
+            monkeypatch,
+            "ending-failed",
+            self._raises(RuntimeError("UNETLoader failed: KeyError 'x'")),
+            workflow_id="manual:" + "a" * 32,
+        )
+        assert (
+            payload["status"],
+            payload["message"],
+            payload["workflow_id"],
+            payload["stopped"],
+        ) == ("failed", "UNETLoader failed: KeyError 'x'", "manual:" + "a" * 32, False)
+        assert outcome == {
+            "prompt_id": "ending-failed",
+            "status": "failed",
+            "message": "UNETLoader failed: KeyError 'x'",
+            "stopped": False,
+            "picture_ids": [],
+            "library_uuid": None,
+        }
+
+    def test_a_stopped_run_is_marked_stopped(self, monkeypatch):
+        payload, outcome = self._end(
+            monkeypatch,
+            "ending-stopped",
+            self._raises(comfyui_service.ComfyUIRunStopped("Interrupted at KSampler")),
+        )
+        assert (payload["status"], payload["stopped"]) == ("failed", True)
+        assert (outcome["status"], outcome["stopped"], outcome["message"]) == (
+            "failed",
+            True,
+            "Interrupted at KSampler",
+        )
+
+    def test_comfyui_going_away_is_told_in_words_not_a_status_code(self, monkeypatch):
+        # str() of an HTTPException is "502: ..."; the detail is the sentence.
+        payload, outcome = self._end(
+            monkeypatch,
+            "ending-gone",
+            self._raises(
+                comfyui_service.HTTPException(
+                    status_code=502,
+                    detail="ComfyUI stopped answering before the run finished",
+                )
+            ),
+        )
+        assert payload["message"] == "ComfyUI stopped answering before the run finished"
+        assert outcome["message"] == payload["message"] and not outcome["stopped"]
+
+    def test_a_finished_run_is_kept_with_the_pictures_it_added(self, monkeypatch):
+        monkeypatch.setattr(
+            comfyui_service, "_set_source_picture_id_on_pictures", lambda *a: None
+        )
+        monkeypatch.setattr(
+            comfyui_service, "_copy_set_and_project_assignments", lambda *a: None
+        )
+        server = _FakeServer()
+        monkeypatch.setattr(
+            comfyui_service, "_wait_for_comfyui_outputs", lambda *a, **k: ([], [41, 42])
+        )
+        comfyui_service._process_comfyui_outputs(
+            server,
+            "http://comfy",
+            "ending-done",
+            None,
+            None,
+            None,
+            workflow_id="auto:x",
+        )
+        assert server.vault.events[-1][1]["workflow_id"] == "auto:x"
+        assert comfyui_service.run_outcome("ending-done") == {
+            "prompt_id": "ending-done",
+            "status": "completed",
+            "message": None,
+            "stopped": False,
+            "picture_ids": [41, 42],
+            "library_uuid": None,
+        }
+
+    def test_only_the_newest_outcomes_are_kept(self, monkeypatch):
+        monkeypatch.setattr(comfyui_service, "MAX_RUN_OUTCOMES", 2)
+        monkeypatch.setattr(comfyui_service, "_run_outcomes", {})
+        for prompt_id in ("kept-1", "kept-2", "kept-3"):
+            comfyui_service.record_run_outcome(prompt_id, "running")
+        # Nothing has ended, so the oldest goes.
+        assert comfyui_service.run_outcome("kept-1") is None
+        # An update replaces a run's row rather than adding one, and a run
+        # that has ended goes before an older one that is still going.
+        comfyui_service.record_run_outcome("kept-3", "completed")
+        comfyui_service.record_run_outcome("kept-4", "running")
+        assert comfyui_service.run_outcome("kept-3") is None
+        assert comfyui_service.run_outcome("kept-2")["status"] == "running"
+        assert comfyui_service.run_outcome("kept-4")["status"] == "running"
+        assert comfyui_service.run_outcome("never-run") is None
+
+    def test_a_runs_library_is_kept_through_its_ending(self):
+        comfyui_service.record_run_outcome("lib-run", "running", library_uuid="lib-a")
+        comfyui_service.record_run_outcome("lib-run", "completed", picture_ids=[7])
+        assert comfyui_service.run_outcome("lib-run")["library_uuid"] == "lib-a"
+
+    def test_outputs_of_a_library_that_was_switched_away_are_kept_as_a_failure(
+        self, monkeypatch
+    ):
+        """No event (the tab is on another library by then), but a reader of
+        the run is not left with "running" for good."""
+
+        class _Gone:
+            def acquire_read(self):
+                return None
+
+        server = _FakeServer()
+        server.library_coordinator = _Gone()
+        monkeypatch.setattr(
+            comfyui_service, "_wait_for_comfyui_outputs", lambda *a, **k: ([], [41])
+        )
+        comfyui_service._process_comfyui_outputs(
+            server, "http://comfy", "ending-switched", None, None, None
+        )
+        assert server.vault.events == []
+        outcome = comfyui_service.run_outcome("ending-switched")
+        assert outcome["status"] == "failed" and "library changed" in outcome["message"]
 
 
 def demo() -> None:
