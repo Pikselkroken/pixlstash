@@ -35,4 +35,14 @@ describe("a failed run reaches its workflow", () => {
     expect(app).toMatch(/function onRunStarted\(\{[^}]*error = ""[^}]*\}/);
     expect(app).toMatch(/if \(error\) \{\s*noticeStore\.error\(/);
   });
+
+  // The Edit tab tells the runs that were queued and never hears that others
+  // were refused, so the notice must not sit behind its early return.
+  it("says so for a popup opened from the Edit tab too", () => {
+    const body = app.slice(app.indexOf("function onRunStarted("));
+    const notice = body.indexOf("if (error) {");
+    const editTabReturn = body.indexOf("runDialogStore.source?.fromEditTab");
+    expect(notice).toBeGreaterThan(0);
+    expect(editTabReturn).toBeGreaterThan(notice);
+  });
 });

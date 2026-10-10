@@ -419,7 +419,9 @@ function onRestoreConfirmed() {
  */
 function onRunStarted({ prompts = [], pictureIds = [], error = "" } = {}) {
   // ComfyUI took some of the batch and refused the next: the ones it took are
-  // followed as usual, and the rest must not vanish without a word.
+  // followed as usual, and the rest must not vanish without a word. Ahead of
+  // the Edit tab's return on purpose: that tab tells the runs that were
+  // queued, and nothing but this says some were not.
   if (error) {
     noticeStore.error(
       `ComfyUI stopped taking runs after ${prompts.length}: ${error}`,
@@ -427,7 +429,8 @@ function onRunStarted({ prompts = [], pictureIds = [], error = "" } = {}) {
     );
   }
   // From the lightbox's Edit tab: no picture ids, so the runner leaves the
-  // lightbox on the original, and no toast, because the tab tells the run.
+  // lightbox on the original, and no "started" toast, because the tab tells
+  // the run.
   if (runDialogStore.source?.fromEditTab) {
     runDialogStore.started(prompts, []);
     return;
