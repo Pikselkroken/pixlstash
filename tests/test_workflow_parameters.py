@@ -90,6 +90,26 @@ def _sized_graph():
     }
 
 
+def test_an_empty_latent_s_size_is_the_run_s_size_over_another_node_s():
+    assert wp.size_inputs(_sized_graph()) == {("5", "width"), ("5", "height")}
+
+
+def test_with_no_empty_latent_the_size_is_matched_by_input_name():
+    """An image-to-video node sizes the latent it hands out (#1833)."""
+    graph = {
+        "49": _selector(),
+        "7": {
+            "class_type": "WanImageToVideo",
+            "inputs": {"width": ["49", 0], "height": 480, "length": 81},
+        },
+        # By name alone: not only the video node, and not only the first met.
+        "11": {"class_type": "ImageScale", "inputs": {"width": 512}},
+        "9": {"class_type": "KSampler", "inputs": {"steps": 20}},
+        "bad": "not a node",
+    }
+    assert wp.size_inputs(graph) == {("7", "width"), ("7", "height"), ("11", "width")}
+
+
 def test_a_run_at_the_selector_s_own_size_leaves_the_wires_alone():
     graph = _sized_graph()
     wp.set_latent_size(graph, graph["5"], "width", 1368)

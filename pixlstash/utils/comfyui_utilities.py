@@ -777,16 +777,19 @@ def extract_recipe_extras(workflow: dict) -> dict:
         offer without walking the execution graph. The size is the exception:
         an empty latent's, worked out from a Resolution Selector when wired,
         wins over another node's ``width`` (an SDXL text encoder's 4096),
-        because a run writes it back onto that latent.
+        because a run writes it back onto that latent. A graph with no empty
+        latent (image-to-video) has no such ranking: the first node naming
+        a ``width`` wins, wired or not (``workflow_parameters.size_inputs``).
     """
     # Local: workflow_parameters -> workflow_io -> this module is a cycle.
-    from pixlstash.services.workflow_parameters import is_latent_size, linked_size
+    from pixlstash.services.workflow_parameters import linked_size, size_inputs
 
     negative_prompt: str | None = None
     settings: dict[str, Any] = {}
     latent_size: dict[str, int] = {}
     try:
-        for node in workflow.values():
+        sized = size_inputs(workflow)
+        for node_id, node in workflow.items():
             if not isinstance(node, dict):
                 continue
             inputs = node.get("inputs") or {}
@@ -803,7 +806,7 @@ def extract_recipe_extras(workflow: dict) -> dict:
                     )
             for field, kind in _SETTING_FIELDS.items():
                 value = inputs.get(field)
-                if is_latent_size(node.get("class_type"), field):
+                if (str(node_id), field) in sized:
                     linked = linked_size(workflow, value)
                     size = _typed_setting(value if linked is None else linked, kind)
                     if size is not None:

@@ -1524,9 +1524,17 @@ def test_the_default_recipe_is_the_modal_checkpoint_and_the_majority_loras(
     assert recipe.stages == {"face_detailer": False}
 
 
-def test_a_latent_sized_by_a_resolution_selector_offers_its_size(hub, monkeypatch):
-    """The wired width and height read as what the selector works out to."""
+@pytest.mark.parametrize("sized", ["EmptyLatentImage", "WanImageToVideo"])
+def test_a_latent_sized_by_a_resolution_selector_offers_its_size(
+    hub, monkeypatch, sized
+):
+    """The wired width and height read as what the selector works out to.
+
+    On an empty latent, or with none in the graph on the image-to-video node
+    that sizes its own (#1833).
+    """
     graph = _graph()
+    graph["4"]["class_type"] = sized
     graph["49"] = _node(
         "ResolutionSelector",
         aspect_ratio="16:9 (Widescreen)",

@@ -85,17 +85,28 @@ _ASPECT_RATIOS = {
 SIZE_NAMES = ("width", "height")
 
 
-def is_latent_size(class_type: Any, name: str) -> bool:
-    """Whether *name* on *class_type* is the size of the picture a run makes.
+def size_inputs(graph: dict) -> set[tuple[str, str]]:
+    """The ``(node id, input name)`` pairs that are the size a run of *graph* makes.
 
-    The empty latent's ``width`` / ``height``: the one place a size can be set
-    whatever drives it, so a run that wants another size writes it there.
+    An empty latent's ``width`` / ``height`` when the graph has one: the one
+    place a size can be set whatever drives it, so a run that wants another
+    size writes it there. A graph with none is matched on the input names
+    alone (#1833): an image-to-video node (``WanImageToVideo``) sizes the
+    latent it hands out, and there is no empty latent to find.
     """
-    # ponytail: a name rule, like `is_picture_batch` offline; object_info's
-    # LATENT output if a pack names its empty latent otherwise.
-    # Efficiency loaders name theirs `empty_latent_width`, so are not matched.
-    cls = str(class_type or "")
-    return name in SIZE_NAMES and "Empty" in cls and "Latent" in cls
+    # ponytail: name rules, like `is_picture_batch` offline; object_info's
+    # LATENT output if the fallback ever picks up a node that sizes no latent.
+    # Efficiency loaders name theirs `empty_latent_width`, so are not matched,
+    # and a graph of theirs takes the name fallback like any other.
+    named = [
+        (str(node_id), name, str(node.get("class_type") or ""))
+        for node_id, node in graph.items()
+        if isinstance(node, dict) and isinstance(node.get("inputs"), dict)
+        for name in SIZE_NAMES
+        if name in node["inputs"]
+    ]
+    latent = {(i, n) for i, n, cls in named if "Empty" in cls and "Latent" in cls}
+    return latent or {(i, n) for i, n, _ in named}
 
 
 def linked_size(graph: dict, link: Any) -> Optional[int]:
@@ -136,7 +147,7 @@ def linked_size(graph: dict, link: Any) -> Optional[int]:
 
 
 def set_latent_size(graph: dict, node: dict, name: str, value: Any) -> None:
-    """Write a run's *value* into a latent size input, cutting a wire if needed.
+    """Write a run's *value* into a size input, cutting a wire if needed.
 
     A wired size whose source already says *value* is left wired, so a run
     that did not change the size sends the graph as authored. Otherwise the
