@@ -278,6 +278,7 @@ import {
   readReason,
 } from "../../utils/runReasons";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
+import { labelPrompts, runTaskLabel } from "../../utils/runTaskLabel";
 import { withRef } from "../../utils/withRef";
 import { selectNewestStackMember } from "../../utils/stack";
 import { stackMemberIds } from "../../utils/stackMembers";
@@ -671,7 +672,11 @@ async function submit() {
     remember(workflowId.value);
     follow(id, card?.name, text, stack.value, before);
     // No picture ids: see the component's docstring.
-    runDialog.started(prompts, []);
+    const label = runTaskLabel({ workflow: card?.name });
+    runDialog.started(
+      labelPrompts(prompts, () => label),
+      [],
+    );
   } catch (err) {
     submitError.value = errorMessage(err, "Could not start the edit.");
   } finally {

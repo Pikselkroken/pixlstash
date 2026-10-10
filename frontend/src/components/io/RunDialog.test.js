@@ -2024,11 +2024,99 @@ describe("the body it sends", () => {
     await flushPromises();
 
     expect(wrapper.emitted("run")[0][0]).toEqual({
-      prompts: [{ prompt_id: "p1" }],
+      prompts: [{ prompt_id: "p1", label: "Cinematic portrait" }],
       pictureIds: [42],
     });
     // Only a popup the Edit tab opened hands it the run to follow.
     expect(useRunDialogStore().editRun).toBe(null);
+  });
+
+  // What the Tasks tab calls the run: a clone, else the saved recipe, else
+  // the workflow.
+  async function labelOf(wrapper) {
+    await wrapper.vm.submit();
+    await flushPromises();
+    return wrapper.emitted("run")[0][0].prompts[0].label;
+  }
+
+  /** The run's answer, saying which picture's graph the server ran. */
+  function ranFrom(pictureId) {
+    runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [{ prompt_id: "p1" }],
+      groups: [{ workflow_id: KEY, source_picture_id: pictureId }],
+    });
+  }
+
+  it("calls an untouched run of a picture, with its seed typed in, a clone", async () => {
+    // The grid's own entry opens a one-picture run as a "selection".
+    const wrapper = await mountRun({ kind: "selection", pictureIds: [42] });
+    wrapper.vm.seedMode = "fixed";
+    expect(wrapper.vm.seed).toBe("418220931");
+    expect(await labelOf(wrapper)).toBe("Clone picture");
+  });
+
+  it("names the workflow when the typed seed is not the picture's", async () => {
+    const wrapper = await mountRun();
+    wrapper.vm.seedMode = "fixed";
+    wrapper.vm.seed = "7";
+    expect(await labelOf(wrapper)).toBe("Cinematic portrait");
+  });
+
+  it("calls a kept seed a clone when the graph run was this picture's", async () => {
+    ranFrom(42);
+    const wrapper = await mountRun();
+    wrapper.vm.seedMode = "keep";
+    expect(await labelOf(wrapper)).toBe("Clone picture");
+  });
+
+  it("names the workflow when the kept seed is another picture's", async () => {
+    // "Keep" leaves the seed of the graph the server ran, and that graph is
+    // the workflow's best picture's, not necessarily the one opened.
+    ranFrom(7);
+    const wrapper = await mountRun();
+    wrapper.vm.seedMode = "keep";
+    expect(await labelOf(wrapper)).toBe("Cinematic portrait");
+  });
+
+  it("names the workflow once the form differs from the picture", async () => {
+    ranFrom(42);
+    const wrapper = await mountRun();
+    wrapper.vm.seedMode = "keep";
+    wrapper.vm.prompt = "something else entirely";
+    expect(await labelOf(wrapper)).toBe("Cinematic portrait");
+  });
+
+  it("names the workflow for a picture another workflow is run on", async () => {
+    ranFrom(42);
+    const wrapper = await mountRun({
+      kind: "selection",
+      pictureIds: [42],
+      workflowId: OTHER,
+      pickWorkflow: true,
+    });
+    wrapper.vm.seedMode = "keep";
+    expect(await labelOf(wrapper)).toBe("Cinematic portrait · detailer");
+  });
+
+  it("names the workflow for several pictures, whichever graph ran", async () => {
+    ranFrom(42);
+    const wrapper = await mountRun({
+      kind: "selection",
+      pictureIds: [42, 43],
+      workflowId: KEY,
+    });
+    wrapper.vm.seedMode = "keep";
+    expect(await labelOf(wrapper)).toBe("Cinematic portrait");
+  });
+
+  it("names the saved recipe ahead of its workflow", async () => {
+    const wrapper = await mountRun({
+      kind: "card",
+      workflowId: KEY,
+      savedRecipe: { id: 5, workflow_id: KEY, name: "Rainy", source_picture_id: 77 },
+    });
+    expect(await labelOf(wrapper)).toBe("Rainy");
   });
 
   it("hands a run opened from the Edit tab to the tab to follow", async () => {

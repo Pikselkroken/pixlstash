@@ -231,7 +231,11 @@ describe("the Edit tab", () => {
     );
     // No source picture: that is what would make the runner step the
     // lightbox to the output, and this design stays on the original.
-    expect(started).toHaveBeenCalledWith([{ prompt_id: "p1" }], []);
+    // Labelled with the workflow, which is what the Tasks tab calls the run.
+    expect(started).toHaveBeenCalledWith(
+      [{ prompt_id: "p1", label: "Relight" }],
+      [],
+    );
     expect(wrapper.text()).toContain("Running");
   });
 

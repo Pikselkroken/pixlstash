@@ -196,6 +196,52 @@ describe("a selection every picture of which can run", () => {
     expect(wrapper.emitted("run")[0][0].pictureIds).toEqual([1, 2, 3]);
   });
 
+  it("labels each prompt by its workflow, or as a clone on a kept seed", async () => {
+    // The run's answer says which picture's graph each group ran: one of the
+    // pictures selected (2), one outside the selection (9), and one of the
+    // selected pictures again but FED into the graph rather than remade.
+    const FED = `auto:${"c".repeat(64)}`;
+    runWorkflowCard.mockResolvedValue({
+      status: "success",
+      prompts: [
+        { prompt_id: "p1", workflow_id: GOOD },
+        { prompt_id: "p2", workflow_id: BAD },
+        { prompt_id: "p3", workflow_id: FED },
+        { prompt_id: "p4", workflow_id: "auto:unlisted" },
+      ],
+      groups: [
+        { workflow_id: GOOD, picture_ids: [1, 2], source_picture_id: 2 },
+        { workflow_id: BAD, picture_ids: [3], source_picture_id: 9 },
+        {
+          workflow_id: FED,
+          picture_ids: [4],
+          source_picture_id: 4,
+          picture_inputs: [{ slot_label: "s", input_name: "image", fill: "selection" }],
+        },
+      ],
+    });
+    const labels = async (wrapper) => {
+      await wrapper.vm.submit();
+      await flushPromises();
+      return wrapper.emitted("run")[0][0].prompts.map((prompt) => prompt.label);
+    };
+    expect(await labels(await mountMakeMore())).toEqual([
+      "Cinematic portrait",
+      "Z-Image turbo",
+      "ComfyUI",
+      "ComfyUI",
+    ]);
+
+    const kept = await mountMakeMore();
+    kept.vm.seedMode = "keep";
+    expect(await labels(kept)).toEqual([
+      "Clone picture",
+      "Z-Image turbo",
+      "ComfyUI",
+      "ComfyUI",
+    ]);
+  });
+
   it("counts once per PICTURE for a card its pictures are fed into (#1457)", async () => {
     // The server feeds each picture into a card with one open picture input
     // and repeats the run per picture, and says so with `fill: "selection"`.
