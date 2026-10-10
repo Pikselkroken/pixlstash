@@ -23,6 +23,7 @@ import json
 import os
 import random
 import sqlite3
+import struct
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,6 +114,7 @@ from pixlstash.tasks.missing_file_purge_task import MissingFilePurgeTask
 from pixlstash.tasks.missing_comfyui_extraction_finder import (
     MissingComfyUIExtractionFinder,
 )
+from pixlstash.utils.comfyui_utilities import find_comfy_workflow
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import KNOWN_BASE_MODELS
 from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY
@@ -1607,6 +1609,196 @@ def test_ingest_files_the_workflow_and_stamps_the_picture(store):
     assert picture.workflow_instance_hash == instance_hash(api_graph(TXT2IMG))
     # The hub holds the graph the vault is now pointing at.
     assert get_document(store.hub, picture.workflow_structural_hash) is not None
+
+
+def _box(kind, *payload):
+    """One ISO-BMFF box."""
+    body = b"".join(payload)
+    return struct.pack(">I4s", 8 + len(body), kind) + body
+
+
+def _element(ident, *payload):
+    """One EBML element, its size written short when it fits, as ffmpeg does."""
+    body = b"".join(payload)
+    size = (
+        bytes([0x80 | len(body)])
+        if len(body) < 0x7F
+        else ((1 << 56) | len(body)).to_bytes(8, "big")
+    )
+    return ident.to_bytes((ident.bit_length() + 7) // 8, "big") + size + body
+
+
+def mp4_bytes(tags=None, comment=None, faststart=False):
+    """An MP4, its ``moov`` after the media data unless ``faststart``.
+
+    ``tags`` are written the way ffmpeg's ``use_metadata_tags`` does (ComfyUI's
+    SaveVideo): a ``keys`` box naming them and an ``ilst`` numbering them.
+    ``comment`` is the iTunes comment atom instead, VideoHelperSuite's.
+    """
+
+    def text(value):
+        return _box(b"data", b"\x00\x00\x00\x01", bytes(4), value.encode())
+
+    if comment is not None:
+        items = [_box(b"ilst", _box(b"\xa9cmt", text(comment)))]
+    else:
+        names = [_box(b"mdta", name.encode()) for name in tags]
+        items = [
+            _box(b"keys", bytes(4), struct.pack(">I", len(names)), *names),
+            _box(
+                b"ilst",
+                *(
+                    _box(struct.pack(">I", index), text(value))
+                    for index, value in enumerate(tags.values(), start=1)
+                ),
+            ),
+        ]
+    handler = _box(b"hdlr", bytes(8), b"mdta", bytes(13))
+    media = _box(b"mdat", bytes(64))
+    moov = _box(b"moov", _box(b"udta", _box(b"meta", bytes(4), handler, *items)))
+    return _box(b"ftyp", b"isom", b"\x00\x00\x02\x00", b"isom") + (
+        moov + media if faststart else media + moov
+    )
+
+
+def mov_bytes(comment):
+    """A QuickTime file: the comment is an atom of ``udta`` itself.
+
+    Its 16-bit length wraps on a long text exactly as ffmpeg writes it, so
+    *comment* is padded past that: a workflow usually is.
+    """
+    text = (comment + " " * 0xFFF0).encode()
+    atom = _box(b"\xa9cmt", struct.pack(">HH", len(text) & 0xFFFF, 0x55C4), text)
+    return (
+        _box(b"ftyp", b"qt  ", b"\x00\x00\x02\x00", b"qt  ")
+        + _box(b"mdat", bytes(64))
+        + _box(b"moov", _box(b"udta", atom))
+    )
+
+
+def webm_bytes(tags):
+    """A WebM whose ``Tags`` follow a cluster, names upper-cased as ffmpeg does."""
+    simple_tags = [
+        _element(
+            0x67C8,
+            _element(0x45A3, name.upper().encode()),
+            _element(0x4487, value.encode()),
+        )
+        for name, value in tags.items()
+    ]
+    return _element(0x1A45DFA3, _element(0x4282, b"webm")) + _element(
+        0x18538067,
+        _element(0x1F43B675, bytes(64)),
+        _element(0x1254C367, _element(0x7373, *simple_tags)),
+    )
+
+
+def _video_tags(api, workflow):
+    return {"prompt": json.dumps(api), "workflow": json.dumps(workflow)}
+
+
+def _vhs_comment(api, workflow):
+    # VideoHelperSuite: one JSON comment, the prompt a string inside it.
+    return json.dumps({"prompt": json.dumps(api), "workflow": workflow})
+
+
+# Each ComfyUI video saver's container layout: (file name, bytes of a video
+# carrying that API graph and editor workflow).
+VIDEO_WRITERS = {
+    "SaveVideo": ("core.mp4", lambda a, w: mp4_bytes(_video_tags(a, w))),
+    "SaveVideo faststart": (
+        "faststart.mp4",
+        lambda a, w: mp4_bytes(_video_tags(a, w), faststart=True),
+    ),
+    "SaveWEBM": ("core.webm", lambda a, w: webm_bytes(_video_tags(a, w))),
+    "VideoHelperSuite mp4": (
+        "vhs.mp4",
+        lambda a, w: mp4_bytes(comment=_vhs_comment(a, w)),
+    ),
+    "VideoHelperSuite mov": (
+        "vhs.mov",
+        lambda a, w: mov_bytes(_vhs_comment(a, w)),
+    ),
+    "VideoHelperSuite webm": (
+        "vhs.webm",
+        lambda a, w: webm_bytes({"comment": _vhs_comment(a, w)}),
+    ),
+}
+
+
+@pytest.mark.parametrize("writer", sorted(VIDEO_WRITERS))
+def test_a_video_is_filed_exactly_as_a_picture_of_the_same_graph(store, writer):
+    """The graph in a video's container is read like the one in a PNG's chunks."""
+    api, workflow = api_graph(TXT2IMG), ui_workflow(TXT2IMG)
+    name, build = VIDEO_WRITERS[writer]
+    (Path(store.image_root) / name).write_bytes(build(api, workflow))
+    still = write_png(Path(store.image_root), "same-graph.png", api=api)
+    video_id, still_id = add_picture(store, name), add_picture(store, still)
+
+    result = run_extraction(store, [video_id, still_id])
+
+    assert result["found_workflow"] == 2
+    assert result["found_comfyui"] == 2
+
+    def filed(picture):
+        return (
+            picture.workflow_hash_version,
+            picture.workflow_topology_hash,
+            picture.workflow_structural_hash,
+            picture.workflow_instance_hash,
+            picture.comfyui_positive_prompt,
+            picture.comfyui_models,
+            picture.comfyui_loras,
+        )
+
+    video = read_picture(store, video_id)
+    assert video.workflow_instance_hash == instance_hash(api)
+    assert video.comfyui_positive_prompt == "a lighthouse at dusk"
+    assert filed(video) == filed(read_picture(store, still_id))
+    # The editor workflow is there too: it is what carries a manual
+    # workflow's tag back from a ComfyUI run.
+    embedded = ImageUtils.extract_embedded_metadata(
+        os.path.join(store.image_root, name)
+    )
+    assert find_comfy_workflow(embedded) == workflow
+
+
+@pytest.mark.parametrize(
+    "name, content",
+    [
+        ("phone.mp4", mp4_bytes({"encoder": "a camera"})),
+        # Tags named like the metadata dict's own sections, which the A1111
+        # reader indexes into: read as tags, they made it raise.
+        ("sections.mp4", mp4_bytes({"png": "x", "exif": "y", "comfyui": "z"})),
+        ("noise.mp4", b"\x00\x00\x00\x01moov" + bytes(3)),
+        ("cut-short.webm", webm_bytes({"prompt": "{}"})[:-9]),
+        ("malformed.webm", b"\x1a\x45\xdf\xa3\x80" + bytes(8)),
+        ("riff.avi", b"RIFF" + bytes(32)),
+    ],
+)
+def test_a_video_with_no_readable_graph_is_scanned_as_carrying_none(
+    store, name, content
+):
+    """No graph and a container that will not parse are facts about the file.
+
+    Either way the marker goes down, so the finder stops offering the video.
+    """
+    (Path(store.image_root) / name).write_bytes(content)
+    picture_id = add_picture(store, name)
+    # The reader's own answer rather than the task's catch-all: the lightbox
+    # and the recipe route call it bare.
+    embedded = ImageUtils.extract_embedded_metadata(
+        os.path.join(store.image_root, name)
+    )
+    assert embedded == {}
+
+    result = run_extraction(store, [picture_id])
+
+    assert result["found_workflow"] == 0
+    picture = read_picture(store, picture_id)
+    assert picture.workflow_hash_version == HASH_VERSION
+    assert picture.workflow_instance_hash is None
+    assert picture.comfyui_models == "[]"
 
 
 @pytest.fixture

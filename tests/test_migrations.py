@@ -1479,6 +1479,48 @@ def test_0128_adds_prompt_match_once_on_a_fresh_and_a_populated_vault():
         assert again.returncode == 0, again.stderr
 
 
+def test_0129_hands_back_every_video_and_no_still():
+    """A video's container is read for its workflow now, so each is re-offered.
+
+    Both markers are cleared because the extraction finder selects on
+    ``workflow_hash_version`` with a hub and on ``comfyui_models`` without one,
+    and a NULL ``comfyui_models`` is what lets the revisit write the prompt and
+    models it finds. A still keeps both.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        scanned = dict(workflow_hash_version="v2", comfyui_models="[]")
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _insert_minimal_row(
+                conn, "picture", file_path="clip.mp4", is_video=1, **scanned
+            )
+            _insert_minimal_row(
+                conn, "picture", file_path="still.png", is_video=0, **scanned
+            )
+            conn.execute(
+                "UPDATE alembic_version SET version_num = "
+                "'0128_add_picture_prompt_match'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            rows = {
+                row[0]: row[1:]
+                for row in conn.execute(
+                    "SELECT file_path, workflow_hash_version, comfyui_models "
+                    "FROM picture"
+                )
+            }
+        assert rows == {"clip.mp4": (None, None), "still.png": ("v2", "[]")}
+
+
 def test_0125_resets_only_recipes_on_a_hand_made_workflow():
     """A hand-made group id goes back to NULL for re-filing; an automatic id
     and an already-NULL one are left as they are."""
