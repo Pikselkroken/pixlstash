@@ -20,6 +20,7 @@ import { computed, ref, watch } from "vue";
 import { VSwitch } from "vuetify/components";
 import { createToken, setTokenLibraries } from "../../api/users";
 import { copyText } from "../../utils/clipboard";
+import { errorDetail } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
@@ -68,6 +69,8 @@ const everyLibrary = ref(false);
 // "every" once the token is widened, "failed" when it was minted and the
 // widening was refused: the token is real either way and is still shown.
 const coverage = ref("");
+// The server's own reason for refusing, when it gave one.
+const coverageError = ref("");
 
 // `-s user` is load-bearing. `claude mcp add` defaults to `-s local`, which
 // registers the server only inside the directory it was run from, so the agent
@@ -111,6 +114,7 @@ watch(
     mode.value = "read";
     everyLibrary.value = false;
     coverage.value = "";
+    coverageError.value = "";
   },
 );
 
@@ -129,8 +133,13 @@ async function create() {
       try {
         await setTokenLibraries(created.token_id, true);
         coverage.value = "every";
-      } catch {
+      } catch (e) {
+        console.warn(
+          "[settings] could not set the new token to work in every library",
+          e,
+        );
         coverage.value = "failed";
+        coverageError.value = errorDetail(e) || "";
       }
     }
     token.value = created.token;
@@ -227,9 +236,12 @@ async function copy(key, text) {
         It works in every library: the agent sees whichever one is open.
       </p>
       <p v-else-if="coverage === 'failed'" class="cad-error">
-        The token was created, but only for this library: PixlStash could not
-        set it to work in every library. Turn on Every library for it in the
-        token list.
+        The token was created, but only for this library.
+        <template v-if="coverageError">{{ coverageError }}</template>
+        <template v-else>
+          PixlStash could not set it to work in every library. Try the Every
+          library switch for it in the token list.
+        </template>
       </p>
       <p v-if="remoteUrl" class="cad-warn">
         You are viewing PixlStash over the network, so these name

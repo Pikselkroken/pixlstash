@@ -262,5 +262,22 @@ describe("a token that works in every library", () => {
     expect(wrapper.findAll(".cad-code")).toHaveLength(2);
     expect(wrapper.text()).toContain("example-minted-token");
     expect(wrapper.find(".cad-error").text()).toMatch(/only for this library/i);
+    // Nothing better to say, so it points at the other way to do it.
+    expect(wrapper.find(".cad-error").text()).toMatch(/token list/i);
+  });
+
+  it("gives the server's reason for refusing, not a guess", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const refusal = { response: { data: { detail: "Sign in on the local network." } } };
+    setTokenLibraries.mockRejectedValue(refusal);
+    const wrapper = await mint({ offerEveryLibrary: true }, { everyLibrary: true });
+
+    const shown = wrapper.find(".cad-error").text();
+    expect(shown).toMatch(/only for this library/i);
+    expect(shown).toContain("Sign in on the local network.");
+    // The switch in the token list would be refused for the same reason.
+    expect(shown).not.toMatch(/token list/i);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("every library"), refusal);
+    warn.mockRestore();
   });
 });
