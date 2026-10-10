@@ -1536,8 +1536,14 @@ const shelfLine = computed(() => {
  * owner's ComfyUI (`object_info`), which the grid must not wait on. A 409 is a
  * card with no graph, said as such; anything else is "could not read it just
  * now", and Edit LoRAs… stays offered because the dialog reads again.
+ *
+ * Only the newest read is kept, the way the detail's is: leaving a workflow
+ * and coming back asks twice for the same key, and the older answer landing
+ * last would put its failure, or its end of waiting, over the newer one.
  */
+let chainRead = 0;
 async function loadChain(key) {
+  const read = ++chainRead;
   chain.value = null;
   chainFailed.value = false;
   chainNoGraph.value = false;
@@ -1548,10 +1554,10 @@ async function loadChain(key) {
   chainPending.value = true;
   try {
     const body = await getLoraChain(key);
-    if (selectedKey.value !== key) return;
+    if (read !== chainRead) return;
     chain.value = body;
   } catch (err) {
-    if (selectedKey.value !== key) return;
+    if (read !== chainRead) return;
     if (err?.response?.status === 409) {
       chainNoGraph.value = true;
     } else {
@@ -1559,7 +1565,7 @@ async function loadChain(key) {
       chainFailed.value = true;
     }
   } finally {
-    if (selectedKey.value === key) chainPending.value = false;
+    if (read === chainRead) chainPending.value = false;
   }
 }
 
@@ -1599,9 +1605,12 @@ const exposable = computed(() => {
 /**
  * Read the selected card's settable inputs. Its own read for the LoRA
  * chain's reason: it is typed from the owner's ComfyUI. A failure leaves the
- * rows as plain boxes, which still set the value.
+ * rows as plain boxes, which still set the value. Only the newest read is
+ * kept, as with the chain.
  */
+let formRead = 0;
 async function loadFormInputs(key) {
+  const read = ++formRead;
   formNodes.value = [];
   formFailed.value = "";
   if (!key) {
@@ -1611,17 +1620,17 @@ async function loadFormInputs(key) {
   formPending.value = true;
   try {
     const body = await getWorkflowFormInputs(key);
-    if (selectedKey.value !== key) return;
+    if (read !== formRead) return;
     formNodes.value = body.nodes ?? [];
   } catch (err) {
-    if (selectedKey.value !== key) return;
+    if (read !== formRead) return;
     console.warn(`[workflows] could not read the form inputs of ${key}`, err);
     formFailed.value =
       err?.response?.status === 409
         ? "PixlStash has no graph for this workflow, so it has no nodes to pick from."
         : errorMessage(err, "Could not read this workflow's nodes just now.");
   } finally {
-    if (selectedKey.value === key) formPending.value = false;
+    if (read === formRead) formPending.value = false;
   }
 }
 

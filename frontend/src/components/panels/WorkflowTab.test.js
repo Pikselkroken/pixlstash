@@ -3178,6 +3178,37 @@ describe("expose a parameter", () => {
     ]);
   });
 
+  it("keeps the newest read of a workflow when an older one of it lands last", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { defaults: [STEPS] } }));
+    // Left and come back to before the first answers: two reads of one key.
+    const late = {};
+    getWorkflowFormInputs
+      .mockImplementationOnce(() => new Promise((_, reject) => (late.form = reject)))
+      .mockResolvedValue({ nodes: NODES });
+    getLoraChain
+      .mockImplementationOnce(() => new Promise((_, reject) => (late.chain = reject)))
+      .mockResolvedValue(loraChain());
+    const store = useWorkflowsStore();
+    store.cards = [card()];
+    store.selectedKeys = [KEY];
+    const wrapper = mount(WorkflowTab, stubbed);
+    mounted.push(wrapper);
+    await flush(wrapper);
+    store.selectedKeys = [];
+    await flush(wrapper);
+    store.selectedKeys = [KEY];
+    await flush(wrapper);
+    // The first reads fail now, after the second ones were answered.
+    late.form(new Error("gone"));
+    late.chain(new Error("gone"));
+    await flush(wrapper);
+    await wrapper.find("[data-testid='wftab-expose']").trigger("click");
+    expect(dialog(wrapper).props("failed")).toBe("");
+    expect(dialog(wrapper).props("nodes")).toHaveLength(2);
+    expect(wrapper.vm.chainFailed).toBe(false);
+    expect(wrapper.vm.chain).not.toBeNull();
+  });
+
   it("says why when the workflow has no graph to pick from", async () => {
     const wrapper = await mountExposing(
       detail({ card: { defaults: [STEPS] } }),
