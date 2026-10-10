@@ -353,11 +353,14 @@ def store_over_workflow(
     Name, notes, defaults, pins and pictures stay where they are.
 
     *expected_version* is the version of a manual workflow the edit was made
-    on. A pull that made a newer one in between is not buried under an edit
-    of the older graph: checked inside the write transaction, and refused.
+    on, and a manual workflow is not written without it. A pull that made a
+    newer one in between is not buried under an edit of the older graph:
+    checked inside the write transaction, and refused. An automatic workflow
+    has no versions and does not read it.
 
     Raises:
-        WorkflowChanged: The manual workflow is past *expected_version*.
+        WorkflowChanged: The manual workflow is not at *expected_version*, or
+            none was given.
         NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
         RecursionError: The document nests too deeply to read.
         WorkflowFileTooLarge: It is past :data:`MAX_WORKFLOW_FILE_BYTES`.
@@ -373,7 +376,9 @@ def store_over_workflow(
                 "WHERE workflow_id = ?",
                 (workflow_id,),
             ).fetchone()[0]
-            if expected_version is not None and current != expected_version:
+            # `None` is refused too: an unguarded write is the one that could
+            # bury a pulled version.
+            if current != expected_version:
                 raise WorkflowChanged(
                     f"{workflow_id} is at version {current}, and the edit was "
                     f"made on version {expected_version}"

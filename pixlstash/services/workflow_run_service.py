@@ -372,7 +372,9 @@ def resolve_source(
 
     0. The graph the owner saved over the workflow (*edited_document*), when
        the card is the base of a workflow that has one: it is what they said
-       the workflow's graph is, so nothing below is consulted.
+       the workflow's graph is, so nothing below is consulted. One that is
+       not an API graph is no graph to run: it is logged and the tiers below
+       answer.
     1. The linked imported file, when the card has one on this machine. It is
        the only tier that is the workflow *as authored*, so it wins even when a
        picture would also answer.
@@ -392,6 +394,12 @@ def resolve_source(
     (the first) and ``problems`` (all), so the owner is told why.
     """
     edited = api_graph(edited_document) if edited_document else None
+    if edited_document and not edited:
+        logger.warning(
+            "Card %s: the graph saved over its workflow is not an API graph, "
+            "so it is not used and another source is looked for.",
+            getattr(card, "workflow_key", "?"),
+        )
     if edited:
         bindings = edited_document.get(BINDINGS_KEY)
         return Source(

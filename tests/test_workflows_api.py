@@ -15107,6 +15107,37 @@ def test_the_edited_graph_is_the_first_source_and_keeps_its_bindings():
     assert source.bindings == bindings
 
 
+def test_a_manual_overwrite_is_refused_without_the_version_it_was_made_on(chained):
+    """No version, no write: the check against a pulled version cannot be skipped."""
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
+    assert r.status_code == 201, r.text
+    manual = r.json()["workflow_id"]
+    edited = json.loads(json.dumps(CHAIN_DOCUMENT))
+    with pytest.raises(workflows_routes.WorkflowChanged):
+        workflows_routes.store_over_workflow(
+            chained.server.hub, manual, edited, "chain"
+        )
+    versions = chained.server.hub.fetchall(
+        "SELECT version FROM workflow_version WHERE workflow_id = ?", (manual,)
+    )
+    assert [row[0] for row in versions] == [1]
+
+
+def test_an_edited_graph_that_is_no_api_graph_is_said_and_not_used(caplog):
+    """A stored edit that cannot run falls to the next source, out loud."""
+    with caplog.at_level(logging.WARNING, logger=run_service.logger.name):
+        source, reason = run_service.resolve_source(
+            SimpleNamespace(workflow_key="example-card", file_name=None),
+            picture_graph=json.loads(json.dumps(CHAIN_DOCUMENT)),
+            picture_id=7,
+            edited_document={"nodes": [], "links": []},
+        )
+    assert reason is None
+    assert (source.origin, source.picture_id) == (run_service.FROM_PICTURE, 7)
+    said = [rec.getMessage() for rec in caplog.records]
+    assert any("example-card" in line and "not an API graph" in line for line in said)
+
+
 # --- skipping a LoRA for one run (#1478) ------------------------------------
 
 
