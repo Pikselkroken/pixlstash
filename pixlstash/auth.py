@@ -2333,6 +2333,10 @@ class AuthService:
                     ),
                 )
             token.all_libraries = all_libraries
+            # No active library means no registry at all (a served request
+            # always has one, or library admission answers 503 first). Then
+            # there is nothing to pin to and the token keeps the stamp it has,
+            # which the hub column never lets be empty.
             if not all_libraries and active_uuid is not None:
                 token.library_uuid = active_uuid
             session.add(token)

@@ -17,6 +17,7 @@ import threading
 import time
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import Session, delete, select
 
@@ -276,8 +277,6 @@ class TestPinnedRoutes:
         """
         from types import SimpleNamespace
 
-        from fastapi import HTTPException
-
         from pixlstash.authz.gate import AuthzGate
 
         request = SimpleNamespace(
@@ -475,6 +474,38 @@ class TestATokenThatCoversEveryLibrary:
             == 403
         )
 
+    def test_pinning_with_no_registry_keeps_the_library_it_was_stamped_with(
+        self, server
+    ):
+        """With nothing to say which library is active there is none to pin to.
+
+        That is an ``AuthService`` built without a registry; a served request
+        always has an active library, because without one the admission
+        middleware answers 503 before any handler runs. The token goes back to
+        the library its stamp names, which the hub never lets be empty, so it
+        is never left covering nothing.
+        """
+        owner = _owner_client(server)
+        token = _mint(owner)
+        before = _token_row(server)
+        assert _cover(owner, before.id, True).status_code == 200
+
+        provider = server.auth.library_uuid_provider
+        server.auth.library_uuid_provider = lambda: None
+        try:
+            narrowed = _cover(owner, before.id, False)
+        finally:
+            server.auth.library_uuid_provider = provider
+        assert narrowed.status_code == 200, narrowed.text
+
+        after = _token_row(server)
+        assert after.all_libraries is False
+        assert after.library_uuid == before.library_uuid
+        response = TestClient(server.api).get(
+            f"{API}/pictures", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200, response.text
+
     def test_a_read_only_token_can_cover_every_library_and_stays_read_only(
         self, server, other_library
     ):
@@ -622,8 +653,6 @@ class TestATokenThatCoversEveryLibrary:
         when it was read. If the owner pinned the token in between, the
         re-check after registering ends that session; a token that still covers
         every library, and a session that is pinned itself, are left alone."""
-        from fastapi import HTTPException
-
         owner = _owner_client(server)
         _mint(owner)
         row = _token_row(server)
