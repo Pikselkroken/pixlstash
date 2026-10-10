@@ -12,6 +12,7 @@ vi.mock("../../api/stacks", () => ({ listStackPictures: vi.fn() }));
 vi.mock("../../utils/apiClient", () => ({ API_BASE_URL: "" }));
 
 import ComfyUiRunner from "./ComfyUiRunner.vue";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 function mountRunner() {
   return mount(ComfyUiRunner, {
@@ -110,5 +111,37 @@ describe("ComfyUiRunner", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("names the Tasks row after the prompt ComfyUI is running", async () => {
+    const wrapper = mountRunner();
+    const row = () => Object.values(useTasksStore().comfyuiRuns)[0];
+    wrapper.vm.handleComfyuiRun({
+      prompts: [
+        { prompt_id: "p-1", label: "Clone picture" },
+        { prompt_id: "p-2", label: "Cinematic portrait" },
+      ],
+    });
+    await wrapper.vm.$nextTick();
+    expect(row().label).toBe("Clone picture");
+
+    // Queued behind the first: the row keeps naming what is in front.
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-3", label: "Rainy" }] });
+    await wrapper.vm.$nextTick();
+    expect(row().label).toBe("Clone picture");
+
+    wrapper.vm.handleComfyuiPayload({
+      type: "progress",
+      data: { prompt_id: "p-2", node: "3", value: 5, max: 20 },
+    });
+    await wrapper.vm.$nextTick();
+    expect(row().label).toBe("Cinematic portrait");
+  });
+
+  it("calls a run that names nothing ComfyUI", async () => {
+    const wrapper = mountRunner();
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-1" }] });
+    await wrapper.vm.$nextTick();
+    expect(Object.values(useTasksStore().comfyuiRuns)[0].label).toBe("ComfyUI");
   });
 });

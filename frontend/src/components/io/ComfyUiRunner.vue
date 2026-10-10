@@ -51,7 +51,7 @@
  *   handleComfyuiRun(payload)          - Call when a comfyui-run event is received.
  *   maybeRefreshOverlayForComfyui()    - Call after each grid fetch to update overlay.
  *   clientId                           - Ref<string|null> with the current client id.
- *   progress                           - Reactive progress object { visible, status, percent, message }.
+ *   progress                           - Reactive progress object { visible, status, percent, message, label }.
  */
 import { ref, reactive, onUnmounted, watch } from "vue";
 import { abortRun } from "../../api/comfyui";
@@ -59,6 +59,7 @@ import { getPictureMetadata } from "../../api/pictures";
 import { listStackPictures } from "../../api/stacks";
 import { formatComfyuiExecutionErrorMessage } from "../../utils/utils.js";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { RUN_TASK_FALLBACK } from "../../utils/runTaskLabel";
 
 import { API_BASE_URL } from "../../utils/apiClient";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -91,6 +92,8 @@ const progress = reactive({
   status: "idle",
   percent: 0,
   message: "ComfyUI running...",
+  // What the Tasks tab calls the run: the prompt ComfyUI last spoke about.
+  label: RUN_TASK_FALLBACK,
 });
 
 // Mirror this runner's progress into the tasks store so it shows up as a row in
@@ -107,14 +110,15 @@ watch(
     status: progress.status,
     percent: progress.percent,
     message: progress.message,
+    label: progress.label,
   }),
-  ({ visible, status, percent, message }) => {
+  ({ visible, status, percent, message, label }) => {
     if (visible && status !== "failed") {
       tasksStore.setComfyuiRun(tasksRunId, {
         status,
         percent,
         message,
-        label: "ComfyUI",
+        label,
       });
     } else {
       tasksStore.clearComfyuiRun(tasksRunId);
@@ -125,6 +129,8 @@ watch(
 const comfyuiActivePromptIds = ref(new Set());
 const comfyuiCompletedPromptIds = ref(new Set());
 const comfyuiPromptPictureMap = reactive({});
+// What each prompt's run is called (`runTaskLabel`), as its popup named it.
+const comfyuiPromptLabels = {};
 const comfyuiPromptLastSeen = reactive({});
 const comfyuiLastMessageAt = ref(0);
 // Allow long WebSocket silences (up to 5 min) so cold model loads, which emit
@@ -584,6 +590,11 @@ function handleComfyuiPayload(payload) {
     return;
   }
 
+  // The prompt ComfyUI is talking about is the one running.
+  if (promptKey && comfyuiPromptLabels[promptKey]) {
+    progress.label = comfyuiPromptLabels[promptKey];
+  }
+
   if (
     type === "execution_error" ||
     type === "execution_failed" ||
@@ -766,6 +777,9 @@ async function abortComfyui() {
   Object.keys(comfyuiPromptPictureMap).forEach(
     (k) => delete comfyuiPromptPictureMap[k],
   );
+  Object.keys(comfyuiPromptLabels).forEach(
+    (k) => delete comfyuiPromptLabels[k],
+  );
   Object.keys(comfyuiPromptLastSeen).forEach(
     (k) => delete comfyuiPromptLastSeen[k],
   );
@@ -802,11 +816,13 @@ function handleComfyuiRun(payload) {
   if (!ids.length) return;
   comfyuiFailureLocked.value = false;
   const next = new Set(comfyuiActivePromptIds.value);
+  const nothingRunning = next.size === 0;
   for (const id of ids) {
     next.add(id);
     const entry = prompts.find(
       (item) => String(item?.prompt_id || item?.promptId) === id,
     );
+    comfyuiPromptLabels[id] = entry?.label || RUN_TASK_FALLBACK;
     const pictureId = entry?.picture_id ?? payload?.pictureId ?? null;
     if (pictureId != null) {
       comfyuiPromptPictureMap[id] = pictureId;
@@ -823,6 +839,9 @@ function handleComfyuiRun(payload) {
   progress.status = "queued";
   progress.percent = 0;
   progress.message = "ComfyUI queued...";
+  // A run queued behind another leaves the row naming the one in front:
+  // ComfyUI names this one itself when its turn comes.
+  if (nothingRunning) progress.label = comfyuiPromptLabels[ids[0]];
   clearComfyuiHideTimer();
   comfyuiSourcePictureId.value = payload?.pictureId ?? null;
   comfyuiPendingOverlayRefresh.value = Boolean(comfyuiSourcePictureId.value);

@@ -824,6 +824,7 @@ import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
 import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
 import { wouldDuplicate } from "../../utils/recipeKey";
+import { labelPrompts, runTaskLabel } from "../../utils/runTaskLabel";
 import { setEachRun } from "../../utils/workflowPins";
 import {
   changesNodes,
@@ -1248,6 +1249,31 @@ const title = computed(() => {
   return kind.value === "card" ? "Run workflow" : "Run recipe";
 });
 const subtitle = computed(() => card.value?.name || "");
+/**
+ * What a run's row in the Tasks tab is called (`runTaskLabel`), given the
+ * run's own *answer*.
+ *
+ * A clone is one picture's recipe on its own workflow, nothing on the form
+ * changed, run with THAT picture's seed: its seed typed as the fixed one, or
+ * "Keep the original's" when the answer says the graph that ran was read from
+ * this picture (`source_picture_id`). Kept on another picture's graph, the
+ * seed is that picture's, and the run is not this one again.
+ */
+function taskLabelFor(answer) {
+  const sameSeed =
+    seedMode.value === "fixed"
+      ? Boolean(seedText.value) && String(seed.value).trim() === seedText.value
+      : seedMode.value === "keep" &&
+        Number(answer?.groups?.[0]?.source_picture_id) ===
+          Number(pictureIds.value[0]);
+  return runTaskLabel({
+    // `runsOwnWorkflow` is only ever true of ONE picture: no recipe is read
+    // for several.
+    clone: runsOwnWorkflow.value && !dirty.value && sameSeed,
+    recipe: savedRecipe.value?.name,
+    workflow: card.value?.name,
+  });
+}
 const sourceName = computed(
   () => props.source?.name || card.value?.name || "This run",
 );
@@ -3195,7 +3221,11 @@ async function submit() {
         beforeIds,
       };
     }
-    emit("run", { prompts, pictureIds: pictureIds.value });
+    const label = taskLabelFor(answer);
+    emit("run", {
+      prompts: labelPrompts(prompts, () => label),
+      pictureIds: pictureIds.value,
+    });
     emit("close");
   } catch (err) {
     // A submission error is a FORM error: keep the dialog and every input.
