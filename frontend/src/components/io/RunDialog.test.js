@@ -27,6 +27,7 @@ const setWorkflowInputs = vi.fn();
 const saveFixedWorkflow = vi.fn();
 const setWorkflowPins = vi.fn();
 const readModelSwap = vi.fn();
+const getWorkflowFormInputs = vi.fn();
 
 const stackMemberIds = vi.fn();
 vi.mock("../../utils/stackMembers", () => ({
@@ -42,6 +43,7 @@ vi.mock("../../api/workflows", () => ({
   saveFixedWorkflow: (...args) => saveFixedWorkflow(...args),
   setWorkflowPins: (...args) => setWorkflowPins(...args),
   readModelSwap: (...args) => readModelSwap(...args),
+  getWorkflowFormInputs: (...args) => getWorkflowFormInputs(...args),
   workflowCoverUrl: (cover) => (cover?.url ? `/api/v1${cover.url}` : ""),
 }));
 vi.mock("../../api/comfyui", () => ({
@@ -162,6 +164,7 @@ async function mountRun(source = { kind: "picture", pictureIds: [42] }) {
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  getWorkflowFormInputs.mockResolvedValue({ nodes: [] });
   currentRoute.name = "home";
   getWorkflowCard.mockImplementation(async (key) =>
     key === OTHER
@@ -490,6 +493,84 @@ describe("a refusal the popup offers to fix", () => {
     await wrapper.vm.submit();
     expect(runWorkflowCard.mock.calls[0][0].choices).toEqual([
       { node_id: "3", field: "sampler_name", value: "dpmpp_2m" },
+    ]);
+  });
+
+  it("offers a parameter ComfyUI lists the choices of as a list", async () => {
+    const pin = { slot_label: "KSampler", input_name: "sampler_name" };
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        defaults: [
+          ...card().defaults,
+          def("Sampler", "sampler_name", "res_2s"),
+          def("Start", "start_at_step", 2),
+        ],
+      }),
+      pins: [pin, { slot_label: "KSampler", input_name: "start_at_step" }],
+    });
+    getWorkflowFormInputs.mockResolvedValue({
+      nodes: [{ node_id: "3", inputs: [{ ...pin, options: ["euler", "dpmpp_2m"] }] }],
+    });
+    const wrapper = await mountRun();
+    expect(getWorkflowFormInputs).toHaveBeenCalledWith(KEY);
+    // One list, for the sampler; the step count beside it is still typed.
+    const lists = wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .filter((list) => list.attributes("data-testid") === "rund-param-choice");
+    expect(lists).toHaveLength(1);
+    expect(lists[0].props("label")).toBe("Sampler");
+    // The workflow's own value stays listed though ComfyUI does not offer it.
+    expect(lists[0].props("options")).toEqual(["res_2s", "euler", "dpmpp_2m"]);
+    lists[0].vm.$emit("update:modelValue", "dpmpp_2m");
+    await flushPromises();
+    const sampler = wrapper.vm.defaults.find(
+      (field) => field.input_name === "sampler_name",
+    );
+    expect(wrapper.vm.runValue(sampler)).toBe("dpmpp_2m");
+  });
+
+  it("sets an on-or-off parameter to the value, and names an added one's node", async () => {
+    const tiled = { ...def("tiled", "tiled", true, "core:up"), exposed: true };
+    getWorkflowCard.mockResolvedValue({
+      card: card({ defaults: [...card().defaults, tiled] }),
+      pins: [{ slot_label: "core:up", input_name: "tiled" }],
+    });
+    getWorkflowFormInputs.mockResolvedValue({
+      nodes: [
+        {
+          node_id: "8",
+          title: "Final upscale",
+          inputs: [{ slot_label: "core:up", input_name: "tiled", options: null }],
+        },
+      ],
+    });
+    const wrapper = await mountRun();
+    const [list] = wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .filter((entry) => entry.attributes("data-testid") === "rund-param-choice");
+    expect(list.props("options")).toEqual(["true", "false"]);
+    expect(list.element.closest(".rund-f").textContent).toContain("Final upscale");
+    list.vm.$emit("update:modelValue", "false");
+    await flushPromises();
+    const field = wrapper.vm.defaults.find((entry) => entry.input_name === "tiled");
+    // The boolean, never the word: ComfyUI reads the text "false" as on.
+    expect(wrapper.vm.runValue(field)).toBe(false);
+  });
+
+  it("types every parameter when ComfyUI's choices cannot be read", async () => {
+    const pin = { slot_label: "KSampler", input_name: "sampler_name" };
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        defaults: [...card().defaults, def("Sampler", "sampler_name", "euler")],
+      }),
+      pins: [pin],
+    });
+    getWorkflowFormInputs.mockRejectedValue(new Error("down"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wrapper = await mountRun();
+    expect(wrapper.find('[data-testid="rund-param-choice"]').exists()).toBe(false);
+    expect(wrapper.vm.otherRunFields.map((f) => f.input_name)).toEqual([
+      "sampler_name",
     ]);
   });
 

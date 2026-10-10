@@ -597,6 +597,20 @@
           <span class="section-label" role="heading" aria-level="3"
             >Parameters</span
           >
+          <!-- Any other setting of the graph's nodes, picked by node and made
+               a row here. Offered once the detail is in: the write it ends in
+               is whole-set, built from the rows on screen. -->
+          <AppButton
+            v-if="detail"
+            size="sm"
+            variant="ghost"
+            icon-only
+            icon-left="plus"
+            tooltip="Expose a parameter…"
+            :loading="busy === 'expose'"
+            data-testid="wftab-expose"
+            @click="exposeOpen = true"
+          />
         </div>
         <p v-if="detailPending" class="wftab-note wftab-quiet">
           Reading its parameters…
@@ -612,6 +626,8 @@
               :key="row.label"
               :row="row"
               :busy="busy === `default:${row.label}`"
+              :options="choicesFor(formOptions, row)"
+              :node="nodeOf(row)"
               @toggle-pin="togglePin(row)"
               @reset="writeDefault(row)"
               @edit="(value) => writeDefault(row, { value })"
@@ -640,6 +656,8 @@
                     :key="row.label"
                     :row="row"
                     :busy="busy === `default:${row.label}`"
+                    :options="choicesFor(formOptions, row)"
+                    :node="nodeOf(row)"
                     @toggle-pin="togglePin(row)"
                     @reset="writeDefault(row)"
                     @edit="(value) => writeDefault(row, { value })"
@@ -655,6 +673,8 @@
                   :key="row.label"
                   :row="row"
                   :busy="busy === `default:${row.label}`"
+                  :options="choicesFor(formOptions, row)"
+                  :node="nodeOf(row)"
                   @toggle-pin="togglePin(row)"
                   @reset="writeDefault(row)"
                   @edit="(value) => writeDefault(row, { value })"
@@ -826,6 +846,15 @@
       @close="closeEditLoras"
       @overwritten="onOverwritten"
     />
+    <ExposeParameterDialog
+      v-if="exposeOpen"
+      :open="exposeOpen"
+      :nodes="exposable"
+      :pending="formPending"
+      :failed="formFailed"
+      @close="exposeOpen = false"
+      @expose="exposeParameter"
+    />
   </AppInspector>
 </template>
 
@@ -848,6 +877,7 @@ import {
   getLoraChain,
   getLoraSummary,
   getWorkflowCard,
+  getWorkflowFormInputs,
   patchWorkflowCard,
   preflightWorkflowRun,
   readModelSwap,
@@ -885,7 +915,13 @@ import {
   replacementOptions,
   UNMATCHED_REPLACEMENTS_TEXT,
 } from "../../utils/workflowCard";
-import { setEachRun } from "../../utils/workflowPins";
+import {
+  choicesFor,
+  nodesByAddress,
+  optionsByAddress,
+  parameterAddress,
+  setEachRun,
+} from "../../utils/workflowPins";
 import { pictureCount } from "../../utils/workflowSets";
 import { formatUserDay } from "../../utils/utils";
 import AppButton from "../widgets/AppButton.vue";
@@ -894,6 +930,7 @@ import AppSelect from "../widgets/AppSelect.vue";
 import BreakableTitle from "../widgets/BreakableTitle.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
+import ExposeParameterDialog from "../io/ExposeParameterDialog.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
@@ -1499,8 +1536,14 @@ const shelfLine = computed(() => {
  * owner's ComfyUI (`object_info`), which the grid must not wait on. A 409 is a
  * card with no graph, said as such; anything else is "could not read it just
  * now", and Edit LoRAs… stays offered because the dialog reads again.
+ *
+ * Only the newest read is kept, the way the detail's is: leaving a workflow
+ * and coming back asks twice for the same key, and the older answer landing
+ * last would put its failure, or its end of waiting, over the newer one.
  */
+let chainRead = 0;
 async function loadChain(key) {
+  const read = ++chainRead;
   chain.value = null;
   chainFailed.value = false;
   chainNoGraph.value = false;
@@ -1511,10 +1554,10 @@ async function loadChain(key) {
   chainPending.value = true;
   try {
     const body = await getLoraChain(key);
-    if (selectedKey.value !== key) return;
+    if (read !== chainRead) return;
     chain.value = body;
   } catch (err) {
-    if (selectedKey.value !== key) return;
+    if (read !== chainRead) return;
     if (err?.response?.status === 409) {
       chainNoGraph.value = true;
     } else {
@@ -1522,7 +1565,72 @@ async function loadChain(key) {
       chainFailed.value = true;
     }
   } finally {
-    if (selectedKey.value === key) chainPending.value = false;
+    if (read === chainRead) chainPending.value = false;
+  }
+}
+
+// ── The graph's own settings: drop-downs, and Expose a parameter ───────────
+
+/** `GET …/form-inputs` for the selected card: its nodes, and that read's state. */
+const formNodes = ref([]);
+const formPending = ref(false);
+/** Why the nodes could not be read, as the dialog says it; "" when they were. */
+const formFailed = ref("");
+const exposeOpen = ref(false);
+
+/** What ComfyUI offers for each parameter that is a choice there. */
+const formOptions = computed(() => optionsByAddress(formNodes.value));
+const formNodeNames = computed(() => nodesByAddress(formNodes.value));
+
+/** The node an exposed row is a setting of; a computed row needs no telling. */
+function nodeOf(row) {
+  return row.exposed ? formNodeNames.value[parameterAddress(row)] || "" : "";
+}
+
+/**
+ * The nodes with a setting that is not a parameter yet, and only those
+ * settings. Told by the rows on screen rather than the read's own `exposed`,
+ * so a row added or removed since is counted without asking again.
+ */
+const exposable = computed(() => {
+  const rows = new Set(defaults.value.map(parameterAddress));
+  return formNodes.value
+    .map((node) => ({
+      ...node,
+      inputs: node.inputs.filter((input) => !rows.has(parameterAddress(input))),
+    }))
+    .filter((node) => node.inputs.length);
+});
+
+/**
+ * Read the selected card's settable inputs. Its own read for the LoRA
+ * chain's reason: it is typed from the owner's ComfyUI. A failure leaves the
+ * rows as plain boxes, which still set the value. Only the newest read is
+ * kept, as with the chain.
+ */
+let formRead = 0;
+async function loadFormInputs(key) {
+  const read = ++formRead;
+  formNodes.value = [];
+  formFailed.value = "";
+  if (!key) {
+    formPending.value = false;
+    return;
+  }
+  formPending.value = true;
+  try {
+    const body = await getWorkflowFormInputs(key);
+    if (read !== formRead) return;
+    formNodes.value = body.nodes ?? [];
+  } catch (err) {
+    if (read !== formRead) return;
+    console.warn(`[workflows] could not read the form inputs of ${key}`, err);
+    formFailed.value =
+      err?.response?.status === 409
+        ? "PixlStash has no graph for this workflow, so it has no nodes to pick from."
+        : errorMessage(err, "Could not read this workflow's nodes just now.");
+  } finally {
+    if (read === formRead) formPending.value = false;
   }
 }
 
@@ -1893,6 +2001,7 @@ function onOverwritten(key) {
   if (selectedKey.value !== key) return;
   void loadDetail(key);
   void loadChain(key);
+  void loadFormInputs(key);
 }
 
 function closeEditLoras() {
@@ -2275,6 +2384,58 @@ function writeDefault(row, edit = null) {
   });
 }
 
+/**
+ * Expose a parameter: `entry` (`{slot_label, input_name, value}`, the dialog's
+ * pick) becomes one of the workflow's own values, set each run.
+ *
+ * Two whole-set writes, the default and then its pin. If the pin fails the row
+ * is still there, fixed, and its lock frees it.
+ */
+function exposeParameter(entry) {
+  const key = selectedKey.value;
+  exposeOpen.value = false;
+  if (!key) return;
+  return queueWrite("expose", async () => {
+    const rows = defaultsFor(key);
+    if (!rows) return;
+    const address = { slot_label: entry.slot_label, input_name: entry.input_name };
+    const others = (list) =>
+      list
+        .filter(
+          (row) =>
+            row.slot_label !== entry.slot_label ||
+            row.input_name !== entry.input_name,
+        )
+        .map((row) => ({
+          slot_label: row.slot_label,
+          input_name: row.input_name,
+        }));
+    try {
+      const body = await setWorkflowDefaults(key, [
+        ...editedExcept(rows, entry.slot_label, entry.input_name),
+        { ...address, value: entry.value },
+      ]);
+      if (stillOn(key)) detail.value = body;
+      const stored = body.pins;
+      const pins = [
+        ...others(Array.isArray(stored) ? stored : rows.filter((row) => row.pinned)),
+        address,
+      ];
+      const pinned = await setWorkflowPins(key, pins);
+      if (!stillOn(key)) return;
+      detail.value = { ...detail.value, pins: pinned.pins ?? pins };
+      // Under "Set each run" at once: it was not there when the workflow was
+      // opened, so the opened grouping has no place for it.
+      openedPins.value = [
+        ...others(rows.filter((row) => setEachRun(row, openedPins.value))),
+        address,
+      ];
+    } catch (err) {
+      fail(err, `Could not expose ${entry.input_name}.`);
+    }
+  });
+}
+
 /** Pin or unpin one parameter. Whole-set, like the defaults. */
 function togglePin(row) {
   const key = selectedKey.value;
@@ -2459,8 +2620,10 @@ watch(
   selectedKey,
   (key) => {
     othersOpen.value = false;
+    exposeOpen.value = false;
     void loadDetail(key);
     void loadChain(key);
+    void loadFormInputs(key);
   },
   { immediate: true },
 );

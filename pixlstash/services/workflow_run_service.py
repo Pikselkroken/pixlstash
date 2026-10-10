@@ -35,6 +35,7 @@ from pixlstash.services.comfyui_recipe_service import (
     bypass_node,
     bypass_stage,
     detect_seed_targets,
+    find_input_spec,
     listed_options,
     preflight_prompt,
     sanitize_prompt_graph,
@@ -43,12 +44,13 @@ from pixlstash.services.comfyui_recipe_service import (
 from pixlstash.services.comfyui_service import pixlstash_node_refusals
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
+    SECRET_FIELD_RE,
     WorkflowGraphError,
     asset_reference,
     is_link,
     normalized_filename,
 )
-from pixlstash.services.workflow_identity import model_fix_kind
+from pixlstash.services.workflow_identity import CORE_ADDRESS_PREFIX, model_fix_kind
 from pixlstash.services.workflow_io import (
     WorkflowIO,
     api_graph,
@@ -284,18 +286,11 @@ def apply_prompts(graph: dict, prompt: Optional[str], negative: Optional[str]) -
     except WorkflowGraphError as exc:
         logger.info("Prompts not applied, the graph will not reduce: %s", exc)
         detected = WorkflowIO()
-    both = set(detected.positive_prompts) & set(detected.negative_prompts)
     for side, text in (("positive", prompt), ("negative", negative)):
         node_ids = getattr(detected, f"{side}_prompts")
         held = set()
         for node_id in node_ids:
-            # An encoder that makes both sides keeps its negative in a field
-            # of its own; its positive field must not take the negative.
-            fields = (
-                NEGATIVE_FIELDS
-                if side == "negative" and node_id in both
-                else PROMPT_FIELDS
-            )
+            fields = _side_fields(detected, side, node_id)
             inputs = (graph.get(node_id) or {}).get("inputs") or {}
             name = prompt_field(inputs, fields)
             if name is None:
@@ -1716,3 +1711,167 @@ def place_recipe_loras(
             }
         )
     return placements, unplaced
+
+
+def _side_fields(detected: WorkflowIO, side: str, node_id: str) -> tuple[str, ...]:
+    """The inputs a prompt node may keep *side*'s text in.
+
+    An encoder that makes both sides keeps its negative in a field of its own;
+    its positive field must not take the negative.
+    """
+    both = set(detected.positive_prompts) & set(detected.negative_prompts)
+    return NEGATIVE_FIELDS if side == "negative" and node_id in both else PROMPT_FIELDS
+
+
+def _prompt_inputs(graph: dict, detected: WorkflowIO) -> set[tuple[str, str]]:
+    """The ``(node id, input)`` pairs :func:`apply_prompts` writes a prompt into."""
+    found = set()
+    for side in ("positive", "negative"):
+        for node_id in getattr(detected, f"{side}_prompts"):
+            name = prompt_field(
+                (graph.get(node_id) or {}).get("inputs") or {},
+                _side_fields(detected, side, node_id),
+            )
+            if name is not None:
+                found.add(
+                    _literal_prompt_target(graph, node_id, name) or (node_id, name)
+                )
+    return found
+
+
+def _node_title(node: dict) -> str:
+    """The name its author gave a node in ComfyUI, or ``""``."""
+    meta = node.get("_meta")
+    title = meta.get("title") if isinstance(meta, dict) else None
+    return title if isinstance(title, str) else ""
+
+
+# What ComfyUI's `object_info` calls a widget's type, as the form's own kinds.
+# A combo is `choice`; any other type is one the form cannot name.
+_FORM_KINDS = {
+    "INT": "number",
+    "FLOAT": "number",
+    "STRING": "text",
+    "BOOLEAN": "boolean",
+}
+
+
+def form_inputs(
+    graph: dict,
+    labels: dict[str, str],
+    core: dict[str, str],
+    object_info: Optional[dict],
+    exposed: set[tuple[str, str]],
+    max_text: int,
+) -> list[dict]:
+    """The inputs of *graph* a parameter row can set, grouped by node.
+
+    Every literal input a run writes by address (``labels`` / ``core``, as
+    ``_apply_addressed`` reads them), less the ones PixlStash already has a
+    control for or decides itself: the prompts, the seeds, a picture batch, a
+    picture loader, a model or LoRA loader's file and strengths, the save node
+    (a run swaps it) and a credential. A wired input is not a form field, and
+    text of several lines is left out because a row edits one line.
+
+    *exposed* is the addresses that are parameter rows already; those are kept
+    and flagged, so a row can be drawn with its options. An input is addressed
+    the way its row is, else by ``core:`` label when the node has one, since
+    that survives a change of topology. Nodes the graph cannot tell apart share
+    an address, and one write reaches them all, so only the first is listed.
+
+    Returns:
+        ``[{node_id, title, class_type, inputs: [{slot_label, input_name,
+        value, kind, options, exposed}]}]``, in graph order. ``kind`` is
+        ``number`` / ``text`` / ``boolean`` / ``choice`` from *object_info*, or
+        ``None`` where ComfyUI did not answer, does not declare the input, or
+        declares a list it names no choices of.
+    """
+    try:
+        detected = detect_workflow_io(graph)
+    except WorkflowGraphError as exc:
+        logger.info("Form inputs read without prompt or picture detection: %s", exc)
+        detected = WorkflowIO()
+    owned = _prompt_inputs(graph, detected)
+    owned.update(
+        (target["node_id"], target["field"])
+        for target in run_seed_targets(graph, object_info)
+    )
+    owned.update(
+        (str(node_id), widget)
+        for node_id, _class, widget, _value in iter_model_fields_api(graph)
+    )
+
+    seen: set[tuple[str, str]] = set()
+    nodes = []
+    for node_id, node in graph.items():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        node_id = str(node_id)
+        if (
+            not isinstance(inputs, dict)
+            or node_id in detected.save_nodes
+            or node_id in detected.picture_inputs
+            or lora_slot_fields(inputs)
+        ):
+            continue
+        class_type = str(node.get("class_type") or "")
+        # The core address first: it is the one that survives another topology.
+        forms = [
+            form
+            for form in (
+                CORE_ADDRESS_PREFIX + core[node_id] if node_id in core else None,
+                labels.get(node_id),
+            )
+            if form
+        ]
+        found = []
+        for name, value in inputs.items():
+            if (
+                not forms
+                or not isinstance(value, (bool, int, float, str))
+                # The address is `<slot label>/<input name>`, split at the last one.
+                or "/" in name
+                or (node_id, name) in owned
+                # A credential is text; `max_tokens` is a number and stays.
+                or (isinstance(value, str) and SECRET_FIELD_RE.search(name))
+                or model_fix_kind("", name)
+                or is_picture_batch(class_type, name, object_info)
+                # ponytail: one-line text only; a textarea row if prompts of
+                # several lines are to be exposed.
+                or (isinstance(value, str) and (len(value) > max_text or "\n" in value))
+            ):
+                continue
+            row = next((form for form in forms if (form, name) in exposed), None)
+            address = (row or forms[0], name)
+            if address in seen:
+                continue
+            seen.add(address)
+            spec = find_input_spec((object_info or {}).get(class_type), name)
+            options = listed_options(object_info, class_type, name)
+            if options:
+                kind = "choice"
+            elif spec is None:
+                kind = None
+            else:
+                # A list with no choices named (filled at run time, or of
+                # numbers) has no entry here, so it is untyped like the rest.
+                kind = _FORM_KINDS.get(spec[0]) if isinstance(spec[0], str) else None
+            found.append(
+                {
+                    "slot_label": address[0],
+                    "input_name": name,
+                    "value": value,
+                    "kind": kind,
+                    "options": options or None,
+                    "exposed": row is not None,
+                }
+            )
+        if found:
+            nodes.append(
+                {
+                    "node_id": node_id,
+                    "title": _node_title(node) or class_type,
+                    "class_type": class_type,
+                    "inputs": found,
+                }
+            )
+    return nodes

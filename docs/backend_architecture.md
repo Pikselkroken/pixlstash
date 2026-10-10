@@ -777,6 +777,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/{workflow_id}/duplicate                                     | workflows       | Duplicate a workflow                                        |
 | GET    | /api/v1/workflows/{workflow_id}/export                                        | workflows       | Export a workflow                                           |
 | POST   | /api/v1/workflows/{workflow_id}/fixed-copy                                    | workflows       | Save a workflow with this ComfyUI's repairs applied         |
+| GET    | /api/v1/workflows/{workflow_id}/form-inputs                                   | workflows       | The inputs of a workflow a parameter can be made of         |
 | GET    | /api/v1/workflows/{workflow_id}/graph                                         | workflows       | A workflow's runnable graph                                 |
 | PUT    | /api/v1/workflows/{workflow_id}/inputs                                        | workflows       | Set a workflow's picture inputs                             |
 | GET    | /api/v1/workflows/{workflow_id}/lora-chain                                    | workflows       | A workflow's LoRA chain                                     |
@@ -2545,6 +2546,26 @@ variant is in (`RunGroup.workflow_id`); `workflow_key` is no longer a source.
   never touched), `PUT …/pins` (stored as addresses) and `PUT …/inputs`
   (library-keyed). A run reads the picture inputs back by workflow, and puts a
   `core:` address on the run graph's own slot label before filling it.
+- **Any literal input can be a parameter ("Expose a parameter").** A default
+  written at an address its pictures do not vote on is a row of the default
+  recipe like any other (`Default.exposed`), and `_apply_addressed` writes it
+  on every run, so exposing needs no table of its own: it is a `PUT …/defaults`
+  naming the address, plus a pin. `GET …/form-inputs` lists what can be named
+  (`workflow_run_service.form_inputs`, over the graph Run resolves and the
+  labels `_apply_addressed` reads, so a listed address is one a run sets):
+  every literal input, less what PixlStash has a control for or overwrites
+  (prompts, seeds, a picture batch, a picture loader, a model or LoRA
+  loader's file and strengths, the save node, a text credential), text of
+  several lines (a row edits one) and a name holding the address separator.
+  Each carries ComfyUI's type and, for a combo, its options, read from the
+  cached `object_info`; both are null where ComfyUI did not answer or names
+  no choices. **A default keeps its type**: the column is TEXT and `30` reads
+  back as the number, so text that would read back as anything else (a
+  drop-down's `"1024"`, the word `"true"`) is stored as a JSON string
+  (`routes/workflows._stored_value`) and comes back as that text. A new address is the node's
+  `core:` label where it has one, which survives another topology; a slot
+  label on a non-core node goes stale when the graph's topology changes, as
+  any slot-label default does.
 - **Merge and split are removed.** Workflows are automatic; a wrong grouping
   is fixed in the core rule, never by moving a topology by hand.
 - **Removed:** `PUT /workflows/{key}/slots`, `PUT /workflows/{key}/lora-promotion`,

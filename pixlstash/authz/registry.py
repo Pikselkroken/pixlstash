@@ -1820,6 +1820,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="A workflow's pinned parameters; PUT blocked for READ tokens; owner only",
     ),
+    # Expose a parameter: the literal inputs of the workflow's graph, resolved
+    # out of the whole library like the LoRA chain's, with ComfyUI's options.
+    ("GET", "/api/v1/workflows/{workflow_id}/form-inputs"): RoutePolicy(
+        _OWNER,
+        justification="A workflow's graph inputs and their values, resolved from the whole library; owner only",
+    ),
     ("PUT", "/api/v1/workflows/{workflow_id}/inputs"): RoutePolicy(
         _OWNER,
         justification="A workflow's picture-input setup, which names a Fixed picture by content; PUT blocked for READ tokens; owner only",

@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from pixlstash.services import workflow_parameters as wp
+from pixlstash.services import workflow_run_service as run_service
 
 _LATENT_OUT = {"input": {"required": {}}, "output": ["LATENT"]}
 
@@ -151,3 +152,153 @@ def test_a_square_primitive_keeps_driving_the_height_when_only_width_changes():
     wp.set_latent_size(graph, graph["5"], "width", 1216)
     assert graph["5"]["inputs"] == {"width": 1216, "height": ["7", 0], "batch_size": 1}
     assert graph["3"]["inputs"]["seed"] == ["7", 0]
+
+
+# --- the inputs a parameter can be made of ---------------------------------
+
+_FORM_GRAPH = {
+    "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "Base.safetensors"},
+    },
+    "2": {
+        "class_type": "LoraLoader",
+        "inputs": {"lora_name": "Style.safetensors", "strength_model": 0.8},
+    },
+    "3": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 7,
+            "steps": 20,
+            "model": ["2", 0],
+            "positive": ["6", 0],
+            "latent_image": ["5", 0],
+        },
+    },
+    "5": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 512, "height": 512, "batch_size": 4},
+    },
+    "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "a cat", "clip": ["2", 1]},
+    },
+    "8": {
+        "class_type": "ImageScaleBy",
+        "_meta": {"title": "Final upscale"},
+        "inputs": {
+            "upscale_method": "lanczos",
+            "scale_by": 1.5,
+            "image": ["3", 0],
+        },
+    },
+    "9": {
+        "class_type": "SomePackNode",
+        "inputs": {
+            "api_key": "example-not-a-key",
+            "max_tokens": 77,
+            "notes": "x" * 50,
+            "mode": {"nested": True},
+            "verse": "one line\nand another",
+            "a/b": 1,
+            "ratio": 2,
+        },
+    },
+    "10": {"class_type": "LoadImage", "inputs": {"image": "in.png", "upload": "image"}},
+    # Told apart from node 8 by nothing the labels below can see.
+    "11": {
+        "class_type": "ImageScaleBy",
+        "inputs": {"upscale_method": "bicubic", "scale_by": 3.0, "image": ["10", 0]},
+    },
+    "4": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "P", "images": ["8", 0]},
+    },
+}
+_FORM_INFO = {
+    "KSampler": {
+        "input": {
+            "required": {
+                "seed": ["INT", {"control_after_generate": True}],
+                "steps": ["INT", {}],
+            }
+        }
+    },
+    "ImageScaleBy": {
+        "input": {
+            "required": {
+                "upscale_method": [["nearest-exact", "lanczos"], {}],
+                "scale_by": ["FLOAT", {}],
+            }
+        }
+    },
+}
+
+
+def _form(object_info=_FORM_INFO, exposed=(), core=None, max_text=2000):
+    labels = {node_id: f"label-{node_id}" for node_id in _FORM_GRAPH}
+    labels["11"] = labels["8"]
+    nodes = run_service.form_inputs(
+        _FORM_GRAPH, labels, core or {}, object_info, set(exposed), max_text
+    )
+    return {
+        (node["node_id"], row["input_name"]): {**row, "title": node["title"]}
+        for node in nodes
+        for row in node["inputs"]
+    }
+
+
+def test_form_inputs_leave_out_what_pixlstash_already_sets():
+    """Wrong if a prompt, seed, batch, model, LoRA, saver, picture or key is offered.
+
+    Nor text of several lines (a row edits one), a name the address cannot
+    carry, or the twin of a node already listed: one write reaches both.
+    """
+    rows = _form()
+    assert set(rows) == {
+        ("3", "steps"),
+        ("5", "width"),
+        ("5", "height"),
+        ("8", "upscale_method"),
+        ("8", "scale_by"),
+        ("9", "max_tokens"),
+        ("9", "notes"),
+        ("9", "ratio"),
+    }
+    # Text longer than a default may hold could not be stored, so is not offered.
+    assert ("9", "notes") not in _form(max_text=10)
+
+
+def test_form_inputs_are_typed_and_listed_from_object_info():
+    rows = _form()
+    method = rows[("8", "upscale_method")]
+    assert (method["kind"], method["options"], method["value"]) == (
+        "choice",
+        ["nearest-exact", "lanczos"],
+        "lanczos",
+    )
+    assert method["title"] == "Final upscale"
+    assert rows[("8", "scale_by")]["kind"] == "number"
+    # A node ComfyUI does not declare, and any node when it did not answer.
+    assert rows[("9", "max_tokens")]["kind"] is None
+    # A list of numbers names no choice a row could offer: untyped, not text.
+    listed = {"SomePackNode": {"input": {"required": {"ratio": [[1, 2, 4], {}]}}}}
+    ratio = _form(object_info=listed)[("9", "ratio")]
+    assert (ratio["kind"], ratio["options"]) == (None, None)
+    offline = _form(object_info=None)[("8", "upscale_method")]
+    assert (offline["kind"], offline["options"]) == (None, None)
+
+
+def test_form_inputs_are_addressed_as_their_row_is_else_by_core():
+    core = {"8": "c8", "3": "c3"}
+    rows = _form(core=core, exposed={("label-3", "steps"), ("core:c8", "scale_by")})
+    # A row keeps the address it was written at, either spelling.
+    assert (rows[("3", "steps")]["slot_label"], rows[("3", "steps")]["exposed"]) == (
+        "label-3",
+        True,
+    )
+    assert rows[("8", "scale_by")]["exposed"] is True
+    # A new one takes the core address where the node has one.
+    method = rows[("8", "upscale_method")]
+    assert (method["slot_label"], method["exposed"]) == ("core:c8", False)
+    assert rows[("9", "max_tokens")]["slot_label"] == "label-9"

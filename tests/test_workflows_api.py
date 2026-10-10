@@ -189,6 +189,8 @@ _WORKFLOW_ROUTES = (
     # LoRA each loader loads, and the owner's ComfyUI behind it.
     ("GET", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("GET", "/api/v1/workflows/{workflow_id}/lora-summary"),
+    # Expose a parameter: the same graph's literal inputs and their values.
+    ("GET", "/api/v1/workflows/{workflow_id}/form-inputs"),
     # Open in ComfyUI: the same graph unscrubbed, so owner-only for the same
     # reason and with even more to lose.
     ("GET", "/api/v1/workflows/{workflow_id}/graph"),
@@ -1025,6 +1027,10 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
             API + "/workflows/{workflow_id}/graph",
         ),
         (
+            f"{API}/workflows/{BUSY_WF}/form-inputs",
+            API + "/workflows/{workflow_id}/form-inputs",
+        ),
+        (
             f"{API}/workflows/{BUSY_WF}/model-swap",
             API + "/workflows/{workflow_id}/model-swap",
         ),
@@ -1052,6 +1058,10 @@ _TEMPLATED_PATHS = (
     # with most to lose from the rollback.
     (f"{API}/workflows/{BUSY_WF}/export", API + "/workflows/{workflow_id}/export"),
     (f"{API}/workflows/{BUSY_WF}/graph", API + "/workflows/{workflow_id}/graph"),
+    (
+        f"{API}/workflows/{BUSY_WF}/form-inputs",
+        API + "/workflows/{workflow_id}/form-inputs",
+    ),
 )
 
 
@@ -6187,6 +6197,12 @@ _EVERY_WORKFLOW_ROUTE = (
     ),
     (
         "GET",
+        "/workflows/{workflow_id}/form-inputs",
+        f"/workflows/{BUSY_WF}/form-inputs",
+        None,
+    ),
+    (
+        "GET",
         "/workflows/{workflow_id}/model-swap",
         f"/workflows/{BUSY_WF}/model-swap",
         None,
@@ -8707,6 +8723,99 @@ def test_a_sampler_this_comfyui_lacks_is_offered_a_replacement(runnable):
     assert r.json()["groups"][0]["reasons"] == [], r.json()
     inputs = runnable.submitted[0]["graph"]["3"]["inputs"]
     assert (inputs["sampler_name"], inputs["scheduler"]) == ("euler", "normal")
+
+
+def test_an_input_nothing_maps_is_offered_and_a_run_sets_it_once_exposed(runnable):
+    """Expose a parameter, end to end: listed, written as a default, run.
+
+    Wrong if the upscale node is missing from the list, if the prompt or the
+    sampler's seed is in it, or if the run submits the graph's own 1.5.
+    """
+    document = json.loads(json.dumps(RUN_DOCUMENT))
+    document["3"]["inputs"].update({"steps": 13, "cfg": 1.5, "seed": 5})
+    document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    document["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    document["2"]["inputs"].update({"strength_model": 1.0, "strength_clip": 1.0})
+    document["4"]["inputs"] = {"filename_prefix": "P", "images": ["8", 0]}
+    document["8"] = {
+        "class_type": "ImageScaleBy",
+        "inputs": {"upscale_method": "lanczos", "scale_by": 1.5, "image": ["3", 0]},
+    }
+    manual = create_manual_workflow(runnable.server.hub, "Scaled", document, "import")
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["ImageScaleBy"] = {
+        "input": {
+            "required": {
+                "image": ["IMAGE", {}],
+                "upscale_method": [["nearest-exact", "lanczos"], {}],
+                "scale_by": ["FLOAT", {"default": 1.0}],
+            }
+        },
+        "output": ["IMAGE"],
+    }
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (info, None)
+    )
+
+    def form() -> dict:
+        r = runnable.owner.get(f"{API}/workflows/{manual}/form-inputs")
+        assert r.status_code == 200, r.text
+        return {
+            (node["class_type"], row["input_name"]): row
+            for node in r.json()["nodes"]
+            for row in node["inputs"]
+        }
+
+    listed = form()
+    # The sampler's steps and cfg are parameters already; its seed, the
+    # checkpoint, the LoRA loader and the saver are PixlStash's own.
+    assert {key for key, row in listed.items() if not row["exposed"]} == {
+        ("ImageScaleBy", "upscale_method"),
+        ("ImageScaleBy", "scale_by"),
+    }, listed
+    assert {key for key, row in listed.items() if row["exposed"]} == {
+        ("KSampler", "steps"),
+        ("KSampler", "cfg"),
+    }
+    scale = listed[("ImageScaleBy", "scale_by")]
+    assert (scale["value"], scale["kind"]) == (1.5, "number")
+    assert listed[("ImageScaleBy", "upscale_method")]["options"] == [
+        "nearest-exact",
+        "lanczos",
+    ]
+
+    address = {k: scale[k] for k in ("slot_label", "input_name")}
+    steps = {k: listed[("KSampler", "steps")][k] for k in ("slot_label", "input_name")}
+    method = {
+        k: listed[("ImageScaleBy", "upscale_method")][k]
+        for k in ("slot_label", "input_name")
+    }
+    r = runnable.owner.put(
+        f"{API}/workflows/{manual}/defaults",
+        json={
+            "defaults": [
+                {**address, "value": 2.5},
+                {**steps, "value": 9},
+                # Text that looks like a number is still text on the way back.
+                {**method, "value": "1024"},
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    rows = {v["input_name"]: v for v in r.json()["card"]["default_recipe"]["values"]}
+    row = rows["scale_by"]
+    assert (row["value"], row["provenance"], row["exposed"]) == (2.5, "edited", True)
+    # An edit of a parameter the graph votes on is the owner's value, and
+    # still not a parameter the owner added.
+    assert (rows["steps"]["provenance"], rows["steps"]["exposed"]) == ("edited", False)
+    assert rows["cfg"]["exposed"] is False
+    assert rows["upscale_method"]["value"] == "1024"
+    assert form()[("ImageScaleBy", "scale_by")]["exposed"] is True
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": manual})
+    assert r.status_code == 200 and runnable.submitted, r.text
+    ran = runnable.submitted[0]["graph"]["8"]["inputs"]
+    assert (ran["scale_by"], ran["upscale_method"]) == (2.5, "1024")
 
 
 @pytest.fixture

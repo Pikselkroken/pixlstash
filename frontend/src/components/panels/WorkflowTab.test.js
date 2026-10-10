@@ -22,6 +22,7 @@ const setWorkflowDefaults = vi.fn();
 const setWorkflowPins = vi.fn();
 const getLoraSummary = vi.fn();
 const getLoraChain = vi.fn();
+const getWorkflowFormInputs = vi.fn();
 const readModelSwap = vi.fn();
 const setWorkflowModelFix = vi.fn();
 const setWorkflowDefaultLora = vi.fn();
@@ -38,6 +39,7 @@ vi.mock("../../api/workflows", () => ({
   // throws in the render and every assertion in the file goes with it.
   workflowCoverUrl: (cover) => cover?.url ?? "",
   getLoraChain: (...args) => getLoraChain(...args),
+  getWorkflowFormInputs: (...args) => getWorkflowFormInputs(...args),
   readModelSwap: (...args) => readModelSwap(...args),
   setWorkflowModelFix: (...args) => setWorkflowModelFix(...args),
   setWorkflowDefaultLora: (...args) => setWorkflowDefaultLora(...args),
@@ -332,6 +334,7 @@ beforeEach(() => {
   setWorkflowDefaultLora.mockReset().mockResolvedValue(detail());
   getLoraSummary.mockReset().mockResolvedValue(loraSummary());
   getLoraChain.mockReset().mockResolvedValue(loraChain());
+  getWorkflowFormInputs.mockReset().mockResolvedValue({ nodes: [] });
   replace.mockReset();
   preflightWorkflowRun.mockReset().mockResolvedValue({ groups: [] });
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2834,6 +2837,10 @@ describe("the LoRA chain (#1478)", () => {
     store.cards = [card()];
     store.selectedKeys = keys;
     const wrapper = mount(WorkflowTab, chainOpts);
+    // Unmounted with the rest. Left mounted, a rail with Edit LoRAs… open
+    // re-renders when its pre-flight lands, by then under a later test's
+    // stubs, which mounts the real dialog with no Vuetify to mount it in.
+    mounted.push(wrapper);
     await flush(wrapper);
     return { wrapper, store };
   }
@@ -3013,5 +3020,204 @@ describe("the LoRA chain (#1478)", () => {
     expect(dialog.props("dropLora")).toBe("hairstyle-v3.safetensors");
     // One-shot: taken off the URL so a reload does not reopen it.
     expect(replace).toHaveBeenCalledWith({ query: { workflow: OTHER } });
+  });
+});
+
+describe("expose a parameter", () => {
+  const SCALE = { slot_label: "core:up", input_name: "scale_by" };
+  const NODES = [
+    {
+      node_id: "3",
+      title: "KSampler",
+      class_type: "KSampler",
+      inputs: [
+        // A row already, and a choice: its options feed the row's list.
+        {
+          ...SAMPLER,
+          kind: "choice",
+          options: ["euler", "dpmpp_2m"],
+          exposed: true,
+        },
+      ],
+    },
+    {
+      node_id: "8",
+      title: "Final upscale",
+      class_type: "ImageScaleBy",
+      inputs: [{ ...SCALE, value: 1.5, kind: "number", options: null, exposed: false }],
+    },
+  ];
+  const dialog = (wrapper) =>
+    wrapper.findComponent({ name: "ExposeParameterDialog" });
+  const stubbed = {
+    global: {
+      stubs: { ...globalOpts.global.stubs, ExposeParameterDialog: true },
+    },
+  };
+
+  async function mountExposing(shown, refused = null) {
+    getWorkflowCard.mockResolvedValue(shown);
+    if (refused) getWorkflowFormInputs.mockRejectedValue(refused);
+    else getWorkflowFormInputs.mockResolvedValue({ nodes: NODES });
+    const store = useWorkflowsStore();
+    store.cards = [card()];
+    store.selectedKeys = [KEY];
+    const wrapper = mount(WorkflowTab, stubbed);
+    mounted.push(wrapper);
+    await flush(wrapper);
+    return wrapper;
+  }
+
+  it("offers the nodes' settings that are not parameters yet, and only those", async () => {
+    const wrapper = await mountExposing(
+      detail({ card: { defaults: [STEPS, SAMPLER] } }),
+    );
+    expect(getWorkflowFormInputs).toHaveBeenCalledWith(KEY);
+    expect(dialog(wrapper).exists()).toBe(false);
+    await wrapper.find("[data-testid='wftab-expose']").trigger("click");
+    // The sampler node holds nothing but a row, so it is not offered at all.
+    expect(dialog(wrapper).props("nodes")).toEqual([NODES[1]]);
+  });
+
+  it("writes the pick as the workflow's own value and sets it each run", async () => {
+    const exposed = {
+      ...SCALE,
+      label: "scale_by",
+      value: 1.5,
+      provenance: "edited",
+      exposed: true,
+    };
+    const wrapper = await mountExposing(
+      detail({ card: { defaults: [STEPS, CFG, SAMPLER] } }),
+    );
+    setWorkflowDefaults.mockResolvedValue(
+      detail({ card: { defaults: [STEPS, CFG, SAMPLER, exposed] } }),
+    );
+    setWorkflowPins.mockImplementation(async (_key, pins) => ({ pins }));
+    await wrapper.find("[data-testid='wftab-expose']").trigger("click");
+    dialog(wrapper).vm.$emit("expose", { ...SCALE, value: 1.5 });
+    await flush(wrapper);
+    // Whole-set: the edit that was there goes back with it.
+    expect(setWorkflowDefaults).toHaveBeenCalledWith(KEY, [
+      { slot_label: "slot-a", input_name: "cfg", value: "7.5" },
+      { ...SCALE, value: 1.5 },
+    ]);
+    // And the pins nobody had chosen are written out, with it among them.
+    expect(setWorkflowPins).toHaveBeenCalledWith(KEY, [
+      { slot_label: "slot-a", input_name: "steps" },
+      { slot_label: "slot-a", input_name: "cfg" },
+      SCALE,
+    ]);
+    expect(dialog(wrapper).exists()).toBe(false);
+    expect(lockOf(wrapper, "scale_by").attributes("aria-pressed")).toBe("false");
+    expect(inFixedGroup(wrapper, "scale_by")).toBe(false);
+    // Named after its setting alone, so the row says which node's it is; a
+    // parameter the pictures vote on needs no telling, though its node is
+    // in the same read.
+    expect(rowNamed(wrapper, "scale_by").find(".wfdef-node").text()).toBe("Final upscale");
+    expect(rowNamed(wrapper, "sampler_name").find(".wfdef-node").exists()).toBe(false);
+    // Its ↺ would have nothing to go back to: the button removes the row.
+    expect(
+      rowNamed(wrapper, "scale_by").find("[data-testid='wfdef-reset']").attributes("aria-label"),
+    ).toBe("Remove scale_by from the parameters");
+    expect(
+      rowNamed(wrapper, "cfg").find("[data-testid='wfdef-reset']").attributes("aria-label"),
+    ).toBe("Put cfg back to what your pictures say");
+    // It is a row now, so there is nothing left to offer.
+    await wrapper.find("[data-testid='wftab-expose']").trigger("click");
+    expect(dialog(wrapper).props("nodes")).toEqual([]);
+  });
+
+  it("draws a choice set each run as a list of ComfyUI's options", async () => {
+    const wrapper = await mountExposing(
+      detail({
+        card: { defaults: [STEPS, { ...SAMPLER, value: "res_2s" }] },
+        pins: [{ slot_label: SAMPLER.slot_label, input_name: SAMPLER.input_name }],
+      }),
+    );
+    const list = rowNamed(wrapper, "sampler_name").find(
+      "[data-testid='wfdef-select'] select",
+    );
+    // Its own value stays listed though this ComfyUI does not offer it.
+    expect(list.findAll("option").map((o) => o.text())).toEqual([
+      "res_2s",
+      "euler",
+      "dpmpp_2m",
+    ]);
+    // A number is still typed.
+    expect(rowNamed(wrapper, "steps").find("[data-testid='wfdef-select']").exists()).toBe(false);
+    await list.setValue("euler");
+    await flush(wrapper);
+    expect(setWorkflowDefaults).toHaveBeenCalledWith(KEY, [
+      { slot_label: SAMPLER.slot_label, input_name: "sampler_name", value: "euler" },
+    ]);
+  });
+
+  it("offers an on-or-off value as the two words, and writes the value they mean", async () => {
+    const tiled = {
+      label: "tiled",
+      slot_label: "core:up",
+      input_name: "tiled",
+      value: true,
+      provenance: "edited",
+      exposed: true,
+    };
+    const wrapper = await mountExposing(
+      detail({
+        card: { defaults: [STEPS, tiled] },
+        pins: [{ slot_label: "core:up", input_name: "tiled" }],
+      }),
+    );
+    const list = rowNamed(wrapper, "tiled").find("[data-testid='wfdef-select'] select");
+    expect(list.findAll("option").map((o) => o.text())).toEqual(["true", "false"]);
+    await list.setValue("false");
+    await flush(wrapper);
+    // The boolean, never the word: ComfyUI reads the text "false" as on.
+    expect(setWorkflowDefaults).toHaveBeenCalledWith(KEY, [
+      { slot_label: "core:up", input_name: "tiled", value: false },
+    ]);
+  });
+
+  it("keeps the newest read of a workflow when an older one of it lands last", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { defaults: [STEPS] } }));
+    // Left and come back to before the first answers: two reads of one key.
+    const late = {};
+    getWorkflowFormInputs
+      .mockImplementationOnce(() => new Promise((_, reject) => (late.form = reject)))
+      .mockResolvedValue({ nodes: NODES });
+    getLoraChain
+      .mockImplementationOnce(() => new Promise((_, reject) => (late.chain = reject)))
+      .mockResolvedValue(loraChain());
+    const store = useWorkflowsStore();
+    store.cards = [card()];
+    store.selectedKeys = [KEY];
+    const wrapper = mount(WorkflowTab, stubbed);
+    mounted.push(wrapper);
+    await flush(wrapper);
+    store.selectedKeys = [];
+    await flush(wrapper);
+    store.selectedKeys = [KEY];
+    await flush(wrapper);
+    // The first reads fail now, after the second ones were answered.
+    late.form(new Error("gone"));
+    late.chain(new Error("gone"));
+    await flush(wrapper);
+    await wrapper.find("[data-testid='wftab-expose']").trigger("click");
+    expect(dialog(wrapper).props("failed")).toBe("");
+    expect(dialog(wrapper).props("nodes")).toHaveLength(2);
+    expect(wrapper.vm.chainFailed).toBe(false);
+    expect(wrapper.vm.chain).not.toBeNull();
+  });
+
+  it("says why when the workflow has no graph to pick from", async () => {
+    const wrapper = await mountExposing(
+      detail({ card: { defaults: [STEPS] } }),
+      { response: { status: 409 } },
+    );
+    // The rows are untouched by the failed read: still plain boxes.
+    expect(rowNamed(wrapper, "steps").find("[data-testid='wfdef-input']").exists()).toBe(true);
+    await wrapper.find("[data-testid='wftab-expose']").trigger("click");
+    expect(dialog(wrapper).props("failed")).toContain("has no graph");
+    expect(dialog(wrapper).props("nodes")).toEqual([]);
   });
 });

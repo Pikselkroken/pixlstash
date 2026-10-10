@@ -2354,6 +2354,28 @@ can no longer see.
   as the value's own type and written as an edit through the whole-set
   `PUT …/defaults`, so it reads "Yours" and locking keeps it; a value that
   does not parse is put back. A fixed row's value stays text.
+  **A value ComfyUI lists the choices of is a drop-down** (`AppSelect`, on a
+  line of its own under the name: half the rail clips a sampler's name). The
+  options come from `GET …/form-inputs`, read beside the detail on every
+  selection (`formOptions`, `utils/workflowPins.js::choicesFor`, which keeps
+  the row's own value listed where this ComfyUI no longer offers it); a
+  failed read leaves the rows typed. An on-or-off value is the same list
+  with `true` and `false`, written as the boolean. The Run popup reads the
+  same route for its set-each-run rows, and its `coerce` turns the two words
+  into the boolean, which as text ComfyUI would read as on.
+  **Expose a parameter** is the `+` in the Parameters head
+  (`io/ExposeParameterDialog.vue`): a node, one of its settings, and its type
+  only where ComfyUI did not say (`kind: null`; the graph's value is then
+  read as the type picked). It lists the same read less the addresses that
+  are rows already, told by the rows on screen. The pick is two whole-set
+  writes queued as one, `PUT …/defaults` with the address at the graph's own
+  value and `PUT …/pins` with it set each run; the row is added to
+  `openedPins` so it shows under *Set each run* at once. Such a row is
+  `exposed`: its ↺ is a ✕, "Remove <name> from the parameters", since
+  clearing the edit takes the row away, and it carries its node's name under
+  its own (`nodesByAddress`, the dialog's naming), because a row is labelled
+  by its setting alone and two nodes can each have a `text`. The Run popup
+  puts the same name after the field's label.
   A LoRA goes INTO the default recipe from the pile: each ALSO USED fan row
   the summary gives a `sha256` (the one shelf file it is, the route's own
   resolution) has **Add to default** (`PUT …/default-lora`,

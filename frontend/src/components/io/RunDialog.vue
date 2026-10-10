@@ -458,6 +458,11 @@
         >
           <span class="rund-l">
             {{ field.label }}
+            <!-- A parameter the owner added is named after its setting alone:
+                 the node says which of two "text"s this is. -->
+            <span v-if="field.exposed && formNodeNames[address(field)]">
+              · {{ formNodeNames[address(field)] }}
+            </span>
             <RunResetChip
               v-if="isEdited(field)"
               :value="baseOf(field)"
@@ -465,7 +470,21 @@
               @reset="resetValue(field)"
             />
           </span>
+          <!-- A value ComfyUI lists the choices of (a sampler, an exposed
+               drop-down) is picked from them; any other is typed. -->
+          <AppSelect
+            v-if="choicesFor(formOptions, field, currentValue(field))"
+            :model-value="String(currentValue(field))"
+            :label="field.label"
+            hide-label
+            compact
+            :options="choicesFor(formOptions, field, currentValue(field))"
+            :disabled="submitting"
+            data-testid="rund-param-choice"
+            @update:model-value="(v) => typeValue(field, v)"
+          />
           <AppInput
+            v-else
             :model-value="String(currentValue(field))"
             :aria-label="field.label"
             :disabled="submitting"
@@ -848,6 +867,7 @@ import { stackMemberIds } from "../../utils/stackMembers";
 import { listSavedRecipes } from "../../api/recipes";
 import {
   getWorkflowCard,
+  getWorkflowFormInputs,
   listWorkflowCards,
   preflightWorkflowRun,
   readModelSwap,
@@ -867,7 +887,12 @@ import { namesWord, triggerWord } from "../../utils/triggerWords";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { labelPrompts, runTaskLabel } from "../../utils/runTaskLabel";
 import { UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
-import { setEachRun } from "../../utils/workflowPins";
+import {
+  choicesFor,
+  nodesByAddress,
+  optionsByAddress,
+  setEachRun,
+} from "../../utils/workflowPins";
 import {
   changesNodes,
   MISSING_CHOICES,
@@ -956,6 +981,10 @@ const card = ref(null);
  * choice made, so the shared default set applies (`setEachRun`).
  */
 const pins = ref(null);
+/** What ComfyUI offers for each of the card's parameters that is a choice. */
+const formOptions = ref({});
+/** The node each parameter is a setting of, for the ones the owner added. */
+const formNodeNames = ref({});
 /** The address "Set each run" is writing, and what went wrong if it failed. */
 const freeing = ref("");
 const fixedSummary = ref(null);
@@ -1683,6 +1712,12 @@ function isEdited(field) {
  * answer, since `JSON.stringify(NaN)` is `null` and `RunValue` refuses it.
  */
 function coerce(field, raw) {
+  // On or off: the word is the value, and any other word is not one. Sent as
+  // text, ComfyUI would read "false" as on.
+  if (typeof baseOf(field) === "boolean") {
+    const word = String(raw ?? "").trim();
+    return word === "true" ? true : word === "false" ? false : undefined;
+  }
   if (typeof baseOf(field) !== "number") return raw;
   const text = String(raw ?? "").trim();
   if (!text) return undefined;
@@ -2999,6 +3034,20 @@ async function loadCard(key, { keepEdits = false } = {}) {
   // A popup reopened on another source while this read was out has its own
   // card; this one's answer must not replace it.
   const token = loadToken;
+  formOptions.value = {};
+  formNodeNames.value = {};
+  // Beside the card, never ahead of it: the options only turn a typed box
+  // into a list, so a ComfyUI that does not answer leaves the boxes typed.
+  getWorkflowFormInputs(key)
+    .then((body) => {
+      if (token === loadToken && key === activeKey.value) {
+        formOptions.value = optionsByAddress(body.nodes);
+        formNodeNames.value = nodesByAddress(body.nodes);
+      }
+    })
+    .catch((err) => {
+      console.warn(`[run] could not read the choices of ${key}`, err);
+    });
   const detail = await getWorkflowCard(key);
   if (token !== loadToken) return;
   const next = detail?.card || null;
