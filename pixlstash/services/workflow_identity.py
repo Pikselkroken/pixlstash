@@ -157,6 +157,10 @@ PLUMBING = "plumbing"
 UPSCALE = "upscale"
 FACE_DETAILER = "face_detailer"
 SEED_VARIANCE = "seed_variance"
+# A save of what the graph goes on to sample again (the first pass's picture).
+# Read off the wiring by :func:`intermediate_saves`, not by class, so
+# :func:`node_groups` never answers it.
+INTERMEDIATE_SAVE = "intermediate_save"
 POST_PROCESS = "post_process"
 LORA = "lora"
 
@@ -593,7 +597,7 @@ def unswapped(
 # The post-processing groups a card says it has, in the order a name lists
 # them. A tuple and not the set itself: the cached value is a string, and two
 # derivations of one topology have to compare equal byte for byte.
-SPECIAL_GROUPS = (UPSCALE, FACE_DETAILER, SEED_VARIANCE)
+SPECIAL_GROUPS = (UPSCALE, FACE_DETAILER, SEED_VARIANCE, INTERMEDIATE_SAVE)
 
 # A class that only LOADS the thing, and so is not on its own evidence the
 # graph does it. `node_groups` groups these with the work they feed because it
@@ -625,7 +629,42 @@ def special_groups(document: dict) -> tuple[str, ...]:
         if group in SPECIAL_GROUPS
         and not _LOADER_CLASS_RE.search(nodes[node_id].class_type)
     }
+    if intermediate_saves(nodes):
+        present.add(INTERMEDIATE_SAVE)
     return tuple(group for group in SPECIAL_GROUPS if group in present)
+
+
+# How a graph upscales, in the order a description lists them.
+UPSCALE_ULTIMATE_SD = "ultimate_sd"
+UPSCALE_MODEL = "model"
+UPSCALE_LATENT = "latent"
+UPSCALE_RESIZE = "resize"
+
+
+def upscale_kinds(document: dict) -> tuple[str, ...]:
+    """How this stored document's upscale stage upscales; empty when it has none.
+
+    The stage is one checkbox whatever it does, and a tiled diffusion upscale
+    is not a resize: this is what the owner is switching on or off. A plain
+    resize is named only when nothing else upscales, since a 4x model is
+    commonly scaled back down by one.
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph rather than a stored one.
+    """
+    classes = {node.class_type for node in _reduce(document).values()}
+    kinds = [
+        kind
+        for kind, prefix in (
+            (UPSCALE_ULTIMATE_SD, "UltimateSDUpscale"),
+            (UPSCALE_MODEL, "ImageUpscaleWithModel"),
+            (UPSCALE_LATENT, "LatentUpscale"),
+        )
+        if any(cls.startswith(prefix) for cls in classes)
+    ]
+    if not kinds and any(cls.startswith("ImageScale") for cls in classes):
+        kinds.append(UPSCALE_RESIZE)
+    return tuple(kinds)
 
 
 # What a graph's core DOES that a generated name cannot otherwise say (#1722):
@@ -1013,11 +1052,47 @@ def _core_v4(
       is never one;
     * a likeness gate is stripped where the graph samples, as a filter is;
     * a sink that saves what the graph goes on to sample is dropped
-      (:func:`_final_sinks`), and dead nodes pruned again (:func:`_prune`,
-      with its refusal);
+      (:func:`_saves_along_the_way`; the :data:`INTERMEDIATE_SAVE` stage where
+      a sampler made its picture), and dead nodes pruned again
+      (:func:`_prune`, with its refusal);
     * the PixlStash picture loader reads as ``LoadImage``, and a checkpoint
       loader nothing reads a CLIP or VAE from as ``UNETLoader``: it loads a
       model, which is all the other does.
+    """
+    stripped = _v4_strip(nodes)
+    along_the_way, unsampled = _saves_along_the_way(stripped)
+    kept, pruned, refused = _prune(
+        {
+            node_id: node
+            for node_id, node in stripped.items()
+            if node_id not in along_the_way | unsampled
+        }
+    )
+    slots_read: dict[str, set[int]] = {}
+    for node in kept.values():
+        for _, source, slot in node.inputs:
+            slots_read.setdefault(source, set()).add(slot)
+
+    def stock(node_id: str, class_type: str) -> str:
+        if class_type == "CheckpointLoaderSimple" and slots_read.get(node_id) == {0}:
+            return "UNETLoader"
+        return _V4_CANONICAL_CLASSES.get(class_type, class_type)
+
+    return (
+        {
+            node_id: ReducedNode(stock(node_id, n.class_type), n.widgets, n.inputs)
+            for node_id, n in kept.items()
+        },
+        pruned,
+        refused,
+    )
+
+
+def _v4_strip(nodes: dict[str, ReducedNode]) -> dict[str, ReducedNode]:
+    """The v3 core without filing wires, seed nodes, model patches and gates.
+
+    :func:`_core_v4`'s first three steps, apart so the intermediate-save stage
+    (:func:`intermediate_saves`) reads the graph the core drops its saves from.
     """
     nodes = {
         node_id: ReducedNode(
@@ -1049,36 +1124,32 @@ def _core_v4(
         gate = sampled and node.class_type in _LIKENESS_GATE_CLASSES
         if patch or gate or node.class_type in _V4_PLUMBING_CLASSES:
             groups[node_id] = PLUMBING
-    kept, pruned, refused = _prune(
-        _final_sinks(_strip(nodes, {PLUMBING}, groups=groups))
-    )
-    slots_read: dict[str, set[int]] = {}
-    for node in kept.values():
-        for _, source, slot in node.inputs:
-            slots_read.setdefault(source, set()).add(slot)
-
-    def stock(node_id: str, class_type: str) -> str:
-        if class_type == "CheckpointLoaderSimple" and slots_read.get(node_id) == {0}:
-            return "UNETLoader"
-        return _V4_CANONICAL_CLASSES.get(class_type, class_type)
-
-    return (
-        {
-            node_id: ReducedNode(stock(node_id, n.class_type), n.widgets, n.inputs)
-            for node_id, n in kept.items()
-        },
-        pruned,
-        refused,
-    )
+    return _strip(nodes, {PLUMBING}, groups=groups)
 
 
-def _final_sinks(nodes: dict[str, ReducedNode]) -> dict[str, ReducedNode]:
-    """*nodes* without the sinks that save something the graph samples further.
+def intermediate_saves(nodes: dict[str, ReducedNode]) -> set[str]:
+    """The nodes of a reduced graph, raw or stored, in its intermediate-save stage.
 
-    A sink whose upstream samplers are a strict part of another sink's is a
-    save along the way (the picture before the second pass, or one no sampler
-    made), not another result. Two sinks of one sampler's output are both
-    final, and a graph that does not sample keeps every sink.
+    The saves the core drops because the graph samples their picture again
+    (:func:`_saves_along_the_way`), read off the same strip as the core, so a
+    graph has the stage exactly when its core lost such a save. Empty for a
+    graph that does not sample.
+    """
+    if not has_sampler(nodes):
+        return set()
+    core = _core_of(nodes, True, rule=3)[0]
+    return _saves_along_the_way(_v4_strip(core))[0]
+
+
+def _saves_along_the_way(nodes: dict[str, ReducedNode]) -> tuple[set[str], set[str]]:
+    """``(saves of what the graph samples again, sinks no sampler made)``.
+
+    Neither is a result of the graph, so both are off the core. A sink whose
+    upstream samplers are a strict part of another sink's saves a picture
+    along the way: the :data:`INTERMEDIATE_SAVE` stage when a sampler made it
+    (the picture before the second pass), plain bookkeeping when none did (a
+    prompt written to a file). Two sinks of one sampler's output are both
+    results, and a graph that does not sample keeps every sink.
     """
     read = {source for node in nodes.values() for _, source, _ in node.inputs}
     samplers: dict[str, set[str]] = {}
@@ -1096,12 +1167,13 @@ def _final_sinks(nodes: dict[str, ReducedNode]) -> dict[str, ReducedNode]:
         samplers[node_id] = {
             i for i in seen if _SAMPLER_CLASS_RE.search(nodes[i].class_type)
         }
-    return {
-        node_id: node
-        for node_id, node in nodes.items()
-        if node_id not in samplers
-        or not any(samplers[node_id] < other for other in samplers.values())
+    dropped = {
+        node_id
+        for node_id, mine in samplers.items()
+        if any(mine < other for other in samplers.values())
     }
+    staged = {node_id for node_id in dropped if samplers[node_id]}
+    return staged, dropped - staged
 
 
 def _prune(

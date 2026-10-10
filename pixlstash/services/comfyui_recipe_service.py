@@ -1998,6 +1998,9 @@ def bypass_node(prompt_graph: dict, node_id: str, object_info: dict) -> None:
 def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict]:
     """Switch one optional stage (an upscale, a FaceDetailer pass) off (#1621).
 
+    The intermediate-save stage is the exception to the next paragraph: its
+    nodes are :func:`~pixlstash.services.workflow_identity.intermediate_saves`'.
+
     Every node :func:`~pixlstash.services.workflow_identity.node_groups` puts in
     *group* goes through :func:`bypass_node`, consumers before what they read,
     so a FaceDetailer reading another's pipe is taken out first. A node with no
@@ -2033,15 +2036,27 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
             same type can stand in for, or this ComfyUI does not know the class.
     """
     # Local: workflow_identity imports this module.
-    from pixlstash.services.workflow_identity import SEED_VARIANCE, node_groups
+    from pixlstash.services.workflow_identity import (
+        INTERMEDIATE_SAVE,
+        SEED_VARIANCE,
+        intermediate_saves,
+        node_groups,
+    )
 
     graph = deepcopy(prompt_graph)
     live_before = live_node_ids(graph, object_info)
-    in_stage = {
-        node_id
-        for node_id, node_group in node_groups(reduce_api_graph(graph)).items()
-        if node_group == group and (live_before is None or node_id in live_before)
-    }
+    reduced = reduce_api_graph(graph)
+    # An intermediate save is read off the wiring, not a class: the saves the
+    # core rule drops. A save hands nothing on, so bypassing it removes it,
+    # and the decode only it read is pruned below.
+    staged = (
+        intermediate_saves(reduced)
+        if group == INTERMEDIATE_SAVE
+        else {
+            n for n, node_group in node_groups(reduced).items() if node_group == group
+        }
+    )
+    in_stage = {n for n in staged if live_before is None or n in live_before}
     reads = {
         str(node_id): {
             str(value[0])

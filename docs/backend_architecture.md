@@ -2300,7 +2300,7 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | Table | Holds |
 |---|---|
 | `workflow_variant` | Which card each stored variant belongs to, with the `key_version` that keyed it. **No timestamp column**, here or on the cache below: deriving the same hub twice has to write byte-identical rows, or "the backfill runs twice with identical rows" is a claim no test can make |
-| `workflow_topology_core` | Per topology: the automatic workflow key (`core_hash` + `core_version`), the workflow type, the slot list the internal marks and the card-era overrides address, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`, `seed_variance`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. `traits` is the same shape of answer, with the same NULL rule and the same re-queue, for what the CORE does (`workflow_identity.graph_traits`: `two_pass`, `refine`, `model_per_pass`, `likeness_gate`, `negative_prompt`, `references:N`), read off the core strip so every topology of one automatic workflow agrees; a generated name uses it only to tell colliding workflows apart (#1722). The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
+| `workflow_topology_core` | Per topology: the automatic workflow key (`core_hash` + `core_version`), the workflow type, the slot list the internal marks and the card-era overrides address, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`, `seed_variance`, `intermediate_save`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. `traits` is the same shape of answer, with the same NULL rule and the same re-queue, for what the CORE does (`workflow_identity.graph_traits`: `two_pass`, `refine`, `model_per_pass`, `likeness_gate`, `negative_prompt`, `references:N`), read off the core strip so every topology of one automatic workflow agrees; a generated name uses it only to tell colliding workflows apart (#1722). The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
 | `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, guessed from the filename the first time the slot is seen and never recomputed. An internal input to the card key only: no route reads or writes it, and the cut-over read it once (below) |
 | `workflow_lora_promotion` | One LoRA **file** promoted into the card key at one slot, per **(topology, slot label, asset reference)**. **No longer written** (#1623: its route went with the slot marks, the same mechanism); the rows already there still key cards. The per-file counterpart of the slot mark: `workflow_key(..., promoted=)` keys a recipe slot only while it holds exactly that file, so only that file's pictures split off. Read by every writer of `workflow_variant.workflow_key` (`workflow_cards.promoted_pairs`, in `record_identity` and `_rekey_variants`) and by nothing owner-facing. Names the file by its `asset:` reference, never the filename, so a forget leaves the split standing and nameless, as it does a mark. A card a promotion made is never a one-off |
 | `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets — unless ComfyUI has converted it (#1530): `POST /comfyui/workflows/convert` stores the API graph beside the file as `<name>.json.api` (`{converted_from, prompt}`, the digest of the editor file it was made from), and `_file_in_hub` files that graph instead, so the row gets a structural hash. `runnable_document` is what every run, list and parameter read goes through to see it; a conversion of another version of the file is ignored, and delete removes it. Deleting the file drops the row and leaves the card, which its pictures made |
@@ -2446,7 +2446,14 @@ workflow: each featured parameter's mode by address; each checkpoint, VAE and
 text-encoder loader's modal file (`model_fix_kind` says which loaders those
 are); every LoRA present in **more than half** the instances, at its modal
 strength (D2); and each stage the base topology has, on unless most instances
-ran without it. Prompt, negative and seed are not part of it. **A loader no
+ran without it. It also says **how the base graph's upscale stage upscales**
+(`DefaultRecipe.upscale`, from `workflow_identity.upscale_kinds`:
+`ultimate_sd`, `model`, `latent`, and `resize` only when nothing else
+upscales, since a 4x model is commonly scaled back down) and which file its
+`UpscaleModelLoader` names (`upscale_model`), which the route serves as one
+sentence, `default_recipe.stage_details.upscale` (`_UPSCALE_LABELS`,
+"Upscale model (4x-ultrasharp)"): one checkbox covers a resize and a tiled
+re-diffusion. Prompt, negative and seed are not part of it. **A loader no
 output reads is not counted** (`workflow_identity.live_slots`): a leftover
 branch wired into nothing never runs, the LoRA chain already ignores it, and a
 default naming its LoRA showed a row Edit LoRAs could not reach or remove (a
@@ -2773,19 +2780,26 @@ kept for data step 13's label maps (`_core_strip_v3`). In order:
   or a LoRA loader the core kept is never a patch;
 * a likeness gate (`_LIKENESS_GATE_CLASSES`) is stripped where the graph
   samples, as a picture filter is: with no sampler it is what the graph does;
-* **a save along the way is dropped** (`_final_sinks`): a sink whose upstream
-  samplers are a strict part of another sink's saves what the graph goes on
-  to sample (the first pass's picture), or something no sampler made. Two
-  saves of one sampler's picture are both results, and a graph that does not
-  sample keeps every sink. Dead nodes are then pruned again (`_prune`, with
-  its refusal), which takes the save's own decode with it;
+* **a save along the way is dropped** (`_saves_along_the_way`): a sink whose
+  upstream samplers are a strict part of another sink's saves what the graph
+  goes on to sample (the first pass's picture), or something no sampler made
+  (a prompt written to a file). Two saves of one sampler's picture are both
+  results, and a graph that does not sample keeps every sink. Dead nodes are
+  then pruned again (`_prune`, with its refusal), which takes the save's own
+  decode with it. **A save of a sampled picture is the `INTERMEDIATE_SAVE`
+  stage**: in `SPECIAL_GROUPS` and `specials`, on or off in the default
+  recipe and skippable per run, as upscale is, and never printed in a
+  generated name. It is the one stage read off the wiring rather than a
+  class, so `node_groups` never answers it: `intermediate_saves(nodes)` does,
+  from the same strip as the core (`_v4_strip`), so a graph has the stage
+  exactly when its core lost such a save;
 * `PixlStashPictureLoader` reads as `LoadImage` (`_V4_CANONICAL_CLASSES`;
   both put the picture on output 0), and a checkpoint loader nothing reads a
   CLIP or VAE from reads as `UNETLoader`: it loads a model, which is all the
   other does.
 
-So `intermediate_save` is no longer a trait, and `likeness_gate` names only a
-graph with no sampler. As with v3, a carried address keeps its input name: a
+So `intermediate_save` is a stage and no longer a trait, and `likeness_gate`
+names only a graph with no sampler. As with v3, a carried address keeps its input name: a
 picture input is addressed by node, so it survives the loader's spelling, but
 a default on an input one spelling lacks is skipped by a run on the other.
 
@@ -2937,6 +2951,11 @@ rather than dropped as step 8 drops it (`_retire_all(own_slots=True)`). Each
 moved topology's earlier `workflow_core_successor` maps (step 8's v1 -> v2) are
 composed through v2 -> v3, so a recipe still filed on a v1 id lands on v3
 labels. A failure restamps `unmoved-v2` (`unmoved-v3`).
+
+**Data step 14** clears `specials` on a hub that was already at data version
+13: step 13 ran there before an intermediate save was a stage, so its cached
+stages do not name it, and the variant finder re-derives a NULL one. A hub
+coming from below 13 was just written by step 13 and is left alone.
 
 **A merged workflow is hidden only when everything merged into it was.** The
 carry writes the first old id's attributes onto an heir with none, its
@@ -9025,7 +9044,9 @@ nothing.
 
 An upscale or FaceDetailer pass is an optional **stage** of a workflow, on or
 off per run, which is why `core_hash` strips both groups and graphs with and
-without them stack. `RunRequest.skip_stages` (`upscale`, `face_detailer`) names
+without them stack; seed variance and an intermediate save are stages too.
+`RunRequest.skip_stages` (`upscale`, `face_detailer`, `seed_variance`,
+`intermediate_save`) names
 the stages a run goes without; `_plan` applies them through
 `skip_requested_stages` on the run's copy, after the LoRAs are placed (the prune
 can remove a loader only the stage read, and a LoRA addressed to it must not
@@ -9034,7 +9055,9 @@ become a 400) and before `judge`, so the graph judged is the graph submitted.
 `bypass_stage` in
 [`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py)
 finds the stage with `workflow_identity.node_groups` over `reduce_api_graph`
-(node ids survive the reduction), limited to nodes an output reads, and takes
+(node ids survive the reduction; the intermediate-save stage with
+`intermediate_saves`, whose nodes are saves: bypassing one removes it, and
+the decode only it read is pruned), limited to nodes an output reads, and takes
 each out through `bypass_node`, consumers before what they read. Each output
 is answered by the node's first linked input of the same type: IMAGE by
 `image` (`ImageUpscaleWithModel`, `ImageScale*`, `UltimateSDUpscale`,

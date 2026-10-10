@@ -43,6 +43,7 @@ from pixlstash.hub.workflow_card_reads import (
     workflow_index,
     workflow_of_variant,
 )
+import pixlstash.routes.workflows as workflows_routes
 from pixlstash.services import workflow_card_service
 from pixlstash.services.workflow_run_service import saved_recipe_body
 from pixlstash.hub.workflow_card_writes import (
@@ -2442,3 +2443,42 @@ def test_an_orphan_loader_the_core_pruned_adds_no_family(hub):
         library_uuid="test-library",
     )
     assert _families(hub, keys) == "flux1"
+
+
+def test_the_default_recipe_says_how_its_base_graph_upscales(hub, monkeypatch):
+    """One "Upscale" checkbox covers a resize and a re-diffusion: the recipe
+    names which, and the model it loads, for automatic and manual alike."""
+    run = _file_run(hub, ckpt="upscaled.safetensors", upscale=True)
+    _, recipe = _defaults(hub, monkeypatch, [run])
+    assert recipe.stages == {"upscale": True}
+    assert (recipe.upscale, recipe.upscale_model) == (("model",), "4x_ultra.pth")
+    assert workflows_routes._stage_details(recipe) == {
+        "upscale": "Upscale model (4x_ultra)"
+    }
+
+    manual = create_manual_workflow(hub, "Mine", _graph(upscale=True), "import")
+    recipe = workflow_card_service.workflow_defaults(
+        hub, SimpleNamespace(library_uuid="test-library"), manual
+    )
+    assert (recipe.upscale, recipe.upscale_model) == (("model",), "4x_ultra.pth")
+
+    # The negative: no upscale, nothing said.
+    plain = _file_run(hub, ckpt="plain.safetensors")
+    _, recipe = _defaults(hub, monkeypatch, [plain])
+    assert (recipe.upscale, recipe.upscale_model) == ((), None)
+    assert workflows_routes._stage_details(recipe) == {}
+
+
+def test_stage_details_name_each_kind_and_the_model_only_where_one_loads():
+    def said(*kinds, model="4x-UltraSharp.pth") -> dict:
+        recipe = SimpleNamespace(upscale=kinds, upscale_model=model)
+        return workflows_routes._stage_details(recipe)
+
+    assert said("ultimate_sd") == {"upscale": "Ultimate SD Upscale (4x-UltraSharp)"}
+    assert said("model", "latent") == {
+        "upscale": "Upscale model (4x-UltraSharp) + Latent upscale and second pass"
+    }
+    assert said("resize") == {"upscale": "Resize"}
+    assert said("model", model=None) == {"upscale": "Upscale model"}
+    # A kind a newer build wrote is left out rather than printed raw.
+    assert said("from-the-future") == {}

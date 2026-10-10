@@ -24,6 +24,7 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.services.workflow_identity import (
     FACE_DETAILER,
+    INTERMEDIATE_SAVE,
     LIKENESS_GATE,
     MODEL_PER_PASS,
     NEGATIVE_PROMPT,
@@ -39,6 +40,7 @@ from pixlstash.services.workflow_identity import (
     guess_mark,
     slots,
     special_groups,
+    upscale_kinds,
     workflow_key,
     workflow_type,
 )
@@ -871,6 +873,48 @@ def test_core_v4_drops_a_save_of_what_the_graph_samples_again():
     )
     assert core_hash(_doc(twice)) != core_hash(_doc(_graph()))
     assert "71" in core_node_labels(_doc(twice))
+
+
+def test_an_intermediate_save_is_a_stage_the_card_has():
+    """What the core drops, the card offers: on or off in the default recipe."""
+    two_pass = _second_pass(("5", 0))
+    saved = _graph(extra={**two_pass, **_FIRST_PASS_SAVE})
+    assert special_groups(_doc(saved)) == (INTERMEDIATE_SAVE,)
+    # Beside the other stages, in the order the rows list them.
+    assert special_groups(
+        _doc(_graph(upscale=True, extra={**two_pass, **_FIRST_PASS_SAVE}))
+    ) == (UPSCALE, INTERMEDIATE_SAVE)
+    # The negatives: two passes with one save, and a save of a picture no
+    # sampler made, which the core drops without calling it a stage.
+    assert special_groups(_doc(_graph(extra=two_pass))) == ()
+    loaded = {
+        "80": _node("LoadImage", image="in.png"),
+        "81": _node("SaveImage", images=["80", 0], filename_prefix="copy"),
+    }
+    assert special_groups(_doc(_graph(extra=loaded))) == ()
+    assert core_hash(_doc(_graph(extra=loaded))) == core_hash(_doc(_graph()))
+
+
+def test_upscale_kinds_say_how_the_stage_upscales():
+    def kinds(**extra) -> tuple:
+        return upscale_kinds(_doc(_graph(extra=extra)))
+
+    assert upscale_kinds(_doc(_graph())) == ()
+    assert upscale_kinds(_doc(_graph(upscale=True))) == ("model",)
+    assert upscale_kinds(_doc(_graph(hires=True))) == ("latent",)
+    assert kinds(**{"40": _node("ImageScaleBy", image=["6", 0])}) == ("resize",)
+    ultimate = {
+        "40": _node("UpscaleModelLoader", model_name="4x.pth"),
+        "41": _node("UltimateSDUpscale", image=["6", 0], upscale_model=["40", 0]),
+    }
+    assert kinds(**ultimate) == ("ultimate_sd",)
+    # A 4x model scaled back down is a model upscale, not also a resize.
+    scaled = {"42": _node("ImageScaleBy", image=["41", 0])}
+    assert upscale_kinds(_doc(_graph(upscale=True, extra=scaled))) == ("model",)
+    assert kinds(**ultimate, **{"43": _node("LatentUpscaleBy", samples=["5", 0])}) == (
+        "ultimate_sd",
+        "latent",
+    )
 
 
 def test_core_v4_is_a_function_of_the_v3_core():

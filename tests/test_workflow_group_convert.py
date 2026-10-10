@@ -1671,6 +1671,9 @@ def test_the_hub_open_runs_step_13_and_moves_a_v3_row_an_older_build_writes(step
     assert w.hub.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
     merged = w.v3_id[w.plain]
     assert workflow_of_variant(w.hub, w.patched.structural_hash) == merged
+    # Written by this build's step 13, so the stages are read already.
+    unread = "SELECT COUNT(*) FROM workflow_topology_core WHERE specials IS NULL"
+    assert w.hub.fetchone(unread)[0] == 0
     # An older build sharing the hub re-caches the patched topology on v3.
     v3 = _core_strip_v3(get_document(w.hub, w.patched.structural_hash))
     with w.hub.transaction() as conn:
@@ -1685,6 +1688,21 @@ def test_the_hub_open_runs_step_13_and_moves_a_v3_row_an_older_build_writes(step
     assert workflow_of_variant(w.hub, w.patched.structural_hash) == merged
     with w.hub.transaction() as conn:
         assert not _has_old_cores(conn, "v3")
+
+
+def test_a_hub_already_on_step_13_has_its_stages_read_again(step_13):
+    """Step 13 ran there before an intermediate save was a stage, so its
+    cached stages do not name it: cleared for the variant finder."""
+    w = step_13
+    path = w.hub.path
+    with w.hub.transaction() as conn:
+        rederive_cores_from(conn, "v3")
+        conn.execute("PRAGMA user_version = 13")
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert w.hub.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
+    stages = w.hub.fetchall("SELECT DISTINCT specials FROM workflow_topology_core")
+    assert [tuple(row) for row in stages] == [(None,)]
 
 
 def test_carrying_one_workflow_twice_onto_an_heir_writes_its_notes_once(tmp_path):

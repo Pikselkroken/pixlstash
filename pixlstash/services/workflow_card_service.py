@@ -82,6 +82,7 @@ from pixlstash.services.workflow_identity import (
     model_fix_kind,
     slots,
     topology_node_labels,
+    upscale_kinds,
 )
 from pixlstash.services.workflow_library_service import (
     CoverCandidate,
@@ -1341,7 +1342,10 @@ class DefaultRecipe:
 
     ``stages`` maps each stage group the base topology has to whether the
     default recipe runs it: on, unless most of the sampled pictures ran
-    without it. ``base_card`` is the card whose source a run resolves.
+    without it. ``upscale`` says how the base graph's upscale stage upscales
+    (``workflow_identity.upscale_kinds``) and ``upscale_model`` which file its
+    upscale model loader names, when the hub knows. ``base_card`` is the card
+    whose source a run resolves.
     """
 
     workflow_id: str
@@ -1356,6 +1360,8 @@ class DefaultRecipe:
     models: list[DefaultModel] = field(default_factory=list)
     loras: list[DefaultLora] = field(default_factory=list)
     stages: dict[str, bool] = field(default_factory=dict)
+    upscale: tuple[str, ...] = ()
+    upscale_model: Optional[str] = None
 
     def recipe_loras(self) -> list[dict]:
         """The LoRAs as a saved recipe holds them, for ``place_recipe_loras``."""
@@ -1374,6 +1380,8 @@ class _VariantRead:
     core: dict[str, str]
     base: dict[str, str]
     slots: list[Slot]
+    # How the graph upscales (`workflow_identity.upscale_kinds`).
+    upscale: tuple[str, ...] = ()
 
 
 def workflow_defaults(
@@ -1524,6 +1532,21 @@ def workflow_defaults(
         sampled=sampled,
         stages={stage: without[stage] * 2 <= staged for stage in base_stages},
     )
+    # The base graph's own read: a manual workflow's one, else the base
+    # topology's variant.
+    base_read = reads.get(
+        workflow_id if workflow_id.startswith(MANUAL_PREFIX) else base_variant
+    )
+    if base_read is not None:
+        recipe.upscale = base_read.upscale
+        recipe.upscale_model = next(
+            (
+                names.get(slot.asset)
+                for slot in base_read.slots
+                if slot.class_type.startswith("UpscaleModelLoader")
+            ),
+            None,
+        )
 
     core_labels = {
         CORE_ADDRESS_PREFIX + label
@@ -1754,6 +1777,7 @@ def _manual_sample(
             core={},
             base=topology_node_labels(structural),
             slots=live_slots(structural),
+            upscale=upscale_kinds(structural),
         )
     except WorkflowGraphError as exc:
         logger.info(
@@ -1812,6 +1836,7 @@ def _variant_reads(
                 core=core_node_labels(document, strip_loras=STRIP_LORAS_FOR_STACKS),
                 base=topology_node_labels(document) if on_base else {},
                 slots=live_slots(document),
+                upscale=upscale_kinds(document),
             )
         except WorkflowGraphError as exc:
             logger.info(

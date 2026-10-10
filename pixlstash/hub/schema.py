@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 13
+CURRENT_DATA_VERSION = 14
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -2259,6 +2259,12 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     )
 
                     rederive_cores_from(conn, "v3")
+                if data_version == 13:
+                    # A hub step 13 already moved, before an intermediate save
+                    # was a stage: its cached `specials` do not name it. The
+                    # variant finder re-derives a NULL one. A hub coming from
+                    # below 13 was just written by step 13 and needs nothing.
+                    conn.execute("UPDATE workflow_topology_core SET specials = NULL")
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.
