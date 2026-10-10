@@ -141,6 +141,8 @@ const comfyuiFailureLocked = ref(false);
 // (a cached graph, a batch still submitting), so its registration arrives
 // after the failure and must not paper over it with "queued".
 const comfyuiFailedPromptMessages = new Map();
+// Prompts the backend said were over before `/workflows/run` registered them.
+const comfyuiFinishedEarlyPromptIds = new Set();
 const comfyuiWsState = reactive({
   connecting: false,
   url: "",
@@ -838,10 +840,18 @@ function handleComfyuiRun(payload) {
   }
   // Consumed: `markComfyuiPromptFailed` re-records it, and nothing needs it now.
   for (const id of ids) comfyuiFailedPromptMessages.delete(id);
+  for (const id of ids) {
+    if (comfyuiFinishedEarlyPromptIds.delete(id)) {
+      markComfyuiPromptComplete(id, "completed-before-registered");
+    }
+  }
 }
 
 // Promote backend ComfyUI failure progress events into the ComfyUI runner banner
 // so an errored run fails immediately even when ComfyUI WS emits no explicit error.
+// Its `completed` is what ends a run: ComfyUI's socket says a prompt is over
+// only to the client the prompt named, and a run names none, so without it the
+// row stays at the last sampler's 100% for good.
 watch(
   () => props.wsPluginProgress,
   (wrapped) => {
@@ -857,12 +867,22 @@ watch(
     const status = String(payload.status || "")
       .trim()
       .toLowerCase();
-    if (status !== "failed") return;
+    if (status !== "failed" && status !== "completed") return;
 
     const runId = String(payload.run_id || payload.runId || "").trim();
     const promptKey = runId.toLowerCase().startsWith("comfyui-")
       ? runId.slice("comfyui-".length)
       : null;
+    if (status === "completed") {
+      // Every tab hears this, so only a prompt this runner follows ends here.
+      if (!promptKey || comfyuiCompletedPromptIds.value.has(promptKey)) return;
+      if (comfyuiActivePromptIds.value.has(promptKey)) {
+        markComfyuiPromptComplete(promptKey, "plugin-progress-completed");
+      } else {
+        comfyuiFinishedEarlyPromptIds.add(promptKey);
+      }
+      return;
+    }
     const resolvedPromptKey = resolveErrorPromptKey(
       promptKey,
       comfyuiActivePromptIds.value,

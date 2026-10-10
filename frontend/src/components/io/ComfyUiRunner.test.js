@@ -35,6 +35,17 @@ function failed(promptId, message) {
   };
 }
 
+function completed(promptId) {
+  return {
+    key: Date.now(),
+    payload: {
+      plugin: "ComfyUI",
+      status: "completed",
+      run_id: `comfyui-${promptId}`,
+    },
+  };
+}
+
 describe("ComfyUiRunner", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -52,6 +63,39 @@ describe("ComfyUiRunner", () => {
     const wrapper = mountRunner();
     await wrapper.setProps({ wsPluginProgress: failed("p-1", "node 94: bad") });
     wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-2" }] });
+    expect(wrapper.vm.progress.status).toBe("queued");
+  });
+
+  // ComfyUI tells nobody that a prompt submitted without a client id is
+  // over, so the last thing its socket says is a sampler at 100%.
+  it("ends a run when the backend says it is over", async () => {
+    const wrapper = mountRunner();
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-1" }] });
+    wrapper.vm.handleComfyuiPayload({
+      type: "progress",
+      data: { prompt_id: "p-1", node: "3", value: 20, max: 20 },
+    });
+    expect(wrapper.vm.progress.status).toBe("running");
+
+    await wrapper.setProps({ wsPluginProgress: completed("p-1") });
+    expect(wrapper.vm.progress.status).toBe("completed");
+  });
+
+  it("ends a run that was over before it was registered", async () => {
+    const wrapper = mountRunner();
+    await wrapper.setProps({ wsPluginProgress: completed("p-1") });
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-1" }] });
+    expect(wrapper.vm.progress.status).toBe("completed");
+  });
+
+  // Every tab hears every run end.
+  it("shows nothing for the end of a run it does not follow", async () => {
+    const wrapper = mountRunner();
+    await wrapper.setProps({ wsPluginProgress: completed("p-9") });
+    expect(wrapper.vm.progress.visible).toBe(false);
+
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-1" }] });
+    await wrapper.setProps({ wsPluginProgress: completed("p-9") });
     expect(wrapper.vm.progress.status).toBe("queued");
   });
 
