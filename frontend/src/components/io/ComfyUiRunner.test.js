@@ -87,6 +87,30 @@ describe("ComfyUiRunner", () => {
     expect(wrapper.vm.progress.message).toBe("ComfyUI failed: first");
   });
 
+  // The banner is the first failure's until it is dismissed, so the prompt it
+  // is "about" must not move to a later one: the backend's sentence for the
+  // first would then be refused as another prompt's.
+  it("still takes the backend's sentence for the first failure after a second prompt fails", async () => {
+    const wrapper = mountRunner();
+    wrapper.vm.handleComfyuiRun({
+      prompts: [{ prompt_id: "p-1" }, { prompt_id: "p-2" }],
+    });
+    wrapper.vm.handleComfyuiPayload({
+      type: "execution_error",
+      data: { prompt_id: "p-1", exception_message: "first" },
+    });
+    // The second prompt fails too, by the socket and by the backend.
+    wrapper.vm.handleComfyuiPayload({
+      type: "execution_error",
+      data: { prompt_id: "p-2", exception_message: "second" },
+    });
+    await wrapper.setProps({ wsPluginProgress: failed("p-2", "KSampler failed: second") });
+    expect(wrapper.vm.progress.message).toBe("ComfyUI failed: first");
+
+    await wrapper.setProps({ wsPluginProgress: failed("p-1", "UNETLoader failed: first") });
+    expect(wrapper.vm.progress.message).toBe("UNETLoader failed: first");
+  });
+
   // Every tab hears every failure, and Abort's stopped runs report a moment
   // after the next run has been started.
   it("does not end its own run on the failure of a prompt it does not follow", async () => {
