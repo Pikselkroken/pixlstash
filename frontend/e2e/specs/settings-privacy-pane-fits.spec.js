@@ -18,7 +18,7 @@ test('Privacy pane fits without scrolling at every ghost retention position', as
   const content = page.locator('.settings-content')
   const keep = page.getByRole('radiogroup', { name: 'Keep picture ghosts' })
   // Each click saves to the shared backend, so end on the default.
-  for (const position of ['Off', 'On', 'Covered only']) {
+  for (const position of ['Never', 'Always', 'While matched']) {
     const radio = keep.getByRole('radio', { name: position, exact: true })
     await radio.click()
     await expect(radio).toHaveAttribute('aria-checked', 'true')

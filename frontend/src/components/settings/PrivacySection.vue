@@ -96,7 +96,7 @@
   <SettingsSection
     v-if="ghosts"
     title="Ghosts"
-    desc="What PixlStash keeps of something that is gone. Workflows › Ghosts lists what holds them."
+    desc="What is left of pictures you deleted for good. Workflows › Ghosts lists their workflows."
   >
     <SettingsRow
       label="Keep picture ghosts"
@@ -126,7 +126,7 @@
     <SettingsRow
       v-if="ghosts.model_ghosts != null"
       label="Model ghosts"
-      sub="Names and digests of models that are not on your shelf, including models from imported pictures you never added."
+      sub="Names and file hashes of models that are not on your shelf, including models from imported pictures you never added."
     >
       <AppButton
         variant="secondary"
@@ -275,18 +275,18 @@ const ghostError = ref("");
 const purgeKind = ref(null);
 
 const retentionOptions = [
-  { id: "off", label: "Off" },
-  { id: "covered", label: "Covered only" },
-  { id: "on", label: "On" },
+  { id: "off", label: "Never" },
+  { id: "covered", label: "While matched" },
+  { id: "on", label: "Always" },
 ];
 
 // Saving a position destroys nothing already kept (the server says so too), so
-// Off must not read as a purge: somebody choosing it for privacy would believe
+// Never must not read as a purge: somebody choosing it for privacy would believe
 // the ghosts were gone.
 const RETENTION_SUBS = {
   off: "From now on, none: a permanently deleted picture cannot be made again. Ghosts already kept stay until you purge them below.",
   covered:
-    "Only while a picture you kept has the same workflow and prompt. Deleting the last one removes the ghosts it covered.",
+    "Only while a picture you kept has the same workflow and prompt. Deleting the last one removes the ghosts it matched.",
   on: "Every permanently deleted picture, until you purge them below.",
 };
 

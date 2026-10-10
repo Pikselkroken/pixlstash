@@ -397,8 +397,8 @@ describe("KeepCoverOnlyDialog: Keep recipes only", () => {
     ).not.toContain("cover stays");
   });
 
-  it("says undo will not turn the ghost setting back off", () => {
-    expect(mountRecipes().text()).toContain("Ctrl+Z does not turn it back off");
+  it("says undo does not reach the ghost setting", () => {
+    expect(mountRecipes().text()).toContain("Ctrl+Z does not undo that");
   });
 
   it("hands the box to the parent rather than keeping it", async () => {

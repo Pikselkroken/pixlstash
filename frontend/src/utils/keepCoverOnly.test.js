@@ -331,7 +331,7 @@ describe("Keep recipes only copy", () => {
 
   // Under `covered` what takes the recipe away later is deleting the COVER,
   // which no reader derives from "your ghost setting".
-  it("names the cover as what keeps a recipe alive, under Covered only", () => {
+  it("names the cover as what keeps a recipe alive, under While matched", () => {
     expect(keepRecipesOnlyLede("covered")).toContain(
       "for as long as its cover stays",
     );
@@ -344,12 +344,12 @@ describe("Keep recipes only copy", () => {
     expect(keepRecipesOnlyLede(null)).not.toContain("cover stays");
   });
 
-  it("does not describe Covered only when the ghost setting is Off", () => {
+  it("does not describe While matched when the ghost setting is Never", () => {
     const [row] = keepRecipesOnlyStayingReasons({
       ghost_retention: "off",
       pictures_staying_ghost_not_kept: 2,
     });
-    expect(row.text).toBe("2 would keep nothing, because your ghost setting is Off.");
+    expect(row.text).toBe("2 would keep nothing, because Keep picture ghosts is set to Never.");
   });
 
   it("names unchanged stacks on the receipt", () => {

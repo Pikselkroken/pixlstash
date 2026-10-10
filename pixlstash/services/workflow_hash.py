@@ -376,7 +376,7 @@ def instance_widget_value(name: str, value: Any) -> Any:
 
     V is what makes one *generation* rather than one instance: a seed, and the
     output path a file happens to land at. Null them and two re-rolls of the
-    same prompt share an instance, which is the equivalence "Covered only" is
+    same prompt share an instance, which is the equivalence "While matched" is
     asking about. Keep them and every picture is its own instance and the tier
     answers nothing.
 
@@ -623,7 +623,7 @@ def instance_hash(api_graph: dict) -> str:
     """The instance key: the recipe plus one set of parameters, seed excluded.
 
     Two pictures share an instance exactly when they share this value, which is
-    what "Covered only" asks. The parameters themselves are kept, per library,
+    what "While matched" asks. The parameters themselves are kept, per library,
     as :func:`instance_document_from_reduction` in ``workflow_recipe_instance``.
     """
     return graph_key(promote_instance_widgets(reduce_api_graph(api_graph)))

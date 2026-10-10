@@ -2055,7 +2055,7 @@ def test_hub_rows_outlive_the_pictures_they_came_from(store):
 
 
 def test_two_pictures_share_an_instance_exactly_when_they_share_the_value(store):
-    """What "Covered only" tests, asserted end to end through ingest.
+    """What "While matched" tests, asserted end to end through ingest.
 
     Same graph, different seed: one instance. Same graph, different prompt: two.
     """
