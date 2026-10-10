@@ -64,6 +64,12 @@ vi.mock("../../api/recipes", () => ({
 vi.mock("../../api/pictureSets", () => ({
   listPictureSets: vi.fn().mockResolvedValue([]),
 }));
+// The person picker reads the people the same way, on a workflow run alone.
+const listCharacters = vi.fn();
+vi.mock("../../api/characters", () => ({
+  listCharacters: (...args) => listCharacters(...args),
+  characterThumbnailUrl: (id) => `/api/v1/characters/${id}/thumbnail`,
+}));
 const push = vi.fn();
 const currentRoute = { name: "home" };
 vi.mock("vue-router", () => ({
@@ -172,6 +178,7 @@ beforeEach(() => {
   );
   listWorkflowCards.mockResolvedValue({ cards: [] });
   fetchWorkflowSets.mockResolvedValue({ hand_made: [] });
+  listCharacters.mockResolvedValue([]);
   setWorkflowInputs.mockResolvedValue({ inputs: [] });
   listSavedRecipes.mockResolvedValue([]);
   preflightWorkflowRun.mockResolvedValue({ ok: true, runs: 1, groups: [] });
@@ -2528,6 +2535,26 @@ describe("Create with LoRA", () => {
     expect(wrapper.text()).toContain("Example's reference pictures");
   });
 
+  it("draws the person chosen and fixed, with no way to take their LoRA off", async () => {
+    const wrapper = await mountRun(fromPerson);
+    const fixed = wrapper.find('[data-testid="person-fixed"]');
+    expect(fixed.text()).toBe("Example");
+    // A statement, not a control: nobody else to pick, and no "No one".
+    expect(wrapper.find('[role="radio"]').exists()).toBe(false);
+    expect(wrapper.vm.addedLoras[0].person).toBe(true);
+    expect(wrapper.findComponent({ name: "AppBarButton" }).exists()).toBe(false);
+  });
+
+  it("keeps a set's LoRA removable: only a person is fixed", async () => {
+    const wrapper = await mountRun({
+      ...fromPerson,
+      name: "Beach",
+      lora: { entityType: "set", entityId: 5, name: "Beach" },
+    });
+    expect(wrapper.find('[data-testid="rund-person"]').exists()).toBe(false);
+    expect(wrapper.findComponent({ name: "AppBarButton" }).exists()).toBe(true);
+  });
+
   it("files a set's run into that set", async () => {
     const wrapper = await mountRun({
       ...fromPerson,
@@ -2580,6 +2607,125 @@ describe("Create with LoRA", () => {
   });
 });
 
+describe("the person a workflow run alone is of", () => {
+  const of = (id) => [{ entity_type: "character", entity_id: id }];
+  const MIRA = {
+    sha256: "m".repeat(64),
+    filename: "mira-sdxl.safetensors",
+    base_model_family: "sdxl",
+    attachments: of(7),
+  };
+  const KREA_ONLY = {
+    sha256: "n".repeat(64),
+    filename: "noor-krea2.safetensors",
+    base_model_family: "krea2",
+    attachments: of(8),
+  };
+  const sdxlCard = (overrides = {}) =>
+    card({
+      models: [{ kind: "checkpoint", name: "realvis", base_model_family: "sdxl" }],
+      ...overrides,
+    });
+  const fromCard = { kind: "card", workflowId: KEY };
+  const tile = (wrapper, id) => wrapper.find(`[data-person="${id}"]`);
+
+  beforeEach(() => {
+    listCharacters.mockResolvedValue([
+      { id: 7, name: "Mira" },
+      { id: 8, name: "Noor" },
+    ]);
+    listAdapters.mockImplementation(async ({ fileKind } = {}) =>
+      fileKind ? [] : [MIRA, KREA_ONLY],
+    );
+    getWorkflowCard.mockImplementation(async (key) => ({
+      card:
+        key === OTHER
+          ? card({
+              id: OTHER,
+              models: [{ kind: "unet", name: "krea", base_model_family: "krea2" }],
+            })
+          : sdxlCard(),
+    }));
+  });
+
+  it("offers the people whose LoRA works with the checkpoint, and no one first", async () => {
+    const wrapper = await mountRun(fromCard);
+    expect(wrapper.find('[data-person="null"]').attributes("aria-checked")).toBe("true");
+    expect(tile(wrapper, 7).text()).toBe("Mira");
+    // The face is asked of the API, not of the page's own origin.
+    expect(tile(wrapper, 7).find("img").attributes("src")).toBe(
+      "/api/v1/characters/7/thumbnail",
+    );
+    // Noor's LoRA is for another base model: said, not offered.
+    expect(tile(wrapper, 8).exists()).toBe(false);
+    expect(wrapper.text()).toContain(
+      "Not listed: 1 whose LoRA is for another base model.",
+    );
+    // Nobody picked: the run says nothing about a person.
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].add_loras).toBeUndefined();
+  });
+
+  it("adds the picked person's LoRA, and takes it off again for no one", async () => {
+    const wrapper = await mountRun(fromCard);
+    await tile(wrapper, 7).trigger("click");
+    expect(tile(wrapper, 7).attributes("aria-checked")).toBe("true");
+    await wrapper.vm.submit();
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body.workflow_id).toBe(KEY);
+    expect(body.add_loras).toEqual([{ sha256: MIRA.sha256, strength_model: 1 }]);
+
+    await wrapper.find('[data-person="null"]').trigger("click");
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[1][0].add_loras).toBeUndefined();
+  });
+
+  it("keeps the picked person's LoRA in a recipe saved from the run", async () => {
+    const wrapper = await mountRun(fromCard);
+    expect(wrapper.vm.recipeLoras).toEqual([]);
+    await tile(wrapper, 7).trigger("click");
+    expect(wrapper.vm.recipeLoras).toEqual([
+      { filename: MIRA.filename, sha256: MIRA.sha256, strength: 1 },
+    ]);
+  });
+
+  it("unpicks the person when the run is told to go without LoRAs", async () => {
+    const wrapper = await mountRun(fromCard);
+    await tile(wrapper, 7).trigger("click");
+    await wrapper.vm.dropLoras();
+    expect(wrapper.find('[data-person="null"]').attributes("aria-checked")).toBe("true");
+    expect(wrapper.vm.addedLoras).toEqual([]);
+  });
+
+  it("takes a pick off when the workflow changes to another base model", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: KEY, name: "SDXL" },
+        { id: OTHER, name: "Krea" },
+      ],
+    });
+    const wrapper = await mountRun({ ...fromCard, pickWorkflow: true });
+    await tile(wrapper, 7).trigger("click");
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    // Mira's LoRA is SDXL; on the Krea workflow Noor is the one offered.
+    expect(tile(wrapper, 7).exists()).toBe(false);
+    expect(tile(wrapper, 8).exists()).toBe(true);
+    expect(wrapper.vm.addedLoras).toEqual([]);
+  });
+
+  it("is not offered on a recipe's run, which keeps its own LoRAs", async () => {
+    const wrapper = await mountRun();
+    expect(wrapper.find('[data-testid="rund-person"]').exists()).toBe(false);
+  });
+
+  it("is absent where nobody has a LoRA", async () => {
+    listAdapters.mockResolvedValue([]);
+    const wrapper = await mountRun(fromCard);
+    expect(wrapper.find('[data-testid="rund-person"]').exists()).toBe(false);
+  });
+});
+
 describe("Add LoRA", () => {
   it("adds a loader of its own when the graph has no free slot", async () => {
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
@@ -2590,6 +2736,8 @@ describe("Add LoRA", () => {
     expect(wrapper.vm.runBlocker).toBe(
       "Choose a LoRA for each added row, or remove it.",
     );
+    // A row with nothing picked is no LoRA to save as part of the look.
+    expect(wrapper.vm.recipeLoras).toEqual([]);
     wrapper.vm.addedLoras[0].sha256 = "s".repeat(64);
     await flushPromises();
     await wrapper.vm.submit();

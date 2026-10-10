@@ -777,6 +777,11 @@ Seven rules the client must not re-derive:
    (`{detail}`, the server's sentence); with ComfyUI unreachable the run is
    refused as `comfyui_unreachable`, and `allow_unchecked` does not run it
    without the LoRA (400).
+   **A run by `workflow_id` goes without any LoRA attached to a person**: the
+   loader holding one is bypassed on the run's copy and not reported in
+   `bypassed_loras`, and `default_recipe.loras` does not list it. A run from
+   `picture_ids` or `saved_recipe_id` keeps it. `add_loras` is how a client
+   says who a workflow run is of (the Run popup's person picker).
    `skip_stages: ["upscale" | "face_detailer" | "seed_variance" | "intermediate_save"]` (#1621)
    switches an optional
    stage off for the run: its nodes are bypassed on the run's copy and what

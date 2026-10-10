@@ -1420,6 +1420,14 @@ def _defaults(hub, monkeypatch, runs):
     return workflow_id, workflow_card_service.workflow_defaults(hub, vault, workflow_id)
 
 
+@pytest.fixture(autouse=True)
+def _nobody_has_a_lora(monkeypatch):
+    """The vault's third read: no LoRA is attached to a person unless a test says."""
+    monkeypatch.setattr(
+        workflow_card_service, "character_lora_hashes", lambda vault: set()
+    )
+
+
 def _four_runs(hub):
     return [
         _file_run(
@@ -1601,6 +1609,44 @@ def test_the_owner_s_edits_replace_what_they_name(hub, monkeypatch):
     model = next(m for m in recipe.models if m.address == checkpoint.address)
     assert (model.filename, model.provenance) == ("c.safetensors", "edited")
     assert ("d" * 64, 0.5) in [(lora.sha256, lora.strength) for lora in recipe.loras]
+
+
+def test_a_persons_lora_is_set_aside_unless_the_owner_put_it_in(hub, monkeypatch):
+    """Most runs loading a person's LoRA does not make it the workflow's."""
+    runs = _four_runs(hub)
+    digest = "e" * 64
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', 'x.safetensors', ?, 'scanned')",
+            (digest,),
+        )
+    monkeypatch.setattr(
+        workflow_card_service, "character_lora_hashes", lambda vault: {digest}
+    )
+    workflow_id, recipe = _defaults(hub, monkeypatch, runs)
+
+    assert recipe.loras == []
+    assert [lora.sha256 for lora in recipe.person_loras] == [digest]
+    assert recipe.character_loras == {digest}
+    # A picture's run still places it; a run of the workflow alone does not.
+    assert [lora["sha256"] for lora in recipe.recipe_loras(people=None)] == [digest]
+    # ...unless it names that person itself.
+    assert [lora["sha256"] for lora in recipe.recipe_loras(people={digest})] == [digest]
+    assert recipe.recipe_loras(people={"f" * 64}) == recipe.recipe_loras() == []
+    assert recipe.loras_decided
+
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, ?)",
+            (workflow_id, "lora:" + digest, "0.5"),
+        )
+    _, edited = _defaults(hub, monkeypatch, runs)
+    assert [(lora.sha256, lora.provenance) for lora in edited.loras] == [
+        (digest, "edited")
+    ]
+    assert edited.person_loras == [] and edited.character_loras == frozenset()
 
 
 def test_the_stage_vote_counts_only_topologies_whose_stages_are_known(hub, monkeypatch):

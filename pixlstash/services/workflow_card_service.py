@@ -33,7 +33,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Callable, Optional, Union
+from typing import Callable, Collection, Optional, Union
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import (
@@ -60,6 +60,7 @@ from pixlstash.services.comfyui_recipe_service import (
 )
 from pixlstash.services.model_shelf_service import (
     adapter_digest_index,
+    character_lora_hashes,
     models_for_digest,
     recipe_asset_index,
     base_model_family,
@@ -1362,9 +1363,22 @@ class DefaultRecipe:
     stages: dict[str, bool] = field(default_factory=dict)
     upscale: tuple[str, ...] = ()
     upscale_model: Optional[str] = None
+    # Who a picture is of is a recipe's business, never the workflow's. A LoRA
+    # attached to a person that most instances loaded is kept here, out of
+    # ``loras``: a run of the workflow by itself goes without it, and a run
+    # made from a picture still places it. Not one the owner put in by hand.
+    person_loras: list[DefaultLora] = field(default_factory=list)
+    # Every digest attached to a person, less the owner's own: a run of the
+    # workflow by itself bypasses a loader still holding one.
+    character_loras: frozenset[str] = frozenset()
 
-    def recipe_loras(self) -> list[dict]:
-        """The LoRAs as a saved recipe holds them, for ``place_recipe_loras``."""
+    def recipe_loras(self, people: Optional[Collection[str]] = ()) -> list[dict]:
+        """The LoRAs as a saved recipe holds them, for ``place_recipe_loras``.
+
+        *people* names the ``person_loras`` to add, by digest: the ones a run
+        of the workflow by itself asked for. ``None`` is all of them, which is
+        what a picture's run places.
+        """
         return [
             {
                 "filename": lora.filename,
@@ -1372,6 +1386,11 @@ class DefaultRecipe:
                 "strength": lora.strength,
             }
             for lora in self.loras
+            + [
+                lora
+                for lora in self.person_loras
+                if people is None or lora.sha256 in people
+            ]
         ]
 
 
@@ -1393,7 +1412,9 @@ def workflow_defaults(
     conversion stored yet (:func:`converted_manual_document`).
 
     Featured parameters and models are the mode per address; a LoRA is in when
-    more than half the sampled instances loaded it, at its modal strength;
+    more than half the sampled instances loaded it, at its modal strength,
+    unless it is attached to a person (``character_lora_hashes``): that is who
+    a picture is of, which only a recipe or the owner's own edit says;
     a stage the base topology has is on unless most instances ran without it.
     The owner's edits (``workflow_group_default``) replace what they name and
     say so (``EDITED``). Counted per distinct instance, as ``card_defaults``
@@ -1644,6 +1665,8 @@ def workflow_defaults(
         shelf = by_name.get(normalized_filename(filename or ""), set())
         return next(iter(shelf)) if len(shelf) == 1 else None
 
+    # Whatever the sample loaded: the base graph's own loader may hold one.
+    characters = character_lora_hashes(vault)
     majority = sorted(asset for asset, seen in lora_seen.items() if seen * 2 > sampled)
     for asset in majority:
         filename = names.get(asset)
@@ -1658,7 +1681,9 @@ def workflow_defaults(
         )
         edited = lora_overrides.pop(sha256, None) if sha256 else None
         if edited is None:
-            recipe.loras.append(lora)
+            # A person's LoRA, however many of the pictures loaded it, is not
+            # the workflow's: the pile still offers it.
+            (recipe.person_loras if sha256 in characters else recipe.loras).append(lora)
         elif edited != LORA_OFF:
             recipe.loras.append(
                 replace(lora, strength=_float_or_none(edited), provenance=EDITED)
@@ -1678,6 +1703,9 @@ def workflow_defaults(
         recipe.loras.append(
             DefaultLora(asset, filename, sha256, _float_or_none(value), EDITED)
         )
+    recipe.character_loras = frozenset(
+        characters - {lora.sha256 for lora in recipe.loras}
+    )
     recipe.loras_decided = (
         bool(majority)
         or bare * 2 > sampled
