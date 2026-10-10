@@ -10391,7 +10391,7 @@ def test_a_replay_finds_its_input_on_another_topology(i2i, monkeypatch):
     assert (row["fill"], row["picture_id"]) == ("original", original), row
 
 
-@pytest.mark.parametrize("gone", ["binned", "file", "wired"])
+@pytest.mark.parametrize("gone", ["binned", "file", "wired", "garbled"])
 def test_a_replay_that_cannot_name_a_usable_original_runs_as_before(
     i2i, monkeypatch, gone
 ):
@@ -10399,7 +10399,9 @@ def test_a_replay_that_cannot_name_a_usable_original_runs_as_before(
 
     Each is filled like any other run and none refuses it. The file case
     matters most: `_upload_files` answers 404 for a picture off the disk, and
-    that would refuse a run over a picture the owner never chose.
+    that would refuse a run over a picture the owner never chose. A garbled
+    graph is file metadata nobody vetted, and must not be what stops the run
+    either.
     """
     original = _add_picture(i2i.server, i2i.tmp_path, "original.png")
     upscaled = _add_picture(i2i.server, i2i.tmp_path, "upscaled.png")
@@ -10408,8 +10410,11 @@ def test_a_replay_that_cannot_name_a_usable_original_runs_as_before(
         _bin_picture(i2i.server, original)
     elif gone == "file":
         (i2i.tmp_path / "original.png").unlink()
-    else:
+    elif gone == "wired":
         made["5"]["inputs"]["image"] = ["1", 0]
+        _embed_in(monkeypatch, {upscaled: made})
+    else:
+        made["5"]["inputs"] = ["image", made["5"]["inputs"]["image"]]
         _embed_in(monkeypatch, {upscaled: made})
     payload = _replay(i2i, upscaled)
     row = _inputs_of(payload)[_label_of(i2i.graph, "5")]
@@ -10425,6 +10430,9 @@ def test_a_replay_of_several_pictures_still_runs_over_each(i2i, monkeypatch):
     payload = _preflight(i2i.owner, picture_ids=made, target=RUN_WF, replay=True)
     assert _inputs_of(payload)[_label_of(i2i.graph, "5")]["fill"] == "selection"
     assert payload["runs"] == 2, payload
+    # And with no picture at all there is nothing to replay: answered, not a 500.
+    payload = _preflight(i2i.owner, workflow_id=RUN_WF, replay=True)
+    assert _inputs_of(payload)[_label_of(i2i.graph, "5")]["fill"] != "original"
 
 
 def test_a_pinned_reference_leaves_one_input_for_the_selection(i2i):
