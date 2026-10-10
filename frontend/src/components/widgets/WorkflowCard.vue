@@ -248,6 +248,13 @@ const props = defineProps({
    * that is this.
    */
   selected: { type: Boolean, default: false },
+  /**
+   * This workflow's last run, when it ended without a picture and nobody has
+   * dismissed that or run it again: `{message, stopped}`
+   * (`useRunDialogStore.failures`). Drawn as the first chip of the facts row,
+   * so the card says so where the run was started.
+   */
+  runFailure: { type: Object, default: null },
 });
 
 const emit = defineEmits(["run"]);
@@ -389,8 +396,35 @@ const loraCount = computed(() => {
   if (count) return count === 1 ? "1 LoRA" : `${count} LoRAs`;
   return lorasAreUnread.value ? "LoRAs not read" : "No LoRAs";
 });
-const facts = computed(() => factChips(props.card, { short: true }));
-const accessibleName = computed(() => cardAccessibleName(props.card));
+/** "Run failed" / "Run stopped", ahead of every fact so it is never clipped. */
+const runFailureChip = computed(() =>
+  props.runFailure
+    ? {
+        key: "run-failure",
+        label: props.runFailure.stopped ? "Run stopped" : "Run failed",
+        title: props.runFailure.message,
+        fact: true,
+        badge: true,
+        // A run somebody stopped did not go wrong, so it takes no hue.
+        error: !props.runFailure.stopped,
+      }
+    : null,
+);
+const facts = computed(() => [
+  ...(runFailureChip.value ? [runFailureChip.value] : []),
+  ...factChips(props.card, { short: true }),
+]);
+// Every chip is `aria-hidden`, so the failure is spoken here or not at all.
+const accessibleName = computed(() =>
+  [
+    cardAccessibleName(props.card),
+    props.runFailure
+      ? `last run ${props.runFailure.stopped ? "stopped" : "failed"}: ${props.runFailure.message}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(", "),
+);
 </script>
 
 <style scoped src="./cardCover.css"></style>

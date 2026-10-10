@@ -1174,3 +1174,48 @@ describe("the ComfyUI badge", () => {
     expect(css).toMatch(/\.wf-card__badge--origin\s*{[^}]*left:\s*var\(--space-3\)/);
   });
 });
+
+// #1839: the Run popup closes on submit, so the card is where a run that ended
+// without a picture is still said to have.
+describe("a run that ended without a picture", () => {
+  const base = { id: "w", name: "Flux", manual: true, picture_count: 2, covers: [] };
+  const chips = (w) => w.findComponent({ name: "ChipRow" }).props("items");
+
+  it("is the first chip of the facts row, on the error wash", () => {
+    const wrapper = mountCard(base, {
+      runFailure: { message: "KSampler failed: RuntimeError boom", stopped: false },
+    });
+    const [first, second] = chips(wrapper);
+    expect(first).toMatchObject({
+      label: "Run failed",
+      title: "KSampler failed: RuntimeError boom",
+      error: true,
+    });
+    // Ahead of "Manual": the row clips to "+N" from the end.
+    expect(second.label).toBe("Manual");
+    expect(wrapper.find(".chip-row__chip--error").text()).toBe("Run failed");
+    // The chips are aria-hidden, so the name is where it is spoken.
+    expect(wrapper.find("article").attributes("aria-label")).toContain(
+      "last run failed: KSampler failed: RuntimeError boom",
+    );
+  });
+
+  it("says stopped, without the error hue, for a run somebody interrupted", () => {
+    const wrapper = mountCard(base, {
+      runFailure: { message: "Interrupted at KSampler", stopped: true },
+    });
+    expect(chips(wrapper)[0]).toMatchObject({ label: "Run stopped", error: false });
+    expect(wrapper.find(".chip-row__chip--error").exists()).toBe(false);
+    expect(wrapper.find("article").attributes("aria-label")).toContain(
+      "last run stopped: Interrupted at KSampler",
+    );
+  });
+
+  it("draws nothing for a workflow whose last run is not on record", () => {
+    const wrapper = mountCard(base);
+    expect(chips(wrapper).map((chip) => chip.label)).toEqual(["Manual"]);
+    expect(wrapper.find("article").attributes("aria-label")).not.toContain(
+      "last run",
+    );
+  });
+});

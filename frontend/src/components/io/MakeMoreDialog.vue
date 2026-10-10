@@ -380,6 +380,8 @@ async function submit() {
     emit("run", {
       prompts: labelPrompts(prompts, taskLabelsFor(answer)),
       pictureIds: pictureIds.value,
+      // Only on a `partial` answer: why the rest of the batch was not queued.
+      ...(answer?.error ? { error: answer.error } : {}),
     });
     emit("close");
   } catch (err) {

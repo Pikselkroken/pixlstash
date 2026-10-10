@@ -3221,3 +3221,66 @@ describe("expose a parameter", () => {
     expect(dialog(wrapper).props("nodes")).toEqual([]);
   });
 });
+
+// #1839: where a run that ended without a picture is said to have, with the
+// sentence that says why, until it is dismissed or the workflow runs again.
+describe("the selected workflow's failed run", () => {
+  const block = (w) => w.find('[data-testid="wftab-run-failure"]');
+  const message =
+    "Load Diffusion Model (UNETLoader) failed: KeyError 'asym_w4a8_int8'";
+
+  it("says the run failed and why, and Dismiss takes it down", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    expect(block(wrapper).exists()).toBe(false);
+
+    const runDialog = useRunDialogStore();
+    runDialog.runFailed(KEY, { promptId: "p-1", message, stopped: false });
+    await flush(wrapper);
+    // Not an alert: the panel mounts again on every selection.
+    expect(block(wrapper).attributes("role")).toBe("status");
+    expect(block(wrapper).text()).toContain("Last run failed");
+    expect(block(wrapper).text()).toContain(message);
+    expect(block(wrapper).classes()).not.toContain("wftab-run-failure--stopped");
+
+    await wrapper.find('[data-testid="wftab-run-failure-dismiss"]').trigger("click");
+    await flush(wrapper);
+    expect(block(wrapper).exists()).toBe(false);
+    expect(runDialog.failures[KEY]).toBeUndefined();
+  });
+
+  // Dismiss removes its own button; focus must not fall to the page body.
+  it("hands focus to Run… when it is dismissed", async () => {
+    useWorkflowsStore().cards = [card()];
+    useWorkflowsStore().selectedKeys = [KEY];
+    useRunDialogStore().runFailed(KEY, { promptId: "p-1", message, stopped: false });
+    const wrapper = mount(WorkflowTab, { ...globalOpts, attachTo: document.body });
+    mounted.push(wrapper);
+    await flush(wrapper);
+    const dismiss = wrapper.find('[data-testid="wftab-run-failure-dismiss"]');
+    dismiss.element.focus();
+    await dismiss.trigger("click");
+    await flush(wrapper);
+    // The button itself: the body's text holds "Run…" too.
+    expect(document.activeElement?.tagName).toBe("BUTTON");
+    expect(document.activeElement.textContent.trim()).toBe("Run…");
+  });
+
+  it("says stopped for a run somebody interrupted", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    useRunDialogStore().runFailed(KEY, {
+      promptId: "p-1",
+      message: "Interrupted at KSampler",
+      stopped: true,
+    });
+    await flush(wrapper);
+    expect(block(wrapper).text()).toContain("Last run stopped");
+    expect(block(wrapper).classes()).toContain("wftab-run-failure--stopped");
+  });
+
+  it("is another workflow's business when another is selected", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    useRunDialogStore().runFailed(OTHER, { promptId: "p-1", message, stopped: false });
+    await flush(wrapper);
+    expect(block(wrapper).exists()).toBe(false);
+  });
+});

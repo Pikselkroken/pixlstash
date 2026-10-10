@@ -60,6 +60,46 @@ describe("ComfyUiRunner", () => {
     expect(wrapper.vm.progress.message).toBe("node 94: bad");
   });
 
+  // ComfyUI's socket speaks first and says only what the exception said; the
+  // backend's sentence names the node (#1839).
+  it("takes the backend's account of the failure it is showing", async () => {
+    const wrapper = mountRunner();
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-1" }] });
+    wrapper.vm.handleComfyuiPayload({
+      type: "execution_error",
+      data: { prompt_id: "p-1", exception_message: "'asym_w4a8_int8'" },
+    });
+    expect(wrapper.vm.progress.message).toBe("ComfyUI failed: 'asym_w4a8_int8'");
+
+    const named = "Load Diffusion Model (UNETLoader) failed: KeyError 'asym_w4a8_int8'";
+    await wrapper.setProps({ wsPluginProgress: failed("p-1", named) });
+    expect(wrapper.vm.progress.message).toBe(named);
+  });
+
+  it("keeps the first failure when a later one is about another prompt", async () => {
+    const wrapper = mountRunner();
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-1" }] });
+    wrapper.vm.handleComfyuiPayload({
+      type: "execution_error",
+      data: { prompt_id: "p-1", exception_message: "first" },
+    });
+    await wrapper.setProps({ wsPluginProgress: failed("p-2", "second") });
+    expect(wrapper.vm.progress.message).toBe("ComfyUI failed: first");
+  });
+
+  // Every tab hears every failure, and Abort's stopped runs report a moment
+  // after the next run has been started.
+  it("does not end its own run on the failure of a prompt it does not follow", async () => {
+    const wrapper = mountRunner();
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-2" }] });
+    await wrapper.setProps({ wsPluginProgress: failed("p-1", "Interrupted") });
+    expect(wrapper.vm.progress.status).toBe("queued");
+    // Still on record, should that prompt turn out to be this runner's.
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-1" }] });
+    expect(wrapper.vm.progress.status).toBe("failed");
+    expect(wrapper.vm.progress.message).toBe("Interrupted");
+  });
+
   it("still queues a run whose prompts have not failed", async () => {
     const wrapper = mountRunner();
     await wrapper.setProps({ wsPluginProgress: failed("p-1", "node 94: bad") });

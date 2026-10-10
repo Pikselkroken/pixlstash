@@ -68,6 +68,15 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    * follow: `{prompts, pictureId, workflowName, instruction, stack}`.
    */
   const editRun = ref(null);
+  /**
+   * The run of each workflow that last ended without a picture, by workflow
+   * id: `{promptId, message, stopped}`. `message` is the backend's sentence
+   * (the node that failed and why) and `stopped` marks a run somebody
+   * interrupted. Here rather than in a progress runner because a runner dies
+   * with its view, and the card and the Workflow tab must still say so when
+   * the owner comes back. Kept until dismissed or the workflow runs again.
+   */
+  const failures = ref({});
   /** Bumped on every session reset, so a pin write answered after one is dropped. */
   let session = 0;
   function sessionEpoch() {
@@ -119,8 +128,47 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     };
   }
 
+  /** A run of this workflow ended without a picture (`plugin_progress`). */
+  function runFailed(workflowId, failure) {
+    if (!workflowId) return;
+    failures.value = { ...failures.value, [workflowId]: failure };
+  }
+
+  /**
+   * Take a `plugin_progress` event. A ComfyUI run that failed is recorded on
+   * the workflow it names and answered as `{promptId, message, stopped}`;
+   * anything else is null.
+   */
+  function runEvent(payload) {
+    if (String(payload?.plugin || "").toLowerCase() !== "comfyui") return null;
+    if (payload.status !== "failed") return null;
+    const failure = {
+      promptId: String(payload.run_id || "").replace(/^comfyui-/i, ""),
+      message: String(payload.message || "").trim() || "ComfyUI failed",
+      stopped: Boolean(payload.stopped),
+    };
+    runFailed(payload.workflow_id, failure);
+    return failure;
+  }
+
+  function dismissFailure(workflowId) {
+    if (!(workflowId in failures.value)) return;
+    const next = { ...failures.value };
+    delete next[workflowId];
+    failures.value = next;
+  }
+
   /** Hand a started run's prompts to the runner, for progress. */
   function started(prompts, pictureIds = []) {
+    // Running a workflow again takes its last failure down. Not a failure OF
+    // one of these prompts: a run can fail before `/workflows/run` answers.
+    const startedIds = new Set(prompts.map((prompt) => String(prompt?.prompt_id)));
+    for (const prompt of prompts) {
+      const failure = failures.value[prompt?.workflow_id];
+      if (failure && !startedIds.has(String(failure.promptId))) {
+        dismissFailure(prompt.workflow_id);
+      }
+    }
     runner?.({
       prompts,
       pictureIds,
@@ -134,6 +182,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     context.value = {};
     pinsWritten.value = null;
     editRun.value = null;
+    failures.value = {};
     session += 1;
   });
   onScopeDispose(() => unsubscribeSessionReset());
@@ -145,6 +194,10 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     context,
     pinsWritten,
     editRun,
+    failures,
+    runEvent,
+    runFailed,
+    dismissFailure,
     sessionEpoch,
     hasRunner,
     openRun,
