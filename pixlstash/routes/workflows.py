@@ -54,6 +54,7 @@ from pydantic import (
     model_validator,
 )
 
+from pixlstash.hub import workflow_versions
 from pixlstash.hub.workflow_card_reads import (
     Workflow,
     asset_names,
@@ -170,9 +171,11 @@ from pixlstash.routes.comfyui import (
     _read_object_info,
     _resolve_workflow_path,
     _shelf_adapter,
+    WorkflowChanged,
     WorkflowFileTooLarge,
     runnable_document,
     store_manual_workflow,
+    store_over_workflow,
     trash_user_workflow,
     user_workflow_exists,
 )
@@ -648,24 +651,26 @@ class WorkflowCard(BaseModel):
         1,
         description=(
             "How many versions of the workflow's document are kept: a ComfyUI "
-            "file that changed is a new version of its workflow, and at most "
-            "50 are kept (version 1 and the newest 49). Always 1 for an "
-            "automatic workflow."
+            "file that changed, or a LoRA chain edit saved over the workflow, "
+            "is a new version of it, and at most "
+            "50 are kept (version 1 and the newest 49). 1 for an automatic "
+            "workflow never saved over; one saved over keeps the graph its "
+            "pictures held as version 1."
         ),
     )
     version: int = Field(
         1,
         description=(
             "The current version's number. Versions are numbered for good, "
-            "so past the 50 kept it is more than `versions`. Always 1 for an "
-            "automatic workflow."
+            "so past the 50 kept it is more than `versions`. 1 for an "
+            "automatic workflow never saved over."
         ),
     )
     version_at: str | None = Field(
         None,
         description=(
             "When the current version was stored (ISO 8601). Null for an "
-            "automatic workflow."
+            "automatic workflow never saved over."
         ),
     )
     hidden: bool = Field(
@@ -1433,7 +1438,9 @@ class RunGroup(BaseModel):
     workflow_id: str | None = None
     # The version of a manual workflow's document this group runs, after Run
     # and Open's check against ComfyUI; what its pictures record
-    # (`picture.run_workflow_version`). Null for an automatic workflow.
+    # (`picture.run_workflow_version`). For an automatic workflow the owner
+    # saved over, the version of its graph (recorded on no picture); null
+    # for one never saved over.
     workflow_version: int | None = None
     source: str | None = None
     source_picture_id: int | None = None
@@ -1528,7 +1535,7 @@ class WorkflowExport(BaseModel):
         description="What the export left out, as categories, never values.",
     )
     source: str = Field(
-        description="Where the graph was resolved from: file, picture or instance."
+        description="Where the graph was resolved from: edit, file, picture or instance."
     )
 
 
@@ -1561,7 +1568,7 @@ class WorkflowRunnableGraph(BaseModel):
         None, description="With `needs_conversion`: why the file did not convert."
     )
     source: str | None = Field(
-        description="Where the graph was resolved from: file, picture or instance."
+        description="Where the graph was resolved from: edit, file, picture or instance."
     )
     seedless: bool = Field(
         False,
@@ -1772,6 +1779,8 @@ class LoraChainEdit(BaseModel):
 
     name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
     dry_run: StrictBool = False
+    # Save over this workflow instead of as a copy: `name` is then not read.
+    overwrite: StrictBool = False
 
 
 class LoraChainChange(BaseModel):
@@ -1783,16 +1792,25 @@ class LoraChainChange(BaseModel):
 
 
 class LoraChainSaved(BaseModel):
-    """What a chain edit changed, and the workflow the new file is in."""
+    """What a chain edit changed, and the workflow the edited graph is in."""
 
     dry_run: bool = False
-    name: str | None = Field(None, description="The file written; null on a dry run.")
+    name: str | None = Field(
+        None,
+        description=(
+            "What the new workflow is called; null on a dry run and on an "
+            "overwrite, which names nothing."
+        ),
+    )
     workflow_id: str | None = Field(
         None,
         description=(
-            "The workflow the new file is in; null on a dry run or where it "
-            "is in none yet."
+            "The workflow the edited graph is in: the new one, or this one "
+            "on an overwrite; null on a dry run."
         ),
+    )
+    overwritten: bool = Field(
+        False, description="Whether the edit was saved over this workflow."
     )
     changes: list[LoraChainChange] = Field(default_factory=list)
 
@@ -3174,8 +3192,8 @@ def create_router(server) -> APIRouter:
         """The base-model files the card's runnable graph names, in order.
 
         Read off the same source a run would submit (:func:`_source_graph_for`:
-        the workflow file, then the best picture's embedded graph, then a stored
-        instance), because that is the graph whose missing file matters. Only
+        the owner's edit of the graph, else the workflow file, then the best
+        picture's embedded graph, then a stored instance), because that is the graph whose missing file matters. Only
         asked when the card has no name for its base model, so the grid never
         pays for it and an opened card pays once. A name the hub forgot reads
         back as :data:`~run_service.FORGOTTEN_MODEL` and is left out: it names
@@ -3949,6 +3967,41 @@ def create_router(server) -> APIRouter:
             return
         pulls.freshen(_comfyui_url(user), workflow_id)
 
+    def _edited_graph_for(card) -> tuple[dict | None, int | None]:
+        """``(graph, version)`` the owner saved over the automatic workflow
+        *card* is the base of.
+
+        The workflow's highest version (``workflow_versions.edited_document``).
+        ``(None, None)`` for a workflow never saved over, which is nearly
+        every one, and for a card that is in such a workflow without being its
+        base: a saved recipe runs on the card it was saved from, and that
+        card's own graph is not the one that was edited.
+        """
+        if not card.variants:
+            return None, None
+        hub = _hub()
+        workflow_id = workflow_of_variant(hub, card.variants[0])
+        if not workflow_id:
+            return None, None
+        edited, version = workflow_versions.edited_document(hub, workflow_id)
+        if version is None:
+            return None, None
+        workflow = find_workflow(hub, workflow_id, _counts())
+        if workflow is None or workflow.base_card != card.workflow_key:
+            return None, None
+        if api_graph(edited) is None:
+            # Only a row written from outside this route can be one: every
+            # overwrite stores a checked API graph. The version still stands,
+            # so the next overwrite is made on it and replaces it.
+            logger.warning(
+                "Workflow %s: version %d of its graph is not an API graph, so "
+                "the graph its pictures hold is used instead.",
+                workflow_id,
+                version,
+            )
+            return None, version
+        return edited, version
+
     def _source_graph_for(
         card, object_info: dict | None = None, comfyui_url: str | None = None
     ) -> tuple[run_service.Source | None, run_service.Reason | None]:
@@ -3981,6 +4034,14 @@ def create_router(server) -> APIRouter:
                 # The version read with the document, so the number the run
                 # records is the graph it built.
                 source.workflow_version = version
+            return source, reason
+        edited, edited_version = _edited_graph_for(card)
+        if edited is not None:
+            # What the owner saved over this workflow's graph: no file,
+            # picture or instance is read, since none of them is its graph now.
+            source, reason = run_service.resolve_source(card, edited_document=edited)
+            if source is not None:
+                source.workflow_version = edited_version
             return source, reason
         file_document = None
         file_problems: list[str] = []
@@ -4024,7 +4085,7 @@ def create_router(server) -> APIRouter:
             )
             instances = instance_documents(hub, library_uuid, hashes)
             names = asset_names(hub, [h for h, _ in instances])
-        return run_service.resolve_source(
+        source, reason = run_service.resolve_source(
             card,
             file_document=file_document,
             picture_graph=picture_graph,
@@ -4033,6 +4094,11 @@ def create_router(server) -> APIRouter:
             asset_names=names,
             file_problems=file_problems,
         )
+        if source is not None:
+            # A stored version that would not read: the pictures' graph runs,
+            # and an overwrite made on it is still made on that version.
+            source.workflow_version = edited_version
+        return source, reason
 
     def _apply_addressed(graph: dict, values: list[RunValue]) -> None:
         """Write each ``(slot label, input name)`` value into the graph.
@@ -6488,6 +6554,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such card."},
             409: {"description": "There is no graph to duplicate."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             500: {"description": "The copy could not be written."},
         },
     )
@@ -6579,6 +6648,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such card."},
             409: {"description": "No graph, or nothing this ComfyUI needs fixed."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             503: {"description": "ComfyUI could not be reached."},
         },
     )
@@ -6897,23 +6969,35 @@ def create_router(server) -> APIRouter:
             "one list per pass), an existing loader by node_id "
             "(moved and re-weighted, its id kept), a new one by the shelf "
             "sha256 of its LoRA, and every loader left out deleted. One call "
-            "is one new file; the original file is never changed. dry_run "
-            "answers the list of changes and writes nothing."
+            "is one new workflow and this one is not changed, unless "
+            "overwrite asks for the edit to be saved over this one. That is "
+            "its next version: the versions before are kept and its graph is "
+            "the newest (an automatic workflow's first overwrite keeps the "
+            "graph read off its pictures as version 1). Its name, pictures "
+            "and recipes stay. dry_run answers the list of changes and writes "
+            "nothing."
         ),
         response_model=LoraChainSaved,
         status_code=201,
         responses={
             200: {
                 "model": LoraChainSaved,
-                "description": "A dry run: the changes, nothing written.",
+                "description": (
+                    "A dry run (the changes, nothing written), or an "
+                    "overwrite (this workflow, changed)."
+                ),
             },
             404: {"description": "This machine has no such card."},
             409: {
                 "description": (
                     "No graph, nothing changed, an unknown or repeated loader, a "
-                    "LoRA not on the shelf or not on this ComfyUI, or a chain "
-                    "PixlStash cannot edit honestly."
+                    "LoRA not on the shelf or not on this ComfyUI, a chain "
+                    "PixlStash cannot edit honestly, or an overwrite of a "
+                    "workflow that got another version meanwhile."
                 )
+            },
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
             },
             503: {"description": "ComfyUI could not be reached."},
         },
@@ -6949,6 +7033,40 @@ def create_router(server) -> APIRouter:
             apply_lora_chain(graph, plan, object_info)
         except LookupError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if payload.overwrite:
+            if not card.manual and (
+                not card.variants
+                or workflow_of_variant(hub, card.variants[0]) != workflow.workflow_id
+            ):
+                # `_edited_graph_for` finds a workflow's versions through the
+                # card's first variant: a card without one would answer 200
+                # here and never be read back. Its other condition, that the
+                # card is the workflow's base card, is what `_require_base`
+                # handed us.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "PixlStash cannot save over this workflow: its graph is "
+                        "not read off its pictures. Save it as a new workflow."
+                    ),
+                )
+            _store_over(
+                hub,
+                workflow,
+                graph,
+                source.bindings,
+                "chain",
+                source.workflow_version,
+                original=source.graph,
+            )
+            response.status_code = 200
+            _announce(request, [workflow.workflow_id], "changed")
+            return LoraChainSaved(
+                dry_run=False,
+                workflow_id=workflow.workflow_id,
+                overwritten=True,
+                changes=plan["changes"],
+            )
         asked = re.sub(r"\.json$", "", (payload.name or "").strip(), flags=re.I)
         stem = download_stem(asked) if asked else ""
         name, landed = _store_copy(
@@ -7771,6 +7889,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such workflow."},
             409: {"description": "No graph to clone, or a swap could not be made."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             500: {"description": "The copy could not be written."},
         },
     )
@@ -7947,6 +8068,60 @@ def create_router(server) -> APIRouter:
                 detail="PixlStash could not store the workflow copy.",
             ) from exc
 
+    def _store_over(
+        hub,
+        workflow,
+        graph: dict,
+        bindings: list | None,
+        source: str,
+        version: int | None,
+        *,
+        original: dict,
+    ) -> None:
+        """Store one graph over *workflow*'s own, or raise the 500 that says why not.
+
+        :func:`_store_copy`'s twin for a gesture the owner asked to land on
+        the workflow itself: its next version. *bindings* go back in for the
+        same reason, on *original* too, which is the graph the edit was made
+        on and becomes version 1 of an automatic workflow saved over for the
+        first time. *version* is the version that graph was read at (``None``
+        for an automatic workflow never saved over); another one since is a
+        409, not an overwrite.
+        """
+        if bindings is not None:
+            graph = {**graph, BINDINGS_KEY: bindings}
+            original = {**original, BINDINGS_KEY: bindings}
+        try:
+            store_over_workflow(
+                hub,
+                workflow.workflow_id,
+                graph,
+                source,
+                expected_version=version,
+                original=original,
+            )
+        except WorkflowChanged as exc:
+            logger.info("An overwrite was refused: %s.", exc)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow got a newer version while it was being "
+                    "edited. Open Edit LoRAs again to edit that one."
+                ),
+            ) from exc
+        except WorkflowFileTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except (NotAWorkflowError, RecursionError, LookupError, sqlite3.Error) as exc:
+            logger.error(
+                "An edited graph could not be stored over workflow %s: %s",
+                workflow.workflow_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="PixlStash could not store the edited workflow.",
+            ) from exc
+
     @router.post(
         "/recipes/{recipe_id}/extract-workflow",
         summary="Make a saved recipe a manual workflow of its own",
@@ -7963,6 +8138,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "No such saved recipe."},
             409: {"description": "The recipe has no graph left to build on."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
         },
     )
     def extract_workflow(request: Request, recipe_id: int):

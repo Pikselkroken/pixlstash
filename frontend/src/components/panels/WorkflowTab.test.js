@@ -2791,6 +2791,7 @@ describe("the LoRA chain (#1478)", () => {
         EditLorasDialog: {
           name: "EditLorasDialog",
           props: ["open", "workflowId", "cardName", "pictureCount", "dropLora"],
+          emits: ["close", "overwritten"],
           template: "<div class='eld-stub' />",
         },
       },
@@ -2945,6 +2946,28 @@ describe("the LoRA chain (#1478)", () => {
     expect(dialog.props("cardName")).toBe("Cinematic portrait");
     expect(dialog.props("pictureCount")).toBe(184);
     expect(dialog.props("dropLora")).toBe("");
+  });
+
+  it("reads the chain again when Edit LoRAs… saved over the card itself", async () => {
+    const { wrapper } = await mountChain();
+    await editButton(wrapper).trigger("click");
+    await flush(wrapper);
+    const reads = getLoraChain.mock.calls.length;
+    const details = getWorkflowCard.mock.calls.length;
+    getLoraChain.mockResolvedValue(loraChain({ loaders: [] }));
+
+    // Another card's overwrite is not this rail's to re-read.
+    const dialog = wrapper.findComponent({ name: "EditLorasDialog" });
+    dialog.vm.$emit("overwritten", OTHER);
+    await flush(wrapper);
+    expect(getLoraChain.mock.calls.length).toBe(reads);
+
+    dialog.vm.$emit("overwritten", KEY);
+    await flush(wrapper);
+    expect(getLoraChain.mock.calls.length).toBe(reads + 1);
+    // The detail too: a manual workflow's version line comes with it.
+    expect(getWorkflowCard.mock.calls.length).toBe(details + 1);
+    expect(textOf(wrapper)).toContain("No LoRA loader. Editing adds the first one.");
   });
 
   it("says so, and refuses Edit, for a card with no graph", async () => {

@@ -91,7 +91,7 @@ from pixlstash.services.workflow_bindings import migrate_placeholders
 from pixlstash.services.workflow_inbox import content_hash
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.sql_chunking import chunked
-from pixlstash.utils.workflow_ids import MANUAL_PREFIX, stamp_workflow_id
+from pixlstash.utils.workflow_ids import AUTO_PREFIX, MANUAL_PREFIX, stamp_workflow_id
 
 logger = get_logger(__name__)
 
@@ -1250,6 +1250,7 @@ _WORKFLOW_ID_COLUMNS = (
     ("workflow_group_default", "workflow_id"),
     ("workflow_group_pins", "workflow_id"),
     ("workflow_group_picture_input", "workflow_id"),
+    ("workflow_version", "workflow_id"),
     ("workflow_key_successor", "workflow_id"),
     ("workflow_id_successor", "successor_id"),
     ("workflow_document", "from_workflow_id"),
@@ -1581,6 +1582,27 @@ def _carry_group_state(
             conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (group,))
     if not keep:
         conn.execute("DELETE FROM workflow_group_attr WHERE workflow_id = ?", (group,))
+        # The versions the owner's overwrites made are the one owner state
+        # not carried: the heirs may hold another base-model family, and a
+        # graph edited for these pictures is not theirs. They go with the id,
+        # out loud. Only an automatic id: a manual workflow's versions are its
+        # document, and it is never retired here.
+        dropped = (
+            conn.execute(
+                "DELETE FROM workflow_version WHERE workflow_id = ?", (group,)
+            ).rowcount
+            if group.startswith(AUTO_PREFIX)
+            else 0
+        )
+        if dropped:
+            logger.warning(
+                "Workflow %s is retired: the %d version(s) saved over it are "
+                "not carried to %s, which reads its graph off its pictures "
+                "again.",
+                group,
+                dropped,
+                heir,
+            )
 
 
 def _run_strength(run, node_id: str):

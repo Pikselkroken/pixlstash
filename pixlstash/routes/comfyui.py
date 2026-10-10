@@ -101,6 +101,7 @@ from pixlstash.services.workflow_io import (
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 # ComfyUI workflow-execution orchestration and the output-import pipeline live in
 # the service layer (backend refactor Phase 2 §4.5); the route handlers below
@@ -198,6 +199,10 @@ class WorkflowFileTooLarge(ValueError):
     A ``ValueError`` because every caller already handles one from
     ``json.load`` and treats it the same way - the document did not read.
     """
+
+
+class WorkflowChanged(Exception):
+    """A workflow got a newer version than the one an edit of it was made on."""
 
 
 def _load_workflow_json(path: str) -> dict:
@@ -327,6 +332,73 @@ def store_manual_workflow(
         api_document=api_document,
         record=record,
     )
+
+
+def store_over_workflow(
+    hub,
+    workflow_id: str,
+    workflow: dict,
+    source: str,
+    *,
+    expected_version: int | None = None,
+    original: dict | None = None,
+) -> int:
+    """Store *workflow* as the next version of the existing workflow *workflow_id*.
+
+    The other half of :func:`store_manual_workflow`: the same checks, and no
+    new record. Every overwrite is a version (``workflow_version``, *source*
+    its ``source``), so what it replaced is kept and the workflow's graph is
+    its newest. A manual workflow already has its document as version 1. An
+    automatic one holds no document, so the first overwrite stores *original*,
+    the graph read off its pictures, as version 1 beside the edit as version 2.
+    Name, notes, defaults, pins and pictures stay where they are.
+
+    *expected_version* is the version the edit was made on, checked inside the
+    write transaction: a version made in between (a pull, another tab's
+    overwrite) is not buried under an edit of the older graph. A manual
+    workflow is not written without it; for an automatic one ``None`` says
+    the edit was made on its pictures' graph, before any version.
+
+    Returns:
+        The number of the version written.
+
+    Raises:
+        WorkflowChanged: The workflow is not at *expected_version*.
+        NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
+        RecursionError: The document nests too deeply to read.
+        WorkflowFileTooLarge: It, or *original*, is past
+            :data:`MAX_WORKFLOW_FILE_BYTES`.
+        LookupError: No manual workflow *workflow_id*, or an automatic one's
+            first overwrite came without *original*.
+    """
+    check_comfy_workflow(workflow)
+    workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
+    _within_the_cap(workflow)
+    if original is not None:
+        _within_the_cap(original)
+    manual = workflow_id.startswith(MANUAL_PREFIX)
+    with hub.transaction() as conn:
+        current = conn.execute(
+            "SELECT MAX(version) FROM workflow_version WHERE workflow_id = ?",
+            (workflow_id,),
+        ).fetchone()[0]
+        if manual and current is None:
+            # Made by a build before versions: its document is version 1.
+            current = 1
+        # A manual `None` is refused too: an unguarded write is the one that
+        # could bury a pulled version.
+        if current != expected_version:
+            raise WorkflowChanged(
+                f"{workflow_id} is at version {current}, and the edit was "
+                f"made on version {expected_version}"
+            )
+        return workflow_versions.append_version(
+            conn,
+            workflow_id,
+            workflow,
+            source=source,
+            first=None if manual else original,
+        )
 
 
 def _within_the_cap(document: dict) -> None:

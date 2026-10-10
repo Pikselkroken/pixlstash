@@ -231,14 +231,26 @@
       </p>
 
       <p v-if="editable && !pending" class="eld-note eld-quiet">
-        Saving writes a new workflow. <b class="eld-strong">{{ cardName }}</b>
-        and its {{ picturesLabel }} stay as they are.
+        Nothing is written yet. Save… asks whether this goes over
+        <b class="eld-strong">{{ shownName }}</b> or is a new workflow.
       </p>
     </template>
 
     <!-- ── Step two: a named thing, and what it changes ──────────────── -->
     <template v-else>
+      <!-- Where the edit lands. Over the original is the default: it is a
+           new version, with the ones before kept, so Enter accepts either. -->
+      <div class="eld-where">
+        <span class="section-label">Save it as</span>
+        <Segmented
+          v-model="saveMode"
+          :options="saveModes"
+          aria-label="Save it as"
+          data-testid="eld-save-mode"
+        />
+      </div>
       <AppInput
+        v-if="!overwriting"
         v-model="newName"
         label="Name of the new workflow"
         :disabled="saving"
@@ -259,9 +271,15 @@
           </li>
         </ul>
       </div>
-      <p class="eld-note eld-quiet">
+      <p v-if="!overwriting" class="eld-note eld-quiet">
         The original keeps its {{ picturesLabel }}. Nothing made before this
         edit changes meaning.
+      </p>
+      <p v-else class="eld-note eld-quiet" data-testid="eld-over-note">
+        <b class="eld-strong">{{ shownName }}</b> keeps its name and its
+        {{ picturesLabel }}, and this chain becomes its next version. A recipe
+        naming a LoRA the workflow no longer loads still lists it, and a run
+        leaves it out and says so. {{ overNote }}
       </p>
       <p v-if="saveError" class="eld-note eld-bad" role="alert">
         {{ saveError }}
@@ -307,7 +325,7 @@
           :disabled="!canSave"
           @click="save"
         >
-          Save as a new workflow
+          {{ overwriting ? "Overwrite the original" : "Save as a new workflow" }}
         </AppButton>
       </template>
     </template>
@@ -317,7 +335,7 @@
 <script setup>
 /**
  * Edit LoRAs (#1478, direction B): a workflow's LoRA chain as one list
- * between two fixed ends, saved as a NEW workflow.
+ * between two fixed ends, saved as a new workflow or over the one it edits.
  *
  * The model source above, the sink below, and between them the loaders in
  * the order the chain applies them — so dragging row 3 above row 2 genuinely
@@ -326,9 +344,16 @@
  *
  * **Nothing is written until the second step.** Save… asks the route for a dry
  * run and lists the changes it answers with — the rewires included, which are
- * the part no owner can see — beside the new workflow's name; only "Save as a
- * new workflow" writes. The original card and its pictures never change: the
- * route stores a content-addressed copy.
+ * the part no owner can see — beside the choice of where it lands; only the
+ * second step's button writes. **Over the original** is the default (owner
+ * decision, 2026-10-10; `overwrite` on the PUT): it keeps the card, its name,
+ * pictures and recipes and gives it a new version, which is its graph from
+ * then on; every version before is kept (an automatic workflow's first
+ * overwrite keeps the graph read off its pictures as version 1). It emits
+ * `overwritten`, because the card selected does not change and the rail must
+ * read it again. **A new workflow** is the other choice: the original card
+ * and its pictures do not change. Plain Enter accepts whichever is chosen,
+ * since neither loses anything.
  *
  * **Where the model forks** (`lanes` in the read), the chain is drawn as the
  * graph it is: the loaders every pass reads once at the top, then one lane per
@@ -372,16 +397,19 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import Segmented from "../widgets/Segmented.vue";
 import EditLorasRow from "./EditLorasRow.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  /** The card whose chain is edited. The save never modifies it. */
+  /** The card whose chain is edited. Only an overwrite modifies it. */
   workflowId: { type: String, default: "" },
   /** What the owner calls the card: the subtitle, and the new name's stem. */
   cardName: { type: String, default: "" },
   /** How many pictures the card made, for "its N pictures stay as they are". */
   pictureCount: { type: Number, default: 0 },
+  /** The card's `origin_category`: `comfyui` is a workflow ComfyUI's file feeds. */
+  originCategory: { type: String, default: "" },
   /**
    * A LoRA filename to open with its loader already struck through.
    *
@@ -399,7 +427,7 @@ const props = defineProps({
   pending: { type: Object, default: null },
 });
 
-const emit = defineEmits(["close", "done"]);
+const emit = defineEmits(["close", "done", "overwritten"]);
 
 const notices = useNoticeStore();
 const workflows = useWorkflowsStore();
@@ -417,6 +445,8 @@ const shelfRead = ref(false);
 /** "edit" (the chain) or "confirm" (the name and what changes). */
 const step = ref("edit");
 const newName = ref("");
+/** "over" (this workflow's next version, the default) or "new" (a copy). */
+const saveMode = ref("over");
 const changes = ref([]);
 const previewing = ref(false);
 const previewError = ref("");
@@ -438,6 +468,28 @@ const editable = computed(() => Boolean(chain.value?.editable));
 const refusal = computed(() => chain.value?.refusal || "");
 
 const picturesLabel = computed(() => countPictures(props.pictureCount));
+
+const overwriting = computed(() => saveMode.value === "over");
+
+/** The card's name in a sentence, or words for one whose name has not landed. */
+const shownName = computed(() => props.cardName || "this workflow");
+
+const saveModes = computed(() => [
+  { id: "over", label: "Over the original", disabled: saving.value },
+  { id: "new", label: "A new workflow", disabled: saving.value },
+]);
+
+/**
+ * What happens to the graph an overwrite replaces, said before the press: it
+ * is kept as the version before. A workflow pulled from ComfyUI takes that
+ * file's next save as a newer version still, so the edit is only current
+ * until then.
+ */
+const overNote = computed(() =>
+  props.originCategory === "comfyui"
+    ? "The graph it replaces is kept as the version before. This workflow follows a file in ComfyUI: saving that file there again makes a newer version on top of this one."
+    : "The graph it replaces is kept as the version before.",
+);
 
 /** One lane per pass when the model forks; empty for a straight chain. */
 const lanes = computed(() => chain.value?.lanes || []);
@@ -821,6 +873,7 @@ async function load() {
   saveError.value = "";
   dropMissed.value = "";
   newName.value = "";
+  saveMode.value = "over";
   changes.value = [];
   say("");
   if (!props.workflowId) return;
@@ -1084,6 +1137,11 @@ function requestBody(dryRun) {
     name: newName.value.trim() || null,
     dry_run: dryRun,
   };
+  if (!dryRun && overwriting.value) {
+    // Over the original: it keeps its own name, so none is sent.
+    body.name = null;
+    body.overwrite = true;
+  }
   if (branched.value) {
     body.lanes = lanes.value.map((_lane, index) =>
       chainEntries(effective.filter((row) => row.lane === index)),
@@ -1123,25 +1181,44 @@ async function save() {
   if (!canSave.value) return;
   saving.value = true;
   saveError.value = "";
+  let answer;
   try {
-    const answer = await saveLoraChain(props.workflowId, requestBody(false));
-    const saved = String(answer?.name || newName.value.trim() || "");
-    notices.push({
-      level: "success",
-      text: saved
-        ? `Saved “${saved.replace(/\.json$/i, "")}” as a new workflow.`
-        : "Saved as a new workflow.",
-    });
-    // The new card is a card of its own, so the grid is re-read and the rail
-    // moves onto it: the owner's next look is at what they just made.
-    await workflows.refetch();
-    if (answer?.workflow_id) workflows.select(answer.workflow_id);
-    emit("close");
+    answer = await saveLoraChain(props.workflowId, requestBody(false));
   } catch (err) {
     console.warn("[workflows] the LoRA chain save was refused", err);
     saveError.value = errorMessage(err, "Could not save the edited LoRAs.");
+    saving.value = false;
+    return;
+  }
+  // The write landed. Nothing below may read as a failed save: the dialog
+  // would stay open, and a second press would write the edit again.
+  const over = Boolean(answer?.overwritten);
+  try {
+    const saved = String(answer?.name || newName.value.trim() || "");
+    notices.push({
+      level: "success",
+      text: over
+        ? `Saved over “${shownName.value}”.`
+        : saved
+          ? `Saved “${saved.replace(/\.json$/i, "")}” as a new workflow.`
+          : "Saved as a new workflow.",
+    });
+    // A new card is a card of its own, so the grid is re-read and the rail
+    // moves onto it: the owner's next look is at what they just made. Over
+    // the original it is the same card, so nothing is selected: the grid is
+    // re-read (a manual workflow's models and version come off its new
+    // document) and the rail is told below to read its chain again.
+    await workflows.refetch();
+    if (!over && answer?.workflow_id) workflows.select(answer.workflow_id);
+  } catch (err) {
+    console.warn(
+      `[workflows] the LoRA chain of ${props.workflowId} was saved, but the grid could not be shown again`,
+      err,
+    );
   } finally {
     saving.value = false;
+    if (over) emit("overwritten", props.workflowId);
+    emit("close");
   }
 }
 
@@ -1167,6 +1244,17 @@ function close() {
   if (saving.value) return;
   emit("close");
 }
+
+// The name field and the note under the changes swap with the choice, which a
+// reader who is not watching the dialog cannot see.
+watch(saveMode, (mode) => {
+  if (step.value !== "confirm") return;
+  say(
+    mode === "over"
+      ? `Saving over ${shownName.value}, as its next version. No new workflow is made.`
+      : `Saving as a new workflow, to be named. ${shownName.value} is not changed.`,
+  );
+});
 
 watch(
   () => [props.open, props.workflowId],
@@ -1402,6 +1490,13 @@ watch(
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: var(--space-2);
+}
+
+.eld-where {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-2);
 }
 

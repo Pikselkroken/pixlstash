@@ -845,7 +845,7 @@ tools are offered; it does not limit the token, which can do anything you can.
 Extra tools: `list_workflows`, `get_workflow`, `export_workflow_graph`,
 `import_workflow_graph`, `preflight_workflow`, `run_workflow`.
 
-A stored workflow is never changed in place: importing an edited graph makes a
+An import never changes a stored workflow in place: importing an edited graph makes a
 new workflow card, and importing an unchanged one matches the stored copy and
 adds nothing. A different prompt, seed or LoRA is not a graph edit; pass it to
 the run instead.

@@ -1399,8 +1399,19 @@ CREATE TABLE IF NOT EXISTS workflow_card_move (
 # document. ``content_hash`` is ``workflow_inbox.content_hash``;
 # ``topology_hash`` is NULL where it was not computed (data step 12 leaves it);
 # ``remote_modified`` is ComfyUI's clock in milliseconds for a pulled version;
-# ``source`` is how the version arrived (the document's origin for version 1,
-# ``pull`` for every later one).
+# ``source`` is how the version arrived (the document's origin for version 1;
+# ``pull`` for a changed ComfyUI file, ``chain`` for a LoRA chain edit saved
+# over the workflow).
+#
+# **An automatic workflow has versions only once the owner saves over it.** It
+# holds no ``workflow_document`` row: its graph is read off its best picture.
+# The first overwrite stores that graph as version 1 (``source`` ``pictures``)
+# and the edit as version 2; its current graph is then its highest version,
+# read by ``routes/workflows._edited_graph_for`` ahead of every other tier,
+# for the workflow's base card only. **Not carried when an ``auto:`` id
+# changes** (a new core rule, a re-identified family): the graph was edited
+# for the pictures that id held, so the rows are deleted with the retired id
+# and logged (``workflow_group_convert._carry_group_state``).
 _V2_WORKFLOW_VERSION = """
 CREATE TABLE IF NOT EXISTS workflow_version (
     workflow_id      TEXT NOT NULL,
