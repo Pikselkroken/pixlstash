@@ -338,6 +338,13 @@ _RUN_SCHEMA = {
             "description": "Other widget overrides, as get_workflow names them.",
         },
         "loras": {"type": "array", "items": {"type": "object"}},
+        "add_loras": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Shelf LoRAs to add for this run, each "
+            "{sha256, strength_model}. A workflow runs without any LoRA "
+            "attached to a person; this is how a run names who it is of.",
+        },
         "destination": {
             "type": "object",
             "description": 'Where the new pictures are filed, e.g. {"set_id": 12}.',

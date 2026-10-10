@@ -2469,6 +2469,34 @@ output node it does not recognise dead where ComfyUI would not.
 `workflow_group_default` edits replace what they name (`EDITED`); a `lora:`
 edit holding `off` takes a LoRA out.
 
+**A person's LoRA is a recipe's, never the workflow's.** A character LoRA is
+one attached to a person on the Models shelf
+(`model_shelf_service.character_lora_hashes`: the `adapter_attachment` rows of
+the open library whose character still exists, since the table has no foreign
+key and a deleted person's rows stay; never a guess from a filename). Who a
+picture is of is not part of a workflow, so `workflow_defaults` puts a majority
+LoRA attached to a person in `DefaultRecipe.person_loras` instead of `loras`:
+the card's `default_recipe.loras`, the export and the Workflow tab's default
+rows do not list it, and the tab's **Also used** pile offers it (the pile takes
+a LoRA in every picture too when the default leaves it out). One the owner adds
+to the default by hand (`EDITED`) stays in `loras`. `character_loras` is every
+attached digest less those. **Only a `workflow_id` source goes without them**
+(`_plan`'s `alone`; that is Run, its pre-flight, Open in ComfyUI and the MCP
+tools, which all name the workflow): `_leave_out_character_loras` bypasses each
+live loader of the base graph whose shelf digest is in `character_loras` before
+anything else reads the LoRA slots, so the loader a no-majority sample left in
+the graph is covered too. Best effort like the recipe's other bypasses (a
+stacker holding another LoRA, or an unreachable ComfyUI, keeps it and is
+logged), never reported in `bypassed_loras` (nothing is missing), and a slot
+the request names itself (`loras`, `skip_loras`) is left to the request. **The
+person the run names keeps their loader**: a digest in `add_loras` is neither
+bypassed nor left out of the recipe's LoRAs (`recipe_loras(people=added)`), so
+`_add_loras` sets its strengths where the graph already loads it instead of a
+splice the graph may refuse. A run made from pictures or a saved recipe places
+`recipe_loras(people=None)`, every one of them, exactly as before. Naming the
+person is `add_loras`: the Run popup's person picker
+(`docs/frontend_architecture.md`, `RunDialog.vue`) and the MCP run tools.
+
 **A run by `workflow_id`** starts from the base card's source and has the
 server apply the default recipe **under** the request: the recipe's values
 are written in a pass of their own before the request's, so a request value
