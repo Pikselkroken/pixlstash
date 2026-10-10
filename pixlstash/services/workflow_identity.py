@@ -59,7 +59,13 @@ WORKFLOW_KEY_VERSION = "v1"
 # string primitives, film grain, seed variance, loader variants).
 # v3: v2 also strips integer primitives, previews, prompt builders, the project
 # loader and model patches, and reads samplers and savers as the stock ones.
-CORE_VERSION = "v3"
+# v4: a third pass (:func:`_core_v4`) takes out filing wires, seed nodes, every
+# model patch, likeness gates and intermediate saves, and reads the PixlStash
+# picture loader and a checkpoint loader used only for its model as stock ones.
+CORE_VERSION = "v4"
+# The same rule as a number: what the core passes compare against, so a retired
+# rule can still be derived for a data step's label maps.
+_LIVE_RULE = 4
 
 ASSET_REFERENCE_PREFIX = "asset:"
 
@@ -206,6 +212,13 @@ _V3_CANONICAL_CLASSES = {
 _POST_PROCESS_CLASSES = frozenset(
     {"PhotoFilmGrain", "Image Levels Adjustment", "ImageSharpen", "ImageBlur"}
 )
+# Core rule v4's additions (:func:`_core_v4`). Seed nodes v3's list missed, and
+# the picture loader that reads the library where `LoadImage` reads a file.
+_V4_PLUMBING_CLASSES = frozenset({"SeedGenerator", "Seed (rgthree)"})
+_V4_CANONICAL_CLASSES = {"PixlStashPictureLoader": "LoadImage"}
+# The project, set and character a picture is filed into, wired from loader to
+# loader to saver: where a result lands, never what the graph does.
+_FILING_INPUT_PREFIX = "pixlstash_"
 # What a node with no consumer may still be for: it writes, shows or sends.
 # Anchored on purpose: a bare `Combine` or `Output` also matched
 # `ConditioningCombine` and friends, so orphan conditioning was never pruned.
@@ -622,7 +635,6 @@ def special_groups(document: dict) -> tuple[str, ...]:
 TWO_PASS = "two_pass"
 REFINE = "refine"
 MODEL_PER_PASS = "model_per_pass"
-INTERMEDIATE_SAVE = "intermediate_save"
 LIKENESS_GATE = "likeness_gate"
 NEGATIVE_PROMPT = "negative_prompt"
 REFERENCES_PREFIX = "references:"
@@ -630,14 +642,12 @@ TRAITS = (
     TWO_PASS,
     REFINE,
     MODEL_PER_PASS,
-    INTERMEDIATE_SAVE,
     LIKENESS_GATE,
     NEGATIVE_PROMPT,
 )
 _LIKENESS_GATE_CLASSES = frozenset(
     {"PixlStashFaceLikenessGate", "PixlStashPictureLikenessGate"}
 )
-_SAVER_CLASS_RE = re.compile(r"Save", re.IGNORECASE)
 _TEXT_ENCODER_CLASS_RE = re.compile(r"TextEncode")
 
 
@@ -677,22 +687,14 @@ def reduced_traits(
         and any(name == "latent_image" for name, _, _ in node.inputs)
     }
     present: set[str] = set()
-    first_passes: set[str] = set()
     for node_id in samplers:
         found = _upstream_sampler(core, node_id, samplers)
         if found is None:
             continue
         source, encoded = found
-        first_passes.add(source)
         present.add(REFINE if encoded else TWO_PASS)
         if _model_root(core, source) != _model_root(core, node_id):
             present.add(MODEL_PER_PASS)
-    for node_id, node in core.items():
-        if not _SAVER_CLASS_RE.search(node.class_type) or node_id in samplers:
-            continue
-        found = _upstream_sampler(core, node_id, samplers)
-        if found is not None and found[0] in first_passes:
-            present.add(INTERMEDIATE_SAVE)
     if any(n.class_type in _LIKENESS_GATE_CLASSES for n in core.values()):
         present.add(LIKENESS_GATE)
     if any(_negative_is_prompted(core, node) for node in core.values()):
@@ -905,17 +907,18 @@ def _core_graph(document: dict, strip_loras: bool) -> dict[str, ReducedNode]:
 
 
 def _core_pass(
-    document: dict, strip_loras: bool, *, v3: bool = True
+    document: dict, strip_loras: bool, *, rule: int = _LIVE_RULE
 ) -> tuple[dict[str, ReducedNode], Counter, bool]:
     """:func:`_core_v2`'s answer for a whole document: the live core rule.
 
-    *v3* off is core rule v2, kept only for data step 10's label maps.
+    A lower *rule* (2 or 3) is a retired one, kept only for the label maps of
+    the data step that moved off it.
     """
-    return _core_of(_reduce(document), strip_loras, v3=v3)
+    return _core_of(_reduce(document), strip_loras, rule=rule)
 
 
 def _core_of(
-    nodes: dict[str, ReducedNode], strip_loras: bool, *, v3: bool = True
+    nodes: dict[str, ReducedNode], strip_loras: bool, *, rule: int = _LIVE_RULE
 ) -> tuple[dict[str, ReducedNode], Counter, bool]:
     """:func:`_core_pass` of an already reduced graph, stored or raw."""
     strip = _core_strip(strip_loras)
@@ -931,7 +934,7 @@ def _core_of(
             for node_id, group in groups.items()
         )
         strip -= {FACE_DETAILER} if detailer else {UPSCALE, FACE_DETAILER}
-    return _core_v2(_strip(nodes, strip), v3=v3)
+    return _core_v2(_strip(nodes, strip), rule=rule)
 
 
 def has_sampler(nodes: dict[str, ReducedNode]) -> bool:
@@ -944,7 +947,7 @@ def _core_strip(strip_loras: bool) -> set[str]:
 
 
 def _core_v2(
-    nodes: dict[str, ReducedNode], *, v3: bool = True
+    nodes: dict[str, ReducedNode], *, rule: int = _LIVE_RULE
 ) -> tuple[dict[str, ReducedNode], Counter, bool]:
     """Core rule v2's second pass over an already v1-stripped graph.
 
@@ -966,9 +969,11 @@ def _core_v2(
       was a stripped preview), or everything: the graph is kept whole;
     * loader variants read as the stock loader (:data:`_CANONICAL_LOADERS`).
 
-    *v3* (the live rule) adds :data:`_V3_PLUMBING_CLASSES` to the plumbing and
-    :data:`_V3_CANONICAL_CLASSES` to the stock spellings.
+    *rule* 3 adds :data:`_V3_PLUMBING_CLASSES` to the plumbing and
+    :data:`_V3_CANONICAL_CLASSES` to the stock spellings; *rule* 4 (the live
+    rule) then runs :func:`_core_v4` over the result.
     """
+    v3 = rule >= 3
     plumbing = _STRING_PRIMITIVE_CLASSES | (_V3_PLUMBING_CLASSES if v3 else set())
     groups = node_groups(nodes)
     for node_id, node in nodes.items():
@@ -980,16 +985,123 @@ def _core_v2(
         {PLUMBING, POST_PROCESS, SEED_VARIANCE} if has_sampler(nodes) else {PLUMBING}
     )
     kept, pruned, refused = _prune(_strip(nodes, strip, groups=groups))
+    core = {
+        node_id: ReducedNode(_canonical_class(n.class_type, v3), n.widgets, n.inputs)
+        for node_id, n in kept.items()
+    }
+    if rule < 4:
+        return core, pruned, refused
+    core, pruned_v4, refused_v4 = _core_v4(core)
+    return core, pruned + pruned_v4, refused or refused_v4
+
+
+def _core_v4(
+    nodes: dict[str, ReducedNode],
+) -> tuple[dict[str, ReducedNode], Counter, bool]:
+    """Core rule v4's third pass, over the v3 core and never the document.
+
+    So two graphs with one v3 core have one v4 core, and workflows only merge
+    (data step 13). :func:`_core_v2`'s answer shape. In order:
+
+    * filing wires are dropped (:data:`_FILING_INPUT_PREFIX`), which leaves a
+      set or character loader that fed nothing else dead;
+    * seed nodes (:data:`_V4_PLUMBING_CLASSES`) and **model patches** are
+      stripped, edges re-wired through them. A patch is read off the wiring,
+      not a class list: its one link is ``model`` and everything reading it
+      reads it as ``model`` (``TeaCache``, ``CompileModel``, a shift). A
+      scheduler takes a model too, but is read as ``sigmas``, and a sampler
+      is never one;
+    * a likeness gate is stripped where the graph samples, as a filter is;
+    * a sink that saves what the graph goes on to sample is dropped
+      (:func:`_final_sinks`), and dead nodes pruned again (:func:`_prune`,
+      with its refusal);
+    * the PixlStash picture loader reads as ``LoadImage``, and a checkpoint
+      loader nothing reads a CLIP or VAE from as ``UNETLoader``: it loads a
+      model, which is all the other does.
+    """
+    nodes = {
+        node_id: ReducedNode(
+            node.class_type,
+            node.widgets,
+            tuple(
+                edge
+                for edge in node.inputs
+                if not edge[0].startswith(_FILING_INPUT_PREFIX)
+            ),
+        )
+        for node_id, node in nodes.items()
+    }
+    read_as: dict[str, set[str]] = {}
+    for node in nodes.values():
+        for name, source, _ in node.inputs:
+            read_as.setdefault(source, set()).add(name)
+    sampled = has_sampler(nodes)
+    groups = node_groups(nodes)
+    for node_id, node in nodes.items():
+        if groups[node_id] is not None:
+            # A stage or a LoRA loader the core kept is not a patch.
+            continue
+        patch = (
+            [name for name, _, _ in node.inputs] == ["model"]
+            and read_as.get(node_id) == {"model"}
+            and not _SAMPLER_CLASS_RE.search(node.class_type)
+        )
+        gate = sampled and node.class_type in _LIKENESS_GATE_CLASSES
+        if patch or gate or node.class_type in _V4_PLUMBING_CLASSES:
+            groups[node_id] = PLUMBING
+    kept, pruned, refused = _prune(
+        _final_sinks(_strip(nodes, {PLUMBING}, groups=groups))
+    )
+    slots_read: dict[str, set[int]] = {}
+    for node in kept.values():
+        for _, source, slot in node.inputs:
+            slots_read.setdefault(source, set()).add(slot)
+
+    def stock(node_id: str, class_type: str) -> str:
+        if class_type == "CheckpointLoaderSimple" and slots_read.get(node_id) == {0}:
+            return "UNETLoader"
+        return _V4_CANONICAL_CLASSES.get(class_type, class_type)
+
     return (
         {
-            node_id: ReducedNode(
-                _canonical_class(n.class_type, v3), n.widgets, n.inputs
-            )
+            node_id: ReducedNode(stock(node_id, n.class_type), n.widgets, n.inputs)
             for node_id, n in kept.items()
         },
         pruned,
         refused,
     )
+
+
+def _final_sinks(nodes: dict[str, ReducedNode]) -> dict[str, ReducedNode]:
+    """*nodes* without the sinks that save something the graph samples further.
+
+    A sink whose upstream samplers are a strict part of another sink's is a
+    save along the way (the picture before the second pass, or one no sampler
+    made), not another result. Two sinks of one sampler's output are both
+    final, and a graph that does not sample keeps every sink.
+    """
+    read = {source for node in nodes.values() for _, source, _ in node.inputs}
+    samplers: dict[str, set[str]] = {}
+    for node_id, node in nodes.items():
+        if node_id in read or not _SINK_CLASS_RE.search(node.class_type):
+            continue
+        seen: set[str] = set()
+        stack = [source for _, source, _ in node.inputs]
+        while stack:
+            current = stack.pop()
+            if current in seen or current not in nodes:
+                continue
+            seen.add(current)
+            stack.extend(source for _, source, _ in nodes[current].inputs)
+        samplers[node_id] = {
+            i for i in seen if _SAMPLER_CLASS_RE.search(nodes[i].class_type)
+        }
+    return {
+        node_id: node
+        for node_id, node in nodes.items()
+        if node_id not in samplers
+        or not any(samplers[node_id] < other for other in samplers.values())
+    }
 
 
 def _prune(
@@ -1119,7 +1231,8 @@ def reduced_workflow_type(nodes: dict[str, ReducedNode]) -> Optional[str]:
         for node_id, node in nodes.items()
     ):
         return "img2img"
-    if any(re.match(r"^Empty.*Latent", cls) for cls in classes):
+    # Unanchored: `SDXL Quick Empty Latent (WLSH)` starts from nothing too.
+    if any(re.search(r"Empty.*Latent", cls) for cls in classes):
         return "txt2img"
     return None
 

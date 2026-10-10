@@ -183,7 +183,6 @@ from pixlstash.services.workflow_export import (
 from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     CORE_ADDRESS_PREFIX,
-    INTERMEDIATE_SAVE,
     LIKENESS_GATE,
     MODEL_PER_PASS,
     NEGATIVE_PROMPT,
@@ -2331,7 +2330,6 @@ _TRAIT_LABELS = {
     TWO_PASS: "Two-Pass",
     REFINE: "Refine",
     MODEL_PER_PASS: "Model per Pass",
-    INTERMEDIATE_SAVE: "Intermediate Save",
     LIKENESS_GATE: "Likeness Gate",
     NEGATIVE_PROMPT: "Negative Prompt",
 }

@@ -31,6 +31,7 @@ from pixlstash.hub.workflow_card_reads import (
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 from pixlstash.hub.workflow_group_convert import (
     _core_strip_v2,
+    _core_strip_v3,
     card_document,
     core_label_maps,
     label_map,
@@ -181,12 +182,14 @@ class SavedRecipeConvertTask(BaseTask):
                     )
                     deferred.append(recipe_id)
                     continue
-                # Keyed by the retired rule's labels: v1 (step 8) or v2
-                # (step 10). A label is a digest of its graph, so the two do not meet.
+                # Keyed by the retired rule's labels: v1 (step 8), v2 (step
+                # 10) or v3 (step 13). Where two rules give one label, it is
+                # the same node's.
                 stage_slots = (
                     {
                         **core_label_maps(found[1])[1],
                         **core_label_maps(found[1], _core_strip_v2)[1],
+                        **core_label_maps(found[1], _core_strip_v3)[1],
                     }
                     if found and card.topology_hash == bases.get(workflow_id)
                     else {}
