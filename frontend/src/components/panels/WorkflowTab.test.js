@@ -1425,6 +1425,32 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(pileRow.find(".wftab-label").text()).toBe("Also used");
   });
 
+  it("piles a LoRA in every picture that the default leaves out (a person's)", async () => {
+    // In every picture, yet not a default: the workflow runs without a
+    // person's LoRA. It must still be listed, or it could not be added back.
+    const cy = `asset:${"3".repeat(64)}`;
+    // Bo is a default, so the pile is as long as `varying` and only its
+    // members say the "No LoRA" count no longer answers for it.
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({
+        loras: [{ asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength: 0.8, provenance: "best" }],
+      }),
+    );
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        without: 4,
+        shared: [
+          { asset: cy, filename: "cy.safetensors", name: "Cy", on_shelf: true, sha256: "c".repeat(64), pictures: 5, picture_ids: [31] },
+        ],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.vm.alsoUsed.map((use) => use.name)).toEqual(["Cy", "Ada"]);
+    expect(wrapper.find("[data-testid='wftab-pile']").text()).toContain("+1");
+    // "No LoRA" was counted against the varying ones alone.
+    expect(wrapper.vm.pileSummary.without).toBe(null);
+  });
+
   it("never joins by filename: a same-named LoRA with another digest stays in the pile", async () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({

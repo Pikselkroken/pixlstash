@@ -2,7 +2,12 @@
 
 import { describe, it, expect } from "vitest";
 
-import { fitWorkflows, nameKey, pairedCheckpoints } from "./loraWorkflows";
+import {
+  fitPeople,
+  fitWorkflows,
+  nameKey,
+  pairedCheckpoints,
+} from "./loraWorkflows";
 
 const LORA = {
   sha256: "a".repeat(64),
@@ -118,5 +123,59 @@ describe("pairedCheckpoints", () => {
       },
     ];
     expect([...pairedCheckpoints(sets, LORA.sha256)]).toEqual(["d".repeat(64)]);
+  });
+});
+
+describe("fitPeople", () => {
+  const of = (id) => [{ entity_type: "character", entity_id: id }];
+  const lora = (letter, family, attachments) => ({
+    sha256: letter.repeat(64),
+    filename: `${letter}.safetensors`,
+    base_model_family: family,
+    attachments,
+  });
+  const PEOPLE = [
+    { id: 1, name: "Unread" },
+    { id: 2, name: "Example" },
+    { id: 3, name: "Other" },
+    { id: 4, name: "Nobody's" },
+  ];
+
+  it("offers the people whose LoRA works with the checkpoint, matches first", () => {
+    const fits = fitPeople(
+      card("w"),
+      [
+        lora("u", null, of(1)),
+        lora("s", "sdxl", of(2)),
+        lora("k", "krea2", of(2)),
+        lora("x", "sdxl", of(3)),
+        // A set's LoRA is not a person's.
+        lora("t", "krea2", [{ entity_type: "set", entity_id: 4 }]),
+      ],
+      PEOPLE,
+    );
+    expect(fits.people.map((p) => [p.name, p.loras.map((l) => l.filename)])).toEqual([
+      // Only the LoRA for this base model, though Example has two.
+      ["Example", ["k.safetensors"]],
+      // Nothing says it will not work, so it is offered, after the match.
+      ["Unread", ["u.safetensors"]],
+    ]);
+    // Other's only LoRA is for another base model: counted, not offered.
+    expect(fits.clash).toBe(1);
+  });
+
+  it("offers everyone with a LoRA when the checkpoint's family is not known", () => {
+    const fits = fitPeople(card("w", { family: null }), [lora("x", "sdxl", of(3))], PEOPLE);
+    expect(fits.people.map((p) => p.name)).toEqual(["Other"]);
+    expect(fits.clash).toBe(0);
+  });
+
+  it("still offers a person on a workflow that starts from a picture", () => {
+    const fits = fitPeople(
+      card("w", { type: "img2img" }),
+      [lora("k", "krea2", of(2))],
+      PEOPLE,
+    );
+    expect(fits.people.map((p) => p.name)).toEqual(["Example"]);
   });
 });
