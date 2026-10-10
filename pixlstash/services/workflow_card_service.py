@@ -35,6 +35,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Callable, Optional, Union
 
+from pixlstash.hub import workflow_versions
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import (
     Card,
@@ -599,6 +600,7 @@ def _describe_dates(hub: HubDatabase, figures: list[WorkflowFigures]) -> None:
                 batch,
             )
         )
+    saved_over = workflow_versions.automatic_version_facts(hub)
     for figure in figures:
         if figure.card.manual:
             # `version_at` already falls back to the document's own date.
@@ -608,6 +610,15 @@ def _describe_dates(hub: HubDatabase, figures: list[WorkflowFigures]) -> None:
         seen = [first_seen[v] for v in figure.card.variants if v in first_seen]
         if seen:
             figure.created_at, figure.changed_at = min(seen), max(seen)
+        versions = saved_over.get(figure.workflow_id)
+        if versions is not None:
+            # An automatic workflow the owner saved over: its version line,
+            # and the overwrite counts as a change beside a new variant.
+            kept, current, stored_at = versions
+            figure.card = replace(
+                figure.card, versions=kept, version=current, version_at=stored_at
+            )
+            figure.changed_at = max(filter(None, [figure.changed_at, stored_at]))
 
 
 def _describe_recipe_values(

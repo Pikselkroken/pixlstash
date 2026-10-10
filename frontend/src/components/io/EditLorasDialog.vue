@@ -278,9 +278,9 @@
       </p>
       <p v-else class="eld-note eld-quiet" data-testid="eld-over-note">
         <b class="eld-strong">{{ shownName }}</b> keeps its name and its
-        {{ picturesLabel }}, and this chain becomes its graph. A recipe naming
-        a LoRA the workflow no longer loads still lists it, and a run leaves
-        it out and says so. {{ overNote }}
+        {{ picturesLabel }}, and this chain becomes its next version. A recipe
+        naming a LoRA the workflow no longer loads still lists it, and a run
+        leaves it out and says so. {{ overNote }}
       </p>
       <p v-if="saveError" class="eld-note eld-bad" role="alert">
         {{ saveError }}
@@ -348,9 +348,10 @@
  * the part no owner can see — beside the choice of where it lands; only the
  * second step's button writes. **A new workflow** is the default: the original
  * card and its pictures do not change. **Over the original** (`overwrite` on
- * the PUT) keeps the card, its name, pictures and recipes and replaces its
- * graph: a manual workflow gets a new version, an automatic one a stored
- * graph in place of the one read off its pictures. It emits `overwritten`,
+ * the PUT) keeps the card, its name, pictures and recipes and gives it a new
+ * version, which is its graph from then on; every version before is kept (an
+ * automatic workflow's first overwrite keeps the graph read off its pictures
+ * as version 1). It emits `overwritten`,
  * because the card selected does not change and the rail must read it again.
  * Plain Enter never overwrites: that write is its button's alone, and the
  * live region says so when the choice is made.
@@ -480,14 +481,15 @@ const saveModes = computed(() => [
 ]);
 
 /**
- * What an overwrite cannot promise, said before the press. A workflow pulled
- * from ComfyUI takes that file's next save as its newest version, so the edit
- * is only current until then.
+ * What happens to the graph an overwrite replaces, said before the press: it
+ * is kept as the version before. A workflow pulled from ComfyUI takes that
+ * file's next save as a newer version still, so the edit is only current
+ * until then.
  */
 const overNote = computed(() =>
   props.originCategory === "comfyui"
-    ? "This workflow follows a file in ComfyUI: saving that file there again puts ComfyUI's version back on top. Overwriting cannot be undone here."
-    : "Overwriting cannot be undone here.",
+    ? "The graph it replaces is kept as the version before. This workflow follows a file in ComfyUI: saving that file there again makes a newer version on top of this one."
+    : "The graph it replaces is kept as the version before.",
 );
 
 /** One lane per pass when the model forks; empty for a straight chain. */

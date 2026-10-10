@@ -3,7 +3,12 @@
 A ComfyUI file whose content changed is a new **version** of the card its
 ``workflow_origin`` row names, not a new card, so its pictures, recipes,
 defaults and pins stay where they are. So is a LoRA chain edit the owner saved
-over the workflow instead of as a copy. Version 1 is the document the card was
+over the workflow instead of as a copy.
+
+**An automatic workflow has versions too, once it is saved over.** It has no
+``workflow_document`` row, so nothing here copies onto one: its version 1 is
+the graph its pictures held (:func:`append_version`'s *first*), and its
+current graph is read from its highest version (:func:`edited_document`). Version 1 is the document the card was
 made with; the card's current graph is its highest version.
 
 **``workflow_document`` holds a copy of the highest version** (``document`` and
@@ -27,7 +32,7 @@ from typing import Optional
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_inbox import content_hash as document_content_hash
-from pixlstash.utils.workflow_ids import stamp_workflow_id
+from pixlstash.utils.workflow_ids import AUTO_PREFIX, stamp_workflow_id
 
 logger = get_logger(__name__)
 
@@ -35,6 +40,10 @@ logger = get_logger(__name__)
 # ``MAX_VERSIONS - 1``. A ComfyUI file is written by whoever reaches ComfyUI,
 # and the poll takes every change, so history is bounded or the hub is not.
 MAX_VERSIONS = 50
+
+# ``source`` of an automatic workflow's version 1: the graph its pictures held
+# when the owner first saved over it.
+FROM_PICTURES = "pictures"
 
 
 def _now() -> str:
@@ -144,12 +153,18 @@ def append_version(
     content_hash: Optional[str] = None,
     topology_hash: Optional[str] = None,
     remote_modified: Optional[int] = None,
+    first: Optional[dict] = None,
 ) -> int:
     """Make *document* the next version of *workflow_id*, inside the caller's
     transaction, and return its number.
 
     *source* is how the version arrived: ``pull`` for a changed ComfyUI file,
     ``chain`` for a LoRA chain edit the owner saved over the workflow.
+
+    *first* is version 1 of a workflow that has no document row to take it
+    from: an automatic workflow's graph as read off its pictures, stored the
+    first time the owner saves over it (``source`` :data:`FROM_PICTURES`), so
+    what the edit replaced is kept like any other earlier version.
 
     Stamped with the workflow's id like every stored document, and copied onto
     ``workflow_document`` with its conversion cleared: the conversion was of the
@@ -166,7 +181,9 @@ def append_version(
     if latest is None:
         # Made by a build before versions: its document is version 1.
         if not _first_from_document(conn, workflow_id):
-            raise LookupError(f"No manual workflow {workflow_id}")
+            if first is None:
+                raise LookupError(f"No manual workflow {workflow_id}")
+            insert_version(conn, workflow_id, 1, json.dumps(first), None, FROM_PICTURES)
         latest = 1
     stored = json.dumps(stamp_workflow_id(document, workflow_id))
     version = latest + 1
@@ -244,3 +261,53 @@ def version_with_content(
     ):
         return None
     return 1 if current_content_hash(hub, workflow_id) == content_hash else None
+
+
+def edited_document(
+    hub: HubDatabase, workflow_id: str
+) -> tuple[Optional[dict], Optional[int]]:
+    """An automatic workflow's current graph and its version, or ``(None, None)``.
+
+    The highest version the owner's overwrites made. ``(None, None)`` for a
+    workflow never saved over, which is nearly every one. A row that will not
+    parse is logged and answers ``(None, version)``: the caller decides what a
+    workflow whose stored graph cannot be read runs.
+    """
+    row = hub.fetchone(
+        "SELECT version, document FROM workflow_version WHERE workflow_id = ? "
+        "ORDER BY version DESC LIMIT 1",
+        (workflow_id,),
+    )
+    if row is None:
+        return None, None
+    try:
+        document = json.loads(row["document"])
+    except (ValueError, TypeError, RecursionError) as exc:
+        logger.warning(
+            "Workflow %s: version %d of its graph will not read: %s",
+            workflow_id,
+            row["version"],
+            exc,
+        )
+        return None, row["version"]
+    return (document if isinstance(document, dict) else None), row["version"]
+
+
+def automatic_version_facts(hub: HubDatabase) -> dict[str, tuple[int, int, str]]:
+    """``{workflow id: (versions kept, current version, stored at)}`` per
+    automatic workflow the owner has saved over.
+
+    What the grid shows as *Version N*, read in one statement. A manual
+    workflow's are read with its document (``workflow_card_reads``).
+    """
+    return {
+        row["workflow_id"]: (row["versions"], row["version"], row["created_at"])
+        for row in hub.fetchall(
+            "SELECT v.workflow_id, COUNT(*) AS versions, MAX(v.version) AS version, "
+            "(SELECT l.created_at FROM workflow_version l "
+            "WHERE l.workflow_id = v.workflow_id ORDER BY l.version DESC LIMIT 1) "
+            "AS created_at FROM workflow_version v "
+            "WHERE v.workflow_id LIKE ? GROUP BY v.workflow_id",
+            (f"{AUTO_PREFIX}%",),
+        )
+    }

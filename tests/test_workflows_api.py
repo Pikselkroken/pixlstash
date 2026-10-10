@@ -648,7 +648,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_group_attr")
         conn.execute("DELETE FROM workflow_group_pins")
         conn.execute("DELETE FROM workflow_group_picture_input")
-        conn.execute("DELETE FROM workflow_group_graph")
+        conn.execute("DELETE FROM workflow_version")
         conn.execute("DELETE FROM workflow_group_member")
         conn.execute("DELETE FROM workflow_group")
         conn.execute("DELETE FROM workflow_document")
@@ -14957,12 +14957,25 @@ def _chain_ids(client, workflow_id=RUN_WF) -> list[str]:
     return [loader["node_id"] for loader in r.json()["loaders"]]
 
 
+def _versions_of(env, workflow_id) -> list[tuple[int, str, dict]]:
+    """``(version, source, document)`` of every version kept, oldest first."""
+    return [
+        (row[0], row[1], json.loads(row[2]))
+        for row in env.server.hub.fetchall(
+            "SELECT version, source, document FROM workflow_version "
+            "WHERE workflow_id = ? ORDER BY version",
+            (workflow_id,),
+        )
+    ]
+
+
 def test_an_overwrite_changes_an_automatic_workflows_own_graph(chained):
-    """Overwrite on a workflow known from its pictures: same workflow, new graph.
+    """Overwrite on a workflow known from its pictures: same workflow, new version.
 
     The picture still embeds loader 5 (``chained`` serves CHAIN_DOCUMENT for
-    it), so every read below that lacks 5 came from the stored edit. Wrong if
-    a manual workflow appears (that is Save as new), or if the pictures move.
+    it), so every read below that lacks 5 came from the stored version. The
+    graph the pictures held is kept as version 1. Wrong if a manual workflow
+    appears (that is Save as new), or if the pictures move.
     """
     pictures = _by_key(_cards(chained.owner))[RUN_WF]["picture_count"]
     assert pictures, "the fixture workflow has no picture to keep"
@@ -14988,14 +15001,25 @@ def test_an_overwrite_changes_an_automatic_workflows_own_graph(chained):
     opened = chained.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
     assert opened["source"] == "edit", opened["source"]
     assert "5" not in opened["workflow"]
-    assert _by_key(_cards(chained.owner))[RUN_WF]["picture_count"] == pictures
+    card = _by_key(_cards(chained.owner))[RUN_WF]
+    assert card["picture_count"] == pictures
+    assert (card["versions"], card["version"]) == (2, 2), card
+    assert card["version_at"], "an overwritten workflow says when"
+    # What the edit replaced is version 1, loader 5 and all.
+    first, second = _versions_of(chained, RUN_WF)
+    assert (first[0], first[1], "5" in first[2]) == (1, "pictures", True)
+    assert (second[0], second[1], "5" in second[2]) == (2, "chain", False)
 
-    # The next edit starts from the edited graph, and replaces it.
+    # The next edit starts from the newest version, and is the next one.
     r = _chain_edit(chained.owner, overwrite=True)
     assert r.status_code == 200, r.text
     assert _chain_ids(chained.owner) == []
-    rows = chained.server.hub.fetchall("SELECT workflow_id FROM workflow_group_graph")
-    assert [row[0] for row in rows] == [RUN_WF]
+    assert [(row[0], row[1]) for row in _versions_of(chained, RUN_WF)] == [
+        (1, "pictures"),
+        (2, "chain"),
+        (3, "chain"),
+    ]
+    assert _by_key(_cards(chained.owner))[RUN_WF]["version"] == 3
 
 
 def test_an_overwritten_graph_is_the_base_cards_and_no_other_cards(chained):
@@ -15085,7 +15109,41 @@ def test_an_overwrite_is_refused_where_it_would_never_be_read_back(chained):
     r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True)
     assert r.status_code == 409, r.text
     assert "Save it as a new workflow" in r.json()["detail"]
-    assert chained.server.hub.fetchall("SELECT 1 FROM workflow_group_graph") == []
+    assert _versions_of(chained, RUN_WF) == []
+
+
+def test_two_overwrites_of_one_automatic_workflow_do_not_bury_each_other(chained):
+    """Another tab saved over it first: the second edit is refused, not stacked."""
+    real = workflows_routes.store_over_workflow
+
+    def another_tab_first(hub, workflow_id, graph, source, **kwargs):
+        real(hub, workflow_id, json.loads(json.dumps(CHAIN_DOCUMENT)), source, **kwargs)
+        return real(hub, workflow_id, graph, source, **kwargs)
+
+    chained.monkeypatch.setattr(
+        workflows_routes, "store_over_workflow", another_tab_first
+    )
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True)
+    assert r.status_code == 409, r.text
+    # The other tab's two versions and nothing of ours: loader 5 still stands.
+    kept = _versions_of(chained, RUN_WF)
+    assert [(row[0], row[1]) for row in kept] == [(1, "pictures"), (2, "chain")]
+    assert "5" in kept[1][2]
+
+
+def test_a_version_that_will_not_run_is_replaced_by_the_next_overwrite(chained):
+    """A stored version that is no API graph: the pictures' graph runs, said
+    in the log, and saving over the workflow again is how it is put right."""
+    with chained.server.hub.transaction() as conn:
+        for version in (1, 2):
+            workflow_versions.insert_version(
+                conn, RUN_WF, version, '{"nodes": [], "links": []}', None, "chain"
+            )
+    assert _chain_ids(chained.owner) == ["2", "5"]
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True)
+    assert r.status_code == 200, r.text
+    assert [row[0] for row in _versions_of(chained, RUN_WF)] == [1, 2, 3]
+    assert _chain_ids(chained.owner) == ["2"]
 
 
 def test_the_edited_graph_is_the_first_source_and_keeps_its_bindings():

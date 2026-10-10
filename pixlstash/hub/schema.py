@@ -1399,6 +1399,16 @@ CREATE TABLE IF NOT EXISTS workflow_card_move (
 # ``source`` is how the version arrived (the document's origin for version 1;
 # ``pull`` for a changed ComfyUI file, ``chain`` for a LoRA chain edit saved
 # over the workflow).
+#
+# **An automatic workflow has versions only once the owner saves over it.** It
+# holds no ``workflow_document`` row: its graph is read off its best picture.
+# The first overwrite stores that graph as version 1 (``source`` ``pictures``)
+# and the edit as version 2; its current graph is then its highest version,
+# read by ``routes/workflows._edited_graph_for`` ahead of every other tier,
+# for the workflow's base card only. **Not carried when an ``auto:`` id
+# changes** (a new core rule, a re-identified family): the graph was edited
+# for the pictures that id held, so the rows are deleted with the retired id
+# and logged (``workflow_group_convert._carry_group_state``).
 _V2_WORKFLOW_VERSION = """
 CREATE TABLE IF NOT EXISTS workflow_version (
     workflow_id      TEXT NOT NULL,
@@ -1411,27 +1421,6 @@ CREATE TABLE IF NOT EXISTS workflow_version (
     source           TEXT NOT NULL,
     created_at       TEXT NOT NULL,
     PRIMARY KEY (workflow_id, version)
-)
-"""
-
-# The graph the owner saved OVER an automatic workflow's (Edit LoRAs,
-# "Overwrite the original"). An automatic workflow holds no document of its
-# own: its graph is read off its best picture, so an edit of it has nowhere
-# else to live. One row per workflow, replaced by the next overwrite; the
-# document is an API graph, ``pixlstash_bindings`` kept. Read by
-# ``routes/workflows._source_graph_for`` ahead of every other tier, for the
-# workflow's base card only. A manual workflow never has a row: its edit is a
-# ``workflow_version``. **Not carried when an ``auto:`` id changes** (a new
-# core rule, a re-identified family): the graph was edited for the pictures
-# that id held, and the workflow that follows it falls back to its pictures'.
-# The row is deleted with the retired id, and logged
-# (``workflow_group_convert._carry_group_state``). An automatic workflow
-# cannot be deleted, so like its name and pins the row otherwise stays.
-_V2_WORKFLOW_GROUP_GRAPH = """
-CREATE TABLE IF NOT EXISTS workflow_group_graph (
-    workflow_id  TEXT PRIMARY KEY,
-    document     TEXT NOT NULL,
-    created_at   TEXT NOT NULL
 )
 """
 
@@ -1512,7 +1501,6 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_FAMILY_PASS,
     _V2_WORKFLOW_CARD_MOVE,
     _V2_WORKFLOW_VERSION,
-    _V2_WORKFLOW_GROUP_GRAPH,
     *_V2_WORKFLOW_INDEXES,
 )
 

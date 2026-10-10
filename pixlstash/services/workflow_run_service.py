@@ -231,7 +231,7 @@ def prompt_text_target(
 
 # Where the source of a runnable graph came from, in the order tried.
 FROM_FILE = "file"
-# The graph the owner saved over an automatic workflow's (`workflow_group_graph`).
+# The newest version the owner saved over an automatic workflow (`workflow_version`).
 FROM_EDIT = "edit"
 FROM_PICTURE = "picture"
 FROM_INSTANCE = "instance"

@@ -1852,7 +1852,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # the whole library like its siblings, names the shelf LoRA each loader
     # loads, and reaches the owner's ComfyUI for object_info; the write is the
     # insertion above generalised to the whole chain: a new workflow, or with
-    # `overwrite` this workflow's own graph (a version, or its edited graph).
+    # `overwrite` this workflow's next version.
     ("GET", "/api/v1/workflows/{workflow_id}/lora-chain"): RoutePolicy(
         _OWNER,
         justification="A workflow's LoRA loaders and the shelf LoRAs they load, resolved from the whole library; owner only",

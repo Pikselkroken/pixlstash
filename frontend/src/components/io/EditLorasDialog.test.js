@@ -533,12 +533,14 @@ describe("the second step", () => {
     // No name is asked for: the original keeps its own.
     expect(wrapper.find("input[type=text]").exists()).toBe(false);
     expect(textOf(wrapper)).toContain(
-      "SDXL + face detailer keeps its name and its 184 pictures, and this chain becomes its graph.",
+      "SDXL + face detailer keeps its name and its 184 pictures, and this chain becomes its next version.",
     );
     expect(wrapper.find("[role=status][aria-live]").text()).toContain(
       "Saving over SDXL + face detailer.",
     );
-    expect(textOf(wrapper)).toContain("Overwriting cannot be undone here.");
+    expect(textOf(wrapper)).toContain(
+      "The graph it replaces is kept as the version before.",
+    );
     expect(textOf(wrapper)).not.toContain("follows a file in ComfyUI");
 
     // Enter accepts a dialog; it must not be what overwrites.
