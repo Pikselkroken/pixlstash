@@ -279,7 +279,8 @@
         <b class="eld-strong">{{ shownName }}</b> keeps its name and its
         {{ picturesLabel }}, and this chain becomes its next version. A recipe
         naming a LoRA the workflow no longer loads still lists it, and a run
-        leaves it out and says so. {{ overNote }}
+        leaves it out and says so. The graph it replaces is kept as the version
+        before.
       </p>
       <p v-if="saveError" class="eld-note eld-bad" role="alert">
         {{ saveError }}
@@ -408,8 +409,6 @@ const props = defineProps({
   cardName: { type: String, default: "" },
   /** How many pictures the card made, for "its N pictures stay as they are". */
   pictureCount: { type: Number, default: 0 },
-  /** The card's `origin_category`: `comfyui` is a workflow ComfyUI's file feeds. */
-  originCategory: { type: String, default: "" },
   /**
    * A LoRA filename to open with its loader already struck through.
    *
@@ -478,18 +477,6 @@ const saveModes = computed(() => [
   { id: "over", label: "Over the original", disabled: saving.value },
   { id: "new", label: "A new workflow", disabled: saving.value },
 ]);
-
-/**
- * What happens to the graph an overwrite replaces, said before the press: it
- * is kept as the version before. A workflow pulled from ComfyUI takes that
- * file's next save as a newer version still, so the edit is only current
- * until then.
- */
-const overNote = computed(() =>
-  props.originCategory === "comfyui"
-    ? "The graph it replaces is kept as the version before. This workflow follows a file in ComfyUI: saving that file there again makes a newer version on top of this one."
-    : "The graph it replaces is kept as the version before.",
-);
 
 /** One lane per pass when the model forks; empty for a straight chain. */
 const lanes = computed(() => chain.value?.lanes || []);

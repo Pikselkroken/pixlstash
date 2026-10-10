@@ -306,7 +306,6 @@ const tmLabelMap = {
   text_score: "Text score",
   text_read: "Text in pictures",
   object_detection: "Object detection",
-  comfyui_workflow_pull: "ComfyUI workflow pull",
 };
 
 const tmWorkerLabelMap = {

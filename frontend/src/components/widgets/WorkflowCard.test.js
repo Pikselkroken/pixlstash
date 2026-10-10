@@ -1146,7 +1146,7 @@ describe("the ComfyUI badge", () => {
   const base = { id: "w", name: "Flux", picture_count: 2, covers: [] };
   const badge = (w) => w.find('[data-testid="wf-card-comfyui"]');
 
-  it("marks a card pulled from ComfyUI, named for assistive tech", () => {
+  it("marks a card that came from ComfyUI, named for assistive tech", () => {
     const wrapper = mountCard({ ...base, origin_category: "comfyui" });
     expect(badge(wrapper).exists()).toBe(true);
     expect(badge(wrapper).attributes("role")).toBe("img");

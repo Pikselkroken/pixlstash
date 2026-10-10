@@ -247,7 +247,7 @@ export function recipeCount(recipes) {
 }
 
 /**
- * "3 ComfyUI runs", "1 ComfyUI run" - finished runs the workflow pull read off
+ * "3 ComfyUI runs", "1 ComfyUI run" - finished runs recorded earlier from
  * ComfyUI's history (#1565), counted apart from recipes.
  */
 export function runCount(runs) {

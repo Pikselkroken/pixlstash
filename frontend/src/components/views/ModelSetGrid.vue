@@ -45,9 +45,9 @@
         </p>
         <p>
           A set is read off a recipe, which arrives with a picture that carries
-          its workflow, or off a ComfyUI run the workflow pull recorded. Until one does, there is nothing here to group —
-          which says nothing about the models on the shelf. You can still make a
-          set by hand.
+          its workflow. Until one does, there is nothing here to group — which
+          says nothing about the models on the shelf. You can still make a set
+          by hand.
         </p>
       </div>
       <div

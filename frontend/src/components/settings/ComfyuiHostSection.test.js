@@ -16,12 +16,6 @@ vi.mock("vuetify/components", () => ({
   },
   VIcon: { template: "<i />" },
   VProgressCircular: { template: "<i />" },
-  VSwitch: {
-    props: ["modelValue", "disabled"],
-    emits: ["update:modelValue"],
-    template:
-      '<input type="checkbox" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)" />',
-  },
 }));
 
 const config = vi.hoisted(() => ({
@@ -365,46 +359,6 @@ it("says why when the saved address cannot be read, instead of hiding the card",
   const wrapper = await mountPane();
   expect(wrapper.find(".cf-card").exists()).toBe(true);
   expect(wrapper.find('[role="alert"]').text()).toContain("server down");
-});
-
-describe("pulling workflows from ComfyUI", () => {
-  const sw = (wrapper) =>
-    wrapper.find('[data-testid="comfyui-pull-switch"]');
-
-  it("is on when the config says nothing, and says what it does", async () => {
-    const wrapper = await mountPane();
-    expect(sw(wrapper).element.checked).toBe(true);
-    expect(wrapper.text()).toContain(
-      "Checks ComfyUI's saved workflows every minute and keeps each one's versions on its card.",
-    );
-  });
-
-  it("reads an off setting, and PATCHes the new value when flipped", async () => {
-    config.getUserConfig.mockResolvedValue({
-      comfyui_url: "http://127.0.0.1:8188/",
-      pull_comfyui_workflows: false,
-    });
-    const wrapper = await mountPane();
-    expect(sw(wrapper).element.checked).toBe(false);
-
-    await sw(wrapper).setValue(true);
-    await flushPromises();
-    expect(config.patchUserConfig).toHaveBeenCalledWith({
-      pull_comfyui_workflows: true,
-    });
-    expect(sw(wrapper).element.checked).toBe(true);
-  });
-
-  it("puts the switch back and says so when the save fails", async () => {
-    config.patchUserConfig.mockRejectedValue(new Error("boom"));
-    const wrapper = await mountPane();
-    await sw(wrapper).setValue(false);
-    await flushPromises();
-    expect(sw(wrapper).element.checked).toBe(true);
-    expect(wrapper.find('[role="alert"]').text()).toContain(
-      "Could not save that setting.",
-    );
-  });
 });
 
 describe("linking ComfyUI", () => {

@@ -795,9 +795,10 @@
              ComfyUI opens on whatever it had last. It opens what Run… runs
              (`runTarget`), and is refused rather than hidden otherwise, for
              Run…'s reason or a ComfyUI without the node. The tooltip is its
-             accessible name. "A copy", because that is what it is: what
-             ComfyUI saves comes back as a workflow of its own on the next
-             pull, and this one keeps its graph. -->
+             accessible name. "A copy", because that is what it is: nothing
+             ComfyUI saves comes back by itself, it reaches PixlStash only
+             when exported from ComfyUI or imported, and this one keeps its
+             graph. -->
         <AppButton
           v-if="canOpenComfyui"
           icon-only
@@ -874,7 +875,6 @@
       :workflow-id="editKey"
       :card-name="editName"
       :picture-count="editPictures"
-      :origin-category="editOrigin"
       :drop-lora="editDrop"
       @close="closeEditLoras"
       @overwritten="onOverwritten"
@@ -1151,13 +1151,11 @@ const recipesName = computed(() =>
 const picturesLabel = computed(() => outputCount(card.value));
 
 // "Version 3 · 2026-10-06": only where there is a history to speak of, a
-// workflow that was pulled from ComfyUI or has been stored more than once.
+// workflow that has been stored more than once.
 const userPrefs = useUserPrefsStore();
 const versionLine = computed(() => {
   const c = card.value;
-  if (!c || !(c.versions > 1 || c.origin_category === "comfyui")) {
-    return "";
-  }
+  if (!c || !(c.versions > 1)) return "";
   const day = formatUserDay(c.version_at, userPrefs.dateFormat);
   // `version`, the number, not `versions`, how many are kept: past the 50
   // kept the two differ.
@@ -1543,7 +1541,6 @@ const chainNoGraph = ref(false);
 const editKey = ref("");
 const editName = ref("");
 const editPictures = ref(0);
-const editOrigin = ref("");
 /** A LoRA to open with its loader already deleted (Save-as-recipe's hand-over). */
 const editDrop = ref("");
 
@@ -2038,7 +2035,6 @@ function openEditLoras(key, drop = "") {
   const shown = card.value?.id === key ? card.value : null;
   editName.value = shown?.name || "";
   editPictures.value = Number(shown?.picture_count) || 0;
-  editOrigin.value = shown?.origin_category || "";
   editDrop.value = drop;
   editKey.value = key;
 }
@@ -2065,7 +2061,6 @@ watch(card, (next) => {
   if (!editKey.value || next?.id !== editKey.value) return;
   if (!editName.value) editName.value = next.name || "";
   if (!editPictures.value) editPictures.value = Number(next.picture_count) || 0;
-  if (!editOrigin.value) editOrigin.value = next.origin_category || "";
 });
 
 // `?workflow=<id>&edit=loras&drop_lora=<file>`, from Save-as-recipe's "The
