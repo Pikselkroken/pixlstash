@@ -812,8 +812,10 @@
       :workflow-id="editKey"
       :card-name="editName"
       :picture-count="editPictures"
+      :origin-category="editOrigin"
       :drop-lora="editDrop"
       @close="closeEditLoras"
+      @overwritten="onOverwritten"
     />
   </AppInspector>
 </template>
@@ -1436,6 +1438,7 @@ const chainNoGraph = ref(false);
 const editKey = ref("");
 const editName = ref("");
 const editPictures = ref(0);
+const editOrigin = ref("");
 /** A LoRA to open with its loader already deleted (Save-as-recipe's hand-over). */
 const editDrop = ref("");
 
@@ -1852,8 +1855,19 @@ function openEditLoras(key, drop = "") {
   const shown = card.value?.id === key ? card.value : null;
   editName.value = shown?.name || "";
   editPictures.value = Number(shown?.picture_count) || 0;
+  editOrigin.value = shown?.origin_category || "";
   editDrop.value = drop;
   editKey.value = key;
+}
+
+/**
+ * Edit LoRAs… saved over the card itself. The selection did not move, so the
+ * watcher below reads nothing: the chain and the detail are asked again here.
+ */
+function onOverwritten(key) {
+  if (selectedKey.value !== key) return;
+  void loadDetail(key);
+  void loadChain(key);
 }
 
 function closeEditLoras() {
@@ -1867,6 +1881,7 @@ watch(card, (next) => {
   if (!editKey.value || next?.id !== editKey.value) return;
   if (!editName.value) editName.value = next.name || "";
   if (!editPictures.value) editPictures.value = Number(next.picture_count) || 0;
+  if (!editOrigin.value) editOrigin.value = next.origin_category || "";
 });
 
 // `?workflow=<id>&edit=loras&drop_lora=<file>`, from Save-as-recipe's "The

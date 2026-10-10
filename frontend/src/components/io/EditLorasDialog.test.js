@@ -7,6 +7,8 @@
 // * Add appends one row at the end, and only a picked LoRA is sent.
 // * Save… is a dry run, and its `changes` are what the second step lists;
 //   only "Save as a new workflow" writes.
+// * "Over the original" sends `overwrite`, selects nothing new, and is never
+//   what Enter does.
 // * `editable: false` opens read-only, with the planner's sentence.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -194,7 +196,7 @@ describe("the chain as read", () => {
     expect(said).not.toContain("ignores that loader");
     // And says what saving does to the original.
     expect(said).toContain(
-      "Saving writes a new workflow. SDXL + face detailer and its 184 pictures stay as they are.",
+      "Nothing is written yet. Save… asks whether this is a new workflow or goes over SDXL + face detailer.",
     );
     expect(textOf(wrapper)).toContain("No changes");
     expect(button(wrapper, "Save…").attributes("disabled")).toBeDefined();
@@ -510,6 +512,70 @@ describe("the second step", () => {
       "Saved “SDXL + face detailer (edited)” as a new workflow.",
     );
     expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("saves over the original when asked, and tells the rail to read it again", async () => {
+    const wrapper = await toStepTwo();
+    const store = useWorkflowsStore();
+    const refetch = vi.spyOn(store, "refetch").mockResolvedValue();
+    const select = vi.spyOn(store, "select");
+    const push = vi.spyOn(useNoticeStore(), "push");
+    saveLoraChain.mockResolvedValueOnce({
+      dry_run: false,
+      name: null,
+      workflow_id: KEY,
+      overwritten: true,
+      changes: [],
+    });
+
+    await button(wrapper, "Over the original").trigger("click");
+    await flushPromises();
+    // No name is asked for: the original keeps its own.
+    expect(wrapper.find("input[type=text]").exists()).toBe(false);
+    expect(textOf(wrapper)).toContain(
+      "SDXL + face detailer keeps its name and its 184 pictures, and this chain becomes its graph.",
+    );
+    expect(wrapper.find("[role=status][aria-live]").text()).toContain(
+      "Saving over SDXL + face detailer.",
+    );
+    expect(textOf(wrapper)).toContain("Overwriting cannot be undone here.");
+    expect(textOf(wrapper)).not.toContain("follows a file in ComfyUI");
+
+    // Enter accepts a dialog; it must not be what overwrites.
+    await wrapper.find(".app-dialog").trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(saveLoraChain).toHaveBeenCalledTimes(1);
+
+    await button(wrapper, "Overwrite the original").trigger("click");
+    await flushPromises();
+
+    const [key, body] = saveLoraChain.mock.calls[1];
+    expect(key).toBe(KEY);
+    expect(body).toMatchObject({ name: null, dry_run: false, overwrite: true });
+    expect(refetch).toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
+    expect(push.mock.calls[0][0].text).toBe("Saved over “SDXL + face detailer”.");
+    expect(wrapper.emitted("overwritten")).toEqual([[KEY]]);
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("does not send overwrite for a new workflow, and Enter saves that one", async () => {
+    const wrapper = await toStepTwo();
+    await wrapper.find(".app-dialog").trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(saveLoraChain).toHaveBeenCalledTimes(2);
+    expect(saveLoraChain.mock.calls[1][1]).not.toHaveProperty("overwrite");
+    expect(wrapper.emitted("overwritten")).toBeFalsy();
+  });
+
+  it("says a ComfyUI file can put its own version back", async () => {
+    const wrapper = await mountDialog({ originCategory: "comfyui" });
+    await deleteButton(wrapper, 3).trigger("click");
+    await button(wrapper, "Save…").trigger("click");
+    await flushPromises();
+    await button(wrapper, "Over the original").trigger("click");
+    await flushPromises();
+    expect(textOf(wrapper)).toContain("This workflow follows a file in ComfyUI");
   });
 
   it("stays open and says why when the save is refused", async () => {

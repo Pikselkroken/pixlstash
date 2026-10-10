@@ -32,6 +32,7 @@ from pixlstash.hub.workflow_card_reads import (
 )
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
+    set_group_graph,
     set_manual_api_document,
 )
 from pixlstash.hub.workflows import (
@@ -101,6 +102,7 @@ from pixlstash.services.workflow_io import (
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
+from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 # ComfyUI workflow-execution orchestration and the output-import pipeline live in
 # the service layer (backend refactor Phase 2 §4.5); the route handlers below
@@ -198,6 +200,10 @@ class WorkflowFileTooLarge(ValueError):
     A ``ValueError`` because every caller already handles one from
     ``json.load`` and treats it the same way - the document did not read.
     """
+
+
+class WorkflowChanged(Exception):
+    """A workflow got a newer version than the one an edit of it was made on."""
 
 
 def _load_workflow_json(path: str) -> dict:
@@ -327,6 +333,54 @@ def store_manual_workflow(
         api_document=api_document,
         record=record,
     )
+
+
+def store_over_workflow(
+    hub,
+    workflow_id: str,
+    workflow: dict,
+    source: str,
+    *,
+    expected_version: int | None = None,
+) -> None:
+    """Store *workflow* as the graph of the existing workflow *workflow_id*.
+
+    The other half of :func:`store_manual_workflow`: the same checks, and no
+    new record. A manual workflow gets its next version (*source* is what
+    ``workflow_version.source`` records), so the version before is kept; an
+    automatic one, which holds no document, gets its one edited graph
+    (``workflow_group_graph``), read ahead of the graph its pictures hold.
+    Name, notes, defaults, pins and pictures stay where they are.
+
+    *expected_version* is the version of a manual workflow the edit was made
+    on. A pull that made a newer one in between is not buried under an edit
+    of the older graph: checked inside the write transaction, and refused.
+
+    Raises:
+        WorkflowChanged: The manual workflow is past *expected_version*.
+        NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
+        RecursionError: The document nests too deeply to read.
+        WorkflowFileTooLarge: It is past :data:`MAX_WORKFLOW_FILE_BYTES`.
+        LookupError: No manual workflow *workflow_id*.
+    """
+    check_comfy_workflow(workflow)
+    workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
+    _within_the_cap(workflow)
+    if workflow_id.startswith(MANUAL_PREFIX):
+        with hub.transaction() as conn:
+            current = conn.execute(
+                "SELECT COALESCE(MAX(version), 1) FROM workflow_version "
+                "WHERE workflow_id = ?",
+                (workflow_id,),
+            ).fetchone()[0]
+            if expected_version is not None and current != expected_version:
+                raise WorkflowChanged(
+                    f"{workflow_id} is at version {current}, and the edit was "
+                    f"made on version {expected_version}"
+                )
+            workflow_versions.append_version(conn, workflow_id, workflow, source=source)
+    else:
+        set_group_graph(hub, workflow_id, workflow)
 
 
 def _within_the_cap(document: dict) -> None:

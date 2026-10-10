@@ -177,6 +177,24 @@ def replace_group_picture_inputs(
         )
 
 
+def set_group_graph(hub: HubDatabase, workflow_id: str, document: dict) -> None:
+    """Store *document* as automatic workflow *workflow_id*'s graph.
+
+    Over the one it had, if any: an automatic workflow keeps one edited graph
+    and no history, since every picture it made still holds the graph it ran.
+    A manual workflow's edit is a version instead
+    (``workflow_versions.append_version``).
+    """
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_graph (workflow_id, document, created_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(workflow_id) DO UPDATE SET "
+            "document = excluded.document, created_at = excluded.created_at",
+            (workflow_id, json.dumps(document), datetime.now(timezone.utc).isoformat()),
+        )
+    logger.info("Stored an edited graph over automatic workflow %s.", workflow_id)
+
+
 def create_manual_workflow(
     hub: HubDatabase,
     name: str,

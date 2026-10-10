@@ -231,6 +231,8 @@ def prompt_text_target(
 
 # Where the source of a runnable graph came from, in the order tried.
 FROM_FILE = "file"
+# The graph the owner saved over an automatic workflow's (`workflow_group_graph`).
+FROM_EDIT = "edit"
 FROM_PICTURE = "picture"
 FROM_INSTANCE = "instance"
 
@@ -260,7 +262,7 @@ class Source:
     """A graph to submit, and where it was found.
 
     ``forgotten`` counts references the hub could no longer name, which is only
-    ever non-zero for :data:`FROM_INSTANCE`: the other two tiers carry the real
+    ever non-zero for :data:`FROM_INSTANCE`: the other tiers carry the real
     filenames because they were never reduced.
     """
 
@@ -364,9 +366,13 @@ def resolve_source(
     instance_documents: Optional[list[tuple[str, dict]]] = None,
     asset_names: Optional[dict[str, list[tuple[str, str]]]] = None,
     file_problems: Optional[list[str]] = None,
+    edited_document: Optional[dict] = None,
 ) -> tuple[Optional[Source], Optional[Reason]]:
     """What to submit for a card, in the order the brief fixes.
 
+    0. The graph the owner saved over the workflow (*edited_document*), when
+       the card is the base of a workflow that has one: it is what they said
+       the workflow's graph is, so nothing below is consulted.
     1. The linked imported file, when the card has one on this machine. It is
        the only tier that is the workflow *as authored*, so it wins even when a
        picture would also answer.
@@ -385,6 +391,14 @@ def resolve_source(
     that would not convert; a ``ui_format`` reason carries them as ``detail``
     (the first) and ``problems`` (all), so the owner is told why.
     """
+    edited = api_graph(edited_document) if edited_document else None
+    if edited:
+        bindings = edited_document.get(BINDINGS_KEY)
+        return Source(
+            sanitize_prompt_graph(edited),
+            FROM_EDIT,
+            bindings=bindings if isinstance(bindings, list) else None,
+        ), None
     ui_only = False
     if file_document:
         graph = api_graph(file_document)

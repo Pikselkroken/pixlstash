@@ -1851,14 +1851,15 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # The LoRA chain editor (#1478). The read resolves the base graph out of
     # the whole library like its siblings, names the shelf LoRA each loader
     # loads, and reaches the owner's ComfyUI for object_info; the write is the
-    # insertion above generalised to the whole chain, and files a new file.
+    # insertion above generalised to the whole chain: a new workflow, or with
+    # `overwrite` this workflow's own graph (a version, or its edited graph).
     ("GET", "/api/v1/workflows/{workflow_id}/lora-chain"): RoutePolicy(
         _OWNER,
         justification="A workflow's LoRA loaders and the shelf LoRAs they load, resolved from the whole library; owner only",
     ),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"): RoutePolicy(
         _OWNER,
-        justification="Write a copy of a workflow's graph with its LoRA chain edited; PUT blocked for READ tokens; owner only",
+        justification="Write a workflow's graph with its LoRA chain edited, as a copy or over the workflow itself; PUT blocked for READ tokens; owner only",
     ),
     # Clone with new models: the read names the shelf's checkpoints, VAEs and
     # text encoders and what recipes have run together, which is the whole

@@ -2,7 +2,8 @@
 
 A ComfyUI file whose content changed is a new **version** of the card its
 ``workflow_origin`` row names, not a new card, so its pictures, recipes,
-defaults and pins stay where they are. Version 1 is the document the card was
+defaults and pins stay where they are. So is a LoRA chain edit the owner saved
+over the workflow instead of as a copy. Version 1 is the document the card was
 made with; the card's current graph is its highest version.
 
 **``workflow_document`` holds a copy of the highest version** (``document`` and
@@ -139,12 +140,16 @@ def append_version(
     workflow_id: str,
     document: dict,
     *,
+    source: str = "pull",
     content_hash: Optional[str] = None,
     topology_hash: Optional[str] = None,
     remote_modified: Optional[int] = None,
 ) -> int:
     """Make *document* the next version of *workflow_id*, inside the caller's
     transaction, and return its number.
+
+    *source* is how the version arrived: ``pull`` for a changed ComfyUI file,
+    ``chain`` for a LoRA chain edit the owner saved over the workflow.
 
     Stamped with the workflow's id like every stored document, and copied onto
     ``workflow_document`` with its conversion cleared: the conversion was of the
@@ -171,7 +176,7 @@ def append_version(
         version,
         stored,
         None,
-        "pull",
+        source,
         content_hash=content_hash,
         topology_hash=topology_hash,
         remote_modified=remote_modified,
@@ -187,9 +192,10 @@ def append_version(
         (workflow_id, version - (MAX_VERSIONS - 1)),
     ).rowcount
     logger.info(
-        "Manual workflow %s is now at version %d (pull)%s.",
+        "Manual workflow %s is now at version %d (%s)%s.",
         workflow_id,
         version,
+        source,
         f"; {pruned} older version(s) pruned" if pruned else "",
     )
     return version

@@ -418,6 +418,32 @@ def manual_document(hub: HubDatabase, workflow_id: str) -> Optional[dict]:
     return manual_document_and_version(hub, workflow_id)[0]
 
 
+def group_graph(hub: HubDatabase, workflow_id: str) -> Optional[dict]:
+    """The graph the owner saved over automatic workflow *workflow_id*, or ``None``.
+
+    ``workflow_group_graph``, written by ``workflow_group_writes.set_group_graph``.
+    A row that will not parse is logged and answers ``None``, so the workflow
+    falls back to the graph its pictures hold rather than failing to run.
+    """
+    row = hub.fetchone(
+        "SELECT document FROM workflow_group_graph WHERE workflow_id = ?",
+        (workflow_id,),
+    )
+    if row is None:
+        return None
+    try:
+        document = json.loads(row["document"])
+    except (ValueError, TypeError, RecursionError) as exc:
+        logger.warning(
+            "Workflow %s: its edited graph will not read, so the graph its "
+            "pictures hold is used instead: %s",
+            workflow_id,
+            exc,
+        )
+        return None
+    return document if isinstance(document, dict) else None
+
+
 def manual_document_and_version(
     hub: HubDatabase, workflow_id: str
 ) -> tuple[Optional[dict], Optional[int]]:

@@ -388,21 +388,25 @@ export async function getLoraChain(workflowId) {
 }
 
 /**
- * Save a LoRA chain as the owner left it, as a NEW workflow (#1478).
+ * Save a LoRA chain as the owner left it (#1478): as a new workflow, or with
+ * `overwrite: true` over the one it edits.
  *
  * `entries` is the whole chain in apply order: an existing loader by
  * `node_id` (kept, maybe moved or re-weighted), a new one by the shelf
  * `sha256` with `node_id: null`. For a forked chain `entries` is the trunk
  * and `lanes` one such list per lane, in the read's order; an existing loader
- * may sit in any of them. An existing loader left out of all is deleted. The
- * original file is never modified: a write answers 201 with the new card's
- * `workflow_id`, and `dry_run: true` answers 200 with only the `changes` the
- * confirm step lists.
+ * may sit in any of them. An existing loader left out of all is deleted. A
+ * write answers 201 with the new card's `workflow_id` and leaves the original
+ * alone; an overwrite answers 200 with the same `workflow_id` and
+ * `overwritten: true`; `dry_run: true` answers 200 with only the `changes`
+ * the confirm step lists.
  *
  * @param {string} workflowId
  * @param {{entries: Array<{node_id: ?string, sha256?: string, strength?: number}>,
- *   lanes?: Array<Array<Object>>, name: ?string, dry_run: boolean}} body
+ *   lanes?: Array<Array<Object>>, name: ?string, dry_run: boolean,
+ *   overwrite?: boolean}} body
  * @returns {Promise<{dry_run: boolean, name: ?string, workflow_id: ?string,
+ *   overwritten?: boolean,
  *   changes: Array<{kind: string, node_id: ?string, text: string}>}>}
  */
 export async function saveLoraChain(workflowId, body) {

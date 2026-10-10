@@ -140,8 +140,8 @@ Run here, not with the ComfyUI MCP server's own run tool: that submits \
 straight to ComfyUI, and its pictures never reach PixlStash. run_workflow \
 imports what it makes into the library and ties it to the workflow.
 
-A stored graph is never changed in place. An import with a different graph \
-is a new graph, which may land in a workflow of its own; importing an \
+An import never changes a stored graph in place. An import with a different \
+graph is a new graph, which may land in a workflow of its own; importing an \
 unchanged graph matches the stored one and adds nothing. A different prompt, \
 seed, LoRA or value is not a graph edit: pass it to preflight_workflow and \
 run_workflow instead of re-importing, or every tweak becomes a new graph.
