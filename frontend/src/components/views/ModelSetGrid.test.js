@@ -1150,7 +1150,18 @@ describe("selection and the verbs", () => {
       .trigger("contextmenu", { clientX: 120, clientY: 340 });
 
     expect([...store.selectedIds]).toEqual([3]);
-    expect(wrapper.emitted("menu")[0][0]).toEqual({ x: 120, y: 340 });
+    // A tray row is a file in somebody's set, not a set: no card is named.
+    expect(wrapper.emitted("menu")[0][0]).toEqual({ x: 120, y: 340, setKey: "" });
+
+    // A card names its set, which is what Clone set to edit is about.
+    await wrapper
+      .find('[data-testid="model-set-card"]')
+      .trigger("contextmenu", { clientX: 5, clientY: 6 });
+    expect(wrapper.emitted("menu")[1][0]).toEqual({
+      x: 5,
+      y: 6,
+      setKey: "model:1",
+    });
   });
 
   it("leaves a selection of forty alone when one of them is right-clicked", async () => {
@@ -3180,6 +3191,24 @@ describe("hiding a set from pictures", () => {
     expect(operations.receipt.summary).toContain("Hid the set");
     await operations.takeLocalReceiptAction();
     expect(store.setGroups).toHaveLength(1);
+  });
+
+  it("clones the open set into a set of the owner's from its tray", async () => {
+    const { wrapper, store } = await mountOneSet();
+    createWorkflowSet.mockResolvedValue({ id: 12, members: [] });
+    // Offered in the tray, where the set's models are in front of the reader.
+    expect(wrapper.find('[data-testid="set-clone"]').exists()).toBe(false);
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-testid="set-clone"]').trigger("click");
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      cloned: true,
+      members: [
+        { model_id: 1, slot: "checkpoint" },
+        { model_id: 3, slot: "lora" },
+      ],
+    });
+    wrapper.unmount();
   });
 
   it("keeps the grid and its Show them line when every set is hidden", async () => {

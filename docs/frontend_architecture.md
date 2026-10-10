@@ -1885,6 +1885,22 @@ the shelf's workflow sets section) and served as `hand_made` on
   decides, and it opens the group only over a closed tray (never moving the
   view off a hand-made tray, which the watch would read as closing that one).
   Hidden sets count as present for the grid's empty states.
+- **A set from pictures is cloned to be edited, and a clone never gives
+  way.** An evidence card cannot be edited, so `store.cloneSetFromPictures`
+  makes a hand-made set of the models on it (the head in Checkpoint, the rest
+  by kind) with `cloned: true`, and opens it; a second press while the first
+  is on the wire is ignored. The verb is *Clone to edit* on the open tray's
+  bar (`ModelSetPanel` emits `clone`; not on a missing-base set) and *Clone
+  set to edit* on the menu opened on the CARD: the grid's `menu` event names
+  the card (`setKey`, empty for a tray row), `ShelfSelectionBar` lists the
+  item only while that menu is open and emits `clone-set` with the group. It
+  is keyed by the card and never by the selected file, which other trays draw
+  too. The copy covers the card's combinations, so it takes the card's place
+  and deleting it brings the card back; an engine is never a member, so
+  pictures that ran with one stay on the card. `automaticTwin` answers null
+  for a `cloned` set: matching the set from pictures is what it was made for.
+  The mark is the server's (`cloned` on the set), and Duplicate set and a
+  delete's Undo carry it.
 - **A hand-made card selects the SET; a tray tile selects a FILE.**
   `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
   either kind clears the other; Ctrl+click and select-all hold both (see the

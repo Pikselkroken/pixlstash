@@ -575,14 +575,16 @@ Rules neither side may drift from:
 8. **Hand-made sets ride on the same payload (#1520).** Each combination carries
    `covered_by` (ids of the owner's sets holding all its models on the shelf),
    `no_set` omits on-shelf set members, and `hand_made` lists the sets, newest
-   first: `{id, name, created_at, updated_at, incomplete, checkpoint_ids,
-   picture_count, recipes, covers, members}`, each member `{sha256, slot, label,
+   first: `{id, name, created_at, updated_at, cloned, incomplete,
+   checkpoint_ids, picture_count, recipes, covers, members}`, each member `{sha256, slot, label,
    on_shelf, id, name, filename, kind, base_model, file_size}`. They are written
    by `POST /models/workflow-sets` (201, the set), `PATCH` and `DELETE
    /models/workflow-sets/{set_id}` (the set; `{deleted: set}`),
    `POST .../{set_id}/members` (`{set, added: [sha256]}`) and
    `POST .../{set_id}/members/remove` (`{set, removed: [{sha256, slot,
-   label}]}`), all owner-only. **Undo is the client re-posting what a write
+   label}]}`), all owner-only. `cloned` is set by the create (`cloned: true`,
+   a copy of a set from pictures) and never changes; the client never swaps a
+   cloned set for the set from pictures it matches. **Undo is the client re-posting what a write
    returned**: a deleted set's members as `{sha256, slot, label}`, removed
    members the same way, added ones through `members/remove`. No server-side
    undo exists. A refusal is a 409 whose `detail` is the sentence to show.

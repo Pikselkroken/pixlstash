@@ -2393,8 +2393,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * A member off the shelf rules a match out, since no set from pictures can
    * hold a file the shelf does not have. So does a twin some OTHER hand-made
    * set also covers: deleting this one would not bring it back on screen.
+   * And a `cloned` set has none: it was copied from its twin on purpose
+   * (`cloneSetFromPictures`), so matching it is the point, not an accident.
    */
   function automaticTwin(set) {
+    if (set?.cloned) return null;
     const members = set?.members ?? [];
     if (!members.length || members.some((m) => !m.on_shelf || m.id == null)) {
       return null;
@@ -2551,6 +2554,51 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
+   * A hand-made copy of a set from pictures, so it can be edited: the models
+   * on its card, the head as the checkpoint and the rest by kind. Marked
+   * `cloned`, which keeps it while it still matches that set (`automaticTwin`).
+   * The card it copies leaves the grid, since the copy covers its pictures;
+   * deleting the copy brings the card back.
+   *
+   * @param {Object} group - an entry of `setGroups`, never a missing-base one.
+   * @returns {Promise<Object|null>} the new set.
+   */
+  async function cloneSetFromPictures(group) {
+    if (!group?.head || group.head.missing || cloning.has(group.key)) {
+      return null;
+    }
+    // One clone per card: a second press while the first is on the wire would
+    // make a twin of the clone, and neither would ever give way.
+    cloning.add(group.key);
+    try {
+      return await createHandMadeSet({
+        cloned: true,
+        members: group.models
+          // An engine is not a file a workflow loads, so no set holds one, and
+          // the pictures that ran with it stay on the card.
+          .filter((model) => model.kind !== "engine")
+          .map((model) => ({
+            model_id: model.id,
+            slot:
+              model.id === group.head.id
+                ? "checkpoint"
+                : defaultSlot(model.kind),
+          })),
+      });
+    } finally {
+      cloning.delete(group.key);
+    }
+  }
+
+  /** The keys of the sets from pictures a clone is being made of. */
+  const cloning = new Set();
+
+  /** The `cloned` mark as a create body carries it: only when it is set. */
+  function clonedBack(set) {
+    return set?.cloned ? { cloned: true } : {};
+  }
+
+  /**
    * Make a copy of a set: the same members in the same slots, by hash, so a
    * member off the shelf is copied too. What it was kept separate from is not
    * copied; the copy is offered the merge afresh.
@@ -2566,6 +2614,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         .slice(0, MAX_SET_NAME_LENGTH - " copy".length)
         .join("")} copy`,
       members: (set.members ?? []).map(memberBack),
+      ...clonedBack(set),
     });
   }
 
@@ -2620,6 +2669,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
               createWorkflowSet({
                 name: snapshot.name ?? null,
                 members: (snapshot.members ?? []).map(memberBack),
+                ...clonedBack(snapshot),
               }),
             ),
           );
@@ -3881,6 +3931,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     addRowsToHandMadeSet,
     railDropRefusal,
     createSetFromRows,
+    cloneSetFromPictures,
     confirmSecondCheckpoint,
     railDrag,
     railOver,

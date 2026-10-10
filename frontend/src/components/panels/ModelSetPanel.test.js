@@ -88,6 +88,23 @@ const buttonNames = (w) =>
     .findAll('button[data-testid^="verdict-"]')
     .map((b) => b.attributes("aria-label"));
 
+describe("ModelSetPanel clone", () => {
+  it("offers the set as a set of the owner's own", async () => {
+    const w = mountPanel();
+    await w.get('[data-testid="set-clone"]').trigger("click");
+    expect(w.emitted("clone")).toHaveLength(1);
+    w.unmount();
+  });
+
+  it("offers none for a set whose base model is not on the shelf", () => {
+    const w = mountPanel({
+      missing: { names: ["gone.safetensors"], workflowIds: [], workflowsByName: {} },
+    });
+    expect(w.find('[data-testid="set-clone"]').exists()).toBe(false);
+    w.unmount();
+  });
+});
+
 describe("ModelSetPanel check note", () => {
   it("states plain no-evidence copy with no entry, and draws no check or verdict UI", () => {
     const w = mountPanel({ check: null });

@@ -9372,6 +9372,12 @@ like every shelf table), read and written by
   (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
   for a `checkpoint` or an `unknown` file only (a diffusion file is often
   `unknown`). Engines and files still waiting for their hash are refused (409).
+- **`cloned` is the owner's mark, and the server only stores it.**
+  `POST /models/workflow-sets` takes `cloned: true` for a set copied from a set
+  from pictures; it is served on the set and on a delete's snapshot. The client
+  reads it to keep such a set while it still holds exactly that set's models,
+  where a set built by hand into the same models gives way. The column is
+  amended into v2 with a default, so an earlier build's sets read as not cloned.
 - **Members are sha256s, with no foreign key to `model`.** Forgetting or
   deleting a file drops its `model` row; the member stays, is served
   `on_shelf: false` under the `label` it was added with, and reconnects when a

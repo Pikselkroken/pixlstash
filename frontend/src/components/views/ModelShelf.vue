@@ -1484,6 +1484,7 @@
         @delete="confirmDelete"
         @works-with="openWorksWith"
         @new-set="newSetWithCheckpoint"
+        @clone-set="(group) => store.cloneSetFromPictures(group)"
         @remove-from-set="removeSelectedFromSet"
       />
       <WorkflowSetSelectionBar
@@ -3794,8 +3795,8 @@ function openRowMenu(row, event) {
  * same file-manager rule {@link openRowMenu} follows; this is only the half that
  * needs the bar's ref, which lives here because there is one bar for both views.
  */
-function openGridMenu({ x, y }) {
-  selBarRef.value?.openContextMenu(x, y);
+function openGridMenu({ x, y, setKey }) {
+  selBarRef.value?.openContextMenu(x, y, setKey);
 }
 
 /**

@@ -879,3 +879,61 @@ describe("Keep one copy", () => {
     expect(wrapper.vm.mergeable).toBe(false);
   });
 });
+
+describe("Clone set to edit", () => {
+  const cloneItem = (wrapper) =>
+    wrapper
+      .findAll(".ctx-item")
+      .find((b) => b.text().includes("Clone set to edit"));
+
+  /** A checkpoint that ran with one LoRA, the checkpoint selected. */
+  function selectHead() {
+    const store = selectRows([
+      row(1, "present", { file_kind: "checkpoint", kind: null }),
+      row(2, "present"),
+    ]);
+    store.toggleSelected(2);
+    store.workflowSets = {
+      combinations: [
+        {
+          key: "1+2",
+          models: [
+            { id: 1, name: "m1.safetensors", kind: "checkpoint" },
+            { id: 2, name: "m2.safetensors", kind: "adapter" },
+          ],
+          recipes: 1,
+          picture_count: 1,
+          covers: [],
+        },
+      ],
+      noSet: [],
+      handMade: [],
+      setChecks: [],
+    };
+    return store;
+  }
+
+  it("is on the menu opened on a card, and names that card's set", async () => {
+    selectHead();
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    wrapper.vm.openContextMenu(1, 2, "model:1");
+    await wrapper.vm.$nextTick();
+    await cloneItem(wrapper).trigger("click");
+    expect(wrapper.emitted("clone-set")).toHaveLength(1);
+    expect(wrapper.emitted("clone-set")[0][0].key).toBe("model:1");
+  });
+
+  it("is not on a menu opened on anything else, though the same file is selected", async () => {
+    // A tray row, a row of the list: the head file selected, but no card.
+    selectHead();
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    wrapper.vm.openContextMenu(1, 2);
+    await wrapper.vm.$nextTick();
+    expect(cloneItem(wrapper)).toBeUndefined();
+    // Nor under the pill's ⋯ once a card's menu has closed.
+    wrapper.vm.openContextMenu(1, 2, "model:1");
+    wrapper.vm.contextOpen = false;
+    await wrapper.vm.$nextTick();
+    expect(cloneItem(wrapper)).toBeUndefined();
+  });
+});
