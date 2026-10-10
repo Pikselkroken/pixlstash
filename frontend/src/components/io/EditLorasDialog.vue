@@ -1180,38 +1180,44 @@ async function save() {
   if (!canSave.value) return;
   saving.value = true;
   saveError.value = "";
+  let answer;
   try {
-    const answer = await saveLoraChain(props.workflowId, requestBody(false));
-    if (answer?.overwritten) {
-      notices.push({
-        level: "success",
-        text: `Saved over “${shownName.value}”.`,
-      });
-      // The same card, so nothing is selected: the grid is re-read (a manual
-      // workflow's models and version come off its new document) and the
-      // rail is told to read its chain again.
-      await workflows.refetch();
-      emit("overwritten", props.workflowId);
-      emit("close");
-      return;
-    }
-    const saved = String(answer?.name || newName.value.trim() || "");
-    notices.push({
-      level: "success",
-      text: saved
-        ? `Saved “${saved.replace(/\.json$/i, "")}” as a new workflow.`
-        : "Saved as a new workflow.",
-    });
-    // The new card is a card of its own, so the grid is re-read and the rail
-    // moves onto it: the owner's next look is at what they just made.
-    await workflows.refetch();
-    if (answer?.workflow_id) workflows.select(answer.workflow_id);
-    emit("close");
+    answer = await saveLoraChain(props.workflowId, requestBody(false));
   } catch (err) {
     console.warn("[workflows] the LoRA chain save was refused", err);
     saveError.value = errorMessage(err, "Could not save the edited LoRAs.");
+    saving.value = false;
+    return;
+  }
+  // The write landed. Nothing below may read as a failed save: the dialog
+  // would stay open, and a second press would write the edit again.
+  const over = Boolean(answer?.overwritten);
+  try {
+    const saved = String(answer?.name || newName.value.trim() || "");
+    notices.push({
+      level: "success",
+      text: over
+        ? `Saved over “${shownName.value}”.`
+        : saved
+          ? `Saved “${saved.replace(/\.json$/i, "")}” as a new workflow.`
+          : "Saved as a new workflow.",
+    });
+    // A new card is a card of its own, so the grid is re-read and the rail
+    // moves onto it: the owner's next look is at what they just made. Over
+    // the original it is the same card, so nothing is selected: the grid is
+    // re-read (a manual workflow's models and version come off its new
+    // document) and the rail is told below to read its chain again.
+    await workflows.refetch();
+    if (!over && answer?.workflow_id) workflows.select(answer.workflow_id);
+  } catch (err) {
+    console.warn(
+      `[workflows] the LoRA chain of ${props.workflowId} was saved, but the grid could not be shown again`,
+      err,
+    );
   } finally {
     saving.value = false;
+    if (over) emit("overwritten", props.workflowId);
+    emit("close");
   }
 }
 

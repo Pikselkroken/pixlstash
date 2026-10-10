@@ -578,6 +578,35 @@ describe("the second step", () => {
     expect(textOf(wrapper)).toContain("This workflow follows a file in ComfyUI");
   });
 
+  it.each([
+    ["A new workflow", "Save as a new workflow", false],
+    ["Over the original", "Overwrite the original", true],
+  ])(
+    "does not report a landed save as failed when the grid re-read throws (%s)",
+    async (mode, press, overwritten) => {
+      const wrapper = await toStepTwo();
+      const store = useWorkflowsStore();
+      vi.spyOn(store, "refetch").mockRejectedValue(new Error("grid read failed"));
+      saveLoraChain.mockResolvedValueOnce({
+        dry_run: false,
+        name: overwritten ? null : "SDXL + face detailer (edited).json",
+        workflow_id: overwritten ? KEY : NEW_KEY,
+        overwritten,
+        changes: [],
+      });
+      await button(wrapper, mode).trigger("click");
+      await flushPromises();
+      await button(wrapper, press).trigger("click");
+      await flushPromises();
+
+      // Closed, with no alert: left open, a second press writes it again.
+      expect(wrapper.find("[role=alert]").exists()).toBe(false);
+      expect(wrapper.emitted("close")).toBeTruthy();
+      expect(Boolean(wrapper.emitted("overwritten"))).toBe(overwritten);
+      expect(saveLoraChain).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("stays open and says why when the save is refused", async () => {
     const wrapper = await toStepTwo();
     saveLoraChain.mockRejectedValueOnce({
