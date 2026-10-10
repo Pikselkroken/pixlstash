@@ -6455,6 +6455,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such card."},
             409: {"description": "There is no graph to duplicate."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             500: {"description": "The copy could not be written."},
         },
     )
@@ -6546,6 +6549,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such card."},
             409: {"description": "No graph, or nothing this ComfyUI needs fixed."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             503: {"description": "ComfyUI could not be reached."},
         },
     )
@@ -6890,6 +6896,9 @@ def create_router(server) -> APIRouter:
                     "workflow that got a newer version meanwhile."
                 )
             },
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             503: {"description": "ComfyUI could not be reached."},
         },
     )
@@ -6931,7 +6940,8 @@ def create_router(server) -> APIRouter:
             ):
                 # `_edited_graph_for` finds a stored graph through the card's
                 # first variant: a card without one would answer 200 here and
-                # never be read back.
+                # never be read back. Its other condition, that the card is
+                # the workflow's base card, is what `_require_base` handed us.
                 raise HTTPException(
                     status_code=409,
                     detail=(
@@ -7772,6 +7782,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such workflow."},
             409: {"description": "No graph to clone, or a swap could not be made."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             500: {"description": "The copy could not be written."},
         },
     )
@@ -8007,6 +8020,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "No such saved recipe."},
             409: {"description": "The recipe has no graph left to build on."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
         },
     )
     def extract_workflow(request: Request, recipe_id: int):
