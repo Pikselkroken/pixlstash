@@ -319,6 +319,28 @@ let columnsMenuCloseTimeout = null;
 // Unsubscribe handle for the desktop tray's "Settings" event (desktop only).
 let stopOpenSettings = null;
 
+// Observed when the element arrives, not in onMounted. `<v-app>` renders its
+// content inside a Suspense boundary, so on a route whose view is an async
+// component the main area's ref is assigned after this component's mounted hook
+// has run; an observer created there was never created at all on those routes,
+// and the column count then tracked the window instead of the main area for the
+// life of the page.
+watch(mainAreaRef, (mainArea) => {
+  if (mainAreaResizeObserver) {
+    mainAreaResizeObserver.disconnect();
+    mainAreaResizeObserver = null;
+  }
+  if (!mainArea || typeof ResizeObserver === "undefined") return;
+  mainAreaResizeObserver = new ResizeObserver(() => {
+    updateMaxColumns();
+    updateIsMobile();
+  });
+  mainAreaResizeObserver.observe(mainArea);
+  if (gridWrapperRef.value) {
+    mainAreaResizeObserver.observe(gridWrapperRef.value);
+  }
+});
+
 // --- Computed ---
 // Maps the current route to a sidebar folder key ('rf-{id}' or 'if-{id}') so
 // the sidebar can highlight the correct folder on deep-link or back-navigation.
@@ -639,16 +661,6 @@ onMounted(async () => {
   refreshSidebar();
   updateMaxColumns();
   connectUpdatesSocket();
-  if (typeof ResizeObserver !== "undefined" && mainAreaRef.value) {
-    mainAreaResizeObserver = new ResizeObserver(() => {
-      updateMaxColumns();
-      updateIsMobile();
-    });
-    mainAreaResizeObserver.observe(mainAreaRef.value);
-    if (gridWrapperRef.value) {
-      mainAreaResizeObserver.observe(gridWrapperRef.value);
-    }
-  }
   // Everything above that the app shell needs to be usable (sidebar refresh,
   // WebSocket connect, layout measurement) has now been kicked off; the
   // remaining config/library/undo-history fetches finish in the background
