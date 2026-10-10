@@ -36,11 +36,6 @@ _LORA_CLASSES = {
     "LoRALoaderModelOnly",
     "LoraLoaderGGUF",
 }
-_CLIP_TEXT_ENCODE_CLASSES = {
-    "CLIPTextEncode",
-    "CLIPTextEncodeSDXL",
-    "CLIPTextEncodeFlux",
-}
 # Nodes that have a named "positive" conditioning input connected to a sampler
 _SAMPLER_CLASSES = {
     "KSampler",
@@ -48,6 +43,16 @@ _SAMPLER_CLASSES = {
     "CFGGuider",
     "SamplerCustom",
 }
+# The input a prompt node keeps its text in, first found: ``text`` on core's
+# encoders, ``prompt`` on the edit and video ones, ``value`` on a primitive
+# feeding one. One rule for the run, the bindings (#1832) and the recipe.
+# ponytail: one field per node. An encoder with a field per model (SDXL's
+# ``text_g``/``text_l``, Flux's ``clip_l``/``t5xxl``) has no place for a run's
+# prompt, and the Run popup says so; write every field when that is wanted.
+PROMPT_FIELDS = ("text", "prompt", "value")
+# Where an encoder that makes both sides (``TextEncodeBooguEdit``) keeps the
+# negative. Never ``PROMPT_FIELDS`` for it: that is its positive.
+NEGATIVE_FIELDS = ("negative_prompt", "negative")
 # Nodes that carry a seed value
 _SEED_CLASSES = {
     "KSampler",
@@ -197,6 +202,34 @@ def _extract_text_from_node_ui(node: dict | None) -> str | None:
     return None
 
 
+def _is_conditioning_input(name: Any) -> bool:
+    return name in ("positive", "negative") or "conditioning" in str(name)
+
+
+def _guider_prompt_inputs(class_type: str) -> tuple[str, ...]:
+    """The inputs a sampler or guider takes its positive prompt on.
+
+    ``BasicGuider`` has one, unnamed; the same reading as
+    ``workflow_io._prompt_inputs``.
+    """
+    if class_type.endswith("Guider"):
+        return ("positive", "conditioning")
+    return ("positive",) if class_type in _SAMPLER_CLASSES else ()
+
+
+def _encodes_text_ui(node: dict) -> bool:
+    """Whether a UI-format node makes conditioning out of text.
+
+    The rule ``workflow_io`` detects a run's prompt nodes by: a ``TextEncode``
+    class, or a node that takes CLIP and no conditioning, so makes the
+    conditioning itself (``MiniMaxH3ImageToVideo``).
+    """
+    if "TextEncode" in str(node.get("type") or ""):
+        return True
+    kinds = {inp.get("type") for inp in node.get("inputs") or []}
+    return "CLIP" in kinds and "CONDITIONING" not in kinds
+
+
 def _follow_positive_ui(
     node_id: str,
     node_map: dict,
@@ -212,13 +245,14 @@ def _follow_positive_ui(
     node = node_map.get(str(node_id))
     if not isinstance(node, dict):
         return None
-    if node.get("type") in _CLIP_TEXT_ENCODE_CLASSES:
-        text = _get_widget_value_ui(node, "text")
-        if isinstance(text, str) and text.strip():
-            return text.strip()
+    if _encodes_text_ui(node):
+        for field in PROMPT_FIELDS:
+            text = _get_widget_value_ui(node, field)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
         # text may be fed by an external STRING link - follow it
         for inp in node.get("inputs") or []:
-            if inp.get("name") == "text" and inp.get("link") is not None:
+            if inp.get("name") in PROMPT_FIELDS and inp.get("link") is not None:
                 src_id = link_map.get(str(inp["link"]))
                 if src_id:
                     return _extract_text_from_node_ui(node_map.get(src_id))
@@ -280,11 +314,11 @@ def _extract_generation_info_ui(workflow: dict) -> dict:
                 if isinstance(name, str) and name:
                     loras.append(name)
 
-            elif node_type in _SAMPLER_CLASSES:
+            elif _guider_prompt_inputs(node_type):
                 if positive_prompt is None:
                     for inp in node.get("inputs") or []:
                         if (
-                            inp.get("name") == "positive"
+                            inp.get("name") in _guider_prompt_inputs(node_type)
                             and inp.get("link") is not None
                         ):
                             upstream_id = link_map.get(str(inp["link"]))
@@ -399,9 +433,18 @@ def _follow_prompt_api(
     class_type = node.get("class_type", "")
     inputs = node.get("inputs") or {}
 
-    if class_type in _CLIP_TEXT_ENCODE_CLASSES:
-        text = inputs.get("text")
-        return _resolve_text_api(text, workflow, depth + 1)
+    # An encoder, by the rule `workflow_io` detects a run's prompt nodes by: a
+    # `TextEncode` class, or a node that takes `clip` and no conditioning, so
+    # makes the conditioning itself (`MiniMaxH3ImageToVideo`).
+    if "TextEncode" in class_type or (
+        "clip" in inputs and not any(map(_is_conditioning_input, inputs))
+    ):
+        # One that makes both sides keeps its negative in a field of its own.
+        fields = PROMPT_FIELDS
+        if side == "negative" and any(name in inputs for name in NEGATIVE_FIELDS):
+            fields = NEGATIVE_FIELDS
+        name = next((name for name in fields if name in inputs), None)
+        return _resolve_text_api(inputs.get(name), workflow, depth + 1)
 
     # Follow conditioning passthrough nodes upstream, **the caller's side
     # first**: a node carrying both a generic `conditioning` and a named
@@ -491,9 +534,16 @@ def _extract_generation_info_api(workflow: dict) -> dict:
             if isinstance(name, str) and name:
                 loras.append(name)
 
-        elif class_type in _SAMPLER_CLASSES:
+        elif _guider_prompt_inputs(class_type):
             if positive_prompt is None:
-                ref = inputs.get("positive")
+                ref = next(
+                    (
+                        inputs[name]
+                        for name in _guider_prompt_inputs(class_type)
+                        if name in inputs
+                    ),
+                    None,
+                )
                 if _is_api_ref(ref):
                     positive_prompt = _follow_prompt_api(str(ref[0]), workflow)
             if seed is None and class_type in _SEED_CLASSES:

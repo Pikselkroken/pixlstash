@@ -787,22 +787,45 @@ def _wait_for_comfyui_outputs(
         time.sleep(poll_s)
 
 
-def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:
+def _emit_comfyui_progress(
+    server, prompt_id: str, status: str, message: str, progress: int = 0
+) -> None:
     try:
         server.vault.notify(
             EventType.PLUGIN_PROGRESS,
             {
                 "plugin": "ComfyUI",
-                "status": "failed",
+                "status": status,
                 "run_id": f"comfyui-{prompt_id}",
-                "message": str(message or "ComfyUI failed"),
+                "message": message,
                 "current": 0,
                 "total": 0,
-                "progress": 0,
+                "progress": progress,
             },
         )
     except Exception as exc:
-        logger.debug("Failed to emit ComfyUI failure progress event: %s", exc)
+        logger.debug(
+            "Failed to emit ComfyUI %s progress event for prompt %s: %s",
+            status,
+            prompt_id,
+            exc,
+        )
+
+
+def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:
+    _emit_comfyui_progress(
+        server, prompt_id, "failed", str(message or "ComfyUI failed")
+    )
+
+
+def _emit_comfyui_completed_progress(server, prompt_id: str) -> None:
+    """Say a prompt's run is over, once what it made is in the library.
+
+    The tab following a run cannot learn this from ComfyUI's socket: ComfyUI
+    sends ``execution_success`` and the closing ``executing`` only to the
+    client a prompt named, and a run names none.
+    """
+    _emit_comfyui_progress(server, prompt_id, "completed", "ComfyUI complete", 100)
 
 
 def _download_comfyui_image(base_url: str, entry: dict) -> tuple[bytes, str]:
@@ -1230,7 +1253,7 @@ def _process_comfyui_outputs(
     rejected: str | None = None,
     run_workflow_version: int | None = None,
 ) -> None:
-    """Poll ComfyUI for a prompt's outputs, import them, and emit ONE event.
+    """Poll ComfyUI for a prompt's outputs, import them, and say how it ended.
 
     *rejected* is ComfyUI's account of the outputs it dropped at validation
     while still accepting the prompt (``format_prompt_rejection``); a run that
@@ -1261,6 +1284,11 @@ def _process_comfyui_outputs(
 
     Failures emit a ``PLUGIN_PROGRESS`` failure event via
     ``_emit_comfyui_failure_progress`` and never a ``PICTURE_IMPORTED`` event.
+
+    A run that did not fail ends with a ``PLUGIN_PROGRESS`` ``completed`` event
+    (``_emit_comfyui_completed_progress``), after the import event and also
+    when every output was a duplicate: it is what takes the run's row out of
+    the Tasks tab.
     """
     lease = None
     pinned_server = None
@@ -1413,6 +1441,7 @@ def _process_comfyui_outputs(
                     "change_kind": "added",
                 },
             )
+        _emit_comfyui_completed_progress(pinned_server, prompt_id)
     except RuntimeError as exc:
         logger.warning("ComfyUI prompt %s failed before outputs: %s", prompt_id, exc)
         if pinned_server is not None:

@@ -1521,6 +1521,59 @@ def test_0129_hands_back_every_video_and_no_still():
         assert rows == {"clip.mp4": (None, None), "still.png": ("v2", "[]")}
 
 
+def test_0130_hands_back_a_picture_with_a_graph_and_no_prompt():
+    """The prompt reader follows more graphs now, so the ones it gave up on are
+    re-offered: a picture with a graph and no prompt. One that has its prompt,
+    and one that carries no graph at all, keep both markers.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        scanned = dict(workflow_hash_version="v2", comfyui_models="[]")
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _insert_minimal_row(
+                conn,
+                "picture",
+                file_path="no-prompt.mp4",
+                workflow_instance_hash="a" * 64,
+                **scanned,
+            )
+            _insert_minimal_row(
+                conn,
+                "picture",
+                file_path="prompted.png",
+                workflow_instance_hash="b" * 64,
+                comfyui_positive_prompt="a castle",
+                **scanned,
+            )
+            _insert_minimal_row(conn, "picture", file_path="photo.jpg", **scanned)
+            conn.execute(
+                "UPDATE alembic_version SET version_num = "
+                "'0129_rescan_videos_for_embedded_workflows'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            rows = {
+                row[0]: row[1:]
+                for row in conn.execute(
+                    "SELECT file_path, workflow_hash_version, comfyui_models "
+                    "FROM picture"
+                )
+            }
+        assert rows == {
+            "no-prompt.mp4": (None, None),
+            "prompted.png": ("v2", "[]"),
+            "photo.jpg": ("v2", "[]"),
+        }
+
+
 def test_0125_resets_only_recipes_on_a_hand_made_workflow():
     """A hand-made group id goes back to NULL for re-filing; an automatic id
     and an already-NULL one are left as they are."""

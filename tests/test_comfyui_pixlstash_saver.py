@@ -305,6 +305,13 @@ class TestOutputProcessing:
         )
         return server, calls
 
+    @staticmethod
+    def _ending(event):
+        """``(run_id, status)`` of a ``PLUGIN_PROGRESS`` event."""
+        event_type, payload = event
+        assert event_type == EventType.PLUGIN_PROGRESS
+        return payload["run_id"], payload["status"]
+
     def test_a_manual_workflows_run_files_what_it_made_on_it(self, monkeypatch):
         """Imported and saver-reported pictures both; a plain run files none."""
         _server, calls = self._run(
@@ -331,11 +338,14 @@ class TestOutputProcessing:
         assert calls["downloads"] == 0
         assert calls["stacked"] == (7, [41, 42])
         assert calls["sourced"] == (None, [41, 42])
-        assert server.vault.events == [
-            (
-                EventType.PICTURE_IMPORTED,
-                {"ids": [41, 42], "source": "ui", "change_kind": "added"},
-            )
+        # The import, then the end of the run: the order a tab following the
+        # run needs, so its row leaves once the pictures are there.
+        assert server.vault.events[0] == (
+            EventType.PICTURE_IMPORTED,
+            {"ids": [41, 42], "source": "ui", "change_kind": "added"},
+        )
+        assert [self._ending(event) for event in server.vault.events[1:]] == [
+            ("comfyui-prompt-1", "completed")
         ]
 
     def test_a_mixed_graph_merges_both_sets_of_ids(self, monkeypatch):
@@ -354,7 +364,11 @@ class TestOutputProcessing:
         server, calls = self._run(monkeypatch, images=[], pixlstash_ids=[])
         assert calls["downloads"] == 0
         assert calls["stacked"] is None
-        assert server.vault.events == []
+        # The run still ended, and its row must not wait for a picture that
+        # is never coming.
+        assert [self._ending(event) for event in server.vault.events] == [
+            ("comfyui-prompt-1", "completed")
+        ]
 
     def test_a_genuinely_empty_run_still_reports_failure(self, monkeypatch):
         # No saver ran and nothing was written: the pre-existing failure path
@@ -363,7 +377,7 @@ class TestOutputProcessing:
         assert [event for event, _payload in server.vault.events] == [
             EventType.PLUGIN_PROGRESS
         ]
-        assert server.vault.events[0][1]["status"] == "failed"
+        assert self._ending(server.vault.events[0]) == ("comfyui-prompt-1", "failed")
 
     def test_an_empty_run_reports_the_outputs_comfyui_dropped(self, monkeypatch):
         # ComfyUI accepted the prompt but dropped the save output at validation;
