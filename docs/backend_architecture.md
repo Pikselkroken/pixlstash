@@ -9656,12 +9656,22 @@ encoder meeting no replaced loader, or two families, a family missing from the
 map, or a type ComfyUI does not list for that class keeps the graph's own.
 `POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
 per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
-maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file - and a VAE or
-text-encoder slot the set's untaken file of the same layout (`family`), and
-when the set holds exactly as many files of a kind as the graph has slots, the
-rest in graph order whatever their layout: a set's files go with its
-checkpoint. A slot already loads the set's file only when its name is that
-shelf row; a name the shelf cannot pin to one row is compared whole, so a
+maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file. The VAE and the text-encoder slots are each
+paired with the set's files of that kind in four passes, a file taken once
+(#1831): the owner's own pairing (`picks`, graph filename -> a model of
+`model_ids`; one naming another model, or one model twice, is a 422); then a
+slot that already loads one of the set's files keeps it, so a set holding the
+very files the workflow loads changes none of them; then a slot takes the
+set's file of its own layout (`family`); and when the set holds exactly as
+many files of the kind as the graph has slots, every slot left takes one
+whatever its layout: a set's files go with its checkpoint. The last two pair
+by filename, closest pair first (`_closest_pairs`, which `_pair_bases` uses
+too), never in order: in order, a set listing its audio VAE before its video
+one crossed the two loaders of an image-to-video graph. The plan answers with
+the pairing (`takes`, graph filename -> the set's model id) and the set's
+files by loader kind (`choices`), which is what the dialog's per-loader select
+is drawn from and sends back whole as `picks`. A slot already loads the set's
+file only when its name is that shelf row; a name the shelf cannot pin to one row is compared whole, so a
 generic `diffusion_pytorch_model.safetensors` in another folder is swapped,
 never kept. The plan runs the clone's `retype_text_encoders` on its copy, so a
 loader row carries `was_type`/`now_type`. `maps_cleanly` says the set's

@@ -112,39 +112,106 @@
         </p>
         <template v-else>
           <span id="cos-diff-label" class="section-label">What the clone changes</span>
-          <ul class="cos-rows" data-testid="cos-loaders">
+          <ul
+            class="cos-rows"
+            data-testid="cos-loaders"
+            :aria-busy="String(replanning)"
+          >
             <li
-              v-for="row in chosen.plan.loaders"
+              v-for="row in loaderRows()"
               :key="row.node_id"
               class="cos-row"
               :class="{ 'cos-row--same': !changed(row) }"
             >
               <span class="cos-row-kind">{{ kindLabel(row.kind) }}</span>
-              <span v-if="!changed(row)" class="cos-row-body">
-                <span class="cos-class">{{ row.was_class }}</span>
-                · {{ fileNames(row.was) }}
-                <span class="cos-same">Unchanged</span>
-              </span>
-              <span v-else class="cos-row-body">
-                <span class="cos-was">
-                  <span class="cos-class">{{ row.was_class }}</span>
-                  {{ fileNames(row.was) }}
-                  <template v-if="row.was_type !== row.now_type">
-                    · {{ row.was_type }}</template
+              <span
+                class="cos-row-body"
+                :class="{ 'cos-row-body--one': !row.twoLines }"
+              >
+                <!-- Two lines, each said: what the loader has (struck when
+                     the clone changes it), then what it goes to. A row with
+                     a select has both even when nothing changes: the file is
+                     how the owner knows which loader this is. -->
+                <template v-if="row.twoLines">
+                  <span class="cos-line-label">Original</span>
+                  <span
+                    class="cos-was"
+                    :class="{ 'cos-was--kept': !changed(row) }"
                   >
-                </span>
+                    <span class="cos-class">{{ row.was_class }}</span>
+                    {{ row.wasText }}
+                    <template v-if="row.was_type !== row.now_type">
+                      · {{ row.was_type }}</template
+                    >
+                  </span>
+                  <!-- Under the kind, where the second line has room for it:
+                       beside a long file name it wrapped onto a line of its
+                       own. -->
+                  <span v-if="!changed(row)" class="cos-same cos-same--under"
+                    >Unchanged</span
+                  >
+                  <span class="cos-line-label"
+                    >To
+                    <v-icon size="14" aria-hidden="true"
+                      >mdi-arrow-right</v-icon
+                    ></span
+                  >
+                </template>
+                <!-- An unchanged row with nothing to pick is its "now" half
+                     alone: the class and the files are the ones it has. On
+                     two lines the class is said again only when it changes:
+                     the line above names it, and the width goes to the file. -->
                 <span class="cos-now">
-                  <v-icon size="14" aria-hidden="true">mdi-arrow-right</v-icon>
-                  <span class="cos-class">{{ row.now_class }}</span>
-                  {{ fileNames(row.now) }}
+                  <span
+                    v-if="!row.twoLines || row.now_class !== row.was_class"
+                    class="cos-class"
+                    >{{ row.now_class }}</span
+                  >
+                  <template v-if="!row.twoLines">·</template>
+                  <!-- A file the set holds an alternative for is a select:
+                       the pairing is a guess the owner can overrule. -->
+                  <template v-for="(part, index) in row.parts" :key="index">
+                    <AppSelect
+                      v-if="part.options.length"
+                      class="cos-pick"
+                      compact
+                      hide-label
+                      :label="`${kindLabel(row.kind)} in place of ${part.wasName}`"
+                      :model-value="part.taken"
+                      :options="part.options"
+                      :disabled="cloning"
+                      :data-testid="`cos-pick-${part.slot}`"
+                      @update:model-value="pick(part.slot, $event)"
+                    />
+                    <span v-else
+                      >{{ part.name
+                      }}{{ index < row.now.length - 1 ? "," : "" }}</span
+                    >
+                  </template>
                   <template v-if="row.was_type !== row.now_type">
                     · {{ row.now_type }}</template
                   >
                   <span v-if="row.pack" class="cos-pack">{{ row.pack }}</span>
+                  <span v-if="!row.twoLines" class="cos-same">Unchanged</span>
                 </span>
               </span>
             </li>
           </ul>
+          <!-- The other row changed without being touched: said, and read
+               out, rather than left to be noticed. -->
+          <p v-if="swapNotice" class="cos-note" role="status" data-testid="cos-swapped">
+            {{ swapNotice }}
+          </p>
+          <!-- Only after a pick: a set that will not load cannot be chosen,
+               but the file picked for a loader may be one ComfyUI refuses. -->
+          <p
+            v-if="chosen.plan.reason"
+            class="cos-note cos-bad"
+            role="alert"
+            data-testid="cos-reason"
+          >
+            {{ chosen.plan.reason }}. Pick another file to clone.
+          </p>
           <p v-if="baseKept" class="cos-note cos-warn" data-testid="cos-base-kept">
             <v-icon size="14" aria-hidden="true">mdi-alert-outline</v-icon>
             <span
@@ -276,6 +343,12 @@
  * pending mode, on the clone's chain; *Done* hands the chain back here, and
  * the clone is still one write.
  *
+ * **The pairing is a guess the owner can overrule.** Where the set holds more
+ * than one VAE (or text encoder), each loader taking one draws it as a select
+ * of the set's files of that kind. Picking the file another loader has swaps
+ * the two; the server re-plans that one set with the choice (`picks`), so the
+ * diff, the swaps Clone sends and the fit are still the server's.
+ *
  * Replaces *Clone with new models* in the menu; *Pick files myself* (the All
  * tab's last card) opens that dialog instead.
  */
@@ -292,6 +365,7 @@ import { deriveModelName } from "../../utils/modelShelf";
 import {
   cloneOntoSetName,
   handMadeName,
+  headName,
   pictureCount,
   setCheckpoint,
   setGroups,
@@ -299,6 +373,7 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import EditLorasDialog from "./EditLorasDialog.vue";
 
@@ -337,7 +412,7 @@ const KIND_LABELS = {
 
 const loading = ref(false);
 const loadError = ref("");
-/** Every set, each `{key, name, files, cover, pictures, handMade, loraIds, checkpointIds, plan}`. */
+/** Every set, each `{key, name, files, cover, pictures, handMade, loraIds, checkpointIds, namesById, plan}`. */
 const sets = ref([]);
 /** `set-clone-plans`' `base_filename` and `base_model`. */
 const base = ref({ filename: null, model: null });
@@ -350,6 +425,12 @@ const chosenKey = ref("");
 const name = ref("");
 const nameTouched = ref(false);
 const cloning = ref(false);
+/** Said after a pick that moved another loader's file too. */
+const swapNotice = ref("");
+/** A pick is being re-planned: the diff on show is about to be replaced. */
+const replanning = ref(false);
+/** The pick made while one was being re-planned: `{key, slot, id}`, or null. */
+let queuedPick = null;
 const cloneError = ref("");
 const editOpen = ref(false);
 /** Edit LoRAs' Done for the chosen set: `{key, rows, body}`, or null. */
@@ -498,6 +579,7 @@ const canClone = computed(
     !sameFiles.value &&
     Boolean(name.value.trim()) &&
     !cloning.value &&
+    !replanning.value &&
     // Removing LoRAs rewires the graph, which needs the chain's planner; an
     // unread chain may hold LoRAs of the old base model.
     (chosen.value.plan.keeps_loras || Boolean(chain.value)) &&
@@ -538,6 +620,63 @@ function kindLabel(kind) {
 
 function fileNames(files) {
   return files.map((file) => deriveModelName(file) || file).join(", ");
+}
+
+/**
+ * The plan's loader rows as drawn: each with its new files as `parts`, a part
+ * carrying the set's files it could be instead (the set's models of the kind
+ * its loader takes, `choices`, when there are two or more), whether it is
+ * drawn as two lines (`twoLines`: it changes, or a part can be picked), and
+ * the files the loader has as text (`wasText`). `slot` is
+ * the graph's own name for the file, which `takes` and `picks` key.
+ *
+ * **A row with a select names files exactly** (`loraStem`: the file's own
+ * name, no folder, no extension), in its text and in the select alike. The
+ * row is there to tell two files of one kind apart, and the shelf's tidied
+ * name drops the very tokens (a precision, a version) that may be all that
+ * differs; it also has to read the same on both sides to be matched by eye.
+ *
+ * **Built on every render, not cached.** Fresh `options` make each select
+ * re-render, and Vue re-patches a `<select>`'s `value` whenever it does: that
+ * is what puts a native select back on the plan's file after a pick the
+ * server refused, without remounting it (which would drop its focus).
+ */
+function loaderRows() {
+  const { loaders = [], takes = {}, choices = {} } = chosen.value?.plan ?? {};
+  return loaders.map((row) => {
+    // A loader rewritten to a class with other fields has no file-for-file row.
+    const aligned = row.was.length === row.now.length;
+    const parts = row.now.map((file, index) => {
+      const slot = aligned ? row.was[index] : "";
+      const taken = takes[slot];
+      const ids =
+        taken == null
+          ? []
+          : (Object.values(choices).find((of) => of.includes(taken)) ?? []);
+      return {
+        slot,
+        taken,
+        file,
+        wasName: loraStem(slot),
+        options:
+          ids.length > 1
+            ? ids.map((id) => ({
+                value: id,
+                label: chosen.value.namesById[id] || `Model ${id}`,
+              }))
+            : [],
+      };
+    });
+    const picks = parts.some((part) => part.options.length);
+    const named = (file) =>
+      picks ? loraStem(file) : deriveModelName(file) || file;
+    return {
+      ...row,
+      twoLines: picks || changed(row),
+      wasText: row.was.map(named).join(", "),
+      parts: parts.map((part) => ({ ...part, name: named(part.file) })),
+    };
+  });
 }
 
 function coverSrc(cover) {
@@ -581,6 +720,17 @@ function namesByFile(members) {
 }
 
 /**
+ * What a file select calls each member, by id: its file's own name without
+ * the extension, which is what the loader rows beside it show. The shelf's
+ * name only for a member with no file.
+ */
+function namesById(members) {
+  return Object.fromEntries(
+    members.map((m) => [m.id, loraStem(m.filename) || m.name]),
+  );
+}
+
+/**
  * The base models the clone loads, by their shelf names: the plan's base
  * loaders' new files in loader order, each name once (a two-model graph names
  * both, as the server's generated names do). Off the plan, not the set's
@@ -604,10 +754,21 @@ function filesLine(members) {
     .join(" · ");
 }
 
+/**
+ * A set member under the name the shelf reads it by (`headName`): its display
+ * name, else one derived from its file, never `….safetensors`. Applied to
+ * every member on the way in, so the set's card, its files line and the name
+ * the clone is offered all read as the shelf does.
+ */
+function shelfNamed(member) {
+  return member ? { ...member, name: headName(member) || member.name } : member;
+}
+
 /** The shelf's sets as this dialog draws them, before their plans. */
 function candidates(payload) {
-  const handMade = (payload.hand_made ?? []).map((set) => {
-    const members = (set.members ?? []).filter((m) => m.on_shelf && m.id != null);
+  const handMade = (payload.hand_made ?? []).map((raw) => {
+    const set = { ...raw, members: (raw.members ?? []).map(shelfNamed) };
+    const members = set.members.filter((m) => m.on_shelf && m.id != null);
     const checkpoint = setCheckpoint(set);
     const ordered = [
       ...members.filter((m) => m.slot === "checkpoint"),
@@ -633,14 +794,20 @@ function candidates(payload) {
         .map((m) => m.id),
       checkpointName: checkpoint?.name || "",
       modelNames: namesByFile(members),
+      namesById: namesById(members),
     };
   });
   // A set whose base model is off the shelf has no checkpoint to clone onto.
   const groups = setGroups(payload.combinations ?? []).filter(
     (group) => !group.head?.missing,
   );
-  const evidence = groups.map((group) => {
-    const models = group.models ?? [];
+  const evidence = groups.map((raw) => {
+    const group = {
+      ...raw,
+      head: shelfNamed(raw.head),
+      models: (raw.models ?? []).map(shelfNamed),
+    };
+    const models = group.models;
     return {
       key: group.key,
       handMade: false,
@@ -661,6 +828,7 @@ function candidates(payload) {
       ],
       checkpointName: group.head?.name || "",
       modelNames: namesByFile(models),
+      namesById: namesById(models),
     };
   });
   return [...handMade, ...evidence];
@@ -671,6 +839,9 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   cloneError.value = "";
+  replanning.value = false;
+  queuedPick = null;
+  swapNotice.value = "";
   sets.value = [];
   chain.value = null;
   chosenKey.value = "";
@@ -731,6 +902,9 @@ function choose(key) {
       (added.length ? `, including ${added.map((row) => row.name).join(", ")}.` : ".")
     : "";
   edited.value = null;
+  // What went wrong was about the set left behind.
+  cloneError.value = "";
+  swapNotice.value = "";
   chosenKey.value = key;
   if (!nameTouched.value) {
     name.value = cloneOntoSetName(
@@ -739,6 +913,70 @@ function choose(key) {
       chosen.value?.name,
       loadedModelName(chosen.value),
     );
+  }
+}
+
+/**
+ * The owner's choice of *modelId* for the loaders of the graph file *slot*.
+ * A file another loader has swaps with this one's, so one file is never on
+ * two. The whole pairing is sent, and the server's plan for it replaces the
+ * one on show; a refused re-plan leaves that one as it was. The selects stay
+ * enabled meanwhile (disabling the focused one drops focus to the page), so a
+ * pick made before the answer waits for it and is asked next, against the
+ * plan that answer left: the select already shows it, and dropping it would
+ * turn the select back without a word. The latest one waiting wins.
+ */
+async function pick(slot, modelId) {
+  const set = chosen.value;
+  // A native select hands its value back as text.
+  const id = Number(modelId);
+  if (replanning.value) {
+    queuedPick = { key: set.key, slot, id };
+    return;
+  }
+  // Already so: a pick that waited may ask for what the answer brought.
+  if (set.plan.takes?.[slot] === id) return;
+  const picks = { ...set.plan.takes };
+  const other = Object.keys(picks).find((file) => picks[file] === id);
+  if (other) picks[other] = picks[slot];
+  picks[slot] = id;
+  const mine = token;
+  replanning.value = true;
+  cloneError.value = "";
+  swapNotice.value = "";
+  try {
+    const answer = await planSetClones(props.workflowId, [
+      {
+        key: set.key,
+        checkpoint_ids: set.checkpointIds,
+        model_ids: set.modelIds,
+        picks,
+      },
+    ]);
+    if (mine !== token) return;
+    const plan = (answer?.plans ?? []).find((found) => found.key === set.key);
+    if (!plan) cloneError.value = "Could not change that file.";
+    else {
+      set.plan = plan;
+      if (other) {
+        swapNotice.value = `Swapped with the loader of ${loraStem(other)}, which had that file.`;
+      }
+    }
+  } catch (err) {
+    if (mine !== token) return;
+    console.warn(
+      `[workflows] could not re-plan the clone of ${props.workflowId} onto ${set.key}`,
+      err,
+    );
+    cloneError.value = errorMessage(err, "Could not change that file.");
+  } finally {
+    if (mine === token) {
+      replanning.value = false;
+      const next = queuedPick;
+      queuedPick = null;
+      // Only on the set it was made on, if that is still the one on show.
+      if (next && next.key === chosenKey.value) void pick(next.slot, next.id);
+    }
   }
 }
 
@@ -788,7 +1026,8 @@ watch(
 <style scoped>
 .cos-panes {
   display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  /* The diff reads whole file names; a set's card only has to be found. */
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   gap: var(--space-6);
   min-height: 0;
 }
@@ -950,10 +1189,14 @@ watch(
   list-style: none;
 }
 
+/* One grid for the whole row: the kind, the line's word ("Original", "To")
+   and the line. A two-line row's lines are this grid's rows, so every cell
+   sits on its own line's baseline, whether that line is text or a select. */
 .cos-row {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: var(--space-3);
+  grid-template-columns: 72px max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-2) var(--space-3);
   padding: var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
@@ -978,18 +1221,38 @@ watch(
   min-width: 0;
 }
 
+/* A two-line row's body is not a box: its words and lines are cells of the
+   row's grid. */
 .cos-row-body {
-  flex-direction: column;
-  align-items: flex-start;
+  display: contents;
 }
 
-.cos-row--same .cos-row-body {
-  flex-direction: row;
+.cos-row-body--one {
+  display: flex;
+  grid-column: 2 / -1;
+}
+
+.cos-line-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  grid-column: 2;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cos-was,
+.cos-now {
+  grid-column: 3;
 }
 
 .cos-was {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   text-decoration: line-through;
+}
+
+/* Shown to name the loader, not as something the clone replaces. */
+.cos-was--kept {
+  text-decoration: none;
 }
 
 .cos-class {
@@ -998,6 +1261,22 @@ watch(
 
 .cos-same {
   margin-left: auto;
+}
+
+.cos-same--under {
+  grid-column: 1;
+  margin-left: 0;
+}
+
+.cos-row-body--one .cos-now {
+  flex: 1;
+}
+
+/* A field, not a chip: it takes the line's spare width, so a short name does
+   not leave the chevron pressed against it. */
+.cos-pick {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .cos-pack,
