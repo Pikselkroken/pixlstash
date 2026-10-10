@@ -39,6 +39,7 @@ import socket
 import sqlite3
 import tempfile
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from types import SimpleNamespace
@@ -17312,14 +17313,43 @@ def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
     # by the digest of that file on the shelf.
     address = _model_address(saving, saving.manual)
     own = _h("the-workflows-own-checkpoint")
+    another = _h("another-checkpoint")
     with saving.server.hub.transaction() as conn:
-        conn.execute("DELETE FROM model WHERE sha256 = ?", (own,))
-        conn.execute(
+        conn.execute("DELETE FROM model WHERE sha256 IN (?, ?)", (own, another))
+        conn.executemany(
             "INSERT INTO model (file_kind, filename, sha256, provenance) "
-            "VALUES ('checkpoint', 'realvisxl.safetensors', ?, 'scanned')",
-            (own,),
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            [("realvisxl.safetensors", own), ("krea.safetensors", another)],
         )
     try:
+        # The control for the digest case below: another model's digest IS a
+        # change, so "nothing kept" there is the comparison and not a digest
+        # the shelf could not name.
+        _run(
+            saving,
+            workflow_id=saving.manual,
+            models=[{"address": address, "sha256": another}],
+        )
+        kept = _changes(saving, saving.manual)["ran"]["models"]
+        assert [model["sha256"] for model in kept] == [another]
+        # A default whose name the hub forgot is no answer either: the graph
+        # still says what the loader holds.
+        real = workflows_routes.workflow_defaults
+
+        def forgetful(*args, **kwargs):
+            recipe = real(*args, **kwargs)
+            recipe.models = [replace(m, filename=None) for m in recipe.models]
+            return recipe
+
+        saving.monkeypatch.setattr(workflows_routes, "workflow_defaults", forgetful)
+        _run(saving, workflow_id=saving.manual, **SKIP_FIVE)
+        _run(
+            saving,
+            workflow_id=saving.manual,
+            models=[{"address": address, "filename": "realvisxl.safetensors"}],
+        )
+        assert _changes(saving, saving.manual)["ran"] is None
+        saving.monkeypatch.setattr(workflows_routes, "workflow_defaults", real)
         # Nor by the loader's other address: `core:<label>` names the same
         # loader its slot label does, and a run loads a model at either.
         core = "core:" + core_node_labels(structural_document(CHAIN_DOCUMENT))["1"]
@@ -17333,7 +17363,7 @@ def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
             assert _changes(saving, saving.manual)["ran"] is None, named
     finally:
         with saving.server.hub.transaction() as conn:
-            conn.execute("DELETE FROM model WHERE sha256 = ?", (own,))
+            conn.execute("DELETE FROM model WHERE sha256 IN (?, ?)", (own, another))
     _run(saving, workflow_id=saving.manual)
     assert _changes(saving, saving.manual)["ran"] is None
 
@@ -17450,6 +17480,41 @@ def test_a_save_takes_over_from_an_older_edit_of_the_default(saving):
     assert (
         _run(saving, workflow_id=saving.manual)["2"]["inputs"]["strength_model"] == 0.6
     )
+
+
+def test_a_saved_graph_that_will_not_read_says_nothing_about_stages(
+    runnable, monkeypatch
+):
+    """Nobody read the graph, so nothing says it has no stages: the workflow
+    keeps the ones it was known to have, and the owner's answer for each.
+
+    Wrong if `stages` comes back empty: an unreadable graph would then drop
+    the stage the owner switched off, and a run would bring it back.
+    """
+    _upscaled_run(runnable, monkeypatch, object_info=True)
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET specials = 'upscale' "
+            "WHERE topology_hash = ?",
+            (RUN_TOPOLOGY,),
+        )
+        workflow_group_writes.write_saved_defaults(
+            conn, RUN_WF, [], [("stage:upscale", "off")]
+        )
+        # Saved over, with a newest version that is a graph and will not reduce.
+        for version, source in ((1, "pictures"), (2, "loras")):
+            workflow_versions.insert_version(
+                conn,
+                RUN_WF,
+                version,
+                json.dumps({"1": {"class_type": "KSampler", "inputs": [1, 2]}}),
+                None,
+                source,
+            )
+    recipe = runnable.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"][
+        "default_recipe"
+    ]
+    assert recipe["stages"] == {"upscale": False}
 
 
 def test_a_change_to_one_lora_saves_the_others_as_the_default_has_them(saving):

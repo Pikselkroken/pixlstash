@@ -1918,7 +1918,10 @@ def _saved_graph(
 def _graph_sample(
     workflow_id: str, graph: Optional[dict], *, core: bool
 ) -> tuple[
-    list[tuple[str, dict]], dict[str, _VariantRead], dict[str, str], tuple[str, ...]
+    list[tuple[str, dict]],
+    dict[str, _VariantRead],
+    dict[str, str],
+    Optional[tuple[str, ...]],
 ]:
     """``(documents, reads, names, stages)`` of a workflow read off its own
     graph: that graph, once.
@@ -1928,10 +1931,12 @@ def _graph_sample(
     the core holds the node. Its model names are the ones it spells and its
     stages the ones it has. A graph that is missing (an editor document that
     will not convert) or will not reduce has nothing to sample, which leaves a
-    default recipe of the owner's edits alone.
+    default recipe of the owner's edits alone; its *stages* are then ``None``,
+    which is not ``()``: nobody read the graph, so nothing says it has none,
+    and the caller keeps what it knew of the workflow's stages.
     """
     if graph is None:
-        return [], {}, {}, ()
+        return [], {}, {}, None
     graph = sanitize_prompt_graph(graph)
     try:
         structural = structural_document(graph)
@@ -1951,7 +1956,7 @@ def _graph_sample(
             workflow_id,
             exc,
         )
-        return [], {}, {}, ()
+        return [], {}, {}, None
     names = {}
     for slot in read.slots:
         value = ((graph.get(slot.node_id) or {}).get("inputs") or {}).get(slot.widget)

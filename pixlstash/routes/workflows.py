@@ -274,6 +274,7 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import family_of, modality_of
 from pixlstash.utils.comfyui_utilities import NotAWorkflowError
 from pixlstash.hub.workflow_origin import FILE_ORIGIN, INBOX_ORIGIN
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX, WORKFLOW_ID_PATTERN
 from send2trash import TrashPermissionError
 
@@ -9158,17 +9159,7 @@ def create_router(server) -> APIRouter:
             # same test as one named by file, or the workflow's own model
             # sent with its digest would read as a change on every run. One
             # the shelf does not hold was not loaded, so it changed nothing.
-            by_digest = (
-                {
-                    str(row["sha256"]).lower(): row["filename"]
-                    for row in hub.fetchall(
-                        "SELECT sha256, filename FROM model "
-                        "WHERE sha256 IS NOT NULL AND filename IS NOT NULL"
-                    )
-                }
-                if any(m.sha256 for m in asked.models)
-                else {}
-            )
+            by_digest = _shelf_files_of(hub, asked.models)
 
             # An address the recipe does not spell that way is read off the
             # graph, where the same loader answers to either spelling; the
@@ -9182,7 +9173,8 @@ def create_router(server) -> APIRouter:
                 )
                 if not filename:
                     return False
-                if model.address in models:
+                # A name the hub forgot is no answer: the graph has one.
+                if models.get(model.address):
                     return normalized_filename(filename) != models[model.address]
                 if files_at is None:
                     files_at = _graph_files_at(
@@ -9255,6 +9247,24 @@ def create_router(server) -> APIRouter:
             is not None
         )
 
+    def _shelf_files_of(hub, models: list[RunModel]) -> dict[str, str]:
+        """``{sha256: shelf filename}`` for the models named by digest.
+
+        Only the digests asked for: this is read on every run that names a
+        model by digest, and the shelf can hold thousands of rows.
+        """
+        digests = sorted({str(m.sha256).strip().lower() for m in models if m.sha256})
+        found: dict[str, str] = {}
+        for batch in chunked(digests):
+            placeholders = ",".join("?" * len(batch))
+            for row in hub.fetchall(
+                "SELECT sha256, filename FROM model WHERE filename IS NOT NULL "
+                f"AND lower(sha256) IN ({placeholders})",
+                tuple(batch),
+            ):
+                found[str(row["sha256"]).lower()] = row["filename"]
+        return found
+
     def _graph_files_at(hub, workflow_id: str, object_info: dict | None):
         """A read of the files the workflow's graph loads at a model address.
 
@@ -9320,21 +9330,11 @@ def create_router(server) -> APIRouter:
             m.address: m.shelf_filename or m.filename
             for m in (recipe.models if recipe else [])
         }
-        by_digest = None
+        by_digest = _shelf_files_of(hub, picks)
         object_info = _owner_object_info()
         files_at = _graph_files_at(hub, workflow_id, object_info)
         for pick in picks:
-            now = pick.filename
-            if now is None:
-                if by_digest is None:
-                    by_digest = {
-                        str(row["sha256"]).lower(): row["filename"]
-                        for row in hub.fetchall(
-                            "SELECT sha256, filename FROM model "
-                            "WHERE sha256 IS NOT NULL AND filename IS NOT NULL"
-                        )
-                    }
-                now = by_digest.get(str(pick.sha256).lower())
+            now = pick.filename or by_digest.get(str(pick.sha256).strip().lower())
             widget = pick.address.rpartition(OVERRIDE_ADDRESS_SEPARATOR)[2]
             for was in [current.get(pick.address), *files_at(pick.address)]:
                 if not was or was in (SHELF_MODEL_GONE, SHELF_MODEL_UNNAMED):
