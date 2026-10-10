@@ -64,6 +64,7 @@ import {
 import { setPicturesProject } from "../../api/pictures";
 import { getSharedResourceIds, revokeTokensByResource } from "../../api/users";
 import { listSortMechanisms } from "../../api/session";
+import { listAdapters } from "../../api/modelShelf";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isFaceDrag,
@@ -394,6 +395,10 @@ const sidebarCtxX = ref(0);
 const sidebarCtxY = ref(0);
 const sidebarCtxCharacter = ref(null); // { id, name } or null
 const sidebarCtxSet = ref(null); // { id, name, set_icon, set_color } or null
+// Whether the open menu's person or set has a LoRA for "Create with LoRA…":
+// 'checking' | 'attached' | 'none' | 'failed'. Only 'attached' enables the row.
+const sidebarCtxLoraState = ref("checking");
+let loraCheckEpoch = 0;
 const setCtxIconMenuOpen = ref(false);
 const setCtxColorMenuOpen = ref(false);
 const setCtxAppearanceMenuPos = ref({ top: 0, left: 0, openUp: false });
@@ -2818,6 +2823,68 @@ function primeDuplicateCount(type, item) {
 }
 
 /**
+ * Find out whether the person or set a context menu just opened on has a LoRA
+ * attached, so "Create with LoRA…" is only live when there is one to run.
+ *
+ * The row stays disabled until the answer lands and when it cannot be read:
+ * the popup makes the same read, so it would fail the same way. Both
+ * attachable file kinds, as `RunDialog.loadLoraSource` reads them.
+ *
+ * @param {string} type - the context-menu target type.
+ * @param {Object} item - the target object.
+ */
+async function primeLoraCheck(type, item) {
+  const mine = ++loraCheckEpoch;
+  // Reset before any return: the last menu's answer is not this one's.
+  sidebarCtxLoraState.value = "checking";
+  const filter = { character: "characterId", set: "setId" }[type];
+  if (!filter || !item?.id) return;
+  // The row is not rendered for these, and the read is the owner's alone.
+  if (isReadOnly.value || !filterStore.comfyuiConfigured) return;
+  let state;
+  try {
+    const kinds = await Promise.all(
+      ["adapter", "unknown"].map((fileKind) =>
+        listAdapters({ fileKind, [filter]: Number(item.id) }),
+      ),
+    );
+    state = kinds.flat().some((row) => row?.sha256) ? "attached" : "none";
+  } catch (err) {
+    console.warn(
+      `Could not read the LoRAs attached to ${type} ${item.id}:`,
+      err,
+    );
+    state = "failed";
+  }
+  // A menu opened on another row while this read was out has its own answer.
+  if (mine === loraCheckEpoch) sidebarCtxLoraState.value = state;
+}
+
+// ComfyUI's configuration lands after start-up, possibly under an open menu.
+// The row it reveals was skipped by the check above, so ask again.
+watch([() => filterStore.comfyuiConfigured, isReadOnly], () => {
+  if (!sidebarCtxVisible.value) return;
+  if (sidebarCtxCharacter.value) {
+    primeLoraCheck("character", sidebarCtxCharacter.value);
+  } else if (sidebarCtxSet.value) {
+    primeLoraCheck("set", sidebarCtxSet.value);
+  }
+});
+
+/**
+ * Why "Create with LoRA…" is disabled on the open menu, or "" when it is live.
+ * @param {string} name - the person or set the menu was opened on.
+ * @returns {string}
+ */
+function loraRowReason(name) {
+  return {
+    checking: "Checking for an attached LoRA…",
+    none: `No LoRA is attached to ${name}. Assign one from the Models shelf.`,
+    failed: "Could not read the Models shelf.",
+  }[sidebarCtxLoraState.value] || "";
+}
+
+/**
  * The known duplicate count for one scope, or null while it is still unknown.
  * @param {string} type
  * @param {Object} item
@@ -2861,6 +2928,7 @@ function openSidebarCtxMenu(type, item, event) {
   // that turns out to be empty. A scoped count reuses cached hashes and is
   // cheap; the store also de-duplicates repeat opens on the same object.
   primeDuplicateCount(type, item);
+  primeLoraCheck(type, item);
   // Reset here rather than in every branch: only the scrapheap branch turns it
   // on, so a single top-level reset keeps the per-type blocks below untouched.
   sidebarCtxScrapheap.value = false;
@@ -7932,14 +8000,24 @@ defineExpose({
         <button
           v-if="!isReadOnly && filterStore.comfyuiConfigured"
           class="ctx-item"
+          :disabled="sidebarCtxLoraState !== 'attached'"
           @click="openLoraRunFromCtx('character', sidebarCtxCharacter)"
         >
           <Tooltip
-            :text="`Run a workflow with ${sidebarCtxCharacter.name}'s LoRA`"
+            :text="
+              loraRowReason(sidebarCtxCharacter.name) ||
+              `Run a workflow with ${sidebarCtxCharacter.name}'s LoRA`
+            "
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
-          <span class="ctx-label-text">Create with LoRA…</span>
+          <!-- The reason is in the label as well as the tooltip, as on the
+               duplicates row below: a disabled row cannot be focused. -->
+          <span class="ctx-label-text">{{
+            sidebarCtxLoraState === "none"
+              ? "No LoRA attached"
+              : "Create with LoRA…"
+          }}</span>
         </button>
         <button
           class="ctx-item"
@@ -8054,14 +8132,22 @@ defineExpose({
             !isReadOnly && !sidebarCtxSet.locked && filterStore.comfyuiConfigured
           "
           class="ctx-item"
+          :disabled="sidebarCtxLoraState !== 'attached'"
           @click="openLoraRunFromCtx('set', sidebarCtxSet)"
         >
           <Tooltip
-            :text="`Run a workflow with the LoRA attached to ${sidebarCtxSet.name}`"
+            :text="
+              loraRowReason(sidebarCtxSet.name) ||
+              `Run a workflow with the LoRA attached to ${sidebarCtxSet.name}`
+            "
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
-          <span class="ctx-label-text">Create with LoRA…</span>
+          <span class="ctx-label-text">{{
+            sidebarCtxLoraState === "none"
+              ? "No LoRA attached"
+              : "Create with LoRA…"
+          }}</span>
         </button>
         <button
           class="ctx-item"
