@@ -1490,15 +1490,26 @@ in the Workflow tab's Models panel head, both through
   dialog and opens `CloneWithModelsDialog` on the same card. With nothing that
   fits, it opens on *All*. Each card says in advance "Keeps its N LoRAs" or
   "Clears N LoRAs".
-- **Right: the clone as a node diff**, the plan's `loaders` read as they come:
-  class, files and a CLIP loader's type before, then after, the node pack chip,
-  and "Unchanged". A
+- **Right: the clone as a node diff**, the plan's `loaders` read as they come.
+  A row that changes is two lines, each said: **Original** (class, files and a
+  CLIP loader's type, struck) and **To →** (the same after, and the node pack
+  chip). A row that does not is one line ending "Unchanged". A
   pack ComfyUI does not have is a warning, never a refusal.
+- **Names are read as the shelf reads them.** Every set member goes through
+  `headName` on the way in (`shelfNamed`): its display name, else one derived
+  from its file, so no set card, files line or offered clone name carries
+  `….safetensors`.
 - **Which file goes to which loader is the server's guess and the owner's
   call** (#1831). Where the set holds two or more VAEs (or text encoders),
   each loader file taking one is a compact `AppSelect` of the set's files of
-  that kind (the plan's `takes` and `choices`), in changed and unchanged rows
-  alike. Picking the file another loader has swaps the two, and a status line
+  that kind (the plan's `takes` and `choices`), on the row's **To →** line. A
+  row with a select is two lines even when nothing changes, its **Original**
+  line unstruck and ending "Unchanged", because the file a loader has is how
+  the owner knows which loader it is. Such a row names files exactly, in its
+  text and in the select alike (`loraStem`: no folder, no extension): the
+  shelf's tidied name drops a precision or a version, which may be all that
+  tells two files of one kind apart. Picking the file another loader has
+  swaps the two, and a status line
   says so, since the other row changed untouched. The dialog never
   builds the swap itself: it re-asks `set-clone-plans` for that one set with
   the whole pairing as `picks` and replaces the set's plan with the answer, so

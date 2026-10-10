@@ -1549,10 +1549,31 @@ describe("Clone onto a workflow set", () => {
       hand_made: [
         {
           ...sets.hand_made[0],
+          // No name of its own, and nobody named its files: every name the
+          // shelf has for them is the file's, extension and all.
+          name: "",
           members: [
-            ...sets.hand_made[0].members,
-            { id: 31, slot: "vae", on_shelf: true, name: "Audio VAE" },
-            { id: 32, slot: "vae", on_shelf: true, name: "Video VAE" },
+            {
+              id: 11,
+              slot: "checkpoint",
+              on_shelf: true,
+              name: "h3_finetune.safetensors",
+              filename: "h3_finetune.safetensors",
+            },
+            {
+              id: 31,
+              slot: "vae",
+              on_shelf: true,
+              name: "H3_Audio_VAE_fp16.safetensors",
+              filename: "H3_Audio_VAE_fp16.safetensors",
+            },
+            {
+              id: 32,
+              slot: "vae",
+              on_shelf: true,
+              name: "H3_Video_VAE_fp16.safetensors",
+              filename: "H3_Video_VAE_fp16.safetensors",
+            },
           ],
         },
       ],
@@ -1600,19 +1621,32 @@ describe("Clone onto a workflow set", () => {
         options: s.findAll("option").map((o) => o.text()),
       }));
     // Each loader starts on the file it already loads; the checkpoint row,
-    // which the set holds one file for, offers nothing.
+    // which the set holds one file for, offers nothing. A file is called by
+    // its own name, whole but for the extension: the tidied name would drop
+    // the precision, which may be all that tells two files apart.
+    const files = ["H3_Audio_VAE_fp16", "H3_Video_VAE_fp16"];
     expect(picks()).toEqual([
-      {
-        value: "32",
-        label: "VAE in place of video",
-        options: ["Audio VAE", "Video VAE"],
-      },
-      {
-        value: "31",
-        label: "VAE in place of audio",
-        options: ["Audio VAE", "Video VAE"],
-      },
+      { value: "32", label: "VAE in place of video", options: files },
+      { value: "31", label: "VAE in place of audio", options: files },
     ]);
+    // Nothing changes yet, and each row still says which file its loader
+    // has, unstruck, over the select.
+    const vaeRows = wrapper.findAll('[data-testid="cos-loaders"] li').slice(1);
+    expect(
+      vaeRows.map((li) => li.findAll(".cos-line-label").map((l) => l.text())),
+    ).toEqual([
+      ["Original", "To"],
+      ["Original", "To"],
+    ]);
+    expect(
+      vaeRows.map((li) => li.find(".cos-was").text().replace(/\s+/g, " ")),
+    ).toEqual(["VAELoader video Unchanged", "VAELoader audio Unchanged"]);
+    expect(wrapper.findAll(".cos-was--kept")).toHaveLength(2);
+    // No `.safetensors` on the set's card or in the name the clone is offered.
+    expect(wrapper.find('[data-testid="cos-set-hand:7"]').text()).not.toContain(
+      "safetensors",
+    );
+    expect(wrapper.find(".cos-name input").element.value).toBe("a · h3 finetune");
 
     planSetClones.mockClear();
     planSetClones.mockResolvedValue({ ...reply, plans: [crossed] });
@@ -1632,6 +1666,7 @@ describe("Clone onto a workflow set", () => {
       },
     ]);
     expect(picks().map((p) => p.value)).toEqual(["31", "32"]);
+    expect(wrapper.findAll(".cos-was--kept")).toHaveLength(0);
     // The row nobody touched changed too: said, in a status region.
     expect(wrapper.find('[data-testid="cos-swapped"]').text()).toContain(
       "Swapped with the loader of audio",

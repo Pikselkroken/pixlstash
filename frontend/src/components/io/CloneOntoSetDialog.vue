@@ -118,31 +118,46 @@
             :aria-busy="String(replanning)"
           >
             <li
-              v-for="row in chosen.plan.loaders"
+              v-for="row in loaderRows()"
               :key="row.node_id"
               class="cos-row"
               :class="{ 'cos-row--same': !changed(row) }"
             >
               <span class="cos-row-kind">{{ kindLabel(row.kind) }}</span>
-              <span class="cos-row-body">
-                <span v-if="changed(row)" class="cos-was">
-                  <span class="cos-class">{{ row.was_class }}</span>
-                  {{ fileNames(row.was) }}
-                  <template v-if="row.was_type !== row.now_type">
-                    · {{ row.was_type }}</template
+              <span
+                class="cos-row-body"
+                :class="{ 'cos-row-body--one': !row.twoLines }"
+              >
+                <!-- Two lines, each said: what the loader has (struck when
+                     the clone changes it), then what it goes to. A row with
+                     a select has both even when nothing changes: the file is
+                     how the owner knows which loader this is. -->
+                <template v-if="row.twoLines">
+                  <span class="cos-line-label">Original</span>
+                  <span
+                    class="cos-was"
+                    :class="{ 'cos-was--kept': !changed(row) }"
                   >
-                </span>
-                <!-- An unchanged row is its "now" half alone: the class and
-                     the files are the ones it has. -->
+                    <span class="cos-class">{{ row.was_class }}</span>
+                    {{ row.wasText }}
+                    <template v-if="row.was_type !== row.now_type">
+                      · {{ row.was_type }}</template
+                    >
+                    <span v-if="!changed(row)" class="cos-same">Unchanged</span>
+                  </span>
+                  <span class="cos-line-label">To</span>
+                </template>
+                <!-- An unchanged row with nothing to pick is its "now" half
+                     alone: the class and the files are the ones it has. -->
                 <span class="cos-now">
-                  <v-icon v-if="changed(row)" size="14" aria-hidden="true"
+                  <v-icon v-if="row.twoLines" size="14" aria-hidden="true"
                     >mdi-arrow-right</v-icon
                   >
                   <span class="cos-class">{{ row.now_class }}</span>
-                  <template v-if="!changed(row)">·</template>
+                  <template v-if="!row.twoLines">·</template>
                   <!-- A file the set holds an alternative for is a select:
                        the pairing is a guess the owner can overrule. -->
-                  <template v-for="(part, index) in nowParts(row)" :key="index">
+                  <template v-for="(part, index) in row.parts" :key="index">
                     <AppSelect
                       v-if="part.options.length"
                       class="cos-pick"
@@ -164,7 +179,7 @@
                     · {{ row.now_type }}</template
                   >
                   <span v-if="row.pack" class="cos-pack">{{ row.pack }}</span>
-                  <span v-if="!changed(row)" class="cos-same">Unchanged</span>
+                  <span v-if="!row.twoLines" class="cos-same">Unchanged</span>
                 </span>
               </span>
             </li>
@@ -337,6 +352,7 @@ import { deriveModelName } from "../../utils/modelShelf";
 import {
   cloneOntoSetName,
   handMadeName,
+  headName,
   pictureCount,
   setCheckpoint,
   setGroups,
@@ -594,33 +610,58 @@ function fileNames(files) {
 }
 
 /**
- * A row's new files, each with the set's files it could be instead: the set's
- * models of the kind its loader takes (`choices`), when there are two or more.
- * `slot` is the graph's own name for the file, which `takes` and `picks` key.
+ * The plan's loader rows as drawn: each with its new files as `parts`, a part
+ * carrying the set's files it could be instead (the set's models of the kind
+ * its loader takes, `choices`, when there are two or more), whether it is
+ * drawn as two lines (`twoLines`: it changes, or a part can be picked), and
+ * the files the loader has as text (`wasText`). `slot` is
+ * the graph's own name for the file, which `takes` and `picks` key.
+ *
+ * **A row with a select names files exactly** (`loraStem`: the file's own
+ * name, no folder, no extension), in its text and in the select alike. The
+ * row is there to tell two files of one kind apart, and the shelf's tidied
+ * name drops the very tokens (a precision, a version) that may be all that
+ * differs; it also has to read the same on both sides to be matched by eye.
+ *
+ * **Built on every render, not cached.** Fresh `options` make each select
+ * re-render, and Vue re-patches a `<select>`'s `value` whenever it does: that
+ * is what puts a native select back on the plan's file after a pick the
+ * server refused, without remounting it (which would drop its focus).
  */
-function nowParts(row) {
-  const { takes = {}, choices = {} } = chosen.value.plan;
-  // A loader rewritten to a class with other fields has no file-for-file row.
-  const aligned = row.was.length === row.now.length;
-  return row.now.map((file, index) => {
-    const slot = aligned ? row.was[index] : "";
-    const taken = takes[slot];
-    const ids =
-      taken == null
-        ? []
-        : (Object.values(choices).find((of) => of.includes(taken)) ?? []);
+function loaderRows() {
+  const { loaders = [], takes = {}, choices = {} } = chosen.value?.plan ?? {};
+  return loaders.map((row) => {
+    // A loader rewritten to a class with other fields has no file-for-file row.
+    const aligned = row.was.length === row.now.length;
+    const parts = row.now.map((file, index) => {
+      const slot = aligned ? row.was[index] : "";
+      const taken = takes[slot];
+      const ids =
+        taken == null
+          ? []
+          : (Object.values(choices).find((of) => of.includes(taken)) ?? []);
+      return {
+        slot,
+        taken,
+        file,
+        wasName: loraStem(slot),
+        options:
+          ids.length > 1
+            ? ids.map((id) => ({
+                value: id,
+                label: chosen.value.namesById[id] || `Model ${id}`,
+              }))
+            : [],
+      };
+    });
+    const picks = parts.some((part) => part.options.length);
+    const named = (file) =>
+      picks ? loraStem(file) : deriveModelName(file) || file;
     return {
-      slot,
-      taken,
-      name: deriveModelName(file) || file,
-      wasName: deriveModelName(slot) || slot,
-      options:
-        ids.length > 1
-          ? ids.map((id) => ({
-              value: id,
-              label: chosen.value.namesById[id] || `Model ${id}`,
-            }))
-          : [],
+      ...row,
+      twoLines: picks || changed(row),
+      wasText: row.was.map(named).join(", "),
+      parts: parts.map((part) => ({ ...part, name: named(part.file) })),
     };
   });
 }
@@ -665,10 +706,14 @@ function namesByFile(members) {
   );
 }
 
-/** Each member's shelf name by its id: what a file select calls it. */
+/**
+ * What a file select calls each member, by id: its file's own name without
+ * the extension, which is what the loader rows beside it show. The shelf's
+ * name only for a member with no file.
+ */
 function namesById(members) {
   return Object.fromEntries(
-    members.map((m) => [m.id, m.name || deriveModelName(m.filename || "")]),
+    members.map((m) => [m.id, loraStem(m.filename) || m.name]),
   );
 }
 
@@ -696,10 +741,21 @@ function filesLine(members) {
     .join(" · ");
 }
 
+/**
+ * A set member under the name the shelf reads it by (`headName`): its display
+ * name, else one derived from its file, never `….safetensors`. Applied to
+ * every member on the way in, so the set's card, its files line and the name
+ * the clone is offered all read as the shelf does.
+ */
+function shelfNamed(member) {
+  return member ? { ...member, name: headName(member) || member.name } : member;
+}
+
 /** The shelf's sets as this dialog draws them, before their plans. */
 function candidates(payload) {
-  const handMade = (payload.hand_made ?? []).map((set) => {
-    const members = (set.members ?? []).filter((m) => m.on_shelf && m.id != null);
+  const handMade = (payload.hand_made ?? []).map((raw) => {
+    const set = { ...raw, members: (raw.members ?? []).map(shelfNamed) };
+    const members = set.members.filter((m) => m.on_shelf && m.id != null);
     const checkpoint = setCheckpoint(set);
     const ordered = [
       ...members.filter((m) => m.slot === "checkpoint"),
@@ -732,8 +788,13 @@ function candidates(payload) {
   const groups = setGroups(payload.combinations ?? []).filter(
     (group) => !group.head?.missing,
   );
-  const evidence = groups.map((group) => {
-    const models = group.models ?? [];
+  const evidence = groups.map((raw) => {
+    const group = {
+      ...raw,
+      head: shelfNamed(raw.head),
+      models: (raw.models ?? []).map(shelfNamed),
+    };
+    const models = group.models;
     return {
       key: group.key,
       handMade: false,
@@ -885,7 +946,7 @@ async function pick(slot, modelId) {
     else {
       set.plan = plan;
       if (other) {
-        swapNotice.value = `Swapped with the loader of ${deriveModelName(other) || other}, which had that file.`;
+        swapNotice.value = `Swapped with the loader of ${loraStem(other)}, which had that file.`;
       }
     }
   } catch (err) {
@@ -1145,18 +1206,33 @@ watch(
   min-width: 0;
 }
 
+/* "Original" and "To" in a column of their own, so the two lines' classes
+   start level whatever the words' widths. */
 .cos-row-body {
-  flex-direction: column;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  /* Each word level with the middle of its own line: the "To" line is as
+     tall as its select. */
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
 }
 
-.cos-row--same .cos-row-body {
-  flex-direction: row;
+.cos-row-body--one {
+  display: flex;
+}
+
+.cos-line-label {
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .cos-was {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
   text-decoration: line-through;
+}
+
+/* Shown to name the loader, not as something the clone replaces. */
+.cos-was--kept {
+  text-decoration: none;
 }
 
 .cos-class {
@@ -1167,13 +1243,7 @@ watch(
   margin-left: auto;
 }
 
-/* The line runs the row's width, changed or not: "Unchanged" sits at its end
-   and a select has room to be a field. */
-.cos-now {
-  align-self: stretch;
-}
-
-.cos-row--same .cos-now {
+.cos-row-body--one .cos-now {
   flex: 1;
 }
 
