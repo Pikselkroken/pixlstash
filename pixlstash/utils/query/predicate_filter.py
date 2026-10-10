@@ -40,19 +40,26 @@ from sqlmodel import select
 
 from pixlstash.db_models.dedup import DedupGroup, DedupGroupMember
 from pixlstash.db_models.picture import Picture
+from pixlstash.utils.workflow_ids import AUTO_PREFIX, MANUAL_PREFIX
 from pixlstash.utils.service.person_tags import (
     FACE_REQUIRING_TAGS,
     OBJECT_META_TAGS,
     PERSON_TAGS,
 )
 
-# In a workflow filter's key list, a live manual workflow whose pictures are
-# NOT the filtered workflow's (``!manual:<uuid>``). See
-# :func:`workflow_keys_predicate`.
+_WORKFLOW_ID_PREFIXES = (AUTO_PREFIX, MANUAL_PREFIX)
+
+# In a workflow filter's key list, a workflow whose runs file on it and whose
+# pictures are therefore NOT a plain variant's (``!manual:<uuid>``,
+# ``!auto:<digest>``). See :func:`workflow_keys_predicate`.
 NOT_MADE_BY = "!"
-# The manual workflow the listed variants must ALSO have been run by
-# (``=manual:<uuid>``): one manual workflow's pictures, narrowed by a LoRA.
+# The workflow a held variant (:data:`RUN_VARIANT`) must have been run by
+# (``=manual:<uuid>``): one run-filed workflow's own runs, narrowed by a LoRA.
 ONLY_MADE_BY = "="
+# A variant counted only in a picture an :data:`ONLY_MADE_BY` workflow's run
+# made (``@<structural hash>``), where a plain variant is counted in every
+# picture no run-filed workflow made.
+RUN_VARIANT = "@"
 
 
 def _in_json(column, values: Sequence[str]) -> ColumnElement:
@@ -65,27 +72,31 @@ def _in_json(column, values: Sequence[str]) -> ColumnElement:
     return column.in_(select(rows.c.value))
 
 
-def made_by_live_manual(live: Sequence[str]) -> ColumnElement:
-    """``picture.run_workflow_id`` names one of the *live* manual workflows.
+def made_by_run_filed(live: Sequence[str]) -> ColumnElement:
+    """``picture.run_workflow_id`` names one of the *live* run-filed workflows.
 
-    A picture naming a manual workflow that has since been deleted is in none.
+    *live* is ``workflow_card_reads.run_filed_workflow_ids``: the manual
+    workflows the hub holds and the automatic ones the owner saved over. A
+    picture naming a manual workflow that has since been deleted is in none.
     """
     return _in_json(Picture.run_workflow_id, live)
 
 
 def filed_as(live: Sequence[str]) -> ColumnElement:
-    """The key a kept picture is filed under: its live manual workflow, else its variant.
+    """The key a kept picture is filed under: the workflow whose run made it, else its variant.
 
-    A picture a manual workflow's run made (``run_workflow_id``) belongs to
-    THAT workflow while it lives, not to the automatic one its variant is in.
-    Every per-workflow read of pictures (the grid's counts and covers, a
-    workflow's pictures, its recipes' credit and looks) groups or narrows by
-    this, so a manual workflow is one more key beside the variants.
+    A picture made by a run of a workflow whose runs file on it
+    (``run_workflow_id`` in *live*: a manual workflow, or an automatic one
+    the owner saved over) belongs to THAT workflow while it lives, not to the
+    automatic one its variant is in. Every per-workflow read of pictures (the
+    grid's counts and covers, a workflow's pictures, its recipes' credit and
+    looks) groups or narrows by this, so such a workflow's id is one more key
+    beside the variants (``workflow_card_reads.picture_keys``).
     """
     if not live:
         return Picture.workflow_structural_hash
     return case(
-        (made_by_live_manual(live), Picture.run_workflow_id),
+        (made_by_run_filed(live), Picture.run_workflow_id),
         else_=Picture.workflow_structural_hash,
     )
 
@@ -94,29 +105,43 @@ def workflow_keys_predicate(keys: Sequence[str]) -> ColumnElement:
     """The pictures a resolved workflow filter names.
 
     *keys* is what ``routes/pictures/_listing._resolve_workflow_filter``
-    resolves ``?workflow=`` to, for one workflow or several (OR'd): manual
-    workflows' own ids (their runs, by ``run_workflow_id``) and automatic
-    ones' variants, plus - when any are automatic - every live manual id
-    prefixed :data:`NOT_MADE_BY`: a manual run's picture is that workflow's
-    and never the automatic one's, while it lives. Empty matches nothing.
+    resolves ``?workflow=`` to, for one workflow or several (OR'd):
+
+    * a workflow id (``manual:``, ``auto:``): the pictures its own runs made,
+      by ``run_workflow_id``. A manual workflow's only key; a saved-over
+      automatic one's beside its variants;
+    * a variant: its pictures, less those a :data:`NOT_MADE_BY` workflow's
+      run made. A run-filed workflow's picture is that workflow's and never
+      the one its variant is in, while it lives;
+    * a :data:`RUN_VARIANT`: that variant's pictures made by a run of an
+      :data:`ONLY_MADE_BY` workflow (its runs, narrowed by a LoRA).
+
+    Empty matches nothing.
     """
-    manual = [key for key in keys if key.startswith("manual:")]
+    own = [key for key in keys if key.startswith(_WORKFLOW_ID_PREFIXES)]
     excluded = [key[1:] for key in keys if key.startswith(NOT_MADE_BY)]
     only = [key[1:] for key in keys if key.startswith(ONLY_MADE_BY)]
+    held = [key[1:] for key in keys if key.startswith(RUN_VARIANT)]
     variants = [
         key
         for key in keys
-        if key not in manual and key[:1] not in (NOT_MADE_BY, ONLY_MADE_BY)
+        if key not in own and key[:1] not in (NOT_MADE_BY, ONLY_MADE_BY, RUN_VARIANT)
     ]
-    auto = _in_json(Picture.workflow_structural_hash, variants)
-    if only:
-        auto = and_(auto, Picture.run_workflow_id.in_(only))
+    found = _in_json(Picture.workflow_structural_hash, variants)
     if excluded:
-        auto = and_(
-            auto,
-            or_(Picture.run_workflow_id.is_(None), not_(made_by_live_manual(excluded))),
+        found = and_(
+            found,
+            or_(Picture.run_workflow_id.is_(None), not_(made_by_run_filed(excluded))),
         )
-    return or_(_in_json(Picture.run_workflow_id, manual), auto) if manual else auto
+    if held:
+        found = or_(
+            found,
+            and_(
+                _in_json(Picture.workflow_structural_hash, held),
+                _in_json(Picture.run_workflow_id, only),
+            ),
+        )
+    return or_(_in_json(Picture.run_workflow_id, own), found) if own else found
 
 
 # Tag vocabularies for the live "Impossible tags" grid filters, lowercased once for

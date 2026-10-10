@@ -14,9 +14,10 @@ back to the agent as a tool error. By default every tool is a ``GET``; mint a
 argv, which other accounts on the machine can list.
 
 ``--allow-write`` adds the workflow tools: list and read workflows, hand a
-workflow's graph out as a file, take an edited graph back, and preflight or
-run a workflow. They are a fixed allowlist of non-destructive
-routes plus one, ``run_workflow``, that spends GPU time and makes pictures.
+workflow's graph out as a file, take an edited graph back (as a new workflow,
+or saved over the one it came from as its next version), and preflight or
+run a workflow. They are a fixed allowlist of routes that remove nothing,
+plus one, ``run_workflow``, that spends GPU time and makes pictures.
 Every route they wrap is owner-only, so they need an unscoped (``ALL``)
 token; the flag narrows what this server offers, never what the token can
 do. ``export_workflow_graph`` and ``import_workflow_graph`` write and read a
@@ -141,7 +142,10 @@ edit correct: ask it for a node's real inputs (nodes) and which models are on \
 disk (search_models), or set widget values with it (set_workflow_slot).
 3. Validate the edited file with the ComfyUI MCP server (validate_workflow) \
 before importing. Do not store a graph that does not validate.
-4. import_workflow_graph stores it and answers with its workflow_id.
+4. import_workflow_graph with the workflow_id it was exported from saves it \
+over that workflow as its next version, and answers with the version. \
+Without a workflow_id it stores a new workflow and answers with its \
+workflow_id.
 5. preflight_workflow with that id says whether it would run; then \
 run_workflow runs it and says how each run ended. A failed run answers with \
 the node that failed and why; one still going when the wait is over answers \
@@ -151,9 +155,14 @@ Run here, not with the ComfyUI MCP server's own run tool: that submits \
 straight to ComfyUI, and its pictures never reach PixlStash. run_workflow \
 imports what it makes into the library and ties it to the workflow.
 
-An import never changes a stored graph in place. An import with a different \
-graph is a new graph, which may land in a workflow of its own; importing an \
-unchanged graph matches the stored one and adds nothing. A different prompt, \
+Saving over a workflow keeps the graph it replaces: the workflow has \
+versions, and the owner can go back to one in PixlStash. Pass read_version \
+(the version export_workflow_graph answered with) so the answer can say \
+whether a newer version was replaced. Two things the answer reports instead \
+of doing: a graph that replaces a checkpoint this machine has is stored as a \
+new workflow (new_workflow), and a LoRA attached to a person is left out of \
+the stored graph (left_out), since who a picture is of belongs to a run or a \
+recipe; run_workflow's add_loras names a person. A different prompt, \
 seed, LoRA or value is not a graph edit: pass it to preflight_workflow and \
 run_workflow instead of re-importing, or every tweak becomes a new graph.
 
@@ -421,18 +430,32 @@ WORKFLOW_TOOLS = [
     },
     {
         "name": "import_workflow_graph",
-        "description": "Store a ComfyUI workflow (API or UI format) in "
-        "PixlStash, from a file path or an inline object. Validate it first "
-        "if a ComfyUI MCP server is connected. Every call stores a new "
-        "manual workflow named after `name`, identical copies included, and "
-        "the answer carries its workflow_id.",
+        "description": "Store a ComfyUI workflow in PixlStash, from a file "
+        "path or an inline object. Validate it first if a ComfyUI MCP server "
+        "is connected. With `workflow_id`, the graph (API format) is saved "
+        "over that workflow as its next version: the workflow keeps its "
+        "name, pictures and recipes, the graph it replaces is kept as the "
+        "version before, and the answer carries the version. Without it, "
+        "every call stores a new manual workflow named after `name` (API or "
+        "UI format, identical copies included) and the answer carries its "
+        "workflow_id.",
         "inputSchema": {
             "type": "object",
             "properties": {
+                "workflow_id": {
+                    **_WORKFLOW_ID,
+                    "description": "The workflow to save the graph over, as "
+                    "its next version. Leave out to store a new workflow.",
+                },
+                "read_version": {
+                    "type": ["integer", "null"],
+                    "description": "With workflow_id: the `version` "
+                    "export_workflow_graph answered with.",
+                },
                 "name": {
                     "type": "string",
                     "description": "What to call the workflow, e.g. 'Portrait "
-                    "+ upscale.json'.",
+                    "+ upscale.json'. Needed for a new workflow.",
                 },
                 "path": {
                     "type": "string",
@@ -443,12 +466,12 @@ WORKFLOW_TOOLS = [
                     "description": "The graph itself. Give this or path.",
                 },
             },
-            "required": ["name"],
         },
-        # Adds a workflow and never replaces one.
+        # Adds a workflow, or a version of one: what it replaces is kept, but
+        # the workflow then runs another graph, so a client should ask.
         "annotations": {
             "readOnlyHint": False,
-            "destructiveHint": False,
+            "destructiveHint": True,
             "openWorldHint": False,
         },
     },
@@ -866,6 +889,9 @@ def _call_workflow_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict] 
             # is kept so an older server's answer still reads the same.
             "seedless": graph.get("seedless", False),
             "forgotten_models": graph.get("forgotten", 0),
+            # What import_workflow_graph takes back as read_version when the
+            # edited graph is saved over this workflow.
+            "version": graph.get("version"),
         }
         return [{"type": "text", "text": json.dumps(summary, indent=1)}]
     if name == "import_workflow_graph":
@@ -876,6 +902,18 @@ def _call_workflow_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict] 
             if not isinstance(path, str) or not path:
                 raise ToolError("path must be a non-empty string")
             workflow = _read_graph(path)
+        if arguments.get("workflow_id") is not None:
+            # Saved over that workflow, as its next version.
+            body = {"workflow": workflow, "source": "mcp"}
+            if "read_version" in arguments:
+                body["read_version"] = arguments["read_version"]
+            if arguments.get("name"):
+                body["name"] = arguments["name"]
+            return _json_content(
+                _send(fetch, "PUT", f"/workflows/{_quoted_id(arguments)}/graph", body)
+            )
+        if not arguments.get("name"):
+            raise ToolError("a new workflow needs a name")
         body = {"name": arguments.get("name"), "workflow": workflow}
         return _json_content(_send(fetch, "POST", "/comfyui/workflows/import", body))
     if name == "preflight_workflow":

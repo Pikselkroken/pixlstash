@@ -44,6 +44,8 @@ from pixlstash.hub.workflow_card_reads import (
     asset_names,
     card_index,
     find_workflow,
+    picture_keys,
+    run_filed_workflow_ids,
     instance_documents,
     manual_document_and_version,
     variant_documents,
@@ -51,7 +53,11 @@ from pixlstash.hub.workflow_card_reads import (
     workflow_index,
 )
 from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, loader_swaps_of
-from pixlstash.hub.workflow_group_writes import set_manual_api_document
+from pixlstash.hub.workflow_group_writes import (
+    STAGE_ADDRESS_PREFIX,
+    STAGE_OFF,
+    set_manual_api_document,
+)
 from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import workflow_bindings
@@ -83,6 +89,7 @@ from pixlstash.services.workflow_identity import (
     live_slots,
     model_fix_kind,
     slots,
+    special_groups,
     topology_node_labels,
     upscale_kinds,
 )
@@ -277,6 +284,10 @@ class WorkflowFigures:
     # the values the workflow's kept pictures used, most used first, spelled
     # as the picture filters take them (:func:`_describe_recipe_values`).
     recipe_values: dict[str, list[tuple[str, int]]] = field(default_factory=dict)
+    # What its kept pictures are filed under in the vault
+    # (``workflow_card_reads.picture_keys``): its variants, and its own id
+    # where its runs file on it.
+    picture_keys: list[str] = field(default_factory=list)
 
     @property
     def workflow_id(self) -> str:
@@ -335,17 +346,22 @@ def _figures(
     candidates: list[CoverCandidate],
     saved_recipes: dict[str, int],
     superseded: frozenset[str] = frozenset(),
+    run_filed: Collection[str] = (),
 ) -> list[WorkflowFigures]:
     """Fold each workflow's variants into one set of counts and one cover strip.
 
     A picture of a *superseded* variant - made with a model the owner has
     since replaced - is flagged and covers only where no picture made with
     the workflow as it now stands can. *saved_recipes* is by workflow id.
+    *run_filed* is the workflows whose runs file on them, as the vault reads
+    were given them (``run_filed_workflow_ids``): a saved-over automatic
+    workflow's own runs are counted under its id, beside its variants.
     """
     by_variant: dict[str, list[CoverCandidate]] = {}
     for candidate in candidates:
         by_variant.setdefault(candidate.structural_hash, []).append(candidate)
     by_key = {card.workflow_key: card for card in cards}
+    run_filed = frozenset(run_filed)
 
     figures = []
     for workflow in workflows:
@@ -377,9 +393,15 @@ def _figures(
             workflow=workflow,
             base=base,
             saved_recipes=saved_recipes.get(workflow.workflow_id, 0),
+            # The variants, and the id itself where the workflow's runs file
+            # on it. `card.variants` stays the variants (a manual workflow's
+            # is its id already): the hub passes below read it.
+            picture_keys=list(
+                dict.fromkeys([*variants, *picture_keys(workflow, run_filed)])
+            ),
         )
         strip: list[CoverCandidate] = []
-        for structural_hash in variants:
+        for structural_hash in figure.picture_keys:
             seen = activity.get(structural_hash)
             if seen is not None:
                 figure.pictures += seen.pictures
@@ -524,8 +546,9 @@ def read_grid(
         else None
     )
     workflows = workflow_index(hub, counts, cards)
+    run_filed = run_filed_workflow_ids(hub)
     activity, candidates, saved_recipes, model_values = read_card_grid(
-        vault, COVER_DEPTH, [card.workflow_key for card in cards if card.manual]
+        vault, COVER_DEPTH, run_filed
     )
     figures = _figures(
         workflows,
@@ -534,6 +557,7 @@ def read_grid(
         candidates,
         saved_recipes,
         _superseded_variants(hub, cards),
+        run_filed,
     )
     _rank(figures)
     # One read of `workflow_recipe_asset` for every pass below: every variant,
@@ -633,7 +657,7 @@ def _describe_recipe_values(
     """
     for figure in figures:
         totals = {"checkpoints": Counter(), "loras": Counter()}
-        for variant in figure.card.variants:
+        for variant in figure.picture_keys or figure.card.variants:
             for kind, used in by_variant.get(variant, {}).items():
                 totals[kind].update(used)
         figure.recipe_values = {
@@ -1418,12 +1442,25 @@ class _VariantRead:
 
 
 def workflow_defaults(
-    hub: HubDatabase, vault, workflow_id: str, object_info: ObjectInfo = None
+    hub: HubDatabase,
+    vault,
+    workflow_id: str,
+    object_info: ObjectInfo = None,
+    *,
+    version: Optional[int] = None,
 ) -> Optional[DefaultRecipe]:
     """The default recipe of one workflow, or ``None`` for an unknown id.
 
     *object_info* converts a manual workflow's editor document that has no
     conversion stored yet (:func:`converted_manual_document`).
+
+    **A workflow with a graph of its own is read off that graph**: a manual
+    workflow's document, and the newest version of an automatic workflow the
+    owner has saved over (#1849). Its models, LoRAs, strengths and parameters
+    are the graph's, since a save is how they change; only a workflow nobody
+    has saved over is still a vote of its pictures. *version* reads an
+    earlier version instead, which is the default a saved recipe made then
+    runs under.
 
     Featured parameters and models are the mode per address; a LoRA is in when
     more than half the sampled instances loaded it, at its modal strength,
@@ -1443,11 +1480,37 @@ def workflow_defaults(
     provenance = FROM_BEST
     documents: list[tuple[str, dict]] = []
     manual_names: Optional[dict[str, str]] = None
-    if workflow_id.startswith(MANUAL_PREFIX):
+    # The stages of a workflow read off its own graph; None for a vote.
+    graph_stages: Optional[tuple[str, ...]] = None
+    manual = workflow_id.startswith(MANUAL_PREFIX)
+    saved = None if manual else _saved_graph(hub, workflow_id, version)
+    base_variant = None
+    if manual:
         # A manual workflow's sample is its own document, read by its own
         # slot labels: never a picture's run, and never a `core:` address.
         provenance = FROM_ALL
-        documents, reads, manual_names = _manual_sample(hub, workflow_id, object_info)
+        earlier = (
+            workflow_versions.document_of(hub, workflow_id, version)
+            if version is not None
+            else None
+        )
+        documents, reads, manual_names, graph_stages = _graph_sample(
+            workflow_id,
+            api_graph(
+                earlier
+                or converted_manual_document(hub, workflow_id, object_info)[0]
+                or {}
+            ),
+            core=False,
+        )
+    elif saved is not None:
+        # Saved over: its graph is its own now, read as a manual one's is,
+        # but by `core:` address where the core has the node, so the
+        # parameters and pins the owner set before the save still name it.
+        provenance = FROM_ALL
+        documents, reads, manual_names, graph_stages = _graph_sample(
+            workflow_id, saved, core=True
+        )
     else:
         if library_uuid:
             hashes = read_instance_hashes(
@@ -1485,7 +1548,11 @@ def workflow_defaults(
     bare = 0
     lora_strengths: dict[str, Counter] = {}
     lora_widgets: dict[str, str] = {}
-    base_stages = workflow.specials.get(workflow.base_topology or "") or ()
+    base_stages = (
+        graph_stages
+        if graph_stages is not None
+        else workflow.specials.get(workflow.base_topology or "") or ()
+    )
     without: Counter = Counter()
     # Instances whose topology's stages are known: the stage vote's electorate.
     staged = 0
@@ -1539,8 +1606,14 @@ def workflow_defaults(
                 continue
             kind = model_fix_kind(slot.class_type, slot.widget)
             label = read.core.get(slot.node_id)
+            if label:
+                label = CORE_ADDRESS_PREFIX + label
+            elif graph_stages is not None:
+                # A workflow read off its own graph names a loader its core
+                # does not hold (every loader of a manual one) by slot label.
+                label = read.base.get(slot.node_id)
             if kind and label:
-                address = f"{CORE_ADDRESS_PREFIX}{label}/{slot.widget}"
+                address = f"{label}/{slot.widget}"
                 models.setdefault(address, Counter())[slot.asset] += 1
                 model_kinds[address] = kind
         lora_seen.update(loaded)
@@ -1570,9 +1643,7 @@ def workflow_defaults(
     )
     # The base graph's own read: a manual workflow's one, else the base
     # topology's variant.
-    base_read = reads.get(
-        workflow_id if workflow_id.startswith(MANUAL_PREFIX) else base_variant
-    )
+    base_read = reads.get(workflow_id if graph_stages is not None else base_variant)
     if base_read is not None:
         recipe.upscale = base_read.upscale
         recipe.upscale_model = next(
@@ -1593,6 +1664,13 @@ def workflow_defaults(
     for address, value in overrides.items():
         if address.startswith(LORA_ADDRESS_PREFIX):
             lora_overrides[address[len(LORA_ADDRESS_PREFIX) :].lower()] = value
+            continue
+        if address.startswith(STAGE_ADDRESS_PREFIX):
+            # The owner's own answer, over the vote. A stage the graph no
+            # longer has is not brought back by its row.
+            stage = address[len(STAGE_ADDRESS_PREFIX) :]
+            if stage in recipe.stages:
+                recipe.stages[stage] = value != STAGE_OFF
             continue
         slot_label, _, input_name = address.rpartition("/")
         if (
@@ -1803,44 +1881,75 @@ def converted_manual_document(
     return with_converted_graph(document, graph), version, []
 
 
-def _manual_sample(
-    hub: HubDatabase, workflow_id: str, object_info: ObjectInfo = None
-) -> tuple[list[tuple[str, dict]], dict[str, _VariantRead], dict[str, str]]:
-    """``(documents, reads, names)`` of a manual workflow: its own graph, once.
+def _saved_graph(
+    hub: HubDatabase, workflow_id: str, version: Optional[int] = None
+) -> Optional[dict]:
+    """The graph the owner saved over an automatic workflow, or ``None``.
 
-    The one instance is the document's API graph, addressed by its own slot
-    labels (no core), and its model names are the ones it spells. An editor
-    document is converted (and the conversion stored) on this read when
-    *object_info* can be had (:func:`converted_manual_document`); one that
-    will not convert, or will not reduce, has nothing to sample, which leaves
-    a default recipe of the owner's edits alone.
+    Its newest version, or *version* of it. ``None`` for a workflow never
+    saved over, and for the version that IS the graph read off its pictures
+    (version 1, or a later one that went back to it): the default was the
+    pictures' vote then, and is read that way.
     """
-    graph = api_graph(converted_manual_document(hub, workflow_id, object_info)[0] or {})
+    edited, found = workflow_versions.edited_document(hub, workflow_id, version)
+    if found is None:
+        return None
+    seen = set()
+    while found is not None and found not in seen:
+        seen.add(found)
+        source = workflow_versions.source_of(hub, workflow_id, found) or ""
+        if source == workflow_versions.FROM_PICTURES:
+            return None
+        if not source.startswith(workflow_versions.REVERT_PREFIX):
+            break
+        target = source[len(workflow_versions.REVERT_PREFIX) :]
+        found = int(target) if target.isdigit() else None
+    return api_graph(edited or {})
+
+
+def _graph_sample(
+    workflow_id: str, graph: Optional[dict], *, core: bool
+) -> tuple[
+    list[tuple[str, dict]], dict[str, _VariantRead], dict[str, str], tuple[str, ...]
+]:
+    """``(documents, reads, names, stages)`` of a workflow read off its own
+    graph: that graph, once.
+
+    The one instance is the API graph, addressed by its own slot labels and,
+    with *core* (an automatic workflow saved over), by ``core:`` label where
+    the core holds the node. Its model names are the ones it spells and its
+    stages the ones it has. A graph that is missing (an editor document that
+    will not convert) or will not reduce has nothing to sample, which leaves a
+    default recipe of the owner's edits alone.
+    """
     if graph is None:
-        return [], {}, {}
+        return [], {}, {}, ()
     graph = sanitize_prompt_graph(graph)
     try:
         structural = structural_document(graph)
         read = _VariantRead(
-            core={},
+            core=core_node_labels(structural, strip_loras=STRIP_LORAS_FOR_STACKS)
+            if core
+            else {},
             base=topology_node_labels(structural),
             slots=live_slots(structural),
             upscale=upscale_kinds(structural),
         )
+        stages = special_groups(structural)
     except WorkflowGraphError as exc:
         logger.info(
-            "Manual workflow %s will not reduce, so its default recipe is its "
+            "Workflow %s will not reduce, so its default recipe is its "
             "owner's edits alone: %s",
             workflow_id,
             exc,
         )
-        return [], {}, {}
+        return [], {}, {}, ()
     names = {}
     for slot in read.slots:
         value = ((graph.get(slot.node_id) or {}).get("inputs") or {}).get(slot.widget)
         if isinstance(value, str) and value:
             names[slot.asset] = value
-    return [(workflow_id, graph)], {workflow_id: read}, names
+    return [(workflow_id, graph)], {workflow_id: read}, names, stages
 
 
 def _variant_reads(

@@ -156,13 +156,15 @@ _STARS = range(1, 6)
 
 
 # ---------------------------------------------------------------------------
-# Manual workflows. A picture a manual workflow's run made carries its id
-# (`Picture.run_workflow_id`) and counts on THAT workflow, not on the automatic
-# one its variant is in - while the manual workflow lives: the hub hands every
-# read here its list of live ids, so deleting one needs no vault write and its
-# pictures fall back to their variant. The grid reads group by `_filed_as`,
-# which is the manual id for such a picture and the variant otherwise, so a
-# manual workflow is one more key beside the variants.
+# Workflows whose runs file on them: every manual workflow, and every
+# automatic one the owner saved over (#1849). A picture such a workflow's run
+# made carries its id (`Picture.run_workflow_id`) and counts on THAT workflow,
+# not on the automatic one its variant is in - while it lives: the hub hands
+# every read here its list of live ids (`live`,
+# `workflow_card_reads.run_filed_workflow_ids`), so deleting a manual one
+# needs no vault write and its pictures fall back to their variant. The grid
+# reads group by `_filed_as`, which is that id for such a picture and the
+# variant otherwise, so such a workflow is one more key beside the variants.
 # ---------------------------------------------------------------------------
 
 
@@ -259,7 +261,7 @@ def variant_activity(
     :func:`recipe_picture_counts`**, and served only to owner routes for the
     same reason: it reads every non-deleted picture in the vault, so a scoped token
     holding the result would learn the size of the whole library one workflow
-    at a time. *live* is the hub's manual workflow ids (:func:`_filed_as`).
+    at a time. *live* is the hub's run-filed workflow ids (:func:`_filed_as`).
     """
     column = _filed_as(list(live))
     rows = session.exec(
@@ -351,9 +353,11 @@ def variant_picture_ids(
 ) -> list[int]:
     """The newest kept pictures filed under these keys, newest first.
 
-    A key is a variant or a live manual workflow's id (:func:`_filed_as`), so
-    a manual workflow's pictures are its runs' and an automatic one's leave
-    those out. Narrowed rather than grouped vault-wide, for the reason
+    A key is a variant or a live run-filed workflow's id (:func:`_filed_as`),
+    so a manual workflow's pictures are its runs', an automatic one's leave
+    those out, and a saved-over automatic one's are both its variants' and
+    its own runs' (``workflow_card_reads.picture_keys`` names a workflow's
+    keys). Narrowed rather than grouped vault-wide, for the reason
     :func:`recipe_activity` is: the caller already knows what it is opening.
     """
     if not structural_hashes:
@@ -422,8 +426,8 @@ def variant_model_values(
     owner routes, like :func:`variant_activity`.
     """
     found: dict[str, dict[str, Counter]] = {}
-    # The key `_filed_as` spells, in SQL: a live manual workflow's id, else
-    # the variant.
+    # The key `_filed_as` spells, in SQL: a live run-filed workflow's id,
+    # else the variant.
     filed = (
         "CASE WHEN p.run_workflow_id IN (SELECT value FROM json_each(:live)) "
         "THEN p.run_workflow_id ELSE p.workflow_structural_hash END"

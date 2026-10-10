@@ -168,6 +168,11 @@ from tests.authz_guard import (  # noqa: F401
     no_spa_fallback,
 )
 from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4
+from pixlstash.db_models.adapter_attachment import AdapterAttachment
+from pixlstash.services.comfyui_recipe_service import detect_lora_targets
+from pixlstash.services.comfyui_service import pixlstash_node_refusals
+from pixlstash.services.model_shelf_service import people_who_fit
+from pixlstash.hub import workflow_group_writes
 
 API = "/api/v1"
 
@@ -177,6 +182,17 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/workflows"),
+    # Saving over a workflow (#1849): changes, the two verbs, versions, the
+    # whole-graph write and who fits.
+    ("GET", "/api/v1/workflows/{workflow_id}/changes"),
+    ("PUT", "/api/v1/workflows/{workflow_id}/changes"),
+    ("DELETE", "/api/v1/workflows/{workflow_id}/changes"),
+    ("POST", "/api/v1/workflows/{workflow_id}/save"),
+    ("POST", "/api/v1/workflows/{workflow_id}/save-as-new"),
+    ("GET", "/api/v1/workflows/{workflow_id}/versions"),
+    ("POST", "/api/v1/workflows/{workflow_id}/versions/{version}/restore"),
+    ("PUT", "/api/v1/workflows/{workflow_id}/graph"),
+    ("GET", "/api/v1/workflows/{workflow_id}/people"),
     ("GET", "/api/v1/workflows/{workflow_id}"),
     ("GET", "/api/v1/workflows/{workflow_id}/pictures"),
     # The ghost routes. Pinned here as well as refused in the authz test below:
@@ -659,6 +675,8 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_group_pins")
         conn.execute("DELETE FROM workflow_group_picture_input")
         conn.execute("DELETE FROM workflow_version")
+        conn.execute("DELETE FROM workflow_change")
+        conn.execute("DELETE FROM workflow_kept_variant")
         conn.execute("DELETE FROM workflow_group_member")
         conn.execute("DELETE FROM workflow_group")
         conn.execute("DELETE FROM workflow_document")
@@ -1069,6 +1087,20 @@ _TEMPLATED_PATHS = (
     (
         f"{API}/workflows/{BUSY_WF}/form-inputs",
         API + "/workflows/{workflow_id}/form-inputs",
+    ),
+    # Saving over a workflow (#1849): what waits on it, its versions, and who
+    # has a LoRA for its checkpoint.
+    (
+        f"{API}/workflows/{BUSY_WF}/changes",
+        API + "/workflows/{workflow_id}/changes",
+    ),
+    (
+        f"{API}/workflows/{BUSY_WF}/versions",
+        API + "/workflows/{workflow_id}/versions",
+    ),
+    (
+        f"{API}/workflows/{BUSY_WF}/people",
+        API + "/workflows/{workflow_id}/people",
     ),
 )
 
@@ -6084,6 +6116,47 @@ _EVERY_WORKFLOW_ROUTE = (
         f"/workflows/{BUSY_WF}/set-clone-plans",
         {"sets": []},
     ),
+    # Saving over a workflow (#1849). Each body is one the owner's own call
+    # writes nothing with: an empty set, a dry run, a version it does not keep.
+    ("GET", "/workflows/{workflow_id}/changes", f"/workflows/{BUSY_WF}/changes", None),
+    ("PUT", "/workflows/{workflow_id}/changes", f"/workflows/{BUSY_WF}/changes", {}),
+    (
+        "DELETE",
+        "/workflows/{workflow_id}/changes",
+        f"/workflows/{BUSY_WF}/changes",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/save",
+        f"/workflows/{BUSY_WF}/save",
+        {"dry_run": True},
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/save-as-new",
+        f"/workflows/{BUSY_WF}/save-as-new",
+        {"name": "n", "dry_run": True},
+    ),
+    (
+        "GET",
+        "/workflows/{workflow_id}/versions",
+        f"/workflows/{BUSY_WF}/versions",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/versions/{version}/restore",
+        f"/workflows/{BUSY_WF}/versions/7/restore",
+        None,
+    ),
+    (
+        "PUT",
+        "/workflows/{workflow_id}/graph",
+        f"/workflows/{BUSY_WF}/graph",
+        {"workflow": {}},
+    ),
+    ("GET", "/workflows/{workflow_id}/people", f"/workflows/{BUSY_WF}/people", None),
     (
         "POST",
         "/workflows/run/preflight",
@@ -16593,3 +16666,935 @@ def test_a_graph_too_deeply_nested_to_walk_is_refused_not_a_500(runnable, monkey
     )
     r = runnable.owner.get(f"{API}/workflows/{RUN_WF}/export")
     assert r.status_code == 409, r.text
+
+
+# ===========================================================================
+# Saving over a workflow (#1849): waiting changes, Save, Save as new, versions
+# ===========================================================================
+# A manual workflow holding CHAIN_DOCUMENT is the subject of most of these:
+# its default recipe is its own graph, so every assertion is about the change
+# and not about what the pictures of an automatic workflow happened to vote.
+
+SKIP_FIVE = {"skip_loras": [{"node_id": "5", "field": "lora_name"}]}
+# A second LoRA on the shelf, for a multi-adapter loader's kept row.
+STYLE_DIGEST = _h("style-lora-digest")
+
+
+@pytest.fixture
+def saving(chained):
+    """``chained``, plus a manual workflow whose graph is CHAIN_DOCUMENT."""
+    manual = workflows_routes.store_manual_workflow(
+        chained.server.hub, "Chain", json.loads(json.dumps(CHAIN_DOCUMENT)), "import"
+    )
+    return SimpleNamespace(manual=manual, **vars(chained))
+
+
+def _changes(env, workflow_id) -> dict:
+    r = env.owner.get(f"{API}/workflows/{workflow_id}/changes")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _put_changes(env, workflow_id, **changes) -> dict:
+    r = env.owner.put(f"{API}/workflows/{workflow_id}/changes", json=changes)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _save(env, workflow_id, as_new=False, **body):
+    verb = "save-as-new" if as_new else "save"
+    return env.owner.post(f"{API}/workflows/{workflow_id}/{verb}", json=body)
+
+
+def _model_address(env, workflow_id) -> str:
+    """The address the workflow's default recipe names its checkpoint by."""
+    detail = env.owner.get(f"{API}/workflows/{workflow_id}").json()
+    (model,) = [
+        m
+        for m in detail["card"]["default_recipe"]["models"]
+        if m["address"].endswith("/ckpt_name")
+    ]
+    return model["address"]
+
+
+def _listing(*checkpoints):
+    """CHAIN_OBJECT_INFO with ComfyUI listing exactly these checkpoints."""
+    info = json.loads(json.dumps(CHAIN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        list(checkpoints),
+        {},
+    ]
+    return info
+
+
+def _comfyui_lists(env, *checkpoints):
+    info = _listing(*checkpoints)
+    env.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(info)), None),
+    )
+
+
+def test_changes_wait_on_a_workflow_and_its_card_says_so(saving):
+    """Held in the hub, so they outlive the session; the graph is untouched.
+
+    Wrong if the card counts 0 while something waits, or if a discard leaves
+    the count standing.
+    """
+    state = _put_changes(saving, saving.manual, **SKIP_FIVE)
+    assert state["count"] == 1
+    assert state["waiting"]["skip_loras"] == SKIP_FIVE["skip_loras"]
+    assert (state["save"]["open"], state["save_as_new"]["open"]) == (True, True)
+    # A row of the hub, not of this process: a restart reads it back.
+    (row,) = saving.server.hub.fetchall(
+        "SELECT kind, base_version FROM workflow_change WHERE workflow_id = ?",
+        (saving.manual,),
+    )
+    assert tuple(row) == ("waiting", 1)
+    assert _by_key(_cards(saving.owner))[saving.manual]["unsaved_changes"] == 1
+    detail = saving.owner.get(f"{API}/workflows/{saving.manual}").json()
+    assert detail["card"]["unsaved_changes"] == 1
+    # Nothing is written until it is saved.
+    assert _chain_ids(saving.owner, saving.manual) == ["2", "5"]
+
+    r = saving.owner.delete(f"{API}/workflows/{saving.manual}/changes")
+    assert r.status_code == 200, r.text
+    assert (r.json()["count"], r.json()["waiting"]) == (0, None)
+    assert r.json()["save"] == {"open": False, "reason": "There is nothing to save."}
+    assert _by_key(_cards(saving.owner))[saving.manual]["unsaved_changes"] == 0
+
+
+def test_the_unsaved_graph_opens_only_when_asked_for(saving):
+    """Open in ComfyUI takes the waiting changes; Export and a plain read do not."""
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    saved = saving.owner.get(f"{API}/workflows/{saving.manual}/graph").json()
+    assert "5" in saved["workflow"] and saved["waiting_applied"] is False
+    unsaved = saving.owner.get(
+        f"{API}/workflows/{saving.manual}/graph", params={"waiting": "true"}
+    ).json()
+    assert "5" not in unsaved["workflow"], unsaved["workflow"].keys()
+    assert (unsaved["waiting_applied"], unsaved["version"]) == (True, 1)
+
+
+def test_save_writes_what_waits_over_the_workflow_as_its_next_version(saving):
+    """Same id, a new version, the graph before kept, and nothing left waiting.
+
+    Wrong if a second workflow appears (that is Save as new), if loader 2 went
+    with loader 5, or if the change still waits.
+    """
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    r = _save(saving, saving.manual)
+    assert r.status_code == 200, r.text
+    assert (r.json()["workflow_id"], r.json()["version"], r.json()["new_workflow"]) == (
+        saving.manual,
+        2,
+        False,
+    )
+    assert _manual_ids(saving) == [saving.manual]
+    first, second = _versions_of(saving, saving.manual)
+    assert (first[0], "5" in first[2]) == (1, True)
+    assert (second[0], second[1]) == (2, "loras")
+    assert "5" not in second[2] and "2" in second[2], second[2].keys()
+    assert _chain_ids(saving.owner, saving.manual) == ["2"]
+    assert _changes(saving, saving.manual)["count"] == 0
+
+    listed = saving.owner.get(f"{API}/workflows/{saving.manual}/versions").json()
+    assert [(v["version"], v["reason"], v["current"]) for v in listed["versions"]] == [
+        (2, "LoRAs edited", True),
+        (1, None, False),
+    ]
+
+
+def test_save_takes_changes_in_the_request_on_top_of_what_waits(saving):
+    """How the Run popup saves what it changed without a second path."""
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    r = _save(
+        saving,
+        saving.manual,
+        changes={
+            "loras": [
+                {"node_id": "2", "sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.3}
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    stored = _versions_of(saving, saving.manual)[-1][2]
+    assert "5" not in stored
+    assert stored["2"]["inputs"]["strength_model"] == 0.3
+
+
+def test_a_save_of_only_parameters_makes_no_version(saving):
+    """Parameters are defaults stored beside the graph: the graph is as it was."""
+    r = _save(
+        saving,
+        saving.manual,
+        changes={
+            "values": [{"slot_label": "sampler", "input_name": "steps", "value": 30}]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["version"] == 1
+    assert [row[0] for row in _versions_of(saving, saving.manual)] == [1]
+    rows = saving.server.hub.fetchall(
+        "SELECT address, value FROM workflow_group_default WHERE workflow_id = ?",
+        (saving.manual,),
+    )
+    assert [tuple(row) for row in rows] == [("sampler/steps", "30")]
+
+
+def test_a_checkpoint_change_is_save_as_new_only(saving):
+    """Rule 2: the verdict, the refusal and the read all say the one sentence.
+
+    Wrong if Save writes a version, or if Save as new is closed too.
+    """
+    _comfyui_lists(saving, "realvisxl.safetensors", "krea.safetensors")
+    pick = {
+        "models": [
+            {
+                "address": _model_address(saving, saving.manual),
+                "filename": "krea.safetensors",
+            }
+        ]
+    }
+    dry = _save(saving, saving.manual, changes=pick, dry_run=True).json()
+    assert dry["save"]["open"] is False
+    assert "checkpoint" in dry["save"]["reason"]
+    assert dry["save_as_new"] == {"open": True, "reason": None}
+    assert _put_changes(saving, saving.manual, **pick)["save"] == dry["save"]
+
+    r = _save(saving, saving.manual)
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == dry["save"]["reason"]
+    assert [row[0] for row in _versions_of(saving, saving.manual)] == [1]
+
+    r = _save(saving, saving.manual, as_new=True, name="Chain on Krea")
+    assert r.status_code == 201, r.text
+    made = r.json()
+    assert (made["new_workflow"], made["name"]) == (True, "Chain on Krea")
+    assert made["workflow_id"] != saving.manual
+    assert (
+        manual_document(saving.server.hub, made["workflow_id"])["1"]["inputs"][
+            "ckpt_name"
+        ]
+        == "krea.safetensors"
+    )
+    # This one is as it was, with nothing left waiting.
+    assert (
+        manual_document(saving.server.hub, saving.manual)["1"]["inputs"]["ckpt_name"]
+        == "realvisxl.safetensors"
+    )
+    assert _changes(saving, saving.manual)["count"] == 0
+
+
+def test_replacing_a_checkpoint_that_is_not_installed_is_a_repair(saving):
+    """The exception to rule 2: Save is offered and it stays the same workflow."""
+    address = _model_address(saving, saving.manual)
+    # ComfyUI no longer has the checkpoint the workflow names.
+    _comfyui_lists(saving, "krea.safetensors")
+    r = _save(
+        saving,
+        saving.manual,
+        changes={"models": [{"address": address, "filename": "krea.safetensors"}]},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["version"] == 2
+    last = _versions_of(saving, saving.manual)[-1]
+    assert (last[1], last[2]["1"]["inputs"]["ckpt_name"]) == (
+        "models",
+        "krea.safetensors",
+    )
+
+
+def test_changes_made_before_another_version_are_save_as_new_only(saving):
+    """A set applied to a graph it was not made against gives a graph nobody chose."""
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    newer = json.loads(json.dumps(CHAIN_DOCUMENT))
+    newer["2"]["inputs"]["strength_model"] = 0.9
+    r = saving.owner.put(
+        f"{API}/workflows/{saving.manual}/graph",
+        json={"workflow": newer, "source": "mcp"},
+    )
+    assert r.status_code == 200 and r.json()["version"] == 2, r.text
+
+    state = _changes(saving, saving.manual)
+    assert (state["count"], state["version"]) == (1, 2), "the graph save dropped them"
+    assert state["save"]["open"] is False
+    assert "changed since" in state["save"]["reason"]
+    r = _save(saving, saving.manual)
+    assert r.status_code == 409 and r.json()["detail"] == state["save"]["reason"]
+    assert [row[0] for row in _versions_of(saving, saving.manual)] == [1, 2]
+
+    r = _save(saving, saving.manual, as_new=True, name="Without the style")
+    assert r.status_code == 201, r.text
+    copy = manual_document(saving.server.hub, r.json()["workflow_id"])
+    assert "5" not in copy and copy["2"]["inputs"]["strength_model"] == 0.9
+
+
+def test_a_save_refuses_a_change_it_could_not_make(saving):
+    """A run reports a model it could not load and carries on; a save must not."""
+    r = _save(
+        saving,
+        saving.manual,
+        changes={
+            "models": [
+                {
+                    "address": _model_address(saving, saving.manual).replace(
+                        "ckpt_name", "vae_name"
+                    ),
+                    "filename": "some-vae.safetensors",
+                }
+            ]
+        },
+    )
+    assert r.status_code == 409, r.text
+    assert "could not be loaded" in r.json()["detail"]
+    assert [row[0] for row in _versions_of(saving, saving.manual)] == [1]
+
+
+def test_going_back_makes_the_earlier_graph_the_newest_version(saving):
+    """Nothing is removed, so going back can itself be undone."""
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    assert _save(saving, saving.manual).status_code == 200
+    assert _chain_ids(saving.owner, saving.manual) == ["2"]
+
+    r = saving.owner.post(f"{API}/workflows/{saving.manual}/versions/1/restore")
+    assert r.status_code == 200, r.text
+    assert [(v["version"], v["reason"]) for v in r.json()["versions"]] == [
+        (3, "went back to version 1"),
+        (2, "LoRAs edited"),
+        (1, None),
+    ]
+    assert _chain_ids(saving.owner, saving.manual) == ["2", "5"]
+    kept = _versions_of(saving, saving.manual)
+    assert "5" not in kept[1][2], "going back rewrote the version it left"
+
+    r = saving.owner.post(f"{API}/workflows/{saving.manual}/versions/3/restore")
+    assert r.status_code == 409, r.text
+    r = saving.owner.post(f"{API}/workflows/{saving.manual}/versions/9/restore")
+    assert r.status_code == 404, r.text
+    assert len(_versions_of(saving, saving.manual)) == 3
+
+
+ADD_DETAIL_DIGEST = _h("add-detail-on-the-shelf")
+
+
+@pytest.fixture
+def voted(runnable):
+    """RUN_WF as its pictures hold it: a graph that loads the one LoRA its
+    stored run does, with that LoRA on the shelf.
+
+    The default recipe of an automatic workflow is a vote of its pictures, so
+    its LoRA is ``add_detail.safetensors`` and the graph agrees.
+    """
+    with runnable.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (ADD_DETAIL_DIGEST,))
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', 'add_detail.safetensors', ?, 'scanned')",
+            (ADD_DETAIL_DIGEST,),
+        )
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"].update(
+        lora_name="add_detail.safetensors", strength_model=0.8, strength_clip=0.8
+    )
+    embedded["3"]["inputs"].update(steps=20, cfg=7.0, seed=1)
+    embedded["4"]["inputs"]["filename_prefix"] = "P"
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(embedded)),
+            [],
+        ),
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(RUN_OBJECT_INFO)), None),
+    )
+    try:
+        yield runnable
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (ADD_DETAIL_DIGEST,))
+
+
+def test_the_first_save_over_an_automatic_workflow_keeps_it_the_same_workflow(voted):
+    """Same id; version 1 is the graph its pictures held; and from then on its
+    default recipe is its own graph.
+
+    Wrong if a manual workflow appears, if the picture graph is lost, or if
+    the strength asked for is not the workflow's default afterwards.
+    """
+    pictures = _by_key(_cards(voted.owner))[RUN_WF]["picture_count"]
+    r = _save(
+        voted,
+        RUN_WF,
+        changes={
+            "loras": [
+                {"node_id": "2", "sha256": ADD_DETAIL_DIGEST, "strength_model": 0.3}
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert (r.json()["workflow_id"], r.json()["version"]) == (RUN_WF, 2)
+    assert _manual_ids(voted) == []
+    first, second = _versions_of(voted, RUN_WF)
+    assert (first[1], first[2]["2"]["inputs"]["strength_model"]) == ("pictures", 0.8)
+    assert (second[1], second[2]["2"]["inputs"]["strength_model"]) == ("loras", 0.3)
+    card = _by_key(_cards(voted.owner))[RUN_WF]
+    assert (card["picture_count"], card["version"]) == (pictures, 2)
+    recipe = voted.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"][
+        "default_recipe"
+    ]
+    assert [(lora["sha256"], lora["strength"]) for lora in recipe["loras"]] == [
+        (ADD_DETAIL_DIGEST, 0.3)
+    ]
+    listed = voted.owner.get(f"{API}/workflows/{RUN_WF}/versions").json()
+    assert [v["reason"] for v in listed["versions"]] == [
+        "LoRAs edited",
+        "as PixlStash first read it",
+    ]
+    # Its own run is filed on it now, as a manual workflow's is.
+    seen = []
+    voted.monkeypatch.setattr(
+        workflows_routes,
+        "_process_comfyui_outputs",
+        lambda *a, **k: seen.append(k.get("run_workflow_id")),
+    )
+    voted.monkeypatch.setattr(
+        workflows_routes.threading,
+        "Thread",
+        lambda target, args, kwargs, daemon: SimpleNamespace(
+            start=lambda: target(*args, **kwargs)
+        ),
+    )
+    ran = _run(voted, workflow_id=RUN_WF)
+    assert seen == [RUN_WF]
+    # And by name, for a watch folder that imports the output first.
+    prefix = ran["4"]["inputs"]["filename_prefix"]
+    assert parse_workflow_tag_from_filename(f"/out/{prefix}_00001_.png") == RUN_WF
+
+
+def _recipe_on(env, workflow_id, card) -> int:
+    def write(session):
+        recipe = SavedRecipe(
+            name="kept before the save",
+            workflow_key=card,
+            workflow_id=workflow_id,
+            prompt="a cat",
+        )
+        session.add(recipe)
+        session.commit()
+        return recipe.id
+
+    return env.server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def _run(env, **body) -> dict:
+    del env.submitted[:]
+    r = env.owner.post(f"{API}/workflows/run", json=body)
+    assert r.status_code == 200, r.text
+    assert env.submitted, r.json()
+    return env.submitted[0]["graph"]
+
+
+def test_a_saved_recipe_still_runs_on_the_graph_it_was_saved_from(saving):
+    """Rule 8, the promise the whole change rests on: a save over a workflow
+    never changes what a recipe saved before it makes.
+
+    Wrong if the recipe's run lacks loader 5 (it ran the saved-over graph), or
+    if the workflow's own run still has it (the save did not take).
+    """
+    recipe_id = _recipe_on(saving, saving.manual, saving.manual)
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    assert _save(saving, saving.manual).status_code == 200
+
+    assert "5" not in _run(saving, workflow_id=saving.manual)
+    replayed = _run(saving, saved_recipe_id=recipe_id)
+    assert "5" in replayed, "the recipe ran the graph saved over its workflow"
+    assert replayed["5"]["inputs"]["lora_name"] == "Mystery_Style.safetensors"
+
+    # A recipe saved after the save is of the new graph.
+    later = _recipe_on(saving, saving.manual, saving.manual)
+    assert "5" not in _run(saving, saved_recipe_id=later)
+
+
+def test_a_recipe_on_an_automatic_workflow_keeps_its_graph_through_a_save(voted):
+    """The same promise where the graph before the save was read off pictures."""
+    recipe_id = _recipe_on(voted, RUN_WF, RUN_CARD)
+    r = _save(
+        voted,
+        RUN_WF,
+        changes={"skip_loras": [{"node_id": "2", "field": "lora_name"}]},
+    )
+    assert r.status_code == 200, r.text
+    assert "2" not in _run(voted, workflow_id=RUN_WF)
+    assert "2" in _run(voted, saved_recipe_id=recipe_id)
+
+
+def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
+    """So the Tasks tab can offer the two verbs after the pictures are back."""
+    _run(saving, workflow_id=saving.manual, **SKIP_FIVE)
+    state = _changes(saving, saving.manual)
+    assert state["ran"]["skip_loras"] == SKIP_FIVE["skip_loras"]
+    assert state["ran_save"] == {"open": True, "reason": None}
+    assert state["count"] == 0, "a run's changes are not waiting changes"
+
+    # A run that changed nothing takes the offer away.
+    _run(saving, workflow_id=saving.manual)
+    assert _changes(saving, saving.manual)["ran"] is None
+
+    _run(saving, workflow_id=saving.manual, **SKIP_FIVE)
+    ran = _changes(saving, saving.manual)["ran"]
+    r = _save(saving, saving.manual, changes=ran, from_run=True)
+    assert r.status_code == 200, r.text
+    assert _versions_of(saving, saving.manual)[-1][1] == "run"
+    listed = saving.owner.get(f"{API}/workflows/{saving.manual}/versions").json()
+    assert listed["versions"][0]["reason"] == "saved from a run"
+    assert _changes(saving, saving.manual)["ran"] is None
+
+
+def test_a_stage_default_is_saved_and_a_run_can_still_keep_the_stage(
+    runnable, monkeypatch
+):
+    """A stage switched off is a default beside the graph, so it comes back.
+
+    Wrong if the save makes a version, if the stage is cut out of the graph
+    for good, or if `keep_stages` cannot switch it on for one run.
+    """
+    _upscaled_run(runnable, monkeypatch, object_info=True)
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET specials = 'upscale' "
+            "WHERE topology_hash = ?",
+            (RUN_TOPOLOGY,),
+        )
+    r = _save(runnable, RUN_WF, changes={"stages": {"upscale": False}})
+    assert r.status_code == 200, r.text
+    assert r.json()["version"] is None
+    assert _versions_of(runnable, RUN_WF) == []
+    recipe = runnable.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"][
+        "default_recipe"
+    ]
+    assert recipe["stages"] == {"upscale": False}
+
+    assert "5" not in _run(runnable, workflow_id=RUN_WF)
+    kept = _run(runnable, workflow_id=RUN_WF, keep_stages=["upscale"])
+    assert kept["4"]["inputs"]["images"] == ["5", 0]
+
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "workflow_id": RUN_WF,
+            "skip_stages": ["upscale"],
+            "keep_stages": ["upscale"],
+        },
+    )
+    assert r.status_code == 422, r.text
+    r = _save(runnable, RUN_WF, changes={"stages": {"face_detailer": False}})
+    assert r.status_code == 409 and "face_detailer" in r.json()["detail"], r.text
+
+
+def test_a_saved_graph_keeps_a_stage_the_default_has_switched_off(
+    runnable, monkeypatch
+):
+    """A run without the stage submits a graph without its nodes; a save does
+    not store that graph, or the stage could never be switched on again."""
+    _upscaled_run(runnable, monkeypatch, object_info=True)
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET specials = 'upscale' "
+            "WHERE topology_hash = ?",
+            (RUN_TOPOLOGY,),
+        )
+    r = _save(
+        runnable,
+        RUN_WF,
+        changes={
+            "stages": {"upscale": False},
+            "skip_loras": [{"node_id": "2", "field": "lora_name"}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    stored = _versions_of(runnable, RUN_WF)[-1][2]
+    assert "2" not in stored
+    assert stored["5"]["class_type"] == "ImageScaleBy", "the stage was cut out"
+    # Off is the default, written with the version; the run still skips it.
+    recipe = runnable.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"][
+        "default_recipe"
+    ]
+    assert recipe["stages"] == {"upscale": False}
+    assert "5" not in _run(runnable, workflow_id=RUN_WF)
+
+
+def test_a_save_takes_over_from_an_older_edit_of_the_default(saving):
+    """A LoRA's row in the default recipe would be applied over the saved
+    graph at the next run, and the save would not have taken."""
+    workflow_group_writes.set_default_lora(
+        saving.server.hub, saving.manual, RUN_ADAPTER_DIGEST, "0.2"
+    )
+
+    def default_strength():
+        recipe = saving.owner.get(f"{API}/workflows/{saving.manual}").json()["card"][
+            "default_recipe"
+        ]
+        return {lora["sha256"]: lora["strength"] for lora in recipe["loras"]}[
+            RUN_ADAPTER_DIGEST
+        ]
+
+    assert default_strength() == 0.2, "the edit of the default is not being read"
+    r = _save(
+        saving,
+        saving.manual,
+        changes={
+            "loras": [
+                {"node_id": "2", "sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.6}
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert default_strength() == 0.6
+    assert (
+        _run(saving, workflow_id=saving.manual)["2"]["inputs"]["strength_model"] == 0.6
+    )
+
+
+def test_a_change_to_one_lora_saves_the_others_as_the_default_has_them(saving):
+    """What the Workflow tab shows is what is saved, with the change on top:
+    a LoRA the owner never touched keeps the strength the default gave it."""
+    with saving.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (STYLE_DIGEST,))
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', 'Mystery_Style.safetensors', ?, 'scanned')",
+            (STYLE_DIGEST,),
+        )
+    try:
+        workflow_group_writes.set_default_lora(
+            saving.server.hub, saving.manual, RUN_ADAPTER_DIGEST, "0.2"
+        )
+        r = _save(
+            saving,
+            saving.manual,
+            changes={
+                "loras": [
+                    {"node_id": "5", "sha256": STYLE_DIGEST, "strength_model": 0.9}
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
+        stored = _versions_of(saving, saving.manual)[-1][2]
+        assert stored["5"]["inputs"]["strength_model"] == 0.9
+        assert stored["2"]["inputs"]["strength_model"] == 0.2
+    finally:
+        with saving.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (STYLE_DIGEST,))
+
+
+# --- a whole graph saved over a workflow ------------------------------------
+
+
+def _put_graph(env, workflow_id, graph, **extra):
+    return env.owner.put(
+        f"{API}/workflows/{workflow_id}/graph", json={"workflow": graph, **extra}
+    )
+
+
+def _without_five():
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    del graph["5"]
+    graph["6"]["inputs"]["clip"] = ["2", 1]
+    graph["3"]["inputs"]["model"] = ["2", 0]
+    return graph
+
+
+def test_a_whole_graph_is_saved_over_a_workflow_as_its_next_version(saving):
+    """The MCP server's and ComfyUI's one write. Wrong if a card appears."""
+    r = _put_graph(saving, saving.manual, _without_five(), source="mcp", read_version=1)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["workflow_id"], body["version"], body["new_workflow"]) == (
+        saving.manual,
+        2,
+        False,
+    )
+    assert (body["unchanged"], body["replaced_newer"]) == (False, False)
+    assert _manual_ids(saving) == [saving.manual]
+    assert _versions_of(saving, saving.manual)[-1][1] == "mcp"
+    assert _chain_ids(saving.owner, saving.manual) == ["2"]
+
+    # The same graph again is the workflow's current one: nothing is stored.
+    r = _put_graph(saving, saving.manual, _without_five(), read_version=2)
+    assert r.status_code == 200 and r.json()["unchanged"] is True, r.text
+    assert len(_versions_of(saving, saving.manual)) == 2
+
+    # Read at version 1, saved after version 2: saved anyway, and said.
+    r = _put_graph(
+        saving, saving.manual, json.loads(json.dumps(CHAIN_DOCUMENT)), read_version=1
+    )
+    assert r.status_code == 200, r.text
+    assert (r.json()["version"], r.json()["replaced_newer"]) == (3, True)
+    assert _versions_of(saving, saving.manual)[-1][1] == "comfyui"
+
+    r = _put_graph(saving, saving.manual, {"nodes": [], "links": []})
+    assert r.status_code == 422, r.text
+
+
+def test_a_graph_read_with_the_waiting_changes_clears_them(saving):
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    r = _put_graph(saving, saving.manual, _without_five(), waiting_applied=True)
+    assert r.status_code == 200, r.text
+    assert _changes(saving, saving.manual)["count"] == 0
+
+
+def test_a_graph_that_replaces_an_installed_checkpoint_is_a_new_workflow(saving):
+    """Where Save would be refused: the caller is at no screen that could
+    offer Save as new, so the graph is stored and the answer says where."""
+    _comfyui_lists(saving, "realvisxl.safetensors", "krea.safetensors")
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    graph["1"]["inputs"]["ckpt_name"] = "krea.safetensors"
+    r = _put_graph(saving, saving.manual, graph, name="Chain on Krea")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["new_workflow"] is True and "realvisxl" in body["reason"]
+    assert body["workflow_id"] != saving.manual
+    assert [row[0] for row in _versions_of(saving, saving.manual)] == [1]
+    assert (
+        manual_document(saving.server.hub, body["workflow_id"])["1"]["inputs"][
+            "ckpt_name"
+        ]
+        == "krea.safetensors"
+    )
+
+    # The same graph where the old checkpoint is gone is a repair: a version.
+    _comfyui_lists(saving, "krea.safetensors")
+    r = _put_graph(saving, saving.manual, graph)
+    assert r.status_code == 200, r.text
+    assert (r.json()["new_workflow"], r.json()["version"]) == (False, 2)
+
+
+# --- a person's LoRA is never part of a workflow (rule 4) -------------------
+
+
+@pytest.fixture
+def a_persons_lora(saving):
+    """RUN_ADAPTER_DIGEST (loader 2 of CHAIN_DOCUMENT) attached to the person."""
+
+    def attach(session):
+        session.add(
+            AdapterAttachment(
+                adapter_sha256=RUN_ADAPTER_DIGEST,
+                entity_type="character",
+                entity_id=saving.env.character_id,
+            )
+        )
+        session.commit()
+
+    def detach(session):
+        session.exec(
+            delete(AdapterAttachment).where(
+                AdapterAttachment.adapter_sha256 == RUN_ADAPTER_DIGEST
+            )
+        )
+        session.commit()
+
+    saving.server.vault.db.run_task(attach, priority=DBPriority.IMMEDIATE)
+    try:
+        yield saving
+    finally:
+        saving.server.vault.db.run_task(detach, priority=DBPriority.IMMEDIATE)
+
+
+def test_a_graph_saved_with_a_persons_lora_goes_without_it(a_persons_lora):
+    """Left out and named in the answer, and no read of the workflow has it.
+
+    Wrong if loader 2 is in the stored version, or if the answer does not say
+    whose LoRA was left out.
+    """
+    env = a_persons_lora
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    graph["5"]["inputs"]["strength_model"] = 0.7
+    r = _put_graph(env, env.manual, graph)
+    assert r.status_code == 200, r.text
+    (left,) = r.json()["left_out"]
+    assert (left["node_id"], left["sha256"], left["character_ids"]) == (
+        "2",
+        RUN_ADAPTER_DIGEST,
+        [env.env.character_id],
+    )
+    stored = _versions_of(env, env.manual)[-1][2]
+    assert "2" not in stored
+    # What read loader 2 reads what it read.
+    assert stored["5"]["inputs"]["model"] == ["1", 0]
+    assert stored["5"]["inputs"]["strength_model"] == 0.7
+    opened = env.owner.get(f"{API}/workflows/{env.manual}/graph").json()["workflow"]
+    exported = env.owner.get(f"{API}/workflows/{env.manual}/export").json()["workflow"]
+    assert "2" not in opened and "2" not in exported
+    assert "2" not in _run(env, workflow_id=env.manual)
+
+
+def test_a_persons_lora_is_not_a_change_to_a_workflow(a_persons_lora):
+    """Not counted, not kept waiting, and Save writes the graph without it."""
+    env = a_persons_lora
+    state = _put_changes(
+        env,
+        env.manual,
+        loras=[{"node_id": "5", "sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.4}],
+    )
+    assert (state["count"], state["waiting"]) == (0, None)
+    _put_changes(env, env.manual, **SKIP_FIVE)
+    r = _save(env, env.manual)
+    assert r.status_code == 200, r.text
+    stored = _versions_of(env, env.manual)[-1][2]
+    assert "5" not in stored
+    assert "2" not in stored, "Save wrote the person's loader into the workflow"
+
+
+def _with_people_loader(*rows):
+    """CHAIN_DOCUMENT with a multi-adapter loader between the checkpoint and
+    loader 2, holding *rows* of ``(digest, strength)``."""
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    inputs = {"model": ["1", 0], "clip": ["1", 1]}
+    for index, (digest, strength) in enumerate(rows, start=1):
+        suffix = "" if index == 1 else f"_{index}"
+        inputs[f"adapter_sha256{suffix}"] = digest
+        inputs[f"strength_model{suffix}"] = strength
+        inputs[f"strength_clip{suffix}"] = strength
+    graph["9"] = {"class_type": "PixlStashMultiAdapterLoader", "inputs": inputs}
+    graph["2"]["inputs"]["model"] = ["9", 0]
+    graph["2"]["inputs"]["clip"] = ["9", 1]
+    return graph
+
+
+def test_the_people_loader_never_comes_back_into_a_workflow(a_persons_lora):
+    """Rule 4 per row: a person's row is emptied, a loader left with no adapter
+    is taken out, and a graph that differs only by that is unchanged."""
+    env = a_persons_lora
+    # Loader 2 of the stored graph is the person's too: start from a version
+    # that already goes without it, as every stored version does.
+    r = _put_graph(env, env.manual, json.loads(json.dumps(CHAIN_DOCUMENT)))
+    assert r.status_code == 200 and r.json()["version"] == 2, r.text
+    current = _versions_of(env, env.manual)[-1][2]
+    info = json.loads(json.dumps(CHAIN_OBJECT_INFO))
+    info["PixlStashMultiAdapterLoader"] = {
+        "input": {"required": {"model": ["MODEL", {}], "clip": ["CLIP", {}]}},
+        "output": ["MODEL", "CLIP", "STRING"],
+    }
+    env.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(info)), None),
+    )
+
+    def with_loader(*rows):
+        graph = json.loads(json.dumps(current))
+        graph.pop("pixlstash_bindings", None)
+        inputs = {"model": ["1", 0], "clip": ["1", 1]}
+        for index, (digest, strength) in enumerate(rows, start=1):
+            suffix = "" if index == 1 else f"_{index}"
+            inputs[f"adapter_sha256{suffix}"] = digest
+            inputs[f"strength_model{suffix}"] = strength
+            inputs[f"strength_clip{suffix}"] = strength
+        graph["9"] = {"class_type": "PixlStashMultiAdapterLoader", "inputs": inputs}
+        graph["5"]["inputs"]["model"] = ["9", 0]
+        graph["5"]["inputs"]["clip"] = ["9", 1]
+        return graph
+
+    # Only people picked: the loader comes off and nothing is stored.
+    r = _put_graph(env, env.manual, with_loader((RUN_ADAPTER_DIGEST, 0.8)))
+    assert r.status_code == 200, r.text
+    assert r.json()["unchanged"] is True, r.json()
+    assert [left["field"] for left in r.json()["left_out"]] == ["adapter_sha256"]
+    assert len(_versions_of(env, env.manual)) == 2
+
+    # A style LoRA beside the person: the loader is the owner's and is kept,
+    # with the person's row emptied and the style's row moved up.
+    r = _put_graph(
+        env,
+        env.manual,
+        with_loader((RUN_ADAPTER_DIGEST, 0.8), (STYLE_DIGEST, 0.4)),
+    )
+    assert r.status_code == 200, r.text
+    assert (r.json()["unchanged"], r.json()["version"]) == (False, 3)
+    kept = _versions_of(env, env.manual)[-1][2]["9"]["inputs"]
+    assert (kept["adapter_sha256"], kept["strength_model"]) == (STYLE_DIGEST, 0.4)
+    assert kept["adapter_sha256_2"] == ""
+
+
+def test_a_person_row_that_cannot_be_taken_out_is_refused_not_stored():
+    """A stacker holding another LoRA has no empty slot to leave: the write
+    is refused, where a run would have kept the loader and said so."""
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "a"}},
+        "2": {
+            "class_type": "LoraStacker",
+            "inputs": {"lora_name_1": "person.safetensors", "lora_name_2": "style"},
+        },
+    }
+    taken, refused = run_service.take_out_person_loras(
+        graph, [("2", "lora_name_1")], None
+    )
+    assert taken == []
+    assert [entry["field"] for entry in refused] == ["lora_name_1"]
+    assert graph["2"]["inputs"]["lora_name_1"] == "person.safetensors"
+
+
+def test_each_row_of_the_multi_adapter_loader_is_a_slot_with_its_own_strengths():
+    """`adapter_sha256_2` read the first row's strengths before #1849, and was
+    no slot at all, so a picture made with the node misread."""
+    graph = _with_people_loader(("a" * 64, 0.8), ("b" * 64, 0.4))
+    rows = {
+        target["field"]: (target["value"], target["strengths"])
+        for target in detect_lora_targets(graph)
+        if target["node_id"] == "9"
+    }
+    assert rows == {
+        "adapter_sha256": ("a" * 64, {"model": 0.8, "clip": 0.8}),
+        "adapter_sha256_2": ("b" * 64, {"model": 0.4, "clip": 0.4}),
+    }
+    # Addressed by digest, like the adapter loader: it replays everywhere.
+    assert pixlstash_node_refusals({"9": graph["9"]}) == []
+
+
+# --- who fits a workflow ----------------------------------------------------
+
+
+def test_the_people_a_workflow_offers_are_those_with_a_lora_for_its_base_model(
+    a_persons_lora,
+):
+    """The Run popup's rule, answered once for both apps. Wrong if a person
+    whose LoRA is for another base model is offered."""
+    env = a_persons_lora
+    with env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'SDXL 1.0', trigger_words = ? "
+            "WHERE sha256 = ?",
+            (json.dumps(["ohwx"]), RUN_ADAPTER_DIGEST),
+        )
+    fits = people_who_fit(env.server.hub, env.server.vault, "sdxl")
+    (person,) = fits["people"]
+    assert (person["id"], person["name"]) == (
+        env.env.character_id,
+        "Workflow Character",
+    )
+    assert [(lora["sha256"], lora["trigger_words"]) for lora in person["loras"]] == [
+        (RUN_ADAPTER_DIGEST, ["ohwx"])
+    ]
+    assert (fits["clash"], fits["unknown"]) == (0, 0)
+    other = people_who_fit(env.server.hub, env.server.vault, "flux1")
+    assert (other["people"], other["clash"], other["unknown"]) == ([], 1, 0)
+    nobody_knows = people_who_fit(env.server.hub, env.server.vault, None)
+    assert (nobody_knows["people"], nobody_knows["unknown"]) == ([], 1)
+
+    # The route answers for the workflow's own checkpoint, which this hub
+    # never identified: the person is counted, not offered.
+    r = env.owner.get(f"{API}/workflows/{env.manual}/people")
+    assert r.status_code == 200, r.text
+    assert (r.json()["family"], r.json()["people"], r.json()["unknown"]) == (
+        None,
+        [],
+        1,
+    )

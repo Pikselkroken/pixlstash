@@ -8,7 +8,10 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Generation, Picture
 from pixlstash.hub import workflow_versions
-from pixlstash.hub.workflow_card_reads import is_manual_workflow, workflow_of_variant
+from pixlstash.hub.workflow_card_reads import (
+    is_run_filed_workflow,
+    workflow_of_variant,
+)
 from pixlstash.hub.workflows import record_api_graph, record_reduction
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.a1111_recipe import reduce_a1111
@@ -264,7 +267,7 @@ class ComfyUIExtractionTask(BaseTask):
                     # A revisit (a migration's rescan) moves no card's covers,
                     # and announcing it would re-read the grid per batch.
                     first_filing = db_pic.workflow_instance_hash is None
-                    # The manual workflow its ComfyUI run was tagged with. A
+                    # The run-filed workflow its ComfyUI run was tagged with. A
                     # value already there is PixlStash's own run's, and stays.
                     # A tag written now files the picture on that workflow even
                     # without a graph, so it is announced either way.
@@ -463,12 +466,14 @@ class ComfyUIExtractionTask(BaseTask):
             return None
 
     def _run_workflow_tag(self, picture_id: int, embedded_metadata) -> str | None:
-        """The manual workflow the picture's ComfyUI run was tagged with, if held.
+        """The workflow the picture's ComfyUI run was tagged with, if its runs file on it.
 
         Read off the editor workflow ComfyUI embeds (its ``workflow`` chunk),
         where every document PixlStash stores as a manual workflow carries its
-        id. A tag this hub holds no workflow for (deleted since, or another
-        machine's) files nothing: the picture falls to its automatic workflow.
+        id. A manual workflow this hub holds, or an automatic one the owner
+        saved over (``is_run_filed_workflow``); any other tag (deleted since,
+        another machine's, an automatic workflow never saved over) files
+        nothing: the picture falls to its automatic workflow.
         """
         if not embedded_metadata:
             return None
@@ -478,10 +483,10 @@ class ComfyUIExtractionTask(BaseTask):
         tag = tagged_workflow_id(workflow)
         if tag is None:
             return None
-        if not is_manual_workflow(self._hub, tag):
+        if not is_run_filed_workflow(self._hub, tag):
             logger.info(
-                "Picture %s was made by manual workflow %s, which this hub does "
-                "not hold, so it is filed by its graph instead.",
+                "Picture %s was made by workflow %s, which this hub does not "
+                "hold as one its runs file on, so it is filed by its graph instead.",
                 picture_id,
                 tag,
             )

@@ -1410,10 +1410,12 @@ CREATE TABLE IF NOT EXISTS workflow_card_move (
 # The first overwrite stores that graph as version 1 (``source`` ``pictures``)
 # and the edit as version 2; its current graph is then its highest version,
 # read by ``routes/workflows._edited_graph_for`` ahead of every other tier,
-# for the workflow's base card only. **Not carried when an ``auto:`` id
-# changes** (a new core rule, a re-identified family): the graph was edited
-# for the pictures that id held, so the rows are deleted with the retired id
-# and logged (``workflow_group_convert._carry_group_state``).
+# for the workflow's base card only. **A saved-over automatic workflow keeps
+# its id** (#1849, ``workflow_kept_variant`` below), so these rows are never
+# retired with it; ``workflow_group_convert._carry_group_state`` still deletes
+# and logs the rows of a retired id, for the case that should be impossible.
+# ``source`` is also what the version menu's words are made from
+# (``workflow_versions.reason``).
 _V2_WORKFLOW_VERSION = """
 CREATE TABLE IF NOT EXISTS workflow_version (
     workflow_id      TEXT NOT NULL,
@@ -1426,6 +1428,40 @@ CREATE TABLE IF NOT EXISTS workflow_version (
     source           TEXT NOT NULL,
     created_at       TEXT NOT NULL,
     PRIMARY KEY (workflow_id, version)
+)
+"""
+
+# The changes waiting on a workflow, and the changes its last run was made
+# with (#1849), as one JSON document each in ``routes/workflows``'s
+# ``WorkflowChanges`` shape: model picks, LoRA strengths, LoRA loaders
+# removed, stages on or off, parameter values. ``kind`` ``waiting`` is what the
+# Workflow tab edits and Save writes; ``run`` is what a finished run changed,
+# kept so it can still be saved, until the next run of the workflow or a
+# save. ``base_version`` is the workflow's version when the changes were
+# made (NULL for an automatic workflow never saved over): Save refuses a set
+# made against another version.
+_V2_WORKFLOW_CHANGE = """
+CREATE TABLE IF NOT EXISTS workflow_change (
+    workflow_id   TEXT NOT NULL,
+    kind          TEXT NOT NULL CHECK (kind IN ('waiting', 'run')),
+    changes       TEXT NOT NULL,
+    base_version  INTEGER,
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (workflow_id, kind)
+)
+"""
+
+# A variant kept in the automatic workflow the owner saved over (#1849, rule
+# 5 of #1846). An ``auto:`` id is a digest of a core and its base-model
+# families, so a new core rule or a re-identified family would move the
+# variant to another id; a row here says it stays in ``workflow_id``, and
+# every variant-to-workflow read asks it first. Written only for a workflow
+# with ``workflow_version`` rows, at the moment its variants would otherwise
+# have moved; one never saved over regroups as it always did.
+_V2_WORKFLOW_KEPT_VARIANT = """
+CREATE TABLE IF NOT EXISTS workflow_kept_variant (
+    structural_hash  TEXT PRIMARY KEY,
+    workflow_id      TEXT NOT NULL
 )
 """
 
@@ -1506,6 +1542,8 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_FAMILY_PASS,
     _V2_WORKFLOW_CARD_MOVE,
     _V2_WORKFLOW_VERSION,
+    _V2_WORKFLOW_CHANGE,
+    _V2_WORKFLOW_KEPT_VARIANT,
     *_V2_WORKFLOW_INDEXES,
 )
 

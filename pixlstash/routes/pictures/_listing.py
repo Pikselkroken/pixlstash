@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 from pixlstash.database import DBPriority
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflow_card_reads import (
-    manual_workflow_ids,
+    run_filed_workflow_ids,
     variants_in_workflows,
 )
 from pixlstash.db_models import (
@@ -46,6 +46,7 @@ from pixlstash.utils.service.filter_helpers import (
 from pixlstash.utils.query.predicate_filter import (
     NOT_MADE_BY,
     ONLY_MADE_BY,
+    RUN_VARIANT,
     PredicateFilter,
     is_truthy_flag,
 )
@@ -403,9 +404,11 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
 
     ``workflow`` is repeatable and the workflows are OR'd, like
     ``comfyui_model``: the keys are the union of each one's. That union is
-    exact because every automatic workflow leaves out the same thing (every
-    live manual workflow's runs), and a manual one's pictures arrive by its
-    own id, past that exclusion.
+    exact because every automatic workflow's variants leave out the same
+    thing (the runs of every workflow whose runs file on it: the live manual
+    ones and the automatic ones the owner saved over,
+    ``run_filed_workflow_ids``), and such a workflow's own runs arrive by its
+    id, past that exclusion.
 
     **An empty list is a filter, not the absence of one.** A workflow with no
     filed variant - or a workflow the pictures of this library never ran - matches no
@@ -421,11 +424,12 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
             ``workflow`` is a list of ids, or one id as a string.
 
     Returns:
-        The keys to match (``predicate_filter.workflow_keys_predicate``: manual
-        workflows' own ids and automatic ones' variants, with the live manual
-        ids whose runs the variants leave out, or - a manual workflow narrowed
-        by a LoRA - its runs' variants that load it, held to its runs), or
-        ``None`` when neither param is set.
+        The keys to match (``predicate_filter.workflow_keys_predicate``: the
+        ids of the named workflows whose runs file on them, and automatic
+        ones' variants with the run-filed ids whose runs the variants leave
+        out; narrowed by a LoRA, the variants that load it, a run-filed
+        workflow's own runs standing in as their variants held to its runs),
+        or ``None`` when neither param is set.
     """
     # Presence, not truthiness: `?workflow=` names no workflow, and dropping
     # the filter for it would answer a request for one workflow with the whole
@@ -453,36 +457,43 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     # The one workflow a LoRA may narrow, else None.
     workflow_id = workflow_ids[0] if workflow_ids and len(workflow_ids) == 1 else None
     hub = getattr(server, "hub", None)
-    matched: list[set[str]] = []
     live: list[str] = []
+    # The named workflows whose own runs are wanted (by ``run_workflow_id``),
+    # the variants wanted in every picture no run-filed workflow made, and the
+    # variants wanted only in one workflow's runs.
+    own: set[str] = set()
+    variants: set[str] = set()
+    held: set[str] = set()
     try:
         if hub is None:
             raise LookupError("no hub is attached to this server")
         if workflow_ids is not None:
-            live = manual_workflow_ids(hub)
-            # A manual workflow's pictures are its runs'; an automatic one's
-            # are its variants', less every live manual workflow's runs.
-            manual = {wid for wid in workflow_ids if wid in live}
-            matched.append(
-                manual
-                | variants_in_workflows(
-                    hub, [wid for wid in workflow_ids if wid not in manual]
-                )
-            )
+            live = run_filed_workflow_ids(hub)
+            # A manual workflow's pictures are its runs' (it is on no
+            # topology, so it has no variant); an automatic one's are its
+            # variants', less every run-filed workflow's runs, and - once the
+            # owner has saved over it - its own runs' as well.
+            own = {wid for wid in workflow_ids if wid in live}
+            variants = variants_in_workflows(hub, workflow_ids)
         if lora is not None:
             # Only ever a narrowing of one workflow, and only of a well-formed
             # reference: alone it would parse every stored graph on the hub
             # per request, and this route is open to scoped tokens.
             if workflow_id is not None and _ASSET_RE.match(lora):
-                among = sorted(set.intersection(*matched))
-                if workflow_id in live:
-                    # A manual workflow's key is its id, not a variant: narrow
-                    # the variants its own runs made, and keep it to them.
-                    among = _variants_run_by(server, workflow_id)
-                    matched = [set(among)]
-                matched.append(set(workflow_cards.variants_loading(hub, lora, among)))
+                if workflow_id in own:
+                    # Its id is every run of it, not a variant: narrow the
+                    # variants its own runs made, and keep those to its runs.
+                    held = set(
+                        workflow_cards.variants_loading(
+                            hub, lora, _variants_run_by(server, workflow_id)
+                        )
+                    )
+                    own = set()
+                variants = set(
+                    workflow_cards.variants_loading(hub, lora, sorted(variants))
+                )
             else:
-                matched.append(set())
+                own, variants = set(), set()
     except Exception as exc:
         # Fail closed, both for a hub that is absent and for one that will not
         # answer: a filter that cannot be resolved must not silently widen the
@@ -496,21 +507,22 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
             exc,
         )
         return []
-    keys = sorted(set.intersection(*matched))
-    if keys and lora is not None and workflow_id in live:
+    keys = sorted(own | variants)
+    if held:
+        keys += [RUN_VARIANT + variant for variant in sorted(held)]
         keys += [ONLY_MADE_BY + workflow_id]
-    elif keys and any(wid not in live for wid in workflow_ids or ()):
-        keys += [NOT_MADE_BY + manual for manual in live]
+    if variants:
+        keys += [NOT_MADE_BY + wid for wid in live]
     return keys
 
 
-def _variants_run_by(server, manual_id: str) -> list[str]:
-    """The variants a manual workflow's own runs made, sorted."""
+def _variants_run_by(server, workflow_id: str) -> list[str]:
+    """The variants a run-filed workflow's own runs made, sorted."""
     return server.vault.db.run_immediate_read_task(
         lambda session: sorted(
             session.exec(
                 select(Picture.workflow_structural_hash)
-                .where(Picture.run_workflow_id == manual_id)
+                .where(Picture.run_workflow_id == workflow_id)
                 .where(Picture.workflow_structural_hash.is_not(None))
                 .distinct()
             ).all()

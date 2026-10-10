@@ -29,14 +29,21 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.schema import CURRENT_DATA_VERSION, _has_old_cores
 from pixlstash.hub.workflow_card_reads import (
     card_index,
+    kept_variants,
     manual_document,
+    topologies_in_workflow,
+    variant_workflows,
+    variants_in_workflow,
+    variants_in_workflows,
     workflow_index,
     workflow_of_variant,
 )
 from pixlstash.hub import workflow_origin, workflow_versions
 from pixlstash.hub.workflow_group_writes import (
+    WAITING,
     create_manual_workflow,
     delete_manual_workflow,
+    write_changes,
 )
 import pixlstash.routes.comfyui as comfyui_routes
 import pixlstash.hub.workflow_group_convert as convert
@@ -55,6 +62,7 @@ from pixlstash.hub.workflow_group_convert import (
     dissolve_manual_groups,
     rederive_cores,
     rederive_cores_from,
+    reidentify_families,
     stranded_workflow_ids,
 )
 from pixlstash.hub import workflow_cards
@@ -3124,3 +3132,411 @@ def test_a_retired_workflows_versions_go_with_it_and_are_not_carried(tmp_path):
         "SELECT workflow_id, version FROM workflow_version ORDER BY workflow_id, version"
     )
     assert [tuple(row) for row in rows] == [(living, 1), (living, 2), (manual, 1)]
+
+
+def test_a_retired_workflows_unsaved_changes_go_with_it(tmp_path):
+    """They name loaders of the graph the retired id read, which an heir may
+    not read; a workflow that lives on through a split keeps its own."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    retired, living, heir = (f"auto:{digit * 64}" for digit in "123")
+    for workflow_id in (retired, living):
+        write_changes(hub, workflow_id, WAITING, {"stages": {"upscale": False}})
+    assert retired in stranded_workflow_ids(hub, {living}, set())
+
+    with hub.transaction() as conn:
+        _carry_group_state(conn, living, heir, keep=True)
+        _carry_group_state(conn, retired, heir)
+
+    rows = hub.fetchall("SELECT workflow_id FROM workflow_change")
+    assert [row[0] for row in rows] == [living]
+
+
+# ── rule 5 of #1846 (#1849): a saved-over automatic workflow is never retired ──
+
+
+def _save_over(hub, workflow_id) -> None:
+    """Versions 1 and 2 on an automatic workflow, as its first overwrite stores them."""
+    graph = {"1": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}}}
+    with hub.transaction() as conn:
+        workflow_versions.append_version(
+            conn, workflow_id, graph, source="chain", first=graph
+        )
+
+
+def _versions(hub, workflow_id) -> list[int]:
+    return [
+        row[0]
+        for row in hub.fetchall(
+            "SELECT version FROM workflow_version WHERE workflow_id = ? "
+            "ORDER BY version",
+            (workflow_id,),
+        )
+    ]
+
+
+def _every_read_places(hub, variant, workflow_id, topology_hash) -> None:
+    """Each variant-to-workflow read files *variant* in *workflow_id*, and only there."""
+    assert workflow_of_variant(hub, variant) == workflow_id
+    assert variant_workflows(hub)[variant] == workflow_id
+    assert variant in variants_in_workflow(hub, workflow_id)
+    assert variant in variants_in_workflows(hub, [workflow_id])
+    assert topology_hash in topologies_in_workflow(hub, workflow_id)
+    holding = [w.workflow_id for w in workflow_index(hub) if variant in w.variants]
+    assert holding == [workflow_id]
+    others = [
+        w.workflow_id for w in workflow_index(hub) if w.workflow_id != workflow_id
+    ]
+    assert variant not in variants_in_workflows(hub, others)
+    for other in others:
+        assert variant not in variants_in_workflow(hub, other)
+
+
+def test_a_saved_over_workflow_keeps_its_id_through_a_new_core_rule(step_10):
+    """The AuraFlow twin's v2 workflow was saved over: v3 would merge it into
+    the plain one, and instead it stays, with its id, versions, owner rows and
+    variant. The Seed twin, never saved over, merges exactly as before."""
+    w = step_10
+    saved, plain_id, seed_id = w.v2_id[w.aura], w.v2_id[w.plain], w.v2_id[w.seed]
+    cfg = f"core:{w.v2_sampler[w.aura]}/cfg"
+    shift = f"core:{w.v2_labels[w.aura]['90']}/shift"
+    _save_over(w.hub, saved)
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_pins (workflow_id, pins) VALUES (?, ?)",
+            (saved, json.dumps([cfg, shift])),
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_picture_input "
+            "(library_uuid, workflow_id, address, mode, pixel_sha) "
+            "VALUES (?, ?, ?, 'picker', NULL)",
+            (LIB, saved, cfg),
+        )
+
+    with w.hub.transaction() as conn:
+        assert rederive_cores_from(conn, "v2") == 4
+
+    # It keeps its id and its variant, in every read, and v3's id for that
+    # variant (the plain workflow's) does not list it as well.
+    _every_read_places(w.hub, w.aura.structural_hash, saved, w.aura.topology_hash)
+    assert variants_in_workflow(w.hub, saved) == [w.aura.structural_hash]
+    assert kept_variants(w.hub) == {w.aura.structural_hash: saved}
+    # Its versions and owner rows stay on it, re-addressed onto the live core:
+    # the sampler by its label there, the patch v3 strips by its slot.
+    assert _versions(w.hub, saved) == [1, 2]
+    rows = _step_8_rows(w.hub)
+    attrs = {r[0]: r for r in rows["workflow_group_attr"]}
+    assert attrs[saved][1:3] == ("Aura", None)
+    live_cfg, live_shift = f"core:{w.v3_sampler}/cfg", f"{w.aura_slot}/shift"
+    assert live_shift != shift, "the fixture must move an address"
+    assert sorted(r[1:] for r in rows["workflow_group_default"] if r[0] == saved) == [
+        (live_shift, "5.0"),
+        (live_cfg, "3"),
+    ]
+    assert [json.loads(r[1]) for r in rows["workflow_group_pins"] if r[0] == saved] == [
+        [live_cfg, live_shift]
+    ]
+    assert [r[2] for r in rows["workflow_group_picture_input"] if r[1] == saved] == [
+        live_cfg
+    ]
+    # Not retired: no successor of any kind leads away from it.
+    assert saved not in dict(rows["workflow_id_successor"])
+    assert saved not in {r[1] for r in rows["workflow_core_successor"]}
+
+    # The workflow never saved over regroups exactly as it did.
+    _every_read_places(w.hub, w.seed.structural_hash, plain_id, w.seed.topology_hash)
+    assert variants_in_workflow(w.hub, plain_id) == sorted(
+        [w.plain.structural_hash, w.seed.structural_hash]
+    )
+    assert dict(rows["workflow_id_successor"]) == {seed_id: plain_id}
+    assert {r[1:3] for r in rows["workflow_core_successor"]} == {(seed_id, plain_id)}
+    assert seed_id not in attrs
+    assert attrs[plain_id][1] == "Plain"
+    for carried in ("Seeded", "Seed notes."):
+        assert carried in attrs[plain_id][2]
+    assert "Aura" not in attrs[plain_id][2]
+    assert [r[1:] for r in rows["workflow_group_default"] if r[0] == plain_id] == [
+        (f"core:{w.v3_sampler}/steps", "8")
+    ]
+
+    # A second run moves nothing and keeps everything.
+    with w.hub.transaction() as conn:
+        assert rederive_cores_from(conn, "v2") == 0
+    assert _step_8_rows(w.hub) == rows
+    assert _versions(w.hub, saved) == [1, 2]
+
+    # A variant that arrives later has no kept row: the live rule files it,
+    # here on the plain workflow, though its graph is what the kept one was.
+    later = record_api_graph(
+        w.hub,
+        _no_negative(
+            _graph(ckpt="flux1-dev.safetensors", extra=CORE_V3_TWINS["aura-flow"][1])
+        ),
+        library_uuid=LIB,
+    )
+    assert later.topology_hash == w.aura.topology_hash
+    assert later.structural_hash != w.aura.structural_hash
+    assert workflow_of_variant(w.hub, later.structural_hash) == plain_id
+    assert workflow_of_variant(w.hub, w.aura.structural_hash) == saved
+
+
+def test_a_saved_over_v1_workflow_keeps_its_id_through_step_8(step_8):
+    """The same rule in the v1 move: the seed-variance workflow was saved
+    over, so it stays; the plain and orphan ones combine and split as before."""
+    w = step_8
+    _save_over(w.hub, w.sve_id)
+
+    with w.hub.transaction() as conn:
+        assert rederive_cores(conn) == 4
+
+    _every_read_places(w.hub, w.sve.structural_hash, w.sve_id, w.sve.topology_hash)
+    assert _versions(w.hub, w.sve_id) == [1, 2]
+    rows = _step_8_rows(w.hub)
+    # Seed variance is a stage on its own base now: addressed by its slot.
+    assert [r[1:] for r in rows["workflow_group_default"] if r[0] == w.sve_id] == [
+        (f"{w.sve_slot}/strength", "0.5")
+    ]
+    flux = workflow_of_variant(w.hub, w.plain.structural_hash)
+    qwen = workflow_of_variant(w.hub, w.qwen.structural_hash)
+    assert flux != qwen and w.sve_id not in (flux, qwen)
+    for keys in (w.lora, w.orphan):
+        _every_read_places(w.hub, keys.structural_hash, flux, keys.topology_hash)
+    assert rows["workflow_id_successor"] == sorted(
+        [(w.plain_id, flux), (w.orphan_id, flux)]
+    )
+    assert {r[1:3] for r in rows["workflow_core_successor"]} == {
+        (w.plain_id, flux),
+        (w.plain_id, qwen),
+        (w.orphan_id, flux),
+    }
+    assert f"{w.sve_slot}/strength" not in {
+        r[1] for r in rows["workflow_group_default"] if r[0] == flux
+    }
+
+
+def test_a_variant_kept_earlier_is_not_moved_by_the_next_core_rule(step_10):
+    """Kept at an earlier rule in a workflow whose id is none this rule
+    computes for it: it is in that workflow, so nothing is retired on its
+    account and it stays."""
+    w = step_10
+    keeper, aura_id, seed_id = w.v2_id[w.two_pass], w.v2_id[w.aura], w.v2_id[w.seed]
+    _save_over(w.hub, keeper)
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_kept_variant (structural_hash, workflow_id) "
+            "VALUES (?, ?)",
+            (w.aura.structural_hash, keeper),
+        )
+
+    with w.hub.transaction() as conn:
+        assert rederive_cores_from(conn, "v2") == 4
+
+    _every_read_places(w.hub, w.aura.structural_hash, keeper, w.aura.topology_hash)
+    assert variants_in_workflow(w.hub, keeper) == sorted(
+        [w.aura.structural_hash, w.two_pass.structural_hash]
+    )
+    rows = _step_8_rows(w.hub)
+    # The id v2 computed for it was never its workflow: not retired, and its
+    # rows are not carried anywhere. The Seed twin still merges.
+    assert dict(rows["workflow_id_successor"]) == {seed_id: w.v2_id[w.plain]}
+    assert aura_id not in {r[1] for r in rows["workflow_core_successor"]}
+    assert {r[0]: r[1] for r in rows["workflow_group_attr"]}[aura_id] == "Aura"
+    assert _versions(w.hub, keeper) == [1, 2]
+
+
+def test_a_saved_over_workflow_keeps_its_id_through_a_family_pass(tmp_path):
+    """Two workflows of unknown families the shelf then learns: the one saved
+    over stays as it is, the other joins the known family's workflow."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        known = record_api_graph(hub, _graph(ckpt=QWEN, upscale=True), LIB)
+        kept = record_api_graph(
+            hub, _graph(ckpt="house-kept-v1.safetensors", upscale=True), LIB
+        )
+        moving = record_api_graph(
+            hub, _graph(ckpt="house-moving-v1.safetensors", upscale=True), LIB
+        )
+        qwen_id = workflow_of_variant(hub, known.structural_hash)
+        kept_id = workflow_of_variant(hub, kept.structural_hash)
+        moving_id = workflow_of_variant(hub, moving.structural_hash)
+        assert len({qwen_id, kept_id, moving_id}) == 3
+        steps = f"core:{_labels(hub, kept, '5')[1]}/steps"
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+                "VALUES (?, ?, NULL, 0)",
+                [(kept_id, "Kept house"), (moving_id, "Moving house")],
+            )
+            conn.execute(
+                "INSERT INTO workflow_group_default (workflow_id, address, value) "
+                "VALUES (?, ?, '9')",
+                (kept_id, steps),
+            )
+            conn.execute(
+                "INSERT INTO workflow_group_pins (workflow_id, pins) VALUES (?, ?)",
+                (kept_id, json.dumps([steps])),
+            )
+        _save_over(hub, kept_id)
+        _identify(hub, "house-kept-v1.safetensors", "1849" + "a" * 60)
+        _identify(hub, "house-moving-v1.safetensors", "1849" + "b" * 60)
+
+        result = reidentify_families(hub)
+
+        # The one never saved over regroups as it always did.
+        assert result["moved"] == 1
+        assert result["renamed"] == {moving_id: qwen_id}
+        assert kept_id not in result["keys"]
+        _every_read_places(hub, moving.structural_hash, qwen_id, moving.topology_hash)
+        attr = hub.fetchone(
+            "SELECT name, notes FROM workflow_group_attr WHERE workflow_id = ?",
+            (qwen_id,),
+        )
+        assert attr["name"] == "Moving house"
+        # The saved-over one keeps its id, variant, versions and owner rows.
+        _every_read_places(hub, kept.structural_hash, kept_id, kept.topology_hash)
+        assert variants_in_workflow(hub, kept_id) == [kept.structural_hash]
+        assert kept_variants(hub) == {kept.structural_hash: kept_id}
+        assert _versions(hub, kept_id) == [1, 2]
+        assert (
+            hub.fetchone(
+                "SELECT name FROM workflow_group_attr WHERE workflow_id = ?",
+                (kept_id,),
+            )["name"]
+            == "Kept house"
+        )
+        assert (
+            hub.fetchone(
+                "SELECT value FROM workflow_group_default "
+                "WHERE workflow_id = ? AND address = ?",
+                (kept_id, steps),
+            )[0]
+            == "9"
+        )
+        assert json.loads(
+            hub.fetchone(
+                "SELECT pins FROM workflow_group_pins WHERE workflow_id = ?",
+                (kept_id,),
+            )[0]
+        ) == [steps]
+        assert (
+            hub.fetchone(
+                "SELECT 1 FROM workflow_id_successor WHERE workflow_id = ?",
+                (kept_id,),
+            )
+            is None
+        )
+        assert not hub.fetchall(
+            "SELECT 1 FROM workflow_core_successor WHERE old_workflow_id = ?",
+            (kept_id,),
+        )
+        # Its family row says what the shelf now knows, so the next pass has
+        # nothing left to look at.
+        families = dict(
+            hub.fetchall(
+                "SELECT structural_hash, families FROM workflow_variant_family"
+            )
+        )
+        assert families[kept.structural_hash] == families[known.structural_hash]
+        assert reidentify_families(hub) == {"moved": 0, "keys": [], "renamed": {}}
+        _every_read_places(hub, kept.structural_hash, kept_id, kept.topology_hash)
+    finally:
+        hub.close()
+
+
+def test_a_kept_variant_whose_family_the_shelf_learns_is_not_moved(tmp_path):
+    """Already kept when its unknown base model is identified: its family row
+    says what the shelf knows, and it stays in the workflow keeping it."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        known = record_api_graph(hub, _graph(ckpt=QWEN, upscale=True), LIB)
+        unknown = record_api_graph(
+            hub, _graph(ckpt="house-held-v1.safetensors", upscale=True), LIB
+        )
+        computed = workflow_of_variant(hub, unknown.structural_hash)
+        keeper = "auto:" + "9" * 64
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_kept_variant (structural_hash, workflow_id) "
+                "VALUES (?, ?)",
+                (unknown.structural_hash, keeper),
+            )
+        _identify(hub, "house-held-v1.safetensors", "1849" + "d" * 60)
+
+        assert reidentify_families(hub) == {"moved": 0, "keys": [], "renamed": {}}
+
+        _every_read_places(hub, unknown.structural_hash, keeper, unknown.topology_hash)
+        families = dict(
+            hub.fetchall(
+                "SELECT structural_hash, families FROM workflow_variant_family"
+            )
+        )
+        assert families[unknown.structural_hash] == families[known.structural_hash]
+        assert hub.fetchall("SELECT * FROM workflow_id_successor") == []
+        assert not hub.fetchall(
+            "SELECT 1 FROM workflow_core_successor WHERE old_workflow_id = ?",
+            (computed,),
+        )
+    finally:
+        hub.close()
+
+
+def test_a_kept_variant_does_not_keep_another_workflow_alive(tmp_path):
+    """A variant a saved-over workflow keeps is in that workflow, so the id
+    its family and core compute retires when its real variants leave."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        moving, staying, old_id = _share_an_unknown_workflow(
+            hub, LIB, "house-leaving-v1.safetensors", "house-staying-v1.safetensors"
+        )
+        record_api_graph(hub, _graph(ckpt=QWEN, upscale=True), LIB)
+        elsewhere = "auto:" + "9" * 64
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_kept_variant (structural_hash, workflow_id) "
+                "VALUES (?, ?)",
+                (staying.structural_hash, elsewhere),
+            )
+        assert workflow_of_variant(hub, staying.structural_hash) == elsewhere
+        _identify(hub, "house-leaving-v1.safetensors", "1849" + "c" * 60)
+
+        result = reidentify_families(hub)
+
+        assert result["moved"] == 1
+        assert list(result["renamed"]) == [old_id], (
+            "the only variant still computing the old id is kept elsewhere, "
+            "so the old id is retired, not left living on"
+        )
+        assert workflow_of_variant(hub, staying.structural_hash) == elsewhere
+    finally:
+        hub.close()
+
+
+def test_a_kept_variant_revives_no_retired_id(tmp_path):
+    """`revive_workflows` takes the workflow a variant is IN off the retired
+    list: for a kept variant that is never the id the rule computes."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        keys = record_api_graph(hub, _graph(ckpt=QWEN, upscale=True), LIB)
+        computed = workflow_of_variant(hub, keys.structural_hash)
+        heir, keeper = "auto:" + "8" * 64, "auto:" + "9" * 64
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_kept_variant (structural_hash, workflow_id) "
+                "VALUES (?, ?)",
+                (keys.structural_hash, keeper),
+            )
+            conn.execute(
+                "INSERT INTO workflow_id_successor (workflow_id, successor_id) "
+                "VALUES (?, ?)",
+                (computed, heir),
+            )
+            workflow_cards.revive_workflows(conn, [keys.structural_hash])
+        assert dict(hub.fetchall("SELECT * FROM workflow_id_successor")) == {
+            computed: heir
+        }
+        # The positive control: without the kept row the same call revives it.
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_kept_variant")
+            workflow_cards.revive_workflows(conn, [keys.structural_hash])
+        assert hub.fetchall("SELECT * FROM workflow_id_successor") == []
+    finally:
+        hub.close()

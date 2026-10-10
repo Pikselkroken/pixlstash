@@ -31,6 +31,7 @@ from typing import Optional
 from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_inbox import content_hash as document_content_hash
+from pixlstash.services.workflow_io import with_converted_graph
 from pixlstash.utils.workflow_ids import AUTO_PREFIX, stamp_workflow_id
 
 logger = get_logger(__name__)
@@ -149,13 +150,21 @@ def append_version(
     *,
     source: str,
     first: Optional[dict] = None,
+    api_document: Optional[str] = None,
 ) -> int:
     """Make *document* the next version of *workflow_id*, inside the caller's
     transaction, and return its number.
 
-    *source* is how the version arrived: ``chain`` for a LoRA chain edit the
-    owner saved over the workflow. (``pull`` on a stored row is a ComfyUI file
-    the removed pull read.)
+    *source* is how the version arrived, and what the version menu's text is
+    made from (:func:`reason`): what a Save changed (``models``, ``loras``,
+    joined with a comma), ``run`` for a save of what a run changed,
+    ``comfyui`` and ``mcp`` for a whole graph saved over the workflow,
+    ``revert:<n>`` for going back to version *n*, and ``chain`` for a LoRA
+    chain edit. (``pull`` on a stored row is a ComfyUI file the removed pull
+    read.)
+
+    *api_document* is the stored conversion of *document*, kept when an
+    earlier version is made current again; a new graph has none.
 
     *first* is version 1 of a workflow that has no document row to take it
     from: an automatic workflow's graph as read off its pictures, stored the
@@ -188,13 +197,13 @@ def append_version(
         workflow_id,
         version,
         stored,
-        None,
+        api_document,
         source,
     )
     conn.execute(
-        "UPDATE workflow_document SET document = ?, api_document = NULL "
+        "UPDATE workflow_document SET document = ?, api_document = ? "
         "WHERE workflow_id = ?",
-        (stored, workflow_id),
+        (stored, api_document, workflow_id),
     )
     pruned = conn.execute(
         "DELETE FROM workflow_version WHERE workflow_id = ? AND version > 1 "
@@ -209,6 +218,100 @@ def append_version(
         f"; {pruned} older version(s) pruned" if pruned else "",
     )
     return version
+
+
+# The version menu's words for what a save changed, by ``source``.
+_REASONS = {
+    FROM_PICTURES: "as PixlStash first read it",
+    "models": "models changed",
+    "loras": "LoRAs edited",
+    "chain": "LoRAs edited",
+    "run": "saved from a run",
+    "comfyui": "from ComfyUI",
+    "mcp": "from an assistant",
+    "pull": "from ComfyUI",
+}
+REVERT_PREFIX = "revert:"
+
+
+def reason(source: str) -> Optional[str]:
+    """The few words the version menu shows for a version's ``source``.
+
+    ``None`` for a source that says how the workflow arrived (``import``,
+    ``duplicate``, ...) rather than what a save changed: the menu then shows
+    the version with no reason.
+    """
+    if source.startswith(REVERT_PREFIX):
+        return f"went back to version {source[len(REVERT_PREFIX) :]}"
+    words = [_REASONS[part] for part in source.split(",") if part in _REASONS]
+    return ", ".join(dict.fromkeys(words)) or None
+
+
+def list_versions(hub: HubDatabase, workflow_id: str) -> list[dict]:
+    """Every version kept of *workflow_id*, newest first:
+    ``[{version, created_at, source, reason}]``. Empty for a workflow with
+    none: an automatic one never saved over, or one an older build made."""
+    return [
+        {
+            "version": row["version"],
+            "created_at": row["created_at"],
+            "source": row["source"],
+            "reason": reason(row["source"]),
+        }
+        for row in hub.fetchall(
+            "SELECT version, created_at, source FROM workflow_version "
+            "WHERE workflow_id = ? ORDER BY version DESC",
+            (workflow_id,),
+        )
+    ]
+
+
+def restore_version(conn: sqlite3.Connection, workflow_id: str, version: int) -> int:
+    """Make an earlier version of *workflow_id* its newest; return the new number.
+
+    The earlier graph is appended as a version of its own, so nothing is
+    removed and going back can itself be undone.
+
+    Raises:
+        LookupError: The workflow keeps no such version.
+        ValueError: *version* is already the current one.
+    """
+    row = conn.execute(
+        "SELECT document, api_document, "
+        "(SELECT MAX(version) FROM workflow_version WHERE workflow_id = ?) AS latest "
+        "FROM workflow_version WHERE workflow_id = ? AND version = ?",
+        (workflow_id, workflow_id, version),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"{workflow_id} keeps no version {version}")
+    if row[2] == version:
+        raise ValueError(f"{workflow_id} is already at version {version}")
+    return append_version(
+        conn,
+        workflow_id,
+        json.loads(row[0]),
+        source=f"{REVERT_PREFIX}{version}",
+        api_document=row[1],
+    )
+
+
+def current_version(hub: HubDatabase, workflow_id: str) -> Optional[int]:
+    """The number of *workflow_id*'s current version.
+
+    ``None`` for an automatic workflow never saved over; ``1`` for a manual
+    one an older build made, whose document is its version 1.
+    """
+    row = hub.fetchone(
+        "SELECT MAX(version) FROM workflow_version WHERE workflow_id = ?",
+        (workflow_id,),
+    )
+    if row is not None and row[0] is not None:
+        return row[0]
+    if hub.fetchone(
+        "SELECT 1 FROM workflow_document WHERE workflow_id = ?", (workflow_id,)
+    ):
+        return 1
+    return None
 
 
 def current_content_hash(hub: HubDatabase, workflow_id: str) -> Optional[str]:
@@ -257,20 +360,30 @@ def version_with_content(
 
 
 def edited_document(
-    hub: HubDatabase, workflow_id: str
+    hub: HubDatabase, workflow_id: str, version: Optional[int] = None
 ) -> tuple[Optional[dict], Optional[int]]:
     """An automatic workflow's current graph and its version, or ``(None, None)``.
 
-    The highest version the owner's overwrites made. ``(None, None)`` for a
+    The highest version the owner's saves made, or *version* when an earlier
+    one is asked for (a saved recipe's own graph) and still kept; a version
+    since pruned answers the current one. ``(None, None)`` for a
     workflow never saved over, which is nearly every one. A row that will not
     parse is logged and answers ``(None, version)``: the caller decides what a
     workflow whose stored graph cannot be read runs.
     """
-    row = hub.fetchone(
-        "SELECT version, document FROM workflow_version WHERE workflow_id = ? "
-        "ORDER BY version DESC LIMIT 1",
-        (workflow_id,),
-    )
+    row = None
+    if version is not None:
+        row = hub.fetchone(
+            "SELECT version, document FROM workflow_version WHERE workflow_id = ? "
+            "AND version = ?",
+            (workflow_id, version),
+        )
+    if row is None:
+        row = hub.fetchone(
+            "SELECT version, document FROM workflow_version WHERE workflow_id = ? "
+            "ORDER BY version DESC LIMIT 1",
+            (workflow_id,),
+        )
     if row is None:
         return None, None
     try:
@@ -284,6 +397,98 @@ def edited_document(
         )
         return None, row["version"]
     return (document if isinstance(document, dict) else None), row["version"]
+
+
+def document_of(hub: HubDatabase, workflow_id: str, version: int) -> Optional[dict]:
+    """One kept version of a workflow's document, as it runs: the API graph
+    its conversion holds where it is an editor document. ``None`` for a
+    version the workflow does not keep, or one that will not read (logged)."""
+    row = hub.fetchone(
+        "SELECT document, api_document FROM workflow_version "
+        "WHERE workflow_id = ? AND version = ?",
+        (workflow_id, version),
+    )
+    if row is None:
+        return None
+    try:
+        document = json.loads(row["document"])
+        converted = json.loads(row["api_document"]) if row["api_document"] else None
+    except (ValueError, TypeError, RecursionError) as exc:
+        logger.warning(
+            "Workflow %s: version %d of its document will not read: %s",
+            workflow_id,
+            version,
+            exc,
+        )
+        return None
+    if not isinstance(document, dict):
+        return None
+    return with_converted_graph(
+        document, converted if isinstance(converted, dict) else None
+    )
+
+
+def source_of(hub: HubDatabase, workflow_id: str, version: int) -> Optional[str]:
+    """The ``source`` of one kept version, or ``None`` for none such."""
+    row = hub.fetchone(
+        "SELECT source FROM workflow_version WHERE workflow_id = ? AND version = ?",
+        (workflow_id, version),
+    )
+    return row[0] if row is not None else None
+
+
+def version_at(hub: HubDatabase, workflow_id: str, when: datetime) -> Optional[int]:
+    """The version of *workflow_id* that was current at *when*, or ``None``
+    when that is the version it has now (or it has none).
+
+    What a saved recipe runs on: the graph it was saved from (rule 8 of
+    #1846). The newest kept version stored at or before *when*; a workflow
+    saved over for the first time since then answers its oldest kept version,
+    which for an automatic one is the graph read off its pictures. A version
+    since pruned (a workflow keeps version 1 and the newest 49) answers the
+    nearest kept one before it. A naive *when* is read as UTC.
+    """
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    rows = hub.fetchall(
+        "SELECT version, created_at FROM workflow_version WHERE workflow_id = ? "
+        "ORDER BY version",
+        (workflow_id,),
+    )
+    if not rows:
+        return None
+    found = rows[0]["version"]
+    for row in rows:
+        try:
+            stored = datetime.fromisoformat(row["created_at"])
+        except ValueError as exc:
+            logger.warning(
+                "Workflow %s: version %d has an unreadable time (%r), so it is "
+                "not counted as older than a recipe: %s",
+                workflow_id,
+                row["version"],
+                row["created_at"],
+                exc,
+            )
+            continue
+        if stored.tzinfo is None:
+            stored = stored.replace(tzinfo=timezone.utc)
+        if stored <= when:
+            found = row["version"]
+    return None if found == rows[-1]["version"] else found
+
+
+def saved_over_ids(hub: HubDatabase) -> set[str]:
+    """Every automatic workflow the owner has saved over: an ``auto:`` id with
+    a version. Such a workflow keeps its id (rule 5 of #1846) and its runs
+    file on it, as a manual workflow's do."""
+    return {
+        row[0]
+        for row in hub.fetchall(
+            "SELECT DISTINCT workflow_id FROM workflow_version WHERE workflow_id LIKE ?",
+            (f"{AUTO_PREFIX}%",),
+        )
+    }
 
 
 def automatic_version_facts(hub: HubDatabase) -> dict[str, tuple[int, int, str]]:
