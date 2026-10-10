@@ -73,7 +73,7 @@
            strip below, where every other card says what it is made of (#1485
            retired the cover marks #1466 put here). -->
       <span v-if="hasRecipe" class="wf-card__empty-line" aria-hidden="true"
-        >No pictures yet</span
+        >No {{ outputNoun(card) }}s yet</span
       >
       <AppButton
         variant="outline"
@@ -217,6 +217,7 @@ import {
   checkpointUnread,
   lorasUnread,
   modelDisplayName,
+  outputNoun,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
 import ComfyuiIcon from "./ComfyuiIcon.vue";

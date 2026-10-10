@@ -418,6 +418,21 @@ export function factChips(card, { short = false } = {}) {
 }
 
 /** "4.9 of 5", or null when nothing is rated (0 or missing). */
+/**
+ * What a card's output is called: "video" for a workflow that saves video
+ * (`type`, which the server reads off the graph's save nodes), "picture" for
+ * every other. One rule, so the menu, the counts and the card agree.
+ */
+export function outputNoun(card) {
+  return card?.type === "video" ? "video" : "picture";
+}
+
+/** "3 videos", "1 picture": a card's output, counted in its own word. */
+export function outputCount(card, count = card?.picture_count) {
+  const n = Number(count) || 0;
+  return `${n} ${outputNoun(card)}${n === 1 ? "" : "s"}`;
+}
+
 export function ratingLabel(rating) {
   return rating > 0 ? `${rating.toFixed(1)} of 5` : null;
 }
@@ -467,7 +482,7 @@ export function cardAccessibleName(card) {
         ? "LoRAs not read"
         : "no LoRAs",
     facts.length ? `facts: ${facts.join(", ")}` : null,
-    count === 1 ? "1 picture" : `${count} pictures`,
+    outputCount(card, count),
     ratingLabel(card.rating) ? `rated ${ratingLabel(card.rating)}` : null,
     card.origin_category === "comfyui" ? "from ComfyUI" : null,
   ];

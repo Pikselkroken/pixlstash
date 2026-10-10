@@ -426,6 +426,7 @@ import {
 } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { saveJsonAs } from "../../utils/downloadFile";
+import { outputNoun } from "../../utils/workflowCard";
 import FilterStrip from "../panels/FilterStrip.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
@@ -1433,11 +1434,14 @@ async function confirmDelete() {
   const cards = [...store.selectedCards];
   if (!cards.length) return;
   const one = cards.length === 1;
+  const noun = cards.every((card) => outputNoun(card) === "video")
+    ? "videos"
+    : "pictures";
   const ok = await confirm({
     title: one ? "Delete this workflow?" : `Delete these ${cards.length} workflows?`,
     message:
       `${one ? `“${cards[0].name}”` : "They"} ${one ? "goes" : "go"} to your ` +
-      "system trash. The pictures stay, filed under their automatic " +
+      `system trash. The ${noun} stay, filed under their automatic ` +
       "workflow, and saved recipes on it are listed under Unfiled recipes.",
     confirmLabel: "Delete",
     danger: true,
@@ -1482,10 +1486,11 @@ function openRowMenu(index, event) {
   if (!entry) return;
   cursorId.value = entry.id;
   if (!store.selectedKeys.includes(entry.key)) store.select(entry.key);
+  const tile = pictureUnder(event);
   selBarRef.value?.openContextMenu(
     event.clientX,
     event.clientY,
-    pictureUnder(event),
+    tile && { ...tile, noun: outputNoun(entry.card) },
   );
 }
 
