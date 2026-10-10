@@ -10,7 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from pixlstash.hub.workflow_group_convert import _core_strip_v1, _core_strip_v2
+from pixlstash.hub.workflow_group_convert import (
+    _core_strip_v1,
+    _core_strip_v2,
+    _core_strip_v3,
+    _core_strip_v4,
+)
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     graph_key,
@@ -36,10 +41,12 @@ from pixlstash.services.workflow_identity import (
     guess_mark,
     slots,
     special_groups,
+    upscale_kinds,
     workflow_key,
     workflow_type,
 )
 from pixlstash.services.workflow_identity import _SINK_CLASS_RE
+from pixlstash.services import workflow_identity as identity
 
 
 def _node(class_type: str, **inputs) -> dict:
@@ -695,6 +702,299 @@ def test_core_v3_is_a_function_of_the_v2_core():
     assert all(len(v3) == 1 for v3 in v3_of_v2.values())
 
 
+# ── core rule v4: filing wires, patches, gates and saves along the way ────
+
+_GATED = {
+    "90": _node(
+        "PixlStashPictureLikenessGate", image=["6", 0], pixlstash_set=["91", 1]
+    ),
+    "91": _node("PixlStashSetLoader", set_id=1),
+    "7": _node("SaveImage", images=["90", 1], filename_prefix="out"),
+}
+_FIRST_PASS_SAVE = {
+    "70": _node("VAEDecode", samples=["5", 0], vae=["1", 2]),
+    "71": _node("SaveImage", images=["70", 0], filename_prefix="first"),
+}
+_PATCH_CHAIN = {
+    "90": _node("TeaCache", model=["1", 0], rel_l1_thresh=0.4),
+    "91": _node("CompileModel", model=["90", 0]),
+}
+
+# name: (the clean graph's extra, its twin's extra)
+CORE_V4_TWINS = {
+    "seed-generator": (
+        None,
+        _sampler_fed("seed", "90", _node("SeedGenerator", seed=5)),
+    ),
+    "rgthree-seed": (None, _sampler_fed("seed", "90", _node("Seed (rgthree)", seed=5))),
+    "model-patch": (
+        None,
+        _sampler_fed("model", "90", _node("TeaCache", model=["1", 0], threshold=0.4)),
+    ),
+    "model-patch-chain": (
+        None,
+        {**_PATCH_CHAIN, **_sampler_fed("model", "91", _PATCH_CHAIN["91"])},
+    ),
+    "filing-wires": (
+        None,
+        {
+            "90": _node("PixlStashSetLoader", set_id=1),
+            "91": _node("PixlStashCharacterLoader", character_id=2),
+            "7": _node(
+                "SaveImage",
+                images=["6", 0],
+                filename_prefix="out",
+                pixlstash_project=["90", 0],
+                pixlstash_set=["90", 1],
+                pixlstash_character=["91", 1],
+            ),
+        },
+    ),
+    "likeness-gate": (None, _GATED),
+}
+
+
+@pytest.mark.parametrize("pair", CORE_V4_TWINS.values(), ids=CORE_V4_TWINS.keys())
+def test_core_v4_stacks_a_graph_with_its_clean_twin(pair):
+    clean, member = _graph(extra=pair[0]), _graph(extra=pair[1])
+    assert topology_hash(clean) != topology_hash(member)
+    assert core_hash(_doc(clean)) == core_hash(_doc(member))
+    for node_id in ("1", "4", "5", "6", "7"):
+        assert _core_label(clean, node_id) == _core_label(member, node_id)
+    assert "90" not in core_node_labels(_doc(member))
+
+
+def test_core_v4_reads_the_library_picture_loader_as_load_image():
+    """One edit graph, whichever node hands it the picture and files the result."""
+    plain = _graph(img2img=True)
+    library = _graph(
+        img2img=True,
+        extra={
+            "90": _node("PixlStashSetLoader", set_id=1),
+            "10": _node(
+                "PixlStashPictureLoader",
+                picture_ids="5",
+                pixlstash_project=["90", 0],
+                pixlstash_set=["90", 1],
+            ),
+            "7": _node(
+                "SaveImage",
+                images=["6", 0],
+                filename_prefix="out",
+                pixlstash_project=["10", 2],
+                pixlstash_set=["10", 3],
+            ),
+        },
+    )
+    assert core_hash(_doc(plain)) == core_hash(_doc(library))
+    assert _core_label(plain, "10") == _core_label(library, "10")
+    # The picture is still what the graph starts from.
+    assert workflow_type(_doc(library)) == "img2img"
+    assert core_hash(_doc(library)) != core_hash(_doc(_graph()))
+
+
+def _split_loaders(model_loader: dict, vae=("61", 0)) -> dict:
+    """The graph with its model, text encoder and VAE each from a loader."""
+    return _graph(
+        extra={
+            "1": model_loader,
+            "60": _node("CLIPLoader", clip_name="te.safetensors"),
+            "61": _node("VAELoader", vae_name="vae.safetensors"),
+            "2": _node("CLIPTextEncode", text="a cat", clip=["60", 0]),
+            "3": _node("CLIPTextEncode", text="blurry", clip=["60", 0]),
+            "6": _node("VAEDecode", samples=["5", 0], vae=list(vae)),
+        }
+    )
+
+
+def test_core_v4_reads_a_model_only_checkpoint_loader_as_a_unet_loader():
+    unet = _split_loaders(_node("UNETLoader", unet_name="base.safetensors"))
+    checkpoint = _split_loaders(
+        _node("CheckpointLoaderSimple", ckpt_name="base.safetensors")
+    )
+    assert core_hash(_doc(unet)) == core_hash(_doc(checkpoint))
+    assert _core_label(unet, "1") == _core_label(checkpoint, "1")
+    # The negative: a checkpoint whose VAE is read is a checkpoint still.
+    own_vae = _split_loaders(
+        _node("CheckpointLoaderSimple", ckpt_name="base.safetensors"), vae=("1", 2)
+    )
+    unet_vae = _split_loaders(_node("UNETLoader", unet_name="base.safetensors"))
+    unet_vae["6"]["inputs"]["vae"] = ["1", 2]
+    assert core_hash(_doc(own_vae)) != core_hash(_doc(unet_vae))
+
+
+def test_core_v4_keeps_a_node_that_only_takes_a_model_but_is_not_a_patch():
+    """A scheduler has one link, `model`, and is read as `sigmas`: real work."""
+    scheduled = _graph(
+        extra=_sampler_fed(
+            "sigmas", "90", _node("BasicScheduler", model=["1", 0], steps=20)
+        )
+    )
+    assert core_hash(_doc(scheduled)) != core_hash(_doc(_graph()))
+    assert "90" in core_node_labels(_doc(scheduled))
+    # Nor is a sampler, however little of it is wired.
+    chained = {
+        "1": _node("CheckpointLoaderSimple", ckpt_name="base.safetensors"),
+        "3": _node("KSampler", model=["1", 0]),
+        "4": _node("KSampler", model=["3", 0]),
+        "5": _node("SaveImage", images=["4", 0]),
+    }
+    assert "3" in core_node_labels(_doc(chained))
+
+
+def _gate_only(*, gated: bool) -> dict:
+    graph = {
+        "1": _node("LoadImage", image="in.png"),
+        "3": _node("SaveImage", images=["1", 0], filename_prefix="out"),
+    }
+    if gated:
+        graph["2"] = _node("PixlStashPictureLikenessGate", image=["1", 0])
+        graph["3"] = _node("SaveImage", images=["2", 1], filename_prefix="out")
+    return graph
+
+
+def test_core_v4_keeps_a_gate_in_a_graph_that_does_not_sample():
+    """Without a sampler the gate is what the graph does, as a filter is."""
+    assert core_hash(_doc(_gate_only(gated=True))) != core_hash(
+        _doc(_gate_only(gated=False))
+    )
+
+
+def test_core_v4_drops_a_save_of_what_the_graph_samples_again():
+    two_pass = _second_pass(("5", 0))
+    plain = _graph(extra=two_pass)
+    saved = _graph(extra={**two_pass, **_FIRST_PASS_SAVE})
+    assert topology_hash(plain) != topology_hash(saved)
+    assert core_hash(_doc(plain)) == core_hash(_doc(saved))
+    assert not {"70", "71"} & set(core_node_labels(_doc(saved)))
+    # The negatives: it is still two passes, and a second save of the SAME
+    # sampler's picture is a result, not a save along the way.
+    assert core_hash(_doc(saved)) != core_hash(_doc(_graph()))
+    twice = _graph(
+        extra={"71": _node("SaveImage", images=["6", 0], filename_prefix="b")}
+    )
+    assert core_hash(_doc(twice)) != core_hash(_doc(_graph()))
+    assert "71" in core_node_labels(_doc(twice))
+
+
+def test_an_intermediate_save_is_a_stage_the_card_has():
+    """What the core drops, the card offers: on or off in the default recipe."""
+    two_pass = _second_pass(("5", 0))
+    saved = _graph(extra={**two_pass, **_FIRST_PASS_SAVE})
+    assert special_groups(_doc(saved)) == (INTERMEDIATE_SAVE,)
+    # Beside the other stages, in the order the rows list them.
+    assert special_groups(
+        _doc(_graph(upscale=True, extra={**two_pass, **_FIRST_PASS_SAVE}))
+    ) == (UPSCALE, INTERMEDIATE_SAVE)
+    # The negatives: two passes with one save, and a save of a picture no
+    # sampler made, which the core drops without calling it a stage.
+    assert special_groups(_doc(_graph(extra=two_pass))) == ()
+    loaded = {
+        "80": _node("LoadImage", image="in.png"),
+        "81": _node("SaveImage", images=["80", 0], filename_prefix="copy"),
+    }
+    assert special_groups(_doc(_graph(extra=loaded))) == ()
+    assert core_hash(_doc(_graph(extra=loaded))) == core_hash(_doc(_graph()))
+
+
+def test_upscale_kinds_say_how_the_stage_upscales():
+    def kinds(**extra) -> tuple:
+        return upscale_kinds(_doc(_graph(extra=extra)))
+
+    assert upscale_kinds(_doc(_graph())) == ()
+    assert upscale_kinds(_doc(_graph(upscale=True))) == ("model",)
+    assert upscale_kinds(_doc(_graph(hires=True))) == ("latent",)
+    assert kinds(**{"40": _node("ImageScaleBy", image=["6", 0])}) == ("resize",)
+    ultimate = {
+        "40": _node("UpscaleModelLoader", model_name="4x.pth"),
+        "41": _node("UltimateSDUpscale", image=["6", 0], upscale_model=["40", 0]),
+    }
+    assert kinds(**ultimate) == ("ultimate_sd",)
+    # A 4x model scaled back down is a model upscale, not also a resize.
+    scaled = {"42": _node("ImageScaleBy", image=["41", 0])}
+    assert upscale_kinds(_doc(_graph(upscale=True, extra=scaled))) == ("model",)
+    assert kinds(**ultimate, **{"43": _node("LatentUpscaleBy", samples=["5", 0])}) == (
+        "ultimate_sd",
+        "latent",
+    )
+
+
+def test_core_v4_is_a_function_of_the_v3_core():
+    """Many-to-one: graphs sharing a v3 core share a v4 core (data step 13)."""
+    twins = [*CORE_V2_TWINS.values(), *CORE_V3_TWINS.values(), *CORE_V4_TWINS.values()]
+    graphs = [
+        _graph(**variant, extra=extra)
+        for variant in ({}, {"preview": True}, {"upscale": True}, {"loras": ("a",)})
+        for extra in [None, *(twin for pair in twins for twin in pair)]
+    ]
+    graphs += [_graph(extra=_second_pass(("5", 0))), _gate_only(gated=True)]
+    v4_of_v3: dict[str, set[str]] = {}
+    for graph in graphs:
+        doc = _doc(graph)
+        v4_of_v3.setdefault(graph_key(_core_strip_v3(doc)), set()).add(core_hash(doc))
+    assert len(v4_of_v3) > 1
+    assert all(len(v4) == 1 for v4 in v4_of_v3.values())
+    # And v4 does merge v3 cores, or the above would hold of a no-op.
+    assert len({c for v4 in v4_of_v3.values() for c in v4}) < len(v4_of_v3)
+
+
+# ── core rule v5: the negative side is not core ───────────────────────────
+
+_ZEROED = {"3": _node("ConditioningZeroOut", conditioning=["2", 0])}
+
+
+def test_core_v5_groups_a_typed_negative_with_a_zeroed_one():
+    """Whether the negative is typed or zeroed is the prompt's value, not the
+    graph's identity; which graph has the box is a trait that picks the base."""
+    typed, zeroed = _graph(), _graph(extra=_ZEROED)
+    assert graph_key(_core_strip_v4(_doc(typed))) != graph_key(
+        _core_strip_v4(_doc(zeroed))
+    )
+    assert core_hash(_doc(typed)) == core_hash(_doc(zeroed))
+    for node_id in ("1", "2", "4", "5", "6", "7"):
+        assert _core_label(typed, node_id) == _core_label(zeroed, node_id)
+    assert "3" not in core_node_labels(_doc(typed))
+    assert graph_traits(_doc(typed)) == (NEGATIVE_PROMPT,)
+    assert graph_traits(_doc(zeroed)) == ()
+    # The negative: the positive side is the graph still.
+    other = _graph(extra={"2": _node("CLIPTextEncodeFlux", t5xxl="a", clip=["1", 1])})
+    assert core_hash(_doc(other)) != core_hash(_doc(typed))
+
+
+def test_core_v5_is_a_function_of_the_v4_core():
+    """Many-to-one: graphs sharing a v4 core share a v5 core (data step 15)."""
+    twins = [*CORE_V3_TWINS.values(), *CORE_V4_TWINS.values(), (None, _ZEROED)]
+    graphs = [
+        _graph(**variant, extra=extra)
+        for variant in ({}, {"upscale": True}, {"img2img": True})
+        for extra in [None, *(twin for pair in twins for twin in pair)]
+    ]
+    v5_of_v4: dict[str, set[str]] = {}
+    for graph in graphs:
+        doc = _doc(graph)
+        v5_of_v4.setdefault(graph_key(_core_strip_v4(doc)), set()).add(core_hash(doc))
+    assert all(len(v5) == 1 for v5 in v5_of_v4.values())
+    assert len({c for v5 in v5_of_v4.values() for c in v5}) < len(v5_of_v4)
+
+
+def test_the_intermediate_save_stage_is_the_same_with_loras_kept_or_stripped():
+    """Review of #1822: the stage is read with LoRA loaders stripped whatever
+    the grouping does with them. A loader is neither a sink nor a sampler, so
+    the saves the core drops are the same either way."""
+    graph = _graph(
+        loras=("a.safetensors",),
+        extra={**_second_pass(("5", 0), model=("L0", 0)), **_FIRST_PASS_SAVE},
+    )
+    nodes = identity._reduce(_doc(graph))
+    kept = identity._core_of(nodes, False, rule=3)[0]
+    assert "L0" in kept, "the LoRA loader was stripped, so this proves nothing"
+    assert (
+        identity._saves_along_the_way(identity._v4_strip(kept))[0]
+        == identity.intermediate_saves(nodes)
+        == {"71"}
+    )
+
+
 def test_an_extra_lora_loader_splits_when_loras_are_not_stripped():
     plain, member = _doc(_graph()), _doc(_graph(loras=("a.safetensors",)))
     assert core_hash(plain, strip_loras=False) != core_hash(member, strip_loras=False)
@@ -786,34 +1086,45 @@ def test_traits_say_what_the_core_does_that_the_type_cannot():
         MODEL_PER_PASS,
     )
 
-    # The first pass's picture saved as well as the last.
-    saved = {
-        **two_pass,
-        "70": _node("VAEDecode", samples=["5", 0], vae=["1", 2]),
-        "71": _node("SaveImage", images=["70", 0], filename_prefix="first"),
-    }
-    assert graph_traits(_doc(_graph(extra={**zeroed, **saved}))) == (
-        TWO_PASS,
-        INTERMEDIATE_SAVE,
-    )
+    # The first pass's picture saved as well as the last: off the core since
+    # rule v4, so not a trait.
+    saved = {**two_pass, **_FIRST_PASS_SAVE}
+    assert graph_traits(_doc(_graph(extra={**zeroed, **saved}))) == (TWO_PASS,)
 
-    # Decoded, re-encoded and sampled again: an img2img refine, which a likeness
-    # gate in front of the save can tell apart again.
+    # Decoded, re-encoded and sampled again: an img2img refine. A likeness gate
+    # in front of the save is stripped where the graph samples (rule v4).
     refine = {
         **_second_pass(("81", 0)),
         "80": _node("VAEDecode", samples=["5", 0], vae=["1", 2]),
         "81": _node("VAEEncode", pixels=["80", 0], vae=["1", 2]),
     }
     assert graph_traits(_doc(_graph(extra={**zeroed, **refine}))) == (REFINE,)
-    gated = {
-        **refine,
-        "90": _node("PixlStashPictureLikenessGate", image=["6", 0]),
-        "7": _node("SaveImage", images=["90", 0], filename_prefix="out"),
+    assert graph_traits(_doc(_graph(extra={**zeroed, **refine, **_GATED}))) == (REFINE,)
+    # With no sampler the gate is what the graph does, and the name says so.
+    assert graph_traits(_doc(_gate_only(gated=True))) == (LIKENESS_GATE,)
+
+    # A crop-and-stitch pass through pipes: the second sampler's latent comes
+    # from a node that encodes inside itself, fed a crop of the first pass's
+    # decode. A refine, and of ONE model, though each pass reads it by pipe.
+    piped = {
+        "50": _node("ToBasicPipe", model=["1", 0], positive=["2", 0], vae=["1", 2]),
+        "5": _node(
+            "ImpactKSamplerBasicPipe", basic_pipe=["50", 0], latent_image=["4", 0]
+        ),
+        "51": _node("VAEDecode", samples=["5", 1], vae=["5", 2]),
+        "52": _node("InpaintCropImproved", image=["51", 0]),
+        "53": _node("FromBasicPipe", basic_pipe=["5", 0]),
+        "54": _node("InpaintEasyModel", inpaint_image=["52", 1], positive=["53", 3]),
+        "55": _node(
+            "KSampler", model=["53", 0], positive=["54", 0], latent_image=["54", 2]
+        ),
+        "6": _node("VAEDecode", samples=["55", 0], vae=["53", 2]),
+        "56": _node(
+            "InpaintStitchImproved", stitcher=["52", 0], inpainted_image=["6", 0]
+        ),
+        "7": _node("SaveImage", images=["56", 0], filename_prefix="out"),
     }
-    assert graph_traits(_doc(_graph(extra={**zeroed, **gated}))) == (
-        REFINE,
-        LIKENESS_GATE,
-    )
+    assert graph_traits(_doc(_graph(extra={**zeroed, **piped}))) == (REFINE,)
 
     # Reference images, counted: one edit reference is not two.
     one_ref = {
@@ -944,6 +1255,9 @@ def test_workflow_type():
     }
     assert workflow_type(_doc(upscale)) == "upscale"
     assert workflow_type(_doc({"1": _node("SaveImage")})) is None
+    # An empty latent by another name: not only the stock `Empty*Latent*`.
+    named = _graph(extra={"4": _node("SDXL Quick Empty Latent (WLSH)", width=512)})
+    assert workflow_type(_doc(named)) == "txt2img"
 
 
 PAIRED_API = Path(__file__).parent / "comfyui_workflows" / "paired" / "multigpu" / "api"

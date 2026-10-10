@@ -590,6 +590,11 @@ _CORE_RULE_V1_UNMOVED = "unmoved-v1"
 # row it could not move (as `_CORE_RULE_V1_UNMOVED` is for step 8).
 _CORE_RULE_V2 = f"v2-loras-{'stripped' if STRIP_LORAS_FOR_STACKS else 'kept'}"
 _CORE_RULE_V2_UNMOVED = "unmoved-v2"
+# The same for core rule v3 and data step 13, and v4 and step 15.
+_CORE_RULE_V3 = f"v3-loras-{'stripped' if STRIP_LORAS_FOR_STACKS else 'kept'}"
+_CORE_RULE_V3_UNMOVED = "unmoved-v3"
+_CORE_RULE_V4 = f"v4-loras-{'stripped' if STRIP_LORAS_FOR_STACKS else 'kept'}"
+_CORE_RULE_V4_UNMOVED = "unmoved-v4"
 
 
 def _core_strip_v1(document: dict) -> dict[str, ReducedNode]:
@@ -599,7 +604,26 @@ def _core_strip_v1(document: dict) -> dict[str, ReducedNode]:
 
 def _core_strip_v2(document: dict) -> dict[str, ReducedNode]:
     """Core rule v2's graph, for data step 10's label maps. Not the live rule."""
-    return _core_pass(document, STRIP_LORAS_FOR_STACKS, v3=False)[0]
+    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=2)[0]
+
+
+def _core_strip_v3(document: dict) -> dict[str, ReducedNode]:
+    """Core rule v3's graph, for data step 13's label maps. Not the live rule."""
+    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=3)[0]
+
+
+def _core_strip_v4(document: dict) -> dict[str, ReducedNode]:
+    """Core rule v4's graph, for data step 15's label maps. Not the live rule."""
+    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=4)[0]
+
+
+# What data steps 10, 13 and 15 re-derive from, by the rule's name: its stamp,
+# the stamp of a row that would not move, and its graph.
+_MERGED_RULES = {
+    "v2": (_CORE_RULE_V2, _CORE_RULE_V2_UNMOVED, _core_strip_v2),
+    "v3": (_CORE_RULE_V3, _CORE_RULE_V3_UNMOVED, _core_strip_v3),
+    "v4": (_CORE_RULE_V4, _CORE_RULE_V4_UNMOVED, _core_strip_v4),
+}
 
 
 def core_label_maps(
@@ -608,7 +632,8 @@ def core_label_maps(
     """``({old core label: live core label or None}, {old core label: slot label})``.
 
     *old_rule* is the retired rule's graph: :func:`_core_strip_v1` for data
-    step 8, :func:`_core_strip_v2` for step 10. The second map holds the
+    step 8, :func:`_core_strip_v2` for step 10, :func:`_core_strip_v3` for
+    step 13, :func:`_core_strip_v4` for step 15. The second map holds the
     nodes the live rule took off the core (a stage now, plumbing, or dead), by
     their slot label on *document*'s own topology: where an address on one of
     them can still point when this topology is its workflow's base. Matched
@@ -661,7 +686,7 @@ def _move_topologies(
     ``(heirs_of, topologies_of, labels_of, stage_slots_of, new_of_card,
     core_of_heir)``, in :func:`_retire_all`'s argument order.
 
-    Shared by data steps 8 and 10. This runs at hub open inside the
+    Shared by data steps 8, 10, 13 and 15. This runs at hub open inside the
     data-version transaction, so an uncaught error would refuse the hub on
     every start (`convert_card_state` guards the same way). A topology whose
     move returns ``None`` or raises is rolled back, logged and restamped from
@@ -798,66 +823,109 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
     return len(labels_of)
 
 
-def rederive_cores_v3(conn: sqlite3.Connection) -> int:
-    """Put every topology cached under core rule v2 on v3, its state with it.
+def rederive_cores_from(conn: sqlite3.Connection, rule: str) -> int:
+    """Put every topology cached under retired core rule *rule* on the live one.
 
-    Hub data step 10 (#1719), :func:`rederive_cores`'s move one rule on. v3
-    strips more than v2, so workflows mostly **merge**: each variant's v2 id
-    ``auto_workflow_id(v2 core, families)`` is retired onto its v3 id, and the
-    owner's rows on it are rewritten through the v2-to-v3 label map and carried
-    with :func:`_retire_workflow` (merged onto the heir, never dropped). A
-    variant whose core v3 leaves alone keeps its id, so a workflow it is in
-    lives on and takes the merged ones' state.
+    Hub data step 10 (*rule* ``"v2"``, #1719), step 13 (``"v3"``) and step 15
+    (``"v4"``),
+    :func:`rederive_cores`'s move one rule on. Each rule strips more than the
+    one before, so workflows mostly **merge**: each variant's old id
+    ``auto_workflow_id(old core, families)`` is retired onto its live id, and
+    the owner's rows on it are rewritten through the old-to-live label map and
+    carried with :func:`_retire_workflow` (merged onto the heir, never
+    dropped). A variant whose core the live rule leaves alone keeps its id, so
+    a workflow it is in lives on and takes the merged ones' state.
 
-    **Idempotent**: a second run finds no v2 row. A topology whose documents
-    will not reduce, or whose move raises, is rolled back to its savepoint,
-    logged and restamped ``unmoved-v2`` for the card backfill. A variant with
-    no family row is in no workflow yet and has nothing to carry.
+    **A merged workflow is hidden only when everything merged into it was**:
+    carrying a hidden one's flag onto a visible heir would take that heir's
+    pictures off the grid for a workflow the owner never hid.
+
+    **Idempotent**: a second run finds no row of *rule*. A topology whose
+    documents will not reduce, or whose move raises, is rolled back to its
+    savepoint, logged and restamped ``unmoved-<rule>`` for the card backfill. A
+    variant with no family row is in no workflow yet and has nothing to carry.
 
     Returns:
-        How many topologies moved to v3.
+        How many topologies moved to the live rule.
     """
+    stamp, unmoved, old_rule = _MERGED_RULES[rule]
     hub = _Reader(conn)
-    v2_rows = dict(
+    old_rows = dict(
         conn.execute(
             "SELECT topology_hash, core_hash FROM workflow_topology_core "
             "WHERE core_version = ?",
-            (_CORE_RULE_V2,),
+            (stamp,),
         ).fetchall()
     )
-    if not v2_rows:
+    if not old_rows:
         return 0
     cards_of: dict[str, list[Card]] = {}
     for card in card_index(hub):
-        if not card.manual and card.topology_hash in v2_rows:
+        if not card.manual and card.topology_hash in old_rows:
             cards_of.setdefault(card.topology_hash, []).append(card)
+    # Before anything moves: the workflows there are, and the hidden ones.
+    existed = {w.workflow_id for w in workflow_index(hub)} | {
+        auto_workflow_id(old_rows[topology_hash], families)
+        for topology_hash, cards in cards_of.items()
+        for card in cards
+        for families in card.families.values()
+        if families is not None
+    }
+    hidden = {
+        row[0]
+        for row in conn.execute(
+            "SELECT workflow_id FROM workflow_group_attr WHERE hidden"
+        )
+    }
     moved = _move_topologies(
         conn,
-        v2_rows,
-        lambda topology_hash: _rederive_topology_v3(
+        old_rows,
+        lambda topology_hash: _rederive_topology_from(
             conn,
             hub,
             topology_hash,
             cards_of.get(topology_hash, []),
-            v2_rows[topology_hash],
+            old_rows[topology_hash],
+            rule,
         ),
-        _CORE_RULE_V2,
-        _CORE_RULE_V2_UNMOVED,
+        stamp,
+        unmoved,
     )
     heirs_of, labels_of = moved[0], moved[2]
     live = {w.workflow_id for w in workflow_index(hub)}
     for old_id in sorted(heirs_of.keys() & live):
-        # Some variant of it kept its core (only where v3 is not a function of
-        # the v2 core: a refused prune). It lives on, so its state stays put.
+        # Some variant of it kept its core (only where the live rule is not a
+        # function of the old core: a refused prune). It lives on, so its
+        # state stays put.
         logger.warning(
-            "Workflow %s keeps variants under core rule v3 while others move to "
+            "Workflow %s keeps variants under core rule %s while others move to "
             "%s; its owner state stays on it and is not copied.",
             old_id,
+            CORE_VERSION,
             dict(heirs_of.pop(old_id)),
         )
     _retire_all(conn, hub, *moved, own_slots=True)
+    merged_into: dict[str, set[str]] = {}
+    for old_id, heirs in heirs_of.items():
+        for heir in heirs:
+            merged_into.setdefault(heir, {heir} & existed).add(old_id)
+    for heir, sources in sorted(merged_into.items()):
+        if sources & hidden and not sources <= hidden:
+            conn.execute(
+                "UPDATE workflow_group_attr SET hidden = 0 WHERE workflow_id = ?",
+                (heir,),
+            )
+            logger.info(
+                "Workflow %s merges hidden and visible workflows (%s hidden of "
+                "%s), so it is shown.",
+                heir,
+                sorted(sources & hidden),
+                sorted(sources),
+            )
     logger.info(
-        "Core rule v3: %d topologies re-derived; %d workflows merge into %d.",
+        "Core rule %s to %s: %d topologies re-derived; %d workflows merge into %d.",
+        rule,
+        CORE_VERSION,
         len(labels_of),
         len(heirs_of),
         len({h for heirs in heirs_of.values() for h in heirs}),
@@ -865,14 +933,15 @@ def rederive_cores_v3(conn: sqlite3.Connection) -> int:
     return len(labels_of)
 
 
-def _rederive_topology_v3(
+def _rederive_topology_from(
     conn: sqlite3.Connection,
     hub,
     topology_hash: str,
     cards: list[Card],
     old_core: str,
+    rule: str,
 ) -> Optional[tuple[dict, dict, str, list[tuple[str, str, str, int]]]]:
-    """Write one topology's v3 row; ``None`` when no stored graph reduces.
+    """Write one topology's live row; ``None`` when no stored graph reduces.
 
     Returns :func:`_move_topologies`' shape, one move per variant whose id
     changes.
@@ -881,25 +950,30 @@ def _rederive_topology_v3(
     if found is None:
         logger.warning(
             "Topology %s has no stored graph that reduces, so it stays on "
-            "core rule v2 until the card backfill re-derives it.",
+            "core rule %s until the card backfill re-derives it.",
             topology_hash,
+            rule,
         )
         return None
     document = found[1]
-    if graph_key(_core_strip_v2(document)) != old_core:
+    old_rule = _MERGED_RULES[rule][2]
+    if graph_key(old_rule(document)) != old_core:
         logger.warning(
-            "Topology %s: its stored v2 core %s is not what v2 derives now; "
+            "Topology %s: its stored %s core %s is not what %s derives now; "
             "its label map may name the wrong nodes.",
             topology_hash,
+            rule,
             old_core,
+            rule,
         )
     new_core = core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
-    labels, stage_slots = core_label_maps(document, _core_strip_v2)
+    labels, stage_slots = core_label_maps(document, old_rule)
     _cache_topology(conn, topology_hash, document, slots(document), new_core)
-    # A recipe still on a v1 id reads step 8's map, whose values are v2
-    # labels: composed onto v3 here, or its overrides name nothing. A value
-    # already on the live core (a map an earlier run composed or wrote) stays;
-    # one on neither is stale and goes to None, so the stage slot can answer.
+    # A recipe still on an older id reads an earlier step's map, whose values
+    # are *rule*'s labels: composed onto the live core here, or its overrides
+    # name nothing. A value already on the live core (a map an earlier run
+    # composed or wrote) stays; one on neither is stale and goes to None, so
+    # the stage slot can answer.
     live = set(core_node_labels(document, strip_loras=STRIP_LORAS_FOR_STACKS).values())
     for old_id, new_id, label_map in conn.execute(
         "SELECT old_workflow_id, new_workflow_id, label_map "
@@ -949,9 +1023,9 @@ def _retire_all(
 ) -> None:
     """Retire every old id in *heirs_of* onto its heirs, then report strays.
 
-    Shared by data steps 8 and 10, which both move to the live core rule.
+    Shared by data steps 8, 10, 13 and 15, which all move to the live core rule.
     Each old id's label maps merge over its topologies, and its retirement
-    runs in a savepoint of its own. *own_slots* (step 10): an heir whose base
+    runs in a savepoint of its own. *own_slots* (steps 10, 13 and 15): an heir whose base
     is none of the old id's topologies (a merge into a workflow that lives on)
     still gets the old topologies' slot labels, so an address on a node the
     rule stripped is kept, inert on that base, rather than dropped.

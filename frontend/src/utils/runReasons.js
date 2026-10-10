@@ -21,6 +21,7 @@ export const STAGE_LABELS = {
   upscale: "Upscale",
   face_detailer: "Face detailer",
   seed_variance: "Seed variance",
+  intermediate_save: "Intermediate save",
 };
 
 /** ComfyUI never answered, so nothing at all is known about the graph. */

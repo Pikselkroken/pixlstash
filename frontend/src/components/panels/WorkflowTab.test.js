@@ -1596,6 +1596,24 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(textOf(none)).not.toContain("Off: most of its pictures");
   });
 
+  it("says which kind of upscale a stage is, in a tip on its name", async () => {
+    const shown = withRecipe({ stages: { upscale: true, intermediate_save: true } });
+    shown.card.default_recipe.stage_details = { upscale: "Upscale model (4x-UltraSharp)" };
+    getWorkflowCard.mockResolvedValue(shown);
+    const { wrapper } = await mountWith([KEY]);
+    const stage = wrapper.find("[data-testid='wftab-stage-upscale']");
+    expect(stage.text()).toBe("Upscale");
+    expect(stage.find("tooltip-stub").attributes("text")).toBe(
+      "Upscale model (4x-UltraSharp)",
+    );
+    // A stage that is only ever one thing carries no tip, and is named as
+    // the Run popup names it.
+    expect(wrapper.find("[data-testid='wftab-stage-intermediate_save']").exists()).toBe(false);
+    expect(
+      wrapper.find("[data-testid='wftab-stages'] .wftab-value").text().replace(/\s+/g, " "),
+    ).toBe("Upscale · Intermediate save");
+  });
+
   it("offers Show N on the checkpoint only below the workflow's count", async () => {
     const values = (pictures) => ({
       checkpoints: [

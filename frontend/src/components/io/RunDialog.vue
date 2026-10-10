@@ -520,7 +520,12 @@
               :disabled="submitting"
               @change="setStage(stage.name, $event.target.checked)"
             />
-            <label :for="`${stageId}-${stage.name}`">{{ stage.label }}</label>
+            <label :for="`${stageId}-${stage.name}`"
+              >{{ stage.label
+              }}<span v-if="stage.detail" class="rund-quiet">
+                · {{ stage.detail }}</span
+              ></label
+            >
             <RunResetChip
               v-if="stageOn(stage.name) !== stageDefault(stage.name)"
               :value="stageDefault(stage.name) ? 'on' : 'off'"
@@ -1503,7 +1508,12 @@ const stageRows = computed(() =>
         name in STAGE_LABELS &&
         card.value?.default_recipe?.stages?.[name] !== false,
     )
-    .map((name) => ({ name, label: STAGE_LABELS[name] })),
+    .map((name) => ({
+      name,
+      label: STAGE_LABELS[name],
+      // Which kind the stage is, where it can be several (an upscale).
+      detail: card.value?.default_recipe?.stage_details?.[name] || "",
+    })),
 );
 /** stage -> the owner's on/off, over the default recipe's. */
 const stageChoice = reactive({});

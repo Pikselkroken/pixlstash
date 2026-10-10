@@ -433,7 +433,12 @@
           <span class="wftab-value"
             ><template v-for="(stage, index) in stageRows" :key="stage.key"
               ><span v-if="index" class="wftab-quiet"> · </span
-              >{{ stage.label }}{{ stage.on ? "" : " off" }}</template
+              ><span v-if="stage.detail" :data-testid="`wftab-stage-${stage.key}`"
+                ><Tooltip :text="stage.detail" activator="parent" />{{
+                  stage.label
+                }}</span
+              ><template v-else>{{ stage.label }}</template
+              >{{ stage.on ? "" : " off" }}</template
             ></span
           >
         </div>
@@ -1745,11 +1750,15 @@ const loraNote = computed(() => {
   return `${names} ${missing.length === 1 ? "is" : "are"} not on your shelf.`;
 });
 
-/** The base graph's optional stages and whether the default runs each. */
+/**
+ * The base graph's optional stages and whether the default runs each.
+ * `detail` is which kind a stage is, where it can be several (an upscale).
+ */
 const stageRows = computed(() =>
   Object.entries(defaultRecipe.value?.stages ?? {}).map(([key, on]) => ({
     key,
     on: Boolean(on),
+    detail: defaultRecipe.value?.stage_details?.[key] || "",
     label:
       STAGE_LABELS[key] ??
       key.replace(/_/g, " ").replace(/^./, (first) => first.toUpperCase()),

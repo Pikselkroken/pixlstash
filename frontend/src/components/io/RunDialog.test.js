@@ -1707,6 +1707,34 @@ describe("the body it sends", () => {
     expect(runWorkflowCard.mock.calls[0][0].skip_stages).toEqual(["seed_variance"]);
   });
 
+  it("says which kind of upscale the stage is, beside its checkbox", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        specials: ["upscale", "intermediate_save"],
+        default_recipe: {
+          models: [],
+          loras: [],
+          values: [],
+          stages: { upscale: true, intermediate_save: true },
+          stage_details: { upscale: "Ultimate SD Upscale (4x-UltraSharp)" },
+        },
+      }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const labels = wrapper
+      .find("fieldset")
+      .findAll("label")
+      .map((l) => l.text().replace(/\s+/g, " "));
+    expect(labels).toEqual([
+      "Upscale · Ultimate SD Upscale (4x-UltraSharp)",
+      "Intermediate save",
+    ]);
+    await wrapper.vm.setStage("intermediate_save", false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].skip_stages).toEqual(["intermediate_save"]);
+  });
+
   it("sends the stages the owner turned off as skip_stages (#1623)", async () => {
     getWorkflowCard.mockResolvedValue({
       card: card({

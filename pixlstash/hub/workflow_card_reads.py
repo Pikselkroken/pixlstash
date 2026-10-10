@@ -44,6 +44,7 @@ from pixlstash.services.workflow_hash import (
     reduce_ui_graph,
 )
 from pixlstash.services.workflow_identity import (
+    NEGATIVE_PROMPT,
     WORKFLOW_KEY_VERSION,
     model_fix_kind,
     reduced_traits,
@@ -930,6 +931,8 @@ def workflow_index(
     }
     workflows: dict[str, Workflow] = {}
     loras: dict[str, int] = {}
+    # The topologies whose graph has a negative prompt to type.
+    negative: set[str] = set()
     cards = cards if cards is not None else card_index(hub)
     # A card of a topology with no variant under the current key (a legacy
     # file row) reads no core hash of its own, so it joins whatever workflow
@@ -972,6 +975,8 @@ def workflow_index(
                 loras.get(card.topology_hash, 0),
                 sum(1 for s in card.slots if s.get("is_lora")),
             )
+            if NEGATIVE_PROMPT in (card.traits or ()):
+                negative.add(card.topology_hash)
             entry.variants.append(structural_hash)
             entry.variant_topology[structural_hash] = card.topology_hash
             entry.variant_card[structural_hash] = card.workflow_key
@@ -1000,14 +1005,18 @@ def workflow_index(
                 structural_hash, 0
             )
         # A topology this library has kept pictures of first, so a workflow
-        # with any picture here has a graph to run (#1738); then most of each,
-        # and on a full tie the smallest hash, so two reads of an unchanged hub
-        # name the same base. A workflow file is no key: it may be UI-format,
-        # which does not run, and the hub-only base must not move.
+        # with any picture here has a graph to run (#1738); then one with a
+        # negative prompt to type, which core rule v5 groups with graphs that
+        # zero theirs and which can do what they do (a run cannot add the box);
+        # then most of each, and on a full tie the smallest hash, so two reads
+        # of an unchanged hub name the same base. A workflow file is no key:
+        # it may be UI-format, which does not run, and the hub-only base must
+        # not move.
         entry.base_topology = min(
             entry.topologies,
             key=lambda t: (
                 not pictures.get(t),
+                t not in negative,
                 -len(entry.specials.get(t) or ()),
                 -loras.get(t, 0),
                 -pictures.get(t, 0),

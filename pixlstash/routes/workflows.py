@@ -183,10 +183,12 @@ from pixlstash.services.workflow_export import (
 from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     CORE_ADDRESS_PREFIX,
-    INTERMEDIATE_SAVE,
     LIKENESS_GATE,
+    UPSCALE_LATENT,
+    UPSCALE_MODEL,
+    UPSCALE_RESIZE,
+    UPSCALE_ULTIMATE_SD,
     MODEL_PER_PASS,
-    NEGATIVE_PROMPT,
     REFERENCES_PREFIX,
     REFINE,
     TWO_PASS,
@@ -564,7 +566,9 @@ class DefaultRecipePayload(BaseModel):
 
     Read off the newest instances of its 4★+ pictures (else of every picture),
     with the owner's edits (`provenance: edited`) over it. `stages` names each
-    optional stage the base graph has and whether the recipe runs it.
+    optional stage the base graph has and whether the recipe runs it, and
+    `stage_details` says, for a stage that can be more than one thing, which
+    this graph's is (`upscale`: "Upscale model (4x-ultrasharp)").
     """
 
     sampled: int = 0
@@ -572,6 +576,7 @@ class DefaultRecipePayload(BaseModel):
     loras: list[DefaultRecipeLora] = Field(default_factory=list)
     values: list[WorkflowDefault] = Field(default_factory=list)
     stages: dict[str, bool] = Field(default_factory=dict)
+    stage_details: dict[str, str] = Field(default_factory=dict)
 
 
 class WorkflowCard(BaseModel):
@@ -711,7 +716,7 @@ class WorkflowCard(BaseModel):
         None,
         description=(
             "The post-processing the base graph carries, from `upscale`, "
-            "`face_detailer` and `seed_variance`. **Null and `[]` are different answers**: null "
+            "`face_detailer`, `seed_variance` and `intermediate_save`. **Null and `[]` are different answers**: null "
             "means the graph has not been read for it yet, `[]` means it was "
             "read and has none."
         ),
@@ -1287,9 +1292,9 @@ class RunRequest(BaseModel):
     # Optional stages this run goes without (#1621): each is bypassed on the
     # run's copy, what the stage alone read is pruned, and a card whose stage
     # cannot be taken out is refused with `stage_not_skippable`, never run whole.
-    skip_stages: list[Literal["upscale", "face_detailer", "seed_variance"]] = Field(
-        default_factory=list, max_length=3
-    )
+    skip_stages: list[
+        Literal["upscale", "face_detailer", "seed_variance", "intermediate_save"]
+    ] = Field(default_factory=list, max_length=4)
     values: list[RunValue] = Field(default_factory=list, max_length=MAX_DEFAULTS)
     # Samplers and schedulers this run swaps in for ones this ComfyUI does not
     # list (`missing_choices`), applied last so they win over `values`.
@@ -2331,10 +2336,37 @@ _TRAIT_LABELS = {
     TWO_PASS: "Two-Pass",
     REFINE: "Refine",
     MODEL_PER_PASS: "Model per Pass",
-    INTERMEDIATE_SAVE: "Intermediate Save",
     LIKENESS_GATE: "Likeness Gate",
-    NEGATIVE_PROMPT: "Negative Prompt",
 }
+
+
+# How an upscale stage upscales, as its row says it. One checkbox covers a
+# resize, a model pass and a tiled re-diffusion, which cost seconds to minutes
+# apart, so the row names which this graph's is. Served, as `_TYPE_LABELS` is.
+_UPSCALE_LABELS = {
+    UPSCALE_ULTIMATE_SD: "Ultimate SD Upscale",
+    UPSCALE_MODEL: "Upscale model",
+    UPSCALE_LATENT: "Latent upscale and second pass",
+    UPSCALE_RESIZE: "Resize",
+}
+
+
+def _stage_details(recipe) -> dict[str, str]:
+    """What each stage of the default recipe is, where a stage can be several.
+
+    Only ``upscale`` for now: its kinds joined, the upscale model's name after
+    the kinds that load one. A kind this build does not know is left out, as
+    an unknown special is.
+    """
+    model = _model_stem(recipe.upscale_model) if recipe.upscale_model else ""
+    parts = []
+    for kind in recipe.upscale:
+        label = _UPSCALE_LABELS.get(kind)
+        if not label:
+            continue
+        uses_model = kind in (UPSCALE_ULTIMATE_SD, UPSCALE_MODEL)
+        parts.append(f"{label} ({model})" if model and uses_model else label)
+    return {"upscale": " + ".join(parts)} if parts else {}
 
 
 def _trait_label(trait: str) -> str | None:
@@ -2455,27 +2487,37 @@ def _display_names(figures) -> dict[str, str]:
     A name the owner typed or a workflow file's is left alone however many
     workflows share it: renaming what somebody chose is inventing. Generated
     names that collide first say what the core does differently
-    (``... + Two-Pass``, :func:`_distinguishing_traits`), and whatever still
-    collides is numbered ``Text to Image (2)``, ``(3)``, in id order so a
+    (``... + Two-Pass``, :func:`_distinguishing_traits`). **Two names that
+    differ only by their stages collide**: a stage is switched on or off per
+    run, so ``Text to Image`` and ``Text to Image + Upscale`` read as one
+    workflow run two ways, and a second sampling pass between them is what
+    actually tells them apart. Whatever still collides is numbered ``Text to Image (2)``, ``(3)``: the workflows the
+    grid draws by default before the hidden ones and the one-offs, so the one
+    on screen is not "(2)" of a sibling nobody sees, then in id order so a
     workflow keeps its number from one read to the next.
     """
     # ponytail: id order is stable across reads but a new workflow can shift
     # the numbers after it; store a sequence if that ever matters.
     names = {}
     generated = {}
-    for figure in sorted(figures, key=lambda f: f.workflow_id):
+    for figure in sorted(
+        figures, key=lambda f: (f.card.hidden, f.one_off, f.workflow_id)
+    ):
         card = figure.card
         name = _display_name(card, figure.models)
         names[figure.workflow_id] = name
         if not card.name and not card.file_name:
-            generated.setdefault(name, []).append(figure)
+            # Grouped by the name without its stages, which end it.
+            stem = name.removesuffix(_specials_suffix(card))
+            generated.setdefault(stem, []).append(figure)
     renamed = {}
-    for name, members in generated.items():
+    for members in generated.values():
         # A lone name shares every trait it has with itself, so it gets none.
         suffixes = _distinguishing_traits([member.card for member in members])
         for member, suffix in zip(members, suffixes):
-            names[member.workflow_id] = name + suffix
-            renamed.setdefault(name + suffix, []).append(member.workflow_id)
+            name = names[member.workflow_id] + suffix
+            names[member.workflow_id] = name
+            renamed.setdefault(name, []).append(member.workflow_id)
     for name, keys in renamed.items():
         for number, key in enumerate(keys[1:], start=2):
             names[key] = f"{name} ({number})"
@@ -2668,6 +2710,7 @@ def _recipe_payload(recipe: DefaultRecipe) -> DefaultRecipePayload:
         ],
         values=_defaults_payload(recipe.values),
         stages=dict(recipe.stages),
+        stage_details=_stage_details(recipe),
     )
 
 
@@ -5702,7 +5745,7 @@ def create_router(server) -> APIRouter:
             "and reported in bypassed_loras with requested true, and one that "
             "cannot be skipped without dropping another LoRA is "
             "lora_not_skippable. skip_stages names optional stages (upscale, "
-            "face_detailer, seed_variance) this run goes without; a card whose stage cannot "
+            "face_detailer, seed_variance, intermediate_save) this run goes without; a card whose stage cannot "
             "be taken out is stage_not_skippable. missing_choices names each "
             "sampler_name or scheduler this ComfyUI does not list, with its "
             "options and a replacement (euler, simple) to send back in choices. "

@@ -13,7 +13,12 @@ from pathlib import Path
 import pytest
 
 from pixlstash.services.comfyui_recipe_service import bypass_stage
-from pixlstash.services.workflow_identity import FACE_DETAILER, SEED_VARIANCE, UPSCALE
+from pixlstash.services.workflow_identity import (
+    FACE_DETAILER,
+    INTERMEDIATE_SAVE,
+    SEED_VARIANCE,
+    UPSCALE,
+)
 from pixlstash.services.workflow_run_service import (
     STAGE_NOT_SKIPPABLE,
     skip_requested_stages,
@@ -405,3 +410,56 @@ def test_without_comfyui_only_a_graph_with_the_stage_is_refused():
     reasons = skip_requested_stages(_face_detailer(_base()), [FACE_DETAILER], None)
     assert [r.code for r in reasons] == [STAGE_NOT_SKIPPABLE]
     assert "could not reach ComfyUI" in reasons[0].detail["message"]
+
+
+def _two_pass_saving_the_first() -> dict:
+    """The base graph sampled again, its first pass's picture saved as well."""
+    graph = _base()
+    graph["30"] = copy.deepcopy(graph["3"])
+    graph["30"]["inputs"]["latent_image"] = ["3", 0]
+    graph["8"]["inputs"]["samples"] = ["30", 0]
+    graph["40"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
+    }
+    graph["41"] = {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "first", "images": ["40", 0]},
+    }
+    return graph
+
+
+def test_an_intermediate_save_goes_with_the_decode_only_it_read():
+    graph = _two_pass_saving_the_first()
+
+    changes = bypass_stage(graph, INTERMEDIATE_SAVE, OBJECT_INFO)
+
+    assert _actions(changes) == {"41": "bypassed", "40": "pruned"}
+    # Both passes still run and the result is still saved.
+    assert {"3", "30", "8", "9"} <= graph.keys()
+    assert graph["9"]["inputs"]["images"] == ["8", 0]
+    assert not {"40", "41"} & graph.keys()
+
+
+def test_a_save_no_sampler_made_and_the_last_save_are_not_the_stage():
+    """Only a save of what the graph samples again is the stage: never its
+    result, and never a save of something it only loaded."""
+    assert bypass_stage(_base(), INTERMEDIATE_SAVE, OBJECT_INFO) == []
+    graph = _base()
+    graph["60"] = {"class_type": "LoadImage", "inputs": {"image": "in.png"}}
+    graph["61"] = {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "copy", "images": ["60", 0]},
+    }
+    before = copy.deepcopy(graph)
+    assert bypass_stage(graph, INTERMEDIATE_SAVE, OBJECT_INFO) == []
+    assert graph == before
+
+
+def test_an_intermediate_save_cannot_be_skipped_unasked_without_comfyui():
+    reasons = skip_requested_stages(
+        _two_pass_saving_the_first(), [INTERMEDIATE_SAVE], None
+    )
+    assert [(r.code, r.detail["stage"]) for r in reasons] == [
+        (STAGE_NOT_SKIPPABLE, INTERMEDIATE_SAVE)
+    ]
