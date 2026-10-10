@@ -295,7 +295,7 @@ export async function duplicateWorkflow(workflowId) {
  * With `replacing` (the Workflow tab's "Replace with…", #1596): also
  * `replacements`, the shelf models that go with the workflow's checkpoint (for
  * a checkpoint: that share the missing one's base model, where anything says
- * which) and that the loader naming that file can load, and
+ * which and any does) and that the loader naming that file can load, and
  * `replacements_reason` when there are none.
  *
  * @param {string} workflowId
@@ -320,10 +320,12 @@ export async function readModelSwap(
  * loader before and after (`loaders`, with the node `pack` a new loader class
  * comes from and whether ComfyUI has it), whether the set's checkpoint has the
  * workflow's base model so its LoRAs are kept, and `fit` / `reason`. Asked once
- * per open, for every set on the shelf; nothing is written.
+ * per open, for every set on the shelf, and again for one set when the owner
+ * picks which of its files a loader takes (`picks`, the plan's `takes` with
+ * the choice made); nothing is written.
  *
  * @param {string} workflowId
- * @param {Array<{key: string, model_ids: Array<number>}>} sets
+ * @param {Array<{key: string, checkpoint_ids: Array<number>, model_ids: Array<number>, picks?: Object<string, number>}>} sets
  * @returns {Promise<{base_filename: ?string, base_model: ?string, plans: Array<Object>}>}
  */
 export async function planSetClones(workflowId, sets) {
@@ -388,21 +390,25 @@ export async function getLoraChain(workflowId) {
 }
 
 /**
- * Save a LoRA chain as the owner left it, as a NEW workflow (#1478).
+ * Save a LoRA chain as the owner left it (#1478): as a new workflow, or with
+ * `overwrite: true` over the one it edits.
  *
  * `entries` is the whole chain in apply order: an existing loader by
  * `node_id` (kept, maybe moved or re-weighted), a new one by the shelf
  * `sha256` with `node_id: null`. For a forked chain `entries` is the trunk
  * and `lanes` one such list per lane, in the read's order; an existing loader
- * may sit in any of them. An existing loader left out of all is deleted. The
- * original file is never modified: a write answers 201 with the new card's
- * `workflow_id`, and `dry_run: true` answers 200 with only the `changes` the
- * confirm step lists.
+ * may sit in any of them. An existing loader left out of all is deleted. A
+ * write answers 201 with the new card's `workflow_id` and leaves the original
+ * alone; an overwrite answers 200 with the same `workflow_id` and
+ * `overwritten: true`; `dry_run: true` answers 200 with only the `changes`
+ * the confirm step lists.
  *
  * @param {string} workflowId
  * @param {{entries: Array<{node_id: ?string, sha256?: string, strength?: number}>,
- *   lanes?: Array<Array<Object>>, name: ?string, dry_run: boolean}} body
+ *   lanes?: Array<Array<Object>>, name: ?string, dry_run: boolean,
+ *   overwrite?: boolean}} body
  * @returns {Promise<{dry_run: boolean, name: ?string, workflow_id: ?string,
+ *   overwritten?: boolean,
  *   changes: Array<{kind: string, node_id: ?string, text: string}>}>}
  */
 export async function saveLoraChain(workflowId, body) {

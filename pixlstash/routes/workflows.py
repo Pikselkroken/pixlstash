@@ -39,6 +39,7 @@ import sqlite3
 import os
 import re
 import threading
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field as dataclass_field
 from difflib import SequenceMatcher
@@ -54,6 +55,7 @@ from pydantic import (
     model_validator,
 )
 
+from pixlstash.hub import workflow_versions
 from pixlstash.hub.workflow_card_reads import (
     Workflow,
     asset_names,
@@ -170,9 +172,11 @@ from pixlstash.routes.comfyui import (
     _read_object_info,
     _resolve_workflow_path,
     _shelf_adapter,
+    WorkflowChanged,
     WorkflowFileTooLarge,
     runnable_document,
     store_manual_workflow,
+    store_over_workflow,
     trash_user_workflow,
     user_workflow_exists,
 )
@@ -214,10 +218,9 @@ from pixlstash.services.workflow_inputs import (
 from pixlstash.services.comfyui_ui_graph import convert_ui_graph_to_api
 from pixlstash.services.workflow_io import (
     api_graph,
-    detect_workflow_io,
     with_converted_graph,
 )
-from pixlstash.services.workflow_parameters import is_latent_size, set_latent_size
+from pixlstash.services.workflow_parameters import set_latent_size, size_inputs
 from pixlstash.services.workflow_library_service import (
     read_best_picture_ids,
     read_card_picture_ids,
@@ -649,24 +652,26 @@ class WorkflowCard(BaseModel):
         1,
         description=(
             "How many versions of the workflow's document are kept: a ComfyUI "
-            "file that changed is a new version of its workflow, and at most "
-            "50 are kept (version 1 and the newest 49). Always 1 for an "
-            "automatic workflow."
+            "file that changed, or a LoRA chain edit saved over the workflow, "
+            "is a new version of it, and at most "
+            "50 are kept (version 1 and the newest 49). 1 for an automatic "
+            "workflow never saved over; one saved over keeps the graph its "
+            "pictures held as version 1."
         ),
     )
     version: int = Field(
         1,
         description=(
             "The current version's number. Versions are numbered for good, "
-            "so past the 50 kept it is more than `versions`. Always 1 for an "
-            "automatic workflow."
+            "so past the 50 kept it is more than `versions`. 1 for an "
+            "automatic workflow never saved over."
         ),
     )
     version_at: str | None = Field(
         None,
         description=(
             "When the current version was stored (ISO 8601). Null for an "
-            "automatic workflow."
+            "automatic workflow never saved over."
         ),
     )
     hidden: bool = Field(
@@ -1406,6 +1411,18 @@ class RunPictureInput(ParameterAddress):
     fill: Literal["request", "fixed", "selection", "graph"] | None = None
 
 
+class RunPrompt(BaseModel):
+    """Where one group's graph takes a run's prompts, and what it holds (#1832)."""
+
+    # False where a prompt sent with the run has nowhere to go: no prompt node
+    # was found, or it keeps its text in a field PixlStash does not write.
+    positive_settable: bool = False
+    negative_settable: bool = False
+    # The graph's own positive prompt, before this request's was written. Null
+    # where it is not a literal or the graph's prompt nodes disagree.
+    positive_text: str | None = None
+
+
 class RunGroup(BaseModel):
     """One graph a request resolved to, and whether it would run.
 
@@ -1422,7 +1439,9 @@ class RunGroup(BaseModel):
     workflow_id: str | None = None
     # The version of a manual workflow's document this group runs, after Run
     # and Open's check against ComfyUI; what its pictures record
-    # (`picture.run_workflow_version`). Null for an automatic workflow.
+    # (`picture.run_workflow_version`). For an automatic workflow the owner
+    # saved over, the version of its graph (recorded on no picture); null
+    # for one never saved over.
     workflow_version: int | None = None
     source: str | None = None
     source_picture_id: int | None = None
@@ -1477,8 +1496,12 @@ class RunGroup(BaseModel):
     # What this run does that the owner may not expect, and runs anyway
     # (#1620 Q3): `family_mismatch` for a model loaded in place of one made for
     # another family or modality, `model_not_applied` for one this ComfyUI
-    # cannot load where it was asked for. Not reasons: nothing here refuses.
+    # cannot load where it was asked for, `prompt_not_applied` (with its
+    # `side`) for a prompt this request sent that the graph has no place for
+    # (#1832). Not reasons: nothing here refuses.
     flags: list[dict] = Field(default_factory=list)
+    # Null for a group refused before its graph was resolved.
+    prompt: RunPrompt | None = None
 
 
 class RunPreflight(BaseModel):
@@ -1513,7 +1536,7 @@ class WorkflowExport(BaseModel):
         description="What the export left out, as categories, never values.",
     )
     source: str = Field(
-        description="Where the graph was resolved from: file, picture or instance."
+        description="Where the graph was resolved from: edit, file, picture or instance."
     )
 
 
@@ -1546,7 +1569,7 @@ class WorkflowRunnableGraph(BaseModel):
         None, description="With `needs_conversion`: why the file did not convert."
     )
     source: str | None = Field(
-        description="Where the graph was resolved from: file, picture or instance."
+        description="Where the graph was resolved from: edit, file, picture or instance."
     )
     seedless: bool = Field(
         False,
@@ -1757,6 +1780,8 @@ class LoraChainEdit(BaseModel):
 
     name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
     dry_run: StrictBool = False
+    # Save over this workflow instead of as a copy: `name` is then not read.
+    overwrite: StrictBool = False
 
 
 class LoraChainChange(BaseModel):
@@ -1768,16 +1793,25 @@ class LoraChainChange(BaseModel):
 
 
 class LoraChainSaved(BaseModel):
-    """What a chain edit changed, and the workflow the new file is in."""
+    """What a chain edit changed, and the workflow the edited graph is in."""
 
     dry_run: bool = False
-    name: str | None = Field(None, description="The file written; null on a dry run.")
+    name: str | None = Field(
+        None,
+        description=(
+            "What the new workflow is called; null on a dry run and on an "
+            "overwrite, which names nothing."
+        ),
+    )
     workflow_id: str | None = Field(
         None,
         description=(
-            "The workflow the new file is in; null on a dry run or where it "
-            "is in none yet."
+            "The workflow the edited graph is in: the new one, or this one "
+            "on an overwrite; null on a dry run."
         ),
+    )
+    overwritten: bool = Field(
+        False, description="Whether the edit was saved over this workflow."
     )
     changes: list[LoraChainChange] = Field(default_factory=list)
 
@@ -1915,9 +1949,9 @@ class ModelSwapOptions(BaseModel):
             "grouping them, or recipes and ComfyUI runs that loaded them "
             "together), a checkpoint must have the missing one's base model "
             "(the shelf's, else the one the graph's LoRAs and ControlNets "
-            "agree on), and every kind must be one the loader naming the file "
-            "can load: listed by it when ComfyUI answers, of the same file "
-            "type when it does not."
+            "agree on) unless no loadable one does, and every kind must be "
+            "one the loader naming the file can load: listed by it when "
+            "ComfyUI answers, of the same file type when it does not."
         ),
     )
     replacements_narrowed: bool | None = Field(
@@ -1925,14 +1959,14 @@ class ModelSwapOptions(BaseModel):
         description=(
             "Only with `?replacing=` a checkpoint: true when `replacements` "
             "were held to the missing one's base model, false when nothing "
-            "said which it was and every loadable checkpoint is offered."
+            "said which it was, or no loadable checkpoint has it, and every "
+            "loadable checkpoint is offered."
         ),
     )
     replacements_reason: (
         Literal[
             "no_checkpoint",
             "none_go_with_it",
-            "none_same_base_model",
             "none_loadable",
             "needs_pixlstash_nodes",
         ]
@@ -1941,8 +1975,7 @@ class ModelSwapOptions(BaseModel):
         None,
         description=(
             "Why `replacements` is empty: the checkpoint is not on the shelf, "
-            "so nothing says what goes with it; nothing does; no shelf "
-            "checkpoint is known to have the missing one's base model; "
+            "so nothing says what goes with it; nothing does; "
             "nothing that does can be loaded by this loader; or something "
             "could, through a PixlStash loader, and ComfyUI-PixlStash is not "
             "installed."
@@ -2025,6 +2058,24 @@ class SetCloneAsk(BaseModel):
         max_length=MAX_SET_MODELS,
         description="Its other models: VAEs and text encoders are used.",
     )
+    picks: dict[str, int] = Field(
+        default_factory=dict,
+        max_length=MAX_SET_MODELS,
+        description=(
+            "The owner's own pairing, a VAE or text-encoder file of the graph "
+            "-> the model of `model_ids` its loaders take: applied before "
+            "anything is paired for them. One for a file the graph has no "
+            "loader of that kind for is ignored."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _picks_are_members(self) -> "SetCloneAsk":
+        # One set file is never written over two loaders.
+        ids = list(self.picks.values())
+        if len(ids) != len(set(ids)) or not set(ids) <= set(self.model_ids):
+            raise ValueError("each pick must name a different model of model_ids")
+        return self
 
 
 class SetClonePlansRequest(BaseModel):
@@ -2087,6 +2138,18 @@ class SetClonePlan(BaseModel):
             "Base-model files of the graph no set checkpoint was paired with "
             "(the set holds fewer than the graph loads): they keep their file."
         ),
+    )
+    takes: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Each VAE or text-encoder file of the graph that takes one of the "
+            "set's models -> that model, changed or not: what `picks` "
+            "re-pairs. A file the set has nothing for is absent."
+        ),
+    )
+    choices: dict[str, list[int]] = Field(
+        default_factory=dict,
+        description="The set's models by the loader kind taking them (vae, clip).",
     )
     maps_cleanly: bool = Field(
         False,
@@ -3159,8 +3222,8 @@ def create_router(server) -> APIRouter:
         """The base-model files the card's runnable graph names, in order.
 
         Read off the same source a run would submit (:func:`_source_graph_for`:
-        the workflow file, then the best picture's embedded graph, then a stored
-        instance), because that is the graph whose missing file matters. Only
+        the owner's edit of the graph, else the workflow file, then the best
+        picture's embedded graph, then a stored instance), because that is the graph whose missing file matters. Only
         asked when the card has no name for its base model, so the grid never
         pays for it and an opened card pays once. A name the hub forgot reads
         back as :data:`~run_service.FORGOTTEN_MODEL` and is left out: it names
@@ -3934,6 +3997,41 @@ def create_router(server) -> APIRouter:
             return
         pulls.freshen(_comfyui_url(user), workflow_id)
 
+    def _edited_graph_for(card) -> tuple[dict | None, int | None]:
+        """``(graph, version)`` the owner saved over the automatic workflow
+        *card* is the base of.
+
+        The workflow's highest version (``workflow_versions.edited_document``).
+        ``(None, None)`` for a workflow never saved over, which is nearly
+        every one, and for a card that is in such a workflow without being its
+        base: a saved recipe runs on the card it was saved from, and that
+        card's own graph is not the one that was edited.
+        """
+        if not card.variants:
+            return None, None
+        hub = _hub()
+        workflow_id = workflow_of_variant(hub, card.variants[0])
+        if not workflow_id:
+            return None, None
+        edited, version = workflow_versions.edited_document(hub, workflow_id)
+        if version is None:
+            return None, None
+        workflow = find_workflow(hub, workflow_id, _counts())
+        if workflow is None or workflow.base_card != card.workflow_key:
+            return None, None
+        if api_graph(edited) is None:
+            # Only a row written from outside this route can be one: every
+            # overwrite stores a checked API graph. The version still stands,
+            # so the next overwrite is made on it and replaces it.
+            logger.warning(
+                "Workflow %s: version %d of its graph is not an API graph, so "
+                "the graph its pictures hold is used instead.",
+                workflow_id,
+                version,
+            )
+            return None, version
+        return edited, version
+
     def _source_graph_for(
         card, object_info: dict | None = None, comfyui_url: str | None = None
     ) -> tuple[run_service.Source | None, run_service.Reason | None]:
@@ -3966,6 +4064,14 @@ def create_router(server) -> APIRouter:
                 # The version read with the document, so the number the run
                 # records is the graph it built.
                 source.workflow_version = version
+            return source, reason
+        edited, edited_version = _edited_graph_for(card)
+        if edited is not None:
+            # What the owner saved over this workflow's graph: no file,
+            # picture or instance is read, since none of them is its graph now.
+            source, reason = run_service.resolve_source(card, edited_document=edited)
+            if source is not None:
+                source.workflow_version = edited_version
             return source, reason
         file_document = None
         file_problems: list[str] = []
@@ -4009,7 +4115,7 @@ def create_router(server) -> APIRouter:
             )
             instances = instance_documents(hub, library_uuid, hashes)
             names = asset_names(hub, [h for h, _ in instances])
-        return run_service.resolve_source(
+        source, reason = run_service.resolve_source(
             card,
             file_document=file_document,
             picture_graph=picture_graph,
@@ -4018,6 +4124,11 @@ def create_router(server) -> APIRouter:
             asset_names=names,
             file_problems=file_problems,
         )
+        if source is not None:
+            # A stored version that would not read: the pictures' graph runs,
+            # and an overwrite made on it is still made on that version.
+            source.workflow_version = edited_version
+        return source, reason
 
     def _apply_addressed(graph: dict, values: list[RunValue]) -> None:
         """Write each ``(slot label, input name)`` value into the graph.
@@ -4025,7 +4136,7 @@ def create_router(server) -> APIRouter:
         Addressed by label because that is how a card's defaults are addressed:
         node ids are renumbered by every re-serialisation and a card's variants
         do not agree about them. A wired input is left alone - overwriting one
-        drops the link - except an empty latent's size, which
+        drops the link - except the run's size (``size_inputs``), which
         ``set_latent_size`` cuts only when the value differs from what the wire
         carries. An input the graph does not have is not invented.
         """
@@ -4040,6 +4151,7 @@ def create_router(server) -> APIRouter:
             for index, item in enumerate(values)
         }
         found = set()
+        sized = size_inputs(graph)
         for node_id, node in graph.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
             if not isinstance(inputs, dict):
@@ -4050,8 +4162,8 @@ def create_router(server) -> APIRouter:
             for name in list(inputs):
                 # A wired input is left alone - overwriting drops the link -
                 # so it counts as not applied and is logged below. Except the
-                # latent's size: the one wire a run cuts on purpose.
-                latent_size = is_latent_size(node.get("class_type"), name)
+                # run's size: the one wire a run cuts on purpose.
+                latent_size = (str(node_id), name) in sized
                 if isinstance(inputs[name], list) and not latent_size:
                     continue
                 matches = [
@@ -4238,26 +4350,6 @@ def create_router(server) -> APIRouter:
                             }
                         )
         return flags
-
-    def _apply_prompts(graph: dict, prompt: str | None, negative: str | None) -> None:
-        """Put this run's prompts into the detected text nodes."""
-        if prompt is None and negative is None:
-            return
-        try:
-            detected = detect_workflow_io(graph)
-        except WorkflowGraphError as exc:
-            logger.info("Prompts not applied, the graph will not reduce: %s", exc)
-            return
-        for node_ids, text in (
-            (detected.positive_prompts, prompt),
-            (detected.negative_prompts, negative),
-        ):
-            if text is None:
-                continue
-            for node_id in node_ids:
-                target = run_service.prompt_text_target(graph, node_id, text)
-                if target is not None:
-                    graph[target[0]]["inputs"][target[1]] = text
 
     def _swapped_to_digest_loader(
         graph: dict,
@@ -5369,7 +5461,16 @@ def create_router(server) -> APIRouter:
                     body.count,
                 )
             group.flags = _apply_models(hub, graph, body.models, object_info)
-            _apply_prompts(graph, body.prompt, body.negative)
+            placed = run_service.apply_prompts(graph, body.prompt, body.negative)
+            group.prompt = RunPrompt(
+                positive_settable=placed["positive_settable"],
+                negative_settable=placed["negative_settable"],
+                positive_text=placed["positive_text"],
+            )
+            group.flags += [
+                {"code": "prompt_not_applied", "side": side}
+                for side in placed["unplaced"]
+            ]
             if alone and recipe is not None:
                 # First, so every step below reads the graph without them.
                 _leave_out_character_loras(
@@ -6484,6 +6585,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such card."},
             409: {"description": "There is no graph to duplicate."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             500: {"description": "The copy could not be written."},
         },
     )
@@ -6575,6 +6679,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such card."},
             409: {"description": "No graph, or nothing this ComfyUI needs fixed."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             503: {"description": "ComfyUI could not be reached."},
         },
     )
@@ -6893,23 +7000,35 @@ def create_router(server) -> APIRouter:
             "one list per pass), an existing loader by node_id "
             "(moved and re-weighted, its id kept), a new one by the shelf "
             "sha256 of its LoRA, and every loader left out deleted. One call "
-            "is one new file; the original file is never changed. dry_run "
-            "answers the list of changes and writes nothing."
+            "is one new workflow and this one is not changed, unless "
+            "overwrite asks for the edit to be saved over this one. That is "
+            "its next version: the versions before are kept and its graph is "
+            "the newest (an automatic workflow's first overwrite keeps the "
+            "graph read off its pictures as version 1). Its name, pictures "
+            "and recipes stay. dry_run answers the list of changes and writes "
+            "nothing."
         ),
         response_model=LoraChainSaved,
         status_code=201,
         responses={
             200: {
                 "model": LoraChainSaved,
-                "description": "A dry run: the changes, nothing written.",
+                "description": (
+                    "A dry run (the changes, nothing written), or an "
+                    "overwrite (this workflow, changed)."
+                ),
             },
             404: {"description": "This machine has no such card."},
             409: {
                 "description": (
                     "No graph, nothing changed, an unknown or repeated loader, a "
-                    "LoRA not on the shelf or not on this ComfyUI, or a chain "
-                    "PixlStash cannot edit honestly."
+                    "LoRA not on the shelf or not on this ComfyUI, a chain "
+                    "PixlStash cannot edit honestly, or an overwrite of a "
+                    "workflow that got another version meanwhile."
                 )
+            },
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
             },
             503: {"description": "ComfyUI could not be reached."},
         },
@@ -6945,6 +7064,40 @@ def create_router(server) -> APIRouter:
             apply_lora_chain(graph, plan, object_info)
         except LookupError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if payload.overwrite:
+            if not card.manual and (
+                not card.variants
+                or workflow_of_variant(hub, card.variants[0]) != workflow.workflow_id
+            ):
+                # `_edited_graph_for` finds a workflow's versions through the
+                # card's first variant: a card without one would answer 200
+                # here and never be read back. Its other condition, that the
+                # card is the workflow's base card, is what `_require_base`
+                # handed us.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "PixlStash cannot save over this workflow: its graph is "
+                        "not read off its pictures. Save it as a new workflow."
+                    ),
+                )
+            _store_over(
+                hub,
+                workflow,
+                graph,
+                source.bindings,
+                "chain",
+                source.workflow_version,
+                original=source.graph,
+            )
+            response.status_code = 200
+            _announce(request, [workflow.workflow_id], "changed")
+            return LoraChainSaved(
+                dry_run=False,
+                workflow_id=workflow.workflow_id,
+                overwritten=True,
+                changes=plan["changes"],
+            )
         asked = re.sub(r"\.json$", "", (payload.name or "").strip(), flags=re.I)
         stem = download_stem(asked) if asked else ""
         name, landed = _store_copy(
@@ -7061,15 +7214,15 @@ def create_router(server) -> APIRouter:
     def _replaced_base_model(
         graph: dict, models: dict[int, SwapModel], index: tuple, wanted: str
     ) -> str | None:
-        """The base model a checkpoint replacing *wanted* must share (``_base_key``).
+        """The base model a checkpoint replacing *wanted* should share (``_base_key``).
 
         The shelf's own for the file, where the shelf still holds it; else the
         one base model the graph's LoRAs and ControlNets agree on, since they
         are what a replacement of another base model would not match, when the
         graph loads only this one base model. None when neither says, or they
         disagree: the offer is then not narrowed. A shelf checkpoint of no
-        known base model is not offered once it is narrowed: nothing says it
-        matches.
+        known base model is not offered while one that matches is: nothing
+        says it does.
         """
         slots = [slot for _cls, _widget, slot in _swap_slots(graph, models, index)]
         own = next(
@@ -7116,7 +7269,8 @@ def create_router(server) -> APIRouter:
 
         Read off the graph a run submits, with the owner's fixes applied, so a
         replacement that has gone missing too is answered for the loader it
-        sits in. Every filter below is required:
+        sits in. Every filter below is required, a checkpoint's base model
+        only while a loadable one has it:
 
         * **It goes with the checkpoint** (VAEs and text encoders):
           :func:`propose_companions` for the graph's base model, which is the
@@ -7125,6 +7279,11 @@ def create_router(server) -> APIRouter:
           are marked by their ``via``.
         * **It has the missing one's base model** (checkpoints):
           :func:`_replaced_base_model`, so it matches the LoRAs around it.
+          When no loadable checkpoint has it, every loadable one is offered
+          instead, as when nothing says which it was, and the answer says it
+          is not narrowed. A missing checkpoint with nothing to pick is a
+          dead end, and the base model of a file that is gone is often a
+          guess off its LoRAs that the owner cannot correct.
         * **The loader can load it**: listed by every loader naming the file,
           by the rule the rewrite writes it with (:func:`listed_as`), when
           ComfyUI answers; of the same file type when it cannot be asked. A
@@ -7180,24 +7339,27 @@ def create_router(server) -> APIRouter:
             )
         kind = kinds.pop()
         base_model = None
+        # `wider`: the checkpoints of another base model, offered only when
+        # none in `candidates` can be loaded.
+        candidates, wider = [], []
         if kind == FILE_CHECKPOINT:
             base_model = _replaced_base_model(graph, models, index, wanted)
-            candidates = [
-                ModelFixCandidate(
-                    id=m.id, filename=m.filename, display_name=m.display_name
+            shelf = sorted(
+                (
+                    m
+                    for m in models.values()
+                    if m.file_kind == FILE_CHECKPOINT
+                    and normalized_filename(m.filename) != wanted
+                ),
+                key=lambda m: (m.display_name or m.filename).lower(),
+            )
+            for m in shelf:
+                same = base_model is None or _base_key(m.base_model) == base_model
+                (candidates if same else wider).append(
+                    ModelFixCandidate(
+                        id=m.id, filename=m.filename, display_name=m.display_name
+                    )
                 )
-                for m in sorted(
-                    (
-                        m
-                        for m in models.values()
-                        if m.file_kind == FILE_CHECKPOINT
-                        and (
-                            base_model is None or _base_key(m.base_model) == base_model
-                        )
-                    ),
-                    key=lambda m: (m.display_name or m.filename).lower(),
-                )
-            ]
         else:
             base = next(
                 (
@@ -7229,9 +7391,8 @@ def create_router(server) -> APIRouter:
             c for c in candidates if normalized_filename(c.filename) != wanted
         ]
         narrowed = base_model is not None if kind == FILE_CHECKPOINT else None
-        if not candidates:
-            reason = "none_same_base_model" if base_model else "none_go_with_it"
-            return [], reason, narrowed
+        if not candidates and not wider:
+            return [], "none_go_with_it", narrowed
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
 
         def loadable(candidates, info, log=True):
@@ -7279,6 +7440,17 @@ def create_router(server) -> APIRouter:
         found = loadable(candidates, object_info)
         if found:
             return found, None, narrowed
+        if wider:
+            logger.info(
+                "No loadable checkpoint of base model %s to replace %s with: "
+                "trying every checkpoint instead",
+                base_model,
+                wanted,
+            )
+            candidates, narrowed = wider, False
+            found = loadable(candidates, object_info, log=False)
+            if found:
+                return found, None, narrowed
         pack = [cls for cls, _widgets in run_service.PIXLSTASH_SWAP_LOADERS.values()]
         if object_info is not None and any(cls not in object_info for cls in pack):
             # Would installing ComfyUI-PixlStash make one loadable in EVERY
@@ -7387,6 +7559,39 @@ def create_router(server) -> APIRouter:
                 )
         return options
 
+    def _closest_pairs(
+        slots: list[SwapSlot],
+        models: list[SwapModel],
+        fits: Callable[[SwapSlot, SwapModel], bool] | None = None,
+    ) -> list[tuple[SwapSlot, SwapModel]]:
+        """*slots* paired with *models* by filename, the closest pair first.
+
+        Each slot and each model is paired at most once, and only where
+        *fits* (``(slot, model) -> bool``, when given) allows.
+        """
+        # ponytail: name similarity, the only thing telling two files of one
+        # kind apart (two experts of a base model, a video and an audio VAE);
+        # a shelf role per file would replace it.
+        ranked = sorted(
+            (
+                -SequenceMatcher(
+                    None,
+                    normalized_filename(slot.filename),
+                    normalized_filename(model.filename),
+                ).ratio(),
+                i,
+                j,
+            )
+            for i, slot in enumerate(slots)
+            for j, model in enumerate(models)
+            if fits is None or fits(slot, model)
+        )
+        paired: dict[int, int] = {}
+        for _ratio, i, j in ranked:
+            if i not in paired and j not in paired.values():
+                paired[i] = j
+        return [(slots[i], models[paired[i]]) for i in sorted(paired)]
+
     def _pair_bases(
         found: list[tuple[str, str, SwapSlot]], checkpoints: list[SwapModel]
     ) -> list[tuple[SwapSlot, SwapModel]]:
@@ -7399,26 +7604,7 @@ def create_router(server) -> APIRouter:
         file.
         """
         bases = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
-        # ponytail: name similarity, the only thing telling two experts of one
-        # base model apart; a shelf role per expert would replace it.
-        ranked = sorted(
-            (
-                -SequenceMatcher(
-                    None,
-                    normalized_filename(slot.filename),
-                    normalized_filename(model.filename),
-                ).ratio(),
-                i,
-                j,
-            )
-            for i, slot in enumerate(bases)
-            for j, model in enumerate(checkpoints)
-        )
-        paired: dict[int, int] = {}
-        for _ratio, i, j in ranked:
-            if i not in paired and j not in paired.values():
-                paired[i] = j
-        return [(bases[i], checkpoints[paired[i]]) for i in sorted(paired)]
+        return _closest_pairs(bases, checkpoints)
 
     def _clip_type(node: dict) -> str | None:
         """A CLIP loader node's ``type``, or None for any other node."""
@@ -7434,88 +7620,106 @@ def create_router(server) -> APIRouter:
             return value
         return None
 
+    def _loads(slot: SwapSlot, model: SwapModel) -> bool:
+        """Whether *slot* already loads *model*'s file.
+
+        Only when its name is that shelf row (``SwapSlot.model``); a name the
+        shelf cannot pin to one row is compared whole, so a generic
+        ``diffusion_pytorch_model.safetensors`` in another folder is swapped
+        rather than read as the same file.
+        """
+        if slot.model is not None:
+            return slot.model.id == model.id
+        return (
+            slot.filename.replace("\\", "/").casefold()
+            == model.filename.replace("\\", "/").casefold()
+        )
+
+    def _same_layout(slot: SwapSlot, model: SwapModel) -> bool:
+        """Whether *model* has the layout of the file *slot* loads, when known."""
+        family = slot.model.family if slot.model else None
+        return bool(family) and model.family == family
+
     def _set_swaps(
         found: list[tuple[str, str, SwapSlot]],
         bases: list[tuple[SwapSlot, SwapModel]],
         members: list[SwapModel],
+        picks: dict[str, int] | None = None,
     ) -> tuple[dict[str, str], dict[str, SwapModel]]:
         """The set's checkpoints, and which graph file each of its files replaces.
 
         Each base slot takes the checkpoint :func:`_pair_bases` paired it with
-        (*bases*). A VAE or text-encoder
-        slot takes the set's file of the same layout (``family``) nobody has
-        taken yet. When the set holds exactly as many files of a kind as the
-        graph has slots, every slot takes one, the layout matches first and
-        the rest in order: the set's files go with the set's checkpoint, so a
-        Krea 2 text encoder replaces a Z-Image one whatever their layouts. A
-        slot the set has nothing for keeps its file. Two slots of a kind are
-        two different files (the slot list merges loaders naming one file), so
-        one set file is never written over both.
+        (*bases*). The VAE and the text-encoder slots are each paired with the
+        set's files of that kind in four passes, a file taken once:
 
-        A slot already loads the set's file only when its name is that shelf
-        row (``SwapSlot.model``); a name the shelf cannot pin to one row is
-        compared whole, so a generic ``diffusion_pytorch_model.safetensors``
-        in another folder is swapped rather than read as the same file.
+        1. the owner's own pairing (*picks*, slot filename -> model id);
+        2. a slot that already loads one of the set's files keeps it
+           (:func:`_loads`), so a set holding the very files the workflow
+           loads changes none of them;
+        3. a slot takes the set's file of its own layout (``family``);
+        4. when the set holds exactly as many files of the kind as the graph
+           has slots, every slot left takes one: the set's files go with the
+           set's checkpoint, so a Krea 2 text encoder replaces a Z-Image one
+           whatever their layouts.
+
+        Where a pass leaves a choice (two files of one layout, or the fill of
+        pass 4) it pairs by filename, closest pair first
+        (:func:`_closest_pairs`), never in order: a ``video_vae`` slot takes
+        the set's ``video_vae`` wherever the set lists it. A slot the set has
+        nothing for keeps its file, and so does one no pass fills; a pick
+        naming a file the graph has no slot of that kind for is ignored. Two slots of a kind are two different
+        files (the slot list merges loaders naming one file), so one set file
+        is never written over both.
 
         Returns:
             ``(swaps, filled)``: the graph's filename -> the set's, for the
             files that change, and every slot's filename -> the set's model
             it now loads, changed or not.
         """
-        of_kind = {
-            "vae": [m for m in members if m.file_kind == FILE_VAE],
-            "clip": [m for m in members if m.file_kind == FILE_TEXT_ENCODER],
-        }
-        slots_of = {
-            kind: sum(slot.kind == kind for _c, _w, slot in found) for kind in of_kind
-        }
+        picks = picks or {}
         paired = {slot.filename: new for slot, new in bases}
-        swaps: dict[str, str] = {}
-        taken: set[int] = set()
-        chosen: dict[str, SwapModel] = {}
-        # Layout matches first, so an in-order fill never takes a file a
-        # later slot of its layout needed.
-        for _cls, _widget, slot in found:
-            if slot.kind in BASE_MODEL_KINDS:
-                if slot.filename in paired:
-                    chosen[slot.filename] = paired[slot.filename]
-            elif slot.kind in of_kind:
-                family = slot.model.family if slot.model else None
-                new = next(
-                    (
-                        m
-                        for m in of_kind[slot.kind]
-                        if m.id not in taken and family and m.family == family
-                    ),
-                    None,
+        chosen: dict[str, SwapModel] = {
+            slot.filename: paired[slot.filename]
+            for _c, _w, slot in found
+            if slot.kind in BASE_MODEL_KINDS and slot.filename in paired
+        }
+        for kind, file_kind in (("vae", FILE_VAE), ("clip", FILE_TEXT_ENCODER)):
+            files = [m for m in members if m.file_kind == file_kind]
+            slots = [slot for _c, _w, slot in found if slot.kind == kind]
+            taken: set[int] = set()
+
+            def pair(fits: Callable[[SwapSlot, SwapModel], bool] | None) -> None:
+                pairs = _closest_pairs(
+                    [slot for slot in slots if slot.filename not in chosen],
+                    [m for m in files if m.id not in taken],
+                    fits,
                 )
-                if new is not None:
-                    taken.add(new.id)
-                    chosen[slot.filename] = new
-        for _cls, _widget, slot in found:
-            kind = slot.kind
-            if (
-                kind in of_kind
-                and slot.filename not in chosen
-                and len(of_kind[kind]) == slots_of[kind]
-            ):
-                # ponytail: in graph order; a dual text encoder of two unknown
-                # layouts may pair crosswise, the dialog's diff shows it.
-                new = next((m for m in of_kind[kind] if m.id not in taken), None)
-                if new is not None:
-                    taken.add(new.id)
-                    chosen[slot.filename] = new
-        slots = {slot.filename: slot for _c, _w, slot in found}
-        for filename, new in chosen.items():
-            own = slots[filename].model
-            same = (
-                own.id == new.id
-                if own is not None
-                else filename.replace("\\", "/").casefold()
-                == new.filename.replace("\\", "/").casefold()
+                for slot, model in pairs:
+                    taken.add(model.id)
+                    chosen[slot.filename] = model
+
+            pair(lambda slot, model: picks.get(slot.filename) == model.id)
+            pair(_loads)
+            pair(_same_layout)
+            if len(files) == len(slots):
+                pair(None)
+        ignored = {
+            filename: model_id
+            for filename, model_id in picks.items()
+            if filename not in chosen or chosen[filename].id != model_id
+        }
+        if ignored:
+            # A pick for a file the graph has no VAE or text-encoder slot for,
+            # or of a model of another kind: the plan answers without it.
+            logger.warning(
+                "Ignored set-clone picks that fit no loader of their kind: %s",
+                ignored,
             )
-            if not same:
-                swaps[filename] = new.filename
+        swaps = {
+            slot.filename: chosen[slot.filename].filename
+            for _c, _w, slot in found
+            if slot.filename in chosen and not _loads(slot, chosen[slot.filename])
+        }
         return swaps, chosen
 
     def _wont_load(
@@ -7605,7 +7809,8 @@ def create_router(server) -> APIRouter:
             # the rest would present a partial set as this one, so the set is
             # refused on its own, never the whole read.
             gone = [i for i in (*ask.model_ids, *ask.checkpoint_ids) if i not in models]
-            members = [models[i] for i in ask.model_ids if i in models]
+            # Each once: a repeated id would be one file for two loaders.
+            members = [models[i] for i in dict.fromkeys(ask.model_ids) if i in models]
             # Named by the caller, never guessed from the members: a set's
             # checkpoint slot takes a checkpoint or an unclassified diffusion
             # file, and an upscaler beside no checkpoint is no base model.
@@ -7622,7 +7827,7 @@ def create_router(server) -> APIRouter:
                 (new for slot, new in bases if slot is base),
                 bases[0][1] if bases else None,
             )
-            swaps, filled = _set_swaps(found, bases, members)
+            swaps, filled = _set_swaps(found, bases, members, ask.picks)
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
@@ -7731,6 +7936,17 @@ def create_router(server) -> APIRouter:
                     key=ask.key,
                     fit=fit,
                     maps_cleanly=maps_cleanly,
+                    takes={
+                        slot.filename: filled[slot.filename].id
+                        for _c, _w, slot in found
+                        if slot.kind in ("vae", "clip") and slot.filename in filled
+                    },
+                    choices={
+                        "vae": [m.id for m in members if m.file_kind == FILE_VAE],
+                        "clip": [
+                            m.id for m in members if m.file_kind == FILE_TEXT_ENCODER
+                        ],
+                    },
                     reason=reason,
                     base_model=checkpoint.base_model if checkpoint else None,
                     keeps_loras=keeps,
@@ -7767,6 +7983,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "This machine has no such workflow."},
             409: {"description": "No graph to clone, or a swap could not be made."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
             500: {"description": "The copy could not be written."},
         },
     )
@@ -7943,6 +8162,60 @@ def create_router(server) -> APIRouter:
                 detail="PixlStash could not store the workflow copy.",
             ) from exc
 
+    def _store_over(
+        hub,
+        workflow,
+        graph: dict,
+        bindings: list | None,
+        source: str,
+        version: int | None,
+        *,
+        original: dict,
+    ) -> None:
+        """Store one graph over *workflow*'s own, or raise the 500 that says why not.
+
+        :func:`_store_copy`'s twin for a gesture the owner asked to land on
+        the workflow itself: its next version. *bindings* go back in for the
+        same reason, on *original* too, which is the graph the edit was made
+        on and becomes version 1 of an automatic workflow saved over for the
+        first time. *version* is the version that graph was read at (``None``
+        for an automatic workflow never saved over); another one since is a
+        409, not an overwrite.
+        """
+        if bindings is not None:
+            graph = {**graph, BINDINGS_KEY: bindings}
+            original = {**original, BINDINGS_KEY: bindings}
+        try:
+            store_over_workflow(
+                hub,
+                workflow.workflow_id,
+                graph,
+                source,
+                expected_version=version,
+                original=original,
+            )
+        except WorkflowChanged as exc:
+            logger.info("An overwrite was refused: %s.", exc)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow got a newer version while it was being "
+                    "edited. Open Edit LoRAs again to edit that one."
+                ),
+            ) from exc
+        except WorkflowFileTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except (NotAWorkflowError, RecursionError, LookupError, sqlite3.Error) as exc:
+            logger.error(
+                "An edited graph could not be stored over workflow %s: %s",
+                workflow.workflow_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="PixlStash could not store the edited workflow.",
+            ) from exc
+
     @router.post(
         "/recipes/{recipe_id}/extract-workflow",
         summary="Make a saved recipe a manual workflow of its own",
@@ -7959,6 +8232,9 @@ def create_router(server) -> APIRouter:
         responses={
             404: {"description": "No such saved recipe."},
             409: {"description": "The recipe has no graph left to build on."},
+            413: {
+                "description": "The graph is past the size a stored workflow may be."
+            },
         },
     )
     def extract_workflow(request: Request, recipe_id: int):

@@ -42,7 +42,8 @@ function adapter(overrides = {}) {
     display_name: "Cyanwood Style",
     filename: "Cyanwood_Style_000000250.safetensors",
     base_model: "flux.1-dev",
-    trigger_words: null,
+    trigger_words: [],
+    trigger_words_source: null,
     icon_sha256: null,
     added_at: "2026-08-01T10:00:00Z",
     ...overrides,
@@ -131,7 +132,8 @@ describe("AdapterTray", () => {
                 display_name: null,
                 filename: "ivy.safetensors",
                 base_model: null,
-                trigger_words: "ivy_woman",
+                trigger_words: ["ivy_woman", "portrait"],
+                trigger_words_source: "recorded",
                 added_at: "2026-08-05T10:00:00Z",
               }),
             ],
@@ -149,7 +151,11 @@ describe("AdapterTray", () => {
     expect(cards[0].find(".adapter-card__meta").text()).toBe(
       "Base model not set",
     );
-    expect(cards[0].find(".adapter-card__trigger").text()).toBe("ivy_woman");
+    // The list the API serves, as the first word and a count: printed whole it
+    // was a JSON string, brackets and all.
+    expect(cards[0].find(".adapter-card__trigger").text()).toBe(
+      "Trigger word: ivy_woman +1",
+    );
   });
 
   it("names a row that has nothing to be named from", async () => {

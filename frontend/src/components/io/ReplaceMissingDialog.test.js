@@ -58,7 +58,7 @@ describe("ReplaceMissingDialog", () => {
     readModelSwap.mockImplementation(async (id, { replacing }) =>
       replacing === "gone.sft"
         ? { replacements: [{ id: 9, filename: "new.sft", display_name: "New" }] }
-        : { replacements: [], replacements_reason: "none_same_base_model" },
+        : { replacements: [], replacements_reason: "none_go_with_it" },
     );
     setWorkflowModelFix.mockResolvedValue({});
   });
@@ -71,8 +71,20 @@ describe("ReplaceMissingDialog", () => {
     });
     expect(wrapper.text()).toContain("Name of auto:a · Name of auto:b");
     expect(wrapper.text()).toContain("1 manual workflow loads it too");
-    expect(wrapper.text()).toContain("known to have this checkpoint's base model");
+    expect(wrapper.text()).toContain("known to work with this checkpoint");
     expect(applyButton(wrapper).attributes("disabled")).toBeDefined();
+    expect(wrapper.find('[data-testid="rmd-unmatched"]').exists()).toBe(false);
+  });
+
+  it("says so when the offer is every checkpoint, none known to match", async () => {
+    readModelSwap.mockResolvedValue({
+      replacements: [{ id: 9, filename: "new.sft" }],
+      replacements_narrowed: false,
+    });
+    const wrapper = await mountDialog();
+    expect(wrapper.find('[data-testid="rmd-unmatched"]').text()).toContain(
+      "is known to match it",
+    );
   });
 
   it("writes the choice to every workflow loading the file, never a manual one", async () => {

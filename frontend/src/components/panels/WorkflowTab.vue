@@ -169,6 +169,15 @@
             <p v-else class="wftab-note wftab-quiet">
               No file name was kept for it anywhere.
             </p>
+            <!-- The pick is saved on the workflow, so an offer that is not
+                 of the missing one's base model says so before it. -->
+            <p
+              v-if="checkpointUnmatched"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-replace-unmatched"
+            >
+              {{ UNMATCHED_REPLACEMENTS_TEXT }}
+            </p>
             <!-- The fix: another shelf model in its place. The card keeps its
                  pictures, and what the replacement makes is filed on it. -->
             <AppSelect
@@ -812,8 +821,10 @@
       :workflow-id="editKey"
       :card-name="editName"
       :picture-count="editPictures"
+      :origin-category="editOrigin"
       :drop-lora="editDrop"
       @close="closeEditLoras"
+      @overwritten="onOverwritten"
     />
   </AppInspector>
 </template>
@@ -872,6 +883,7 @@ import {
   modelDisplayName,
   NO_REPLACEMENT_TEXT,
   replacementOptions,
+  UNMATCHED_REPLACEMENTS_TEXT,
 } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
 import { pictureCount } from "../../utils/workflowSets";
@@ -1297,6 +1309,14 @@ const replaceOptions = computed(() =>
     : [],
 );
 
+/** Whether the picker lists every loadable checkpoint, none known to match. */
+const checkpointUnmatched = computed(
+  () =>
+    replaceOptions.value.length > 0 &&
+    replacementsByFile.value[`checkpoint:${missingCheckpointFile.value}`]
+      ?.replacements_narrowed === false,
+);
+
 /**
  * Why the missing checkpoint has no "Replace with…", or "" while it has one or
  * has not been asked. Every answer without one says so: a missing checkpoint
@@ -1309,7 +1329,7 @@ const checkpointNoReplacement = computed(() => {
   const reason = answer.replacements_reason;
   if (reason === "none_loadable")
     return "No checkpoint on your shelf that could replace it is one this loader can load.";
-  return ["none_same_base_model", "none_go_with_it", "unread"].includes(reason)
+  return ["none_go_with_it", "unread"].includes(reason)
     ? NO_REPLACEMENT_TEXT[reason]
     : "Nothing on your shelf can replace it.";
 });
@@ -1436,6 +1456,7 @@ const chainNoGraph = ref(false);
 const editKey = ref("");
 const editName = ref("");
 const editPictures = ref(0);
+const editOrigin = ref("");
 /** A LoRA to open with its loader already deleted (Save-as-recipe's hand-over). */
 const editDrop = ref("");
 
@@ -1859,8 +1880,19 @@ function openEditLoras(key, drop = "") {
   const shown = card.value?.id === key ? card.value : null;
   editName.value = shown?.name || "";
   editPictures.value = Number(shown?.picture_count) || 0;
+  editOrigin.value = shown?.origin_category || "";
   editDrop.value = drop;
   editKey.value = key;
+}
+
+/**
+ * Edit LoRAs… saved over the card itself. The selection did not move, so the
+ * watcher below reads nothing: the chain and the detail are asked again here.
+ */
+function onOverwritten(key) {
+  if (selectedKey.value !== key) return;
+  void loadDetail(key);
+  void loadChain(key);
 }
 
 function closeEditLoras() {
@@ -1874,6 +1906,7 @@ watch(card, (next) => {
   if (!editKey.value || next?.id !== editKey.value) return;
   if (!editName.value) editName.value = next.name || "";
   if (!editPictures.value) editPictures.value = Number(next.picture_count) || 0;
+  if (!editOrigin.value) editOrigin.value = next.origin_category || "";
 });
 
 // `?workflow=<id>&edit=loras&drop_lora=<file>`, from Save-as-recipe's "The

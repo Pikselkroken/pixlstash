@@ -377,6 +377,7 @@ const FIELD_WORDS = {
   kind: "algorithm",
   file_kind: "type",
   capabilities: "features",
+  trigger_words: "trigger words",
 };
 
 /**

@@ -649,6 +649,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_group_attr")
         conn.execute("DELETE FROM workflow_group_pins")
         conn.execute("DELETE FROM workflow_group_picture_input")
+        conn.execute("DELETE FROM workflow_version")
         conn.execute("DELETE FROM workflow_group_member")
         conn.execute("DELETE FROM workflow_group")
         conn.execute("DELETE FROM workflow_document")
@@ -8250,12 +8251,16 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
         assert graph["9"]["inputs"]["batch_size"] == 8
 
 
-def test_a_run_sets_the_latent_size_a_resolution_selector_drives(runnable, monkeypatch):
+@pytest.mark.parametrize("sized", ["EmptyLatentImage", "WanImageToVideo"])
+def test_a_run_sets_the_latent_size_a_resolution_selector_drives(
+    runnable, monkeypatch, sized
+):
     """The size is written on the latent and the selector's wire is cut there.
 
     Wrong if the latent still reads the selector (the run makes the selector's
     size, not the one asked for), or if the height wire went too: only width
-    was asked for.
+    was asked for. The same on an image-to-video node when the graph has no
+    empty latent (#1833).
     """
     embedded = json.loads(json.dumps(RUN_DOCUMENT))
     embedded["49"] = {
@@ -8267,7 +8272,7 @@ def test_a_run_sets_the_latent_size_a_resolution_selector_drives(runnable, monke
         },
     }
     embedded["5"] = {
-        "class_type": "EmptyLatentImage",
+        "class_type": sized,
         "inputs": {"width": ["49", 0], "height": ["49", 1], "batch_size": 1},
     }
     embedded["3"]["inputs"]["latent_image"] = ["5", 0]
@@ -8280,7 +8285,7 @@ def test_a_run_sets_the_latent_size_a_resolution_selector_drives(runnable, monke
         "input": {"required": {}},
         "output": ["INT", "INT"],
     }
-    object_info["EmptyLatentImage"] = {"input": {"required": {}}, "output": ["LATENT"]}
+    object_info[sized] = {"input": {"required": {}}, "output": ["LATENT"]}
     monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (object_info, None)
     )
@@ -11054,7 +11059,7 @@ def test_a_pinned_checkpoint_of_another_family_is_flagged_and_still_runs(runnabl
                 (_OTHER_FAMILY_CHECKPOINT,),
             )
         (group,) = _preflight(runnable.owner, **body)["groups"]
-        assert group["flags"] == []
+        assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
     finally:
         with hub.transaction() as conn:
             conn.execute(
@@ -11069,11 +11074,6 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         "inputs": {"text": None, "clip": ["1", 1]},
     }
     document["3"]["inputs"]["positive"] = ["5", 0]
-    runnable.monkeypatch.setattr(
-        workflows_routes,
-        "detect_workflow_io",
-        lambda graph: SimpleNamespace(positive_prompts=("5",), negative_prompts=()),
-    )
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info["CLIPTextEncode"] = {"input": {"required": {"text": ["STRING", {}]}}}
     runnable.monkeypatch.setattr(
@@ -11095,6 +11095,22 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
     assert r.json()["status"] == "success", r.json()
     assert (
         runnable.submitted[0]["graph"]["5"]["inputs"]["text"] == "a lighthouse at dusk"
+    )
+    group = r.json()["groups"][0]
+    assert group["prompt"] == {
+        "positive_settable": True,
+        "negative_settable": False,
+        "positive_text": "the saved prompt",
+    }
+    assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
+    # A negative this graph has no node for is said before the run (#1832).
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": RUN_WF, "negative": "blurry"},
+    )
+    assert r.status_code == 200, r.text
+    assert {"code": "prompt_not_applied", "side": "negative"} in (
+        r.json()["groups"][0]["flags"]
     )
 
 
@@ -11926,6 +11942,83 @@ def test_an_untouched_run_keeps_the_prompt_builder_wired():
     graph["68"]["inputs"].update(text="a ui prompt", value="an api prompt")
     assert prompt_text_target(graph, "91", "a ui prompt") is None
     assert prompt_text_target(graph, "91", "an api prompt") is None
+
+
+def _encoder_graph(class_type: str, **texts) -> dict:
+    """One encoder feeding both sides of a sampler, or only its positive."""
+    return {
+        "1": {"class_type": "CLIPLoader", "inputs": {"clip_name": "c.safetensors"}},
+        "2": {"class_type": class_type, "inputs": {**texts, "clip": ["1", 0]}},
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "positive": ["2", 0],
+                **({"negative": ["2", 1]} if "negative_prompt" in texts else {}),
+            },
+        },
+    }
+
+
+def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
+    """`text` alone left every `prompt` encoder with the workflow's own (#1832)."""
+    graph = _encoder_graph("TextEncodeQwenImageEdit", prompt="the saved prompt")
+    assert prompt_text_target(graph, "2", "typed") == ("2", "prompt")
+    report = run_service.apply_prompts(graph, "typed", None)
+    assert graph["2"]["inputs"]["prompt"] == "typed"
+    assert report == {
+        "positive_settable": True,
+        "negative_settable": False,
+        "positive_text": "the saved prompt",
+        "unplaced": [],
+    }
+
+
+def test_an_encoder_making_both_sides_keeps_each_prompt_in_its_own_field():
+    """The negative written into `prompt` would run as the positive."""
+    graph = _encoder_graph("TextEncodeBooguEdit", prompt="a cat", negative_prompt="")
+    report = run_service.apply_prompts(graph, "a dog", "blurry")
+    assert graph["2"]["inputs"]["prompt"] == "a dog"
+    assert graph["2"]["inputs"]["negative_prompt"] == "blurry"
+    assert report["unplaced"] == []
+    # With no field of its own the negative has nowhere to go, and says so.
+    graph = _encoder_graph("TextEncodeBooguEdit", prompt="a cat")
+    graph["3"]["inputs"]["negative"] = ["2", 1]
+    report = run_service.apply_prompts(graph, "a dog", "blurry")
+    assert graph["2"]["inputs"]["prompt"] == "a dog"
+    assert (report["negative_settable"], report["unplaced"]) == (False, ["negative"])
+
+
+def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
+    """SDXL's encoder keeps its text in two fields no run writes."""
+    graph = _encoder_graph("CLIPTextEncodeSDXL", text_g="a cat", text_l="a cat")
+    before = json.dumps(graph)
+    with caplog.at_level("WARNING"):
+        report = run_service.apply_prompts(graph, "a dog", None)
+    assert json.dumps(graph) == before
+    assert report == {
+        "positive_settable": False,
+        "negative_settable": False,
+        "positive_text": None,
+        "unplaced": ["positive"],
+    }
+    assert "positive prompt was not applied" in caplog.text
+    # Nothing was sent, so nothing is unplaced: only the popup needs telling.
+    assert run_service.apply_prompts(graph, None, None)["unplaced"] == []
+
+
+def test_the_graphs_own_prompt_is_read_only_where_it_is_one_literal():
+    graph = _text_graph()
+    del graph["7"]
+    graph["3"] = {"class_type": "KSampler", "inputs": {"positive": ["6", 0]}}
+    # Through the text node the encoder reads, as the run writes it.
+    assert (
+        run_service.apply_prompts(graph, None, None)["positive_text"]
+        == (graph["103"]["inputs"]["text"])
+    )
+    graph["6"]["inputs"]["text"] = ["68", 0]
+    graph["68"] = {"class_type": "LoRACharacterPromptBuilder", "inputs": {"seed": 1}}
+    report = run_service.apply_prompts(graph, None, None)
+    assert (report["positive_settable"], report["positive_text"]) == (True, None)
 
 
 def test_a_primitive_string_multiline_is_replaced_from_its_value():
@@ -13391,6 +13484,132 @@ def test_a_set_vae_of_another_layout_replaces_the_graphs_only_one(cloneable):
     assert plans["bare"]["maps_cleanly"] is False
 
 
+def test_two_files_of_a_kind_are_kept_then_paired_by_name_then_as_picked(cloneable):
+    """#1831: a graph loading a video and an audio VAE, and two text encoders
+    of one layout. A set holding the very VAEs changes neither, whatever order
+    it lists them in; other files pair by name, never in order; and the
+    owner's own pairing wins over both."""
+    video, audio = "H3/H3_Video_VAE.safetensors", "H3/H3_Audio_VAE.safetensors"
+    graph = _embedded_export_graph()
+    graph["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": video}}
+    graph["9"] = {"class_type": "VAELoader", "inputs": {"vae_name": audio}}
+    graph["10"] = {
+        "class_type": "DualCLIPLoader",
+        "inputs": {
+            "clip_name1": "enc_video.safetensors",
+            "clip_name2": "enc_audio.safetensors",
+            "type": "flux",
+        },
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "down")
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        ids = {
+            filename: conn.execute(
+                "INSERT INTO model (file_kind, filename, family, provenance) "
+                "VALUES (?, ?, ?, 'scanned')",
+                (file_kind, filename, family),
+            ).lastrowid
+            # The audio file first throughout: in-order pairing crosses them.
+            for file_kind, filename, family in (
+                ("vae", "h3_audio_vae.safetensors", None),
+                ("vae", "h3_video_vae.safetensors", None),
+                ("vae", "h3_audio_vae_ft.safetensors", None),
+                ("vae", "h3_video_vae_ft.safetensors", None),
+                ("text_encoder", "enc_video.safetensors", "t5_xxl"),
+                ("text_encoder", "enc_audio.safetensors", "t5_xxl"),
+                ("text_encoder", "enc_audio_ft.safetensors", "t5_xxl"),
+                ("text_encoder", "enc_video_ft.safetensors", "t5_xxl"),
+            )
+        }
+    own = [ids["h3_audio_vae.safetensors"], ids["h3_video_vae.safetensors"]]
+    named = [
+        ids["h3_audio_vae_ft.safetensors"],
+        ids["h3_video_vae_ft.safetensors"],
+        # Three encoders for two slots: paired on layout alone, still by name.
+        ids["enc_audio_ft.safetensors"],
+        ids["enc_video_ft.safetensors"],
+        ids["enc_audio.safetensors"],
+    ]
+
+    def ask(key, model_ids, **extra):
+        return {
+            "key": key,
+            "checkpoint_ids": [cloneable.checkpoint_id],
+            "model_ids": model_ids,
+            **extra,
+        }
+
+    url = f"{API}/workflows/{RUN_WF}/set-clone-plans"
+    try:
+        r = cloneable.owner.post(
+            url,
+            json={
+                "sets": [
+                    ask("own", own),
+                    ask("named", named),
+                    # Three VAEs for two slots, so nothing is paired by name.
+                    ask("wide", [*own, named[0]]),
+                    # One id twice is one file, and a pick for no loader is
+                    # ignored: the plan is the one the set gets unasked.
+                    ask("twice", [named[0], named[0]]),
+                    ask("stray", own, picks={"no-such.safetensors": own[0]}),
+                    ask("picked", own, picks={video: own[0], audio: own[1]}),
+                ]
+            },
+        )
+        refused = [
+            cloneable.owner.post(url, json={"sets": [ask("bad", own, picks=picks)]})
+            for picks in (
+                # Not a model of the set, and one model for both loaders.
+                {video: cloneable.checkpoint_id},
+                {video: own[0], audio: own[0]},
+            )
+        ]
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "DELETE FROM model WHERE id = ?", [(i,) for i in ids.values()]
+            )
+    assert r.status_code == 200, r.text
+    plans = {plan["key"]: plan for plan in r.json()["plans"]}
+    assert plans["own"]["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+    assert plans["own"]["takes"] == {video: own[1], audio: own[0]}
+    assert plans["own"]["choices"] == {"vae": own, "clip": []}
+    # Kept because they are the files loaded, not because the names pair.
+    assert plans["wide"]["takes"] == plans["own"]["takes"]
+    assert plans["twice"]["takes"] == {}
+    assert plans["stray"]["takes"] == plans["own"]["takes"]
+    assert plans["named"]["swaps"] == {
+        _SHELF_FILENAME: CLONE_CHECKPOINT,
+        video: "h3_video_vae_ft.safetensors",
+        audio: "h3_audio_vae_ft.safetensors",
+        "enc_video.safetensors": "enc_video_ft.safetensors",
+    }
+    # The third encoder is the file its slot already loads: kept, not swapped.
+    assert plans["named"]["takes"]["enc_audio.safetensors"] == named[4]
+    # The owner crossed them: both loaders are rewritten at once, not in turn.
+    assert plans["picked"]["swaps"] == {
+        _SHELF_FILENAME: CLONE_CHECKPOINT,
+        video: "h3_audio_vae.safetensors",
+        audio: "h3_video_vae.safetensors",
+    }
+    assert plans["picked"]["takes"] == {video: own[0], audio: own[1]}
+    now = {row["node_id"]: row["now"] for row in plans["picked"]["loaders"]}
+    assert (now["8"], now["9"]) == (
+        ["h3_audio_vae.safetensors"],
+        ["h3_video_vae.safetensors"],
+    )
+    assert [bad.status_code for bad in refused] == [422, 422]
+
+
 def test_a_set_of_another_family_fits_only_when_its_encoder_is_retyped(cloneable):
     """The plan runs the clone's retype: the diff shows the type it writes,
     and a type it cannot name keeps the set out of Fits."""
@@ -13953,11 +14172,12 @@ def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
             _unshelve(conn, [digest for _kind, digest in digests.values()])
 
 
-def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
+def test_a_missing_checkpoint_is_offered_its_own_base_model_first(cloneable):
     """A replacement of another base model would not match the LoRAs around it.
 
     The missing file's shelf base model decides; without one, the one base
-    model the graph's LoRAs agree on; with neither, nothing is narrowed.
+    model the graph's LoRAs agree on; with neither, or with no loadable
+    checkpoint of that base model, nothing is narrowed.
     """
     hub = cloneable.server.hub
     with hub.transaction() as conn:
@@ -14008,9 +14228,30 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
         set_base("sha256 = ?", "FLUX.1 dev", RUN_ADAPTER_DIGEST)
         assert offered() == ([CLONE_CHECKPOINT], None)
         assert narrowed[-1] is True
-        # A base model nothing on the shelf has is said as such.
+        # A base model nothing on the shelf has leaves every checkpoint to
+        # pick from, never none: the LoRAs' word is a guess (the missing
+        # file's own is unknown), and the owner cannot correct it.
         set_base("sha256 = ?", "SD 1.5", RUN_ADAPTER_DIGEST)
-        assert offered() == ([], "none_same_base_model")
+        assert offered() == every
+        assert narrowed[-1] is False, "an offer of every checkpoint said narrowed"
+        listed = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
+        # Still only what the loader can load.
+        listed.remove(CLONE_CHECKPOINT)
+        assert offered() == ([_REPLACEMENT_FILENAME], None)
+        # Nor does a base model only an unloadable checkpoint has narrow it.
+        set_base("sha256 = ?", "FLUX.1 dev", RUN_ADAPTER_DIGEST)
+        assert offered() == ([_REPLACEMENT_FILENAME], None)
+        assert narrowed[-1] is False
+        # The missing one's own base model widens the same way.
+        set_base("filename = ?", "FLUX.1 dev", _SHELF_FILENAME)
+        assert offered() == ([_REPLACEMENT_FILENAME], None)
+        assert narrowed[-1] is False
+        set_base("filename = ?", None, _SHELF_FILENAME)
+        # Nothing loadable at all is said as that, of no base model.
+        listed.remove(_REPLACEMENT_FILENAME)
+        assert offered() == ([], "none_loadable")
+        assert narrowed[-1] is False
+        listed += [CLONE_CHECKPOINT, _REPLACEMENT_FILENAME]
         # LoRAs that disagree say nothing.
         cloneable.graph["8"] = {
             "class_type": "LoraLoader",
@@ -15098,6 +15339,254 @@ def test_an_edit_never_changes_the_linked_workflow_file(chained):
             conn.execute(
                 "DELETE FROM workflow_file WHERE workflow_name = 'original.json'"
             )
+
+
+# --- saving a chain edit over the workflow itself ---------------------------
+
+
+def _chain_ids(client, workflow_id=RUN_WF) -> list[str]:
+    r = client.get(f"{API}/workflows/{workflow_id}/lora-chain")
+    assert r.status_code == 200, r.text
+    return [loader["node_id"] for loader in r.json()["loaders"]]
+
+
+def _versions_of(env, workflow_id) -> list[tuple[int, str, dict]]:
+    """``(version, source, document)`` of every version kept, oldest first."""
+    return [
+        (row[0], row[1], json.loads(row[2]))
+        for row in env.server.hub.fetchall(
+            "SELECT version, source, document FROM workflow_version "
+            "WHERE workflow_id = ? ORDER BY version",
+            (workflow_id,),
+        )
+    ]
+
+
+def test_an_overwrite_changes_an_automatic_workflows_own_graph(chained):
+    """Overwrite on a workflow known from its pictures: same workflow, new version.
+
+    The picture still embeds loader 5 (``chained`` serves CHAIN_DOCUMENT for
+    it), so every read below that lacks 5 came from the stored version. The
+    graph the pictures held is kept as version 1. Wrong if a manual workflow
+    appears (that is Save as new), or if the pictures move.
+    """
+    pictures = _by_key(_cards(chained.owner))[RUN_WF]["picture_count"]
+    assert pictures, "the fixture workflow has no picture to keep"
+    assert _chain_ids(chained.owner) == ["2", "5"]
+
+    r = _chain_edit(
+        chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True, dry_run=True
+    )
+    assert r.status_code == 200, r.text
+    assert _chain_ids(chained.owner) == ["2", "5"], "a dry run overwrote the graph"
+
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["workflow_id"], body["overwritten"], body["name"]) == (
+        RUN_WF,
+        True,
+        None,
+    )
+    assert _manual_ids(chained) == [], "an overwrite wrote a copy as well"
+    assert _chain_ids(chained.owner) == ["2"]
+
+    opened = chained.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
+    assert opened["source"] == "edit", opened["source"]
+    assert "5" not in opened["workflow"]
+    card = _by_key(_cards(chained.owner))[RUN_WF]
+    assert card["picture_count"] == pictures
+    assert (card["versions"], card["version"]) == (2, 2), card
+    assert card["version_at"], "an overwritten workflow says when"
+    # What the edit replaced is version 1, loader 5 and all.
+    first, second = _versions_of(chained, RUN_WF)
+    assert (first[0], first[1], "5" in first[2]) == (1, "pictures", True)
+    assert (second[0], second[1], "5" in second[2]) == (2, "chain", False)
+
+    # The next edit starts from the newest version, and is the next one.
+    r = _chain_edit(chained.owner, overwrite=True)
+    assert r.status_code == 200, r.text
+    assert _chain_ids(chained.owner) == []
+    assert [(row[0], row[1]) for row in _versions_of(chained, RUN_WF)] == [
+        (1, "pictures"),
+        (2, "chain"),
+        (3, "chain"),
+    ]
+    assert _by_key(_cards(chained.owner))[RUN_WF]["version"] == 3
+
+
+def test_an_overwritten_graph_is_the_base_cards_and_no_other_cards(chained):
+    """A second card of the same workflow keeps resolving its own graph.
+
+    A saved recipe and a picture run on the card they belong to; only the
+    workflow's base card is the workflow's graph.
+    """
+    second = _seed_second_runnable_card(chained.server)
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True)
+    assert r.status_code == 200, r.text
+    payload = _preflight(chained.owner, picture_ids=[chained.picture_id, second])
+    by_picture = {
+        picture: group["source"]
+        for group in payload["groups"]
+        for picture in group["picture_ids"]
+    }
+    # RUN_CARD holds the workflow's kept pictures, so it is the base card.
+    assert by_picture[chained.picture_id] == "edit", by_picture
+    assert by_picture[second] != "edit", by_picture
+
+
+def test_an_overwrite_of_a_manual_workflow_is_its_next_version(chained):
+    """Overwrite on a workflow that holds a document: version 2, same id.
+
+    Version 1 is kept beside it. Wrong if a second manual workflow appears.
+    """
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
+    assert r.status_code == 201, r.text
+    manual = r.json()["workflow_id"]
+    assert _chain_ids(chained.owner, manual) == ["2"]
+
+    r = chained.owner.put(
+        f"{API}/workflows/{manual}/lora-chain",
+        json={"entries": [], "overwrite": True},
+    )
+    assert r.status_code == 200, r.text
+    assert (r.json()["workflow_id"], r.json()["overwritten"]) == (manual, True)
+    assert _manual_ids(chained) == [manual]
+    assert "2" not in manual_document(chained.server.hub, manual)
+    assert _chain_ids(chained.owner, manual) == []
+    versions = chained.server.hub.fetchall(
+        "SELECT version, source, document FROM workflow_version "
+        "WHERE workflow_id = ? ORDER BY version",
+        (manual,),
+    )
+    assert [(row[0], row[1]) for row in versions] == [(1, "chain"), (2, "chain")]
+    assert "2" in json.loads(versions[0][2]), "version 1 lost the loader too"
+    # The automatic workflow it was copied from is not what was overwritten.
+    assert _chain_ids(chained.owner) == ["2", "5"]
+
+
+def test_an_overwrite_does_not_bury_a_version_made_meanwhile(chained):
+    """A pull that lands between the read and the write wins, and says so."""
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
+    assert r.status_code == 201, r.text
+    manual = r.json()["workflow_id"]
+    real = workflows_routes.store_over_workflow
+
+    def pulled_first(hub, workflow_id, *args, **kwargs):
+        with hub.transaction() as conn:
+            workflow_versions.append_version(
+                conn, workflow_id, json.loads(json.dumps(CHAIN_DOCUMENT))
+            )
+        return real(hub, workflow_id, *args, **kwargs)
+
+    chained.monkeypatch.setattr(workflows_routes, "store_over_workflow", pulled_first)
+    r = chained.owner.put(
+        f"{API}/workflows/{manual}/lora-chain",
+        json={"entries": [], "overwrite": True},
+    )
+    assert r.status_code == 409, r.text
+    assert "newer version" in r.json()["detail"]
+    versions = chained.server.hub.fetchall(
+        "SELECT version, source FROM workflow_version WHERE workflow_id = ? "
+        "ORDER BY version",
+        (manual,),
+    )
+    assert [tuple(row) for row in versions] == [(1, "chain"), (2, "pull")]
+
+
+def test_an_overwrite_is_refused_where_it_would_never_be_read_back(chained):
+    """A base card the stored graph cannot be found through: 409, nothing stored."""
+    chained.monkeypatch.setattr(
+        workflows_routes, "workflow_of_variant", lambda hub, variant: None
+    )
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True)
+    assert r.status_code == 409, r.text
+    assert "Save it as a new workflow" in r.json()["detail"]
+    assert _versions_of(chained, RUN_WF) == []
+
+
+def test_two_overwrites_of_one_automatic_workflow_do_not_bury_each_other(chained):
+    """Another tab saved over it first: the second edit is refused, not stacked."""
+    real = workflows_routes.store_over_workflow
+
+    def another_tab_first(hub, workflow_id, graph, source, **kwargs):
+        real(hub, workflow_id, json.loads(json.dumps(CHAIN_DOCUMENT)), source, **kwargs)
+        return real(hub, workflow_id, graph, source, **kwargs)
+
+    chained.monkeypatch.setattr(
+        workflows_routes, "store_over_workflow", another_tab_first
+    )
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True)
+    assert r.status_code == 409, r.text
+    # The other tab's two versions and nothing of ours: loader 5 still stands.
+    kept = _versions_of(chained, RUN_WF)
+    assert [(row[0], row[1]) for row in kept] == [(1, "pictures"), (2, "chain")]
+    assert "5" in kept[1][2]
+
+
+def test_a_version_that_will_not_run_is_replaced_by_the_next_overwrite(chained):
+    """A stored version that is no API graph: the pictures' graph runs, said
+    in the log, and saving over the workflow again is how it is put right."""
+    with chained.server.hub.transaction() as conn:
+        for version in (1, 2):
+            workflow_versions.insert_version(
+                conn, RUN_WF, version, '{"nodes": [], "links": []}', None, "chain"
+            )
+    assert _chain_ids(chained.owner) == ["2", "5"]
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, overwrite=True)
+    assert r.status_code == 200, r.text
+    assert [row[0] for row in _versions_of(chained, RUN_WF)] == [1, 2, 3]
+    assert _chain_ids(chained.owner) == ["2"]
+
+
+def test_the_edited_graph_is_the_first_source_and_keeps_its_bindings():
+    """The owner's edit wins over a file and a picture, bindings and all."""
+    bindings = [{"node_id": "3", "input": "seed", "kind": "seed"}]
+    source, reason = run_service.resolve_source(
+        SimpleNamespace(workflow_key="k", file_name=None),
+        file_document=json.loads(json.dumps(CHAIN_DOCUMENT)),
+        picture_graph=json.loads(json.dumps(CHAIN_DOCUMENT)),
+        picture_id=7,
+        edited_document={
+            "3": CHAIN_DOCUMENT["3"],
+            run_service.BINDINGS_KEY: bindings,
+        },
+    )
+    assert reason is None
+    assert (source.origin, source.picture_id) == (run_service.FROM_EDIT, None)
+    assert set(source.graph) == {"3"}, source.graph
+    assert source.bindings == bindings
+
+
+def test_a_manual_overwrite_is_refused_without_the_version_it_was_made_on(chained):
+    """No version, no write: the check against a pulled version cannot be skipped."""
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
+    assert r.status_code == 201, r.text
+    manual = r.json()["workflow_id"]
+    edited = json.loads(json.dumps(CHAIN_DOCUMENT))
+    with pytest.raises(workflows_routes.WorkflowChanged):
+        workflows_routes.store_over_workflow(
+            chained.server.hub, manual, edited, "chain"
+        )
+    versions = chained.server.hub.fetchall(
+        "SELECT version FROM workflow_version WHERE workflow_id = ?", (manual,)
+    )
+    assert [row[0] for row in versions] == [1]
+
+
+def test_an_edited_graph_that_is_no_api_graph_is_said_and_not_used(caplog):
+    """A stored edit that cannot run falls to the next source, out loud."""
+    with caplog.at_level(logging.WARNING, logger=run_service.logger.name):
+        source, reason = run_service.resolve_source(
+            SimpleNamespace(workflow_key="example-card", file_name=None),
+            picture_graph=json.loads(json.dumps(CHAIN_DOCUMENT)),
+            picture_id=7,
+            edited_document={"nodes": [], "links": []},
+        )
+    assert reason is None
+    assert (source.origin, source.picture_id) == (run_service.FROM_PICTURE, 7)
+    said = [rec.getMessage() for rec in caplog.records]
+    assert any("example-card" in line and "not an API graph" in line for line in said)
 
 
 # --- skipping a LoRA for one run (#1478) ------------------------------------

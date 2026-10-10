@@ -201,20 +201,50 @@
           <span class="rund-l">
             Prompt
             <RunResetChip
-              v-if="prompt !== basePrompt"
+              v-if="!promptUnset && prompt !== basePrompt"
               :value="basePrompt || 'no prompt'"
               label="Prompt"
               @reset="prompt = basePrompt"
             />
           </span>
+          <!-- No box the run cannot honour (#1832): a prompt typed here would
+               be dropped, so the field says so instead of taking one. -->
+          <p v-if="promptUnset" class="rund-note" role="status" data-testid="rund-prompt-unset">
+            This workflow has no prompt that can be set here. The run uses the
+            workflow as it is saved.
+          </p>
           <AppTextarea
+            v-else
+            ref="promptField"
             v-model="prompt"
             label="Prompt"
             :placeholder="isEdit ? 'Describe the change, e.g. make it night time' : ''"
             :rows="3"
             :disabled="submitting"
+            :highlight="personTrigger ? [personTrigger] : []"
             @keydown.stop
           />
+          <!-- The person's LoRA answers to a word the prompt does not say.
+               A suggestion, never a blocker: it goes once the word is typed,
+               and the box then marks the word instead. -->
+          <p
+            v-if="triggerMissing"
+            class="rund-note rund-note--bad rund-trigger"
+            role="status"
+            data-testid="rund-trigger"
+          >
+            <v-icon size="14" class="rund-trigger-glyph" aria-hidden="true"
+              >mdi-alert-outline</v-icon
+            >
+            <span>
+              The prompt does not have the trigger word of this person's LoRA:
+              <strong>{{ personTrigger }}</strong>
+            </span>
+            <AppButton size="sm" :disabled="submitting" @click="addTrigger"
+            >
+              Add it
+            </AppButton>
+          </p>
         </div>
 
         <!-- Who the run is of. A workflow run by itself carries no person's
@@ -575,7 +605,8 @@
             />
           </span>
           <!-- A checkpoint this ComfyUI does not have is offered the shelf's
-               of the same base model, so the recipe's LoRAs still fit. -->
+               of the same base model, so the recipe's LoRAs still fit, or
+               every one the workflow can load when none is known to be. -->
           <AppSelect
             v-if="checkpointFix?.options.length"
             :model-value="checkpointValue"
@@ -604,7 +635,16 @@
           <!-- The negative prompt only opens when the original had one: an
                empty box under every run would read as a field somebody forgot
                to fill in. -->
-          <details v-if="baseNegative" class="rund-disc">
+          <p
+            v-if="baseNegative && negativeUnset"
+            class="rund-note"
+            role="status"
+            data-testid="rund-negative-unset"
+          >
+            This workflow has no negative prompt to set, so the picture's is
+            not used.
+          </p>
+          <details v-else-if="baseNegative" class="rund-disc">
             <summary>Negative prompt</summary>
             <AppTextarea
               v-model="negative"
@@ -823,8 +863,10 @@ import { errorMessage } from "../../utils/apiError";
 import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
 import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
+import { namesWord, triggerWord } from "../../utils/triggerWords";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { labelPrompts, runTaskLabel } from "../../utils/runTaskLabel";
+import { UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
 import {
   changesNodes,
@@ -950,6 +992,8 @@ const drafts = reactive({});
 const fellBack = ref([]);
 
 const prompt = ref("");
+/** `RunGroup.prompt` of the last pre-flight: the graph's own prompt facts. */
+const graphPrompt = ref(null);
 const negative = ref("");
 const count = ref(1);
 const seedMode = ref("new");
@@ -1418,7 +1462,7 @@ const BASE_MODEL_FOLDERS = ["checkpoints", "diffusion_models"];
  * replacement for one that is gone, with what may replace it:
  * `{file, missing, was, options, reason, narrowed}`, or null. `options` are the
  * shelf checkpoints this workflow's loader can load, held to the missing one's
- * base model where anything says which (`narrowed`), so the LoRAs still fit
+ * base model where anything says which and any has it (`narrowed`), so the LoRAs still fit
  * (`model-swap?replacing=`, the Workflow tab's "Replace with…"); `reason` says
  * why there are none. Kept once offered, so the picker stays after a pick
  * clears the reason.
@@ -1456,13 +1500,11 @@ const checkpointFixNote = computed(() => {
   if (fix.options.length) {
     return fix.narrowed
       ? `${gone} Pick another of the same base model for this run.`
-      : `${gone} Nothing says which base model it was, so every checkpoint this workflow can load is listed: pick one its LoRAs were made for.`;
+      : `${gone} ${UNMATCHED_REPLACEMENTS_TEXT}`;
   }
   // No `needs_pixlstash_nodes` case: the PixlStash swap loaders are VAE and
   // text-encoder ones only, so a checkpoint ask never gets that reason.
   switch (fix.reason) {
-    case "none_same_base_model":
-      return `${gone} No checkpoint on your model shelf is known to have its base model.`;
     case "none_loadable":
       return fix.narrowed
         ? `${gone} None of the same base model on your model shelf can be loaded by this workflow.`
@@ -1811,8 +1853,21 @@ const basePrompt = computed(
     props.source?.prompt ||
     recipe.value?.positive_prompt ||
     savedRecipe.value?.prompt ||
+    graphPrompt.value?.positive_text ||
     "",
 );
+/**
+ * A run with nothing else to prefill from shows the workflow's own prompt once
+ * the pre-flight has read it, so what will run is visible (#1832), and follows
+ * it to the next workflow picked. Only a box still showing the last base:
+ * text the owner typed is theirs.
+ */
+watch(basePrompt, (now, was) => {
+  if (prompt.value === was) prompt.value = now;
+});
+/** The graph has nowhere to put a prompt, so the form offers no box for one. */
+const promptUnset = computed(() => graphPrompt.value?.positive_settable === false);
+const negativeUnset = computed(() => graphPrompt.value?.negative_settable === false);
 
 /**
  * What to send as `prompt`, or `null` to leave the graph's own alone.
@@ -1822,6 +1877,7 @@ const basePrompt = computed(
  * nothing filled it, which is not the same thing.
  */
 const promptOverride = computed(() => {
+  if (promptUnset.value) return null;
   const typed = prompt.value;
   if (typed) return typed;
   return basePrompt.value ? "" : null;
@@ -2090,7 +2146,7 @@ const fixedPerson = computed(() =>
 );
 /** Shelf rows the shelf classes `unknown`: attachable to a person all the same. */
 const unknownLoras = ref([]);
-/** The people whose LoRA works with this workflow's checkpoint (`fitPeople`). */
+/** The people whose LoRA is for this workflow's base model (`fitPeople`). */
 const personFits = computed(() =>
   offersPerson.value && card.value
     ? fitPeople(
@@ -2098,7 +2154,7 @@ const personFits = computed(() =>
         [...adapters.value, ...unknownLoras.value],
         entityLists.characters,
       )
-    : { people: [], clash: 0 },
+    : { people: [], clash: 0, unknown: 0, family: null },
 );
 /** The person picked for this run, or null for no one. */
 const personId = ref(null);
@@ -2111,18 +2167,21 @@ const showPerson = computed(
   () =>
     Boolean(fixedPerson.value) ||
     personFits.value.people.length > 0 ||
-    personFits.value.clash > 0,
+    personFits.value.clash + personFits.value.unknown > 0,
 );
 const personNote = computed(() => {
   if (fixedPerson.value) return "";
-  const { people, clash } = personFits.value;
-  if (!people.length) {
-    return "No person's LoRA is for this workflow's base model, so it runs with no one's.";
+  const { people, clash, unknown, family } = personFits.value;
+  if (!family) {
+    return "This workflow's base model is not known, so no person's LoRA can be matched to it.";
   }
-  const left = clash
-    ? ` Not listed: ${clash} whose LoRA is for another base model.`
-    : "";
-  return `A workflow runs without a person's LoRA. Pick someone to add theirs.${left}`;
+  const parts = [];
+  if (clash) parts.push(`${clash} whose LoRA is for another base model`);
+  if (unknown) parts.push(`${unknown} whose LoRA has no base model recorded`);
+  const left = parts.length ? ` Not listed: ${parts.join(", ")}.` : "";
+  return people.length
+    ? `A workflow runs without a person's LoRA. Pick someone to add theirs.${left}`
+    : `No person has a LoRA for this workflow's base model, so it runs with no one's.${left}`;
 });
 /** The LoRAs the person's row offers: theirs that fit, never the whole shelf. */
 const personLoraOptions = computed(() =>
@@ -2134,7 +2193,38 @@ const personLoraOptions = computed(() =>
 );
 
 /**
- * Pick the person this run is of: their best-fitting LoRA becomes an added
+ * The trigger word of the LoRA on the person's row, or "" when there is no
+ * such row or its LoRA needs none. Read off the row's own pick, so changing
+ * which of the person's LoRAs runs changes the word.
+ */
+const personTrigger = computed(() => {
+  const sha = addedLoras.value.find((row) => row.person)?.sha256;
+  if (!sha) return "";
+  return triggerWord(
+    [...attachedLoras.value, ...adapters.value, ...unknownLoras.value].find(
+      (row) => row.sha256 === sha,
+    ),
+  );
+});
+/** The word is asked for and the prompt, which can be set here, lacks it. */
+const triggerMissing = computed(
+  () =>
+    Boolean(personTrigger.value) &&
+    !promptUnset.value &&
+    !namesWord(prompt.value, personTrigger.value),
+);
+const promptField = ref(null);
+
+/** Put the word first, where a trigger word goes, and hand the box back. */
+function addTrigger() {
+  const rest = prompt.value.trim();
+  prompt.value = rest ? `${personTrigger.value}, ${rest}` : personTrigger.value;
+  // The button goes with the suggestion; focus must not fall to the page.
+  promptField.value?.focus?.();
+}
+
+/**
+ * Pick the person this run is of: their first matching LoRA becomes an added
  * row (`add_loras`), replacing the last pick's. Null is "No one".
  */
 function pickPerson(id) {
@@ -2516,20 +2606,20 @@ function runBody() {
   // picture made at 45 steps on a card whose best picture used 20, press Run
   // untouched, and the form said 45 while the run did 20.
   //
-  // Safe to send the lot: `_apply_addressed` leaves a wired input alone (a
-  // latent's size only when it equals what the wire carries, which is why the
-  // picture's recipe reports the latent's own size) and "an input the graph
+  // Safe to send the lot: `_apply_addressed` leaves a wired input alone (the
+  // run's size only when it equals what the wire carries, which is why the
+  // picture's recipe reports the size its latent is made at) and "an input the graph
   // does not have is not invented", so an address this graph lacks is inert
   // rather than an error.
   const values = displayedValues();
   const body = {
     // `null` means "leave the graph's own text alone"; `""` means "blank it",
-    // and `_apply_prompts` honours both literally. A card or a multi-picture
-    // selection reads no recipe, so the box is empty because there was nothing
-    // to prefill it with - sending that emptiness would wipe every positive
+    // and `apply_prompts` honours both literally. A card or a multi-picture
+    // selection reads no recipe, so until the pre-flight has read the graph's
+    // own prompt the box is empty because there was nothing to prefill it with - sending that emptiness would wipe every positive
     // prompt node in the graph and generate from no prompt at all.
     prompt: promptOverride.value,
-    negative: baseNegative.value ? negative.value : null,
+    negative: baseNegative.value && !negativeUnset.value ? negative.value : null,
     // Only the rows that DIFFER from the graph. An untouched slot needs no
     // override - ComfyUI loads what the graph already names - and a slot the
     // shelf could not name has no digest to send, which `RunLora.sha256`
@@ -3002,6 +3092,7 @@ async function runPreflight(token = loadToken) {
     // One group: this popup always runs one workflow (`target`, an id or a saved
     // recipe), so the first group's inputs are the card's.
     pictureInputs.value = answer?.groups?.[0]?.picture_inputs || [];
+    graphPrompt.value = answer?.groups?.[0]?.prompt || null;
     inputsKey.value = askedFor;
   } catch (err) {
     // The route answers 400/404/422 here exactly as it does on the run, "so
@@ -3013,6 +3104,7 @@ async function runPreflight(token = loadToken) {
     reasons.value = [];
     bypassed.value = [];
     changedNodes.value = false;
+    graphPrompt.value = null;
     // What the card's inputs are is no longer known, so nothing may be
     // written from the last answer: that is how a pin reverted the one before.
     pictureInputs.value = [];
@@ -3627,5 +3719,17 @@ button.rund-in-tile.rund-in-tile--off {
 
 .rund-note--bad {
   color: rgb(var(--v-theme-surface-error));
+}
+
+.rund-trigger {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.rund-trigger-glyph {
+  flex-shrink: 0;
 }
 </style>

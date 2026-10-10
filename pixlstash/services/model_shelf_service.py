@@ -434,6 +434,103 @@ def fetch_attachments(vault, *, sha256: Optional[str] = None) -> dict[str, list[
     return grouped
 
 
+def fetch_character_names(vault) -> dict[int, str]:
+    """Return ``character.id -> name`` for the active library, from the **vault**.
+
+    What a model with no trigger word of its own falls back to: the person it is
+    attached to is, on a real shelf, what the LoRA was trained to draw. One
+    whole-table read per page, hoisted like the attachments it is joined to.
+    """
+
+    def fetch(session: Session):
+        return list(session.exec(select(Character.id, Character.name)).all())
+
+    return {
+        int(character_id): name
+        for character_id, name in vault.db.run_task(
+            fetch, priority=DBPriority.IMMEDIATE
+        )
+        if name and name.strip()
+    }
+
+
+def decode_trigger_words(raw: Optional[str]) -> list[str]:
+    """Return the stored ``model.trigger_words`` column as a list.
+
+    Every writer stores a JSON list of strings. A value that is not JSON at
+    all is served as one word rather than dropped; inside JSON, anything that
+    is not a non-blank string is not a word and is left out.
+    """
+    if not raw:
+        return []
+    try:
+        decoded = json.loads(raw)
+    except ValueError:
+        logger.warning(
+            "model.trigger_words is not JSON (%r); serving it as one word.", raw
+        )
+        return [raw]
+    if not isinstance(decoded, list):
+        decoded = [decoded]
+    return [word.strip() for word in decoded if isinstance(word, str) and word.strip()]
+
+
+def encode_trigger_words(words: Optional[list[str]]) -> Optional[str]:
+    """Return the owner's trigger words as the column stores them.
+
+    Two different empties. A list with nothing in it is the owner saying this
+    model needs no trigger word, and is stored as ``[]``: an answer, which no
+    default and no later scan may overrule. ``None`` is "not set", stored as
+    NULL, which is what lets the person's name stand in and lets the scanner
+    fill the column from the file's header.
+    """
+    if words is None:
+        return None
+    cleaned = dict.fromkeys(word.strip() for word in words if word.strip())
+    # Not ASCII-escaped: the shelf's search is a LIKE over this column, and an
+    # escaped `café` is not a string anyone types.
+    return json.dumps(list(cleaned), ensure_ascii=False)
+
+
+TRIGGER_SOURCE_RECORDED = "recorded"
+TRIGGER_SOURCE_CHARACTER = "character"
+
+
+def effective_trigger_words(
+    raw: Optional[str], attachments: list[dict], character_names: dict[int, str]
+) -> tuple[list[str], Optional[str]]:
+    """Return ``(trigger words, source)`` for one model.
+
+    The words the file or the owner recorded win. A column that was never set
+    (NULL) on a model attached to a person takes that person's name; the lowest
+    character id when it is attached to several, so the answer does not move
+    between requests. A stored empty list is the owner's "none" and takes no
+    default: not every LoRA has a trigger word.
+
+    Args:
+        raw: The stored ``model.trigger_words`` column.
+        attachments: This model's rows from :func:`fetch_attachments`.
+        character_names: :func:`fetch_character_names` for the active library.
+
+    Returns:
+        The words and ``recorded`` / ``character``, or ``([], None)``.
+    """
+    recorded = decode_trigger_words(raw)
+    if recorded:
+        return recorded, TRIGGER_SOURCE_RECORDED
+    if raw is not None:
+        return [], None
+    named = sorted(
+        int(att["entity_id"])
+        for att in attachments
+        if att["entity_type"] == ENTITY_CHARACTER
+        and int(att["entity_id"]) in character_names
+    )
+    if named:
+        return [character_names[named[0]]], TRIGGER_SOURCE_CHARACTER
+    return [], None
+
+
 def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     """How many kept pictures in the active library used each model, by tier.
 
@@ -1795,7 +1892,13 @@ def replace_attachments(
 # The columns a person may edit, and the only ones the verb layer writes. Every
 # one of them is upserted with COALESCE by the scanner, so a correction made
 # here is never re-derived away on the next pass.
-CURATABLE_FIELDS = ("display_name", "base_model", "kind", "file_kind")
+CURATABLE_FIELDS = (
+    "display_name",
+    "base_model",
+    "kind",
+    "file_kind",
+    "trigger_words",
+)
 
 # What a file may be corrected to. Closed, and checked before the UPDATE rather
 # than left to the CHECK constraint: a violation would surface as a 500 naming
@@ -1852,6 +1955,10 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
     the owner is entitled to make, and it puts the row back in the `Needs a
     name` / unset queues where it belongs.
 
+    ``trigger_words`` arrives as a list and is stored as JSON
+    (:func:`encode_trigger_words`): an empty list is "needs none" and is not
+    the same write as ``None``.
+
     ``capabilities`` is the one entry that is not a column. It is the complete
     set for every id, written to ``model_capability``: replaced wholesale rather
     than merged, because these sets are two entries long and a merge would leave
@@ -1895,6 +2002,10 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
                         assignments["base_model"]
                     )
                     assignments["base_model_source"] = SOURCE_USER
+                if "trigger_words" in assignments:
+                    assignments["trigger_words"] = encode_trigger_words(
+                        assignments["trigger_words"]
+                    )
                 columns = ", ".join(f"{field} = ?" for field in assignments)
                 conn.execute(
                     f"UPDATE model SET {columns} WHERE id IN ({placeholders})",

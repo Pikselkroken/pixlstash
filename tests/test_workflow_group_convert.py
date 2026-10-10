@@ -33,7 +33,7 @@ from pixlstash.hub.workflow_card_reads import (
     workflow_index,
     workflow_of_variant,
 )
-from pixlstash.hub import workflow_origin
+from pixlstash.hub import workflow_origin, workflow_versions
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
@@ -55,6 +55,7 @@ from pixlstash.hub.workflow_group_convert import (
     dissolve_manual_groups,
     rederive_cores,
     rederive_cores_from,
+    stranded_workflow_ids,
 )
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflow_cards import auto_workflow_id
@@ -3093,3 +3094,33 @@ def test_an_adopted_file_with_no_pictures_lists_once_as_its_manual_workflow(
                 "DELETE FROM workflow_group_attr WHERE workflow_id = ?",
                 (auto["twin-empty.json"],),
             )
+
+
+def test_a_retired_workflows_versions_go_with_it_and_are_not_carried(tmp_path):
+    """The versions saved over an automatic workflow are deleted when its id retires.
+
+    Never copied to an heir, which may hold another base-model family. An id
+    that lives on through a split (``keep``) keeps its own, a manual
+    workflow's are its document and are never touched here, and versions on
+    an id nothing is in are counted as stranded like any other owner row.
+    """
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    retired, living, heir = (f"auto:{digit * 64}" for digit in "123")
+    graph = {"1": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}}}
+    manual = create_manual_workflow(hub, "kept", graph, "import")
+    with hub.transaction() as conn:
+        for workflow_id in (retired, living):
+            workflow_versions.append_version(
+                conn, workflow_id, graph, source="chain", first=graph
+            )
+    assert stranded_workflow_ids(hub, {living}, set()) == [retired]
+
+    with hub.transaction() as conn:
+        _carry_group_state(conn, living, heir, keep=True)
+        _carry_group_state(conn, retired, heir)
+        _carry_group_state(conn, manual, heir)
+
+    rows = hub.fetchall(
+        "SELECT workflow_id, version FROM workflow_version ORDER BY workflow_id, version"
+    )
+    assert [tuple(row) for row in rows] == [(living, 1), (living, 2), (manual, 1)]

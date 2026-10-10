@@ -1542,6 +1542,274 @@ describe("Clone onto a workflow set", () => {
     expect(clip.find(".cos-now").text()).toContain("chroma");
   });
 
+  it("lets the owner swap the two VAEs of a set before cloning (#1831)", async () => {
+    const sets = await fetchWorkflowSets();
+    fetchWorkflowSets.mockResolvedValue({
+      ...sets,
+      hand_made: [
+        {
+          ...sets.hand_made[0],
+          // No name of its own, and nobody named its files: every name the
+          // shelf has for them is the file's, extension and all.
+          name: "",
+          members: [
+            {
+              id: 11,
+              slot: "checkpoint",
+              on_shelf: true,
+              name: "h3_finetune.safetensors",
+              filename: "h3_finetune.safetensors",
+            },
+            {
+              id: 31,
+              slot: "vae",
+              on_shelf: true,
+              name: "H3_Audio_VAE_fp16.safetensors",
+              filename: "H3_Audio_VAE_fp16.safetensors",
+            },
+            {
+              id: 32,
+              slot: "vae",
+              on_shelf: true,
+              name: "H3_Video_VAE_fp16.safetensors",
+              filename: "H3_Video_VAE_fp16.safetensors",
+            },
+          ],
+        },
+      ],
+    });
+    const vae = (node_id, was, now) =>
+      loader(was, now, {
+        node_id,
+        kind: "vae",
+        was_class: "VAELoader",
+        now_class: "VAELoader",
+      });
+    const reply = await planSetClones();
+    const plan = {
+      ...reply.plans[0],
+      takes: { "h3/video.safetensors": 32, "h3/audio.safetensors": 31 },
+      choices: { vae: [31, 32], clip: [] },
+      loaders: [
+        ...reply.plans[0].loaders,
+        vae("8", "h3/video.safetensors", "h3/video.safetensors"),
+        vae("9", "h3/audio.safetensors", "h3/audio.safetensors"),
+      ],
+    };
+    const crossed = {
+      ...plan,
+      swaps: {
+        ...plan.swaps,
+        "h3/video.safetensors": "h3/audio.safetensors",
+        "h3/audio.safetensors": "h3/video.safetensors",
+      },
+      takes: { "h3/video.safetensors": 31, "h3/audio.safetensors": 32 },
+      loaders: [
+        plan.loaders[0],
+        vae("8", "h3/video.safetensors", "h3/audio.safetensors"),
+        vae("9", "h3/audio.safetensors", "h3/video.safetensors"),
+      ],
+    };
+    planSetClones.mockResolvedValue({ ...reply, plans: [plan] });
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    const picks = () =>
+      wrapper.findAll('[data-testid="cos-loaders"] select').map((s) => ({
+        value: s.element.value,
+        label: s.attributes("aria-label"),
+        options: s.findAll("option").map((o) => o.text()),
+      }));
+    // Each loader starts on the file it already loads; the checkpoint row,
+    // which the set holds one file for, offers nothing. A file is called by
+    // its own name, whole but for the extension: the tidied name would drop
+    // the precision, which may be all that tells two files apart.
+    const files = ["H3_Audio_VAE_fp16", "H3_Video_VAE_fp16"];
+    expect(picks()).toEqual([
+      { value: "32", label: "VAE in place of video", options: files },
+      { value: "31", label: "VAE in place of audio", options: files },
+    ]);
+    // Nothing changes yet, and each row still says which file its loader
+    // has, unstruck, over the select.
+    const vaeRows = wrapper.findAll('[data-testid="cos-loaders"] li').slice(1);
+    expect(
+      vaeRows.map((li) =>
+        li.findAll(".cos-line-label").map((l) => l.text().split(" ")[0]),
+      ),
+    ).toEqual([
+      ["Original", "To"],
+      ["Original", "To"],
+    ]);
+    expect(vaeRows.map((li) => li.find(".cos-was").text())).toEqual([
+      "VAELoader video",
+      "VAELoader audio",
+    ]);
+    // "Unchanged" sits under the kind, and the class is not said twice.
+    expect(wrapper.findAll(".cos-same--under")).toHaveLength(2);
+    expect(vaeRows[0].find(".cos-now .cos-class").exists()).toBe(false);
+    expect(wrapper.findAll(".cos-was--kept")).toHaveLength(2);
+    // No `.safetensors` on the set's card or in the name the clone is offered.
+    expect(wrapper.find('[data-testid="cos-set-hand:7"]').text()).not.toContain(
+      "safetensors",
+    );
+    expect(wrapper.find(".cos-name input").element.value).toBe("a · h3 finetune");
+
+    planSetClones.mockClear();
+    planSetClones.mockResolvedValue({ ...reply, plans: [crossed] });
+    await wrapper
+      .find('[data-testid="cos-pick-h3/video.safetensors"] select')
+      .setValue("31");
+    await flush();
+    // The loader that had the audio VAE takes this one's: a swap, one re-plan
+    // of this set alone, with the whole pairing.
+    expect(planSetClones).toHaveBeenCalledTimes(1);
+    expect(planSetClones).toHaveBeenCalledWith("a", [
+      {
+        key: "hand:7",
+        checkpoint_ids: [11],
+        model_ids: [31, 32],
+        picks: { "h3/video.safetensors": 31, "h3/audio.safetensors": 32 },
+      },
+    ]);
+    expect(picks().map((p) => p.value)).toEqual(["31", "32"]);
+    expect(wrapper.findAll(".cos-was--kept")).toHaveLength(0);
+    expect(wrapper.findAll(".cos-same--under")).toHaveLength(0);
+    // The row nobody touched changed too: said, in a status region.
+    expect(wrapper.find('[data-testid="cos-swapped"]').text()).toContain(
+      "Swapped with the loader of audio",
+    );
+    await cloneButton(wrapper).trigger("click");
+    await flush();
+    expect(cloneWorkflowWithModels).toHaveBeenCalledWith(
+      "a",
+      expect.objectContaining({ swaps: crossed.swaps }),
+    );
+  });
+
+  /** hand:7 holding two VAEs and one text encoder, open on its plan. */
+  async function openOnTwoVaes() {
+    const sets = await fetchWorkflowSets();
+    fetchWorkflowSets.mockResolvedValue({
+      ...sets,
+      hand_made: [
+        {
+          ...sets.hand_made[0],
+          members: [
+            ...sets.hand_made[0].members,
+            { id: 31, slot: "vae", on_shelf: true, name: "Audio VAE" },
+            { id: 32, slot: "vae", on_shelf: true, name: "Video VAE" },
+          ],
+        },
+      ],
+    });
+    const reply = await planSetClones();
+    const plan = {
+      ...reply.plans[0],
+      // The one text encoder the set holds is no choice: its row is text.
+      takes: {
+        "video.safetensors": 32,
+        "audio.safetensors": 31,
+        "t5.safetensors": 41,
+      },
+      choices: { vae: [31, 32], clip: [41] },
+      loaders: ["video", "audio", "t5"].map((file, index) =>
+        loader(`${file}.safetensors`, `${file}.safetensors`, {
+          node_id: String(8 + index),
+          kind: file === "t5" ? "clip" : "vae",
+          was_class: file === "t5" ? "CLIPLoader" : "VAELoader",
+          now_class: file === "t5" ? "CLIPLoader" : "VAELoader",
+        }),
+      ),
+    };
+    planSetClones.mockResolvedValue({ ...reply, plans: [plan] });
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    const values = () =>
+      wrapper
+        .findAll('[data-testid="cos-loaders"] select')
+        .map((s) => s.element.value);
+    const pickFile = (file, id) =>
+      wrapper
+        .find(`[data-testid="cos-pick-${file}.safetensors"] select`)
+        .setValue(id);
+    const pickVideo = (id) => pickFile("video", id);
+    return { wrapper, reply, plan, values, pickVideo, pickFile };
+  }
+
+  it("puts a pick the server refused back and keeps the plan it had", async () => {
+    const { wrapper, reply, plan, values, pickVideo } = await openOnTwoVaes();
+    planSetClones.mockRejectedValue(new Error("offline"));
+    await pickVideo("31");
+    await flush();
+    expect(wrapper.find('[role="alert"]').text()).toContain("offline");
+    expect(values()).toEqual(["32", "31"]);
+
+    // A pick ComfyUI refuses: the reason is said beside the diff, where the
+    // owner is looking, and Clone waits for another pick.
+    planSetClones.mockResolvedValue({
+      ...reply,
+      plans: [
+        { ...plan, fit: "wont_load", reason: "ComfyUI does not list audio" },
+      ],
+    });
+    await pickVideo("31");
+    await flush();
+    expect(wrapper.find('[data-testid="cos-reason"]').text()).toContain(
+      "ComfyUI does not list audio",
+    );
+    expect(cloneButton(wrapper).attributes("disabled")).toBeDefined();
+  });
+
+  it("applies a pick made while another is still being re-planned", async () => {
+    const { wrapper, reply, plan, values, pickVideo, pickFile } =
+      await openOnTwoVaes();
+    const crossed = {
+      ...plan,
+      takes: { ...plan.takes, "video.safetensors": 31, "audio.safetensors": 32 },
+    };
+    let answer;
+    const held = () =>
+      planSetClones.mockReturnValueOnce(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      );
+    planSetClones.mockClear();
+    held();
+    await pickVideo("31");
+    // Before the server has answered, the owner changes their mind.
+    expect(
+      wrapper.find('[data-testid="cos-loaders"]').attributes("aria-busy"),
+    ).toBe("true");
+    await pickVideo("32");
+    expect(planSetClones).toHaveBeenCalledTimes(1);
+    planSetClones.mockResolvedValue({ ...reply, plans: [plan] });
+    answer({ ...reply, plans: [crossed] });
+    await flush();
+    await flush();
+    // Their last pick is asked for, against the plan the first one left, and
+    // is what the selects end on. It took nothing from another loader that
+    // the first pick had not put there, and it was not the same file again.
+    expect(planSetClones).toHaveBeenCalledTimes(2);
+    expect(planSetClones.mock.calls[1][1][0].picks).toEqual(plan.takes);
+    expect(values()).toEqual(["32", "31"]);
+    expect(
+      wrapper.find('[data-testid="cos-loaders"]').attributes("aria-busy"),
+    ).toBe("false");
+
+    // A pick that waited for what the answer brought anyway asks nothing: the
+    // swap already gave the audio loader the video VAE.
+    held();
+    await pickVideo("31");
+    await pickFile("audio", "32");
+    answer({ ...reply, plans: [crossed] });
+    await flush();
+    await flush();
+    expect(planSetClones).toHaveBeenCalledTimes(3);
+    expect(values()).toEqual(["31", "32"]);
+  });
+
   it("names the clone after the model the plan loads and marks a set with no cover", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();

@@ -482,14 +482,20 @@ export const NO_REPLACEMENT_TEXT = {
   no_checkpoint:
     "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
   none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
-  none_same_base_model:
-    "Nothing on your shelf is known to have this checkpoint's base model, which its LoRAs need.",
   none_loadable:
     "What works with this checkpoint is not something this loader can load.",
   needs_pixlstash_nodes:
     "What works with this checkpoint needs a PixlStash loader, and ComfyUI-PixlStash is not installed in ComfyUI.",
   unread: "Could not read what could replace it just now.",
 };
+
+/**
+ * Beside a missing checkpoint's picker when its offer was not held to a base
+ * model (`replacements_narrowed: false`): nothing said which it was, or
+ * nothing loadable has it, so the list is every checkpoint the loader takes.
+ */
+export const UNMATCHED_REPLACEMENTS_TEXT =
+  "No checkpoint this workflow can load is known to match it, so every one it can load is listed: pick one its LoRAs were made for.";
 
 /**
  * A replacement candidate as a "Replace with…" option reads it.

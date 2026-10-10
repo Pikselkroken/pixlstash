@@ -90,6 +90,38 @@ def _sized_graph():
     }
 
 
+def test_an_empty_latent_s_size_is_the_run_s_size_over_another_node_s():
+    assert wp.size_inputs(_sized_graph()) == {("5", "width"), ("5", "height")}
+
+
+def _video_graph(latent_input="latent_image"):
+    return {
+        "49": _selector(),
+        "7": {
+            "class_type": "WanImageToVideo",
+            "inputs": {"width": ["49", 0], "height": 480, "length": 81},
+        },
+        # Sizes the first frame, not the video.
+        "11": {"class_type": "ImageScale", "inputs": {"width": 512}},
+        "9": {
+            "class_type": "KSampler",
+            "inputs": {"steps": 20, latent_input: ["7", 2]},
+        },
+        "bad": "not a node",
+    }
+
+
+def test_with_no_empty_latent_the_size_is_the_node_s_that_hands_out_the_latent():
+    """An image-to-video node sizes the latent it hands out (#1833)."""
+    assert wp.size_inputs(_video_graph()) == {("7", "width"), ("7", "height")}
+
+
+def test_with_nothing_feeding_a_latent_the_size_is_matched_by_input_name():
+    """By name alone: not only a video class, and not only the first node met."""
+    graph = _video_graph(latent_input="image_embeds")
+    assert wp.size_inputs(graph) == {("7", "width"), ("7", "height"), ("11", "width")}
+
+
 def test_a_run_at_the_selector_s_own_size_leaves_the_wires_alone():
     graph = _sized_graph()
     wp.set_latent_size(graph, graph["5"], "width", 1368)

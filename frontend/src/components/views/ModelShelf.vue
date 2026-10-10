@@ -1246,6 +1246,23 @@
                       class="shelf-chip shelf-chip--step"
                       >{{ stepLabel(row) }}</span
                     >
+                    <!-- What to type in a prompt to call this model up. Mono
+                         when the word is on record, because it is typed
+                         character by character like the filename under it; the
+                         dashed "nothing here yet" chip when it is only the name
+                         of the person the model is assigned to. The prefix is
+                         for a screen reader, which otherwise reads a bare word
+                         after the step. -->
+                    <span
+                      v-if="triggerChip(row)"
+                      class="shelf-chip shelf-chip--trigger"
+                      :class="{ 'shelf-chip--none': triggerChip(row).isDefault }"
+                      ><Tooltip
+                        :text="triggerChip(row).title"
+                        activator="parent"
+                      /><span class="visually-hidden">Trigger word: </span
+                      >{{ triggerChip(row).label }}</span
+                    >
                     <!-- What the scan you just ran brought in. The SUCCESS
                          treatment, because an arrival is a good outcome - and
                          nothing else on a row is green, so it reads without a
@@ -1471,6 +1488,7 @@
         @rename="startRenameSelected"
         @set-base-model="editVerb = 'base-model'"
         @set-kind="editVerb = 'kind'"
+        @set-trigger-words="editVerb = 'trigger-words'"
         @stack="confirmStack"
         @unstack="confirmUnstack"
         @make-cover="makeCover"
@@ -1742,6 +1760,7 @@ import {
   modelVersion,
   movableCopies,
   quantBadge,
+  triggerChip,
   releaseReceipt,
   SORT_LABELS,
   stackReceipt,
@@ -5923,6 +5942,18 @@ button.shelf-head-cell:hover {
    reason the filename line under it is monospaced. Nothing else changes: it is
    the row's own chip, at the row's own size and border. */
 .shelf-chip--quant {
+  font-family: var(--font-mono);
+}
+
+/* The trigger word is a phrase somebody typed, so it is the one chip with no
+   natural length. Capped, and a block so the cap ends in an ellipsis: every
+   chip is `flex: none` and the name beside it is what gives way. */
+.shelf-chip--trigger {
+  display: inline-block;
+  max-width: 18ch;
+}
+
+.shelf-chip--trigger:not(.shelf-chip--none) {
   font-family: var(--font-mono);
 }
 

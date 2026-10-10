@@ -560,7 +560,10 @@ class RunImporter:
         mtime = os.stat(target).st_mtime_ns
         now = _utcnow()
         base_model = (info.base_model if info else None) or run.base_model
-        triggers = (info.trigger_words if info else None) or run.trigger_words
+        # The other way round from the base model: `trigger_word` in the config
+        # is the word the trainer was told to use, while the header's are every
+        # tag in its frequency table.
+        triggers = run.trigger_words or (info.trigger_words if info else None)
         with self._hub.transaction() as conn:
             conn.execute(
                 "INSERT INTO model (file_kind, kind, sha256, display_name, "

@@ -85,17 +85,47 @@ _ASPECT_RATIOS = {
 SIZE_NAMES = ("width", "height")
 
 
-def is_latent_size(class_type: Any, name: str) -> bool:
-    """Whether *name* on *class_type* is the size of the picture a run makes.
+def size_inputs(graph: dict) -> set[tuple[str, str]]:
+    """The ``(node id, input name)`` pairs that are the size a run of *graph* makes.
 
-    The empty latent's ``width`` / ``height``: the one place a size can be set
-    whatever drives it, so a run that wants another size writes it there.
+    An empty latent's ``width`` / ``height`` when the graph has one: the one
+    place a size can be set whatever drives it, so a run that wants another
+    size writes it there. A graph with none (#1833) is sized on the node that
+    hands out the latent it sizes, as ``WanImageToVideo`` does: one whose
+    output is wired into an input named for a latent (``latent_image``). With
+    no such node either, the input names alone decide.
     """
-    # ponytail: a name rule, like `is_picture_batch` offline; object_info's
-    # LATENT output if a pack names its empty latent otherwise.
-    # Efficiency loaders name theirs `empty_latent_width`, so are not matched.
-    cls = str(class_type or "")
-    return name in SIZE_NAMES and "Empty" in cls and "Latent" in cls
+    # ponytail: name rules, like `is_picture_batch` offline; object_info's
+    # LATENT output if a pack names its latent input otherwise.
+    # Efficiency loaders name theirs `empty_latent_width`, so are not matched,
+    # and a graph of theirs takes the fallbacks like any other.
+    nodes = {
+        str(node_id): node
+        for node_id, node in graph.items()
+        if isinstance(node, dict) and isinstance(node.get("inputs"), dict)
+    }
+    named = {
+        (node_id, name)
+        for node_id, node in nodes.items()
+        for name in SIZE_NAMES
+        if name in node["inputs"]
+    }
+
+    def empty_latent(node_id: str) -> bool:
+        cls = str(nodes[node_id].get("class_type") or "")
+        return "Empty" in cls and "Latent" in cls
+
+    hands_out_latent = {
+        value[0]
+        for node in nodes.values()
+        for key, value in node["inputs"].items()
+        if "latent" in key.lower() and is_link(value)
+    }
+    return (
+        {pair for pair in named if empty_latent(pair[0])}
+        or {pair for pair in named if pair[0] in hands_out_latent}
+        or named
+    )
 
 
 def linked_size(graph: dict, link: Any) -> Optional[int]:
@@ -136,7 +166,7 @@ def linked_size(graph: dict, link: Any) -> Optional[int]:
 
 
 def set_latent_size(graph: dict, node: dict, name: str, value: Any) -> None:
-    """Write a run's *value* into a latent size input, cutting a wire if needed.
+    """Write a run's *value* into a size input, cutting a wire if needed.
 
     A wired size whose source already says *value* is left wired, so a run
     that did not change the size sends the graph as authored. Otherwise the

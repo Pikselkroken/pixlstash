@@ -302,11 +302,12 @@ async function settle(wrapper) {
  * `replacements` already filtered to what goes with the checkpoint and what
  * the loader lists (#1596).
  */
-function replacementsByKind(byKind, reasons = {}) {
+function replacementsByKind(byKind, reasons = {}, narrowed = true) {
   return (_key, { slotKind } = {}) =>
     Promise.resolve({
       replacements: byKind[slotKind] ?? [],
       replacements_reason: reasons[slotKind] ?? null,
+      replacements_narrowed: slotKind === "checkpoint" ? narrowed : null,
     });
 }
 
@@ -669,6 +670,10 @@ describe("a checkpoint that will not load", () => {
 
     const picker = wrapper.find('[data-testid="wftab-replace-model"] select');
     expect(picker.text()).toContain("RealVis 5");
+    // Held to the missing one's base model: nothing to warn of.
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(
+      false,
+    );
     preflightWorkflowRun.mockResolvedValue({ groups: [] });
     await picker.setValue("realvisXL_v5_bf16.safetensors");
     await settle(wrapper);
@@ -700,8 +705,25 @@ describe("a checkpoint that will not load", () => {
     });
   });
 
+  it("says so when the picker lists every checkpoint, none known to match", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(
+        replacementsByKind({ checkpoint: [{ id: 7, filename: "sd15.safetensors" }] }, {}, false),
+      );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').text()).toContain(
+      "is known to match it",
+    );
+  });
+
   it.each([
-    ["none_same_base_model", "is known to have this checkpoint's base model"],
     ["none_go_with_it", "is known to work with this checkpoint"],
     ["none_loadable", "is one this loader can load"],
     ["unread", "Could not read what could replace it"],
@@ -2791,6 +2813,7 @@ describe("the LoRA chain (#1478)", () => {
         EditLorasDialog: {
           name: "EditLorasDialog",
           props: ["open", "workflowId", "cardName", "pictureCount", "dropLora"],
+          emits: ["close", "overwritten"],
           template: "<div class='eld-stub' />",
         },
       },
@@ -2945,6 +2968,28 @@ describe("the LoRA chain (#1478)", () => {
     expect(dialog.props("cardName")).toBe("Cinematic portrait");
     expect(dialog.props("pictureCount")).toBe(184);
     expect(dialog.props("dropLora")).toBe("");
+  });
+
+  it("reads the chain again when Edit LoRAs… saved over the card itself", async () => {
+    const { wrapper } = await mountChain();
+    await editButton(wrapper).trigger("click");
+    await flush(wrapper);
+    const reads = getLoraChain.mock.calls.length;
+    const details = getWorkflowCard.mock.calls.length;
+    getLoraChain.mockResolvedValue(loraChain({ loaders: [] }));
+
+    // Another card's overwrite is not this rail's to re-read.
+    const dialog = wrapper.findComponent({ name: "EditLorasDialog" });
+    dialog.vm.$emit("overwritten", OTHER);
+    await flush(wrapper);
+    expect(getLoraChain.mock.calls.length).toBe(reads);
+
+    dialog.vm.$emit("overwritten", KEY);
+    await flush(wrapper);
+    expect(getLoraChain.mock.calls.length).toBe(reads + 1);
+    // The detail too: a manual workflow's version line comes with it.
+    expect(getWorkflowCard.mock.calls.length).toBe(details + 1);
+    expect(textOf(wrapper)).toContain("No LoRA loader. Editing adds the first one.");
   });
 
   it("says so, and refuses Edit, for a card with no graph", async () => {

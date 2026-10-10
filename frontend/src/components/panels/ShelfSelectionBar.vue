@@ -300,6 +300,7 @@ const emit = defineEmits([
   "rename",
   "set-base-model",
   "set-kind",
+  "set-trigger-words",
   "stack",
   "unstack",
   "make-cover",
@@ -603,6 +604,20 @@ const membership = computed(() => {
   }
   return byType;
 });
+
+/**
+ * Whether the selection can be given trigger words: every model in it has to be
+ * something a prompt calls up. `unknown` counts, as it does for assigning - an
+ * unclassified file is as likely a LoRA as anything else. The item stays listed
+ * and says why when it cannot, like the run verbs below it.
+ */
+const triggerable = computed(
+  () =>
+    store.selectedModels.length > 0 &&
+    store.selectedModels.every(
+      (row) => row.file_kind === "adapter" || row.file_kind === "unknown",
+    ),
+);
 
 const assignTitle = computed(() => {
   const total = store.selectedModels.length;
@@ -967,6 +982,10 @@ const verbHandlers = computed(() => ({
   assignableIds: assignableIds.value,
   assignable: assignable.value.length > 0,
   membership: membership.value,
+  triggerable: triggerable.value,
+  triggerTitle: triggerable.value
+    ? ""
+    : "Only LoRAs and other adapters have trigger words",
   stackable: stackable.value,
   stackTitle: stackTitle.value,
   unstackable: unstackable.value,
@@ -1115,6 +1134,11 @@ const VerbMenu = (props) => {
     }),
     item("mdi-shape-outline", "Set kind…", {
       on: () => props.onVerb("set-kind"),
+    }),
+    item("mdi-format-quote-close-outline", "Set trigger words…", {
+      on: () => props.onVerb("set-trigger-words"),
+      disabled: !props.triggerable,
+      title: props.triggerTitle,
     }),
     assign("character", "Assign to person"),
     assign("set", "Assign to set"),
