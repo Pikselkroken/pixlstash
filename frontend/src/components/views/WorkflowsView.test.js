@@ -1633,14 +1633,20 @@ describe("Clone onto a workflow set", () => {
     // has, unstruck, over the select.
     const vaeRows = wrapper.findAll('[data-testid="cos-loaders"] li').slice(1);
     expect(
-      vaeRows.map((li) => li.findAll(".cos-line-label").map((l) => l.text())),
+      vaeRows.map((li) =>
+        li.findAll(".cos-line-label").map((l) => l.text().split(" ")[0]),
+      ),
     ).toEqual([
       ["Original", "To"],
       ["Original", "To"],
     ]);
-    expect(
-      vaeRows.map((li) => li.find(".cos-was").text().replace(/\s+/g, " ")),
-    ).toEqual(["VAELoader video Unchanged", "VAELoader audio Unchanged"]);
+    expect(vaeRows.map((li) => li.find(".cos-was").text())).toEqual([
+      "VAELoader video",
+      "VAELoader audio",
+    ]);
+    // "Unchanged" sits under the kind, and the class is not said twice.
+    expect(wrapper.findAll(".cos-same--under")).toHaveLength(2);
+    expect(vaeRows[0].find(".cos-now .cos-class").exists()).toBe(false);
     expect(wrapper.findAll(".cos-was--kept")).toHaveLength(2);
     // No `.safetensors` on the set's card or in the name the clone is offered.
     expect(wrapper.find('[data-testid="cos-set-hand:7"]').text()).not.toContain(
@@ -1667,6 +1673,7 @@ describe("Clone onto a workflow set", () => {
     ]);
     expect(picks().map((p) => p.value)).toEqual(["31", "32"]);
     expect(wrapper.findAll(".cos-was--kept")).toHaveLength(0);
+    expect(wrapper.findAll(".cos-same--under")).toHaveLength(0);
     // The row nobody touched changed too: said, in a status region.
     expect(wrapper.find('[data-testid="cos-swapped"]').text()).toContain(
       "Swapped with the loader of audio",

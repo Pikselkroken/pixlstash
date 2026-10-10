@@ -1492,8 +1492,11 @@ in the Workflow tab's Models panel head, both through
   "Clears N LoRAs".
 - **Right: the clone as a node diff**, the plan's `loaders` read as they come.
   A row that changes is two lines, each said: **Original** (class, files and a
-  CLIP loader's type, struck) and **To →** (the same after, and the node pack
-  chip). A row that does not is one line ending "Unchanged". A
+  CLIP loader's type, struck) and **To →** (the files after, the class again
+  only when it changes, and the node pack chip). A row that does not is one
+  line ending "Unchanged". The row is one grid (kind, the line's word, the
+  line), a two-line row's lines being its grid rows, so the words and the
+  lines start level and sit on each line's baseline. A
   pack ComfyUI does not have is a warning, never a refusal.
 - **Names are read as the shelf reads them.** Every set member goes through
   `headName` on the way in (`shelfNamed`): its display name, else one derived
@@ -1504,8 +1507,9 @@ in the Workflow tab's Models panel head, both through
   each loader file taking one is a compact `AppSelect` of the set's files of
   that kind (the plan's `takes` and `choices`), on the row's **To →** line. A
   row with a select is two lines even when nothing changes, its **Original**
-  line unstruck and ending "Unchanged", because the file a loader has is how
-  the owner knows which loader it is. Such a row names files exactly, in its
+  line unstruck and "Unchanged" under the kind (beside a long file name it
+  wrapped), because the file a loader has is how the owner knows which loader
+  it is. Such a row names files exactly, in its
   text and in the select alike (`loraStem`: no folder, no extension): the
   shelf's tidied name drops a precision or a version, which may be all that
   tells two files of one kind apart. Picking the file another loader has

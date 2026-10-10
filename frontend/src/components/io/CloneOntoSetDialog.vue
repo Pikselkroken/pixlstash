@@ -143,17 +143,30 @@
                     <template v-if="row.was_type !== row.now_type">
                       · {{ row.was_type }}</template
                     >
-                    <span v-if="!changed(row)" class="cos-same">Unchanged</span>
                   </span>
-                  <span class="cos-line-label">To</span>
+                  <!-- Under the kind, where the second line has room for it:
+                       beside a long file name it wrapped onto a line of its
+                       own. -->
+                  <span v-if="!changed(row)" class="cos-same cos-same--under"
+                    >Unchanged</span
+                  >
+                  <span class="cos-line-label"
+                    >To
+                    <v-icon size="14" aria-hidden="true"
+                      >mdi-arrow-right</v-icon
+                    ></span
+                  >
                 </template>
                 <!-- An unchanged row with nothing to pick is its "now" half
-                     alone: the class and the files are the ones it has. -->
+                     alone: the class and the files are the ones it has. On
+                     two lines the class is said again only when it changes:
+                     the line above names it, and the width goes to the file. -->
                 <span class="cos-now">
-                  <v-icon v-if="row.twoLines" size="14" aria-hidden="true"
-                    >mdi-arrow-right</v-icon
+                  <span
+                    v-if="!row.twoLines || row.now_class !== row.was_class"
+                    class="cos-class"
+                    >{{ row.now_class }}</span
                   >
-                  <span class="cos-class">{{ row.now_class }}</span>
                   <template v-if="!row.twoLines">·</template>
                   <!-- A file the set holds an alternative for is a select:
                        the pairing is a guess the owner can overrule. -->
@@ -1013,7 +1026,8 @@ watch(
 <style scoped>
 .cos-panes {
   display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  /* The diff reads whole file names; a set's card only has to be found. */
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
   gap: var(--space-6);
   min-height: 0;
 }
@@ -1175,13 +1189,14 @@ watch(
   list-style: none;
 }
 
+/* One grid for the whole row: the kind, the line's word ("Original", "To")
+   and the line. A two-line row's lines are this grid's rows, so every cell
+   sits on its own line's baseline, whether that line is text or a select. */
 .cos-row {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  /* The kind sits on the first line's baseline, whether that line is text or
-     holds a select. */
+  grid-template-columns: 72px max-content minmax(0, 1fr);
   align-items: baseline;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
   padding: var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
@@ -1206,23 +1221,28 @@ watch(
   min-width: 0;
 }
 
-/* "Original" and "To" in a column of their own, so the two lines' classes
-   start level whatever the words' widths. */
+/* A two-line row's body is not a box: its words and lines are cells of the
+   row's grid. */
 .cos-row-body {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  /* Each word level with the middle of its own line: the "To" line is as
-     tall as its select. */
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
+  display: contents;
 }
 
 .cos-row-body--one {
   display: flex;
+  grid-column: 2 / -1;
 }
 
 .cos-line-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  grid-column: 2;
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.cos-was,
+.cos-now {
+  grid-column: 3;
 }
 
 .cos-was {
@@ -1241,6 +1261,11 @@ watch(
 
 .cos-same {
   margin-left: auto;
+}
+
+.cos-same--under {
+  grid-column: 1;
+  margin-left: 0;
 }
 
 .cos-row-body--one .cos-now {
