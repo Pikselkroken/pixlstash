@@ -259,9 +259,17 @@ class _FakeServer:
 
 
 class TestOutputProcessing:
-    def _run(self, monkeypatch, images, pixlstash_ids, imported=(), **kwargs):
+    def _run(
+        self, monkeypatch, images, pixlstash_ids, imported=(), duplicates=(), **kwargs
+    ):
         server = _FakeServer()
-        calls = {"downloads": 0, "stacked": None, "sourced": None, "filed": None}
+        calls = {
+            "downloads": 0,
+            "stacked": None,
+            "sourced": None,
+            "filed": None,
+            "person": None,
+        }
 
         monkeypatch.setattr(
             comfyui_service,
@@ -277,7 +285,12 @@ class TestOutputProcessing:
         monkeypatch.setattr(
             comfyui_service,
             "_import_comfyui_outputs",
-            lambda *a, **kw: (list(imported), []),
+            lambda *a, **kw: (list(imported), list(duplicates)),
+        )
+        monkeypatch.setattr(
+            comfyui_service,
+            "_assign_outputs_to_lora_person",
+            lambda srv, person, ids: calls.__setitem__("person", (person, ids)),
         )
         monkeypatch.setattr(
             comfyui_service,
@@ -328,6 +341,22 @@ class TestOutputProcessing:
             monkeypatch, images=[], pixlstash_ids=[41], imported=[]
         )
         assert calls["filed"] is None
+
+    def test_what_the_run_made_is_of_the_person_whose_lora_it_loaded(self, monkeypatch):
+        """Imported and saver-reported both; a duplicate keeps the people it has."""
+        _server, calls = self._run(
+            monkeypatch,
+            images=[{"filename": "out_00001.png", "subfolder": "", "type": "output"}],
+            pixlstash_ids=[41],
+            imported=[40],
+            duplicates=[39],
+            lora_character_id=5,
+        )
+        assert calls["person"] == (5, [40, 41])
+        _server, calls = self._run(
+            monkeypatch, images=[], pixlstash_ids=[41], imported=[]
+        )
+        assert calls["person"] == (None, [41])
 
     def test_ids_reported_by_the_saver_are_stacked_and_announced(self, monkeypatch):
         server, calls = self._run(

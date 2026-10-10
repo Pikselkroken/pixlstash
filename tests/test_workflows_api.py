@@ -59,7 +59,7 @@ from pixlstash import auth, mcp_server
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, Project, ReferenceFolder, UserToken
+from pixlstash.db_models import Face, Picture, Project, ReferenceFolder, UserToken
 from pixlstash.db_models.saved_recipe import SavedRecipe
 from pixlstash.event_types import EventType
 from pixlstash.hub.workflow_card_reads import (
@@ -14842,6 +14842,191 @@ def test_a_person_picked_for_a_workflow_run_keeps_their_own_loader(
     # The graph's own node, where it was: no splice was needed, or made.
     assert graph["2"]["class_type"] == "LoraLoader"
     assert graph["2"]["inputs"]["strength_model"] == 0.7
+
+
+def _whose_lora(runnable, **body) -> int | None:
+    """Run *body* once; the person its import was told the pictures are of."""
+    handed: list = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_process_comfyui_outputs",
+        lambda *args, **kwargs: handed.append(kwargs["lora_character_id"]),
+    )
+    r = runnable.owner.post(f"{API}/workflows/run", json=body)
+    assert r.status_code == 200, r.text
+    assert runnable.submitted, [g["reasons"] for g in r.json()["groups"]]
+    # The import is a thread of its own.
+    deadline = time.monotonic() + 5.0
+    while not handed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(handed) == 1, handed
+    return handed[0]
+
+
+def test_a_run_loading_a_persons_lora_says_its_pictures_are_of_them(
+    runnable, person_lora
+):
+    """However the LoRA got into the graph: a recipe's, or the popup's pick."""
+    assert (
+        _whose_lora(runnable, picture_ids=[runnable.picture_id], target=RUN_WF)
+        == person_lora
+    )
+    runnable.submitted.clear()
+    assert (
+        _whose_lora(
+            runnable, workflow_id=RUN_WF, add_loras=[{"sha256": PERSON_LORA_DIGEST}]
+        )
+        == person_lora
+    )
+
+
+def test_a_run_that_leaves_the_persons_lora_out_names_nobody(runnable, person_lora):
+    """The workflow by itself bypasses the loader, so nobody is in the picture."""
+    assert _whose_lora(runnable, workflow_id=RUN_WF) is None
+
+
+def test_a_persons_lora_at_strength_zero_names_nobody(runnable, person_lora):
+    whose = _whose_lora(
+        runnable,
+        workflow_id=RUN_WF,
+        add_loras=[
+            {"sha256": PERSON_LORA_DIGEST, "strength_model": 0, "strength_clip": 0}
+        ],
+    )
+    inputs = runnable.submitted[0]["graph"]["2"]["inputs"]
+    assert (inputs["strength_model"], inputs["strength_clip"]) == (0, 0)
+    assert whose is None
+
+
+def test_loras_of_two_people_name_neither(runnable, person_lora):
+    """A picture holds one pending person, and a guess would be wrong half the time."""
+    vault = runnable.server.vault
+    created = runnable.owner.post(f"{API}/characters", json={"name": "Someone"})
+    assert created.status_code == 200, created.text
+    other = created.json()["character"]["id"]
+    try:
+        model_shelf_service.replace_attachments(
+            vault,
+            PERSON_LORA_DIGEST,
+            [("character", person_lora), ("character", other)],
+        )
+        assert (
+            _whose_lora(runnable, picture_ids=[runnable.picture_id], target=RUN_WF)
+            is None
+        )
+    finally:
+        runnable.owner.delete(f"{API}/characters/{other}")
+
+
+def test_lora_people_reads_a_digest_whatever_its_case(runnable, person_lora):
+    vault = runnable.server.vault
+    upper = PERSON_LORA_DIGEST.upper()
+    model_shelf_service.replace_attachments(vault, PERSON_LORA_DIGEST, [])
+    model_shelf_service.replace_attachments(vault, upper, [("character", person_lora)])
+    try:
+        assert model_shelf_service.lora_people(vault, [PERSON_LORA_DIGEST]) == {
+            person_lora
+        }
+        assert model_shelf_service.lora_people(vault, [_h("nobodys-lora")]) == set()
+        assert model_shelf_service.lora_people(vault, [None]) == set()
+    finally:
+        model_shelf_service.replace_attachments(vault, upper, [])
+
+
+def test_the_runs_pictures_are_linked_to_the_person(runnable, person_lora):
+    """Deferred to face extraction when there is no face yet, else the largest
+    face nobody has; a face that names somebody else is never taken."""
+    server, picture_id = runnable.server, runnable.picture_id
+    created = runnable.owner.post(f"{API}/characters", json={"name": "Someone"})
+    assert created.status_code == 200, created.text
+    other = created.json()["character"]["id"]
+    announced: list = []
+    runnable.monkeypatch.setattr(
+        server.vault, "notify", lambda event, *a, **k: announced.append(event)
+    )
+
+    def pending(session):
+        return session.get(Picture, picture_id).pending_character_id
+
+    def facts(session):
+        picture = session.get(Picture, picture_id)
+        faces = session.exec(select(Face).where(Face.picture_id == picture_id)).all()
+        return (
+            {face.face_index: face.character_id for face in faces},
+            picture.pending_character_id,
+            picture.project_id,
+        )
+
+    def seed_faces(session):
+        session.get(Picture, picture_id).pending_character_id = None
+        session.add(
+            Face(
+                picture_id=picture_id,
+                face_index=0,
+                character_id=other,
+                bbox=[0, 0, 400, 400],
+            )
+        )
+        session.add(Face(picture_id=picture_id, face_index=1, bbox=[0, 0, 90, 90]))
+        session.add(Face(picture_id=picture_id, face_index=2, bbox=[0, 0, 40, 40]))
+        session.commit()
+
+    def clear(session):
+        session.exec(delete(Face).where(Face.picture_id == picture_id))
+        session.get(Picture, picture_id).pending_character_id = None
+        session.commit()
+
+    _faces, _pending, project_before = server.vault.db.run_task(facts)
+    try:
+        comfyui_service._assign_outputs_to_lora_person(
+            server, person_lora, [picture_id]
+        )
+        assert server.vault.db.run_task(pending) == person_lora
+        # Face extraction announces a deferred one, when it names the face.
+        assert announced == []
+
+        server.vault.db.run_task(seed_faces)
+        comfyui_service._assign_outputs_to_lora_person(
+            server, person_lora, [picture_id]
+        )
+        # Where the picture is filed is the run's destination's, not the person's.
+        assert server.vault.db.run_task(facts) == (
+            {0: other, 1: person_lora, 2: None},
+            None,
+            project_before,
+        )
+        assert announced == [EventType.CHANGED_CHARACTERS, EventType.CHANGED_FACES]
+    finally:
+        server.vault.db.run_task(clear)
+        runnable.owner.delete(f"{API}/characters/{other}")
+
+
+def test_a_deleted_person_keeps_no_lora_and_no_pending_picture(runnable, person_lora):
+    """The next person created gets the id, and must get neither with it."""
+    server, picture_id = runnable.server, runnable.picture_id
+
+    def pending(session):
+        return session.get(Picture, picture_id).pending_character_id
+
+    comfyui_service._assign_outputs_to_lora_person(server, person_lora, [picture_id])
+    assert server.vault.db.run_task(pending) == person_lora
+    attached = model_shelf_service.fetch_attachments(
+        server.vault, sha256=PERSON_LORA_DIGEST
+    )
+    assert attached == {
+        PERSON_LORA_DIGEST: [{"entity_type": "character", "entity_id": person_lora}]
+    }
+
+    deleted = runnable.owner.delete(f"{API}/characters/{person_lora}")
+    assert deleted.status_code == 200, deleted.text
+    assert server.vault.db.run_task(pending) is None
+    assert (
+        model_shelf_service.fetch_attachments(server.vault, sha256=PERSON_LORA_DIGEST)
+        == {}
+    )
+    # Gone before the run finished: nothing is linked, and nothing raises.
+    comfyui_service._assign_outputs_to_lora_person(server, person_lora, [picture_id])
+    assert server.vault.db.run_task(pending) is None
 
 
 def test_an_added_lora_the_graph_already_loads_is_not_added_twice(runnable):

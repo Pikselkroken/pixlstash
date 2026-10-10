@@ -1809,9 +1809,9 @@ def character_lora_hashes(vault) -> set[str]:
     shelf writes, never a guess from a filename. A workflow run by itself goes
     without these (``workflow_defaults``); a recipe keeps them.
 
-    Of a person the library still has: deleting a character leaves its
-    attachment rows behind (the table has no foreign key), and a LoRA that was
-    somebody's is nobody's once they are gone.
+    Of a person the library still has: the table has no foreign key, a
+    character deleted before the delete route cleared its rows left them
+    behind, and a LoRA that was somebody's is nobody's once they are gone.
     """
 
     def fetch(session: Session):
@@ -1827,6 +1827,38 @@ def character_lora_hashes(vault) -> set[str]:
     return {
         str(sha256).lower()
         for sha256 in vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
+    }
+
+
+def lora_people(vault, digests) -> set[int]:
+    """The id of every person a LoRA in *digests* is attached to.
+
+    Of a person the library still has, as :func:`character_lora_hashes` reads
+    it. What a run asks of the LoRAs its graph loads: its pictures are of
+    whoever those belong to.
+    """
+    wanted = {str(digest).lower() for digest in digests if digest}
+    if not wanted:
+        return set()
+
+    def fetch(session: Session):
+        return list(
+            session.exec(
+                select(
+                    AdapterAttachment.adapter_sha256, AdapterAttachment.entity_id
+                ).where(
+                    AdapterAttachment.entity_type == ENTITY_CHARACTER,
+                    AdapterAttachment.entity_id.in_(select(Character.id)),
+                )
+            ).all()
+        )
+
+    return {
+        int(character_id)
+        for sha256, character_id in vault.db.run_task(
+            fetch, priority=DBPriority.IMMEDIATE
+        )
+        if str(sha256).lower() in wanted
     }
 
 

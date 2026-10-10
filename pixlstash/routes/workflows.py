@@ -159,6 +159,7 @@ from pixlstash.services.model_shelf_service import (
     adapter_digest_index,
     families_clash,
     known_base_model,
+    lora_people,
     model_name_aliases,
     propose_companions,
     recipe_asset_index,
@@ -4779,6 +4780,36 @@ def create_router(server) -> APIRouter:
                 reason.as_dict(),
             )
 
+    def _lora_person(graph: dict, object_info: dict | None) -> int | None:
+        """The one person the LoRAs *graph* loads are attached to, else ``None``.
+
+        Read off the graph as it is submitted, so it answers the same for a
+        LoRA a recipe placed, one the Run popup added and one the workflow
+        kept. A loader at model strength zero loads nobody, and neither does
+        one no output reads, where ComfyUI said which those are.
+        """
+        slots = [
+            slot
+            for slot in live_lora_targets(graph, object_info)
+            if (slot.get("strengths") or {}).get("model") != 0
+        ]
+        if not slots:
+            return None
+        digests = _slot_digests(slots, adapter_digest_index(_hub())).values()
+        people = lora_people(server.vault, digests)
+        if len(people) > 1:
+            # ponytail: a picture holds one pending person, so a run loading
+            # two people's LoRAs names neither. Match each face to its person
+            # by likeness once group runs are common enough to matter.
+            logger.info(
+                "[workflows] The run loads LoRAs of %d people (%s), so its "
+                "pictures are linked to none of them.",
+                len(people),
+                sorted(people),
+            )
+            return None
+        return next(iter(people), None)
+
     def _slot_digests(slots: list[dict], shelf_index) -> dict:
         """``{(node_id, field): sha256 or None}``: which shelf LoRA each slot loads.
 
@@ -6237,6 +6268,7 @@ def create_router(server) -> APIRouter:
                 else None
             )
             run_workflow_version = group.workflow_version if run_workflow_id else None
+            lora_character_id = _lora_person(graph, object_info)
             # A selection feeding an input is the run's repeat axis: one pass
             # per picture, each its own source and, with `stack`, its own
             # stack. Otherwise one pass, and the group's first picture is the
@@ -6313,6 +6345,7 @@ def create_router(server) -> APIRouter:
                                 "run_workflow_version": run_workflow_version,
                                 "rejected": rejected,
                                 "workflow_id": group.workflow_id,
+                                "lora_character_id": lora_character_id,
                             },
                             daemon=True,
                         ).start()
