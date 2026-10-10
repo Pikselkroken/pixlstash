@@ -16931,6 +16931,94 @@ def test_changes_made_before_another_version_are_save_as_new_only(saving):
     assert "5" not in copy and copy["2"]["inputs"]["strength_model"] == 0.9
 
 
+def test_a_checkpoint_is_the_same_loader_however_its_address_is_spelled(saving):
+    """`core:<label>` and the slot label name one loader, and a run loads a
+    model at either: rule 2 has to hold for both."""
+    _comfyui_lists(saving, "realvisxl.safetensors", "krea.safetensors")
+    label = core_node_labels(structural_document(CHAIN_DOCUMENT))["1"]
+    assert not _model_address(saving, saving.manual).startswith("core:")
+    dry = _save(
+        saving,
+        saving.manual,
+        changes={
+            "models": [
+                {"address": f"core:{label}/ckpt_name", "filename": "krea.safetensors"}
+            ]
+        },
+        dry_run=True,
+    ).json()
+    assert dry["save"]["open"] is False and "checkpoint" in dry["save"]["reason"]
+
+
+def test_a_save_made_against_another_version_says_so(saving):
+    """What the Run popup changed was changed against the version it read."""
+    r = _save(saving, saving.manual, changes=SKIP_FIVE, version=7)
+    assert r.status_code == 409 and "changed since" in r.json()["detail"], r.text
+    r = _save(saving, saving.manual, changes=SKIP_FIVE, version=1)
+    assert r.status_code == 200, r.text
+
+
+def test_a_refused_save_as_new_leaves_no_workflow_behind(saving):
+    r = _save(
+        saving,
+        saving.manual,
+        as_new=True,
+        name="Orphan",
+        changes={"stages": {"upscale": False}},
+    )
+    assert r.status_code == 409, r.text
+    assert _manual_ids(saving) == [saving.manual]
+
+
+def test_a_stored_change_is_bounded(saving):
+    r = saving.owner.put(
+        f"{API}/workflows/{saving.manual}/changes",
+        json={
+            "values": [
+                {"slot_label": "sampler", "input_name": "text", "value": "x" * 5000}
+            ]
+        },
+    )
+    assert r.status_code == 422, r.text
+    r = saving.owner.post(f"{API}/workflows/{saving.manual}/versions/{10**30}/restore")
+    assert r.status_code == 422, r.text
+
+
+def test_a_run_of_a_workflow_with_twin_loaders_keeps_each_ones_checkpoint(saving):
+    """Two loaders in mirrored branches share a slot label. The default recipe
+    of a workflow read off its own graph is what the graph already loads, so a
+    run writes none of it back: written back, one file would take both."""
+    _comfyui_lists(saving, "realvisxl.safetensors", "krea.safetensors")
+    graph = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "realvisxl.safetensors"},
+        },
+        "3": {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["1", 0]}},
+        "4": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "A", "images": ["3", 0]},
+        },
+        "11": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "krea.safetensors"},
+        },
+        "13": {"class_type": "KSampler", "inputs": {"seed": 1, "model": ["11", 0]}},
+        "14": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "A", "images": ["13", 0]},
+        },
+    }
+    twins = workflows_routes.store_manual_workflow(
+        saving.server.hub, "Twins", graph, "import"
+    )
+    ran = _run(saving, workflow_id=twins)
+    assert (ran["1"]["inputs"]["ckpt_name"], ran["11"]["inputs"]["ckpt_name"]) == (
+        "realvisxl.safetensors",
+        "krea.safetensors",
+    )
+
+
 def test_a_save_refuses_a_change_it_could_not_make(saving):
     """A run reports a model it could not load and carries on; a save must not."""
     r = _save(
@@ -17115,6 +17203,8 @@ def test_a_saved_recipe_still_runs_on_the_graph_it_was_saved_from(saving):
     assert "5" not in _run(saving, workflow_id=saving.manual)
     replayed = _run(saving, saved_recipe_id=recipe_id)
     assert "5" in replayed, "the recipe ran the graph saved over its workflow"
+    # The Run popup names the recipe's own workflow as `target`: the same run.
+    assert "5" in _run(saving, saved_recipe_id=recipe_id, target=saving.manual)
     assert replayed["5"]["inputs"]["lora_name"] == "Mystery_Style.safetensors"
 
     # A recipe saved after the save is of the new graph.
@@ -17143,7 +17233,17 @@ def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
     assert state["ran_save"] == {"open": True, "reason": None}
     assert state["count"] == 0, "a run's changes are not waiting changes"
 
+    # Going back a version takes it away too: what the run changed was
+    # changed in a graph the workflow no longer has.
+    with saving.server.hub.transaction() as conn:
+        workflow_versions.append_version(
+            conn, saving.manual, json.loads(json.dumps(CHAIN_DOCUMENT)), source="loras"
+        )
+    assert _changes(saving, saving.manual)["ran"] is None
+
     # A run that changed nothing takes the offer away.
+    _run(saving, workflow_id=saving.manual, **SKIP_FIVE)
+    assert _changes(saving, saving.manual)["ran"] is not None
     _run(saving, workflow_id=saving.manual)
     assert _changes(saving, saving.manual)["ran"] is None
 
@@ -17369,6 +17469,22 @@ def test_a_graph_that_replaces_an_installed_checkpoint_is_a_new_workflow(saving)
         == "krea.safetensors"
     )
 
+    # A loader left wired into nothing does not keep the old checkpoint.
+    info = _listing("realvisxl.safetensors", "krea.safetensors")
+    info["SaveImage"]["output_node"] = True
+    saving.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(info)), None),
+    )
+    dodge = json.loads(json.dumps(graph))
+    dodge["99"] = {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "realvisxl.safetensors"},
+    }
+    r = _put_graph(saving, saving.manual, dodge, name="Chain on Krea again")
+    assert r.status_code == 200 and r.json()["new_workflow"] is True, r.text
+
     # The same graph where the old checkpoint is gone is a repair: a version.
     _comfyui_lists(saving, "krea.safetensors")
     r = _put_graph(saving, saving.manual, graph)
@@ -17522,6 +17638,62 @@ def test_the_people_loader_never_comes_back_into_a_workflow(a_persons_lora):
     kept = _versions_of(env, env.manual)[-1][2]["9"]["inputs"]
     assert (kept["adapter_sha256"], kept["strength_model"]) == (STYLE_DIGEST, 0.4)
     assert kept["adapter_sha256_2"] == ""
+
+
+def test_a_graph_whose_persons_lora_cannot_be_taken_out_is_not_stored(a_persons_lora):
+    """The route's half of the refusal below: a 409, and no version."""
+    env = a_persons_lora
+    graph = json.loads(json.dumps(CHAIN_DOCUMENT))
+    graph["2"] = {
+        "class_type": "LoraStacker",
+        "inputs": {
+            "lora_name_1": RUN_ADAPTER_FILENAME,
+            "lora_name_2": "Mystery_Style.safetensors",
+            "model": ["1", 0],
+            "clip": ["1", 1],
+        },
+    }
+    r = _put_graph(env, env.manual, graph)
+    assert r.status_code == 409 and "attached to a person" in r.json()["detail"], r.text
+    assert [row[0] for row in _versions_of(env, env.manual)] == [1]
+
+
+def test_a_strength_goes_to_its_own_row_of_the_multi_adapter_loader(chained):
+    """A second row's strength was written to the first row's widget."""
+    with chained.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (STYLE_DIGEST,))
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', 'style.safetensors', ?, 'scanned')",
+            (STYLE_DIGEST,),
+        )
+    try:
+        manual = workflows_routes.store_manual_workflow(
+            chained.server.hub,
+            "Rows",
+            _with_people_loader((RUN_ADAPTER_DIGEST, 0.8), (STYLE_DIGEST, 0.4)),
+            "import",
+        )
+        r = _save(
+            chained,
+            manual,
+            changes={
+                "loras": [
+                    {
+                        "node_id": "9",
+                        "field": "adapter_sha256_2",
+                        "sha256": STYLE_DIGEST,
+                        "strength_model": 0.1,
+                    }
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
+        rows = _versions_of(chained, manual)[-1][2]["9"]["inputs"]
+        assert (rows["strength_model"], rows["strength_model_2"]) == (0.8, 0.1)
+    finally:
+        with chained.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (STYLE_DIGEST,))
 
 
 def test_a_person_row_that_cannot_be_taken_out_is_refused_not_stored():

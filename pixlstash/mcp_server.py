@@ -16,8 +16,10 @@ argv, which other accounts on the machine can list.
 ``--allow-write`` adds the workflow tools: list and read workflows, hand a
 workflow's graph out as a file, take an edited graph back (as a new workflow,
 or saved over the one it came from as its next version), and preflight or
-run a workflow. They are a fixed allowlist of routes that remove nothing,
-plus one, ``run_workflow``, that spends GPU time and makes pictures.
+run a workflow. They are a fixed allowlist of routes that delete no workflow,
+picture or recipe (a save over a workflow keeps the graph it replaces as a
+version, of which a workflow keeps 50), plus one, ``run_workflow``, that
+spends GPU time and makes pictures.
 Every route they wrap is owner-only, so they need an unscoped (``ALL``)
 token; the flag narrows what this server offers, never what the token can
 do. ``export_workflow_graph`` and ``import_workflow_graph`` write and read a
@@ -873,7 +875,11 @@ def _call_workflow_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict] 
         if out_path is not None and (not isinstance(out_path, str) or not out_path):
             raise ToolError("out_path must be a non-empty string")
         workflow_id = _quoted_id(arguments)
-        graph = json.loads(_get(fetch, f"/workflows/{workflow_id}/graph")[1])
+        # Every stage left in: the edited graph may be saved back over the
+        # workflow, and a stage cut out of it could not be switched on again.
+        graph = json.loads(
+            _get(fetch, f"/workflows/{workflow_id}/graph", {"all_stages": "true"})[1]
+        )
         workflow = graph.get("workflow") if isinstance(graph, dict) else None
         if not isinstance(workflow, dict):
             raise ToolError("PixlStash answered with no workflow graph")

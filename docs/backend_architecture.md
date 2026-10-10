@@ -2835,9 +2835,10 @@ has. So there is one way a change is applied, the run planner's, and three
 things follow. *Run with changes* is a run whose body carries them
 (`keep_stages` is the new half of `skip_stages`: a stage the default recipe
 has off, on for this run). *Open the unsaved graph* is
-`GET /workflows/{id}/graph?waiting=true`. And **what Save stores is the graph
-a run with those changes would submit**: `_plan(…, saving="over" | "new")`,
-which is Open's plan with two differences. Every stage stays in the graph,
+`GET /workflows/{id}/graph?waiting=true` (`all_stages=true` leaves in a stage
+the default recipe runs without, for a graph that will be saved back: the MCP
+export asks for it). And **what Save stores is built by that same planner**:
+`_plan(…, saving="over" | "new")`, which is Open's plan with three differences. Every stage stays in the graph,
 on or off, because a stage is a default stored beside the graph and can be
 switched on again. And a save *over* the workflow leaves the parameters the
 owner typed (`EDITED`), and the request's own `values`, out of the graph: they
@@ -2858,9 +2859,12 @@ the saved graph.
 
 - `GET`, `PUT`, `DELETE /workflows/{id}/changes`: read, replace and discard
   what waits. The read also carries `ran`, and **which verbs are open and
-  why** (`save`, `save_as_new`, `ran_save`, each `{open, reason}`), decided in
-  `_verbs` and nowhere else, so every surface prints the same sentence and the
-  save refuses for the same one. `WorkflowCard.unsaved_changes` (grid and
+  why** (`save`, `save_as_new`, `ran_save`, each `{open, reason}`): the two
+  rules (the checkpoint rule, a workflow changed since) are decided in
+  `_verbs` and nowhere else, so every surface prints the same sentence and
+  the save refuses for the same one. A `PUT` is not checked against the
+  graph: a change naming a loader or a stage the workflow lacks is refused
+  when it is saved, with its own sentence (400, 409). `WorkflowCard.unsaved_changes` (grid and
   detail) is the count a card's *Unsaved* badge is drawn from.
 - `POST /workflows/{id}/save` and `POST …/save-as-new`: apply what waits with
   the request's `changes` on top (`WorkflowChanges.over`, thing by thing),
@@ -2895,7 +2899,10 @@ newest version of an automatic workflow that has been saved over
 where the core holds the node (so parameters and pins set before the save
 still name it) and by slot label otherwise, with its stages read off the graph
 (`special_groups`). Models are listed for both, a manual workflow's by slot
-label, which is what gives its model rows an address to change. An automatic
+label, which is what gives its model rows an address to change; a run writes
+none of them back (`DefaultRecipe.own_graph`, `_under_defaults`), since the
+graph already loads them and one slot label can name two loaders in mirrored
+branches. An automatic
 workflow nobody has saved over is still a vote of its pictures. **The first
 save over an automatic workflow therefore carries the vote into the graph**:
 the planner applies the default recipe (modal values, models, majority LoRAs,
@@ -2918,9 +2925,11 @@ set of changes applied to a graph it was not made against gives a graph nobody
 chose. Save as new still works.
 
 **A finished run keeps the changes it was made with** (`_keep_run_changes`,
-kind `run`), so the Tasks tab can offer the two verbs afterwards: what the
-body changed against the default recipe, since the Run popup sends every
-parameter it shows. Until the next run of that workflow, or a save. Prompt,
+kind `run`), so the Tasks tab can offer the two verbs afterwards: parameters,
+stages and filename model picks only where they differ from the default
+recipe, since the Run popup sends every parameter it shows; LoRA slots and
+removals as sent. Until the next run of that workflow, a save, or the
+workflow getting another version (the read then answers `ran: null`). Prompt,
 seed, count, the pictures put in and the people picked (`add_loras`) are the
 run's and are never kept.
 
@@ -2931,8 +2940,9 @@ edited*, `run` *saved from a run*, `comfyui` *from ComfyUI*, `mcp` *from an
 assistant*, `revert:<n>` *went back to version n*, and `pictures` (version 1
 of an automatic workflow) *as PixlStash first read it*. Going back
 (`restore_version`) appends the earlier document, with its conversion, as the
-newest version: nothing is removed, so it can be undone, and it is not a
-checkpoint change under rule 2 since every version was already saved on this
+newest version: the version left is kept, so it can be undone (past the 50 a
+workflow keeps, the oldest after version 1 are pruned as for any save), and
+it is not a checkpoint change under rule 2 since every version was already saved on this
 workflow.
 
 **A whole graph saved over a workflow** (`PUT /workflows/{id}/graph`). One
@@ -2942,7 +2952,11 @@ workflow opened from PixlStash (#1852). It differs from Save because it
 carries a graph and not a set of changes. A graph that no longer loads a base
 model this machine has is stored as a **new workflow** and the answer says so
 (`new_workflow`, `reason`), where Save would be refused: the caller is at no
-screen that could offer Save as new. A workflow that got a version since the
+screen that could offer Save as new. Read by file over the loaders an output
+reads (`_base_model_a_graph_drops`), so a loader left wired into nothing does
+not keep the old checkpoint. A credential widget that arrives blank, as
+`GET …/graph` hands every one out, is filled from the stored graph
+(`_keep_stored_secrets`), so a round trip does not wipe a key. A workflow that got a version since the
 graph was read is **saved anyway** as the newest (`replaced_newer`): a whole
 graph cannot be mis-applied, and the version before is one step back. And
 `waiting_applied` clears the waiting changes, which the graph already holds;
@@ -2974,10 +2988,11 @@ off whichever field names the slot), and the class is allowed on replay
 `model_shelf_service.people_who_fit`, served by `GET /workflows/{id}/people`:
 a person is offered when a LoRA attached to them is for the base model of the
 workflow's checkpoint (`base_model_family` on both sides, the first named base
-model of the card). `unknown` counts the people nothing vouches for and
-`clash` those whose every LoRA is for another base model. The Run popup's
-Person field and the people loader in ComfyUI read it, so they offer the same
-people.
+model of the card; a card that names none answers everybody as `unknown`).
+`unknown` counts the people nothing vouches for and `clash` those whose every
+LoRA is for another base model. It is the read the Run popup's Person field
+(#1850, which still works the rule out in the client) and the people loader
+in ComfyUI (#1852) are to share.
 
 **A saved recipe still runs on the graph it was saved from (rule 8).** A
 recipe states only what it changes against its workflow, so a save over the
@@ -2985,9 +3000,11 @@ workflow would otherwise change what the recipe makes. `_plan` gives a
 saved-recipe run the version that was current when the recipe was saved
 (`workflow_versions.version_at(created_at)`: the newest kept version stored at
 or before it, else the oldest kept, which for an automatic workflow is the
-graph read off its pictures), and both halves read it: `_source_graph_for`
-resolves that version's document, and `workflow_defaults(version=)` the
-default recipe the workflow had then. A recipe on another card of the
+graph read off its pictures), whenever the workflow that runs is the recipe's
+own, named as `target` (as the Run popup does) or not. Both halves read it:
+`_source_graph_for` resolves that version's document, and
+`workflow_defaults(version=)` the default recipe read off that graph (the
+owner's typed default rows are not versioned and apply as they are today). A recipe on another card of the
 workflow runs that card's own graph, as before. Nothing is written to a
 recipe. The limit is the 50 versions a workflow keeps: a recipe saved on a
 version since pruned runs on the nearest kept one before it.

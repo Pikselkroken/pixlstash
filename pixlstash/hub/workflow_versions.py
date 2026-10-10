@@ -269,8 +269,9 @@ def list_versions(hub: HubDatabase, workflow_id: str) -> list[dict]:
 def restore_version(conn: sqlite3.Connection, workflow_id: str, version: int) -> int:
     """Make an earlier version of *workflow_id* its newest; return the new number.
 
-    The earlier graph is appended as a version of its own, so nothing is
-    removed and going back can itself be undone.
+    The earlier graph is appended as a version of its own, so the version
+    left is kept and going back can itself be undone (the cap of
+    :data:`MAX_VERSIONS` prunes as for any other version).
 
     Raises:
         LookupError: The workflow keeps no such version.

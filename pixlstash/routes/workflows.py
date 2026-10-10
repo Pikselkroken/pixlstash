@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import sqlite3
 import os
 import re
@@ -43,9 +44,9 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field as dataclass_field
 from difflib import SequenceMatcher
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Path, Query, Request, Response
 from pydantic import (
     BaseModel,
     Field,
@@ -1525,6 +1526,14 @@ class WorkflowChanges(BaseModel):
         if len(set(addresses)) != len(addresses):
             raise ValueError("One model per loader address.")
         _one_row_per_address(self.values)
+        for value in self.values:
+            # Stored, and read back on every grid: bounded like a default.
+            if len(str(value.value)) > MAX_VALUE_LENGTH:
+                raise ValueError(
+                    f"A parameter value is longer than {MAX_VALUE_LENGTH} characters."
+                )
+            if isinstance(value.value, float) and not math.isfinite(value.value):
+                raise ValueError("A parameter value must be a finite number.")
         slots = [(item.node_id, item.field) for item in self.loras]
         if len(set(slots)) != len(slots):
             raise ValueError("One entry per LoRA slot.")
@@ -3328,6 +3337,9 @@ def _count_changes(raw: dict | None) -> int:
     return changes.count() if changes is not None else 0
 
 
+# Past any version a workflow could reach; keeps a path number SQLite can hold.
+MAX_VERSION_NUMBER = 2**31 - 1
+
 # Why Save is closed, as every surface prints it (rule 2 of #1846, and a
 # workflow changed since the changes were made).
 _NOTHING_TO_SAVE = "There is nothing to save."
@@ -5056,17 +5068,22 @@ def create_router(server) -> APIRouter:
                 continue
             # ``strength`` is the model-only loaders' single widget, so a model
             # strength fills it when the two-widget spelling is absent rather
-            # than being silently dropped.
+            # than being silently dropped. A numbered slot (a stacker's
+            # `lora_name_2`, the multi-adapter loader's `adapter_sha256_2`)
+            # has its own widgets, numbered the same.
+            row = re.search(r"_\d+$", item.field)
+            suffix = row.group(0) if row else ""
             if item.strength_model is not None:
-                for name in ("strength_model", "strength"):
+                for name in (f"strength_model{suffix}", f"strength{suffix}"):
                     if name in inputs and not isinstance(inputs[name], list):
                         inputs[name] = item.strength_model
                         break
+            clip = f"strength_clip{suffix}"
             if item.strength_clip is not None and not isinstance(
-                inputs.get("strength_clip"), list
+                inputs.get(clip), list
             ):
-                if "strength_clip" in inputs:
-                    inputs["strength_clip"] = item.strength_clip
+                if clip in inputs:
+                    inputs[clip] = item.strength_clip
         return []
 
     def _add_loras(
@@ -5799,7 +5816,12 @@ def create_router(server) -> APIRouter:
                 "models": [
                     RunModel(address=m.address, filename=m.filename)
                     for m in recipe.models
-                    if m.filename and m.address not in asked
+                    if m.filename
+                    and m.address not in asked
+                    # A workflow read off its own graph already loads what
+                    # its rows name, and a slot label can name two loaders
+                    # (twin branches): written back, one file would take both.
+                    and (not recipe.own_graph or m.provenance == EDITED)
                 ]
                 + list(body.models),
             }
@@ -5945,13 +5967,16 @@ def create_router(server) -> APIRouter:
         # default recipe the workflow had then (rule 8 of #1846): the version
         # that was current when the recipe was saved, where the workflow has
         # been saved over since. A target runs that workflow as it is now.
-        as_of = (
-            workflow_versions.version_at(
-                hub, workflow_id, _saved_recipe(body).created_at
-            )
-            if workflow_id and body.saved_recipe_id is not None and not body.target
-            else None
-        )
+        as_of = None
+        if (
+            workflow_id
+            and body.saved_recipe_id is not None
+            # The Run popup names the recipe's own workflow as `target`.
+            and workflow_id == recipe_workflow
+        ):
+            saved_at = _saved_recipe(body).created_at
+            if saved_at is not None:
+                as_of = workflow_versions.version_at(hub, workflow_id, saved_at)
         recipe = _workflow_recipe(workflow_id, as_of) if workflow_id else None
         # A workflow run by itself is nobody's portrait: a person's LoRA is a
         # recipe's business, so only a run made from pictures places one the
@@ -7275,6 +7300,15 @@ def create_router(server) -> APIRouter:
                 "the unsaved graph. `waiting_applied` says whether any were."
             ),
         ),
+        all_stages: bool = Query(
+            False,
+            description=(
+                "Leave in every stage the workflow has, also one its default "
+                "recipe runs without. For a graph that will be saved back "
+                "over the workflow (`PUT …/graph`): a stage cut out of it "
+                "could not be switched on again."
+            ),
+        ),
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
@@ -7282,16 +7316,17 @@ def create_router(server) -> APIRouter:
         unsaved = (
             _stored_changes(hub, workflow.workflow_id)[0] if waiting else None
         ) or WorkflowChanges()
+        asked = _run_with(workflow.workflow_id, unsaved)
+        if all_stages:
+            asked = asked.model_copy(
+                update={"skip_stages": [], "keep_stages": list(get_args(Stage))}
+            )
         # Run's own plan, so what opens is what Run would submit (#1623 left a
         # workflow several graphs; this is the one Run picks).
         # `RecursionError` for `_card_source`'s reason: the source graph came
         # out of a picture from somewhere else, so its depth is not ours to trust.
         try:
-            plan = _plan(
-                request,
-                _run_with(workflow.workflow_id, unsaved),
-                opening=True,
-            )
+            plan = _plan(request, asked, opening=True)
         except RecursionError as exc:
             logger.warning(
                 "Workflow %s has a source graph too deeply nested to read: %s",
@@ -9056,10 +9091,19 @@ def create_router(server) -> APIRouter:
     def _stored_changes(
         hub, workflow_id: str
     ) -> tuple[WorkflowChanges | None, int | None, WorkflowChanges | None]:
-        """``(waiting, the version they were made against, ran)`` of a workflow."""
+        """``(waiting, the version they were made against, ran)`` of a workflow.
+
+        *ran* is ``None`` once the workflow has another version than the one
+        that run was made on: what it changed no longer applies to this graph.
+        """
         stored = read_changes(hub, workflow_id)
         waiting, base = stored.get(WAITING, (None, None))
-        return _changes_of(waiting), base, _changes_of(stored.get(RAN, (None, None))[0])
+        ran, ran_base = stored.get(RAN, (None, None))
+        if ran is not None and ran_base != workflow_versions.current_version(
+            hub, workflow_id
+        ):
+            ran = None
+        return _changes_of(waiting), base, _changes_of(ran)
 
     def _run_with(workflow_id: str, changes: WorkflowChanges) -> RunRequest:
         """A run of the workflow with *changes*: how a set of changes becomes
@@ -9156,7 +9200,15 @@ def create_router(server) -> APIRouter:
                 return True
         if answered:
             return False
-        return _shelf_digest(hub, FILE_CHECKPOINT)(filename) is not None
+        # Any shelf model of that name, whatever kind it was filed as and
+        # hashed or not: unsure reads as installed, which keeps rule 2 closed.
+        return (
+            hub.fetchone(
+                "SELECT 1 FROM model WHERE lower(filename) = ?",
+                (normalized_filename(filename),),
+            )
+            is not None
+        )
 
     def _changes_the_checkpoint(
         hub, workflow_id: str, changes: WorkflowChanges
@@ -9182,6 +9234,22 @@ def create_router(server) -> APIRouter:
         }
         by_digest = None
         object_info = _owner_object_info()
+        # The graph too: an address can be spelled by slot label or by
+        # `core:` label, and the recipe knows a loader by one of them only.
+        try:
+            _workflow, card = _require_base(hub, workflow_id)
+            graph = _card_source(
+                card, workflow_id=workflow_id, object_info=object_info
+            ).graph
+            labels, core = _graph_labels(graph, "models")
+        except HTTPException as exc:
+            logger.info(
+                "[workflows] Workflow %s has no graph to read a checkpoint "
+                "change against (%s); its default recipe decides alone.",
+                workflow_id,
+                exc.detail,
+            )
+            graph, labels, core = {}, {}, {}
         for pick in picks:
             now = pick.filename
             if now is None:
@@ -9194,15 +9262,29 @@ def create_router(server) -> APIRouter:
                         )
                     }
                 now = by_digest.get(str(pick.sha256).lower())
-            was = current.get(pick.address)
-            if not was or was in (SHELF_MODEL_GONE, SHELF_MODEL_UNNAMED):
-                # Nothing it could load there: whatever goes in is a repair.
-                continue
-            if now and normalized_filename(now) == normalized_filename(was):
-                continue
-            widget = pick.address.rpartition(OVERRIDE_ADDRESS_SEPARATOR)[2]
-            if _installed(hub, was, widget, object_info):
-                return True
+            slot_label, _, widget = pick.address.rpartition(OVERRIDE_ADDRESS_SEPARATOR)
+            loaded = [current.get(pick.address)] + [
+                node["inputs"][widget]
+                for node_id, node in graph.items()
+                if isinstance(node, dict)
+                and isinstance(node.get("inputs"), dict)
+                and isinstance(node["inputs"].get(widget), str)
+                and (
+                    labels.get(node_id) == slot_label
+                    or (
+                        node_id in core
+                        and CORE_ADDRESS_PREFIX + core[node_id] == slot_label
+                    )
+                )
+            ]
+            for was in loaded:
+                if not was or was in (SHELF_MODEL_GONE, SHELF_MODEL_UNNAMED):
+                    # Nothing it could load there: what goes in is a repair.
+                    continue
+                if now and normalized_filename(now) == normalized_filename(was):
+                    continue
+                if _installed(hub, was, widget, object_info):
+                    return True
         return False
 
     def _verbs(
@@ -9568,6 +9650,12 @@ def create_router(server) -> APIRouter:
             name = download_stem(asked) if asked else ""
             if not name:
                 raise HTTPException(status_code=422, detail="Save as new needs a name.")
+            # The new workflow's graph holds every parameter; its stages are
+            # defaults of its own. Worked out before anything is stored, so a
+            # refusal leaves no workflow behind.
+            rows = _default_rows(
+                WorkflowChanges(stages=changes.stages), stages, every=True
+            )
             graph, source, _plan_made, left_out = _graph_to_save(
                 request, hub, workflow_id, changes, "new"
             )
@@ -9575,16 +9663,7 @@ def create_router(server) -> APIRouter:
                 hub, name, graph, source.bindings, "duplicate", workflow, card
             )
             with hub.transaction() as conn:
-                # The new workflow's graph holds every parameter; its stages
-                # are defaults of its own.
-                write_saved_defaults(
-                    conn,
-                    landed,
-                    [],
-                    _default_rows(
-                        WorkflowChanges(stages=changes.stages), stages, every=True
-                    ),
-                )
+                write_saved_defaults(conn, landed, [], rows)
                 clear_changes(conn, workflow_id)
             _announce(request, [landed], "imported")
             _announce(request, [workflow_id], "changed")
@@ -9778,8 +9857,8 @@ def create_router(server) -> APIRouter:
         summary="Go back to an earlier version of a workflow",
         description=(
             "Make an earlier version of this workflow's graph its newest. The "
-            "earlier graph is stored again as a version of its own, so "
-            "nothing is removed and going back can itself be undone. It is "
+            "earlier graph is stored again as a version of its own, so the "
+            "version left is kept and going back can itself be undone. It is "
             "not a checkpoint change: every version was already saved on "
             "this workflow. Changes waiting on it were made against the "
             "version it had, so Save is then closed for them."
@@ -9790,13 +9869,29 @@ def create_router(server) -> APIRouter:
             409: {"description": "That is the version it has."},
         },
     )
-    def restore_workflow_version(request: Request, workflow_id: str, version: int):
+    def restore_workflow_version(
+        request: Request,
+        workflow_id: str,
+        version: int = Path(ge=1, le=MAX_VERSION_NUMBER),
+    ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow_id = _require_workflow(hub, workflow_id).workflow_id
         try:
             with hub.transaction() as conn:
                 workflow_versions.restore_version(conn, workflow_id, version)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Version %d of workflow %s will not read, so it cannot be "
+                "gone back to: %s",
+                version,
+                workflow_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="That version cannot be read, so it cannot be gone back to.",
+            ) from exc
         except LookupError as exc:
             raise HTTPException(
                 status_code=404, detail="This workflow keeps no such version."
@@ -9810,6 +9905,30 @@ def create_router(server) -> APIRouter:
 
     # ── A whole graph saved over a workflow ─────────────────────────────────
 
+    def _keep_stored_secrets(graph: dict, stored: dict) -> None:
+        """Put back each credential the graph arrives without, in place.
+
+        `GET …/graph` blanks every credential widget before the graph leaves
+        (it travels into ComfyUI's page), so a graph that comes back holds
+        empty ones. Stored as sent, a save would wipe the key the workflow
+        runs with. A blank is filled from the same widget of the same node;
+        one the caller typed a value into is the caller's.
+        """
+        for node_id, node in graph.items():
+            inputs = node.get("inputs") if isinstance(node, dict) else None
+            kept = (stored.get(node_id) or {}).get("inputs") if stored else None
+            if not isinstance(inputs, dict) or not isinstance(kept, dict):
+                continue
+            if node.get("class_type") != (stored.get(node_id) or {}).get("class_type"):
+                continue
+            for name, value in inputs.items():
+                if (
+                    value == ""
+                    and SECRET_FIELD_RE.search(name)
+                    and isinstance(kept.get(name), str)
+                ):
+                    inputs[name] = kept[name]
+
     def _base_model_a_graph_drops(
         hub, before: dict, after: dict, object_info
     ) -> str | None:
@@ -9821,10 +9940,15 @@ def create_router(server) -> APIRouter:
         """
 
         def base_files(graph: dict) -> dict[str, tuple[str, str]]:
+            # Of the loaders an output reads, where ComfyUI says which those
+            # are: one left wired into nothing loads no model.
+            live = live_node_ids(graph, object_info) if object_info else None
             return {
                 normalized_filename(value): (value, widget)
-                for _node, _cls, widget, value in iter_model_fields_api(graph)
-                if slot_kind(widget) in BASE_MODEL_KINDS and isinstance(value, str)
+                for node_id, _cls, widget, value in iter_model_fields_api(graph)
+                if slot_kind(widget) in BASE_MODEL_KINDS
+                and isinstance(value, str)
+                and (live is None or str(node_id) in live)
             }
 
         kept = base_files(after)
@@ -9884,16 +10008,29 @@ def create_router(server) -> APIRouter:
                     "ComfyUI submits, not its editor document."
                 ),
             )
-        # The graph alone: an envelope around it is not part of a workflow.
-        graph = deepcopy(api_graph(payload.workflow))
         # Cached: only a bypass and the installed check ask it, and a save
         # from ComfyUI's own page arrives often.
         object_info = _owner_object_info()
         before = _card_source(card, workflow_id=workflow_id, object_info=object_info)
-        left_out = _left_out_people(hub, graph, object_info)
-        if workflow_inbox.content_hash(graph) == workflow_inbox.content_hash(
-            before.graph
-        ):
+        try:
+            # The graph alone: an envelope around it is not part of a workflow.
+            graph = deepcopy(api_graph(payload.workflow))
+            _keep_stored_secrets(graph, before.graph)
+            left_out = _left_out_people(hub, graph, object_info)
+            unchanged = workflow_inbox.content_hash(
+                graph
+            ) == workflow_inbox.content_hash(before.graph)
+        except RecursionError as exc:
+            logger.warning(
+                "A graph sent to save over workflow %s nests too deeply to read: %s",
+                workflow_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="PixlStash cannot read that graph: it is nested too deeply.",
+            ) from exc
+        if unchanged:
             if payload.waiting_applied:
                 write_changes(hub, workflow_id, WAITING, None)
                 _announce(request, [workflow_id], "changed")

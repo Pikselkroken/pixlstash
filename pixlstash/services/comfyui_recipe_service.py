@@ -111,8 +111,9 @@ LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
 # forks the workflow into a new card - the error `guess_mark`'s
 # precision-beats-recall rule exists to prevent.
 #
-# Deliberately NOT used by `detect_lora_targets` above, which wants ONE digest
-# slot per node whatever the pack spelled it, and says so.
+# Deliberately NOT what `detect_lora_targets` above reads a node's FIRST
+# digest slot by: that is one slot whatever the pack spelled it, and it says
+# so. Its numbered rows are `_NUMBERED_DIGEST_FIELD_RE`, below.
 LORA_DIGEST_FIELD_RE = re.compile(r"^(adapter|lora)_sha256(_\d+)?$")
 # A digest row past a node's first: `PixlStashMultiAdapterLoader` holds one
 # adapter per row (`adapter_sha256`, `adapter_sha256_2`, ...), each a slot.
@@ -1289,9 +1290,9 @@ def detect_lora_targets(prompt_graph: dict) -> list[dict]:
         if not isinstance(inputs, dict):
             continue
         fields = [f for f in inputs if LORA_FILENAME_FIELD_RE.match(str(f))]
-        # One digest slot per node, not one per spelling: the pack has called
-        # the widget both things, and a node carrying two names is still one
-        # adapter to load.
+        # One digest slot per spelling-free row: the pack has called the
+        # first widget both things, and a node carrying two names is still
+        # one adapter to load.
         digest = next((f for f in LORA_DIGEST_FIELDS if f in inputs), None)
         digests = [] if digest is None else [digest]
         # A numbered digest field is a row of its own, as a stacker's

@@ -1409,6 +1409,10 @@ class DefaultRecipe:
     # Every digest attached to a person, less the owner's own: a run of the
     # workflow by itself bypasses a loader still holding one.
     character_loras: frozenset[str] = frozenset()
+    # Read off the workflow's own graph (a manual workflow, or an automatic
+    # one saved over) and not off its pictures: its models and LoRAs are what
+    # that graph already loads, so a run has nothing to write back for them.
+    own_graph: bool = False
 
     def recipe_loras(self, people: Optional[Collection[str]] = ()) -> list[dict]:
         """The LoRAs as a saved recipe holds them, for ``place_recipe_loras``.
@@ -1592,10 +1596,13 @@ def workflow_defaults(
             if slot.is_lora:
                 loaded.add(slot.asset)
                 lora_widgets[slot.asset] = slot.widget
+                # The slot's own strength: a numbered slot (a stacker's, a
+                # row of the multi-adapter loader) numbers its widget alike.
+                row = re.search(r"_\d+$", slot.widget)
                 strength = (
                     (document.get(slot.node_id) or {})
                     .get("inputs", {})
-                    .get("strength_model")
+                    .get(f"strength_model{row.group(0) if row else ''}")
                 )
                 if isinstance(strength, (int, float)) and not isinstance(
                     strength, bool
@@ -1640,6 +1647,7 @@ def workflow_defaults(
         base_card=workflow.base_card,
         sampled=sampled,
         stages={stage: without[stage] * 2 <= staged for stage in base_stages},
+        own_graph=graph_stages is not None,
     )
     # The base graph's own read: a manual workflow's one, else the base
     # topology's variant.
