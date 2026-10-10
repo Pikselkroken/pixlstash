@@ -224,6 +224,24 @@
           />
         </div>
 
+        <!-- Who the run is of. A workflow run by itself carries no person's
+             LoRA (the server leaves it out), so the people whose LoRA works
+             with its checkpoint are offered here, by face. Opened on a person
+             (Create with LoRA…), that person is drawn chosen and fixed. -->
+        <div v-if="showPerson" class="rund-f rund-f--4" data-testid="rund-person">
+          <span class="rund-l">Person</span>
+          <PersonPicker
+            v-if="personTiles.length"
+            :people="personTiles"
+            :model-value="chosenPersonId"
+            :fixed="Boolean(fixedPerson)"
+            :disabled="submitting"
+            aria-label="Person"
+            @update:model-value="pickPerson"
+          />
+          <p v-if="personNote" class="rund-note">{{ personNote }}</p>
+        </div>
+
         <div class="rund-f rund-f--4">
           <span class="rund-l">
             LoRAs<span class="rund-sp" /><span class="rund-l2">Strength</span>
@@ -323,10 +341,10 @@
           >
             <AppSelect
               v-model="row.sha256"
-              :label="`Added LoRA ${index + 1}`"
+              :label="row.person ? 'LoRA of the person' : `Added LoRA ${index + 1}`"
               hide-label
               compact
-              :options="adapterOptions"
+              :options="row.person ? personLoraOptions : adapterOptions"
               :disabled="submitting"
             />
             <AppInput
@@ -338,7 +356,10 @@
               :disabled="submitting"
               @keydown.stop
             />
+            <!-- Not on a fixed person's row: the popup was opened to make
+                 pictures of them, and taking their LoRA off is another run. -->
             <AppBarButton
+              v-if="!(row.person && fixedPerson)"
               class="rund-lora-act"
               icon="close"
               :tooltip="`Remove added LoRA ${index + 1}`"
@@ -817,7 +838,7 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
 import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
-import { fitWorkflows } from "../../utils/loraWorkflows";
+import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { setEachRun } from "../../utils/workflowPins";
 import {
@@ -830,6 +851,7 @@ import {
   repairNotices,
   unplacedNotice,
 } from "../../utils/runReasons";
+import PersonPicker from "./PersonPicker.vue";
 import SaveRecipeDialog from "./SaveRecipeDialog.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -1194,7 +1216,8 @@ const hasRecipe = computed(() => Boolean(recipe.value));
 /**
  * What the LoRA section says when it has no graph rows to show: a card run
  * reads no picture's recipe, so the workflow's own LoRAs are named from its
- * default recipe and run as it stores them.
+ * default recipe and run as it stores them. A person's LoRA is never one of
+ * them (the Person field says so).
  */
 const ownLorasLine = computed(() => {
   if (hasRecipe.value) {
@@ -1822,7 +1845,10 @@ const baseNegative = computed(
  * it can only do for a row it is shown.
  */
 const recipeLoras = computed(() =>
-  loras.value
+  // The LoRAs this run adds are part of the look too: the person picked for a
+  // workflow run has no graph row, and a recipe saved without them would run
+  // as somebody else, or as no one.
+  [...loras.value, ...addedLoras.value]
     // A graph LoRA the shelf cannot name is KEPT, as its file with no digest:
     // Save as recipe lists and flags it (#1478), and dropping it here was the
     // silent half of that - the dialog never saw it to say so.
@@ -2039,12 +2065,102 @@ const adapterOptions = computed(() =>
     ),
   ]
     .filter((adapter) => adapter?.sha256)
-    .map((adapter) => ({
-      value: adapter.sha256,
-      label: adapter.display_name || adapter.filename || adapter.sha256.slice(0, 12),
-    }))
+    .map(adapterOption)
     .sort((a, b) => a.label.localeCompare(b.label)),
 );
+
+function adapterOption(adapter) {
+  return {
+    value: adapter.sha256,
+    label: adapter.display_name || adapter.filename || adapter.sha256.slice(0, 12),
+  };
+}
+
+/**
+ * A workflow run by itself is of no one: the server leaves a person's LoRA out
+ * of it (`_leave_out_character_loras`, `routes/workflows.py`), and a recipe
+ * keeps it. So this run, and only this one, is offered the people to add.
+ */
+const offersPerson = computed(
+  () =>
+    kind.value === "card" &&
+    !pictureIds.value.length &&
+    !savedRecipe.value &&
+    !loraSource.value,
+);
+/** Create with LoRA… on a person: that person, chosen and not changeable. */
+const fixedPerson = computed(() =>
+  loraSource.value?.entityType === "character"
+    ? { id: Number(loraSource.value.entityId), name: loraSource.value.name }
+    : null,
+);
+/** Shelf rows the shelf classes `unknown`: attachable to a person all the same. */
+const unknownLoras = ref([]);
+/** The people whose LoRA works with this workflow's checkpoint (`fitPeople`). */
+const personFits = computed(() =>
+  offersPerson.value && card.value
+    ? fitPeople(
+        card.value,
+        [...adapters.value, ...unknownLoras.value],
+        entityLists.characters,
+      )
+    : { people: [], clash: 0 },
+);
+/** The person picked for this run, or null for no one. */
+const personId = ref(null);
+const chosenPersonId = computed(() => fixedPerson.value?.id ?? personId.value);
+const personTiles = computed(() =>
+  fixedPerson.value ? [fixedPerson.value] : personFits.value.people,
+);
+/** Absent, not empty, in a library where nobody has a LoRA. */
+const showPerson = computed(
+  () =>
+    Boolean(fixedPerson.value) ||
+    personFits.value.people.length > 0 ||
+    personFits.value.clash > 0,
+);
+const personNote = computed(() => {
+  if (fixedPerson.value) return "";
+  const { people, clash } = personFits.value;
+  if (!people.length) {
+    return "No person's LoRA is for this workflow's base model, so it runs with no one's.";
+  }
+  const left = clash
+    ? ` Not listed: ${clash} whose LoRA is for another base model.`
+    : "";
+  return `A workflow runs without a person's LoRA. Pick someone to add theirs.${left}`;
+});
+/** The LoRAs the person's row offers: theirs that fit, never the whole shelf. */
+const personLoraOptions = computed(() =>
+  (fixedPerson.value
+    ? attachedLoras.value
+    : personFits.value.people.find((person) => person.id === personId.value)
+        ?.loras || []
+  ).map(adapterOption),
+);
+
+/**
+ * Pick the person this run is of: their best-fitting LoRA becomes an added
+ * row (`add_loras`), replacing the last pick's. Null is "No one".
+ */
+function pickPerson(id) {
+  if (fixedPerson.value) return;
+  const person = personFits.value.people.find((entry) => entry.id === id);
+  personId.value = person ? person.id : null;
+  addedLoras.value = addedLoras.value.filter((row) => !row.person);
+  if (person) addedLoras.value.unshift(addedRow(person.loras[0].sha256, 1, true));
+}
+
+// Another workflow may be for another base model: a pick that no longer fits
+// is taken off rather than sent, and one whose LoRA changed takes the new one.
+watch(personFits, (fits) => {
+  if (personId.value == null) return;
+  const person = fits.people.find((entry) => entry.id === personId.value);
+  const row = addedLoras.value.find((entry) => entry.person);
+  if (!person || !person.loras.some((lora) => lora.sha256 === row?.sha256)) {
+    pickPerson(person ? person.id : null);
+  }
+});
 
 const setOptions = computed(() => [
   { value: "", label: "No set" },
@@ -2534,12 +2650,15 @@ function addLora() {
   addedLoras.value.push(addedRow(""));
 }
 
-function addedRow(sha256, strength = 1) {
+/** `person` marks the row holding the LoRA of the person the run is of. */
+function addedRow(sha256, strength = 1, person = false) {
   addedKey += 1;
-  return { key: `added-${addedKey}`, sha256, strength };
+  return { key: `added-${addedKey}`, sha256, strength, person };
 }
 
 function removeAddedLora(index) {
+  // Taking the picked person's LoRA off is picking no one.
+  if (addedLoras.value[index]?.person) personId.value = null;
   addedLoras.value.splice(index, 1);
 }
 
@@ -2704,6 +2823,7 @@ function removeLora(index) {
 async function dropLoras() {
   loras.value = [];
   addedLoras.value = [];
+  personId.value = null;
   await runPreflight();
 }
 
@@ -2757,7 +2877,20 @@ async function loadLoraSource() {
   attachedLoras.value = kinds.flat().filter((row) => row?.sha256);
   handMadeSets.value = sets?.hand_made || [];
   const first = attachedLoras.value[0];
-  addedLoras.value = first ? [addedRow(first.sha256)] : [];
+  addedLoras.value = first
+    ? [addedRow(first.sha256, 1, source.entityType === "character")]
+    : [];
+}
+
+/** The picker's two reads, neither of which holds the popup up. */
+async function loadPeople() {
+  void entityLists.refresh("characters");
+  try {
+    unknownLoras.value = await listAdapters({ fileKind: "unknown" });
+  } catch (err) {
+    // The picker then offers the people whose LoRA the shelf has classed.
+    console.warn("Could not read the model shelf's unclassified files:", err);
+  }
 }
 
 async function loadAdapters() {
@@ -2949,6 +3082,7 @@ async function load() {
     // simply has no digest to send, which is exactly what leaving it untouched
     // means anyway.
     await loadAdapters();
+    if (offersPerson.value) void loadPeople();
     loras.value = loraSlots.value.map((slot) => loraRow(slot));
     initialLoraCount.value = loras.value.length;
     addedAtOpen.value = addedSignature.value;

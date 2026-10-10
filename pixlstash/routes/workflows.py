@@ -1265,7 +1265,9 @@ class RunRequest(BaseModel):
     saved_recipe_id: int | None = None
     # A workflow (#1622): `auto:<core and families digest>` or an owner's group. It runs its
     # base topology's graph with its DEFAULT RECIPE applied by the server, and
-    # this body's values, models, LoRAs and skipped stages over that.
+    # this body's values, models, LoRAs and skipped stages over that. Only this
+    # source goes without a LoRA attached to a person: who a picture is of is
+    # a recipe's business, and `add_loras` is how such a run names somebody.
     workflow_id: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
 
     # A workflow to run instead of the source's, over its pictures; with its
@@ -4485,6 +4487,56 @@ def create_router(server) -> APIRouter:
                 inputs["strength_clip"] = item.strength_clip
         return refused
 
+    def _leave_out_character_loras(
+        graph: dict,
+        recipe: DefaultRecipe,
+        body: RunRequest,
+        object_info: dict | None,
+        shelf_index,
+    ) -> None:
+        """Bypass the loaders of *graph* still holding a person's LoRA.
+
+        A workflow run by itself is nobody's portrait: which person a picture
+        is of belongs to a recipe, or to the LoRA this run adds
+        (``add_loras``). A slot the request names itself (``loras``,
+        ``skip_loras``) is the owner's and is left to them, and so is the
+        loader of a LoRA this run adds: ``_add_loras`` sets its strengths where
+        it is, rather than a splice the graph may refuse. Best effort, like
+        the default recipe's other bypasses: a loader that cannot be taken out
+        keeps its LoRA and the run goes ahead.
+        """
+        added = {item.sha256.strip().lower() for item in body.add_loras}
+        left_out = recipe.character_loras - added
+        if not left_out:
+            return
+        asked = {item.node_id for item in [*body.loras, *body.skip_loras]}
+        digests = _slot_digests(
+            live_lora_targets(graph, object_info),
+            shelf_index or adapter_digest_index(_hub()),
+        )
+        slots = [
+            slot
+            for slot, digest in digests.items()
+            if digest in left_out and slot[0] not in asked
+        ]
+        skipped, left_in, _found = run_service.skip_requested_loras(
+            graph, slots, object_info
+        )
+        for entry in skipped:
+            logger.info(
+                "[workflows] Workflow %s runs without the character LoRA in "
+                "node %s: who a picture is of is a recipe's, not the workflow's.",
+                recipe.workflow_id,
+                entry.get("node_id"),
+            )
+        for reason in left_in:
+            logger.info(
+                "[workflows] Workflow %s keeps a character LoRA that cannot be "
+                "bypassed: %s",
+                recipe.workflow_id,
+                reason.as_dict(),
+            )
+
     def _slot_digests(slots: list[dict], shelf_index) -> dict:
         """``{(node_id, field): sha256 or None}``: which shelf LoRA each slot loads.
 
@@ -5105,10 +5157,23 @@ def create_router(server) -> APIRouter:
             # Before the default recipe, which is read off the graph too.
             _freshen(user, workflow_id)
         recipe = _workflow_recipe(workflow_id) if workflow_id else None
+        # A workflow run by itself is nobody's portrait: a person's LoRA is a
+        # recipe's business, so only a run made from pictures places one the
+        # default recipe set aside, and only this one bypasses the graph's own.
+        alone = body.workflow_id is not None
+        # The person this run names (`add_loras`) keeps the loader they already
+        # have: bypassed and spliced back, a graph the splice refuses would
+        # stop a run that only wanted another strength.
+        added = {item.sha256.strip().lower() for item in body.add_loras}
+        default_loras = (
+            recipe.recipe_loras(people=added if alone else None)
+            if recipe is not None
+            else []
+        )
         if recipe is not None:
             body = _under_defaults(body, recipe)
             if not body.loras and not recipe_loras:
-                recipe_loras = recipe.recipe_loras()
+                recipe_loras = default_loras
         configured = bool(getattr(user, "comfyui_url", None))
         comfyui_url = _comfyui_url(user)
         object_info, object_info_error = (
@@ -5309,6 +5374,11 @@ def create_router(server) -> APIRouter:
                 {"code": "prompt_not_applied", "side": side}
                 for side in placed["unplaced"]
             ]
+            if alone and recipe is not None:
+                # First, so every step below reads the graph without them.
+                _leave_out_character_loras(
+                    graph, recipe, body, object_info, shelf_index
+                )
             # A saved recipe's LoRAs are matched against the graph as it stood
             # BEFORE the skip: matched after it, the LoRA a skipped loader held
             # moved on to the next free slot and replaced a LoRA the owner had
@@ -5424,7 +5494,7 @@ def create_router(server) -> APIRouter:
                     if (str(target["node_id"]), str(target["field"]))
                     not in skipped_slots
                 ]
-                if recipe is not None and recipe_loras == recipe.recipe_loras():
+                if recipe is not None and recipe_loras == default_loras:
                     # A default LoRA the shelf cannot name, which the loader
                     # still loads, is the graph as it was: nothing to report.
                     group.unplaced_loras = [

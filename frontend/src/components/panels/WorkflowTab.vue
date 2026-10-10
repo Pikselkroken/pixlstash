@@ -1765,7 +1765,7 @@ const stageRows = computed(() =>
   })),
 );
 
-/** ALSO USED: what changes between pictures, less the default's LoRAs. */
+/** ALSO USED: every LoRA the pictures used, less the default's. */
 const alsoUsed = computed(() => {
   // A default with no asset reference cannot be joined by one, so it is
   // matched by its file instead, or it shows twice. Only those: a default
@@ -1778,7 +1778,13 @@ const alsoUsed = computed(() => {
       .map((lora) => digestOf(lora.sha256))
       .filter(Boolean),
   );
-  return (summary.value?.varying ?? []).filter(
+  // `shared` too: a LoRA in every picture is not in the default when it is a
+  // person's (the workflow runs without) or the owner took it out, and it
+  // would otherwise be listed nowhere and could not be added back.
+  return [
+    ...(summary.value?.shared ?? []),
+    ...(summary.value?.varying ?? []),
+  ].filter(
     (use) =>
       !defaultAssets.value.has(digestOf(use.asset)) &&
       !(use.sha256 && shelfFiles.has(digestOf(use.sha256))) &&
@@ -1799,7 +1805,8 @@ const pileSummary = computed(() => ({
   ...summary.value,
   varying: alsoUsed.value,
   without:
-    alsoUsed.value.length === (summary.value?.varying?.length ?? 0)
+    alsoUsed.value.length === (summary.value?.varying?.length ?? 0) &&
+    alsoUsed.value.every((use) => summary.value?.varying?.includes(use))
       ? (summary.value?.without ?? null)
       : null,
   cover_asset: alsoUsed.value.some(

@@ -96,6 +96,7 @@ from pixlstash.services import (
     comfyui_link_service,
     comfyui_pack_service,
     comfyui_userdata,
+    model_shelf_service,
     workflow_card_service,
 )
 from pixlstash.services.workflow_run_service import (
@@ -14358,6 +14359,115 @@ def test_an_added_lora_replaces_none_of_the_workflows_own(runnable):
         if node["class_type"] in ("LoraLoader", "LoraLoaderModelOnly")
     ]
     assert sorted(loaders) == ["add_detail.safetensors", RUN_ADAPTER_FILENAME]
+
+
+PERSON_LORA_DIGEST = _h("person-lora-digest")
+
+
+@pytest.fixture
+def person_lora(runnable):
+    """The LoRA RUN_CARD's graph loads, on the shelf and attached to a person."""
+    hub, vault = runnable.server.hub, runnable.server.vault
+    created = runnable.owner.post(f"{API}/characters", json={"name": "Example"})
+    assert created.status_code == 200, created.text
+    character_id = created.json()["character"]["id"]
+    try:
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+                "VALUES ('adapter', 'unknown', 'add_detail.safetensors', ?, 'scanned')",
+                (PERSON_LORA_DIGEST,),
+            )
+        model_shelf_service.replace_attachments(
+            vault, PERSON_LORA_DIGEST, [("character", character_id)]
+        )
+        yield character_id
+    finally:
+        model_shelf_service.replace_attachments(vault, PERSON_LORA_DIGEST, [])
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (PERSON_LORA_DIGEST,))
+        runnable.owner.delete(f"{API}/characters/{character_id}")
+
+
+def _lora_loaders(graph: dict) -> list[str]:
+    return sorted(
+        node["inputs"]["lora_name"]
+        for node in graph.values()
+        if node["class_type"] in ("LoraLoader", "LoraLoaderModelOnly")
+    )
+
+
+def test_a_workflow_run_by_itself_leaves_out_a_persons_lora(runnable, person_lora):
+    """Who a picture is of is a recipe's business, never the workflow's own."""
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    assert runnable.submitted, [g["reasons"] for g in r.json()["groups"]]
+    graph = runnable.submitted[0]["graph"]
+    assert _lora_loaders(graph) == []
+    # Rewired around the loader, not left reading a node that is gone.
+    assert graph["3"]["inputs"]["model"] == ["1", 0]
+    # Not the "missing on this ComfyUI" warning: nothing is missing.
+    assert r.json()["groups"][0]["bypassed_loras"] == []
+
+    card = runnable.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"]
+    assert card["default_recipe"]["loras"] == []
+
+
+def test_a_persons_lora_no_sample_decided_is_left_out_too(runnable, person_lora):
+    """With no majority the recipe decides nothing, and the loader would stay."""
+    runnable.monkeypatch.setattr(
+        workflow_card_service, "read_instance_hashes", lambda *a, **k: []
+    )
+    card = runnable.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"]
+    assert card["default_recipe"]["sampled"] == 0
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    assert runnable.submitted, [g["reasons"] for g in r.json()["groups"]]
+    assert _lora_loaders(runnable.submitted[0]["graph"]) == []
+
+
+def test_a_lora_of_somebody_deleted_is_nobodys(runnable, person_lora):
+    """An attachment row outlives its character; the LoRA must not stay stripped."""
+    deleted = runnable.owner.delete(f"{API}/characters/{person_lora}")
+    assert deleted.status_code == 200, deleted.text
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    assert _lora_loaders(runnable.submitted[0]["graph"]) == ["add_detail.safetensors"]
+
+
+def test_a_run_made_from_a_picture_keeps_the_persons_lora(runnable, person_lora):
+    """The other direction: the recipe keeps what the workflow leaves out."""
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [runnable.picture_id], "target": RUN_WF},
+    )
+    assert r.status_code == 200, r.text
+    assert runnable.submitted, [g["reasons"] for g in r.json()["groups"]]
+    assert _lora_loaders(runnable.submitted[0]["graph"]) == ["add_detail.safetensors"]
+
+
+def test_a_person_picked_for_a_workflow_run_keeps_their_own_loader(
+    runnable, person_lora
+):
+    """The Run popup's person picker (`add_loras`), on a graph already loading it.
+
+    The loader is not bypassed and spliced back: a splice can be refused (two
+    model sources), and the strengths are set where the LoRA already is.
+    """
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "add_loras": [{"sha256": PERSON_LORA_DIGEST, "strength_model": 0.7}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert runnable.submitted, [g["reasons"] for g in r.json()["groups"]]
+    graph = runnable.submitted[0]["graph"]
+    assert _lora_loaders(graph) == ["add_detail.safetensors"]
+    # The graph's own node, where it was: no splice was needed, or made.
+    assert graph["2"]["class_type"] == "LoraLoader"
+    assert graph["2"]["inputs"]["strength_model"] == 0.7
 
 
 def test_an_added_lora_the_graph_already_loads_is_not_added_twice(runnable):

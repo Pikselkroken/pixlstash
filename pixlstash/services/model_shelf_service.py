@@ -1705,6 +1705,34 @@ def attached_hashes(vault, entity_type: str, entity_id: int) -> set[str]:
     return set(vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE))
 
 
+def character_lora_hashes(vault) -> set[str]:
+    """The sha256 of every model attached to a person in this library.
+
+    **The one answer to "is this a character LoRA"**: the attachment the Models
+    shelf writes, never a guess from a filename. A workflow run by itself goes
+    without these (``workflow_defaults``); a recipe keeps them.
+
+    Of a person the library still has: deleting a character leaves its
+    attachment rows behind (the table has no foreign key), and a LoRA that was
+    somebody's is nobody's once they are gone.
+    """
+
+    def fetch(session: Session):
+        return list(
+            session.exec(
+                select(AdapterAttachment.adapter_sha256).where(
+                    AdapterAttachment.entity_type == ENTITY_CHARACTER,
+                    AdapterAttachment.entity_id.in_(select(Character.id)),
+                )
+            ).all()
+        )
+
+    return {
+        str(sha256).lower()
+        for sha256 in vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
+    }
+
+
 def replace_attachments(
     vault, sha256: str, wanted: list[tuple[str, int]]
 ) -> list[dict]:
