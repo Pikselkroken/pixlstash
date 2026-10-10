@@ -215,13 +215,36 @@
           </p>
           <AppTextarea
             v-else
+            ref="promptField"
             v-model="prompt"
             label="Prompt"
             :placeholder="isEdit ? 'Describe the change, e.g. make it night time' : ''"
             :rows="3"
             :disabled="submitting"
+            :highlight="personTrigger ? [personTrigger] : []"
             @keydown.stop
           />
+          <!-- The person's LoRA answers to a word the prompt does not say.
+               A suggestion, never a blocker: it goes once the word is typed,
+               and the box then marks the word instead. -->
+          <p
+            v-if="triggerMissing"
+            class="rund-note rund-note--bad rund-trigger"
+            role="status"
+            data-testid="rund-trigger"
+          >
+            <v-icon size="14" class="rund-trigger-glyph" aria-hidden="true"
+              >mdi-alert-outline</v-icon
+            >
+            <span>
+              The prompt does not have the trigger word of this person's LoRA:
+              <strong>{{ personTrigger }}</strong>
+            </span>
+            <AppButton size="sm" :disabled="submitting" @click="addTrigger"
+            >
+              Add it
+            </AppButton>
+          </p>
         </div>
 
         <!-- Who the run is of. A workflow run by itself carries no person's
@@ -839,6 +862,7 @@ import { errorMessage } from "../../utils/apiError";
 import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
 import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
+import { namesWord, triggerWord } from "../../utils/triggerWords";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { setEachRun } from "../../utils/workflowPins";
 import {
@@ -2096,7 +2120,7 @@ const fixedPerson = computed(() =>
 );
 /** Shelf rows the shelf classes `unknown`: attachable to a person all the same. */
 const unknownLoras = ref([]);
-/** The people whose LoRA works with this workflow's checkpoint (`fitPeople`). */
+/** The people whose LoRA is for this workflow's base model (`fitPeople`). */
 const personFits = computed(() =>
   offersPerson.value && card.value
     ? fitPeople(
@@ -2104,7 +2128,7 @@ const personFits = computed(() =>
         [...adapters.value, ...unknownLoras.value],
         entityLists.characters,
       )
-    : { people: [], clash: 0 },
+    : { people: [], clash: 0, unknown: 0, family: null },
 );
 /** The person picked for this run, or null for no one. */
 const personId = ref(null);
@@ -2117,18 +2141,21 @@ const showPerson = computed(
   () =>
     Boolean(fixedPerson.value) ||
     personFits.value.people.length > 0 ||
-    personFits.value.clash > 0,
+    personFits.value.clash + personFits.value.unknown > 0,
 );
 const personNote = computed(() => {
   if (fixedPerson.value) return "";
-  const { people, clash } = personFits.value;
-  if (!people.length) {
-    return "No person's LoRA is for this workflow's base model, so it runs with no one's.";
+  const { people, clash, unknown, family } = personFits.value;
+  if (!family) {
+    return "This workflow's base model is not known, so no person's LoRA can be matched to it.";
   }
-  const left = clash
-    ? ` Not listed: ${clash} whose LoRA is for another base model.`
-    : "";
-  return `A workflow runs without a person's LoRA. Pick someone to add theirs.${left}`;
+  const parts = [];
+  if (clash) parts.push(`${clash} whose LoRA is for another base model`);
+  if (unknown) parts.push(`${unknown} whose LoRA has no base model recorded`);
+  const left = parts.length ? ` Not listed: ${parts.join(", ")}.` : "";
+  return people.length
+    ? `A workflow runs without a person's LoRA. Pick someone to add theirs.${left}`
+    : `No person has a LoRA for this workflow's base model, so it runs with no one's.${left}`;
 });
 /** The LoRAs the person's row offers: theirs that fit, never the whole shelf. */
 const personLoraOptions = computed(() =>
@@ -2140,7 +2167,38 @@ const personLoraOptions = computed(() =>
 );
 
 /**
- * Pick the person this run is of: their best-fitting LoRA becomes an added
+ * The trigger word of the LoRA on the person's row, or "" when there is no
+ * such row or its LoRA needs none. Read off the row's own pick, so changing
+ * which of the person's LoRAs runs changes the word.
+ */
+const personTrigger = computed(() => {
+  const sha = addedLoras.value.find((row) => row.person)?.sha256;
+  if (!sha) return "";
+  return triggerWord(
+    [...attachedLoras.value, ...adapters.value, ...unknownLoras.value].find(
+      (row) => row.sha256 === sha,
+    ),
+  );
+});
+/** The word is asked for and the prompt, which can be set here, lacks it. */
+const triggerMissing = computed(
+  () =>
+    Boolean(personTrigger.value) &&
+    !promptUnset.value &&
+    !namesWord(prompt.value, personTrigger.value),
+);
+const promptField = ref(null);
+
+/** Put the word first, where a trigger word goes, and hand the box back. */
+function addTrigger() {
+  const rest = prompt.value.trim();
+  prompt.value = rest ? `${personTrigger.value}, ${rest}` : personTrigger.value;
+  // The button goes with the suggestion; focus must not fall to the page.
+  promptField.value?.focus?.();
+}
+
+/**
+ * Pick the person this run is of: their first matching LoRA becomes an added
  * row (`add_loras`), replacing the last pick's. Null is "No one".
  */
 function pickPerson(id) {
@@ -3631,5 +3689,17 @@ button.rund-in-tile.rund-in-tile--off {
 
 .rund-note--bad {
   color: rgb(var(--v-theme-surface-error));
+}
+
+.rund-trigger {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.rund-trigger-glyph {
+  flex-shrink: 0;
 }
 </style>

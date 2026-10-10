@@ -2592,6 +2592,16 @@ describe("Create with LoRA", () => {
     expect(wrapper.findComponent({ name: "AppBarButton" }).exists()).toBe(false);
   });
 
+  it("suggests the fixed person's trigger word too", async () => {
+    listAdapters.mockImplementation(async ({ fileKind, characterId } = {}) =>
+      characterId && fileKind === "adapter"
+        ? [{ ...PERSON_LORA, trigger_words: ["ohwx"], trigger_words_source: "recorded" }]
+        : [],
+    );
+    const wrapper = await mountRun(fromPerson);
+    expect(wrapper.find('[data-testid="rund-trigger"]').text()).toContain("ohwx");
+  });
+
   it("keeps a set's LoRA removable: only a person is fixed", async () => {
     const wrapper = await mountRun({
       ...fromPerson,
@@ -2764,6 +2774,83 @@ describe("the person a workflow run alone is of", () => {
   it("is not offered on a recipe's run, which keeps its own LoRAs", async () => {
     const wrapper = await mountRun();
     expect(wrapper.find('[data-testid="rund-person"]').exists()).toBe(false);
+  });
+
+  it("does not offer a person whose LoRA has no base model recorded", async () => {
+    listAdapters.mockImplementation(async ({ fileKind } = {}) =>
+      fileKind ? [] : [MIRA, { ...KREA_ONLY, base_model_family: null }],
+    );
+    const wrapper = await mountRun(fromCard);
+    expect(tile(wrapper, 7).exists()).toBe(true);
+    expect(tile(wrapper, 8).exists()).toBe(false);
+    expect(wrapper.text()).toContain(
+      "Not listed: 1 whose LoRA has no base model recorded.",
+    );
+  });
+
+  it("offers no one on a workflow whose base model is not known", async () => {
+    getWorkflowCard.mockResolvedValue({ card: card({ models: [] }) });
+    const wrapper = await mountRun(fromCard);
+    expect(wrapper.find('[role="radio"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("This workflow's base model is not known");
+  });
+
+  describe("the trigger word of the person's LoRA", () => {
+    const suggestion = (wrapper) => wrapper.find('[data-testid="rund-trigger"]');
+    const box = (wrapper) =>
+      wrapper
+        .findAllComponents({ name: "AppTextarea" })
+        .find((c) => c.props("label") === "Prompt");
+    const typePrompt = (wrapper, text) =>
+      box(wrapper).vm.$emit("update:modelValue", text);
+
+    beforeEach(() => {
+      listAdapters.mockImplementation(async ({ fileKind } = {}) =>
+        fileKind
+          ? []
+          : [{ ...MIRA, trigger_words: ["Mira Vale"], trigger_words_source: "character" }],
+      );
+    });
+
+    it("is suggested while the prompt lacks it, and only once a person is picked", async () => {
+      const wrapper = await mountRun(fromCard);
+      expect(suggestion(wrapper).exists()).toBe(false);
+      await tile(wrapper, 7).trigger("click");
+      expect(suggestion(wrapper).text()).toContain("Mira Vale");
+      // The box is told which word to mark once it is typed.
+      expect(box(wrapper).props("highlight")).toEqual(["Mira Vale"]);
+
+      // Any case counts as typed.
+      await typePrompt(wrapper, "a portrait of mira vale, smiling");
+      expect(suggestion(wrapper).exists()).toBe(false);
+
+      await typePrompt(wrapper, "a portrait of mira");
+      expect(suggestion(wrapper).exists()).toBe(true);
+
+      // No one: nothing to suggest, nothing to mark.
+      await wrapper.find('[data-person="null"]').trigger("click");
+      expect(suggestion(wrapper).exists()).toBe(false);
+      expect(box(wrapper).props("highlight")).toEqual([]);
+    });
+
+    it("puts the word first when asked, and never blocks the run", async () => {
+      const wrapper = await mountRun(fromCard);
+      await tile(wrapper, 7).trigger("click");
+      await typePrompt(wrapper, "on a beach");
+      expect(wrapper.vm.runBlocker).toBeFalsy();
+      await suggestion(wrapper).find("button").trigger("click");
+      expect(wrapper.vm.prompt).toBe("Mira Vale, on a beach");
+      expect(suggestion(wrapper).exists()).toBe(false);
+    });
+
+    it("says nothing for a LoRA that needs no trigger word", async () => {
+      listAdapters.mockImplementation(async ({ fileKind } = {}) =>
+        fileKind ? [] : [{ ...MIRA, trigger_words: [], trigger_words_source: "recorded" }],
+      );
+      const wrapper = await mountRun(fromCard);
+      await tile(wrapper, 7).trigger("click");
+      expect(suggestion(wrapper).exists()).toBe(false);
+    });
   });
 
   it("is absent where nobody has a LoRA", async () => {

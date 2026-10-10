@@ -141,7 +141,7 @@ describe("fitPeople", () => {
     { id: 4, name: "Nobody's" },
   ];
 
-  it("offers the people whose LoRA works with the checkpoint, matches first", () => {
+  it("offers only the people whose LoRA is for the checkpoint's base model", () => {
     const fits = fitPeople(
       card("w"),
       [
@@ -157,17 +157,17 @@ describe("fitPeople", () => {
     expect(fits.people.map((p) => [p.name, p.loras.map((l) => l.filename)])).toEqual([
       // Only the LoRA for this base model, though Example has two.
       ["Example", ["k.safetensors"]],
-      // Nothing says it will not work, so it is offered, after the match.
-      ["Unread", ["u.safetensors"]],
     ]);
-    // Other's only LoRA is for another base model: counted, not offered.
+    // Unread's LoRA has no base model recorded: nothing says it works.
+    expect(fits.unknown).toBe(1);
+    // Other's only LoRA is for another base model.
     expect(fits.clash).toBe(1);
   });
 
-  it("offers everyone with a LoRA when the checkpoint's family is not known", () => {
+  it("offers no one when the checkpoint's family is not known", () => {
     const fits = fitPeople(card("w", { family: null }), [lora("x", "sdxl", of(3))], PEOPLE);
-    expect(fits.people.map((p) => p.name)).toEqual(["Other"]);
-    expect(fits.clash).toBe(0);
+    expect(fits.people).toEqual([]);
+    expect(fits).toMatchObject({ clash: 0, unknown: 1 });
   });
 
   it("still offers a person on a workflow that starts from a picture", () => {
