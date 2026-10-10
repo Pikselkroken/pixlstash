@@ -846,10 +846,13 @@ Extra tools: `list_workflows`, `get_workflow`, `export_workflow_graph`,
 `import_workflow_graph`, `preflight_workflow`, `run_workflow`,
 `get_workflow_run`.
 
-An import never changes a stored workflow in place: importing an edited graph makes a
-new workflow card, and importing an unchanged one matches the stored copy and
-adds nothing. A different prompt, seed or LoRA is not a graph edit; pass it to
-the run instead.
+`import_workflow_graph` with a `workflow_id` saves the edited graph over that
+workflow as its next version: the workflow keeps its name, pictures and
+recipes, and the graph it replaces is kept, so you can go back to it. Without a
+`workflow_id` it makes a new workflow card. A graph that swaps a checkpoint
+you have installed is stored as a new workflow either way, and a LoRA attached
+to a person is left out of the stored graph. A different prompt, seed or LoRA
+is not a graph edit; pass it to the run instead.
 
 #### With a ComfyUI MCP server
 
@@ -864,7 +867,9 @@ between them:
    takes on your install and which models are on disk, and can set widget
    values for it.
 3. ComfyUI's server validates the edited file. Do not store one that fails.
-4. `import_workflow_graph` (PixlStash) stores it as a new workflow card.
+4. `import_workflow_graph` (PixlStash) saves it over the workflow it was
+   exported from (pass that `workflow_id`), or stores it as a new workflow
+   card.
 5. `preflight_workflow` checks it would run; `run_workflow` runs it and
    says how each run ended: a failed one names the node that failed and why.
 

@@ -477,7 +477,7 @@ List and import workflow files; read the workflow a picture carries. Running one
 2. **Fail closed on an uninspected graph.** `preflight_prompt` degrading to `unchecked_preflight` keeps `ok: True` because the only fact known is that the check did not run — so a replay refuses `preflight.checked is False` with a 400 unless the request carries `allow_unchecked: true`, the owner's explicit acknowledgement, which is logged with the node classes. **The refusal is enforced here, not only in the dialog**; a UI-only gate is not a gate. This is the one control that is a hard gate, and it is deliberately reserved for the rare case: gating the common ones is what turns an acknowledgement into a reflex.
 3. **Provenance.** `_picture_source_origin` reports `source_is_imported` / `source_label`, surfaced as the **Source** row inside the dialog's disclosure. It stopped being a banner on 2026-08-06: a watched folder on the owner's own ComfyUI output makes every self-generated image "imported", so warning on it fired on the common case. There is no provenance column; the signal is the three fields only ever written on an *inbound* path (`reference_folder_id`, `import_source_folder`, `original_file_name`), all of which PixlStash's own ComfyUI import leaves NULL. The label names the route in ("Watched folder"), never the filesystem path. It is advisory only and fails toward "not imported" — it informs, it does not gate.
 
-**A graph that carries ComfyUI-PixlStash nodes is judged node by node (#1521).** Such a graph is a cycle — PixlStash runs ComfyUI, which calls back into PixlStash — and its ids are frozen: the loaders serialise a choice as `"<name> #<id>"`, so a replay re-applies whatever project, set, character or picture id was current when the file was written. Three ways that went wrong under the old blanket refusal: the ids can name a deleted project or one in a **different library** (which surfaced as a raw SQLite `FOREIGN KEY` failure from the saver's own import, *after* the images were imported); `PixlStashPictureLoader` sources its input by baked `picture_ids`, or **auto-selects by its own sort and filters when that field is empty**, so the output need not be of the chosen picture at all; and the saver imports the outputs itself, competing with the import PixlStash is already running. `pixlstash_node_refusals` (`services/comfyui_service.py`) answers per class, and its defaults refuse: the **project, set and character loaders** run when this library has the id they name **under the same name** (`library_ids_named` → `read_library_ids`; ids start at 1 in every library, so an id alone would run another library's "Portraits #3" against this one's project 3, and a rename refuses until the owner re-picks it; a choice wired from another node cannot be checked and is refused as `unreadable_id`); the **digest-addressed adapter, VAE and CLIP loaders** and the **searches and likeness gates** (they read the library through a loader's ids and write nothing) run everywhere; the **picture loader** runs only where the run writes its ids itself — a card run feeds it the chosen picture's id (`Feed.by_id`, nothing uploaded, since the node fetches it), never runs it on its baked ids, and refuses one it did not feed (`unfed_picture_loaders`); the **checkpoint loader** names a per-hub shelf row id, so it runs only from a stored workflow file (`from_file`); the **saver** is swapped for `SaveImage` on the same images and prefix before the run (`swap_pixlstash_savers`), so the run's own import is the only one and the project, set and character it would have assigned are not applied; a saver whose `picture_ids` output another node reads is left alone and refused, since `SaveImage` has no output. **A pack class with no entry is refused** (`no_policy`), so a node added to the pack later waits for one. The run pre-flight reports `pixlstash_nodes` with `nodes: [{node_id, class_type, title, why, kind?, id?}]`; `GET .../recipe` ("Generate variants") judges the same way with the picture loader and the checkpoint loader refused, and reports `available: false, reason: "pixlstash_nodes"` with the same `pixlstash_nodes` list, so the dialog can say so before the user commits and offer the workflow for pasting into ComfyUI instead. That route serves share links, so it looks library ids up **only for the unscoped owner**; a scoped reader gets every named id as `not_in_library`, and cannot learn which projects exist outside its scope. A pack class that is **missing** from ComfyUI, rather than refused, is reported with install help: `_inserted_loader` ends its refusal with `PIXLSTASH_PACK_INSTALL_HINT` (`services/comfyui_recipe_service.py`) when a LoRA needs `PixlStashAdapterLoader`, and the frontend's `missing_nodes` sentence (`utils/runReasons.js`) names `PixlStash*` classes as the pack's and says how to install it.
+**A graph that carries ComfyUI-PixlStash nodes is judged node by node (#1521).** Such a graph is a cycle — PixlStash runs ComfyUI, which calls back into PixlStash — and its ids are frozen: the loaders serialise a choice as `"<name> #<id>"`, so a replay re-applies whatever project, set, character or picture id was current when the file was written. Three ways that went wrong under the old blanket refusal: the ids can name a deleted project or one in a **different library** (which surfaced as a raw SQLite `FOREIGN KEY` failure from the saver's own import, *after* the images were imported); `PixlStashPictureLoader` sources its input by baked `picture_ids`, or **auto-selects by its own sort and filters when that field is empty**, so the output need not be of the chosen picture at all; and the saver imports the outputs itself, competing with the import PixlStash is already running. `pixlstash_node_refusals` (`services/comfyui_service.py`) answers per class, and its defaults refuse: the **project, set and character loaders** run when this library has the id they name **under the same name** (`library_ids_named` → `read_library_ids`; ids start at 1 in every library, so an id alone would run another library's "Portraits #3" against this one's project 3, and a rename refuses until the owner re-picks it; a choice wired from another node cannot be checked and is refused as `unreadable_id`); the **digest-addressed adapter, multi-adapter, VAE and CLIP loaders** and the **searches and likeness gates** (they read the library through a loader's ids and write nothing) run everywhere; the **picture loader** runs only where the run writes its ids itself — a card run feeds it the chosen picture's id (`Feed.by_id`, nothing uploaded, since the node fetches it), never runs it on its baked ids, and refuses one it did not feed (`unfed_picture_loaders`); the **checkpoint loader** names a per-hub shelf row id, so it runs only from a stored workflow file (`from_file`); the **saver** is swapped for `SaveImage` on the same images and prefix before the run (`swap_pixlstash_savers`), so the run's own import is the only one and the project, set and character it would have assigned are not applied; a saver whose `picture_ids` output another node reads is left alone and refused, since `SaveImage` has no output. **A pack class with no entry is refused** (`no_policy`), so a node added to the pack later waits for one. The run pre-flight reports `pixlstash_nodes` with `nodes: [{node_id, class_type, title, why, kind?, id?}]`; `GET .../recipe` ("Generate variants") judges the same way with the picture loader and the checkpoint loader refused, and reports `available: false, reason: "pixlstash_nodes"` with the same `pixlstash_nodes` list, so the dialog can say so before the user commits and offer the workflow for pasting into ComfyUI instead. That route serves share links, so it looks library ids up **only for the unscoped owner**; a scoped reader gets every named id as `not_in_library`, and cannot learn which projects exist outside its scope. A pack class that is **missing** from ComfyUI, rather than refused, is reported with install help: `_inserted_loader` ends its refusal with `PIXLSTASH_PACK_INSTALL_HINT` (`services/comfyui_recipe_service.py`) when a LoRA needs `PixlStashAdapterLoader`, and the frontend's `missing_nodes` sentence (`utils/runReasons.js`) names `PixlStash*` classes as the pack's and says how to install it.
 
 **Graphs saved by the ComfyUI-PixlStash node pack (`PixlStashPictureSaver`) take the other import path** when one reaches ComfyUI unswapped (a run PixlStash starts swaps it for `SaveImage`, per the policy above). The node uploads to `POST /pictures/import` itself rather than writing a file for PixlStash to collect, so the collection pipeline has to invert for it, in three places that all key off `SAVE_NODE_CLASSES` / `PIXLSTASH_SAVER_CLASSES` in `services/comfyui_service.py`:
 
@@ -786,6 +786,9 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/workflows/{workflow_id}                                               | workflows       | One workflow                                                |
 | PATCH  | /api/v1/workflows/{workflow_id}                                               | workflows       | Edit a workflow                                             |
 | DELETE | /api/v1/workflows/{workflow_id}                                               | workflows       | Delete a manual workflow                                    |
+| GET    | /api/v1/workflows/{workflow_id}/changes                                       | workflows       | A workflow's unsaved changes                                |
+| PUT    | /api/v1/workflows/{workflow_id}/changes                                       | workflows       | Replace a workflow's unsaved changes                        |
+| DELETE | /api/v1/workflows/{workflow_id}/changes                                       | workflows       | Discard a workflow's unsaved changes                        |
 | POST   | /api/v1/workflows/{workflow_id}/clone-with-models                             | workflows       | Clone a workflow onto other models                          |
 | PUT    | /api/v1/workflows/{workflow_id}/default-lora                                  | workflows       | Put one LoRA in or out of a workflow's default recipe       |
 | PUT    | /api/v1/workflows/{workflow_id}/defaults                                      | workflows       | Set a workflow's parameter defaults                         |
@@ -794,15 +797,21 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/{workflow_id}/fixed-copy                                    | workflows       | Save a workflow with this ComfyUI's repairs applied         |
 | GET    | /api/v1/workflows/{workflow_id}/form-inputs                                   | workflows       | The inputs of a workflow a parameter can be made of         |
 | GET    | /api/v1/workflows/{workflow_id}/graph                                         | workflows       | A workflow's runnable graph                                 |
+| PUT    | /api/v1/workflows/{workflow_id}/graph                                         | workflows       | Save a whole graph over a workflow                          |
 | PUT    | /api/v1/workflows/{workflow_id}/inputs                                        | workflows       | Set a workflow's picture inputs                             |
 | GET    | /api/v1/workflows/{workflow_id}/lora-chain                                    | workflows       | A workflow's LoRA chain                                     |
 | PUT    | /api/v1/workflows/{workflow_id}/lora-chain                                    | workflows       | Edit a workflow's LoRA chain                                |
 | GET    | /api/v1/workflows/{workflow_id}/lora-summary                                  | workflows       | The LoRAs of a workflow                                     |
 | PUT    | /api/v1/workflows/{workflow_id}/model-fix                                     | workflows       | Replace a missing model in a workflow                       |
 | GET    | /api/v1/workflows/{workflow_id}/model-swap                                    | workflows       | What a workflow could be cloned onto                        |
+| GET    | /api/v1/workflows/{workflow_id}/people                                        | workflows       | The people a workflow can make pictures of                  |
 | GET    | /api/v1/workflows/{workflow_id}/pictures                                      | workflows       | Pictures made with a workflow                               |
 | PUT    | /api/v1/workflows/{workflow_id}/pins                                          | workflows       | Set a workflow's pinned parameters                          |
+| POST   | /api/v1/workflows/{workflow_id}/save                                          | workflows       | Save a workflow's changes over it                           |
+| POST   | /api/v1/workflows/{workflow_id}/save-as-new                                   | workflows       | Save a workflow's changes as a new workflow                 |
 | POST   | /api/v1/workflows/{workflow_id}/set-clone-plans                               | workflows       | What cloning a workflow onto each workflow set would write  |
+| GET    | /api/v1/workflows/{workflow_id}/versions                                      | workflows       | A workflow's versions                                       |
+| POST   | /api/v1/workflows/{workflow_id}/versions/{version}/restore                    | workflows       | Go back to an earlier version of a workflow                 |
 | GET    | /version                                                                      | server          | Read Version                                                |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
 | WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                   |
@@ -2416,7 +2425,7 @@ nothing in the vault moves; a manual workflow's own runs are the one exception
 | `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and (legacy) a topology placed in a hand-made group by the dropped merge and split, one workflow per topology. Hub data step 6 dissolves every such group and nothing writes a member row any more |
 | `workflow_group_attr`, `workflow_group_default`, `workflow_group_pins`, `workflow_group_picture_input` | The owner's name, notes and hidden flag; edits to the default recipe; pins; picture inputs (library-keyed, pictures by `pixel_sha`). All keyed by `workflow_id` and addressed by **address**, never slot label |
 | `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
-| `workflow_version` (rows of an `auto:` id) | **The versions the owner saved over an automatic workflow** (Edit LoRAs, *Over the original*). An automatic workflow holds no `workflow_document`, so it has versions only once it is saved over: the first overwrite stores the graph read off its pictures as version 1 (`source` `pictures`) and the edit as version 2, and each later overwrite is the next version (`hub/workflow_versions.append_version`, its `first` argument; the same cap of 50). Its graph is then its highest version: `routes/workflows._edited_graph_for` reads it ahead of every other tier (`workflow_versions.edited_document`, `run_service.FROM_EDIT`, `source: "edit"` on Run, Open and Export) **for the workflow's base card only**: a saved recipe or a picture on another card of the workflow runs that card's own graph. The grid shows it as *Version N* (`workflow_versions.automatic_version_facts`, read once per grid; the overwrite also moves `changed_at`). The default recipe, the grid's models and the ghost counts are still read off the pictures, so a recipe LoRA the edited graph has no loader for stays listed and a run reports it unplaced. A version that is not an API graph is logged and the pictures' graph runs; the version number still stands, so the next overwrite replaces it. No picture records an automatic workflow's version (`run_workflow_version` belongs to `run_workflow_id`, a manual id). **Not carried when an `auto:` id changes** (a new core rule, a re-identified family): `_carry_group_state` deletes the rows with the retired id and logs it, and the workflow that follows falls back to its pictures' graph. An id that lives on through a split keeps its versions, and `stranded_workflow_ids` counts the table |
+| `workflow_version` (rows of an `auto:` id) | **The versions the owner saved over an automatic workflow** (Save, a whole graph from ComfyUI or the MCP server, Edit LoRAs *Over the original*; "Saving over a workflow", below). An automatic workflow holds no `workflow_document`, so it has versions only once it is saved over: the first overwrite stores the graph read off its pictures as version 1 (`source` `pictures`) and the edit as version 2, and each later overwrite is the next version (`hub/workflow_versions.append_version`, its `first` argument; the same cap of 50). Its graph is then its highest version: `routes/workflows._edited_graph_for` reads it ahead of every other tier (`workflow_versions.edited_document`, `run_service.FROM_EDIT`, `source: "edit"` on Run, Open and Export) **for the workflow's base card only**: a saved recipe or a picture on another card of the workflow runs that card's own graph. The grid shows it as *Version N* (`workflow_versions.automatic_version_facts`, read once per grid; the overwrite also moves `changed_at`). Its default recipe is then read off that graph, as a manual workflow's is ("Saving over a workflow", below); the grid's models, the LoRA pile and the ghost counts are still read off the pictures. A version that is not an API graph is logged and the pictures' graph runs; the version number still stands, so the next overwrite replaces it. **A saved-over automatic workflow keeps its id** (rule 5 of #1846; "A saved-over automatic workflow keeps its id", below), so its versions are never retired with it; `_carry_group_state` still deletes and logs the rows of a retired id, for the case that should now be impossible. `stranded_workflow_ids` counts the table |
 | `workflow_core_successor` | Per (topology, new workflow), the automatic workflow the retired rule put the topology in, each one the live rule puts its variants in, and the old -> new core label map (data step 8 from v1, step 10 from v2, step 13 from v3, step 15 from v4, below) |
 | `workflow_variant_family` | Per variant, its base-model families (`variant_families`), frozen on first derivation: part of its workflow's id, so a later shelf scan never moves it |
 | `workflow_family_pass` | The shelf signature the last successful family pass (`reidentify_families`) ran against; at most one row |
@@ -2545,8 +2554,8 @@ wins however either addresses the input (slot label or core address), and
 is skipped best effort: one that cannot be taken out runs whole and is logged,
 never refused. A LoRA loader the recipe leaves empty is bypassed, best effort
 too, and only when the recipe was read off at least one picture and the shelf
-names every one of its LoRAs; otherwise every loader keeps its LoRA. The
-request cannot switch a recipe-off stage back on yet (#1623 owns that control). `models: [{address, filename | sha256}]` goes through
+names every one of its LoRAs; otherwise every loader keeps its LoRA. A
+stage the recipe has off stays in for a run that names it in `keep_stages`. `models: [{address, filename | sha256}]` goes through
 `apply_filename_swap`; a model made for another family or modality than the one
 it replaces is **flagged, never blocked** (`RunGroup.flags`, `family_mismatch`;
 `model_shelf_service.families_clash`, which the clone dialog's LoRA flags use
@@ -2637,7 +2646,7 @@ deletable by its old routes, and read once by data step 7.
 
 | Table | Holds |
 |---|---|
-| `workflow_version` (`hub/workflow_versions.py`) | Every version of a manual workflow's document, PK `(workflow_id, version)`, version 1 first: `document`, `api_document` (a conversion is of one version), `content_hash` (`workflow_inbox.content_hash`), `topology_hash` (NULL where not computed), `remote_modified`, `source` (the workflow's origin for version 1, or `pictures` for an automatic workflow's; after it `chain` for a LoRA chain edit saved over the workflow), `created_at`. `source` `pull` and a `remote_modified` (ComfyUI's ms clock) are on versions the removed pull of ComfyUI's saved workflows made; nothing writes them since #1854. **At most `MAX_VERSIONS` (50) per workflow: version 1 and the newest 49**, the rest deleted in the transaction that appends (revert, later, needs only what is kept). Written with the `workflow_document` row (version 1, `create_manual_workflow`), by a chain edit saved over the workflow (`append_version`, whose `source` is a required keyword), and by hub data step 12 (`backfill_first_versions`) for every workflow present then. **`workflow_document.document` and `api_document` are a copy of the highest version, written in the same transaction**, so every reader of a manual workflow's graph (`manual_document`, the card facts, the model widgets, #1530's stored conversion) reads the current version from the row it always read, and an older build sharing the hub does too. A workflow an older build made has no version rows; its next version writes version 1 from its document first. The caches per manual workflow (`workflow_card_reads._MANUAL_FACTS`, one entry per live workflow keyed on its current version; the `lru_cache` on `routes/workflows._model_widgets_at`, 512 entries keyed on workflow id, version and when that version was stored) hold what was read, never the document, so a new version is read afresh and no document is held in memory. A conversion (`set_manual_api_document`) is stored only on a workflow whose current document is still the one converted, checked inside the write transaction, so a save that made a version between the match and the write does not receive the old version's API graph; the server's own conversion (`keep_stored=True`) also only where none is stored, so ComfyUI's always wins. Deleted with the workflow. Which version made a picture is `picture.run_workflow_version` (vault migration 0127; see "Which version made it" below) |
+| `workflow_version` (`hub/workflow_versions.py`) | Every version of a manual workflow's document, PK `(workflow_id, version)`, version 1 first: `document`, `api_document` (a conversion is of one version), `content_hash` (`workflow_inbox.content_hash`), `topology_hash` (NULL where not computed), `remote_modified`, `source` (the workflow's origin for version 1, or `pictures` for an automatic workflow's; after it what the save changed, which the version menu's words are made from: `models`, `loras`, `run`, `comfyui`, `mcp`, `revert:<n>`, and `chain` for a LoRA chain edit; "Saving over a workflow", below), `created_at`. `source` `pull` and a `remote_modified` (ComfyUI's ms clock) are on versions the removed pull of ComfyUI's saved workflows made; nothing writes them since #1854. **At most `MAX_VERSIONS` (50) per workflow: version 1 and the newest 49**, the rest deleted in the transaction that appends (revert, later, needs only what is kept). Written with the `workflow_document` row (version 1, `create_manual_workflow`), by every save over the workflow (`append_version`, whose `source` is a required keyword), and by hub data step 12 (`backfill_first_versions`) for every workflow present then. **`workflow_document.document` and `api_document` are a copy of the highest version, written in the same transaction**, so every reader of a manual workflow's graph (`manual_document`, the card facts, the model widgets, #1530's stored conversion) reads the current version from the row it always read, and an older build sharing the hub does too. A workflow an older build made has no version rows; its next version writes version 1 from its document first. The caches per manual workflow (`workflow_card_reads._MANUAL_FACTS`, one entry per live workflow keyed on its current version; the `lru_cache` on `routes/workflows._model_widgets_at`, 512 entries keyed on workflow id, version and when that version was stored) hold what was read, never the document, so a new version is read afresh and no document is held in memory. A conversion (`set_manual_api_document`) is stored only on a workflow whose current document is still the one converted, checked inside the write transaction, so a save that made a version between the match and the write does not receive the old version's API graph; the server's own conversion (`keep_stored=True`) also only where none is stored, so ComfyUI's always wins. Deleted with the workflow. Which version made a picture is `picture.run_workflow_version` (vault migration 0127; see "Which version made it" below) |
 | `workflow_document` | `workflow_id` PK, `document` (the current version's, see `workflow_version`: as imported, editor or API format, placeholders migrated, `pixlstash_bindings` kept), `api_document` (the API graph an editor document converts into, on its current version row too: ComfyUI's, which `POST /comfyui/workflows/convert` stores on every row holding that document, or the server's own, which `workflow_card_service.converted_manual_document` stores on the first read that needs the graph and never over one already there), `origin` (`import`, `inbox`, `builtin`, `duplicate`, `fixed`, `clone`, `chain`, `recipe`, and `pull`; a CHECK. `pull` is a workflow the removed pull of ComfyUI's saved workflows made: since #1854 no new workflow gets it, bar a file that pull wrote which data step 7 adopts, and `WorkflowCard.origin_category` answers `comfyui` for it, which is how the Workflows view's Origin filter lists the ones left behind for the owner to select and delete), `from_workflow_id` and `from_name` (what a copy or an extract was made from, as it was called then), `created_at`. Name, notes, hidden, defaults, pins and picture inputs are the `workflow_group_*` rows keyed by the same id; there is no `workflow_group` row |
 
 **Its own record, never grouped.** `card_index` appends one `Card` per row
@@ -2647,8 +2656,8 @@ workflow or the other way; `workflow_index` files it as a `Workflow` with no
 topologies, no variants and itself as `base_card`. Identical copies are
 allowed and stay apart. It is always `imported`, so no manual workflow
 is ever a one-off: those are workflows known
-from their pictures alone. A model fix is refused on it (409): its graph changes
-by cloning.
+from their pictures alone. A model fix is refused on it (409); its graph changes
+by Save, which takes the same changes for a manual and an automatic workflow.
 
 **Run, defaults, addresses.** `_source_graph_for` answers a manual card with
 its row (`manual_document`: the document, or the API conversion over it, as
@@ -2659,14 +2668,17 @@ the `object_info` the caller read, else a cached read of its ComfyUI URL) and
 never written back (a copy saved from it holds the converted graph); a refusal
 leaves it `ui_format`. `workflow_defaults` samples the document's own API graph
 once and addresses it by **its own slot labels, never `core:`**, with model names read
-off the graph and the `workflow_group_default` edits over it; a document with
-no API graph samples nothing. The grid reads its models off the document
+off the graph (each loader a row of `default_recipe.models`, by slot label), its
+stages the ones the graph has, and the `workflow_group_default` edits over it; a
+document with no API graph samples nothing. The grid reads its models off the document
 (`routes/workflows._manual_model_widgets`, cached per id: a row's document is
 never rewritten). A saved recipe on a manual workflow stores the id as both
 `workflow_id` and `workflow_key`.
 
 **Its pictures** (vault migration 0126). `picture.run_workflow_id` names the
-manual workflow whose run made the picture: `_submit_every` passes the run's
+manual workflow whose run made the picture (and, since #1849, an automatic
+one the owner has saved over; "A saved-over automatic workflow keeps its id",
+below): `_submit_every` passes the run's
 `workflow_id` when it is `manual:`, and `_process_comfyui_outputs` sets it on
 the pictures it imported and the ids a PixlStash saver reported, never on a
 duplicate. **Filing is exclusive while the workflow lives**: every grid read
@@ -2803,6 +2815,206 @@ with a content hash has that hash filled from its stored document
 (`workflow_inbox.content_hash`), so `workflow_origin.stored_as` matches it and
 an inbox drop of the same content does not store a second copy. A row whose
 workflow is gone is left as it is.
+
+#### Saving over a workflow: changes, Save, Save as new and versions (#1849)
+
+**A workflow's graph is changed and saved with two verbs** (the rules are
+#1846's, cited by number). *Save* writes over the workflow: it keeps its id,
+name, pictures, recipes and settings, and the graph it replaces becomes the
+version before. *Save as new* stores a new manual workflow and leaves this one
+alone. Manual and automatic workflows take the same changes. The older
+single-purpose routes (`…/model-fix`, `…/fixed-copy`, `…/clone-with-models`,
+`…/set-clone-plans`, `PUT …/lora-chain`, `…/default-lora`) still answer for
+the screens that call them and go when nothing does.
+
+**A change is said in a run's words.** `routes/workflows.WorkflowChanges` is
+`models` (a file per loader address, `RunModel`), `loras` (a loader's LoRA and
+its default strengths, `RunLora`), `skip_loras` (a loader removed), `stages`
+(`{stage: on}`) and `values` (parameters): the fields `RunRequest` already
+has. So there is one way a change is applied, the run planner's, and three
+things follow. *Run with changes* is a run whose body carries them
+(`keep_stages` is the new half of `skip_stages`: a stage the default recipe
+has off, on for this run). *Open the unsaved graph* is
+`GET /workflows/{id}/graph?waiting=true`. And **what Save stores is the graph
+a run with those changes would submit**: `_plan(…, saving="over" | "new")`,
+which is Open's plan with two differences. Every stage stays in the graph,
+on or off, because a stage is a default stored beside the graph and can be
+switched on again. And a save *over* the workflow leaves the parameters the
+owner typed (`EDITED`), and the request's own `values`, out of the graph: they
+are rows of the default recipe and keep applying over it. A new workflow has
+no such rows and takes them all in its graph. One more thing is a save's
+alone: **the default recipe's LoRAs are placed even where the request names
+some of its own** (`recipe_too`; a run with `loras` leaves every other loader
+as the graph has it), so a LoRA the owner never touched is saved at the
+strength the default gave it and not at the graph's. Export and Duplicate use
+the saved graph.
+
+| Table | Holds |
+|---|---|
+| `workflow_change` | Per `(workflow_id, kind)`, one `WorkflowChanges` document: `waiting` is what the Workflow tab holds unsaved, `run` is what the last run of the workflow changed. `base_version` is the workflow's version the set was made against (NULL for an automatic workflow never saved over); a `waiting` set that is replaced keeps it, so editing a stale set does not make it current. Deleted with a manual workflow. Hub rows, so the changes survive a restart |
+| `workflow_group_default` rows `stage:<name>` | `on` or `off`: the owner's own answer to "does this workflow run its upscale", over the vote of its pictures. Not a parameter (`is_parameter_address`), so `PUT …/defaults` never clears one |
+
+**The routes** (all `OWNER_ONLY`):
+
+- `GET`, `PUT`, `DELETE /workflows/{id}/changes`: read, replace and discard
+  what waits. The read also carries `ran`, and **which verbs are open and
+  why** (`save`, `save_as_new`, `ran_save`, each `{open, reason}`), decided in
+  `_verbs` and nowhere else, so every surface prints the same sentence and the
+  save refuses for the same one. `WorkflowCard.unsaved_changes` (grid and
+  detail) is the count a card's *Unsaved* badge is drawn from.
+- `POST /workflows/{id}/save` and `POST …/save-as-new`: apply what waits with
+  the request's `changes` on top (`WorkflowChanges.over`, thing by thing),
+  store, and clear what waited. `dry_run` answers the verbs for that
+  combination and writes nothing, which is how the Run popup asks about its
+  own edits.
+- `GET /workflows/{id}/versions` and `POST …/versions/{n}/restore`.
+- `PUT /workflows/{id}/graph`: a whole graph saved over the workflow (below).
+- `GET /workflows/{id}/people`: who fits (below).
+
+**Save.** Model picks, LoRA loaders and strengths go into the graph and make a
+version; stages and parameters are written as default rows
+(`workflow_group_writes.write_saved_defaults`) in the same transaction as the
+version (`store_over_workflow`'s `also`), with the waiting changes cleared.
+**A save of only stages or parameters makes no version**: the graph is as it
+was. A save that makes a version writes every stage's row, because an
+automatic workflow's stages are a vote of its pictures until then and the
+save has to keep the answer. `_refuse_unapplied` then checks the planned graph
+holds every change asked for: the planner is a run's, which reports a model it
+could not load or a loader it could not take out and carries on, and a save
+must not tell the owner a change was kept that is not in the graph (409; 503
+when a LoRA change needs ComfyUI and it does not answer). **The default rows
+the saved graph speaks for are dropped** (`_superseded_defaults`): every model
+row, and the row of every LoRA the graph loads, the default had switched off,
+or a changed loader held. Left in place, an older edit of the default would
+be applied over the graph at the next run and the save would not have taken.
+
+**A workflow with a graph of its own reads its default recipe off that
+graph.** `workflow_defaults` samples a manual workflow's document, and now the
+newest version of an automatic workflow that has been saved over
+(`_saved_graph`, `_graph_sample`): one instance, addressed by `core:` label
+where the core holds the node (so parameters and pins set before the save
+still name it) and by slot label otherwise, with its stages read off the graph
+(`special_groups`). Models are listed for both, a manual workflow's by slot
+label, which is what gives its model rows an address to change. An automatic
+workflow nobody has saved over is still a vote of its pictures. **The first
+save over an automatic workflow therefore carries the vote into the graph**:
+the planner applies the default recipe (modal values, models, majority LoRAs,
+loaders the recipe leaves empty bypassed) before the changes, so nothing the
+inspector showed moves except what was changed. Version 1 is the graph read
+off its pictures; a version that goes back to it is read as the vote again.
+
+**The checkpoint rule (rule 2) is enforced here.** `_changes_the_checkpoint`:
+a set that replaces a base model (a checkpoint or a diffusion-model loader's
+file, `BASE_MODEL_KINDS`) this machine has is Save as new only, as a whole.
+"Has" is ComfyUI's word where it answers (`_installed`: some loader lists the
+file) and the shelf's otherwise. Replacing one that is not installed is a
+repair: Save is open and it stays the same workflow, which is also why its
+runs file on it (below). A VAE, a text encoder and LoRAs keep both verbs.
+
+**A workflow changed since the changes were made** (another tab, a save from
+ComfyUI, going back a version): `waiting.base_version`, or the request's
+`version`, is not the workflow's. Save is refused with the reason, because a
+set of changes applied to a graph it was not made against gives a graph nobody
+chose. Save as new still works.
+
+**A finished run keeps the changes it was made with** (`_keep_run_changes`,
+kind `run`), so the Tasks tab can offer the two verbs afterwards: what the
+body changed against the default recipe, since the Run popup sends every
+parameter it shows. Until the next run of that workflow, or a save. Prompt,
+seed, count, the pictures put in and the people picked (`add_loras`) are the
+run's and are never kept.
+
+**Versions.** `workflow_version.source` is what the version menu's words are
+made from (`workflow_versions.reason`), so no column was added: `models` and
+`loras` (joined when a save changed both) read *models changed* and *LoRAs
+edited*, `run` *saved from a run*, `comfyui` *from ComfyUI*, `mcp` *from an
+assistant*, `revert:<n>` *went back to version n*, and `pictures` (version 1
+of an automatic workflow) *as PixlStash first read it*. Going back
+(`restore_version`) appends the earlier document, with its conversion, as the
+newest version: nothing is removed, so it can be undone, and it is not a
+checkpoint change under rule 2 since every version was already saved on this
+workflow.
+
+**A whole graph saved over a workflow** (`PUT /workflows/{id}/graph`). One
+write that takes a complete API-format graph, with two callers: the MCP
+server's `import_workflow_graph` given a `workflow_id`, and ComfyUI saving a
+workflow opened from PixlStash (#1852). It differs from Save because it
+carries a graph and not a set of changes. A graph that no longer loads a base
+model this machine has is stored as a **new workflow** and the answer says so
+(`new_workflow`, `reason`), where Save would be refused: the caller is at no
+screen that could offer Save as new. A workflow that got a version since the
+graph was read is **saved anyway** as the newest (`replaced_newer`): a whole
+graph cannot be mis-applied, and the version before is one step back. And
+`waiting_applied` clears the waiting changes, which the graph already holds;
+without it they are kept, stale. A graph that is the workflow's current one
+stores nothing (`unchanged`).
+
+**A person's LoRA is held out at every write (rule 4).** Reads already go
+without one (`_leave_out_character_loras`, best effort). A write may not be
+best effort: `_left_out_people` runs `workflow_run_service.take_out_person_loras`
+on the graph about to be stored, by Save, Save as new and the whole-graph
+write alike, and a loader that cannot be taken out refuses the write (409)
+instead of being stored. An entry of `loras` naming such a LoRA is dropped
+before it is counted or kept waiting (`_without_people`). **The rule is per
+row**: a digest row (`adapter_sha256`, `adapter_sha256_2`, …) holding a
+person's LoRA is emptied, and on `PixlStashMultiAdapterLoader` the rows below
+move up with their strengths; a loader left with no adapter is bypassed, its
+readers wired to what it read, and where that cannot be done the multi-adapter
+loader stays, empty, since with every row empty it passes MODEL and CLIP
+through. So the loader PixlStash puts on the canvas for people never comes
+back, one the owner filled with style LoRAs is kept, and a graph that differs
+from the current version only by such rows is `unchanged`. The whole-graph
+answer names what was left out (`left_out`: loader, row, digest and
+`character_ids`). `detect_lora_targets` reads each numbered digest row as a
+slot of its own, with that row's strengths (`_lora_strengths` takes the suffix
+off whichever field names the slot), and the class is allowed on replay
+(`PIXLSTASH_ALLOWED_NODES`: addressed by digest, like the adapter loader).
+
+**Who fits a workflow is answered in one place.**
+`model_shelf_service.people_who_fit`, served by `GET /workflows/{id}/people`:
+a person is offered when a LoRA attached to them is for the base model of the
+workflow's checkpoint (`base_model_family` on both sides, the first named base
+model of the card). `unknown` counts the people nothing vouches for and
+`clash` those whose every LoRA is for another base model. The Run popup's
+Person field and the people loader in ComfyUI read it, so they offer the same
+people.
+
+**A saved recipe still runs on the graph it was saved from (rule 8).** A
+recipe states only what it changes against its workflow, so a save over the
+workflow would otherwise change what the recipe makes. `_plan` gives a
+saved-recipe run the version that was current when the recipe was saved
+(`workflow_versions.version_at(created_at)`: the newest kept version stored at
+or before it, else the oldest kept, which for an automatic workflow is the
+graph read off its pictures), and both halves read it: `_source_graph_for`
+resolves that version's document, and `workflow_defaults(version=)` the
+default recipe the workflow had then. A recipe on another card of the
+workflow runs that card's own graph, as before. Nothing is written to a
+recipe. The limit is the 50 versions a workflow keeps: a recipe saved on a
+version since pruned runs on the nearest kept one before it.
+
+#### A saved-over automatic workflow keeps its id (#1849)
+
+**An automatic workflow that has been saved over is never retired** (rule 5
+of #1846). An `auto:` id is a digest of a core and its base-model families, so
+a new core rule or a re-identified family computes another id for the same
+variants; until #1849 the old id was then retired onto its heirs and the
+versions saved over it were deleted. "Saved over" is one read:
+`workflow_versions.saved_over_ids` (an `auto:` id with a `workflow_version`
+row). One that has never been saved over regroups exactly as before.
+
+| Table | Holds |
+|---|---|
+| `workflow_kept_variant` | `structural_hash` PK, `workflow_id`: this variant stays in this saved-over automatic workflow whatever the rule now computes for it. Written only by the moves below, at the moment the variant would otherwise have left |
+
+- **The precedence lives in one function**, `workflow_cards.variant_workflow_id(kept, core, families)`: the workflow keeping the variant, else `auto_workflow_id`. Every variant-to-workflow read places through it (`workflow_card_reads._placed` over `_AUTO_VARIANTS`, which left-joins the table: `workflow_of_variant`, `variant_workflows`, `variants_in_workflows`, `_auto_variants_of`, `workflow_index`; and `workflow_cards.revive_workflows`), so a kept variant is listed under no other id.
+- **The moves keep instead of moving.** `_rederive_topology_from` (data steps 10, 13, 15), `_rederive_topology` (step 8) and `reidentify_families` write a kept row (`_keep_saved_over`) for a variant whose old id is saved over, and record no heir or successor for it, so `_retire_workflow` and `_carry_group_state` never run for that id: its versions, name, notes, hidden flag, defaults, pins and picture inputs stay where they are. A new rule re-labels the core, so `_rewrite_kept` rewrites the kept workflow's `core:` addresses in place through the same label map a retirement would have used. A variant kept at an earlier step is skipped by a later one. Variants of other workflows on the same topology move as the rule says: **the saved-over one stays as it is and the rule applies to the rest**, whether the rule would have merged it with another or split it.
+- **`_carry_group_state` still deletes and warns** about versions on a retired id, for the case that should now be impossible. It also drops the unsaved changes (`workflow_change`) of any id it retires: they name loaders of a graph an heir may not read.
+- **A variant that arrives later** (a picture made elsewhere whose graph matches what the workflow was before the save) carries no id and has no kept row, so the live rule files it: on the saved-over workflow while the rule still computes its id, on another workflow once it does not.
+- **Delete is still refused** on an automatic workflow, saved over or not (409, hide it instead): it would be found again from its pictures. A saved-over one ends only when nothing of it is left in the hub.
+
+**Its own runs file on it**, the way a manual workflow's do. What it runs is the graph the owner saved, which need not reduce to any variant it holds: a missing checkpoint replaced by one of another family computes another workflow's id, and that repair is meant to stay the same workflow (rule 2). So "a workflow whose runs file on it" is every live manual id **plus every saved-over automatic id**: `workflow_card_reads.run_filed_workflow_ids` (`is_run_filed_workflow` for one), which every filing read takes as *live* in place of the manual ids: `predicate_filter.filed_as` and `made_by_run_filed`, the grid's counts and covers (`read_grid`, `WorkflowFigures.picture_keys`), `GET /workflows/{id}/pictures`, the `GET /pictures?workflow=` filter (`_resolve_workflow_filter`) and a picture's own workflow (`_picture_workflow`). `picture_keys(workflow, run_filed)` says what a workflow's pictures are filed under: a manual one's own id; an automatic one's variants, and its own id as well once it is saved over. So a saved-over workflow's pictures are those its runs made, plus those whose variant is in it and that no other run-filed workflow made. In `workflow_keys_predicate`'s server-internal key list, `@<variant>` is a variant counted only in a picture one of the `=id` workflows' runs made, which is how a LoRA narrowing of a saved-over workflow is said. `_submit_every` passes the id as `run_workflow_id` and tags the save node's filename with it (`__wf_<hex>`: 32 digits name a manual workflow, 64 an automatic one), and the ComfyUI extraction accepts it as an editor tag (`tagged_workflow_id`, checked against the hub with `is_run_filed_workflow`), which is what a canvas opened from PixlStash will carry (#1852).
+
+Known limits: a saved recipe on a kept workflow keeps the `core:` labels of the rule it was saved under (nothing is retired, so nothing queues its conversion), and a run skips an address its graph does not have, said in the log; the default-recipe sample and the LoRA pile of a never-saved workflow read by variant, not by filing, as they already did for manual runs; and a topology whose move raises is rolled back with its kept rows, so the backfill later files its variants by the live rule while the versions stay on the id.
 
 #### The core rule and data step 8
 
