@@ -9170,13 +9170,27 @@ def create_router(server) -> APIRouter:
                 else {}
             )
 
+            # An address the recipe does not spell that way is read off the
+            # graph, where the same loader answers to either spelling; the
+            # graph is read only then.
+            files_at = None
+
             def loads_another(model: RunModel) -> bool:
+                nonlocal files_at
                 filename = model.filename or by_digest.get(
                     str(model.sha256).strip().lower()
                 )
-                return bool(filename) and normalized_filename(filename) != models.get(
-                    model.address
-                )
+                if not filename:
+                    return False
+                if model.address in models:
+                    return normalized_filename(filename) != models[model.address]
+                if files_at is None:
+                    files_at = _graph_files_at(
+                        hub, asked.workflow_id, _owner_object_info()
+                    )
+                loaded = {normalized_filename(f) for f in files_at(model.address)}
+                # A loader the graph has not got loaded nothing.
+                return bool(loaded) and normalized_filename(filename) not in loaded
 
             changes = _without_people(
                 WorkflowChanges(
@@ -9241,6 +9255,49 @@ def create_router(server) -> APIRouter:
             is not None
         )
 
+    def _graph_files_at(hub, workflow_id: str, object_info: dict | None):
+        """A read of the files the workflow's graph loads at a model address.
+
+        By either spelling of the address: a loader is named by its slot
+        label or by its `core:` label, a run loads a model at both
+        (``_apply_models``), and the default recipe knows it by one of them
+        only. A workflow with no graph answers nothing for every address,
+        said in the log.
+        """
+        try:
+            _workflow, card = _require_base(hub, workflow_id)
+            graph = _card_source(
+                card, workflow_id=workflow_id, object_info=object_info
+            ).graph
+            labels, core = _graph_labels(graph, "models")
+        except HTTPException as exc:
+            logger.info(
+                "[workflows] Workflow %s has no graph to read a model address "
+                "against (%s); its default recipe answers alone.",
+                workflow_id,
+                exc.detail,
+            )
+            graph, labels, core = {}, {}, {}
+
+        def files_at(address: str) -> list[str]:
+            slot_label, _, widget = address.rpartition(OVERRIDE_ADDRESS_SEPARATOR)
+            return [
+                node["inputs"][widget]
+                for node_id, node in graph.items()
+                if isinstance(node, dict)
+                and isinstance(node.get("inputs"), dict)
+                and isinstance(node["inputs"].get(widget), str)
+                and (
+                    labels.get(node_id) == slot_label
+                    or (
+                        node_id in core
+                        and CORE_ADDRESS_PREFIX + core[node_id] == slot_label
+                    )
+                )
+            ]
+
+        return files_at
+
     def _changes_the_checkpoint(
         hub, workflow_id: str, changes: WorkflowChanges
     ) -> bool:
@@ -9265,22 +9322,7 @@ def create_router(server) -> APIRouter:
         }
         by_digest = None
         object_info = _owner_object_info()
-        # The graph too: an address can be spelled by slot label or by
-        # `core:` label, and the recipe knows a loader by one of them only.
-        try:
-            _workflow, card = _require_base(hub, workflow_id)
-            graph = _card_source(
-                card, workflow_id=workflow_id, object_info=object_info
-            ).graph
-            labels, core = _graph_labels(graph, "models")
-        except HTTPException as exc:
-            logger.info(
-                "[workflows] Workflow %s has no graph to read a checkpoint "
-                "change against (%s); its default recipe decides alone.",
-                workflow_id,
-                exc.detail,
-            )
-            graph, labels, core = {}, {}, {}
+        files_at = _graph_files_at(hub, workflow_id, object_info)
         for pick in picks:
             now = pick.filename
             if now is None:
@@ -9293,22 +9335,8 @@ def create_router(server) -> APIRouter:
                         )
                     }
                 now = by_digest.get(str(pick.sha256).lower())
-            slot_label, _, widget = pick.address.rpartition(OVERRIDE_ADDRESS_SEPARATOR)
-            loaded = [current.get(pick.address)] + [
-                node["inputs"][widget]
-                for node_id, node in graph.items()
-                if isinstance(node, dict)
-                and isinstance(node.get("inputs"), dict)
-                and isinstance(node["inputs"].get(widget), str)
-                and (
-                    labels.get(node_id) == slot_label
-                    or (
-                        node_id in core
-                        and CORE_ADDRESS_PREFIX + core[node_id] == slot_label
-                    )
-                )
-            ]
-            for was in loaded:
+            widget = pick.address.rpartition(OVERRIDE_ADDRESS_SEPARATOR)[2]
+            for was in [current.get(pick.address), *files_at(pick.address)]:
                 if not was or was in (SHELF_MODEL_GONE, SHELF_MODEL_UNNAMED):
                     # Nothing it could load there: what goes in is a repair.
                     continue

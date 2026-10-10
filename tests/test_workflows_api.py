@@ -16965,6 +16965,35 @@ def test_a_checkpoint_is_the_same_loader_however_its_address_is_spelled(saving):
     assert dry["save"]["open"] is False and "checkpoint" in dry["save"]["reason"]
 
 
+def test_an_automatic_workflows_checkpoint_is_guarded_by_its_slot_label_too(voted):
+    """The mirror of the test above: its default recipe names the loader by
+    `core:` label, and a pick by the graph's own slot label is the same loader."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        ["realvisxl.safetensors", "krea.safetensors"],
+        {},
+    ]
+    voted.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(info)), None),
+    )
+    assert _model_address(voted, RUN_WF).startswith("core:")
+    graph = voted.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    label = topology_node_labels(structural_document(graph))["1"]
+    dry = _save(
+        voted,
+        RUN_WF,
+        changes={
+            "models": [
+                {"address": f"{label}/ckpt_name", "filename": "krea.safetensors"}
+            ]
+        },
+        dry_run=True,
+    ).json()
+    assert dry["save"]["open"] is False and "checkpoint" in dry["save"]["reason"]
+
+
 def test_a_save_made_against_another_version_says_so(saving):
     """What the Run popup changed was changed against the version it read."""
     r = _save(saving, saving.manual, changes=SKIP_FIVE, version=7)
@@ -17291,13 +17320,16 @@ def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
             (own,),
         )
     try:
-        for named in ({"filename": "realvisxl.safetensors"}, {"sha256": own}):
+        # Nor by the loader's other address: `core:<label>` names the same
+        # loader its slot label does, and a run loads a model at either.
+        core = "core:" + core_node_labels(structural_document(CHAIN_DOCUMENT))["1"]
+        for named in (
+            {"address": address, "filename": "realvisxl.safetensors"},
+            {"address": address, "sha256": own},
+            {"address": f"{core}/ckpt_name", "filename": "realvisxl.safetensors"},
+        ):
             _run(saving, workflow_id=saving.manual, **SKIP_FIVE)
-            _run(
-                saving,
-                workflow_id=saving.manual,
-                models=[{"address": address, **named}],
-            )
+            _run(saving, workflow_id=saving.manual, models=[named])
             assert _changes(saving, saving.manual)["ran"] is None, named
     finally:
         with saving.server.hub.transaction() as conn:
