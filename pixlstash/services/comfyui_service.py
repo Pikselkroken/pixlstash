@@ -41,7 +41,10 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.services import import_dedup_service
 from pixlstash.services.layout_move_service import resolve_placement
-from pixlstash.services.comfyui_recipe_service import format_prompt_rejection
+from pixlstash.services.comfyui_recipe_service import (
+    VIDEO_SAVE_CLASSES,
+    format_prompt_rejection,
+)
 from pixlstash.services.set_lock_service import drop_locked_set_ids
 from pixlstash.stacking import normalize_stack_positions
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -63,8 +66,17 @@ PIXLSTASH_IDS_KEY = "picture_ids"
 # Every class in the ComfyUI-PixlStash pack starts with this.
 PIXLSTASH_NODE_PREFIX = "PixlStash"
 
-# Every class that ends a graph with an image PixlStash can end up owning.
-SAVE_NODE_CLASSES = frozenset({"SaveImage"}) | PIXLSTASH_SAVER_CLASSES
+# The savers that write a file under their own ``filename_prefix`` and report
+# it in the prompt's history, for PixlStash to download.
+FILE_SAVE_NODE_CLASSES = frozenset({"SaveImage"}) | VIDEO_SAVE_CLASSES
+
+# Every class that ends a graph with a picture or video PixlStash can end up
+# owning.
+SAVE_NODE_CLASSES = FILE_SAVE_NODE_CLASSES | PIXLSTASH_SAVER_CLASSES
+
+# Where VideoHelperSuite's combine lists the file it wrote; every ComfyUI saver
+# lists its own, a video included, under ``images``.
+VHS_FILES_KEY = "gifs"
 
 # Requests that vet or link a ComfyUI go straight to the address asked.
 # ``requests`` otherwise honours HTTP_PROXY / HTTPS_PROXY / ALL_PROXY from the
@@ -661,7 +673,16 @@ def _extract_comfyui_output_images(
             # A PixlStash saver's images are temp previews of pictures it has
             # already imported. Downloading them would re-import a duplicate.
             continue
-        for image in node_payload.get("images") or []:
+        # A VideoHelperSuite node with `save_output` off is a preview: it
+        # writes a `temp` file its author chose not to keep, so it is not
+        # collected. (A `temp` under `images` is: an explicit
+        # `pixlstash_output_nodes` choice may name a preview node.)
+        kept = [
+            entry
+            for entry in node_payload.get(VHS_FILES_KEY) or []
+            if isinstance(entry, dict) and entry.get("type") != "temp"
+        ]
+        for image in [*(node_payload.get("images") or []), *kept]:
             if not isinstance(image, dict):
                 continue
             filename = image.get("filename")
@@ -677,6 +698,42 @@ def _extract_comfyui_output_images(
     return images
 
 
+def _comfyui_prompt_queued(base_url: str, prompt_id: str) -> bool:
+    """Whether ComfyUI still holds *prompt_id*, running or waiting its turn.
+
+    True when the queue cannot be read: only an answer that does not list the
+    prompt says it is gone, and one slow answer from a busy ComfyUI must not
+    abandon a run that is still going. A ComfyUI that is down ends the wait
+    through the history read instead, which raises.
+    """
+    try:
+        response = requests.get(f"{base_url}/queue", timeout=30)
+        response.raise_for_status()
+        queue = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(
+            "ComfyUI queue could not be read for prompt %s, so it is taken as "
+            "still queued: %s",
+            prompt_id,
+            exc,
+        )
+        return True
+    if not isinstance(queue, dict):
+        logger.warning(
+            "ComfyUI /queue returned %s, not an object, so prompt %s is taken "
+            "as still queued",
+            type(queue).__name__,
+            prompt_id,
+        )
+        return True
+    # Each entry is ``[number, prompt_id, prompt, ...]``.
+    return any(
+        isinstance(item, (list, tuple)) and len(item) > 1 and item[1] == prompt_id
+        for key in ("queue_running", "queue_pending")
+        for item in queue.get(key) or []
+    )
+
+
 def _wait_for_comfyui_outputs(
     base_url: str,
     prompt_id: str,
@@ -686,13 +743,24 @@ def _wait_for_comfyui_outputs(
 ) -> tuple[list[dict], list[int] | None]:
     """Poll history until the prompt produces output.
 
-    Returns the images to download and import, plus the picture ids a PixlStash
+    *timeout_s* is how long a prompt ComfyUI no longer holds is waited for, not
+    a cap on the run: a video, or a prompt behind others in the queue, takes
+    longer than any fixed budget, so while ComfyUI still lists the prompt as
+    running or pending the wait goes on.
+
+    Returns the files to download and import, plus the picture ids a PixlStash
     saver node imported on its own (None when no such node ran).
     """
-    # 5 min budget covers cold model loading plus generation before giving up.
     deadline = time.time() + timeout_s
-    last_images = []
-    while time.time() < deadline:
+    while True:
+        # Asked BEFORE the history read, so a prompt that finishes in between
+        # is still collected by this pass rather than given up on.
+        gone = False
+        if time.time() >= deadline:
+            if _comfyui_prompt_queued(base_url, prompt_id):
+                deadline = time.time() + timeout_s
+            else:
+                gone = True
         history_payload = _fetch_comfyui_history(base_url, prompt_id)
         images = _extract_comfyui_output_images(
             history_payload, prompt_id, output_node_ids
@@ -714,9 +782,9 @@ def _wait_for_comfyui_outputs(
             raise RuntimeError(error_text or f"ComfyUI status={status_str}")
         if error_text and status_str != "success":
             raise RuntimeError(error_text)
-        last_images = images
+        if gone:
+            return [], None
         time.sleep(poll_s)
-    return last_images, None
 
 
 def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:

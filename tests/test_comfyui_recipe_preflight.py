@@ -462,9 +462,25 @@ class TestSaveImageDetection:
         info = {"PixlStashPictureSaver": {}}
         assert preflight_prompt(graph, info)["has_save_image"] is True
 
+    @pytest.mark.parametrize(
+        "saver",
+        [
+            "SaveVideo",
+            "SaveWEBM",
+            "SaveAnimatedWEBP",
+            "SaveAnimatedPNG",
+            "VHS_VideoCombine",
+        ],
+    )
+    def test_reports_a_graph_that_writes_a_video(self, saver):
+        # An image-to-video graph ends in one of these and in no SaveImage;
+        # refusing it as "saves no image" left every video workflow unrunnable.
+        graph = {"9": {"class_type": saver, "inputs": {}}}
+        assert preflight_prompt(graph, {saver: {}})["has_save_image"] is True
+
     def test_reports_a_graph_that_writes_nothing_importable(self):
-        graph = {"9": {"class_type": "SaveAnimatedWEBP", "inputs": {}}}
-        info = {"SaveAnimatedWEBP": {}}
+        graph = {"9": {"class_type": "PreviewImage", "inputs": {}}}
+        info = {"PreviewImage": {}}
         assert preflight_prompt(graph, info)["has_save_image"] is False
 
 

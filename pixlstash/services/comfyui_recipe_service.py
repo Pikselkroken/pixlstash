@@ -63,12 +63,26 @@ _MAX_SEED_LINK_DEPTH = 4
 # randomize width/height primitives.
 SEED_PASSTHROUGH_CLASSES = frozenset({"PrimitiveInt", "SeedNode", "Seed"})
 
-# Nodes that end a graph with an image PixlStash can end up owning: either a
-# written file it collects from ComfyUI's history, or a ComfyUI-PixlStash saver
-# that uploads into the vault itself. A graph with none of these produces no
-# importable output no matter how long it runs.
-SAVE_IMAGE_CLASSES = frozenset(
-    {"SaveImage", "SaveImageWebsocket", "PixlStashPictureSaver"}
+# Nodes that write a video or an animation: ComfyUI's own four, and
+# VideoHelperSuite's combine. Each takes a ``filename_prefix`` and reports the
+# file it wrote in the prompt's history, as ``SaveImage`` does.
+VIDEO_SAVE_CLASSES = frozenset(
+    {
+        "SaveVideo",
+        "SaveWEBM",
+        "SaveAnimatedWEBP",
+        "SaveAnimatedPNG",
+        "VHS_VideoCombine",
+    }
+)
+
+# Nodes that end a graph with a picture or video PixlStash can end up owning:
+# either a written file it collects from ComfyUI's history, or a
+# ComfyUI-PixlStash saver that uploads into the vault itself. A graph with none
+# of these produces no importable output no matter how long it runs.
+SAVE_IMAGE_CLASSES = (
+    frozenset({"SaveImage", "SaveImageWebsocket", "PixlStashPictureSaver"})
+    | VIDEO_SAVE_CLASSES
 )
 
 # Fields naming a file in ComfyUI's *input* directory rather than a model.
@@ -507,7 +521,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
        ComfyUI itself validates it by file existence rather than against the
        combo list. Never reported as a "missing model".
     4. **Output nodes** (``has_save_image``) - a graph with nothing that writes
-       an image runs to completion and imports nothing. Catching it here saves
+       a picture or a video runs to completion and imports nothing. Catching it here saves
        the user the full generation wait for an empty result.
 
     Args:
