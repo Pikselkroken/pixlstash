@@ -86,4 +86,29 @@ describe("ComfyUiRunner", () => {
     expect(wrapper.vm.progress.visible).toBe(true);
     expect(wrapper.vm.progress.status).toBe("running");
   });
+
+  // A video ahead of it in the queue takes longer than the silence allowed,
+  // and ComfyUI says nothing about a prompt until its turn comes.
+  it("does not call a prompt dead while ComfyUI is busy with another", () => {
+    const wrapper = mountRunner();
+    const start = Date.now();
+    wrapper.vm.handleComfyuiRun({
+      prompts: [{ prompt_id: "p-1" }, { prompt_id: "p-2" }],
+    });
+    vi.useFakeTimers({ now: start + 6 * 60 * 1000 });
+    try {
+      wrapper.vm.handleComfyuiPayload({
+        type: "progress",
+        data: { prompt_id: "p-1", node: "3", value: 5, max: 20 },
+      });
+      wrapper.vm.pruneStaleComfyuiPrompts();
+      expect(wrapper.vm.progress.status).toBe("running");
+
+      // Nothing from ComfyUI at all for five minutes is still a dead run.
+      wrapper.vm.pruneStaleComfyuiPrompts(Date.now() + 6 * 60 * 1000);
+      expect(wrapper.vm.progress.status).toBe("failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

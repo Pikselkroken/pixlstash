@@ -776,8 +776,20 @@ class _Converter:
                 declared, index, name, options, inputs.get(name), where
             ):
                 return None
+        # **Every wire is sent, declared or not**, under the socket's own name:
+        # that is what the editor does when it queues a graph, and it is how a
+        # socket this class grows at run time reaches ComfyUI (a V3 autogrow
+        # input's `values.a`, which `/object_info` declares only as `values`).
+        # A wire dropped here is a run ComfyUI refuses over a missing input, or
+        # one that quietly computes something else.
+        declared_names = {name for name, _t, _o, _r in declared}
+        for name, link in connected.items():
+            if name in declared_names:
+                continue
+            resolved = self._resolve(link, want_type=input_types.get(name))
+            if resolved is not None:
+                inputs[name] = resolved
         if by_name:
-            declared_names = {name for name, _t, _o, _r in declared}
             unknown = sorted(k for k in widget_values if k not in declared_names)
             missing = sorted(
                 widget_names - set(widget_values) - set(connected) - set(overrides)

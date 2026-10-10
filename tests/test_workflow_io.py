@@ -115,16 +115,16 @@ def test_built_in_api_workflows(name, expected):
 )
 def test_ui_workflows_through_subgraphs(name, positive, negative):
     found = detect_workflow_io(_load(UI_FIXTURES / name))
-    assert found.save_nodes == (() if name.startswith("video_") else ("9",))
+    assert found.save_nodes == (("80",) if name.startswith("video_") else ("9",))
     assert found.positive_prompts == positive
     assert found.negative_prompts == negative
     assert found.ambiguities == ()
 
 
-def test_video_save_is_not_a_picture_save_node():
+def test_a_video_save_is_a_save_node():
     found = detect_workflow_io(_load(UI_FIXTURES / "video_wan2_2_14B_t2v.json"))
-    assert found.save_nodes == ()
-    assert not found.valid
+    assert found.save_nodes == ("80",)
+    assert found.valid
 
 
 def test_two_save_nodes_are_reported():

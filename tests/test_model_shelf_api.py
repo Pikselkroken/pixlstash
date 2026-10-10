@@ -1649,6 +1649,26 @@ def test_a_deleted_set_comes_back_whole_from_its_snapshot(shelf_env):
         _wipe_sets(server)
 
 
+def test_a_cloned_set_says_so_and_its_snapshot_keeps_the_mark(shelf_env):
+    """The mark is what lets a copy of a set from pictures stay while it still
+    matches that set, so it is served and comes back with a delete's snapshot."""
+    try:
+        made = _new_set(shelf_env, name="Copy", cloned=True)
+        assert made["cloned"] is True
+        plain = _new_set(shelf_env, name="By hand")
+        assert plain["cloned"] is False
+        listed = _hand_made(shelf_env)
+        assert (listed[made["id"]]["cloned"], listed[plain["id"]]["cloned"]) == (
+            True,
+            False,
+        )
+        r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{made['id']}")
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"]["cloned"] is True
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
 def test_a_set_covers_the_combinations_it_holds_and_leaves_no_set(shelf_env):
     """Covered means EVERY model of the combination is on the set: one extra
     model is enough to leave a combination uncovered."""

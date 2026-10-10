@@ -122,6 +122,7 @@ from pixlstash.services.comfyui_recipe_service import (
     swap_to_adapter_loader,
 )
 from pixlstash.services.comfyui_service import (
+    FILE_SAVE_NODE_CLASSES,
     PIXLSTASH_PICTURE_LOADER,
     _extract_output_node_ids,
     _process_comfyui_outputs,
@@ -6013,7 +6014,7 @@ def create_router(server) -> APIRouter:
             graph, lambda own: build_stack_filename_prefix(own, stack_id, source_id)
         ):
             logger.warning(
-                "[workflows] No SaveImage node to tag for stack %s (source %s); "
+                "[workflows] No save node to tag for stack %s (source %s); "
                 "its outputs join the stack only if this run imports them.",
                 stack_id,
                 source_id,
@@ -6033,7 +6034,10 @@ def create_router(server) -> APIRouter:
         """
         if workflow_id is None:
             for node in graph.values():
-                if isinstance(node, dict) and node.get("class_type") == "SaveImage":
+                if (
+                    isinstance(node, dict)
+                    and node.get("class_type") in FILE_SAVE_NODE_CLASSES
+                ):
                     own = (node.get("inputs") or {}).get("filename_prefix")
                     if isinstance(own, str):
                         node["inputs"]["filename_prefix"] = strip_workflow_tags(own)
@@ -6042,13 +6046,15 @@ def create_router(server) -> APIRouter:
             graph, lambda own: build_workflow_filename_prefix(own, workflow_id)
         ):
             logger.warning(
-                "[workflows] No SaveImage node to tag for workflow %s; its "
+                "[workflows] No save node to tag for workflow %s; its "
                 "outputs are filed on it only if this run imports them.",
                 workflow_id,
             )
 
     def _tag_save_nodes(graph: dict, tagged_prefix) -> bool:
-        """Rewrite each SaveImage's ``filename_prefix`` to ``tagged_prefix(own)``.
+        """Rewrite each file saver's ``filename_prefix`` to ``tagged_prefix(own)``.
+
+        ``SaveImage`` and the video savers (``FILE_SAVE_NODE_CLASSES``).
 
         Each save node keeps its OWN prefix under the tag; one wired from
         another node is left alone, since overwriting it drops the link.
@@ -6056,7 +6062,10 @@ def create_router(server) -> APIRouter:
         """
         tagged = False
         for node in graph.values():
-            if not isinstance(node, dict) or node.get("class_type") != "SaveImage":
+            if (
+                not isinstance(node, dict)
+                or node.get("class_type") not in FILE_SAVE_NODE_CLASSES
+            ):
                 continue
             inputs = node.setdefault("inputs", {})
             own = inputs.get("filename_prefix")

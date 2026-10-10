@@ -354,7 +354,7 @@ export function readReason(reason) {
       return read(nodes.map(pixlstashNodeSentence).join(" "));
     }
     case "no_save_node":
-      return read("This graph saves no image, so a run would produce nothing to keep.");
+      return read("This graph saves no picture or video, so a run would produce nothing to keep.");
     case "a1111":
       return read("This picture was made in A1111 or Forge, so there is no ComfyUI graph to run.");
     case "ui_format":

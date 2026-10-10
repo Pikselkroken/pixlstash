@@ -25,6 +25,20 @@
           <span class="msp__name">{{ name }}</span>
           <span class="msp__count num">{{ countLabel }}</span>
           <span class="msp__spacer"></span>
+          <!-- A set from pictures cannot be edited, and this is where a reader
+               finds that out: its clone is a set of their own, which can. Not
+               for a set whose base model is off the shelf, which no set of
+               theirs can hold. -->
+          <AppButton
+            v-if="!missing"
+            variant="ghost"
+            size="sm"
+            icon-left="content-duplicate"
+            tooltip="A &quot;Grouped by you&quot; copy of this set, which you can edit. No file is touched."
+            data-testid="set-clone"
+            @click="emit('clone')"
+            >Clone to edit</AppButton
+          >
           <!-- The Workflows grid's own switch, by name and by behaviour: same two
                options, same icon-label variant, same remembered-for-every-tray
                rule. What differs is the List columns, because a set's members are
@@ -401,6 +415,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   "close",
+  "clone",
   "view",
   "pick",
   "select",

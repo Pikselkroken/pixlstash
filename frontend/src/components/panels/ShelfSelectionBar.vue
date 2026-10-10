@@ -313,6 +313,7 @@ const emit = defineEmits([
   "forget",
   "delete",
   "new-set",
+  "clone-set",
   "remove-from-set",
   "hide-sets",
 ]);
@@ -330,6 +331,8 @@ const countMenuOpen = ref(false);
 const assignMenuOpen = ref(false);
 const moreMenuOpen = ref(false);
 const contextOpen = ref(false);
+/** The set-grid card the context menu was opened on, by group key, or "". */
+const contextSetKey = ref("");
 /** `[x, y]` in client coordinates - what v-menu's `target` takes. */
 const contextAt = ref([0, 0]);
 
@@ -343,7 +346,8 @@ const contextAt = ref([0, 0]);
  * @param {number} x - clientX.
  * @param {number} y - clientY.
  */
-function openContextMenu(x, y) {
+function openContextMenu(x, y, setKey = "") {
+  contextSetKey.value = setKey;
   contextAt.value = [x, y];
   contextOpen.value = true;
 }
@@ -367,6 +371,21 @@ const newSetTitle = computed(() => {
   }
   return "";
 });
+
+/**
+ * "Clone set to edit": the set from pictures whose CARD the context menu was
+ * opened on. Keyed by the card and not by the selected file, because the same
+ * file is drawn in other trays too, where "this set" would be another one.
+ * A set from pictures cannot be edited; its clone is the owner's and can.
+ */
+const clonableSet = computed(
+  () =>
+    (contextOpen.value &&
+      store.setGroups?.find(
+        (group) => group.key === contextSetKey.value && !group.head?.missing,
+      )) ||
+    null,
+);
 
 /**
  * Remove from set: offered while every selected file is a member of the OPEN
@@ -939,6 +958,7 @@ const verbHandlers = computed(() => ({
   hideSets: hideSetsVerb(props.sets),
   newSetTitle: newSetTitle.value,
   removableFromSet: removableFromSet.value,
+  clonable: Boolean(clonableSet.value),
   renameTitle: renameTitle.value,
   iconTitle: iconTitle.value,
   clearIconTitle: clearIconTitle.value,
@@ -972,6 +992,8 @@ const verbHandlers = computed(() => ({
   deleteLabel: deleteLabel.value,
   deleteTitle: deleteTitle.value,
   onVerb: (verb, event) => {
+    // Read before the menu closes: it is the open menu's card.
+    const cloned = clonableSet.value;
     contextOpen.value = false;
     moreMenuOpen.value = false;
     if (verb === "copy-filenames")
@@ -985,6 +1007,7 @@ const verbHandlers = computed(() => ({
     // label and nothing else, so a stale one can never turn a trash into an
     // unlink.
     else if (verb === "delete") emit("delete", Boolean(event?.shiftKey));
+    else if (verb === "clone-set") emit("clone-set", cloned);
     else emit(verb);
   },
   onAttach,
@@ -1163,6 +1186,13 @@ const VerbMenu = (props) => {
           on: () => props.onVerb("new-set"),
           disabled: Boolean(props.newSetTitle),
           title: props.newSetTitle,
+        })
+      : null,
+    props.clonable
+      ? item("mdi-content-duplicate", "Clone set to edit", {
+          on: () => props.onVerb("clone-set"),
+          title:
+            'A "Grouped by you" copy of this set, which you can edit. No file is touched.',
         })
       : null,
     item(

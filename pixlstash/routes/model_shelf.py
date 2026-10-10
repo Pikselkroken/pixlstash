@@ -941,6 +941,10 @@ class HandMadeSet(BaseModel):
     name: Optional[str] = Field(default=None, description="Null when unnamed.")
     created_at: str
     updated_at: str
+    cloned: bool = Field(
+        default=False,
+        description="Copied from a set from pictures on purpose (see the create).",
+    )
     incomplete: bool = Field(description="The set has no checkpoint member.")
     checkpoint_ids: list[int] = Field(
         default_factory=list,
@@ -1027,6 +1031,14 @@ class WorkflowSetCreateRequest(BaseModel):
         default_factory=list,
         max_length=MAX_MODELS_PER_EDIT,
         description="May be empty: an empty set is a set.",
+    )
+    cloned: bool = Field(
+        default=False,
+        description=(
+            "The set is a copy of a set from pictures, made on purpose. Served "
+            "back on the set; the client never swaps such a set for the set "
+            "from pictures it matches."
+        ),
     )
 
 
@@ -2189,6 +2201,7 @@ def create_router(server) -> APIRouter:
                 server.hub,
                 payload.name,
                 [member.model_dump() for member in payload.members],
+                cloned=payload.cloned,
             )
         return _one_set(set_id)
 
