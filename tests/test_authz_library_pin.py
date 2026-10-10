@@ -15,6 +15,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -275,8 +276,6 @@ class TestPinnedRoutes:
         NULL), so this exercises the gate's own defensive branch directly rather
         than through a row that cannot exist.
         """
-        from types import SimpleNamespace
-
         from pixlstash.authz.gate import AuthzGate
 
         request = SimpleNamespace(
@@ -356,6 +355,38 @@ class TestTheTokenList:
             assert [row["resource_name"] for row in listed.json()] == [None]
         finally:
             owner.delete(f"{API}/picture_sets/{set_id}")
+
+    def test_with_no_library_database_the_list_still_answers_without_names(
+        self, server
+    ):
+        """The names are a courtesy; the list is not. A request that reached
+        the handler with no library lease and no vault to read (nothing served
+        does, but the service can be built that way) must not go looking for
+        sets in the hub."""
+        owner = _owner_client(server)
+        minted = owner.post(
+            "/users/me/token",
+            json={
+                "description": "pin test",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 1,
+            },
+        )
+        assert minted.status_code == 200, minted.text
+        request = SimpleNamespace(
+            state=SimpleNamespace(auth_user_id=server.auth.get_user().id),
+            cookies={},
+        )
+        vault_db = server.auth.vault_db
+        server.auth.vault_db = None
+        try:
+            listed = server.auth.list_tokens(request)
+        finally:
+            server.auth.vault_db = vault_db
+        assert [(row["resource_id"], row["resource_name"]) for row in listed] == [
+            (1, None)
+        ]
 
 
 def _token_row(server, description="pin test") -> UserToken:

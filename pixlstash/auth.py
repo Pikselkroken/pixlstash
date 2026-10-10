@@ -2188,7 +2188,9 @@ class AuthService:
         # lookup in the middleware does, so a switch cannot land in between.
         lease = getattr(getattr(request, "state", None), "library_lease", None)
         active_uuid = lease.library_uuid if lease else self.active_library_uuid()
-        vault_db = lease.db if lease else (self.vault_db or self._db)
+        # Never the hub: it has none of these tables, and asking it is what
+        # used to take the whole list down.
+        vault_db = lease.db if lease else self.vault_db
         models = {"character": Character, "picture_set": PictureSet, "project": Project}
         named = [
             token
@@ -2206,7 +2208,15 @@ class AuthService:
                     names[token.id] = obj.name
             return names
 
-        names = vault_db.run_immediate_read_task(fetch_names) if named else {}
+        names = {}
+        if named and vault_db is not None:
+            names = vault_db.run_immediate_read_task(fetch_names)
+        elif named:
+            self._logger.warning(
+                "No library database to read the names of %d share link(s) "
+                "from; listing them without names.",
+                len(named),
+            )
         return [
             {
                 "id": token.id,
