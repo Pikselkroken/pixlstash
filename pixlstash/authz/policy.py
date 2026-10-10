@@ -158,8 +158,9 @@ class RoutePolicy:
             reopen the pivot the pin exists to close. It is also why the one
             route that widens a token past its library
             (``PUT /users/me/token/{token_id}/libraries``, #1787) is pinned
-            and local-owner-only: the pin is lifted by the owner at the
-            machine, never by a token reaching for a library it is refused in.
+            and local-owner-only: the pin is lifted by the owner's own
+            session on the local network, never by a token (which
+            ``AuthService._refuse_token_credential`` refuses outright).
         id_resolver: Names a registered resolver that maps the route's raw id(s)
             (from :attr:`id_param` or :attr:`body_ids`) to a **picture id** before
             the picture-membership check - for routes keyed by a non-picture id

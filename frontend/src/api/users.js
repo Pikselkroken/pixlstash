@@ -73,9 +73,10 @@ export async function patchToken(id, body) {
  * Set which libraries a token works in.
  *
  * A token works only in the library it was created in unless this says
- * otherwise. The server refuses anyone but the owner on the machine PixlStash
- * runs on (`can_manage` from `GET /libraries` is the same answer), and refuses
- * a share link outright: its ids mean something else in the next library.
+ * otherwise. The server refuses anyone but the owner's own session on the
+ * local network (`can_manage` from `GET /libraries` is the same answer; a
+ * token is refused whatever its scope), and refuses a share link outright: its
+ * ids mean something else in the next library.
  *
  * @param {number|string} id
  * @param {boolean} allLibraries - true: whichever library is open; false: only

@@ -899,21 +899,24 @@ class AuthService:
         replacement token between the match and this read, which would let a
         removed credential's session survive by answering to its successor.
         """
-        still_exists = self._db.run_task(
-            lambda session, pid=token_public_id: (
-                session.exec(
-                    select(UserToken).where(UserToken.public_id == pid)
-                ).first()
-                is not None
-            ),
+        token = self._db.run_task(
+            lambda session, pid=token_public_id: session.exec(
+                select(UserToken).where(UserToken.public_id == pid)
+            ).first(),
             priority=DBPriority.IMMEDIATE,
         )
-        if still_exists:
+        # The same ordering settles a token that was pinned to one library
+        # mid-login (set_token_libraries commits, then sweeps): a session
+        # registered with no pin is only right while its token still follows
+        # the active library.
+        with self._session_lock:
+            pinned = session_id in self._library_uuid_by_session
+        if token is not None and (pinned or token_follows_active_library(token)):
             return
         self._forget_session(session_id)
         self._logger.warning(
-            "Discarded a session for token %s: the token was removed while "
-            "the sign-in was in progress.",
+            "Discarded a session for token %s: the token was removed, or "
+            "pinned to one library, while the sign-in was in progress.",
             token_public_id,
         )
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -1964,7 +1967,9 @@ class AuthService:
         switched, so a share link would start serving different pictures and an
         automation would write into the wrong place. The hub column is NOT NULL,
         so a missing provider surfaces as a write error rather than as a token
-        that silently follows the active library.
+        that silently follows the active library. Following it is something the
+        owner asks for afterwards, per token (:meth:`set_token_libraries`); the
+        stamp is written regardless.
         """
         if self.library_uuid_provider is None:
             return None
@@ -1982,6 +1987,29 @@ class AuthService:
             raise HTTPException(
                 status_code=403,
                 detail=f"The ComfyUI link key cannot {action}.",
+            )
+
+    def _refuse_token_credential(self, request: Request) -> None:
+        """Refuse a caller that is a token, or a session a token signed in with.
+
+        Which libraries a token reaches is decided by the owner in person: a
+        password or desktop session. An agent holding a full-access token is
+        an "owner" to every other route, so without this it could be given
+        "this library only" and lift that itself, then switch library and
+        carry on - the pivot the pin exists to close. Exchanging the token for
+        a cookie first must not get round it, hence the session half.
+        """
+        matched = getattr(getattr(request, "state", None), "matched_token", None)
+        session_id = getattr(request, "cookies", {}).get("session_id")
+        with self._session_lock:
+            from_token = session_id in self._token_public_id_by_session
+        if matched is not None or from_token:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Only the owner's own session can change which libraries a "
+                    "token works in; a token cannot."
+                ),
             )
 
     def create_token(
@@ -2281,12 +2309,15 @@ class AuthService:
         ``resource_id`` means a different set, character or project in every
         other library, so widening one would serve somebody else's pictures.
 
-        Who may call this is the authz gate's business (``LOCAL_OWNER_ONLY``:
-        an unscoped owner at the machine), not this method's.
+        Where it may be called from is the authz gate's business
+        (``LOCAL_OWNER_ONLY``: an unscoped owner on the local network). What
+        this method adds is that the caller is the owner's own session and not
+        a token: see :meth:`_refuse_token_credential`.
         """
         self.ensure_secure_when_required(request)
         user_id = self.require_user_id(request)
         self._refuse_bound_token(request, "change tokens")
+        self._refuse_token_credential(request)
         active_uuid = self.active_library_uuid()
 
         def _update(session: Session, user_id: int, token_id: int):
@@ -2818,7 +2849,7 @@ class AuthService:
                             detail += (
                                 ". Switch to that library, or let the token "
                                 "cover every library under API Tokens in "
-                                "the settings, on the machine PixlStash runs on."
+                                "the settings, signed in on the local network."
                             )
                         return JSONResponse(status_code=403, content={"detail": detail})
                     refusal = self.source_refusal(

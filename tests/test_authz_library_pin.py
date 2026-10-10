@@ -1,6 +1,7 @@
 """The library pin: a token authenticates only while its library is active.
 
-Every token belongs to exactly one library (multi-library plan §4). Without the
+A token belongs to exactly one library (multi-library plan §4) unless the owner
+set it to cover them all (#1787, ``TestATokenThatCoversEveryLibrary``). Without the
 pin, switching library would silently change what an existing token grants: a
 share link would start serving somebody else's pictures, and an automation
 holding an ALL token would write into a library the owner never pointed it at.
@@ -439,6 +440,12 @@ class TestATokenThatCoversEveryLibrary:
         assert token_session.post("/login", json={"token": token}).status_code == 200
         assert token_session.get(f"{API}/pictures").status_code == 200
         _restamp_tokens(server, other_library)
+        # Used once more while it covers everything, so the token cache holds
+        # the row as it is now, going into the change.
+        assert (
+            TestClient(server.api).get(f"{API}/pictures", headers=bearer).status_code
+            == 200
+        )
 
         narrowed = _cover(owner, token_id, False)
         assert narrowed.status_code == 200, narrowed.text
@@ -451,6 +458,17 @@ class TestATokenThatCoversEveryLibrary:
             TestClient(server.api).get(f"{API}/pictures", headers=bearer).status_code
             == 200
         )
+        # Nor does the verified copy in the token cache: with the registry
+        # naming some other library, the pinned row is refused at the gate. A
+        # cached row from before the change would still cover it. Nothing has
+        # flushed the cache since the bearer request above but the change.
+        provider = server.auth.library_uuid_provider
+        server.auth.library_uuid_provider = lambda: "example-elsewhere"
+        try:
+            stale = TestClient(server.api).get(f"{API}/pictures", headers=bearer)
+        finally:
+            server.auth.library_uuid_provider = provider
+        assert stale.status_code == 403, stale.text
         _restamp_tokens(server, other_library)
         assert (
             TestClient(server.api).get(f"{API}/pictures", headers=bearer).status_code
@@ -506,9 +524,12 @@ class TestATokenThatCoversEveryLibrary:
         assert client.get(f"{API}/picture_sets", headers=bearer).status_code == 200
         _restamp_tokens(server, other_library)
         assert _token_row(server).all_libraries is True
-        assert client.get(f"{API}/picture_sets", headers=bearer).status_code == 403
+        refused = client.get(f"{API}/picture_sets", headers=bearer)
+        assert refused.status_code == 403
+        # And is told nothing about how the owner could change that.
+        assert refused.json()["detail"] == "Token belongs to a different library"
 
-    def test_only_the_owner_at_the_machine_may_set_it(self, server):
+    def test_only_the_owner_on_the_local_network_may_set_it(self, server):
         owner = _owner_client(server)
         token_id = owner.post(
             "/users/me/token", json={"description": "pin test", "scope": "ALL"}
@@ -541,7 +562,7 @@ class TestATokenThatCoversEveryLibrary:
             assert remote.status_code == 403
             assert "allow_remote_host_ops" in remote.json()["detail"]
             assert _token_row(server).all_libraries is False
-            # The same session, the same proxy, from the machine: allowed.
+            # The same session, the same proxy, from a local address: allowed.
             local = _cover(
                 owner, token_id, True, headers={"X-Forwarded-For": "127.0.0.1"}
             )
@@ -566,10 +587,66 @@ class TestATokenThatCoversEveryLibrary:
         assert refused.status_code == 403
         assert _token_row(server).all_libraries is False
 
-        # In its own library the same token is the owner, and may.
-        _restamp_tokens(server, server.auth.active_library_uuid())
-        allowed = _cover(TestClient(server.api), token_id, True, headers=bearer)
-        assert allowed.status_code == 200, allowed.text
+    def test_no_token_may_set_it_not_even_a_full_access_one_on_itself(self, server):
+        """An agent told "this library only" must not be able to lift that.
+
+        Its token is an owner to every other route, and the next thing it could
+        do is switch library. The token is in its own library here and reaches
+        an owner route, so the refusals are about what it is, not where.
+        """
+        owner = _owner_client(server)
+        token = _mint(owner)
+        bearer = {"Authorization": f"Bearer {token}"}
+        token_id = _token_row(server).id
+        client = TestClient(server.api)
+        assert client.get(f"{API}/users/me/token", headers=bearer).status_code == 200
+
+        refused = _cover(client, token_id, True, headers=bearer)
+        assert refused.status_code == 403
+        assert "a token cannot" in refused.json()["detail"]
+
+        # Nor by signing in with it first and asking as a session.
+        token_session = TestClient(server.api)
+        assert token_session.post("/login", json={"token": token}).status_code == 200
+        assert token_session.get(f"{API}/users/me/token").status_code == 200
+        laundered = _cover(token_session, token_id, True)
+        assert laundered.status_code == 403
+        assert "a token cannot" in laundered.json()["detail"]
+        assert _token_row(server).all_libraries is False
+
+        # The owner's own session may.
+        assert _cover(owner, token_id, True).status_code == 200
+
+    def test_a_login_that_raced_a_pinning_does_not_keep_the_wider_session(self, server):
+        """The session a token login registers carries the reach the token had
+        when it was read. If the owner pinned the token in between, the
+        re-check after registering ends that session; a token that still covers
+        every library, and a session that is pinned itself, are left alone."""
+        from fastapi import HTTPException
+
+        owner = _owner_client(server)
+        _mint(owner)
+        row = _token_row(server)
+        user_id = server.auth.get_user().id
+
+        server.auth._register_session("example-raced", user_id, row.public_id)
+        with pytest.raises(HTTPException) as excinfo:
+            server.auth._confirm_session_token_still_exists(
+                "example-raced", row.public_id
+            )
+        assert excinfo.value.status_code == 401
+        assert "example-raced" not in server.auth.active_session_ids
+
+        server.auth._register_session(
+            "example-pinned", user_id, row.public_id, row.library_uuid
+        )
+        server.auth._confirm_session_token_still_exists("example-pinned", row.public_id)
+        assert _cover(owner, row.id, True).status_code == 200
+        server.auth._register_session("example-follows", user_id, row.public_id)
+        server.auth._confirm_session_token_still_exists(
+            "example-follows", row.public_id
+        )
+        assert "example-follows" in server.auth.active_session_ids
 
     def test_an_unknown_token_is_not_found(self, server):
         owner = _owner_client(server)

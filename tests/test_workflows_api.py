@@ -1712,9 +1712,8 @@ class _FakeComfyUI:
 def _link_tokens(server) -> list[int]:
     """Ids of live ComfyUI link tokens, read from the token table.
 
-    Not through ``GET /users/me/token``: that route resolves a scoped token's
-    character name against the hub, where characters do not live, so it fails
-    once any test here has minted a character-scoped token.
+    Not through ``GET /users/me/token``, so a check of the link does not
+    depend on the listing (which the link token is refused anyway).
     """
 
     def ids(session):
@@ -2065,6 +2064,11 @@ def test_the_link_token_cannot_manage_tokens(workflow_env, comfy_at):
             ("GET", f"{API}/users/me/token", None),
             ("PATCH", f"{API}/users/me/token/{owners}", {"watermark": True}),
             ("DELETE", f"{API}/users/me/token/{owners}", None),
+            (
+                "PUT",
+                f"{API}/users/me/token/{owners}/libraries",
+                {"all_libraries": True},
+            ),
             ("GET", f"{API}/users/me/shared-resource-ids?resource_type=picture", None),
             ("POST", f"{API}/users/me/shared-picture-ids/batch", {"picture_ids": [1]}),
             (
@@ -2084,8 +2088,13 @@ def test_the_link_token_cannot_manage_tokens(workflow_env, comfy_at):
             assert "ComfyUI link key cannot" in r.json()["detail"]
         assert len(_link_tokens(server)) == 1
         # Positive control: the owner reaches the listings, and changes and
-        # deletes the token. Not the token list: it fails here for an
-        # unrelated reason (see ``_link_tokens``).
+        # deletes the token.
+        r = workflow_env.owner.get(f"{API}/users/me/token")
+        assert r.status_code == 200, r.text
+        r = workflow_env.owner.put(
+            f"{API}/users/me/token/{owners}/libraries", json={"all_libraries": True}
+        )
+        assert r.status_code == 200, r.text
         r = workflow_env.owner.get(
             f"{API}/users/me/shared-resource-ids?resource_type=picture"
         )

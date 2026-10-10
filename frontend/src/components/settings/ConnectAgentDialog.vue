@@ -7,14 +7,14 @@
  *
  * The whole point is that nobody copies a bare secret out of the token table
  * and then hand-edits a JSON file around it: the two blocks here paste
- * straight into a client. Scope is a plain unpinned READ token - narrowing it
+ * straight into a client. Scope is a plain READ token naming no resource - narrowing it
  * to one set, character or project is what the "New token" dialog is for, and
  * duplicating that picker here would be a second place to keep correct.
  *
  * A token works only in the library that is open when it is minted, so an
  * agent is refused the moment the owner switches. "Use in every library"
- * lifts that, as a second call: the server lets only the owner at the machine
- * widen a token, which the mint route does not require.
+ * lifts that, as a second call: the server lets only the owner's own session
+ * on the local network widen a token, which the mint route does not require.
  */
 import { computed, ref, watch } from "vue";
 import { VSwitch } from "vuetify/components";

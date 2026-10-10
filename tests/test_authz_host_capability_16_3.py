@@ -462,8 +462,8 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
 
     60 = 52 + 8 with ``PUT /users/me/token/{token_id}/libraries`` (#1787): it
     lets a token reach libraries it was not minted in, which is the owner's
-    decision at the machine and not one a remote session or a leaked token
-    may take.
+    decision on the local network and not one a remote session may take (a
+    token may not either, which the handler sees to).
 
     Arithmetic, not judgement."""
     loopback = {

@@ -687,8 +687,8 @@ class AuthzGate:
     def _enforce_library_pin(self, request: Request, route_policy: RoutePolicy) -> None:
         """Refuse a token whose library is not the active one.
 
-        Every token belongs to exactly one library (multi-library plan §4).
-        Without this, switching library would silently change what an existing
+        A token belongs to exactly one library (multi-library plan §4) unless
+        the owner set it to cover them all. Without this, switching library would silently change what an existing
         token grants: a share link would start serving somebody else's pictures,
         and an automation holding an ALL token would write into the wrong place.
 
@@ -756,8 +756,9 @@ class AuthzGate:
             status_code=403,
             detail=(
                 "This token belongs to a library that is not currently active. "
-                "Switch to that library, or use a token created for the active "
-                "one."
+                "Switch to that library, use a token created for the active "
+                "one, or let this one cover every library under API Tokens in "
+                "the settings."
             ),
         )
 

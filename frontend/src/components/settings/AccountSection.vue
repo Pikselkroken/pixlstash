@@ -347,11 +347,21 @@ async function updateTokenWatermark(token, value) {
 }
 
 // A token works in the library it was made in. With one library that is not
-// worth a column; with several, the owner at the machine may let a token work
+// worth a column; with several, the owner on the local network may let a token work
 // in whichever is open (`can_manage`, the answer the Libraries tab is given).
 const librariesStore = useLibrariesStore();
 const severalLibraries = computed(() => librariesStore.libraries.length > 1);
 const librariesUpdating = reactive(new Set());
+
+// Why a row's switch cannot be used, said on hover: a greyed-out switch with
+// no reason reads as broken.
+function librariesLockedReason(token) {
+  if (token.resource_type)
+    return "A share link stays with the library it was made in";
+  if (!librariesStore.canManage)
+    return "Sign in from the local network to change this";
+  return "";
+}
 
 async function updateTokenLibraries(token, value) {
   if (librariesUpdating.has(token.id)) return;
@@ -704,6 +714,10 @@ watch(
                      A share link stays off for good, because its set,
                      character or project is a different one in every other
                      library. -->
+                <Tooltip
+                  :text="librariesLockedReason(token)"
+                  activator="parent"
+                />
                 <v-switch
                   :model-value="token.all_libraries"
                   color="primary"
@@ -714,8 +728,7 @@ watch(
                   :disabled="
                     tokensLoading ||
                     librariesUpdating.has(token.id) ||
-                    Boolean(token.resource_type) ||
-                    !librariesStore.canManage
+                    Boolean(librariesLockedReason(token))
                   "
                   @update:model-value="updateTokenLibraries(token, $event)"
                 />
