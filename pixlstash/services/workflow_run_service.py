@@ -31,6 +31,7 @@ from typing import Any, Callable, Optional
 from pixlstash.services.comfyui_recipe_service import (
     LORA_DIGEST_FIELD_RE,
     LORA_FILENAME_FIELD_RE,
+    VIDEO_SAVE_CLASSES,
     bypass_node,
     bypass_stage,
     detect_seed_targets,
@@ -739,13 +740,26 @@ def pin_batch_size(graph: dict, object_info: Optional[dict] = None) -> list[str]
     drives keeps its value. A batch the graph builds afterwards on purpose
     (``RepeatLatentBatch``) is left as authored.
 
+    **In a graph that saves a video, a batch of pictures is the animation's
+    frames** (AnimateDiff's ``EmptyLatentImage`` at ``batch_size: 16``), and
+    pinning it would save a one-frame video. A video latent, which counts its
+    frames in ``length``, is still pinned: its batch is how many videos.
+
     Returns:
         The ids of the nodes it changed.
     """
+    saves_video = any(
+        isinstance(node, dict) and node.get("class_type") in VIDEO_SAVE_CLASSES
+        for node in graph.values()
+    )
     pinned = []
     for node_id, node in graph.items():
         inputs = node.get("inputs") if isinstance(node, dict) else None
         if not isinstance(inputs, dict) or "batch_size" not in inputs:
+            continue
+        # ponytail: `length` is how every video latent names its frame count
+        # (core's and Wan's); a pack that names it otherwise keeps its batch.
+        if saves_video and "length" not in inputs:
             continue
         class_type = str(node.get("class_type") or "")
         if not is_picture_batch(class_type, "batch_size", object_info):

@@ -10510,6 +10510,49 @@ def test_each_save_node_keeps_its_own_prefix_under_the_stack_tag(i2i):
     )
 
 
+@pytest.mark.parametrize(
+    "saver",
+    [
+        "SaveVideo",
+        "SaveWEBM",
+        "SaveAnimatedWEBP",
+        "SaveAnimatedPNG",
+        "VHS_VideoCombine",
+    ],
+)
+def test_a_graph_that_saves_a_video_runs_and_its_saver_is_tagged(
+    i2i, monkeypatch, saver
+):
+    """An image-to-video graph ends in a video saver and in no `SaveImage`: it
+    runs, that saver is the node collected, and its prefix carries the tags."""
+    i2i.graph["4"] = {
+        "class_type": saver,
+        "inputs": {"filename_prefix": f"video/out__wf_{'c' * 32}", "video": ["3", 0]},
+    }
+    info = {
+        **I2I_OBJECT_INFO,
+        saver: {"input": {"required": {"filename_prefix": ["STRING", {}]}}},
+    }
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: (json.loads(json.dumps(info)), None),
+    )
+    picture = _add_picture(i2i.server, i2i.tmp_path, "v.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "stack": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert i2i.outputs[0][3] == ["4"]
+    # The inherited workflow tag is dropped and the stack's is written, under
+    # the saver's own prefix and folder.
+    assert i2i.submitted[0]["graph"]["4"]["inputs"]["filename_prefix"] == (
+        f"video/out__stack_{i2i.outputs[0][4]}__src_{picture}"
+    )
+
+
 @pytest.mark.parametrize("stack", [False, True])
 def test_an_automatic_run_drops_a_workflow_tag_its_graph_inherited(i2i, stack):
     """A graph replayed from a manual run's output keeps that run's tagged

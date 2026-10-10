@@ -258,7 +258,9 @@ function pruneStaleComfyuiPrompts(now = Date.now()) {
   const lastAny = comfyuiLastMessageAt.value || now;
   const stale = [];
   for (const promptKey of active.values()) {
-    const lastSeen = comfyuiPromptLastSeen[promptKey] || lastAny;
+    // A prompt waiting behind another hears nothing about itself until its
+    // turn, so ComfyUI saying anything at all counts for it too.
+    const lastSeen = Math.max(comfyuiPromptLastSeen[promptKey] || 0, lastAny);
     if (now - lastSeen > COMFYUI_STALE_MS) {
       stale.push(promptKey);
     }
