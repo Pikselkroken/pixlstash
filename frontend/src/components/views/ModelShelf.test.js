@@ -228,6 +228,8 @@ const globalOpts = {
       ModelSetGrid: {
         name: "ModelSetGrid",
         emits: ["works-with", "menu"],
+        // The real grid exposes the cards it draws selected; a test sets it.
+        data: () => ({ selectedCardGroups: [] }),
         template: "<div class='set-grid-stub'></div>",
       },
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
@@ -5675,6 +5677,94 @@ describe("the set grid is what the shelf opens on", () => {
     // that can drift. The menu is its own, opened through its exposed method.
     expect(bar.vm.contextOpen).toBe(true);
     expect(bar.vm.contextAt).toEqual([210, 64]);
+  });
+
+  /** The grid with three cards: models 1 and 2, and a missing checkpoint. */
+  async function gridWithThreeCards() {
+    const { wrapper, store } = await shelfOnTheGrid();
+    const card = (extra) => ({
+      recipes: 1,
+      picture_count: 1,
+      covers: [],
+      ...extra,
+    });
+    store.workflowSets = {
+      ...store.workflowSets,
+      combinations: [
+        ...store.workflowSets.combinations,
+        card({ key: "2", models: [{ id: 2, name: "b.st", kind: "checkpoint" }] }),
+        card({
+          key: "+gone.sft",
+          models: [],
+          missing: [{ name: "gone.sft", workflow_ids: ["auto:a"] }],
+        }),
+      ],
+      noSet: [],
+    };
+    await wrapper.vm.$nextTick();
+    expect(store.setGroups.map((g) => g.key).sort()).toEqual([
+      "missing:gone.sft",
+      "model:1",
+      "model:2",
+    ]);
+    // The stubbed grid's answer to "which cards are drawn selected".
+    const lightCards = async (...keys) => {
+      wrapper.findComponent({ name: "ModelSetGrid" }).vm.selectedCardGroups =
+        store.setGroups.filter((g) => keys.includes(g.key));
+      await wrapper.vm.$nextTick();
+    };
+    return { wrapper, store, lightCards };
+  }
+
+  it("hides the cards the grid says are selected, and no other", async () => {
+    const { wrapper, store, lightCards } = await gridWithThreeCards();
+    const bar = wrapper.findComponent({ name: "ShelfSelectionBar" });
+    const hide = () =>
+      bar.findAll(".ctx-item").find((b) => b.text().startsWith("Hide "));
+    store.toggleSelected(1);
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    // Two models are selected, but the grid names no card as lit (which is
+    // what it answers for a pick made in a tray): no set verb.
+    expect(hide()).toBeUndefined();
+
+    await lightCards("model:1");
+    expect(hide().text()).toBe("Hide workflow set");
+    await hide().trigger("click");
+
+    expect(store.setGroups.map((g) => g.key).sort()).toEqual([
+      "missing:gone.sft",
+      "model:2",
+    ]);
+    // The row behind the card is untouched: hidden, not forgotten or deleted.
+    expect(store.rows.map((r) => r.id)).toEqual([1, 2]);
+  });
+
+  it("hides every lit card from either pill's menu, missing ones included", async () => {
+    const { wrapper, store, lightCards } = await gridWithThreeCards();
+    store.toggleSelected(1);
+    store.selectAllMissing();
+    await lightCards("model:1");
+
+    const fileRow = wrapper
+      .findComponent({ name: "ShelfSelectionBar" })
+      .findAll(".ctx-item")
+      .find((b) => b.text().startsWith("Hide "));
+    const missingBar = wrapper.findComponent({ name: "MissingSetSelectionBar" });
+    // One row, one count, on both: a card is a card whichever pill counts it.
+    expect(fileRow.text()).toBe("Hide 2 workflow sets");
+    expect(missingBar.find(".ctx-item[data-verb='hide-sets']").text()).toBe(
+      "Hide 2 workflow sets",
+    );
+
+    await missingBar.find('.selbar [data-verb="hide-sets"]').trigger("click");
+
+    // Model 2's card was never selected.
+    expect(store.setGroups.map((g) => g.key)).toEqual(["model:2"]);
+    expect(store.hiddenSetCount).toBe(2);
+    // Both left the screen, so neither is still held for a later Undo to arm.
+    expect([...store.selectedIds]).toEqual([]);
+    expect([...store.selectedMissingKeys]).toEqual([]);
   });
 
   it("takes Ctrl+A to mean the models the GRID draws", async () => {

@@ -989,6 +989,40 @@ describe("selection and the verbs", () => {
     expect(card().classes()).toContain("msc--on");
   });
 
+  it("names the lit cards' sets for Hide, and no set for a tray pick", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [
+        row(1, "realvisXL_v5", "checkpoint"),
+        row(3, "filmgrain_xl"),
+        row(4, "Juggernaut_XL", "checkpoint"),
+      ],
+      combinations: [
+        combination("1,3", [CKPT, LORA]),
+        combination("4,3", [member(4, "Juggernaut_XL", "checkpoint"), LORA]),
+      ],
+    });
+    const cards = () => wrapper.findAll(".msg__row[data-key^='model:']");
+    // Off what the grid EXPOSES, which is all the shelf's template ref can
+    // read: test-utils' `vm` would serve it from setup state either way.
+    const keys = () =>
+      wrapper.vm.$.exposed.selectedCardGroups.value.map((group) => group.key);
+    expect(keys()).toEqual([]);
+
+    await cards()[0].trigger("click");
+    await cards()[1].trigger("click", { ctrlKey: true });
+    expect(keys()).toEqual(cards().map((card) => card.attributes("data-key")));
+
+    // The head picked in its own tray is a file: the card is unlit, and Hide
+    // must not reach a set the reader never selected.
+    await cards()[0].trigger("click");
+    await cards()[0].trigger("dblclick");
+    await wrapper.findAll(".msp__member")[0].trigger("click");
+    expect(wrapper.findAll(".msp__member")[0].attributes("aria-selected")).toBe(
+      "true",
+    );
+    expect(keys()).toEqual([]);
+  });
+
   it("adds an unlit card with Ctrl or Space rather than toggling its model out", async () => {
     const { wrapper, store } = await openTray();
     const card = () => wrapper.find('[data-testid="model-set-card"]');

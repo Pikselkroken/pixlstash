@@ -1,8 +1,9 @@
 <template>
   <!-- The pill while cards named after a MISSING base model are selected. The
-       same floating object as the other two pills; its one verb replaces the
-       missing file in the workflows that load it. No file on the shelf is
-       touched, so nothing here wears the error colour. -->
+       same floating object as the other two pills. Replace swaps the missing
+       file in the workflows that load it; Hide takes the selected cards off
+       the grid. No file on the shelf is touched, so nothing here wears the
+       error colour. -->
   <div
     v-if="store.selectedMissing.length"
     class="selbar"
@@ -24,14 +25,23 @@
       tooltip="Replace in every workflow that loads it"
       @click="emit('replace')"
     />
+    <AppBarButton
+      v-if="hide"
+      shape="round"
+      :icon="hide.icon.replace('mdi-', '')"
+      data-verb="hide-sets"
+      :aria-label="hide.label"
+      :tooltip="hide.label"
+      @click="emit('hide-sets')"
+    />
   </div>
 
   <!-- The card's context menu: right-click, the Menu key or Shift+F10 on a
        missing-base card. The shelf's own verb list in its own order, which the
-       pill is a shortcut into: Replace leads, Copy filename copies the missing
-       names, and the verbs that write the checkpoint's shelf row are shown
-       disabled with the reason, as the file menu shows a verb that does not
-       apply, rather than vanishing. -->
+       pill is a shortcut into: Replace leads, Hide follows it, Copy filename
+       copies the missing names, and the verbs that write the checkpoint's
+       shelf row are shown disabled with the reason, as the file menu shows a
+       verb that does not apply, rather than vanishing. -->
   <v-menu
     v-model="contextOpen"
     :target="contextAt"
@@ -45,7 +55,7 @@
       tabindex="-1"
       @keydown="onMenuKeydown"
     >
-      <template v-for="(entry, index) in MENU" :key="index">
+      <template v-for="(entry, index) in menu" :key="index">
         <div v-if="entry === SEP" class="ctx-sep"></div>
         <button
           v-else
@@ -80,10 +90,16 @@ import { VIcon } from "vuetify/components";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { hideSetsVerb } from "../../utils/workflowSets";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
-const emit = defineEmits(["replace"]);
+const props = defineProps({
+  /** Every selected card from pictures, the file pill's included: what Hide takes. */
+  sets: { type: Array, default: () => [] },
+});
+
+const emit = defineEmits(["replace", "hide-sets"]);
 
 const store = useModelShelfStore();
 
@@ -117,6 +133,24 @@ const MENU = [
   { icon: "mdi-playlist-remove", verb: null, label: "Remove from shelf" },
   { icon: "mdi-delete-outline", verb: null, label: "Delete", kbd: "Del", danger: true },
 ];
+
+/** Hide over the selected cards, as the pill's button and the menu's row. */
+const hide = computed(() => hideSetsVerb(props.sets));
+
+/**
+ * `MENU` with Hide under Replace: the card's eye button, over the selection.
+ * The one verb here besides Replace that needs no shelf row, since it hides
+ * the card and reaches no file.
+ */
+const menu = computed(() =>
+  hide.value
+    ? [
+        MENU[0],
+        { icon: hide.value.icon, verb: "hide-sets", label: hide.value.label },
+        ...MENU.slice(1),
+      ]
+    : MENU,
+);
 
 const contextOpen = ref(false);
 const contextAt = ref([0, 0]);

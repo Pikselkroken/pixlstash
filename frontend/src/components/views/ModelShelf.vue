@@ -1466,6 +1466,8 @@
     <div v-if="isShelfTab" ref="selFloatEl" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
+        :sets="hideableSets"
+        @hide-sets="store.toggleHiddenSets(hideableSets)"
         @rename="startRenameSelected"
         @set-base-model="editVerb = 'base-model'"
         @set-kind="editVerb = 'kind'"
@@ -1497,7 +1499,9 @@
       <MissingSetSelectionBar
         v-if="isSetGrid"
         ref="missingBarRef"
+        :sets="hideableSets"
         @replace="replacingHeads = store.selectedMissing"
+        @hide-sets="store.toggleHiddenSets(hideableSets)"
       />
     </div>
     <ReplaceMissingDialog
@@ -2602,6 +2606,22 @@ onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
 
 const setGridRef = ref(null);
+
+/**
+ * The sets from pictures Hide acts on: every card the grid draws selected,
+ * whichever pill it is counted on, so the two pills' menus offer one row with
+ * one count and Ctrl+A then Hide leaves none of them behind. The model cards
+ * are the grid's answer rather than the store's, because only it knows a head
+ * picked in its open tray from one picked as its card.
+ */
+const hideableSets = computed(() =>
+  isSetGrid.value
+    ? [
+        ...(setGridRef.value?.selectedCardGroups ?? []),
+        ...store.selectedMissingGroups,
+      ]
+    : [],
+);
 
 /** The missing-base heads the Replace dialog is open on, `[]` while closed. */
 const replacingHeads = ref([]);

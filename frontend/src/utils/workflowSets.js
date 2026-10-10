@@ -348,6 +348,26 @@ export function setCard(group) {
 }
 
 /**
+ * Hide, as a menu row over several selected sets from pictures.
+ *
+ * It hides the ones still shown and counts only those, as the receipt does; it
+ * turns into Show again only when every one is already hidden, which is the
+ * card's own eye button over a selection.
+ *
+ * @param {Array<Object>} groups - store `setGroups` entries, each with `hidden`.
+ * @returns {{hide: boolean, icon: string, label: string}|null} null for none.
+ */
+export function hideSetsVerb(groups) {
+  if (!groups?.length) return null;
+  const shown = groups.filter((group) => !group.hidden).length;
+  const n = shown || groups.length;
+  const sets = n === 1 ? "workflow set" : `${n} workflow sets`;
+  return shown
+    ? { hide: true, icon: "mdi-eye-off-outline", label: `Hide ${sets}` }
+    : { hide: false, icon: "mdi-eye-outline", label: `Show ${sets} again` };
+}
+
+/**
  * What a card is called after its head: the name a person gave the file, else
  * the shelf's readable reading of its filename.
  *

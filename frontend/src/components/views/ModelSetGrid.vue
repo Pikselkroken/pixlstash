@@ -927,6 +927,17 @@ function cardSelected(entry) {
 }
 
 /**
+ * The sets from pictures whose cards are drawn selected, in drawn order: what
+ * the bar's Hide acts on. A head picked in its open tray is a FILE and lights
+ * no card, so it names no set here either.
+ */
+const selectedCardGroups = computed(() =>
+  store.setGroups.filter((group) =>
+    cardSelected({ headId: group.head?.id }),
+  ),
+);
+
+/**
  * The card heads a Shift-range from the anchor to `occurrence` passes over, or
  * null when the store will not take it as a range (no anchor on this screen).
  */
@@ -1662,7 +1673,7 @@ async function undoLastPick() {
   }
 }
 
-defineExpose({ openFill, openOffer });
+defineExpose({ openFill, openOffer, selectedCardGroups });
 
 /**
  * Right-click a card or a tray row: the shelf's full verb inventory, at the

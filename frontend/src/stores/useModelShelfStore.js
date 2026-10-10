@@ -57,6 +57,7 @@ import {
   handMadeBase,
   handMadeCard,
   handMadeName,
+  hideSetsVerb,
   pictureCount,
   rowBaseModel,
   setCard,
@@ -1829,8 +1830,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       else next.delete(key);
     }
     writeHiddenSets(next);
-    if (hide && !showHiddenSets.value && keys.includes(openSetKey.value)) {
-      openSetKey.value = "";
+    if (!hide || showHiddenSets.value) return;
+    if (keys.includes(openSetKey.value)) openSetKey.value = "";
+    // The card has left the screen, so its head leaves the selection with it,
+    // as a missing card's key does: otherwise Undo or "Show them" would bring
+    // it back lit, with the file pill armed by no gesture.
+    const gone = new Set(
+      evidenceGroups.value
+        .filter((group) => keys.includes(group.key))
+        .map((group) => group.head?.id),
+    );
+    if ([...selectedIds.value].some((id) => gone.has(id))) {
+      selectedIds.value = new Set(
+        [...selectedIds.value].filter((id) => !gone.has(id)),
+      );
     }
   }
 
@@ -1878,6 +1891,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       async () => changeHidden(keys, true),
       async () => changeHidden(keys, false),
     );
+  }
+
+  /**
+   * Hide over a selection of sets from pictures: the one rule the menus' row
+   * is worded by (`hideSetsVerb`), so what it says is what runs.
+   *
+   * @param {Array<Object>} groups - entries of `setGroups`.
+   */
+  function toggleHiddenSets(groups) {
+    if (hideSetsVerb(groups)?.hide) hideSets(groups);
+    else unhideSets(groups);
   }
 
   /**
@@ -2169,11 +2193,16 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const selectedMissingKeys = ref(new Set());
   let missingAnchor = null;
 
+  /** The selected missing-base cards' groups, in drawn order: what Hide takes. */
+  const selectedMissingGroups = computed(() =>
+    setGroupList.value.filter((group) =>
+      selectedMissingKeys.value.has(group.key),
+    ),
+  );
+
   /** The selected missing heads, in drawn order: `{name, names, workflowsByName, …}`. */
   const selectedMissing = computed(() =>
-    setGroupList.value
-      .filter((group) => selectedMissingKeys.value.has(group.key))
-      .map((group) => group.head),
+    selectedMissingGroups.value.map((group) => group.head),
   );
 
   /**
@@ -3824,6 +3853,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     showHiddenSets,
     hideSets,
     unhideSets,
+    toggleHiddenSets,
     setGridModelIds,
     setGridRows,
     screenRows,
@@ -3834,6 +3864,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     handMadeGroups,
     selectedSetIds,
     selectedMissingKeys,
+    selectedMissingGroups,
     selectedMissing,
     selectMissing,
     clearMissingSelection,
