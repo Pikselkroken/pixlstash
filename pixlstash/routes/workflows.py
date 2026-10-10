@@ -3319,21 +3319,29 @@ def _require_object_info(read: tuple[dict | None, str | None], why: str) -> dict
     return object_info
 
 
-def _changes_of(raw: dict | None) -> WorkflowChanges | None:
+def _changes_of(
+    raw: dict | None, workflow_id: str, kind: str
+) -> WorkflowChanges | None:
     """A stored set of changes, or ``None`` for none, or one that no longer
-    reads (logged): a row an older or newer build wrote must not stop the
-    workflow it is on from being read."""
+    reads (logged, naming the row): a row an older or newer build wrote must
+    not stop the workflow it is on from being read."""
     if not raw:
         return None
     try:
         return WorkflowChanges.model_validate(raw)
     except ValidationError as exc:
-        logger.warning("A stored set of workflow changes will not read: %s", exc)
+        logger.warning(
+            "Workflow %s: its stored %s changes will not read, so they are "
+            "left out: %s",
+            workflow_id,
+            kind,
+            exc,
+        )
         return None
 
 
-def _count_changes(raw: dict | None) -> int:
-    changes = _changes_of(raw)
+def _count_changes(raw: dict | None, workflow_id: str) -> int:
+    changes = _changes_of(raw, workflow_id, WAITING)
     return changes.count() if changes is not None else 0
 
 
@@ -3479,7 +3487,7 @@ def create_router(server) -> APIRouter:
         waiting = waiting_counts(_hub())
         for card in cards:
             if card.id in waiting:
-                card.unsaved_changes = _count_changes(waiting[card.id])
+                card.unsaved_changes = _count_changes(waiting[card.id], card.id)
         return WorkflowCards(cards=cards, one_offs=grid.one_offs, hidden=grid.hidden)
 
     @router.get(
@@ -3519,7 +3527,7 @@ def create_router(server) -> APIRouter:
         )
         card = _entry(figure, recipe, _display_names(grid.figures))
         card.unsaved_changes = _count_changes(
-            read_changes(hub, workflow_id).get(WAITING, ({}, None))[0]
+            read_changes(hub, workflow_id).get(WAITING, ({}, None))[0], workflow_id
         )
         return WorkflowCardDetail(
             card=card,
@@ -9103,7 +9111,11 @@ def create_router(server) -> APIRouter:
             hub, workflow_id
         ):
             ran = None
-        return _changes_of(waiting), base, _changes_of(ran)
+        return (
+            _changes_of(waiting, workflow_id, WAITING),
+            base,
+            _changes_of(ran, workflow_id, RAN),
+        )
 
     def _run_with(workflow_id: str, changes: WorkflowChanges) -> RunRequest:
         """A run of the workflow with *changes*: how a set of changes becomes
@@ -9142,14 +9154,33 @@ def create_router(server) -> APIRouter:
                 for m in (recipe.models if recipe else [])
             }
             stages = dict(recipe.stages) if recipe else {}
+            # A model named by digest is the shelf file of that digest: the
+            # same test as one named by file, or the workflow's own model
+            # sent with its digest would read as a change on every run. One
+            # the shelf does not hold was not loaded, so it changed nothing.
+            by_digest = (
+                {
+                    str(row["sha256"]).lower(): row["filename"]
+                    for row in hub.fetchall(
+                        "SELECT sha256, filename FROM model "
+                        "WHERE sha256 IS NOT NULL AND filename IS NOT NULL"
+                    )
+                }
+                if any(m.sha256 for m in asked.models)
+                else {}
+            )
+
+            def loads_another(model: RunModel) -> bool:
+                filename = model.filename or by_digest.get(
+                    str(model.sha256).strip().lower()
+                )
+                return bool(filename) and normalized_filename(filename) != models.get(
+                    model.address
+                )
+
             changes = _without_people(
                 WorkflowChanges(
-                    models=[
-                        m
-                        for m in asked.models
-                        if m.sha256
-                        or normalized_filename(m.filename) != models.get(m.address)
-                    ],
+                    models=[m for m in asked.models if loads_another(m)],
                     loras=asked.loras,
                     skip_loras=asked.skip_loras,
                     stages={
@@ -9880,14 +9911,8 @@ def create_router(server) -> APIRouter:
         try:
             with hub.transaction() as conn:
                 workflow_versions.restore_version(conn, workflow_id, version)
-        except json.JSONDecodeError as exc:
-            logger.error(
-                "Version %d of workflow %s will not read, so it cannot be "
-                "gone back to: %s",
-                version,
-                workflow_id,
-                exc,
-            )
+        except workflow_versions.UnreadableVersion as exc:
+            # Kept, but not a document: said as that, not as "no such version".
             raise HTTPException(
                 status_code=409,
                 detail="That version cannot be read, so it cannot be gone back to.",

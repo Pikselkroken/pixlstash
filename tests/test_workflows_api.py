@@ -16765,6 +16765,21 @@ def test_changes_wait_on_a_workflow_and_its_card_says_so(saving):
     assert _by_key(_cards(saving.owner))[saving.manual]["unsaved_changes"] == 0
 
 
+def test_a_stored_set_that_will_not_read_is_named_in_the_log(saving, caplog):
+    """A row another build wrote must not stop the workflow being read, and
+    the log has to say which row it was."""
+    workflow_group_writes.write_changes(
+        saving.server.hub, saving.manual, "waiting", {"models": "not a list"}, 1
+    )
+    with caplog.at_level(logging.WARNING, logger="pixlstash.routes.workflows"):
+        state = _changes(saving, saving.manual)
+    assert (state["count"], state["waiting"]) == (0, None)
+    assert any(
+        saving.manual in record.getMessage() and "waiting" in record.getMessage()
+        for record in caplog.records
+    ), [record.getMessage() for record in caplog.records]
+
+
 def test_the_unsaved_graph_opens_only_when_asked_for(saving):
     """Open in ComfyUI takes the waiting changes; Export and a plain read do not."""
     _put_changes(saving, saving.manual, **SKIP_FIVE)
@@ -17064,6 +17079,26 @@ def test_going_back_makes_the_earlier_graph_the_newest_version(saving):
     assert len(_versions_of(saving, saving.manual)) == 3
 
 
+@pytest.mark.parametrize("stored", ["{not json", "[]"])
+def test_a_version_that_will_not_read_cannot_be_gone_back_to(saving, stored):
+    """Said as that, and nothing appended: not a 500, and not "no such version"."""
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    assert _save(saving, saving.manual).status_code == 200
+    with saving.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_version SET document = ? WHERE workflow_id = ? "
+            "AND version = 1",
+            (stored, saving.manual),
+        )
+    r = saving.owner.post(f"{API}/workflows/{saving.manual}/versions/1/restore")
+    assert r.status_code == 409 and "cannot be read" in r.json()["detail"], r.text
+    rows = saving.server.hub.fetchall(
+        "SELECT version FROM workflow_version WHERE workflow_id = ? ORDER BY version",
+        (saving.manual,),
+    )
+    assert [row[0] for row in rows] == [1, 2]
+
+
 ADD_DETAIL_DIGEST = _h("add-detail-on-the-shelf")
 
 
@@ -17244,6 +17279,29 @@ def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
     # A run that changed nothing takes the offer away.
     _run(saving, workflow_id=saving.manual, **SKIP_FIVE)
     assert _changes(saving, saving.manual)["ran"] is not None
+    # Nothing is changed by naming the workflow's own checkpoint, by file or
+    # by the digest of that file on the shelf.
+    address = _model_address(saving, saving.manual)
+    own = _h("the-workflows-own-checkpoint")
+    with saving.server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (own,))
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', 'realvisxl.safetensors', ?, 'scanned')",
+            (own,),
+        )
+    try:
+        for named in ({"filename": "realvisxl.safetensors"}, {"sha256": own}):
+            _run(saving, workflow_id=saving.manual, **SKIP_FIVE)
+            _run(
+                saving,
+                workflow_id=saving.manual,
+                models=[{"address": address, **named}],
+            )
+            assert _changes(saving, saving.manual)["ran"] is None, named
+    finally:
+        with saving.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (own,))
     _run(saving, workflow_id=saving.manual)
     assert _changes(saving, saving.manual)["ran"] is None
 

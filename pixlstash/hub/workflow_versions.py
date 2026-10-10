@@ -266,6 +266,10 @@ def list_versions(hub: HubDatabase, workflow_id: str) -> list[dict]:
     ]
 
 
+class UnreadableVersion(LookupError):
+    """A version the workflow keeps whose stored document will not read."""
+
+
 def restore_version(conn: sqlite3.Connection, workflow_id: str, version: int) -> int:
     """Make an earlier version of *workflow_id* its newest; return the new number.
 
@@ -275,6 +279,8 @@ def restore_version(conn: sqlite3.Connection, workflow_id: str, version: int) ->
 
     Raises:
         LookupError: The workflow keeps no such version.
+        UnreadableVersion: It keeps one, whose document will not read
+            (logged); nothing is appended.
         ValueError: *version* is already the current one.
     """
     row = conn.execute(
@@ -287,10 +293,32 @@ def restore_version(conn: sqlite3.Connection, workflow_id: str, version: int) ->
         raise LookupError(f"{workflow_id} keeps no version {version}")
     if row[2] == version:
         raise ValueError(f"{workflow_id} is already at version {version}")
+    try:
+        document = json.loads(row[0])
+    except (ValueError, TypeError, RecursionError) as exc:
+        logger.warning(
+            "Workflow %s: version %d of its document will not read, so it "
+            "cannot be gone back to: %s",
+            workflow_id,
+            version,
+            exc,
+        )
+        raise UnreadableVersion(
+            f"{workflow_id} version {version} will not read"
+        ) from exc
+    if not isinstance(document, dict):
+        logger.warning(
+            "Workflow %s: version %d holds a %s, not a document, so it cannot "
+            "be gone back to.",
+            workflow_id,
+            version,
+            type(document).__name__,
+        )
+        raise UnreadableVersion(f"{workflow_id} version {version} is no document")
     return append_version(
         conn,
         workflow_id,
-        json.loads(row[0]),
+        document,
         source=f"{REVERT_PREFIX}{version}",
         api_document=row[1],
     )
