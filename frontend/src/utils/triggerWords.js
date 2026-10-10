@@ -20,8 +20,8 @@ export function triggerWord(row) {
 /**
  * *text* cut where it names one of *words*: `[{text, hit}]`, in order.
  *
- * Whole words only and any case, so "mira" is found in "Mira, smiling" and
- * not in "admiral".
+ * Whole words only, any case and any spacing inside a phrase, so "mira" is
+ * found in "Mira, smiling" and not in "admiral".
  *
  * @param {string} text
  * @param {string[]} words
@@ -33,7 +33,12 @@ export function markWords(text, words) {
   const escaped = wanted
     // Longest first, so a phrase wins over a word it starts with.
     .sort((a, b) => b.length - a.length)
-    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    .map((word) =>
+      word
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+        // A phrase is found however its words are spaced or wrapped.
+        .replace(/\s+/g, "\\s+"),
+    );
   const pattern = new RegExp(
     `(?<![\\p{L}\\p{N}_])(?:${escaped.join("|")})(?![\\p{L}\\p{N}_])`,
     "giu",

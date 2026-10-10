@@ -15,12 +15,21 @@ describe("AppTextarea highlight", () => {
     expect(mark.element.parentElement.textContent).toBe("Mira on a beach\n");
   });
 
-  it("draws no copy while there is nothing to mark", async () => {
+  it("draws no copy when there are no words to look for", () => {
+    const wrapper = mount(AppTextarea, {
+      props: { modelValue: "mira", highlight: [] },
+    });
+    expect(wrapper.find("[aria-hidden]").exists()).toBe(false);
+    expect(wrapper.find("mark").exists()).toBe(false);
+  });
+
+  it("keeps the copy level with a field that is already scrolled", async () => {
     const wrapper = mount(AppTextarea, {
       props: { modelValue: "on a beach", highlight: ["mira"] },
     });
-    expect(wrapper.find("[aria-hidden]").exists()).toBe(false);
-    await wrapper.setProps({ highlight: [] , modelValue: "mira" });
-    expect(wrapper.find("mark").exists()).toBe(false);
+    wrapper.find("textarea").element.scrollTop = 40;
+    // No scroll event: the text changing is what has to carry it over.
+    await wrapper.setProps({ modelValue: "on a beach, mira" });
+    expect(wrapper.find("[aria-hidden]").element.scrollTop).toBe(40);
   });
 });

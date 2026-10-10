@@ -1,11 +1,11 @@
 <template>
   <label class="app-textarea">
     <FieldLabel v-if="label">{{ label }}</FieldLabel>
-    <span class="app-textarea__box" :class="{ 'app-textarea__box--marked': marked }">
+    <span class="app-textarea__box" :class="{ 'app-textarea__box--marked': marking }">
       <!-- A textarea cannot style its own text, so the marks are drawn on a
            copy of it underneath: same box, same font, same wrapping. -->
       <span
-        v-if="marked"
+        v-if="marking"
         ref="backdrop"
         class="app-textarea__field app-textarea__backdrop"
         aria-hidden="true"
@@ -29,7 +29,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { markWords } from "../../utils/triggerWords";
 import FieldLabel from "./FieldLabel.vue";
 
@@ -49,11 +49,22 @@ const field = ref(null);
 const backdrop = ref(null);
 
 const parts = computed(() => markWords(props.modelValue, props.highlight));
-const marked = computed(() => parts.value.some((part) => part.hit));
+/**
+ * On whenever there are words to look for, not only once one is found: the
+ * copy reserves a scrollbar gutter, and taking that the moment the word is
+ * typed would rewrap the text under the caret.
+ */
+const marking = computed(() => props.highlight.some((word) => String(word).trim()));
 
 function syncScroll() {
-  if (backdrop.value) backdrop.value.scrollTop = field.value.scrollTop;
+  if (backdrop.value && field.value) {
+    backdrop.value.scrollTop = field.value.scrollTop;
+  }
 }
+
+// The copy starts unscrolled and a text change can move the field without a
+// scroll event reaching it, so it is put level after every draw.
+watch([marking, parts], syncScroll, { flush: "post" });
 
 defineExpose({ focus: () => field.value?.focus() });
 </script>
@@ -84,7 +95,7 @@ defineExpose({ focus: () => field.value?.focus() });
   color: rgba(var(--v-theme-on-surface), 0.45);
 }
 
-/* Marked: the copy takes the field's ground and the field goes clear over it.
+/* Marking: the copy takes the field's ground and the field goes clear over it.
    A grid so the two share one box exactly, and a gutter held on both so a
    scrollbar arriving does not rewrap one and not the other. */
 .app-textarea__box--marked {

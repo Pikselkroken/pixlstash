@@ -30,6 +30,7 @@ describe("markWords", () => {
   it("takes a phrase, and a word with regex characters in it", () => {
     expect(namesWord("a photo of ohwx woman", "ohwx woman")).toBe(true);
     expect(namesWord("a photo of ohwx", "ohwx woman")).toBe(false);
+    expect(namesWord("a photo of Ohwx  \nwoman", "ohwx woman")).toBe(true);
     expect(namesWord("style of m.i+ra", "m.i+ra")).toBe(true);
     expect(namesWord("style of mxiira", "m.i+ra")).toBe(false);
   });
