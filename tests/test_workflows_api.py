@@ -10281,6 +10281,171 @@ def test_a_lone_picture_input_takes_the_selection_with_nothing_in_the_body(i2i):
     assert _inputs_of(r.json())[_label_of(i2i.graph, "5")]["fill"] == "selection"
 
 
+def _embed_in(monkeypatch, graphs: dict[int, dict]) -> None:
+    """Each picture's own graph, by id; a picture not named carries none."""
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(graphs.get(picture_id))),
+            [],
+        ),
+    )
+
+
+def _made_by_a_run_over(i2i, monkeypatch, original: int, *made: int, **body) -> dict:
+    """*made* carry the graph a run over *original* submitted; returns it.
+
+    The graph ComfyUI would embed in that run's output, upload names and all,
+    taken from the route rather than spelled here: the replay reads the names
+    this route wrote, and a test that typed its own would pass on a format the
+    route no longer writes. Only *made* carry it, so a replay that read some
+    other picture's graph finds nothing.
+    """
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [original], "target": RUN_WF, **body},
+    )
+    assert r.status_code == 200, r.text
+    graph = i2i.submitted[-1]["graph"]
+    _embed_in(monkeypatch, {picture: graph for picture in made})
+    i2i.uploads.clear()
+    return graph
+
+
+def _replay(i2i, picture: int, **body) -> dict:
+    return _preflight(
+        i2i.owner, picture_ids=[picture], target=RUN_WF, replay=True, **body
+    )
+
+
+def test_a_replay_loads_what_the_picture_was_made_from_not_the_picture(
+    i2i, monkeypatch
+):
+    """Run recipe on an upscale re-reads its original, not the upscale itself."""
+    original = _add_picture(i2i.server, i2i.tmp_path, "original.png")
+    upscaled = _add_picture(i2i.server, i2i.tmp_path, "upscaled.png")
+    made = _made_by_a_run_over(i2i, monkeypatch, original, upscaled)
+    loaded = made["5"]["inputs"]["image"]
+    assert loaded == _upload_name(i2i.server, original, _h("pixels-original.png"))
+    label = _label_of(i2i.graph, "5")
+
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [upscaled], "target": RUN_WF, "replay": True},
+    )
+    assert r.status_code == 200, r.text
+    assert [upload["name"] for upload in i2i.uploads] == [loaded]
+    assert i2i.submitted[-1]["graph"]["5"]["inputs"]["image"] == loaded
+    row = _inputs_of(r.json())[label]
+    assert (row["fill"], row["picture_id"]) == ("original", original), row
+
+    # The control: without `replay` the workflow runs OVER the picture, which
+    # is what an edit of an edit asks for.
+    i2i.uploads.clear()
+    r = i2i.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [upscaled], "target": RUN_WF}
+    )
+    assert r.status_code == 200, r.text
+    fed = _upload_name(i2i.server, upscaled, _h("pixels-upscaled.png"))
+    assert [upload["name"] for upload in i2i.uploads] == [fed]
+    assert _inputs_of(r.json())[label]["fill"] == "selection"
+
+    # And a replay can still be told to read the picture itself.
+    payload = _replay(
+        i2i,
+        upscaled,
+        inputs=[{"slot_label": label, "input_name": "image", "picture_id": None}],
+    )
+    assert _inputs_of(payload)[label]["fill"] == "selection", payload
+
+    # It is THIS picture's graph that is read: one that carries none has no
+    # original to name.
+    assert _inputs_of(_replay(i2i, original))[label]["fill"] == "selection"
+
+
+def test_a_replay_gives_each_input_its_own_original(i2i, monkeypatch):
+    """Two inputs are matched by address, never by there being one of each."""
+    i2i.graph = _i2i_graph(references=1)
+    subject, reference = _label_of(i2i.graph, "5"), _label_of(i2i.graph, "6")
+    original = _add_picture(i2i.server, i2i.tmp_path, "original.png")
+    style = _add_picture(i2i.server, i2i.tmp_path, "style.png")
+    upscaled = _add_picture(i2i.server, i2i.tmp_path, "upscaled.png")
+    _made_by_a_run_over(
+        i2i,
+        monkeypatch,
+        original,
+        upscaled,
+        inputs=[{"slot_label": reference, "input_name": "image", "picture_id": style}],
+    )
+    rows = _inputs_of(_replay(i2i, upscaled))
+    assert {label: (row["fill"], row["picture_id"]) for label, row in rows.items()} == {
+        subject: ("original", original),
+        reference: ("original", style),
+    }
+
+
+def test_a_replay_finds_its_input_on_another_topology(i2i, monkeypatch):
+    """The picture's graph is rarely the card's: a LoRA added, nodes renumbered.
+
+    Its input is found by address all the same, never by node id.
+    """
+    original = _add_picture(i2i.server, i2i.tmp_path, "original.png")
+    upscaled = _add_picture(i2i.server, i2i.tmp_path, "upscaled.png")
+    made = _made_by_a_run_over(i2i, monkeypatch, original)
+    made["77"] = made.pop("5")
+    made["9"] = {"class_type": "ImageScale", "inputs": {"image": ["77", 0]}}
+    made["3"]["inputs"]["latent_image"] = ["9", 0]
+    label = _label_of(i2i.graph, "5")
+    _embed_in(monkeypatch, {upscaled: made})
+    row = _inputs_of(_replay(i2i, upscaled))[label]
+    assert (row["fill"], row["picture_id"]) == ("original", original), row
+
+
+@pytest.mark.parametrize("gone", ["binned", "file", "wired", "garbled"])
+def test_a_replay_that_cannot_name_a_usable_original_runs_as_before(
+    i2i, monkeypatch, gone
+):
+    """A binned original, one with no file, a wired input: none is an answer.
+
+    Each is filled like any other run and none refuses it. The file case
+    matters most: `_upload_files` answers 404 for a picture off the disk, and
+    that would refuse a run over a picture the owner never chose. A garbled
+    graph is file metadata nobody vetted, and must not be what stops the run
+    either.
+    """
+    original = _add_picture(i2i.server, i2i.tmp_path, "original.png")
+    upscaled = _add_picture(i2i.server, i2i.tmp_path, "upscaled.png")
+    made = _made_by_a_run_over(i2i, monkeypatch, original, upscaled)
+    if gone == "binned":
+        _bin_picture(i2i.server, original)
+    elif gone == "file":
+        (i2i.tmp_path / "original.png").unlink()
+    elif gone == "wired":
+        made["5"]["inputs"]["image"] = ["1", 0]
+        _embed_in(monkeypatch, {upscaled: made})
+    else:
+        made["5"]["inputs"] = ["image", made["5"]["inputs"]["image"]]
+        _embed_in(monkeypatch, {upscaled: made})
+    payload = _replay(i2i, upscaled)
+    row = _inputs_of(payload)[_label_of(i2i.graph, "5")]
+    assert (row["fill"], row["picture_id"]) == ("selection", None), row
+    assert payload["groups"][0]["reasons"] == [], payload
+
+
+def test_a_replay_of_several_pictures_still_runs_over_each(i2i, monkeypatch):
+    """One original per group is all a feed carries, so several are left alone."""
+    original = _add_picture(i2i.server, i2i.tmp_path, "original.png")
+    made = [_add_picture(i2i.server, i2i.tmp_path, f"made-{n}.png") for n in range(2)]
+    _made_by_a_run_over(i2i, monkeypatch, original, *made)
+    payload = _preflight(i2i.owner, picture_ids=made, target=RUN_WF, replay=True)
+    assert _inputs_of(payload)[_label_of(i2i.graph, "5")]["fill"] == "selection"
+    assert payload["runs"] == 2, payload
+    # And with no picture at all there is nothing to replay: answered, not a 500.
+    payload = _preflight(i2i.owner, workflow_id=RUN_WF, replay=True)
+    assert _inputs_of(payload)[_label_of(i2i.graph, "5")]["fill"] != "original"
+
+
 def test_a_pinned_reference_leaves_one_input_for_the_selection(i2i):
     """Two inputs, one pinned: one is unresolved, so the selection fills it.
 

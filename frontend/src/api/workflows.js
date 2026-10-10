@@ -244,8 +244,10 @@ export async function saveFixedWorkflow(workflowId) {
  * `prompt` / `negative` / `loras` / `values` are overrides applied to the graph
  * at run time and are never written back into it. `inputs` fills the card's
  * picture inputs and is usually empty: the server fills the one input a
- * selection can only mean on its own (#1457). `stack` files each new picture
- * behind the one it was made from.
+ * selection can only mean on its own (#1457). `replay: true` says the one
+ * picture named is the workflow's own output, so its picture input takes what
+ * that picture was made from. `stack` files each new picture behind the one it
+ * was made from.
  *
  * @param {Object} body
  * @returns {Promise<{status: string, runs: number, groups: Array<Object>, prompts: Array<Object>}>}

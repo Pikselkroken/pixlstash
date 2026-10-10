@@ -920,6 +920,11 @@ _WORKFLOW_ID_RE = re.compile(WORKFLOW_ID_PATTERN)
 # resolves as a path.
 _UPLOAD_EXTENSION_RE = re.compile(r"^\.[a-z0-9]{1,8}$")
 _PIXEL_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+# The name `_upload_files` gives a hashed picture, read back for its content:
+# a loader still holding one says what its run loaded (`_made_from`).
+_UPLOAD_NAME_RE = re.compile(
+    r"pixlstash-[0-9a-zA-Z]+-\d+-([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?"
+)
 
 
 class WorkflowCardEdit(BaseModel):
@@ -1376,6 +1381,15 @@ class RunRequest(BaseModel):
     # field is optional: it is needed only where two or more inputs are open,
     # and for a picture picked for one run. See `workflow_inputs.resolve_fills`.
     inputs: list[RunInput] = Field(default_factory=list, max_length=MAX_INPUTS)
+    # "Run recipe" on ONE picture this workflow made: the picture is the run's
+    # output, not what it should read, so a picture input takes what that
+    # picture's own run loaded (`fill: "original"`) ahead of the selection. An
+    # input whose original cannot be named, or is no longer kept, is filled as
+    # on any other run. Without it the pictures are what the workflow runs
+    # OVER, which is what an edit of an edit has to stay. The caller's word:
+    # that this workflow made the picture is not checked here. Ignored unless
+    # the request names exactly one picture.
+    replay: bool = False
 
     @field_validator("inputs")
     @classmethod
@@ -1446,13 +1460,15 @@ class RunPictureInput(ParameterAddress):
 
     ``fill`` is the server's answer and the client's to show, never to
     re-derive: ``request`` (this body's entry), ``fixed`` (the workflow's pin),
-    ``selection`` (the group's pictures, one per submission), ``graph`` (open,
-    and the file the graph already names is on this ComfyUI) or ``null`` (open
-    and unfilled, which ``picture_input_unfilled`` names).
+    ``original`` (a replay: the picture this input loaded when the selected
+    one was made), ``selection`` (the group's pictures, one per submission),
+    ``graph`` (open, and the file the graph already names is on this ComfyUI)
+    or ``null`` (open and unfilled, which ``picture_input_unfilled`` names).
 
-    ``picture_id`` is the one picture a ``request`` or ``fixed`` fill feeds; a
-    pin whose content no kept picture holds any more has it ``null`` and
-    ``picture_missing`` true, which is an empty slot to choose again.
+    ``picture_id`` is the one picture a ``request``, ``fixed`` or ``original``
+    fill feeds; a pin whose content no kept picture holds any more has it
+    ``null`` and ``picture_missing`` true, which is an empty slot to choose
+    again.
     """
 
     title: str
@@ -1460,7 +1476,7 @@ class RunPictureInput(ParameterAddress):
     pixel_sha: str | None = None
     picture_id: int | None = None
     picture_missing: bool = False
-    fill: Literal["request", "fixed", "selection", "graph"] | None = None
+    fill: Literal["request", "fixed", "original", "selection", "graph"] | None = None
 
 
 class RunPrompt(BaseModel):
@@ -4893,6 +4909,7 @@ def create_router(server) -> APIRouter:
         requested: dict[tuple[str, str], int | None],
         selection: list[int],
         preflight: dict,
+        made_from: dict[tuple[str, str], int] | None = None,
     ) -> tuple[list[RunPictureInput], list[Feed], list[run_service.Reason]]:
         """Answer every picture input, and refuse the ones nothing answers.
 
@@ -4913,7 +4930,9 @@ def create_router(server) -> APIRouter:
                 {i.pixel_sha for i in card_inputs if i.mode == "fixed" and i.pixel_sha}
             ),
         )
-        fills = resolve_fills(card_inputs, requested, pinned, bool(selection))
+        fills = resolve_fills(
+            card_inputs, requested, pinned, bool(selection), made_from
+        )
         missing = {
             str(item.get("node_id"))
             for item in preflight.get("missing_input_images") or []
@@ -4998,6 +5017,76 @@ def create_router(server) -> APIRouter:
             else []
         )
         return described, feeds, reasons
+
+    def _made_from(
+        picture_id: int, object_info: dict | None
+    ) -> dict[tuple[str, str], int]:
+        """The kept picture each input loaded when *picture_id* was made.
+
+        Read off the picture's OWN graph, by the addresses a card uses, so an
+        entry no input of the running card has is simply never asked for. A
+        run names every picture it uploads by its content (`_upload_files`),
+        so a loader still holding such a name says what it read, and the
+        oldest kept picture with that content is the one a pin would resolve
+        to. Nothing
+        else is certain - a file the owner put in ComfyUI's input folder, an
+        upload made before the picture was hashed, the ids a PixlStash picture
+        loader holds (another library's, for all the graph says), a wired
+        input, a picture since binned or whose file has gone - and those
+        inputs are absent, to be filled as on any other run.
+
+        Matched by address and nothing else. A loader's label comes from
+        what feeds it, which is nothing, so a lone input keeps its address on
+        every topology of the workflow; loaders told apart by what they feed
+        (`_picture_input_labels`) can lose theirs on another topology, and are
+        then not guessed between.
+        """
+        graph = _embedded_graph(picture_id, object_info)
+        if not graph:
+            return {}
+        try:
+            own = card_input_modes(graph, [])
+        except WorkflowGraphError as exc:
+            logger.info(
+                "Picture %s's own graph will not reduce, so a replay of it "
+                "cannot say what it was made from: %s",
+                picture_id,
+                exc,
+            )
+            return {}
+        loaded: dict[tuple[str, str], str] = {}
+        for item in own:
+            # One name across the loaders sharing the address, or none: a
+            # link is a list, and two different names are not one answer.
+            values = [
+                ((graph.get(node_id) or {}).get("inputs") or {}).get(item.input_name)
+                for node_id in item.node_ids
+            ]
+            named = (
+                _UPLOAD_NAME_RE.fullmatch(values[0])
+                if isinstance(values[0], str) and values.count(values[0]) == len(values)
+                else None
+            )
+            if named:
+                loaded[item.address] = named.group(1)
+        kept = read_oldest_kept_by_pixel_sha(server.vault, sorted(set(loaded.values())))
+        # Only a picture a run could hand over. `_upload_files` refuses one
+        # whose file is gone, and here that would refuse a run over a picture
+        # the owner never chose.
+        files = read_kept_picture_files(server.vault, sorted(kept.values()))
+        on_disk = {
+            found_id
+            for found_id, (file_path, _sha) in files.items()
+            if os.path.isfile(
+                ImageUtils.resolve_picture_path(server.vault.image_root, file_path)
+                or ""
+            )
+        }
+        return {
+            address: kept[pixel_sha]
+            for address, pixel_sha in loaded.items()
+            if kept.get(pixel_sha) in on_disk
+        }
 
     def _graph_names_a_live_file(
         graph: dict, node_id: str, input_name: str, missing: set[str]
@@ -5915,7 +6004,17 @@ def create_router(server) -> APIRouter:
             # nothing in ComfyUI's input folder. It blocks this card and not
             # the batch - "Make more like these" runs the rest.
             described, feeds, unfilled = _fill_inputs(
-                graph, card_inputs, requested, picture_ids, preflight
+                graph,
+                card_inputs,
+                requested,
+                picture_ids,
+                preflight,
+                # One picture in the whole request: several each have an
+                # original of their own, and a group feeds an input one
+                # picture or its selection.
+                _made_from(picture_ids[0], object_info)
+                if body.replay and len(body.picture_ids) == 1 and picture_ids
+                else None,
             )
             group.picture_inputs = described
             found += unfilled
@@ -6103,7 +6202,10 @@ def create_router(server) -> APIRouter:
             "graph at run time and never written back into it. inputs fills "
             "the graph's picture inputs; with exactly one left open by the "
             "workflow's pins and stored setup, the selection fills it unasked and "
-            "the run repeats once per selected picture. Pictures are uploaded "
+            "the run repeats once per selected picture. replay: true says the "
+            "one picture named is the workflow's own output, so a picture input "
+            "takes what that picture was made from where the library still "
+            "holds it. Pictures are uploaded "
             "into ComfyUI's input folder only after every refusal is decided. "
             "New runs are NOT stacked with their source unless stack: true, "
             "and a run over a selection stacks each output with the picture it "

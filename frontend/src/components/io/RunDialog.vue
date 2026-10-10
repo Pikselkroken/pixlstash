@@ -183,8 +183,10 @@
               @click="togglePin(input)"
             />
             <span v-else class="rund-x-gap" />
+            <!-- A pick for this run, the selection sent here over a replay's
+                 original included: clearing it is the way back. -->
             <AppBarButton
-              v-if="input.fill === 'request'"
+              v-if="address(input) in picks"
               icon="close"
               :tooltip="`Clear the picture for ${inputTitle(input)}`"
               :aria-disabled="setupReady ? undefined : 'true'"
@@ -2457,6 +2459,8 @@ function inputLine(input) {
         : `Your selection: ${many} pictures, one run each`;
     case "request":
       return "Chosen for this run";
+    case "original":
+      return "The picture this one was made from";
     case "fixed":
       return "Kept for every run of this workflow";
     case "graph":
@@ -2604,6 +2608,24 @@ async function togglePin(input) {
 async function useSelectionHere(input) {
   if (!setupReady.value) return;
   const key = address(input);
+  // The selection goes to one input: a run told to send it elsewhere is
+  // untold first, or the next body names two and is refused whole.
+  for (const [other, pick] of Object.entries(picks)) {
+    if (pick.picture_id === null) delete picks[other];
+  }
+  if (input.fill === "original") {
+    // A replay's own picture stands here, ahead of the card's stored setup,
+    // so nothing written to the card would move it: this run alone is told
+    // (`picture_id: null` is "my selection goes here").
+    picks[key] = {
+      slot_label: input.slot_label,
+      input_name: input.input_name,
+      picture_id: null,
+    };
+    await settle(runPreflight());
+    await focusRow(key);
+    return;
+  }
   await settle(
     (async () => {
       const ok = await writeSetup(setupWith(input, { mode: "selection" }));
@@ -2704,6 +2726,13 @@ function runBody() {
   } else if (pictureIds.value.length) {
     body.picture_ids = pictureIds.value;
     body.target = activeKey.value;
+    // A picture's own recipe again ("Run recipe", "Make more like these…" on
+    // one): the picture is the run's output, so its picture input is what the
+    // picture was made FROM, not the picture. An edit, a workflow the owner
+    // was asked to pick, or another workflow runs over the picture itself.
+    if (!isEdit.value && !props.source?.pickWorkflow && runsOwnWorkflow.value) {
+      body.replay = true;
+    }
   } else {
     body.workflow_id = activeKey.value;
   }

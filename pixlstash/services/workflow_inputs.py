@@ -40,6 +40,7 @@ FIXED = "fixed"
 # How one input of a run was answered, in the order :func:`resolve_fills` asks.
 FILL_REQUEST = "request"
 FILL_FIXED = "fixed"
+FILL_ORIGINAL = "original"
 FILL_SELECTION = "selection"
 
 
@@ -295,19 +296,27 @@ def resolve_fills(
     requested: dict[tuple[str, str], Optional[int]],
     pinned: dict[str, int],
     has_selection: bool,
+    made_from: Optional[dict[tuple[str, str], int]] = None,
 ) -> list[InputFill]:
     """Answer each picture input of one run, strictly in this order.
 
     1. the request's own entry for that address: a picture, or ``None`` for
        "the selection goes here";
     2. a Fixed pin whose content a kept picture still holds;
-    3. a stored Selection, when the run has a selection and the request has
+    3. on a replay, the picture this input loaded when the selected picture
+       was made (*made_from*): the selection is the run's OUTPUT there, and
+       fed back in it is an upscale of the upscale;
+    4. a stored Selection, when the run has a selection and the request has
        not sent it to another input;
-    4. **the lone-unresolved-input rule**: when 1-3 leave exactly one input
+    5. **the lone-unresolved-input rule**: when 1-4 leave exactly one input
        open, the run has a selection and nothing has taken it yet, the
        selection fills that one.
 
-    **Step 4 is a whole-card decision and is taken only after 1-3 have been
+    **A replay that names any original spends the selection**: steps 4 and 5
+    then feed it nowhere, so the picture being made again is never loaded
+    beside the one it was made from. Only the request (step 1) still can.
+
+    **Step 5 is a whole-card decision and is taken only after 1-4 have been
     applied to every input.** Asked per input ("is this the only picture
     input?") it would refuse every two-input workflow with a pinned
     reference, which is the case it exists for. A pin whose picture has gone
@@ -319,6 +328,8 @@ def resolve_fills(
         requested: The request's entries by address.
         pinned: ``{pixel_sha: picture_id}`` for the pins that are still kept.
         has_selection: Whether the run carries pictures a Selection can take.
+        made_from: ``{address: picture_id}`` for the inputs of a replay whose
+            original picture is known and still kept; empty for any other run.
 
     Returns:
         One :class:`InputFill` per input, in *inputs*' order; an unanswered
@@ -331,6 +342,7 @@ def resolve_fills(
     routed = has_selection and any(
         item.address in requested and requested[item.address] is None for item in inputs
     )
+    spent = bool(made_from) and any(item.address in made_from for item in inputs)
     fills: list[InputFill] = []
     for item in inputs:
         if item.address in requested:
@@ -344,13 +356,16 @@ def resolve_fills(
         elif item.mode == FIXED and item.pixel_sha in pinned:
             fills.append(InputFill(item, FILL_FIXED, pinned[item.pixel_sha]))
             continue
-        elif item.mode == SELECTION and has_selection and not routed:
+        elif made_from and item.address in made_from:
+            fills.append(InputFill(item, FILL_ORIGINAL, made_from[item.address]))
+            continue
+        elif item.mode == SELECTION and has_selection and not routed and not spent:
             fills.append(InputFill(item, FILL_SELECTION))
             continue
         fills.append(InputFill(item))
     open_at = [index for index, fill in enumerate(fills) if fill.how is None]
     selection_taken = any(fill.how == FILL_SELECTION for fill in fills)
-    if has_selection and not selection_taken and len(open_at) == 1:
+    if has_selection and not selection_taken and not spent and len(open_at) == 1:
         index = open_at[0]
         fills[index] = InputFill(fills[index].input, FILL_SELECTION)
     return fills
