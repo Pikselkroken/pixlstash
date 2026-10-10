@@ -777,6 +777,21 @@ class TestRecipeExtras:
         settings = extract_recipe_extras(graph)["settings"]
         assert (settings["width"], settings["height"]) == (1024, 1024)
 
+    def test_with_no_empty_latent_the_size_is_the_node_s_that_names_one(self):
+        """Image-to-video: the node sizes its own latent, from a selector (#1833)."""
+        graph = {
+            "49": {
+                "class_type": "ResolutionSelector",
+                "inputs": {"aspect_ratio": "1:1 (Square)", "megapixels": 1.0},
+            },
+            "7": {
+                "class_type": "WanImageToVideo",
+                "inputs": {"width": ["49", 0], "height": ["49", 1], "length": 81},
+            },
+        }
+        settings = extract_recipe_extras(graph)["settings"]
+        assert (settings["width"], settings["height"]) == (1024, 1024)
+
     def test_a_graph_with_nothing_to_say_says_nothing(self):
         assert extract_recipe_extras({}) == {"negative_prompt": None, "settings": {}}
         assert extract_recipe_extras({"1": "not a node"}) == {

@@ -219,7 +219,7 @@ from pixlstash.services.workflow_io import (
     api_graph,
     with_converted_graph,
 )
-from pixlstash.services.workflow_parameters import is_latent_size, set_latent_size
+from pixlstash.services.workflow_parameters import set_latent_size, size_inputs
 from pixlstash.services.workflow_library_service import (
     read_best_picture_ids,
     read_card_picture_ids,
@@ -4106,7 +4106,7 @@ def create_router(server) -> APIRouter:
         Addressed by label because that is how a card's defaults are addressed:
         node ids are renumbered by every re-serialisation and a card's variants
         do not agree about them. A wired input is left alone - overwriting one
-        drops the link - except an empty latent's size, which
+        drops the link - except the run's size (``size_inputs``), which
         ``set_latent_size`` cuts only when the value differs from what the wire
         carries. An input the graph does not have is not invented.
         """
@@ -4121,6 +4121,7 @@ def create_router(server) -> APIRouter:
             for index, item in enumerate(values)
         }
         found = set()
+        sized = size_inputs(graph)
         for node_id, node in graph.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
             if not isinstance(inputs, dict):
@@ -4131,8 +4132,8 @@ def create_router(server) -> APIRouter:
             for name in list(inputs):
                 # A wired input is left alone - overwriting drops the link -
                 # so it counts as not applied and is logged below. Except the
-                # latent's size: the one wire a run cuts on purpose.
-                latent_size = is_latent_size(node.get("class_type"), name)
+                # run's size: the one wire a run cuts on purpose.
+                latent_size = (str(node_id), name) in sized
                 if isinstance(inputs[name], list) and not latent_size:
                     continue
                 matches = [

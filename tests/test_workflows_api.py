@@ -8251,12 +8251,16 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
         assert graph["9"]["inputs"]["batch_size"] == 8
 
 
-def test_a_run_sets_the_latent_size_a_resolution_selector_drives(runnable, monkeypatch):
+@pytest.mark.parametrize("sized", ["EmptyLatentImage", "WanImageToVideo"])
+def test_a_run_sets_the_latent_size_a_resolution_selector_drives(
+    runnable, monkeypatch, sized
+):
     """The size is written on the latent and the selector's wire is cut there.
 
     Wrong if the latent still reads the selector (the run makes the selector's
     size, not the one asked for), or if the height wire went too: only width
-    was asked for.
+    was asked for. The same on an image-to-video node when the graph has no
+    empty latent (#1833).
     """
     embedded = json.loads(json.dumps(RUN_DOCUMENT))
     embedded["49"] = {
@@ -8268,7 +8272,7 @@ def test_a_run_sets_the_latent_size_a_resolution_selector_drives(runnable, monke
         },
     }
     embedded["5"] = {
-        "class_type": "EmptyLatentImage",
+        "class_type": sized,
         "inputs": {"width": ["49", 0], "height": ["49", 1], "batch_size": 1},
     }
     embedded["3"]["inputs"]["latent_image"] = ["5", 0]
@@ -8281,7 +8285,7 @@ def test_a_run_sets_the_latent_size_a_resolution_selector_drives(runnable, monke
         "input": {"required": {}},
         "output": ["INT", "INT"],
     }
-    object_info["EmptyLatentImage"] = {"input": {"required": {}}, "output": ["LATENT"]}
+    object_info[sized] = {"input": {"required": {}}, "output": ["LATENT"]}
     monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (object_info, None)
     )
