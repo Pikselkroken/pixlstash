@@ -390,6 +390,24 @@ export async function getLoraChain(workflowId) {
 }
 
 /**
+ * The inputs of a workflow's graph a parameter can be made of, by node.
+ *
+ * Every literal input a run can set by address, less what PixlStash already
+ * has a control for (prompts, seeds, models, LoRAs, picture inputs, the save
+ * node). `exposed` marks the ones that are parameters already; `kind` and
+ * `options` are ComfyUI's, and null where it did not answer.
+ *
+ * @param {string} workflowId
+ * @returns {Promise<{nodes: Array<{node_id: string, title: string,
+ *   class_type: string, inputs: Array<{slot_label: string, input_name: string,
+ *   value: (boolean|number|string), kind: ?string, options: ?Array<string>,
+ *   exposed: boolean}>}>}>} A 409 when the workflow has no graph.
+ */
+export async function getWorkflowFormInputs(workflowId) {
+  return unwrap(apiClient.get(wf(workflowId, "/form-inputs")));
+}
+
+/**
  * Save a LoRA chain as the owner left it (#1478): as a new workflow, or with
  * `overwrite: true` over the one it edits.
  *

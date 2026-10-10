@@ -465,7 +465,21 @@
               @reset="resetValue(field)"
             />
           </span>
+          <!-- A value ComfyUI lists the choices of (a sampler, an exposed
+               drop-down) is picked from them; any other is typed. -->
+          <AppSelect
+            v-if="choicesFor(formOptions, field, currentValue(field))"
+            :model-value="String(currentValue(field))"
+            :label="field.label"
+            hide-label
+            compact
+            :options="choicesFor(formOptions, field, currentValue(field))"
+            :disabled="submitting"
+            data-testid="rund-choice"
+            @update:model-value="(v) => typeValue(field, v)"
+          />
           <AppInput
+            v-else
             :model-value="String(currentValue(field))"
             :aria-label="field.label"
             :disabled="submitting"
@@ -848,6 +862,7 @@ import { stackMemberIds } from "../../utils/stackMembers";
 import { listSavedRecipes } from "../../api/recipes";
 import {
   getWorkflowCard,
+  getWorkflowFormInputs,
   listWorkflowCards,
   preflightWorkflowRun,
   readModelSwap,
@@ -866,7 +881,11 @@ import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
 import { namesWord, triggerWord } from "../../utils/triggerWords";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import { UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
-import { setEachRun } from "../../utils/workflowPins";
+import {
+  choicesFor,
+  optionsByAddress,
+  setEachRun,
+} from "../../utils/workflowPins";
 import {
   changesNodes,
   MISSING_CHOICES,
@@ -955,6 +974,8 @@ const card = ref(null);
  * choice made, so the shared default set applies (`setEachRun`).
  */
 const pins = ref(null);
+/** What ComfyUI offers for each of the card's parameters that is a choice. */
+const formOptions = ref({});
 /** The address "Set each run" is writing, and what went wrong if it failed. */
 const freeing = ref("");
 const fixedSummary = ref(null);
@@ -2973,6 +2994,18 @@ async function loadCard(key, { keepEdits = false } = {}) {
   // A popup reopened on another source while this read was out has its own
   // card; this one's answer must not replace it.
   const token = loadToken;
+  formOptions.value = {};
+  // Beside the card, never ahead of it: the options only turn a typed box
+  // into a list, so a ComfyUI that does not answer leaves the boxes typed.
+  getWorkflowFormInputs(key)
+    .then((body) => {
+      if (token === loadToken && key === activeKey.value) {
+        formOptions.value = optionsByAddress(body.nodes);
+      }
+    })
+    .catch((err) => {
+      console.warn(`[run] could not read the choices of ${key}`, err);
+    });
   const detail = await getWorkflowCard(key);
   if (token !== loadToken) return;
   const next = detail?.card || null;

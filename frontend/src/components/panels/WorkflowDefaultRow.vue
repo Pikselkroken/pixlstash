@@ -1,5 +1,5 @@
 <template>
-  <div :class="['wfdef', { 'wfdef--fixed': fixed }]">
+  <div :class="['wfdef', { 'wfdef--fixed': fixed, 'wfdef--choice': choosing }]">
     <span class="wfdef-name">
       {{ row.label }}
       <!-- Only the exception is marked (#1653): where the computed values
@@ -9,8 +9,20 @@
     </span>
     <span class="wfdef-value">
       <!-- Set each run: the box is the field, so it edits the workflow's
-           value, which locking then keeps. Fixed: read-only text. -->
+           value, which locking then keeps. Fixed: read-only text. A value
+           ComfyUI lists the choices of is picked from them. -->
       <span v-if="fixed" class="wfdef-text num">{{ row.value }}</span>
+      <AppSelect
+        v-else-if="choosing"
+        class="wfdef-select"
+        :model-value="String(row.value)"
+        :label="row.label"
+        hide-label
+        :options="options"
+        :disabled="busy"
+        data-testid="wfdef-select"
+        @update:model-value="(value) => emit('edit', value)"
+      />
       <input
         v-else
         class="wfdef-text wfdef-input num"
@@ -21,15 +33,22 @@
         @change="onChange"
         @keydown.stop
       />
+      <!-- An exposed parameter has no computed value to go back to: clearing
+           the owner's value takes the row away, and the button says so. -->
       <AppButton
         v-if="row.provenance === 'edited'"
         class="wfdef-reset"
         size="sm"
         variant="ghost"
         icon-only
-        icon-left="restore"
-        :tooltip="`Put ${row.label} back to what your pictures say`"
+        :icon-left="row.exposed ? 'close' : 'restore'"
+        :tooltip="
+          row.exposed
+            ? `Remove ${row.label} from the parameters`
+            : `Put ${row.label} back to what your pictures say`
+        "
         :disabled="busy"
+        data-testid="wfdef-reset"
         @click="emit('reset')"
       />
     </span>
@@ -62,10 +81,13 @@
 import { computed } from "vue";
 
 import AppButton from "../widgets/AppButton.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 
 const props = defineProps({
-  /** `{label, slot_label, input_name, value, provenance, pinned}`. */
+  /** `{label, slot_label, input_name, value, provenance, pinned, exposed}`. */
   row: { type: Object, required: true },
+  /** What ComfyUI offers for this value, when it is a choice there. */
+  options: { type: Array, default: null },
   /** A write for this row is out; both its controls wait for it. */
   busy: { type: Boolean, default: false },
 });
@@ -73,6 +95,7 @@ const props = defineProps({
 const emit = defineEmits(["toggle-pin", "reset", "edit"]);
 
 const fixed = computed(() => !props.row.pinned);
+const choosing = computed(() => !fixed.value && Boolean(props.options?.length));
 
 /**
  * The typed text as the value's own type, or undefined when it is not one:
@@ -150,6 +173,31 @@ function onChange(event) {
   border-color: transparent;
   background: none;
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* A choice takes the row's whole width on a line of its own, under its name:
+   half the rail clips a sampler's name to its first letters. The lock keeps
+   its column, so it still lines up with the rows around it. */
+.wfdef--choice {
+  grid-template-columns: minmax(0, 1fr) var(--control-h-sm);
+  row-gap: var(--space-2);
+}
+
+.wfdef--choice .wfdef-lock {
+  grid-area: 1 / 2;
+}
+
+/* It brings its own field box, so the cell gives up its own. */
+.wfdef--choice .wfdef-value {
+  grid-area: 2 / 1 / auto / -1;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.wfdef-select {
+  flex: 1;
+  min-width: 0;
 }
 
 .wfdef-value:has(.wfdef-input:focus-visible) {
