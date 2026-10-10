@@ -1395,6 +1395,94 @@ class TestDynamicCombos:
 
 
 # ---------------------------------------------------------------------------
+# Every wire is sent, as the editor sends it, whatever the class declares
+# ---------------------------------------------------------------------------
+
+WIRED_OBJECT_INFO = {
+    **OBJECT_INFO,
+    # ComfyUI's Math Expression as `/object_info` declares it, names cut down:
+    # a V3 autogrow input, whose sockets are `values.a`, `values.b`, ...
+    "ComfyMathExpression": {
+        "input": {
+            "required": {
+                "expression": ["STRING", {"default": "a + b", "multiline": True}],
+                "values": [
+                    "COMFY_AUTOGROW_V3",
+                    {
+                        "template": {
+                            "input": {"required": {"value": ["FLOAT,INT,BOOLEAN", {}]}},
+                            "names": ["a", "b", "c"],
+                            "min": 1,
+                        }
+                    },
+                ],
+            }
+        },
+    },
+    "PrimitiveFloat": {"input": {"required": {"value": ["FLOAT", {}]}}},
+}
+
+
+def _seconds(mode=0):
+    return _node(
+        2,
+        "PrimitiveFloat",
+        mode=mode,
+        outputs=[{"name": "FLOAT", "type": "FLOAT", "links": [1]}],
+        widgets=[5],
+    )
+
+
+def _expression():
+    """A Math Expression with its `a` wired to the primitive, as saved."""
+    return _node(
+        1,
+        "ComfyMathExpression",
+        inputs=[
+            {"name": "values.a", "type": "FLOAT,INT,BOOLEAN", "link": 1},
+            {"name": "values.b", "type": "FLOAT,INT,BOOLEAN", "link": None},
+            {"name": "expression", "type": "STRING", "link": None},
+        ],
+        widgets=["a * 24"],
+    )
+
+
+class TestEveryWireIsSent:
+    def test_a_socket_the_class_grows_is_sent_under_its_own_name(self):
+        """A video's length is `seconds * fps` in a Math Expression; dropping
+        the wire left ComfyUI refusing the run over a missing `a`."""
+        graph = _graph([_expression(), _seconds()], [[1, 2, 0, 1, 0, "FLOAT"]])
+        prompt, problems = convert_ui_graph_to_api(graph, WIRED_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"expression": "a * 24", "values.a": ["2", 0]}
+
+    def test_a_wire_into_a_socket_the_class_never_declared_is_sent(self):
+        # The editor queues `inputs[socket.name]` for every wire and consults
+        # no declaration, so neither does this.
+        graph = _graph(
+            [
+                _node(
+                    1,
+                    "PrimitiveFloat",
+                    inputs=[{"name": "from_a_newer_pack", "type": "FLOAT", "link": 1}],
+                    widgets=[3],
+                ),
+                _seconds(),
+            ],
+            [[1, 2, 0, 1, 0, "FLOAT"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, WIRED_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"value": 3, "from_a_newer_pack": ["2", 0]}
+
+    def test_such_a_wire_from_a_muted_node_is_absent_as_the_editor_leaves_it(self):
+        graph = _graph([_expression(), _seconds(mode=2)], [[1, 2, 0, 1, 0, "FLOAT"]])
+        prompt, problems = convert_ui_graph_to_api(graph, WIRED_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"expression": "a * 24"}
+
+
+# ---------------------------------------------------------------------------
 # A widget the node gained after the file was saved gets its default
 # ---------------------------------------------------------------------------
 

@@ -12,7 +12,10 @@ dedups to nothing and so loses the stack placement, the source lineage and the
 import event. Both are covered here.
 """
 
+import pytest
+
 import pixlstash.services.comfyui_service as comfyui_service
+from pixlstash.services import workflow_run_service
 from pixlstash.event_types import EventType
 
 SAVER_GRAPH = {
@@ -387,6 +390,185 @@ class TestOutputProcessing:
         assert comfyui_service._wait_for_comfyui_outputs(
             "http://comfy", "prompt-1", ["9"]
         ) == ([], None)
+
+
+class TestVideoSavers:
+    """A video saver's file is collected as a ``SaveImage``'s is."""
+
+    def test_a_video_saver_is_the_output_node_and_a_preview_is_not(self):
+        graph = {
+            "7": _node("SaveVideo", video=["6", 0], filename_prefix="video/out"),
+            "8": _node("PreviewImage", images=["5", 0]),
+        }
+        assert comfyui_service._extract_output_node_ids(graph, {}) == ["7"]
+
+    def test_a_saved_video_is_listed_for_download(self):
+        # What ComfyUI's history holds for SaveVideo: the file under `images`.
+        payload = _history(
+            {
+                "7": {
+                    "images": [
+                        {
+                            "filename": "out_00001_.mp4",
+                            "subfolder": "video",
+                            "type": "output",
+                        }
+                    ],
+                    "animated": [True],
+                }
+            }
+        )
+        assert comfyui_service._extract_comfyui_output_images(
+            payload, "prompt-1", ["7"]
+        ) == [{"filename": "out_00001_.mp4", "subfolder": "video", "type": "output"}]
+
+    def test_a_video_helper_suite_file_is_listed_for_download(self):
+        # VHS_VideoCombine reports under `gifs`, with fields of its own.
+        payload = _history(
+            {
+                "7": {
+                    "gifs": [
+                        {
+                            "filename": "AnimateDiff_00001.mp4",
+                            "subfolder": "",
+                            "type": "output",
+                            "format": "video/h264-mp4",
+                        }
+                    ]
+                }
+            }
+        )
+        assert comfyui_service._extract_comfyui_output_images(
+            payload, "prompt-1", ["7"]
+        ) == [{"filename": "AnimateDiff_00001.mp4", "subfolder": "", "type": "output"}]
+
+    def test_a_video_helper_suite_preview_is_not_collected(self):
+        # `save_output` off: a `temp` file its author chose not to keep. The
+        # SaveImage beside it is still the run's output.
+        payload = _history(
+            {
+                "7": {"gifs": [{"filename": "AnimateDiff_00001.mp4", "type": "temp"}]},
+                "8": {"images": [{"filename": "out_00001_.png"}]},
+            }
+        )
+        images = comfyui_service._extract_comfyui_output_images(
+            payload, "prompt-1", ["7", "8"]
+        )
+        assert [image["filename"] for image in images] == ["out_00001_.png"]
+
+    def test_an_animation_keeps_its_frames_and_a_video_latent_is_one_video(self):
+        # AnimateDiff's frames are a batch of pictures; pinned to 1, the run
+        # would save a one-frame video. A video latent counts frames in
+        # `length`, so its batch is still how many videos.
+        graph = {
+            "1": _node("EmptyLatentImage", width=512, height=512, batch_size=16),
+            "2": _node("EmptyHunyuanLatentVideo", length=33, batch_size=2),
+            "7": _node("VHS_VideoCombine", images=["1", 0], filename_prefix="out"),
+        }
+        assert workflow_run_service.pin_batch_size(graph) == ["2"]
+        assert graph["1"]["inputs"]["batch_size"] == 16
+        assert graph["2"]["inputs"]["batch_size"] == 1
+        # Saving pictures, the same batch is how many pictures: pinned.
+        graph["7"] = _node("SaveImage", images=["1", 0], filename_prefix="out")
+        assert workflow_run_service.pin_batch_size(graph) == ["1"]
+
+
+class TestWaitingOutARun:
+    """The budget is for a prompt ComfyUI has let go of, not for the run."""
+
+    @staticmethod
+    def _clock(monkeypatch, histories, queued):
+        """Each poll advances a fake clock past the budget; *histories* are
+        the history answers in order, *queued* the queue's answers in order."""
+        now = [0.0]
+        monkeypatch.setattr(comfyui_service.time, "time", lambda: now[0])
+        monkeypatch.setattr(
+            comfyui_service.time,
+            "sleep",
+            lambda _s: now.__setitem__(0, now[0] + 400),
+        )
+        asked = []
+
+        def fake_queued(base_url, prompt_id):
+            asked.append(prompt_id)
+            return queued.pop(0)
+
+        monkeypatch.setattr(comfyui_service, "_comfyui_prompt_queued", fake_queued)
+        monkeypatch.setattr(
+            comfyui_service, "_fetch_comfyui_history", lambda *a: histories.pop(0)
+        )
+        return asked
+
+    def test_a_prompt_still_in_the_queue_is_waited_for_past_the_budget(
+        self, monkeypatch
+    ):
+        done = _history({"7": {"images": [{"filename": "out_00001_.mp4"}]}})
+        asked = self._clock(monkeypatch, [{}, {}, {}, done], [True, True, True])
+        images, _ids = comfyui_service._wait_for_comfyui_outputs(
+            "http://comfy", "prompt-1", ["7"]
+        )
+        assert [image["filename"] for image in images] == ["out_00001_.mp4"]
+        assert asked == ["prompt-1"] * 3
+
+    def test_a_prompt_gone_from_the_queue_ends_the_wait(self, monkeypatch):
+        asked = self._clock(monkeypatch, [{}, {}], [False])
+        assert comfyui_service._wait_for_comfyui_outputs(
+            "http://comfy", "prompt-1", ["7"]
+        ) == ([], None)
+        assert asked == ["prompt-1"]
+
+    def test_a_prompt_that_finishes_as_it_leaves_the_queue_is_collected(
+        self, monkeypatch
+    ):
+        """The queue is asked BEFORE the history is read. The other way round,
+        a prompt that finishes between the two reads is in neither answer and
+        its video is never collected."""
+        done = _history({"7": {"images": [{"filename": "out_00001_.mp4"}]}})
+        asked = self._clock(monkeypatch, [], [False])
+        # The prompt finishes at the moment the queue is asked about it.
+        monkeypatch.setattr(
+            comfyui_service,
+            "_fetch_comfyui_history",
+            lambda *a: done if asked else {},
+        )
+        images, _ids = comfyui_service._wait_for_comfyui_outputs(
+            "http://comfy", "prompt-1", ["7"]
+        )
+        assert [image["filename"] for image in images] == ["out_00001_.mp4"]
+
+    @pytest.mark.parametrize(
+        "queue, held",
+        [
+            ({"queue_running": [[3, "prompt-1", {}]], "queue_pending": []}, True),
+            ({"queue_running": [], "queue_pending": [[4, "prompt-1", {}]]}, True),
+            ({"queue_running": [[3, "other", {}]], "queue_pending": []}, False),
+            # Not an answer about the prompt at all: not known to be gone.
+            ([], True),
+        ],
+    )
+    def test_the_queue_is_read_for_the_prompt(self, monkeypatch, queue, held):
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return queue
+
+        monkeypatch.setattr(
+            comfyui_service.requests, "get", lambda *a, **k: _Response()
+        )
+        assert (
+            comfyui_service._comfyui_prompt_queued("http://comfy", "prompt-1") is held
+        )
+
+    def test_a_queue_that_cannot_be_read_does_not_abandon_the_run(self, monkeypatch):
+        def refuse(*a, **k):
+            raise comfyui_service.requests.ConnectionError("refused")
+
+        monkeypatch.setattr(comfyui_service.requests, "get", refuse)
+        assert (
+            comfyui_service._comfyui_prompt_queued("http://comfy", "prompt-1") is True
+        )
 
 
 def demo() -> None:

@@ -871,7 +871,9 @@ chunk size or a multi-view count (`RebatchLatents`, the Zero123/SV3D batch
 nodes). A graph saved with `batch_size: 4`, or with a primitive setting it,
 therefore does not turn `count` 1 into four pictures, and the parameter list
 offers neither. A batch the graph builds afterwards (`RepeatLatentBatch`) is
-left as authored.
+left as authored, and so is a batch of pictures in a graph that saves a video,
+where it is the animation's frames; a video latent's batch (it counts frames in
+`length`) is still pinned, to one video.
 
 **Edited defaults are overrides applied at run time and never written back into
 a graph.** The stored document is content-addressed, so rewriting it would
