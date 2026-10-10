@@ -90,23 +90,42 @@ def size_inputs(graph: dict) -> set[tuple[str, str]]:
 
     An empty latent's ``width`` / ``height`` when the graph has one: the one
     place a size can be set whatever drives it, so a run that wants another
-    size writes it there. A graph with none is matched on the input names
-    alone (#1833): an image-to-video node (``WanImageToVideo``) sizes the
-    latent it hands out, and there is no empty latent to find.
+    size writes it there. A graph with none (#1833) is sized on the node that
+    hands out the latent it sizes, as ``WanImageToVideo`` does: one whose
+    output is wired into an input named for a latent (``latent_image``). With
+    no such node either, the input names alone decide.
     """
     # ponytail: name rules, like `is_picture_batch` offline; object_info's
-    # LATENT output if the fallback ever picks up a node that sizes no latent.
+    # LATENT output if a pack names its latent input otherwise.
     # Efficiency loaders name theirs `empty_latent_width`, so are not matched,
-    # and a graph of theirs takes the name fallback like any other.
-    named = [
-        (str(node_id), name, str(node.get("class_type") or ""))
+    # and a graph of theirs takes the fallbacks like any other.
+    nodes = {
+        str(node_id): node
         for node_id, node in graph.items()
         if isinstance(node, dict) and isinstance(node.get("inputs"), dict)
+    }
+    named = {
+        (node_id, name)
+        for node_id, node in nodes.items()
         for name in SIZE_NAMES
         if name in node["inputs"]
-    ]
-    latent = {(i, n) for i, n, cls in named if "Empty" in cls and "Latent" in cls}
-    return latent or {(i, n) for i, n, _ in named}
+    }
+
+    def empty_latent(node_id: str) -> bool:
+        cls = str(nodes[node_id].get("class_type") or "")
+        return "Empty" in cls and "Latent" in cls
+
+    hands_out_latent = {
+        value[0]
+        for node in nodes.values()
+        for key, value in node["inputs"].items()
+        if "latent" in key.lower() and is_link(value)
+    }
+    return (
+        {pair for pair in named if empty_latent(pair[0])}
+        or {pair for pair in named if pair[0] in hands_out_latent}
+        or named
+    )
 
 
 def linked_size(graph: dict, link: Any) -> Optional[int]:

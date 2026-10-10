@@ -778,8 +778,9 @@ def extract_recipe_extras(workflow: dict) -> dict:
         an empty latent's, worked out from a Resolution Selector when wired,
         wins over another node's ``width`` (an SDXL text encoder's 4096),
         because a run writes it back onto that latent. A graph with no empty
-        latent (image-to-video) has no such ranking: the first node naming
-        a ``width`` wins, wired or not (``workflow_parameters.size_inputs``).
+        latent (image-to-video) reads it off the node that hands out the
+        latent, and failing that off the first node naming a ``width``
+        (``workflow_parameters.size_inputs``).
     """
     # Local: workflow_parameters -> workflow_io -> this module is a cycle.
     from pixlstash.services.workflow_parameters import linked_size, size_inputs
