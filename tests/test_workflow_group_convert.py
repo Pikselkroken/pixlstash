@@ -8,6 +8,7 @@ is asserted end to end: a recipe saved on a checkpoint-B card still runs on B.
 
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
 import tempfile
@@ -43,11 +44,13 @@ from pixlstash.hub.workflow_group_convert import (
     _CORE_RULE_V1,
     _CORE_RULE_V2,
     _CORE_RULE_V3,
+    _CORE_RULE_V4,
     _GROUP_NAMESPACE,
     _carry_group_state,
     _core_strip_v1,
     _core_strip_v2,
     _core_strip_v3,
+    _core_strip_v4,
     convert_card_state,
     dissolve_manual_groups,
     rederive_cores,
@@ -76,7 +79,9 @@ from tests.test_workflow_identity import (
     CORE_V2_TWINS,
     CORE_V3_TWINS,
     CORE_V4_TWINS,
+    _FIRST_PASS_SAVE,
     _graph,
+    _second_pass,
     _split_loaders,
 )
 
@@ -1255,6 +1260,21 @@ def test_a_v1_topology_that_will_not_reduce_is_tried_once(step_8):
     assert _core_version(w.hub, w.orphan) == convert._CORE_RULE_V1_UNMOVED
 
 
+def _no_negative(graph: dict) -> dict:
+    """*graph* without its negative side, which core rule v5 takes off the core.
+
+    The steps below move to the LIVE rule, so a graph the live rule still
+    changes gets a new id whatever the step under test does. Their fixtures
+    are built without a negative, so the plain graph's id is left alone and
+    is the workflow the others merge into.
+    """
+    graph = copy.deepcopy(graph)
+    graph.pop("3", None)
+    for node in graph.values():
+        node["inputs"].pop("negative", None)
+    return graph
+
+
 # ── data step 10: core rule v2 onto v3 (#1719) ────────────────────────────
 
 
@@ -1268,26 +1288,32 @@ def step_10(tmp_path):
     """
     hub = HubDatabase(str(tmp_path / "hub.db"))
     w = SimpleNamespace(hub=hub)
-    w.plain = record_api_graph(hub, _graph(ckpt=FLUX), library_uuid=LIB)
+    w.plain = record_api_graph(hub, _no_negative(_graph(ckpt=FLUX)), library_uuid=LIB)
     w.seed = record_api_graph(
-        hub, _graph(ckpt=FLUX, extra=CORE_V3_TWINS["seed"][1]), library_uuid=LIB
+        hub,
+        _no_negative(_graph(ckpt=FLUX, extra=CORE_V3_TWINS["seed"][1])),
+        library_uuid=LIB,
     )
     w.aura = record_api_graph(
-        hub, _graph(ckpt=FLUX, extra=CORE_V3_TWINS["aura-flow"][1]), library_uuid=LIB
+        hub,
+        _no_negative(_graph(ckpt=FLUX, extra=CORE_V3_TWINS["aura-flow"][1])),
+        library_uuid=LIB,
     )
     second = _graph()["5"]
     second["inputs"]["latent_image"] = ["5", 0]
     w.two_pass = record_api_graph(
         hub,
-        _graph(
-            ckpt=FLUX,
-            extra={
-                "8": second,
-                "6": {
-                    "class_type": "VAEDecode",
-                    "inputs": {"samples": ["8", 0], "vae": ["1", 2]},
+        _no_negative(
+            _graph(
+                ckpt=FLUX,
+                extra={
+                    "8": second,
+                    "6": {
+                        "class_type": "VAEDecode",
+                        "inputs": {"samples": ["8", 0], "vae": ["1", 2]},
+                    },
                 },
-            },
+            )
         ),
         library_uuid=LIB,
     )
@@ -1538,14 +1564,16 @@ def step_13(tmp_path):
     def checkpoint(**extra):
         graph = _split_loaders({"class_type": "CheckpointLoaderSimple", "inputs": {}})
         graph["1"]["inputs"]["ckpt_name"] = FLUX
-        return dict(graph, **extra)
+        return _no_negative(dict(graph, **extra))
 
     patch = CORE_V4_TWINS["model-patch"][1]
-    w.plain = record_api_graph(hub, _graph(ckpt=FLUX), library_uuid=LIB)
-    w.patched = record_api_graph(hub, _graph(ckpt=FLUX, extra=patch), library_uuid=LIB)
+    w.plain = record_api_graph(hub, _no_negative(_graph(ckpt=FLUX)), library_uuid=LIB)
+    w.patched = record_api_graph(
+        hub, _no_negative(_graph(ckpt=FLUX, extra=patch)), library_uuid=LIB
+    )
     w.seeded = record_api_graph(
         hub,
-        _graph(ckpt=FLUX, extra=CORE_V4_TWINS["seed-generator"][1]),
+        _no_negative(_graph(ckpt=FLUX, extra=CORE_V4_TWINS["seed-generator"][1])),
         library_uuid=LIB,
     )
     w.loader = record_api_graph(hub, checkpoint(), library_uuid=LIB)
@@ -1671,9 +1699,6 @@ def test_the_hub_open_runs_step_13_and_moves_a_v3_row_an_older_build_writes(step
     assert w.hub.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
     merged = w.v3_id[w.plain]
     assert workflow_of_variant(w.hub, w.patched.structural_hash) == merged
-    # Written by this build's step 13, so the stages are read already.
-    unread = "SELECT COUNT(*) FROM workflow_topology_core WHERE specials IS NULL"
-    assert w.hub.fetchone(unread)[0] == 0
     # An older build sharing the hub re-caches the patched topology on v3.
     v3 = _core_strip_v3(get_document(w.hub, w.patched.structural_hash))
     with w.hub.transaction() as conn:
@@ -1690,19 +1715,132 @@ def test_the_hub_open_runs_step_13_and_moves_a_v3_row_an_older_build_writes(step
         assert not _has_old_cores(conn, "v3")
 
 
-def test_a_hub_already_on_step_13_has_its_stages_read_again(step_13):
-    """Step 13 ran there before an intermediate save was a stage, so its
-    cached stages do not name it: cleared for the variant finder."""
-    w = step_13
+# ── data step 15: core rule v4 onto v5 ────────────────────────────────────
+
+
+@pytest.fixture
+def step_15(tmp_path):
+    """v4 workflows v5 merges: one graph with a typed negative, one that zeroes
+    its positive, each named and the zeroed one carrying a sampler default."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    w = SimpleNamespace(hub=hub)
+    zero_out = {
+        "3": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["2", 0]}}
+    }
+    w.typed = record_api_graph(hub, _graph(ckpt=FLUX), library_uuid=LIB)
+    w.zeroed = record_api_graph(
+        hub, _graph(ckpt=FLUX, extra=zero_out), library_uuid=LIB
+    )
+    w.v4_id, w.v4_labels = {}, {}
+    with hub.transaction() as conn:
+        for keys in (w.typed, w.zeroed):
+            v4 = _core_strip_v4(get_document(hub, keys.structural_hash))
+            families = hub.fetchone(
+                "SELECT families FROM workflow_variant_family WHERE structural_hash = ?",
+                (keys.structural_hash,),
+            )[0]
+            w.v4_id[keys] = auto_workflow_id(graph_key(v4), families)
+            w.v4_labels[keys] = node_labels(v4, rounds=None)
+            # As a hub on v4 holds it: the v4 core, and stages nobody read yet.
+            conn.execute(
+                "UPDATE workflow_topology_core SET core_version = ?, core_hash = ?, "
+                "specials = '' WHERE topology_hash = ?",
+                (_CORE_RULE_V4, graph_key(v4), keys.topology_hash),
+            )
+        conn.executemany(
+            "INSERT INTO workflow_group_attr (workflow_id, name, notes, hidden) "
+            "VALUES (?, ?, NULL, 0)",
+            [(w.v4_id[w.typed], "Typed"), (w.v4_id[w.zeroed], "Zeroed")],
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '8')",
+            (w.v4_id[w.zeroed], f"core:{w.v4_labels[w.zeroed]['5']}/steps"),
+        )
+    assert w.v4_id[w.typed] != w.v4_id[w.zeroed]
+    try:
+        yield w
+    finally:
+        hub.close()
+
+
+def test_step_15_merges_a_typed_negative_with_a_zeroed_one(step_15):
+    w = step_15
+    with w.hub.transaction() as conn:
+        assert rederive_cores_from(conn, "v4") == 2
+        assert not _has_old_cores(conn, "v4")
+    merged = workflow_of_variant(w.hub, w.typed.structural_hash)
+    assert merged == workflow_of_variant(w.hub, w.zeroed.structural_hash)
+    assert merged not in w.v4_id.values()
+    rows = _step_8_rows(w.hub)
+    assert {r[0] for r in rows["workflow_group_attr"]} == {merged}
+    sampler = core_node_labels(get_document(w.hub, w.typed.structural_hash))["5"]
+    assert [r[:3] for r in rows["workflow_group_default"]] == [
+        (merged, f"core:{sampler}/steps", "8")
+    ]
+    assert dict(rows["workflow_id_successor"]) == {
+        w.v4_id[w.typed]: merged,
+        w.v4_id[w.zeroed]: merged,
+    }
+
+
+def test_a_merged_workflow_runs_the_graph_with_a_negative_to_type(step_15):
+    """A run cannot add the box, and at CFG 1 the typed graph does what the
+    zeroed one does: it is the base however many pictures the other has."""
+    w = step_15
+    with w.hub.transaction() as conn:
+        rederive_cores_from(conn, "v4")
+    counts = {w.zeroed.structural_hash: 500, w.typed.structural_hash: 1}
+    (workflow,) = workflow_index(w.hub, counts)
+    assert workflow.base_topology == w.typed.topology_hash
+    # The positive control: a kept picture still comes first (#1738).
+    (workflow,) = workflow_index(w.hub, {w.zeroed.structural_hash: 500})
+    assert workflow.base_topology == w.zeroed.topology_hash
+
+
+def test_the_hub_open_runs_step_15_and_reads_the_stages_again(step_15):
+    """A hub already on v4 (data version 13 or 14) was written before an
+    intermediate save was a stage: step 15 rewrites every row's stages."""
+    w = step_15
+    two_pass = _graph(ckpt="step-15-stage.safetensors", extra=_second_pass(("5", 0)))
+    saved = record_api_graph(
+        w.hub, dict(two_pass, **_FIRST_PASS_SAVE), library_uuid=LIB
+    )
+    v4 = _core_strip_v4(get_document(w.hub, saved.structural_hash))
     path = w.hub.path
     with w.hub.transaction() as conn:
-        rederive_cores_from(conn, "v3")
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_version = ?, core_hash = ?, "
+            "specials = '' WHERE topology_hash = ?",
+            (_CORE_RULE_V4, graph_key(v4), saved.topology_hash),
+        )
         conn.execute("PRAGMA user_version = 13")
     w.hub.close()
     w.hub = HubDatabase(path)
     assert w.hub.fetchone("PRAGMA user_version")[0] == CURRENT_DATA_VERSION
-    stages = w.hub.fetchall("SELECT DISTINCT specials FROM workflow_topology_core")
-    assert [tuple(row) for row in stages] == [(None,)]
+    assert workflow_of_variant(w.hub, w.typed.structural_hash) == workflow_of_variant(
+        w.hub, w.zeroed.structural_hash
+    )
+    stages = dict(
+        w.hub.fetchall("SELECT topology_hash, specials FROM workflow_topology_core")
+    )
+    assert stages[saved.topology_hash] == "intermediate_save"
+    assert stages[w.typed.topology_hash] == ""
+    # An older build sharing the hub re-caches the zeroed topology on v4.
+    merged = workflow_of_variant(w.hub, w.typed.structural_hash)
+    v4 = _core_strip_v4(get_document(w.hub, w.zeroed.structural_hash))
+    with w.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_version = ?, core_hash = ? "
+            "WHERE topology_hash = ?",
+            (_CORE_RULE_V4, graph_key(v4), w.zeroed.topology_hash),
+        )
+        assert _has_old_cores(conn, "v4")
+    w.hub.close()
+    w.hub = HubDatabase(path)
+    assert workflow_of_variant(w.hub, w.zeroed.structural_hash) == merged
+    with w.hub.transaction() as conn:
+        assert not _has_old_cores(conn, "v4")
 
 
 def test_carrying_one_workflow_twice_onto_an_heir_writes_its_notes_once(tmp_path):

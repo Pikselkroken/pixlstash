@@ -62,10 +62,12 @@ WORKFLOW_KEY_VERSION = "v1"
 # v4: a third pass (:func:`_core_v4`) takes out filing wires, seed nodes, every
 # model patch, likeness gates and intermediate saves, and reads the PixlStash
 # picture loader and a checkpoint loader used only for its model as stock ones.
-CORE_VERSION = "v4"
+# v5: the negative side is off the core (:func:`_core_v5`): a typed negative
+# prompt and a zeroed one are one workflow.
+CORE_VERSION = "v5"
 # The same rule as a number: what the core passes compare against, so a retired
 # rule can still be derived for a data step's label maps.
-_LIVE_RULE = 4
+_LIVE_RULE = 5
 
 ASSET_REFERENCE_PREFIX = "asset:"
 
@@ -736,7 +738,11 @@ def reduced_traits(
             present.add(MODEL_PER_PASS)
     if any(n.class_type in _LIKENESS_GATE_CLASSES for n in core.values()):
         present.add(LIKENESS_GATE)
-    if any(_negative_is_prompted(core, node) for node in core.values()):
+    # Off the core since rule v5, so read off the v4 graph: the one trait that
+    # can differ inside a workflow. It is never in a name; it says which of a
+    # workflow's graphs has a negative prompt to type, and that one is the base.
+    with_negative = _core_of(nodes, strip_loras, rule=4)[0]
+    if any(_negative_is_prompted(with_negative, n) for n in with_negative.values()):
         present.add(NEGATIVE_PROMPT)
     traits = [trait for trait in TRAITS if trait in present]
     # Pictures, not ReferenceLatent nodes: a Flux 2 edit feeds each picture
@@ -772,16 +778,23 @@ def reduced_traits(
 def _upstream_sampler(
     nodes: dict[str, ReducedNode], node_id: str, samplers: set[str]
 ) -> Optional[tuple[str, bool]]:
-    """The sampler whose picture or latent *node_id* is fed, and whether a
-    ``VAEEncode`` lies between them. ``None`` when none does.
+    """The sampler whose picture or latent *node_id* is fed, and whether the
+    picture left latent space between them (a VAE encode or decode lies on the
+    way). ``None`` when none does.
 
-    Walks the picture/latent stream only (:data:`_STREAM_INPUTS`), so a model
-    or a conditioning shared with another sampler is not mistaken for a pass.
+    Walks the picture/latent stream only (:data:`_STREAM_INPUTS`, and any
+    ``*_image`` input, which is how a crop-and-stitch pass names its picture:
+    ``inpaint_image``), so a model or a conditioning shared with another
+    sampler is not mistaken for a pass. A decode counts as well as an encode:
+    a node that encodes inside itself (``InpaintEasyModel``) has no
+    ``VAEEncode`` to find, but the decode it was fed is on the way.
     """
+
+    def streams(name: str) -> bool:
+        return name in _STREAM_INPUTS or name.endswith("_image")
+
     stack = [
-        (source, False)
-        for name, source, _ in nodes[node_id].inputs
-        if name in _STREAM_INPUTS
+        (source, False) for name, source, _ in nodes[node_id].inputs if streams(name)
     ]
     seen: set[str] = set()
     while stack:
@@ -792,17 +805,19 @@ def _upstream_sampler(
         if current in samplers:
             return current, encoded
         node = nodes[current]
-        encoded = encoded or node.class_type == "VAEEncode"
+        encoded = encoded or node.class_type.startswith(("VAEEncode", "VAEDecode"))
         stack.extend(
-            (source, encoded)
-            for name, source, _ in node.inputs
-            if name in _STREAM_INPUTS
+            (source, encoded) for name, source, _ in node.inputs if streams(name)
         )
     return None
 
 
 def _model_root(nodes: dict[str, ReducedNode], node_id: str) -> Optional[str]:
-    """The node a sampler's model chain starts at: its loader."""
+    """The node a sampler's model chain starts at: its loader.
+
+    Through a ``basic_pipe`` too (Impact Pack bundles the model in one), or
+    two passes sharing a model by pipe would read as a model each.
+    """
     seen: set[str] = set()
     current: Optional[str] = node_id
     while current in nodes and current not in seen:
@@ -810,7 +825,7 @@ def _model_root(nodes: dict[str, ReducedNode], node_id: str) -> Optional[str]:
         edge = next(
             (
                 source
-                for wanted in ("model", "guider")
+                for wanted in ("model", "guider", "basic_pipe")
                 for name, source, _ in nodes[current].inputs
                 if name == wanted
             ),
@@ -1009,8 +1024,9 @@ def _core_v2(
     * loader variants read as the stock loader (:data:`_CANONICAL_LOADERS`).
 
     *rule* 3 adds :data:`_V3_PLUMBING_CLASSES` to the plumbing and
-    :data:`_V3_CANONICAL_CLASSES` to the stock spellings; *rule* 4 (the live
-    rule) then runs :func:`_core_v4` over the result.
+    :data:`_V3_CANONICAL_CLASSES` to the stock spellings; *rule* 4 then runs
+    :func:`_core_v4` over the result, and *rule* 5 (the live rule)
+    :func:`_core_v5` over that.
     """
     v3 = rule >= 3
     plumbing = _STRING_PRIMITIVE_CLASSES | (_V3_PLUMBING_CLASSES if v3 else set())
@@ -1031,7 +1047,38 @@ def _core_v2(
     if rule < 4:
         return core, pruned, refused
     core, pruned_v4, refused_v4 = _core_v4(core)
-    return core, pruned + pruned_v4, refused or refused_v4
+    pruned, refused = pruned + pruned_v4, refused or refused_v4
+    if rule < 5:
+        return core, pruned, refused
+    core, pruned_v5, refused_v5 = _core_v5(core)
+    return core, pruned + pruned_v5, refused or refused_v5
+
+
+def _core_v5(
+    nodes: dict[str, ReducedNode],
+) -> tuple[dict[str, ReducedNode], Counter, bool]:
+    """Core rule v5's pass, over the v4 core: the negative side is not core.
+
+    Every link input named ``negative`` is dropped and what only it kept
+    alive pruned (:func:`_prune`, with its refusal), so a graph that types a
+    negative prompt and one that zeroes its positive (a distilled model at
+    CFG 1, which never reads it) have one core. What the negative says is a
+    prompt, which was never part of a workflow; whether a graph has a box to
+    type one in is :data:`NEGATIVE_PROMPT`, which chooses the base graph.
+
+    ponytail: by the input's name, as the trait reads it; a sampler that
+    spells its negative another way keeps it on the core.
+    """
+    return _prune(
+        {
+            node_id: ReducedNode(
+                node.class_type,
+                node.widgets,
+                tuple(edge for edge in node.inputs if edge[0] != "negative"),
+            )
+            for node_id, node in nodes.items()
+        }
+    )
 
 
 def _core_v4(
@@ -1137,6 +1184,9 @@ def intermediate_saves(nodes: dict[str, ReducedNode]) -> set[str]:
     """
     if not has_sampler(nodes):
         return set()
+    # LoRA loaders stripped, whatever the grouping does with them: a loader is
+    # neither a sink nor a sampler, so kept or stepped through it changes no
+    # sink's upstream samplers and the answer is the same either way.
     core = _core_of(nodes, True, rule=3)[0]
     return _saves_along_the_way(_v4_strip(core))[0]
 

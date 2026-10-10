@@ -3818,12 +3818,34 @@ def test_colliding_generated_names_say_how_they_differ_before_numbering():
     alone = [figure("a" * 64, ("two_pass", "negative_prompt"))]
     assert workflows_routes._display_names(alone) == {"a" * 64: base}
 
-    # A shared trait is news once one of them lacks it: the Klein T2I with a
-    # typed negative beside the one that zeroes its prompt.
-    pair = [figure("a" * 64, ()), figure("b" * 64, ("negative_prompt",))]
+    # A shared trait is news once one of them lacks it.
+    pair = [figure("a" * 64, ()), figure("b" * 64, ("two_pass",))]
     assert workflows_routes._display_names(pair) == {
         "a" * 64: base,
-        "b" * 64: f"{base} + Negative Prompt",
+        "b" * 64: f"{base} + Two-Pass",
+    }
+    # A typed negative is never in a name: core rule v5 groups it with a
+    # zeroed one, and it only says which graph the workflow runs.
+    negatives = [figure("a" * 64, ()), figure("b" * 64, ("negative_prompt",))]
+    assert workflows_routes._display_names(negatives) == {
+        "a" * 64: base,
+        "b" * 64: f"{base} (2)",
+    }
+
+    # Two names that differ only by a stage collide, since a stage is on or
+    # off per run: the second pass is what tells them apart.
+    staged = figure("b" * 64, ("refine",))
+    staged.card.specials = ("upscale",)
+    assert workflows_routes._display_names([figure("a" * 64, ()), staged]) == {
+        "a" * 64: base,
+        "b" * 64: f"{base} + Upscale + Refine",
+    }
+    # The negative: with nothing but the stage between them, neither is renamed.
+    only_staged = figure("b" * 64, ())
+    only_staged.card.specials = ("upscale",)
+    assert workflows_routes._display_names([figure("a" * 64, ()), only_staged]) == {
+        "a" * 64: base,
+        "b" * 64: f"{base} + Upscale",
     }
 
     # A suffixed name that another workflow generates outright is still never
@@ -3835,14 +3857,14 @@ def test_colliding_generated_names_say_how_they_differ_before_numbering():
             SlotModel(
                 name="other",
                 kind="checkpoint",
-                title=f"{base} + Negative Prompt",
+                title=f"{base} + Two-Pass",
             )
         ],
     )
     assert workflows_routes._display_names([*pair, outright]) == {
         "a" * 64: base,
-        "b" * 64: f"{base} + Negative Prompt",
-        "z" * 64: f"{base} + Negative Prompt (2)",
+        "b" * 64: f"{base} + Two-Pass",
+        "z" * 64: f"{base} + Two-Pass (2)",
     }
 
 

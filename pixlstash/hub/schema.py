@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 14
+CURRENT_DATA_VERSION = 15
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -2061,7 +2061,7 @@ def _has_old_cores(conn: sqlite3.Connection, rule: str = "v1") -> bool:
     """Whether a filed topology's core is cached under core rule *rule*.
 
     Data step 8's trigger beyond the version (step 10's with ``"v2"``, step
-    13's with ``"v3"``): an older build sharing this hub writes them. Spelled out rather than imported
+    13's with ``"v3"``, step 15's with ``"v4"``): an older build sharing this hub writes them. Spelled out rather than imported
     (`hub.workflow_cards` imports this module through `hub.db`).
     """
     return (
@@ -2157,6 +2157,7 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
         or _has_old_cores(conn)
         or _has_old_cores(conn, "v2")
         or _has_old_cores(conn, "v3")
+        or _has_old_cores(conn, "v4")
     ):
         try:
             with conn:
@@ -2259,12 +2260,17 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     )
 
                     rederive_cores_from(conn, "v3")
-                if data_version == 13:
-                    # A hub step 13 already moved, before an intermediate save
-                    # was a stage: its cached `specials` do not name it. The
-                    # variant finder re-derives a NULL one. A hub coming from
-                    # below 13 was just written by step 13 and needs nothing.
-                    conn.execute("UPDATE workflow_topology_core SET specials = NULL")
+                if data_version < 15 or _has_old_cores(conn, "v4"):
+                    # Core rule v5: v4 workflows split only by a typed
+                    # negative prompt against a zeroed one merge, their state
+                    # carried. Every v4 row is rewritten, so its stages are
+                    # read again too (an intermediate save became one while
+                    # hubs were on v4, which was data version 14's whole job).
+                    from pixlstash.hub.workflow_group_convert import (
+                        rederive_cores_from,
+                    )
+
+                    rederive_cores_from(conn, "v4")
                 if data_version < CURRENT_DATA_VERSION:
                     # No placeholder: PRAGMA takes no parameters, and the value
                     # is this module's own constant, nothing from outside.

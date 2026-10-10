@@ -590,9 +590,11 @@ _CORE_RULE_V1_UNMOVED = "unmoved-v1"
 # row it could not move (as `_CORE_RULE_V1_UNMOVED` is for step 8).
 _CORE_RULE_V2 = f"v2-loras-{'stripped' if STRIP_LORAS_FOR_STACKS else 'kept'}"
 _CORE_RULE_V2_UNMOVED = "unmoved-v2"
-# The same for core rule v3 and data step 13.
+# The same for core rule v3 and data step 13, and v4 and step 15.
 _CORE_RULE_V3 = f"v3-loras-{'stripped' if STRIP_LORAS_FOR_STACKS else 'kept'}"
 _CORE_RULE_V3_UNMOVED = "unmoved-v3"
+_CORE_RULE_V4 = f"v4-loras-{'stripped' if STRIP_LORAS_FOR_STACKS else 'kept'}"
+_CORE_RULE_V4_UNMOVED = "unmoved-v4"
 
 
 def _core_strip_v1(document: dict) -> dict[str, ReducedNode]:
@@ -610,11 +612,17 @@ def _core_strip_v3(document: dict) -> dict[str, ReducedNode]:
     return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=3)[0]
 
 
-# What data steps 10 and 13 re-derive from, by the rule's name: its stamp, the
-# stamp of a row that would not move, and its graph.
+def _core_strip_v4(document: dict) -> dict[str, ReducedNode]:
+    """Core rule v4's graph, for data step 15's label maps. Not the live rule."""
+    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=4)[0]
+
+
+# What data steps 10, 13 and 15 re-derive from, by the rule's name: its stamp,
+# the stamp of a row that would not move, and its graph.
 _MERGED_RULES = {
     "v2": (_CORE_RULE_V2, _CORE_RULE_V2_UNMOVED, _core_strip_v2),
     "v3": (_CORE_RULE_V3, _CORE_RULE_V3_UNMOVED, _core_strip_v3),
+    "v4": (_CORE_RULE_V4, _CORE_RULE_V4_UNMOVED, _core_strip_v4),
 }
 
 
@@ -625,7 +633,7 @@ def core_label_maps(
 
     *old_rule* is the retired rule's graph: :func:`_core_strip_v1` for data
     step 8, :func:`_core_strip_v2` for step 10, :func:`_core_strip_v3` for
-    step 13. The second map holds the
+    step 13, :func:`_core_strip_v4` for step 15. The second map holds the
     nodes the live rule took off the core (a stage now, plumbing, or dead), by
     their slot label on *document*'s own topology: where an address on one of
     them can still point when this topology is its workflow's base. Matched
@@ -678,7 +686,7 @@ def _move_topologies(
     ``(heirs_of, topologies_of, labels_of, stage_slots_of, new_of_card,
     core_of_heir)``, in :func:`_retire_all`'s argument order.
 
-    Shared by data steps 8, 10 and 13. This runs at hub open inside the
+    Shared by data steps 8, 10, 13 and 15. This runs at hub open inside the
     data-version transaction, so an uncaught error would refuse the hub on
     every start (`convert_card_state` guards the same way). A topology whose
     move returns ``None`` or raises is rolled back, logged and restamped from
@@ -818,7 +826,8 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
 def rederive_cores_from(conn: sqlite3.Connection, rule: str) -> int:
     """Put every topology cached under retired core rule *rule* on the live one.
 
-    Hub data step 10 (*rule* ``"v2"``, #1719) and step 13 (``"v3"``),
+    Hub data step 10 (*rule* ``"v2"``, #1719), step 13 (``"v3"``) and step 15
+    (``"v4"``),
     :func:`rederive_cores`'s move one rule on. Each rule strips more than the
     one before, so workflows mostly **merge**: each variant's old id
     ``auto_workflow_id(old core, families)`` is retired onto its live id, and
@@ -1014,9 +1023,9 @@ def _retire_all(
 ) -> None:
     """Retire every old id in *heirs_of* onto its heirs, then report strays.
 
-    Shared by data steps 8, 10 and 13, which all move to the live core rule.
+    Shared by data steps 8, 10, 13 and 15, which all move to the live core rule.
     Each old id's label maps merge over its topologies, and its retirement
-    runs in a savepoint of its own. *own_slots* (steps 10 and 13): an heir whose base
+    runs in a savepoint of its own. *own_slots* (steps 10, 13 and 15): an heir whose base
     is none of the old id's topologies (a merge into a workflow that lives on)
     still gets the old topologies' slot labels, so an address on a node the
     rule stripped is kept, inert on that base, rather than dropped.

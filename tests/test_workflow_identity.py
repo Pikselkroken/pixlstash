@@ -14,6 +14,7 @@ from pixlstash.hub.workflow_group_convert import (
     _core_strip_v1,
     _core_strip_v2,
     _core_strip_v3,
+    _core_strip_v4,
 )
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
@@ -45,6 +46,7 @@ from pixlstash.services.workflow_identity import (
     workflow_type,
 )
 from pixlstash.services.workflow_identity import _SINK_CLASS_RE
+from pixlstash.services import workflow_identity as identity
 
 
 def _node(class_type: str, **inputs) -> dict:
@@ -936,6 +938,63 @@ def test_core_v4_is_a_function_of_the_v3_core():
     assert len({c for v4 in v4_of_v3.values() for c in v4}) < len(v4_of_v3)
 
 
+# ── core rule v5: the negative side is not core ───────────────────────────
+
+_ZEROED = {"3": _node("ConditioningZeroOut", conditioning=["2", 0])}
+
+
+def test_core_v5_groups_a_typed_negative_with_a_zeroed_one():
+    """Whether the negative is typed or zeroed is the prompt's value, not the
+    graph's identity; which graph has the box is a trait that picks the base."""
+    typed, zeroed = _graph(), _graph(extra=_ZEROED)
+    assert graph_key(_core_strip_v4(_doc(typed))) != graph_key(
+        _core_strip_v4(_doc(zeroed))
+    )
+    assert core_hash(_doc(typed)) == core_hash(_doc(zeroed))
+    for node_id in ("1", "2", "4", "5", "6", "7"):
+        assert _core_label(typed, node_id) == _core_label(zeroed, node_id)
+    assert "3" not in core_node_labels(_doc(typed))
+    assert graph_traits(_doc(typed)) == (NEGATIVE_PROMPT,)
+    assert graph_traits(_doc(zeroed)) == ()
+    # The negative: the positive side is the graph still.
+    other = _graph(extra={"2": _node("CLIPTextEncodeFlux", t5xxl="a", clip=["1", 1])})
+    assert core_hash(_doc(other)) != core_hash(_doc(typed))
+
+
+def test_core_v5_is_a_function_of_the_v4_core():
+    """Many-to-one: graphs sharing a v4 core share a v5 core (data step 15)."""
+    twins = [*CORE_V3_TWINS.values(), *CORE_V4_TWINS.values(), (None, _ZEROED)]
+    graphs = [
+        _graph(**variant, extra=extra)
+        for variant in ({}, {"upscale": True}, {"img2img": True})
+        for extra in [None, *(twin for pair in twins for twin in pair)]
+    ]
+    v5_of_v4: dict[str, set[str]] = {}
+    for graph in graphs:
+        doc = _doc(graph)
+        v5_of_v4.setdefault(graph_key(_core_strip_v4(doc)), set()).add(core_hash(doc))
+    assert all(len(v5) == 1 for v5 in v5_of_v4.values())
+    assert len({c for v5 in v5_of_v4.values() for c in v5}) < len(v5_of_v4)
+
+
+def test_the_intermediate_save_stage_is_the_same_with_loras_kept_or_stripped():
+    """Review of #1822: the stage is read with LoRA loaders stripped whatever
+    the grouping does with them. A loader is neither a sink nor a sampler, so
+    the saves the core drops are the same either way."""
+    graph = _graph(
+        loras=("a.safetensors",),
+        extra={**_second_pass(("5", 0), model=("L0", 0)), **_FIRST_PASS_SAVE},
+    )
+    nodes = identity._reduce(_doc(graph))
+    kept = identity._core_of(nodes, False, rule=3)[0]
+    assert "L0" in kept, "the LoRA loader was stripped, so this proves nothing"
+    assert (
+        identity._saves_along_the_way(identity._v4_strip(kept))[0]
+        == identity.intermediate_saves(nodes)
+        == {"71"}
+    )
+
+
 def test_an_extra_lora_loader_splits_when_loras_are_not_stripped():
     plain, member = _doc(_graph()), _doc(_graph(loras=("a.safetensors",)))
     assert core_hash(plain, strip_loras=False) != core_hash(member, strip_loras=False)
@@ -1043,6 +1102,29 @@ def test_traits_say_what_the_core_does_that_the_type_cannot():
     assert graph_traits(_doc(_graph(extra={**zeroed, **refine, **_GATED}))) == (REFINE,)
     # With no sampler the gate is what the graph does, and the name says so.
     assert graph_traits(_doc(_gate_only(gated=True))) == (LIKENESS_GATE,)
+
+    # A crop-and-stitch pass through pipes: the second sampler's latent comes
+    # from a node that encodes inside itself, fed a crop of the first pass's
+    # decode. A refine, and of ONE model, though each pass reads it by pipe.
+    piped = {
+        "50": _node("ToBasicPipe", model=["1", 0], positive=["2", 0], vae=["1", 2]),
+        "5": _node(
+            "ImpactKSamplerBasicPipe", basic_pipe=["50", 0], latent_image=["4", 0]
+        ),
+        "51": _node("VAEDecode", samples=["5", 1], vae=["5", 2]),
+        "52": _node("InpaintCropImproved", image=["51", 0]),
+        "53": _node("FromBasicPipe", basic_pipe=["5", 0]),
+        "54": _node("InpaintEasyModel", inpaint_image=["52", 1], positive=["53", 3]),
+        "55": _node(
+            "KSampler", model=["53", 0], positive=["54", 0], latent_image=["54", 2]
+        ),
+        "6": _node("VAEDecode", samples=["55", 0], vae=["53", 2]),
+        "56": _node(
+            "InpaintStitchImproved", stitcher=["52", 0], inpainted_image=["6", 0]
+        ),
+        "7": _node("SaveImage", images=["56", 0], filename_prefix="out"),
+    }
+    assert graph_traits(_doc(_graph(extra={**zeroed, **piped}))) == (REFINE,)
 
     # Reference images, counted: one edit reference is not two.
     one_ref = {

@@ -189,7 +189,6 @@ from pixlstash.services.workflow_identity import (
     UPSCALE_RESIZE,
     UPSCALE_ULTIMATE_SD,
     MODEL_PER_PASS,
-    NEGATIVE_PROMPT,
     REFERENCES_PREFIX,
     REFINE,
     TWO_PASS,
@@ -2338,7 +2337,6 @@ _TRAIT_LABELS = {
     REFINE: "Refine",
     MODEL_PER_PASS: "Model per Pass",
     LIKENESS_GATE: "Likeness Gate",
-    NEGATIVE_PROMPT: "Negative Prompt",
 }
 
 
@@ -2489,8 +2487,11 @@ def _display_names(figures) -> dict[str, str]:
     A name the owner typed or a workflow file's is left alone however many
     workflows share it: renaming what somebody chose is inventing. Generated
     names that collide first say what the core does differently
-    (``... + Two-Pass``, :func:`_distinguishing_traits`), and whatever still
-    collides is numbered ``Text to Image (2)``, ``(3)``: the workflows the
+    (``... + Two-Pass``, :func:`_distinguishing_traits`). **Two names that
+    differ only by their stages collide**: a stage is switched on or off per
+    run, so ``Text to Image`` and ``Text to Image + Upscale`` read as one
+    workflow run two ways, and a second sampling pass between them is what
+    actually tells them apart. Whatever still collides is numbered ``Text to Image (2)``, ``(3)``: the workflows the
     grid draws by default before the hidden ones and the one-offs, so the one
     on screen is not "(2)" of a sibling nobody sees, then in id order so a
     workflow keeps its number from one read to the next.
@@ -2506,14 +2507,17 @@ def _display_names(figures) -> dict[str, str]:
         name = _display_name(card, figure.models)
         names[figure.workflow_id] = name
         if not card.name and not card.file_name:
-            generated.setdefault(name, []).append(figure)
+            # Grouped by the name without its stages, which end it.
+            stem = name.removesuffix(_specials_suffix(card))
+            generated.setdefault(stem, []).append(figure)
     renamed = {}
-    for name, members in generated.items():
+    for members in generated.values():
         # A lone name shares every trait it has with itself, so it gets none.
         suffixes = _distinguishing_traits([member.card for member in members])
         for member, suffix in zip(members, suffixes):
-            names[member.workflow_id] = name + suffix
-            renamed.setdefault(name + suffix, []).append(member.workflow_id)
+            name = names[member.workflow_id] + suffix
+            names[member.workflow_id] = name
+            renamed.setdefault(name, []).append(member.workflow_id)
     for name, keys in renamed.items():
         for number, key in enumerate(keys[1:], start=2):
             names[key] = f"{name} ({number})"

@@ -2300,7 +2300,7 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | Table | Holds |
 |---|---|
 | `workflow_variant` | Which card each stored variant belongs to, with the `key_version` that keyed it. **No timestamp column**, here or on the cache below: deriving the same hub twice has to write byte-identical rows, or "the backfill runs twice with identical rows" is a claim no test can make |
-| `workflow_topology_core` | Per topology: the automatic workflow key (`core_hash` + `core_version`), the workflow type, the slot list the internal marks and the card-era overrides address, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`, `seed_variance`, `intermediate_save`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. `traits` is the same shape of answer, with the same NULL rule and the same re-queue, for what the CORE does (`workflow_identity.graph_traits`: `two_pass`, `refine`, `model_per_pass`, `likeness_gate`, `negative_prompt`, `references:N`), read off the core strip so every topology of one automatic workflow agrees; a generated name uses it only to tell colliding workflows apart (#1722). The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
+| `workflow_topology_core` | Per topology: the automatic workflow key (`core_hash` + `core_version`), the workflow type, the slot list the internal marks and the card-era overrides address, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`, `seed_variance`, `intermediate_save`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. `traits` is the same shape of answer, with the same NULL rule and the same re-queue, for what the CORE does (`workflow_identity.graph_traits`: `two_pass`, `refine`, `model_per_pass`, `likeness_gate`, `negative_prompt`, `references:N`), read off the core strip so every topology of one automatic workflow agrees, `negative_prompt` aside: core rule v5 takes the negative side off the core, so that one is read off the v4 graph, differs inside a workflow, is never in a name and chooses the base topology. A generated name uses the others only to tell colliding workflows apart (#1722). The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
 | `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, guessed from the filename the first time the slot is seen and never recomputed. An internal input to the card key only: no route reads or writes it, and the cut-over read it once (below) |
 | `workflow_lora_promotion` | One LoRA **file** promoted into the card key at one slot, per **(topology, slot label, asset reference)**. **No longer written** (#1623: its route went with the slot marks, the same mechanism); the rows already there still key cards. The per-file counterpart of the slot mark: `workflow_key(..., promoted=)` keys a recipe slot only while it holds exactly that file, so only that file's pictures split off. Read by every writer of `workflow_variant.workflow_key` (`workflow_cards.promoted_pairs`, in `record_identity` and `_rekey_variants`) and by nothing owner-facing. Names the file by its `asset:` reference, never the filename, so a forget leaves the split standing and nameless, as it does a mark. A card a promotion made is never a one-off |
 | `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets — unless ComfyUI has converted it (#1530): `POST /comfyui/workflows/convert` stores the API graph beside the file as `<name>.json.api` (`{converted_from, prompt}`, the digest of the editor file it was made from), and `_file_in_hub` files that graph instead, so the row gets a structural hash. `runnable_document` is what every run, list and parameter read goes through to see it; a conversion of another version of the file is ignored, and delete removes it. Deleting the file drops the row and leaves the card, which its pictures made |
@@ -2398,7 +2398,7 @@ nothing in the vault moves; a manual workflow's own runs are the one exception
 | `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and (legacy) a topology placed in a hand-made group by the dropped merge and split, one workflow per topology. Hub data step 6 dissolves every such group and nothing writes a member row any more |
 | `workflow_group_attr`, `workflow_group_default`, `workflow_group_pins`, `workflow_group_picture_input` | The owner's name, notes and hidden flag; edits to the default recipe; pins; picture inputs (library-keyed, pictures by `pixel_sha`). All keyed by `workflow_id` and addressed by **address**, never slot label |
 | `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
-| `workflow_core_successor` | Per (topology, new workflow), the automatic workflow the retired rule put the topology in, each one the live rule puts its variants in, and the old -> new core label map (data step 8 from v1, step 10 from v2, step 13 from v3, below) |
+| `workflow_core_successor` | Per (topology, new workflow), the automatic workflow the retired rule put the topology in, each one the live rule puts its variants in, and the old -> new core label map (data step 8 from v1, step 10 from v2, step 13 from v3, step 15 from v4, below) |
 | `workflow_variant_family` | Per variant, its base-model families (`variant_families`), frozen on first derivation: part of its workflow's id, so a later shelf scan never moves it |
 | `workflow_family_pass` | The shelf signature the last successful family pass (`reidentify_families`) ran against; at most one row |
 | `workflow_card_move` | Per card a family pass moved out of a workflow that lives on (some variants still unknown): its key, the old workflow id and the workflow it moved to, for the vault conversion to re-file a recipe naming the first two onto the third |
@@ -2409,7 +2409,10 @@ its family row, else none), `variants_in_workflow` and `topologies_in_workflow`
 (an automatic id is a digest, so these scan the current variants and keep the
 ones whose id it is), and `workflow_index`, one `Workflow` per group built
 from `card_index`, variant by variant. The **base topology** is one this
-library has kept pictures of before one it has none of (#1738), then the one
+library has kept pictures of before one it has none of (#1738), then one with
+a negative prompt to type before one that zeroes it (the `negative_prompt`
+trait: core rule v5 groups the two, a run cannot add the box, and at CFG 1
+the typed graph does what the zeroed one does), then the one
 with the most stage groups, then the most LoRA loaders, then the most kept
 pictures (#1620 D3, automatic); its busiest card is `base_card`, whose source a
 run resolves. A workflow file is not a key: it may be UI-format, which does not
@@ -2762,7 +2765,7 @@ split, a refused prune aside. Carried defaults keep their input names, so a
 `KSamplerAdvanced` default (`noise_seed`, `start_at_step`) merged onto a
 `KSampler` base addresses an input that base lacks, and a run skips it.
 
-**v4** (the live rule, `_core_v4`) is a third pass, over the v3 core and
+**v4** (`_core_v4`) is a third pass, over the v3 core and
 never the document, so it is a function of the v3 core by construction
 (`test_core_v4_is_a_function_of_the_v3_core`) and only merges. `rule=3` is
 kept for data step 13's label maps (`_core_strip_v3`). In order:
@@ -2802,6 +2805,25 @@ So `intermediate_save` is a stage and no longer a trait, and `likeness_gate`
 names only a graph with no sampler. As with v3, a carried address keeps its input name: a
 picture input is addressed by node, so it survives the loader's spelling, but
 a default on an input one spelling lacks is skipped by a run on the other.
+
+**v5** (the live rule, `_core_v5`) is one more pass, over the v4 core: **the
+negative side is not core**. Every link input named `negative` is dropped and
+what only it kept alive pruned, so a graph that types a negative prompt and
+one that zeroes its positive (a distilled model at CFG 1, which never reads
+it) are one workflow. What a negative says is a prompt, which was never part
+of a workflow. v5 is a function of the v4 core
+(`test_core_v5_is_a_function_of_the_v4_core`), so data step 15 only merges.
+Which of a workflow's graphs has the box is the `negative_prompt` trait, read
+off the v4 graph (`rule=4`, also `_core_strip_v4` for step 15's label maps),
+and the base topology is chosen by it (above). By the input's name: a sampler
+that spells its negative another way keeps it on the core.
+
+**A second pass is found through a crop-and-stitch too.** `_upstream_sampler`
+walks the picture stream by `_STREAM_INPUTS` and any `*_image` input
+(`inpaint_image`), and a VAE decode on the way counts as leaving latent space
+as an encode does, so a pass whose node encodes inside itself
+(`InpaintEasyModel`) is a `refine`. `_model_root` follows a `basic_pipe`, so
+two passes sharing a model through an Impact pipe are not `model_per_pass`.
 
 **A graph with no sampler of its own keeps what it does.** With a sampler,
 every stage (upscale, face detailer, seed variance) is an optional addition
@@ -2930,10 +2952,10 @@ conversion leaves a recipe whose target is the id it already names.
 its `core:` overrides and `models[].address` through the label map (its
 card's topology first), keeping anything it cannot place as it was. Its stage
 slots are keyed by every retired rule's labels: v1 for step 8, v2 for step 10,
-v3 for step 13.
+v3 for step 13, v4 for step 15.
 
-**Data steps 10 and 13** (`workflow_group_convert.rederive_cores_from(conn,
-"v2")` at data version 10 and `(conn, "v3")` at 13, and on every open that
+**Data steps 10, 13 and 15** (`workflow_group_convert.rederive_cores_from(conn,
+"v2")` at data version 10, `(conn, "v3")` at 13 and `(conn, "v4")` at 15, and on every open that
 finds a row of that rule for a filed topology; `_MERGED_RULES` holds each
 rule's stamp and graph) are step 8 one rule on, through the same retirement
 (`_retire_all`, then `_retire_workflow` per old id). Below, "v2" and "v3" read
@@ -2950,12 +2972,11 @@ rewritten to the old topology's slot label and **kept**, inert on that base,
 rather than dropped as step 8 drops it (`_retire_all(own_slots=True)`). Each
 moved topology's earlier `workflow_core_successor` maps (step 8's v1 -> v2) are
 composed through v2 -> v3, so a recipe still filed on a v1 id lands on v3
-labels. A failure restamps `unmoved-v2` (`unmoved-v3`).
+labels. A failure restamps `unmoved-v2` (`unmoved-v3`, `unmoved-v4`).
 
-**Data step 14** clears `specials` on a hub that was already at data version
-13: step 13 ran there before an intermediate save was a stage, so its cached
-stages do not name it, and the variant finder re-derives a NULL one. A hub
-coming from below 13 was just written by step 13 and is left alone.
+**Data version 14 runs nothing.** It cleared `specials` on a hub already on
+v4, written before an intermediate save was a stage; step 15 rewrites every
+v4 row, its stages with it, so the clear is gone and only the number is kept.
 
 **A merged workflow is hidden only when everything merged into it was.** The
 carry writes the first old id's attributes onto an heir with none, its
