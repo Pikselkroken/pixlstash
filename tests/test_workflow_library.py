@@ -1628,8 +1628,8 @@ def _element(ident, *payload):
     return ident.to_bytes((ident.bit_length() + 7) // 8, "big") + size + body
 
 
-def mp4_bytes(tags=None, comment=None):
-    """An MP4 with its ``moov`` after the media data, where ffmpeg puts it.
+def mp4_bytes(tags=None, comment=None, faststart=False):
+    """An MP4, its ``moov`` after the media data unless ``faststart``.
 
     ``tags`` are written the way ffmpeg's ``use_metadata_tags`` does (ComfyUI's
     SaveVideo): a ``keys`` box naming them and an ``ilst`` numbering them.
@@ -1654,10 +1654,25 @@ def mp4_bytes(tags=None, comment=None):
             ),
         ]
     handler = _box(b"hdlr", bytes(8), b"mdta", bytes(13))
+    media = _box(b"mdat", bytes(64))
+    moov = _box(b"moov", _box(b"udta", _box(b"meta", bytes(4), handler, *items)))
+    return _box(b"ftyp", b"isom", b"\x00\x00\x02\x00", b"isom") + (
+        moov + media if faststart else media + moov
+    )
+
+
+def mov_bytes(comment):
+    """A QuickTime file: the comment is an atom of ``udta`` itself.
+
+    Its 16-bit length wraps on a long text exactly as ffmpeg writes it, so
+    *comment* is padded past that: a workflow usually is.
+    """
+    text = (comment + " " * 0xFFF0).encode()
+    atom = _box(b"\xa9cmt", struct.pack(">HH", len(text) & 0xFFFF, 0x55C4), text)
     return (
-        _box(b"ftyp", b"isom", b"\x00\x00\x02\x00", b"isom")
+        _box(b"ftyp", b"qt  ", b"\x00\x00\x02\x00", b"qt  ")
         + _box(b"mdat", bytes(64))
-        + _box(b"moov", _box(b"udta", _box(b"meta", bytes(4), handler, *items)))
+        + _box(b"moov", _box(b"udta", atom))
     )
 
 
@@ -1691,10 +1706,18 @@ def _vhs_comment(api, workflow):
 # carrying that API graph and editor workflow).
 VIDEO_WRITERS = {
     "SaveVideo": ("core.mp4", lambda a, w: mp4_bytes(_video_tags(a, w))),
+    "SaveVideo faststart": (
+        "faststart.mp4",
+        lambda a, w: mp4_bytes(_video_tags(a, w), faststart=True),
+    ),
     "SaveWEBM": ("core.webm", lambda a, w: webm_bytes(_video_tags(a, w))),
     "VideoHelperSuite mp4": (
         "vhs.mp4",
         lambda a, w: mp4_bytes(comment=_vhs_comment(a, w)),
+    ),
+    "VideoHelperSuite mov": (
+        "vhs.mov",
+        lambda a, w: mov_bytes(_vhs_comment(a, w)),
     ),
     "VideoHelperSuite webm": (
         "vhs.webm",
@@ -1744,6 +1767,9 @@ def test_a_video_is_filed_exactly_as_a_picture_of_the_same_graph(store, writer):
     "name, content",
     [
         ("phone.mp4", mp4_bytes({"encoder": "a camera"})),
+        # Tags named like the metadata dict's own sections, which the A1111
+        # reader indexes into: read as tags, they made it raise.
+        ("sections.mp4", mp4_bytes({"png": "x", "exif": "y", "comfyui": "z"})),
         ("noise.mp4", b"\x00\x00\x00\x01moov" + bytes(3)),
         ("cut-short.webm", webm_bytes({"prompt": "{}"})[:-9]),
         ("malformed.webm", b"\x1a\x45\xdf\xa3\x80" + bytes(8)),
@@ -1764,7 +1790,7 @@ def test_a_video_with_no_readable_graph_is_scanned_as_carrying_none(
     embedded = ImageUtils.extract_embedded_metadata(
         os.path.join(store.image_root, name)
     )
-    assert "prompt" not in embedded
+    assert embedded == {}
 
     result = run_extraction(store, [picture_id])
 

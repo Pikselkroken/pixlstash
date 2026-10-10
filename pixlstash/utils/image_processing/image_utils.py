@@ -94,8 +94,8 @@ class ImageUtils:
     def extract_embedded_metadata(file_path: str) -> dict:
         """Extract embedded EXIF and PNG metadata from an image file.
 
-        A video answers with its container's tags instead, at the top level
-        (``VideoUtils.extract_embedded_metadata``).
+        A video answers with the graphs its container's tags carry instead, as
+        ``{"comfyui": {"prompt": ..., "workflow": ...}}``.
 
         Results are cached in memory keyed by (file_path, mtime) so repeated
         calls for the same unchanged file (e.g. on every overlay open) are free.
@@ -111,9 +111,14 @@ class ImageUtils:
     @staticmethod
     @functools.lru_cache(maxsize=512)
     def _extract_embedded_metadata_cached(file_path: str, mtime: float) -> dict:
-        # Pillow cannot open a video; its tags are read off the container.
+        # Pillow cannot open a video; its tags are read off the container. Only
+        # the two ComfyUI writes are kept, in a block of their own: a tag is
+        # named by whoever wrote the file, and one called `png` or `exif` would
+        # otherwise stand where this dict's own sections do.
         if VideoUtils.is_video_file(file_path):
-            return VideoUtils.extract_embedded_metadata(file_path)
+            tags = VideoUtils.extract_embedded_metadata(file_path)
+            graphs = {key: tags[key] for key in ("prompt", "workflow") if key in tags}
+            return {"comfyui": graphs} if graphs else {}
         metadata = {}
         try:
             with Image.open(file_path) as img:

@@ -20,22 +20,27 @@ _MP4_EPOCH = datetime(1904, 1, 1, tzinfo=timezone.utc)
 # Supported video file extensions (lowercase).
 VIDEO_EXTENSIONS = (".mp4", ".webm", ".avi", ".mov", ".mkv")
 
-# The most of a file `extract_embedded_metadata` will pull into memory: the
-# `moov` box or the `Tags` element. Either is kilobytes, a few megabytes with a
-# large workflow in it.
+# The most of a file `extract_embedded_metadata` will read: the `moov` box or
+# the `Tags` element. Either is kilobytes, a few megabytes with a large
+# workflow in it. It is read once and walked through views, never copied.
 _MAX_TAG_BYTES = 64 * 1024 * 1024
 
 _EBML_MAGIC = b"\x1a\x45\xdf\xa3"
 # Matroska element ids, as written (the length marker is part of an id).
 _MKV_SEGMENT = 0x18538067
 _MKV_TAGS = 0x1254C367
+_MKV_CLUSTER = 0x1F43B675
 _MKV_TAG = 0x7373
 _MKV_SIMPLE_TAG = 0x67C8
 _MKV_TAG_NAME = 0x45A3
 _MKV_TAG_STRING = 0x4487
 
 
-def _boxes(data: bytes):
+def _text(data) -> str:
+    return str(data, "utf-8", "replace")
+
+
+def _boxes(data):
     """Yield ``(type, payload)`` for each ISO-BMFF box laid end to end in *data*."""
     pos = 0
     while pos + 8 <= len(data):
@@ -76,18 +81,19 @@ def _mp4_tags(handle, file_size: int) -> dict:
             if size > _MAX_TAG_BYTES:
                 raise ValueError(f"its moov box is {size} bytes")
             handle.seek(pos + skip)
-            moov = handle.read(size - skip)
+            moov = memoryview(handle.read(size - skip))
             break
         pos += size
 
     tags: dict = {}
     top = dict(_boxes(moov))
     user = dict(_boxes(top.get(b"udta", b"")))
-    # QuickTime's own comment atom: [length:2][language:2][text].
+    # QuickTime's own comment atom: [length:2][language:2][text]. The length
+    # is 16 bits and wraps on a longer text, which a workflow usually is, so
+    # the box's own size is what bounds it.
     comment = user.get(b"\xa9cmt", b"")
     if len(comment) > 4:
-        length = int.from_bytes(comment[:2], "big")
-        tags["comment"] = comment[4 : 4 + length].decode("utf-8", "replace")
+        tags["comment"] = _text(comment[4:])
     for meta in (user.get(b"meta"), top.get(b"meta")):
         if not meta:
             continue
@@ -107,14 +113,11 @@ def _mp4_tags(handle, file_size: int) -> dict:
                 name = names[index - 1]
             else:
                 continue
-            tags.setdefault(
-                name.decode("utf-8", "replace").lower(),
-                data[8:].decode("utf-8", "replace"),
-            )
+            tags.setdefault(_text(name).lower(), _text(data[8:]))
     return tags
 
 
-def _ebml_header(data: bytes, pos: int) -> tuple:
+def _ebml_header(data, pos: int) -> tuple:
     """Read an EBML element's id and size at *pos*.
 
     Returns ``(id, size, payload position)``; the size is ``None`` when the
@@ -135,7 +138,7 @@ def _ebml_header(data: bytes, pos: int) -> tuple:
     return ident, None if size == mask else size, pos
 
 
-def _ebml(data: bytes):
+def _ebml(data):
     """Yield ``(id, payload)`` for each EBML element laid end to end in *data*."""
     pos = 0
     while pos < len(data):
@@ -161,11 +164,13 @@ def _matroska_tags(handle, file_size: int) -> dict:
             continue  # Its children are the elements this loop is after.
         if size is None:
             break  # Unsized: nothing past it can be stepped to.
+        if ident == _MKV_CLUSTER and tags:
+            break  # ffmpeg writes its tags ahead of the media; they are read.
         if ident == _MKV_TAGS:
             if size > _MAX_TAG_BYTES:
                 raise ValueError(f"its Tags element is {size} bytes")
             handle.seek(pos)
-            for tag_id, tag in _ebml(handle.read(size)):
+            for tag_id, tag in _ebml(memoryview(handle.read(size))):
                 if tag_id != _MKV_TAG:
                     continue
                 for simple_id, simple in _ebml(tag):
@@ -175,7 +180,7 @@ def _matroska_tags(handle, file_size: int) -> dict:
                     if _MKV_TAG_NAME in fields and _MKV_TAG_STRING in fields:
                         # An EBML string may be padded with NULs.
                         name, value = (
-                            fields[key].decode("utf-8", "replace").rstrip("\x00")
+                            _text(fields[key]).rstrip("\x00")
                             for key in (_MKV_TAG_NAME, _MKV_TAG_STRING)
                         )
                         tags.setdefault(name.lower(), value)
@@ -251,7 +256,7 @@ class VideoUtils:
         if comment.lstrip().startswith("{"):
             try:
                 envelope = json.loads(comment)
-            except ValueError:
+            except (ValueError, RecursionError):
                 # Somebody's own comment that happens to open with a brace.
                 envelope = None
             if isinstance(envelope, dict):
