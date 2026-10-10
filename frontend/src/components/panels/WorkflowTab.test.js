@@ -2837,6 +2837,10 @@ describe("the LoRA chain (#1478)", () => {
     store.cards = [card()];
     store.selectedKeys = keys;
     const wrapper = mount(WorkflowTab, chainOpts);
+    // Unmounted with the rest. Left mounted, a rail with Edit LoRAs… open
+    // re-renders when its pre-flight lands, by then under a later test's
+    // stubs, which mounts the real dialog with no Vuetify to mount it in.
+    mounted.push(wrapper);
     await flush(wrapper);
     return { wrapper, store };
   }
