@@ -8,6 +8,7 @@ import {
   handMadeCard,
   handMadeName,
   headModel,
+  hideSetsVerb,
   rowBaseModel,
   kindCounts,
   offerQuestion,
@@ -306,6 +307,38 @@ describe("sharingLabel", () => {
     expect(sharingLabel(0)).toBe("Only in this set");
     expect(sharingLabel(1)).toBe("Also in 1 other set");
     expect(sharingLabel(17)).toBe("Also in 17 other sets");
+  });
+});
+
+describe("hideSetsVerb", () => {
+  const shown = { hidden: false };
+  const hidden = { hidden: true };
+
+  it("is no row at all over no set", () => {
+    expect(hideSetsVerb([])).toBeNull();
+  });
+
+  it("hides, counting only the sets still shown", () => {
+    expect(hideSetsVerb([shown])).toMatchObject({
+      hide: true,
+      label: "Hide workflow set",
+    });
+    // The receipt says "Hid 2 sets" over this selection, so the row does too.
+    expect(hideSetsVerb([shown, hidden, shown])).toMatchObject({
+      hide: true,
+      label: "Hide 2 workflow sets",
+    });
+  });
+
+  it("shows again only when every one is already hidden", () => {
+    expect(hideSetsVerb([hidden])).toMatchObject({
+      hide: false,
+      label: "Show workflow set again",
+    });
+    expect(hideSetsVerb([hidden, hidden])).toMatchObject({
+      hide: false,
+      label: "Show 2 workflow sets again",
+    });
   });
 });
 

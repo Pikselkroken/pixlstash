@@ -1692,12 +1692,14 @@ proves ran together, with a model free to appear in more than one.
 - **A card named after a missing base model is selected as itself**, a third
   selection (`selectedMissingKeys`, its heads `selectedMissing`): it has no
   shelf row for a file verb, so it gets its own pill
-  (`MissingSetSelectionBar`) whose one verb, *Replace*, opens
+  (`MissingSetSelectionBar`) whose own verb, *Replace*, opens
   `io/ReplaceMissingDialog.vue`. As the Model Shelf design has it, the card's
   context menu (right-click, Menu key) is the full inventory: the file menu's
   verbs in its order, led by *Replace missing model…*, with *Copy filename*
   copying the missing names and every verb that writes the checkpoint's shelf
-  row listed disabled with the reason; the pill is a shortcut into it. A one-line banner over the
+  row listed disabled with the reason; the pill is a shortcut into it. *Hide*
+  sits right under *Replace* and is the pill's second button (below, "hidden,
+  never deleted"). A one-line banner over the
   grid, "N sets are missing their checkpoint · Select them", is the design's
   selection shortcut (`selectAllMissing`), not a second verb; dismissed, it
   returns when a missing set it was not dismissed over appears. A hidden set
@@ -1846,6 +1848,27 @@ the shelf's workflow sets section) and served as `hand_made` on
   counts the hidden sets and toggles `store.showHiddenSets`, which draws them
   with `card.hidden` (faded covers, a "Hidden" tag, the eye button to show one
   again). The file verbs stay on the card's context menu and the bar.
+  **Over several cards the verb is on the menus**: `hideSetsVerb`
+  (`utils/workflowSets.js`) words one row, *Hide workflow set* / *Hide N
+  workflow sets*, that leads the file pill's `⋯` and context menu
+  (`ShelfSelectionBar`; only *Remove from set* goes before it, inside a
+  hand-made tray) and sits under *Replace* on a missing card's menu, with an
+  eye button on that card's pill (`MissingSetSelectionBar`). Both bars take
+  the same `sets` prop and emit `hide-sets`, and the view calls
+  `store.toggleHiddenSets`, so either menu hides every lit card from pictures
+  whichever pill counts it. It hides the selected cards still shown and turns
+  into *Show … again* only when every one is hidden. `sets` is
+  `ModelShelf`'s `hideableSets`: the grid's exposed `selectedCardGroups`, the
+  model cards drawn selected, plus `store.selectedMissingGroups`. It is the
+  lit cards and not every selected head: a checkpoint picked in its open tray
+  is a file, lights no card, and gets no set verb. The row is absent on the
+  row list, which draws no sets, and it is not an icon on the file pill: that
+  pill's verbs are fixed by the Model Shelf design and the context menu is the
+  full inventory.
+  **A hide that takes a card off the screen drops its head from
+  `selectedIds`** (`changeHidden`), as the missing-key watch does for a
+  missing card, so Undo or *Show them* never brings a card back lit with the
+  file pill armed. With *Show them* on, the card stays, dimmed and selected.
 - **A hand-made set that re-creates a set from pictures gives way to it.**
   When the owner closes the set's tray (or opens another card), a watch on
   `openSetKey` runs `yieldToTwin`, never each add: a set is built one model at

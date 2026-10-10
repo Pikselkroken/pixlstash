@@ -3193,6 +3193,43 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(store.hiddenSetCount).toBe(0);
   });
 
+  it("toggles a selection: hides what is shown, shows again once all are hidden", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    store.showHiddenSets = true;
+
+    store.toggleHiddenSets(store.setGroups);
+    expect(store.setGroups.map((g) => g.hidden)).toEqual([true]);
+
+    store.toggleHiddenSets(store.setGroups);
+    expect(store.setGroups.map((g) => g.hidden)).toEqual([false]);
+  });
+
+  it("drops a hidden card's head from the selection, so Undo re-arms nothing", async () => {
+    useOperationStore().setLocalReceiptHost(true);
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    store.setView({ groupBy: "workflow_set" });
+    store.toggleSelected(1);
+    expect(store.selectedRows.map((r) => r.id)).toEqual([1]);
+
+    store.toggleHiddenSets(store.setGroups);
+    expect([...store.selectedIds]).toEqual([]);
+    await useOperationStore().takeLocalReceiptAction();
+    expect(store.setGroups.map((g) => g.key)).toEqual(["model:1"]);
+    expect(store.selectedRows).toEqual([]);
+
+    // Drawn dimmed instead, the card stays on screen and stays selected, so
+    // Show again can follow.
+    store.toggleSelected(1);
+    store.showHiddenSets = true;
+    store.toggleHiddenSets(store.setGroups);
+    expect(store.setGroups.map((g) => g.hidden)).toEqual([true]);
+    expect([...store.selectedIds]).toEqual([1]);
+  });
+
   it("reopens the tray a hide closed when the hide is undone", async () => {
     useOperationStore().setLocalReceiptHost(true);
     const store = shelfWithASet();

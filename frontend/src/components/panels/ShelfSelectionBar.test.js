@@ -759,6 +759,48 @@ describe("the two verbs that act inside a run", () => {
   });
 });
 
+describe("Hide, over selected cards from pictures", () => {
+  const hideRows = (wrapper) =>
+    wrapper.findAll(".ctx-item").filter((b) => /workflow sets?( again)?$/.test(b.text()));
+
+  it("is not on the menu while no card from pictures is selected", () => {
+    // The row list draws no sets, and a file picked in a tray is not one.
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(hideRows(wrapper)).toHaveLength(0);
+  });
+
+  it("leads both menus, counts the cards and emits", async () => {
+    selectRows([row(1, "present"), row(2, "present")]);
+    const wrapper = mount(ShelfSelectionBar, {
+      ...globalOpts,
+      props: { sets: [{ hidden: false }, { hidden: false }] },
+    });
+    // Under `⋯` and at the pointer: one list, drawn twice.
+    expect(hideRows(wrapper).map((b) => b.text())).toEqual([
+      "Hide 2 workflow sets",
+      "Hide 2 workflow sets",
+    ]);
+    for (const menu of wrapper.findAll(".shelf-menu[role='menu']").slice(-2)) {
+      expect(menu.find(".ctx-item").text()).toBe("Hide 2 workflow sets");
+    }
+    await hideRows(wrapper)[0].trigger("click");
+    expect(wrapper.emitted("hide-sets")).toHaveLength(1);
+    // Never the file verbs' emits: this one touches no file.
+    expect(wrapper.emitted("delete")).toBeUndefined();
+    expect(wrapper.emitted("forget")).toBeUndefined();
+  });
+
+  it("offers Show again once every selected card is hidden", () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, {
+      ...globalOpts,
+      props: { sets: [{ hidden: true }] },
+    });
+    expect(hideRows(wrapper)[0].text()).toBe("Show workflow set again");
+  });
+});
+
 describe("Keep one copy", () => {
   // The gate is the row's own count of copies ON THE DISK, which is what the
   // shelf calls a duplicate everywhere else: the hub is content-addressed, so a

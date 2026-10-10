@@ -66,6 +66,32 @@ describe("MissingSetSelectionBar", () => {
     expect(wrapper.emitted("replace")).toHaveLength(1);
   });
 
+  it("offers Hide on the pill and under Replace, over every selected card", async () => {
+    const store = selectMissing(["a.sft", "b.sft"]);
+    expect(store.selectedMissingGroups.map((g) => g.key)).toEqual([
+      "missing:a.sft",
+      "missing:b.sft",
+    ]);
+    // The view hands in every lit card, a model card held beside these too.
+    const wrapper = mount(MissingSetSelectionBar, {
+      ...globalOpts,
+      props: { sets: [...store.selectedMissingGroups, { hidden: false }] },
+    });
+    expect(items(wrapper)[1].text()).toBe("Hide 3 workflow sets");
+    expect(items(wrapper)[1].attributes("disabled")).toBeUndefined();
+    await items(wrapper)[1].trigger("click");
+    await wrapper.find('.selbar [data-verb="hide-sets"]').trigger("click");
+    // Emits, like Replace: the view hands the store the selected cards.
+    expect(wrapper.emitted("hide-sets")).toHaveLength(2);
+    expect(wrapper.emitted("replace")).toBeUndefined();
+  });
+
+  it("has no Hide while the view names no card", () => {
+    selectMissing(["a.sft"]);
+    const wrapper = mount(MissingSetSelectionBar, globalOpts);
+    expect(wrapper.find('[data-verb="hide-sets"]').exists()).toBe(false);
+  });
+
   it("copies the missing files' names", async () => {
     const writeText = vi.fn().mockResolvedValue();
     Object.assign(navigator, { clipboard: { writeText } });

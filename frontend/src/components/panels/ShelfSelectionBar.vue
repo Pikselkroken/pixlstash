@@ -285,6 +285,16 @@ import {
   trashName,
 } from "../../utils/modelShelf";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { hideSetsVerb } from "../../utils/workflowSets";
+
+const props = defineProps({
+  /**
+   * The sets from pictures whose cards are selected, on the set grid: what
+   * Hide acts on, missing-checkpoint cards included. Empty on the row list,
+   * which draws no sets.
+   */
+  sets: { type: Array, default: () => [] },
+});
 
 const emit = defineEmits([
   "rename",
@@ -304,6 +314,7 @@ const emit = defineEmits([
   "delete",
   "new-set",
   "remove-from-set",
+  "hide-sets",
 ]);
 
 const store = useModelShelfStore();
@@ -925,6 +936,7 @@ function onAttach(payload, attach) {
  */
 const verbHandlers = computed(() => ({
   rows: store.selectedRows,
+  hideSets: hideSetsVerb(props.sets),
   newSetTitle: newSetTitle.value,
   removableFromSet: removableFromSet.value,
   renameTitle: renameTitle.value,
@@ -1045,6 +1057,18 @@ const VerbMenu = (props) => {
         })
       : null,
     props.removableFromSet ? sep() : null,
+    // Hide leads for the same reason, and to sit as far from the two removal
+    // verbs at the foot as the menu allows: this one takes a card off the grid
+    // and those take a row off the shelf or a file off the disk.
+    props.hideSets
+      ? item(props.hideSets.icon, props.hideSets.label, {
+          on: () => props.onVerb("hide-sets"),
+          title: props.hideSets.hide
+            ? "No file is touched. Show them, under the grid, brings hidden sets back."
+            : "",
+        })
+      : null,
+    props.hideSets ? sep() : null,
     props.single
       ? item("mdi-pencil-outline", "Rename", {
           on: () => props.onVerb("rename"),
