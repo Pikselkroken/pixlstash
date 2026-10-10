@@ -1095,7 +1095,9 @@ CREATE TABLE IF NOT EXISTS workflow_unstacked (
 # Built for the pull of ComfyUI's saved workflows (#1440), which is gone
 # (#1854): rows whose origin is a ComfyUI address, and the columns
 # ``remote_modified``, ``dismissed`` and ``gone_at``, are what it left. Nothing
-# writes them any more; a leftover row still says its content is stored.
+# writes them any more, bar one: deleting a workflow marks its leftover rows
+# ``dismissed``, for an older build sharing the hub that still pulls. A
+# leftover row that is not dismissed still says its content is stored.
 _V2_WORKFLOW_ORIGIN = """
 CREATE TABLE IF NOT EXISTS workflow_origin (
     origin           TEXT NOT NULL,

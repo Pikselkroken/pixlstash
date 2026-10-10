@@ -41,7 +41,9 @@ from sqlmodel import delete as sqlmodel_delete, select
 from pixlstash.db_models import DeletedFileLog, Generation, Picture
 from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub import workflow_card_reads, workflow_versions
+from pixlstash.hub import workflow_card_reads, workflow_cards, workflow_versions
+from pixlstash.hub import workflows as hub_workflows
+from pixlstash.services import workflow_hash, workflow_identity
 from pixlstash.hub.workflow_card_reads import workflow_of_variant
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
@@ -5350,11 +5352,6 @@ def test_the_member_order_is_the_whole_ranking_not_only_its_head(store, set_shel
 
 def test_nothing_that_keys_a_workflow_reads_the_advisory_model_names():
     """Recovered model names never enter a hash or a card key (#1440 plan §3.4)."""
-    import pixlstash.hub.workflow_cards as cards_module
-    import pixlstash.hub.workflows as hub_workflows_module
-    import pixlstash.services.workflow_hash as hash_module
-    import pixlstash.services.workflow_identity as identity_module
-
-    for module in (hash_module, identity_module, hub_workflows_module, cards_module):
+    for module in (workflow_hash, workflow_identity, hub_workflows, workflow_cards):
         source = Path(module.__file__).read_text("utf-8")
         assert "loaded_model_widgets" not in source, module.__name__

@@ -1849,8 +1849,10 @@ def test_the_link_routes_are_owner_only(workflow_env):
 def test_a_link_reads_none_of_comfyuis_saved_workflows(
     workflow_env, comfy_at, monkeypatch
 ):
-    """#1854: a Link asks ComfyUI for its link steps and nothing else. Its
-    saved workflows and its run history are not read, and no workflow is made."""
+    """#1854: while it links, a Link asks ComfyUI for its link steps and nothing
+    else, and makes no workflow. A read queued for later would not show here:
+    the pull that used to follow a Link was a queued task, and what keeps that
+    out is that nothing is left to queue."""
     fake = comfy_at("http://127.0.0.1:18188/")
     asked: list[str] = []
 
@@ -4586,7 +4588,8 @@ def test_a_card_the_pull_made_is_an_ordinary_workflow_no_file_feeds(
 ):
     """#1854: a card the pull made before it was removed opens, plans a run
     and exports from the graph PixlStash stored. Open names no ComfyUI file,
-    nothing reads one, and deleting the card takes its origin row with it."""
+    nothing reads one, and deleting the card dismisses its origin row, so an
+    older build sharing the hub does not pull it back."""
     _isolate_workflow_folders(tmp_path, monkeypatch)
     server, owner = workflow_env.server, workflow_env.owner
     stored = _builtin_edit_graph(7)
@@ -4628,16 +4631,19 @@ def test_a_card_the_pull_made_is_an_ordinary_workflow_no_file_feeds(
     duplicate = r.json()["workflow_id"]
     assert _by_key(_cards(owner))[duplicate]["origin_category"] == "own"
 
-    def origin_rows(workflow_id):
-        return server.hub.fetchall(
-            "SELECT origin FROM workflow_origin WHERE workflow_name = ?",
-            (workflow_id,),
-        )
+    def dismissals(workflow_id):
+        return [
+            row[0]
+            for row in server.hub.fetchall(
+                "SELECT dismissed FROM workflow_origin WHERE workflow_name = ?",
+                (workflow_id,),
+            )
+        ]
 
-    assert len(origin_rows(key)) == 1
+    assert dismissals(key) == [0]
     assert owner.delete(f"{API}/workflows/{key}").status_code == 200
     assert key not in _by_key(_cards(owner))
-    assert origin_rows(key) == []
+    assert dismissals(key) == [1]
 
 
 def test_deleting_a_converted_workflow_takes_its_conversion_with_it(

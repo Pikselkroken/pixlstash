@@ -15,8 +15,11 @@ stored as.
 **Rows under a ComfyUI address are left over from the pull** of ComfyUI's
 saved workflows, which is gone (#1854). Nothing writes one or follows one to a
 file any more. They still say that a content is already stored as a live
-workflow, so an inbox drop of the same content matches it, and they go with
-the workflow when it is deleted.
+workflow, so an inbox drop of the same content matches it. Deleting the
+workflow marks them ``dismissed`` rather than removing them
+(``workflow_group_writes.delete_manual_workflow``), which every reader here
+passes over and which keeps an older build sharing the hub, one that still
+pulls, from bringing the workflow back.
 
 **Callers hold ``workflow_inbox.INBOX_LOCK``** around a check and the write it
 decides.

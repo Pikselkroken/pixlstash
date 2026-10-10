@@ -264,8 +264,10 @@ def test_a_hub_made_before_content_hash_gains_the_column(tmp_path):
 def test_the_inbox_matches_a_card_the_pull_made_until_it_is_deleted(folders, hub):
     """#1854: the pull of ComfyUI's saved workflows is gone and its origin rows
     stay. One still says its content is stored, so the same file dropped in
-    the watched folder is not stored twice; deleting the card takes the row,
-    so the file is stored again when it is handed over again."""
+    the watched folder is not stored twice. Deleting the card dismisses the
+    row (an older build sharing the hub must not pull the card back), and a
+    dismissed row is read past, so the file is stored again when it is handed
+    over again."""
     digest = workflow_inbox.content_hash(NEEDS_PACK)
     pulled = comfyui_module.store_manual_workflow(
         hub,
@@ -280,7 +282,10 @@ def test_the_inbox_matches_a_card_the_pull_made_until_it_is_deleted(folders, hub
     assert hub.fetchone("SELECT COUNT(*) FROM workflow_document")[0] == 1
 
     delete_manual_workflow(hub, pulled)
-    assert hub.fetchone("SELECT COUNT(*) FROM workflow_origin")[0] == 0
+    assert [
+        tuple(row)
+        for row in hub.fetchall("SELECT origin, dismissed FROM workflow_origin")
+    ] == [("http://comfy.test:8188", 1)]
     with workflow_inbox.INBOX_LOCK:
         result = comfyui_module.store_inbox_workflow(hub, "dropped", NEEDS_PACK)
     assert result["matched"] is False
