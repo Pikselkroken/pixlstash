@@ -231,16 +231,15 @@
       </p>
 
       <p v-if="editable && !pending" class="eld-note eld-quiet">
-        Nothing is written yet. Save… asks whether this is a new workflow or
-        goes over <b class="eld-strong">{{ shownName }}</b
-        >.
+        Nothing is written yet. Save… asks whether this goes over
+        <b class="eld-strong">{{ shownName }}</b> or is a new workflow.
       </p>
     </template>
 
     <!-- ── Step two: a named thing, and what it changes ──────────────── -->
     <template v-else>
-      <!-- Where the edit lands. A new workflow is the default, and the one
-           Enter accepts; going over the original is chosen, then pressed. -->
+      <!-- Where the edit lands. Over the original is the default: it is a
+           new version, with the ones before kept, so Enter accepts either. -->
       <div class="eld-where">
         <span class="section-label">Save it as</span>
         <Segmented
@@ -346,15 +345,15 @@
  * **Nothing is written until the second step.** Save… asks the route for a dry
  * run and lists the changes it answers with — the rewires included, which are
  * the part no owner can see — beside the choice of where it lands; only the
- * second step's button writes. **A new workflow** is the default: the original
- * card and its pictures do not change. **Over the original** (`overwrite` on
- * the PUT) keeps the card, its name, pictures and recipes and gives it a new
- * version, which is its graph from then on; every version before is kept (an
- * automatic workflow's first overwrite keeps the graph read off its pictures
- * as version 1). It emits `overwritten`,
- * because the card selected does not change and the rail must read it again.
- * Plain Enter never overwrites: that write is its button's alone, and the
- * live region says so when the choice is made.
+ * second step's button writes. **Over the original** is the default (owner
+ * decision, 2026-10-10; `overwrite` on the PUT): it keeps the card, its name,
+ * pictures and recipes and gives it a new version, which is its graph from
+ * then on; every version before is kept (an automatic workflow's first
+ * overwrite keeps the graph read off its pictures as version 1). It emits
+ * `overwritten`, because the card selected does not change and the rail must
+ * read it again. **A new workflow** is the other choice: the original card
+ * and its pictures do not change. Plain Enter accepts whichever is chosen,
+ * since neither loses anything.
  *
  * **Where the model forks** (`lanes` in the read), the chain is drawn as the
  * graph it is: the loaders every pass reads once at the top, then one lane per
@@ -446,8 +445,8 @@ const shelfRead = ref(false);
 /** "edit" (the chain) or "confirm" (the name and what changes). */
 const step = ref("edit");
 const newName = ref("");
-/** "new" (a copy, the default) or "over" (this workflow's own graph). */
-const saveMode = ref("new");
+/** "over" (this workflow's next version, the default) or "new" (a copy). */
+const saveMode = ref("over");
 const changes = ref([]);
 const previewing = ref(false);
 const previewError = ref("");
@@ -476,8 +475,8 @@ const overwriting = computed(() => saveMode.value === "over");
 const shownName = computed(() => props.cardName || "this workflow");
 
 const saveModes = computed(() => [
-  { id: "new", label: "A new workflow", disabled: saving.value },
   { id: "over", label: "Over the original", disabled: saving.value },
+  { id: "new", label: "A new workflow", disabled: saving.value },
 ]);
 
 /**
@@ -874,7 +873,7 @@ async function load() {
   saveError.value = "";
   dropMissed.value = "";
   newName.value = "";
-  saveMode.value = "new";
+  saveMode.value = "over";
   changes.value = [];
   say("");
   if (!props.workflowId) return;
@@ -1238,8 +1237,7 @@ function done() {
 function onAccept() {
   if (props.pending) done();
   else if (step.value === "edit") void toConfirm();
-  // Enter saves a copy; an overwrite is written by its own button only.
-  else if (!overwriting.value) void save();
+  else void save();
 }
 
 function close() {
@@ -1253,8 +1251,8 @@ watch(saveMode, (mode) => {
   if (step.value !== "confirm") return;
   say(
     mode === "over"
-      ? `Saving over ${shownName.value}. No new workflow is made, and Enter does not save: use the Overwrite the original button.`
-      : "Saving as a new workflow.",
+      ? `Saving over ${shownName.value}, as its next version. No new workflow is made.`
+      : `Saving as a new workflow, to be named. ${shownName.value} is not changed.`,
   );
 });
 

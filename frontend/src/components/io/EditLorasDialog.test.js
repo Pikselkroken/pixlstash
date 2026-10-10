@@ -6,9 +6,9 @@
 // * A reorder, by keyboard as much as by drag, is the order of `entries`.
 // * Add appends one row at the end, and only a picked LoRA is sent.
 // * Save… is a dry run, and its `changes` are what the second step lists;
-//   only "Save as a new workflow" writes.
-// * "Over the original" sends `overwrite`, selects nothing new, and is never
-//   what Enter does.
+//   only the second step's button (or Enter) writes.
+// * "Over the original" is the default: it sends `overwrite` and selects
+//   nothing new. "A new workflow" is the other choice, named there.
 // * `editable: false` opens read-only, with the planner's sentence.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -152,12 +152,20 @@ beforeEach(() => {
             { kind: "rewired", node_id: "7", text: "#7 KSampler and 2 text encoders rewired" },
           ],
         }
-      : {
-          dry_run: false,
-          name: "SDXL + face detailer (edited).json",
-          workflow_id: NEW_KEY,
-          changes: [],
-        },
+      : body.overwrite
+        ? {
+            dry_run: false,
+            name: null,
+            workflow_id: KEY,
+            overwritten: true,
+            changes: [],
+          }
+        : {
+            dry_run: false,
+            name: "SDXL + face detailer (edited).json",
+            workflow_id: NEW_KEY,
+            changes: [],
+          },
   );
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -196,7 +204,7 @@ describe("the chain as read", () => {
     expect(said).not.toContain("ignores that loader");
     // And says what saving does to the original.
     expect(said).toContain(
-      "Nothing is written yet. Save… asks whether this is a new workflow or goes over SDXL + face detailer.",
+      "Nothing is written yet. Save… asks whether this goes over SDXL + face detailer or is a new workflow.",
     );
     expect(textOf(wrapper)).toContain("No changes");
     expect(button(wrapper, "Save…").attributes("disabled")).toBeDefined();
@@ -465,11 +473,8 @@ describe("the second step", () => {
     return wrapper;
   }
 
-  it("names the new workflow and lists the dry run's changes", async () => {
+  it("lists the dry run's changes and offers to save over the original first", async () => {
     const wrapper = await toStepTwo();
-    expect(wrapper.find("input[type=text]").element.value).toBe(
-      "SDXL + face detailer (edited)",
-    );
     const listed = wrapper
       .findAll("[data-testid='eld-changes'] li")
       .map((item) => item.text());
@@ -477,10 +482,40 @@ describe("the second step", () => {
       "Loader #33 deleted: hairstyle-v3",
       "#7 KSampler and 2 text encoders rewired",
     ]);
+    // Over the original is the default: no name is asked for, and the note
+    // says what happens to the workflow and to the graph it replaces.
+    const modes = wrapper.findAll("[data-testid='eld-save-mode'] [role=radio]");
+    expect(
+      modes.map((mode) => [mode.text(), mode.attributes("aria-checked")]),
+    ).toEqual([
+      ["Over the original", "true"],
+      ["A new workflow", "false"],
+    ]);
+    expect(wrapper.find("input[type=text]").exists()).toBe(false);
+    expect(textOf(wrapper)).toContain(
+      "SDXL + face detailer keeps its name and its 184 pictures, and this chain becomes its next version.",
+    );
+    expect(textOf(wrapper)).toContain(
+      "The graph it replaces is kept as the version before.",
+    );
+    expect(textOf(wrapper)).not.toContain("follows a file in ComfyUI");
+    // A dry run only: nothing is written until the second press.
+    expect(saveLoraChain).toHaveBeenCalledTimes(1);
+  });
+
+  it("names a new workflow when that is chosen instead", async () => {
+    const wrapper = await toStepTwo();
+    await button(wrapper, "A new workflow").trigger("click");
+    await flushPromises();
+    expect(wrapper.find("input[type=text]").element.value).toBe(
+      "SDXL + face detailer (edited)",
+    );
     expect(textOf(wrapper)).toContain(
       "The original keeps its 184 pictures. Nothing made before this edit changes meaning.",
     );
-    // A dry run only: nothing is written until the second press.
+    expect(wrapper.find("[role=status][aria-live]").text()).toContain(
+      "Saving as a new workflow, to be named. SDXL + face detailer is not changed.",
+    );
     expect(saveLoraChain).toHaveBeenCalledTimes(1);
   });
 
@@ -492,6 +527,8 @@ describe("the second step", () => {
     const notices = useNoticeStore();
     const push = vi.spyOn(notices, "push");
 
+    await button(wrapper, "A new workflow").trigger("click");
+    await flushPromises();
     await button(wrapper, "Save as a new workflow").trigger("click");
     await flushPromises();
 
@@ -511,58 +548,41 @@ describe("the second step", () => {
     expect(push.mock.calls[0][0].text).toBe(
       "Saved “SDXL + face detailer (edited)” as a new workflow.",
     );
+    expect(wrapper.emitted("overwritten")).toBeFalsy();
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
-  it("saves over the original when asked, and tells the rail to read it again", async () => {
+  it.each([
+    ["the button", (wrapper) => button(wrapper, "Overwrite the original").trigger("click")],
+    ["Enter", (wrapper) => wrapper.find(".app-dialog").trigger("keydown", { key: "Enter" })],
+  ])(
+    "saves over the original by default with %s, and tells the rail to read it again",
+    async (_how, accept) => {
+      const wrapper = await toStepTwo();
+      const store = useWorkflowsStore();
+      const refetch = vi.spyOn(store, "refetch").mockResolvedValue();
+      const select = vi.spyOn(store, "select");
+      const push = vi.spyOn(useNoticeStore(), "push");
+
+      await accept(wrapper);
+      await flushPromises();
+
+      expect(saveLoraChain).toHaveBeenCalledTimes(2);
+      const [key, body] = saveLoraChain.mock.calls[1];
+      expect(key).toBe(KEY);
+      expect(body).toMatchObject({ name: null, dry_run: false, overwrite: true });
+      expect(refetch).toHaveBeenCalled();
+      expect(select).not.toHaveBeenCalled();
+      expect(push.mock.calls[0][0].text).toBe("Saved over “SDXL + face detailer”.");
+      expect(wrapper.emitted("overwritten")).toEqual([[KEY]]);
+      expect(wrapper.emitted("close")).toBeTruthy();
+    },
+  );
+
+  it("does not send overwrite for a new workflow, by the button or by Enter", async () => {
     const wrapper = await toStepTwo();
-    const store = useWorkflowsStore();
-    const refetch = vi.spyOn(store, "refetch").mockResolvedValue();
-    const select = vi.spyOn(store, "select");
-    const push = vi.spyOn(useNoticeStore(), "push");
-    saveLoraChain.mockResolvedValueOnce({
-      dry_run: false,
-      name: null,
-      workflow_id: KEY,
-      overwritten: true,
-      changes: [],
-    });
-
-    await button(wrapper, "Over the original").trigger("click");
+    await button(wrapper, "A new workflow").trigger("click");
     await flushPromises();
-    // No name is asked for: the original keeps its own.
-    expect(wrapper.find("input[type=text]").exists()).toBe(false);
-    expect(textOf(wrapper)).toContain(
-      "SDXL + face detailer keeps its name and its 184 pictures, and this chain becomes its next version.",
-    );
-    expect(wrapper.find("[role=status][aria-live]").text()).toContain(
-      "Saving over SDXL + face detailer.",
-    );
-    expect(textOf(wrapper)).toContain(
-      "The graph it replaces is kept as the version before.",
-    );
-    expect(textOf(wrapper)).not.toContain("follows a file in ComfyUI");
-
-    // Enter accepts a dialog; it must not be what overwrites.
-    await wrapper.find(".app-dialog").trigger("keydown", { key: "Enter" });
-    await flushPromises();
-    expect(saveLoraChain).toHaveBeenCalledTimes(1);
-
-    await button(wrapper, "Overwrite the original").trigger("click");
-    await flushPromises();
-
-    const [key, body] = saveLoraChain.mock.calls[1];
-    expect(key).toBe(KEY);
-    expect(body).toMatchObject({ name: null, dry_run: false, overwrite: true });
-    expect(refetch).toHaveBeenCalled();
-    expect(select).not.toHaveBeenCalled();
-    expect(push.mock.calls[0][0].text).toBe("Saved over “SDXL + face detailer”.");
-    expect(wrapper.emitted("overwritten")).toEqual([[KEY]]);
-    expect(wrapper.emitted("close")).toBeTruthy();
-  });
-
-  it("does not send overwrite for a new workflow, and Enter saves that one", async () => {
-    const wrapper = await toStepTwo();
     await wrapper.find(".app-dialog").trigger("keydown", { key: "Enter" });
     await flushPromises();
     expect(saveLoraChain).toHaveBeenCalledTimes(2);
@@ -570,14 +590,22 @@ describe("the second step", () => {
     expect(wrapper.emitted("overwritten")).toBeFalsy();
   });
 
-  it("says a ComfyUI file can put its own version back", async () => {
+  it("says a ComfyUI file can put its own version on top", async () => {
     const wrapper = await mountDialog({ originCategory: "comfyui" });
     await deleteButton(wrapper, 3).trigger("click");
     await button(wrapper, "Save…").trigger("click");
     await flushPromises();
+    expect(textOf(wrapper)).toContain("This workflow follows a file in ComfyUI");
+  });
+
+  it("says so in the live region when the choice goes back to the original", async () => {
+    const wrapper = await toStepTwo();
+    await button(wrapper, "A new workflow").trigger("click");
     await button(wrapper, "Over the original").trigger("click");
     await flushPromises();
-    expect(textOf(wrapper)).toContain("This workflow follows a file in ComfyUI");
+    expect(wrapper.find("[role=status][aria-live]").text()).toContain(
+      "Saving over SDXL + face detailer, as its next version.",
+    );
   });
 
   it.each([
@@ -614,7 +642,7 @@ describe("the second step", () => {
     saveLoraChain.mockRejectedValueOnce({
       response: { status: 503, data: { detail: "ComfyUI did not answer." } },
     });
-    await button(wrapper, "Save as a new workflow").trigger("click");
+    await button(wrapper, "Overwrite the original").trigger("click");
     await flushPromises();
     expect(wrapper.find("[role=alert]").text()).toContain("ComfyUI did not answer.");
     expect(wrapper.emitted("close")).toBeFalsy();
