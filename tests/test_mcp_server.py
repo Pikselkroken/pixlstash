@@ -933,6 +933,25 @@ def test_a_run_still_going_when_the_wait_is_over_answers_running():
     assert json.loads(result["content"][0]["text"])["message"] == FAILED["message"]
 
 
+def test_a_wait_is_held_to_the_most_the_server_allows(monkeypatch):
+    """The server answers one message at a time, so a wait holds every other
+    call behind it: whatever is asked for, no longer than the cap."""
+    monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
+    monkeypatch.setattr(mcp_server, "MAX_RUN_WAIT_SECONDS", 0)
+    fetch, seen = _run_fetch({"p1": [dict(RUNNING)]})
+
+    def counted(path, params, method="GET", body=None):
+        # An uncapped hour of zero-length polls would never come back.
+        assert len(seen) < 5, "waited past the cap"
+        return fetch(path, params, method, body)
+
+    result = _write(counted, "run_workflow", workflow_id=WORKFLOW_ID, wait_seconds=3600)
+    assert result["isError"] is False, result
+    (prompt,) = json.loads(result["content"][0]["text"])["prompts"]
+    assert prompt["status"] == "running"
+    assert len(seen) == 2, seen
+
+
 def test_a_run_whose_ending_cannot_be_read_is_still_reported_queued(monkeypatch):
     """An older PixlStash without the route: the run is queued all the same."""
     monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)

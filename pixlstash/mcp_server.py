@@ -67,9 +67,12 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
 TIMEOUT_SECONDS = 60
 # How long run_workflow waits for its runs to end before it answers with
-# whatever is still running, and the most a caller may ask it to wait.
+# whatever is still running, and the most a caller may ask it to wait. The
+# server answers one message at a time, so a wait holds every other call on
+# the connection behind it: two minutes at most, and get_workflow_run for a
+# run that takes longer.
 RUN_WAIT_SECONDS = 30
-MAX_RUN_WAIT_SECONDS = 600
+MAX_RUN_WAIT_SECONDS = 120
 RUN_POLL_SECONDS = 1.0
 # ponytail: a real graph is 50-500 KB; this only stops a stray path at a huge file.
 MAX_GRAPH_BYTES = 16 * 1024 * 1024
@@ -931,7 +934,8 @@ def _follow_runs(fetch: Fetch, answer, wait_seconds: float) -> None:
                 pending.remove(entry)
         if not pending or time.monotonic() >= deadline:
             break
-        time.sleep(RUN_POLL_SECONDS)
+        # Never past the deadline: the wait asked for is the wait given.
+        time.sleep(min(RUN_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
     if entries and all(entry.get("status") == "failed" for entry in entries):
         reasons = dict.fromkeys(str(entry.get("message")) for entry in entries)
         raise ToolError("The run failed: " + "; ".join(reasons))

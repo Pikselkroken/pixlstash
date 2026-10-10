@@ -95,7 +95,7 @@ _run_outcomes_lock = threading.Lock()
 # card and spoken as part of its name.
 MAX_FAILURE_REASON = 300
 
-# Bumped each time PixlStash itself clears ComfyUI's queue, so every poller
+# Bumped each time PixlStash itself has cleared ComfyUI's queue, so every poller
 # asks the queue about its prompt at once instead of at its next check.
 _queue_cleared = 0
 
@@ -1688,7 +1688,10 @@ def _comfyui_abort(base_url: str) -> dict:
     except requests.RequestException as exc:
         logger.warning("ComfyUI /queue clear request failed: %s", exc)
 
-    _queue_cleared += 1
+    # Only a queue that was really emptied: the pollers are told to ask it
+    # about their prompt now, and one that still holds them answers nothing new.
+    if result["queue_cleared"]:
+        _queue_cleared += 1
     return result
 
 

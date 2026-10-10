@@ -565,6 +565,32 @@ class TestWaitingOutARun:
             )
         assert asked == [1]
 
+    @pytest.mark.parametrize("status, cleared", [(200, True), (500, False)])
+    def test_only_a_queue_that_was_cleared_sends_the_pollers_to_ask(
+        self, monkeypatch, status, cleared
+    ):
+        """A clear ComfyUI refused emptied nothing, so there is nothing new
+        for a poller to learn from the queue."""
+        monkeypatch.setattr(
+            comfyui_service.requests,
+            "post",
+            lambda *a, **k: type("R", (), {"status_code": status, "text": ""})(),
+        )
+        before = comfyui_service._queue_cleared
+        assert (
+            comfyui_service._comfyui_abort("http://comfy")["queue_cleared"] is cleared
+        )
+        assert (comfyui_service._queue_cleared != before) is cleared
+
+    def test_a_clear_that_never_reached_comfyui_sends_nobody(self, monkeypatch):
+        def refuse(*a, **k):
+            raise comfyui_service.requests.ConnectionError("refused")
+
+        monkeypatch.setattr(comfyui_service.requests, "post", refuse)
+        before = comfyui_service._queue_cleared
+        comfyui_service._comfyui_abort("http://comfy")
+        assert comfyui_service._queue_cleared == before
+
     def test_a_prompt_in_the_history_with_no_ending_finishes_empty(self, monkeypatch):
         # ComfyUI still has it on record, so it ran: nothing to import, and
         # the caller says "finished without outputs".

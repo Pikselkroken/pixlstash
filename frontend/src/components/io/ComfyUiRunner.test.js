@@ -111,6 +111,21 @@ describe("ComfyUiRunner", () => {
     expect(wrapper.vm.progress.message).toBe("UNETLoader failed: first");
   });
 
+  // The banner can be upgraded to a clearer out-of-memory reason that is
+  // about another prompt. That prompt's reason has to be stored as well as
+  // shown, or registering it afterwards would call a failed run "queued".
+  it("stores the reason of a prompt whose failure upgraded the banner", async () => {
+    const wrapper = mountRunner();
+    await wrapper.setProps({ wsPluginProgress: failed("p-1", "KSampler failed") });
+    await wrapper.setProps({
+      wsPluginProgress: failed("p-2", "KSampler failed: CUDA out of memory"),
+    });
+    expect(wrapper.vm.progress.message).toBe("KSampler failed: CUDA out of memory");
+    wrapper.vm.handleComfyuiRun({ prompts: [{ prompt_id: "p-2" }] });
+    expect(wrapper.vm.progress.status).toBe("failed");
+    expect(wrapper.vm.progress.message).toBe("KSampler failed: CUDA out of memory");
+  });
+
   // Every tab hears every failure, and Abort's stopped runs report a moment
   // after the next run has been started.
   it("does not end its own run on the failure of a prompt it does not follow", async () => {

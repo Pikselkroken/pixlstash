@@ -431,7 +431,9 @@ function markComfyuiPromptFailed(promptKey, reason, errorMessage) {
       promptKey === comfyuiShownFailureKey;
     if ((!currentIsOom && nextIsOom) || backendOnSamePrompt) {
       progress.message = message;
-      if (backendOnSamePrompt) comfyuiFailedPromptMessages.set(promptKey, message);
+      // What a later registration of that prompt reads, so the stored reason
+      // and the shown one cannot drift apart.
+      if (promptKey != null) comfyuiFailedPromptMessages.set(promptKey, message);
       logComfyuiDebug("prompt-failed-upgraded", {
         promptKey,
         reason,
