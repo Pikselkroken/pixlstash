@@ -2490,14 +2490,18 @@ def _display_names(figures) -> dict[str, str]:
     workflows share it: renaming what somebody chose is inventing. Generated
     names that collide first say what the core does differently
     (``... + Two-Pass``, :func:`_distinguishing_traits`), and whatever still
-    collides is numbered ``Text to Image (2)``, ``(3)``, in id order so a
+    collides is numbered ``Text to Image (2)``, ``(3)``: the workflows the
+    grid draws by default before the hidden ones and the one-offs, so the one
+    on screen is not "(2)" of a sibling nobody sees, then in id order so a
     workflow keeps its number from one read to the next.
     """
     # ponytail: id order is stable across reads but a new workflow can shift
     # the numbers after it; store a sequence if that ever matters.
     names = {}
     generated = {}
-    for figure in sorted(figures, key=lambda f: f.workflow_id):
+    for figure in sorted(
+        figures, key=lambda f: (f.card.hidden, f.one_off, f.workflow_id)
+    ):
         card = figure.card
         name = _display_name(card, figure.models)
         names[figure.workflow_id] = name

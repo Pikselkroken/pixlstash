@@ -3803,6 +3803,17 @@ def test_colliding_generated_names_say_how_they_differ_before_numbering():
         "h" * 64: f"{base} (4)",
     }
 
+    # The one the grid draws is numbered first: a one-off or a hidden sibling
+    # earlier in id order must not make the workflow on screen "(2)".
+    one_off, hidden, drawn = (figure(key * 64, ()) for key in "abc")
+    hidden.card.hidden = True
+    drawn.pictures = workflow_card_service.ONE_OFF_PICTURES
+    assert workflows_routes._display_names([one_off, hidden, drawn]) == {
+        "c" * 64: base,
+        "a" * 64: f"{base} (2)",
+        "b" * 64: f"{base} (3)",
+    }
+
     # A workflow whose name does not collide is never lengthened.
     alone = [figure("a" * 64, ("two_pass", "negative_prompt"))]
     assert workflows_routes._display_names(alone) == {"a" * 64: base}
