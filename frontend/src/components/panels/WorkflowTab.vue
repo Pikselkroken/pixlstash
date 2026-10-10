@@ -912,6 +912,7 @@ import {
   checkpointUnread,
   modelDisplayName,
   NO_REPLACEMENT_TEXT,
+  outputCount,
   replacementOptions,
   UNMATCHED_REPLACEMENTS_TEXT,
 } from "../../utils/workflowCard";
@@ -1098,7 +1099,7 @@ const recipesName = computed(() =>
 // grouped spelling went with the shelf in F1b, and this screen never used it.
 // Split from its prefix so the figure alone is F7's *Show all N pictures*
 // link, and the words that place the card stay text.
-const picturesLabel = computed(() => pictureCount(card.value?.picture_count));
+const picturesLabel = computed(() => outputCount(card.value));
 
 // "Version 3 · 2026-10-06": only where there is a history to speak of, a
 // workflow that was pulled from ComfyUI or has been stored more than once.

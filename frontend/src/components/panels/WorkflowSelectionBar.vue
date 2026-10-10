@@ -204,6 +204,7 @@ import Tooltip from "../widgets/Tooltip.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
+import { outputNoun } from "../../utils/workflowCard";
 
 const emit = defineEmits([
   "select-all",
@@ -256,7 +257,9 @@ const contextAt = ref([0, 0]);
  * right-clicked and open a picture off a card the reader may have moved on
  * from.
  *
- * `{id, index, total}`, read off the tile's own dataset by the host.
+ * `{id, index, total, noun}`, read off the tile's own dataset by the host,
+ * with what its own card calls its output: in a mixed selection the tile may
+ * be a video while the selection as a whole is "pictures".
  */
 const contextPicture = ref(null);
 
@@ -295,6 +298,18 @@ watch(contextOpen, (open, wasOpen) => {
 
 const cards = computed(() => store.selectedCards);
 const single = computed(() => store.selectedKeys.length === 1);
+
+/**
+ * What the selection's output is called: "video" when every selected workflow
+ * saves video, "picture" otherwise — a mixed selection included, since that
+ * is the library's word for anything in it.
+ */
+const noun = computed(() =>
+  cards.value.length > 0 &&
+  cards.value.every((card) => outputNoun(card) === "video")
+    ? "video"
+    : "picture",
+);
 
 /**
  * A bulk write is out, so nothing else may be started.
@@ -363,23 +378,24 @@ const coverPictureId = computed(
 const openTarget = computed(() => {
   const picture = contextPicture.value;
   if (picture?.id != null) {
+    const one = picture.noun ?? noun.value;
     return {
       id: picture.id,
       label:
         picture.total > 1
-          ? `Open picture ${picture.index} of ${picture.total}`
-          : "Open this picture",
-      title: "Open the picture you right-clicked",
+          ? `Open ${one} ${picture.index} of ${picture.total}`
+          : `Open this ${one}`,
+      title: `Open the ${one} you right-clicked`,
     };
   }
   return {
     id: coverPictureId.value,
-    label: "Open cover picture",
+    label: `Open cover ${noun.value}`,
     title: runnable.value
       ? coverPictureId.value != null
-        ? "Open the first of this workflow's pictures"
-        : "This workflow has no picture to open"
-      : "Select one workflow to open its cover picture",
+        ? `Open the first of this workflow's ${noun.value}s`
+        : `This workflow has no ${noun.value} to open`
+      : `Select one workflow to open its cover ${noun.value}`,
   };
 });
 
@@ -392,8 +408,8 @@ const coverOpenable = computed(() => openTarget.value.id != null);
  */
 const showPicturesLabel = computed(() =>
   cards.value.length > 1
-    ? `Show all pictures using these ${cards.value.length.toLocaleString()} workflows`
-    : "Show all pictures using this workflow",
+    ? `Show all ${noun.value}s using these ${cards.value.length.toLocaleString()} workflows`
+    : `Show all ${noun.value}s using this workflow`,
 );
 // Nothing to show, so nothing to press: the view would be cleared for an
 // empty grid (the F7 figure is plain text on such a card for the same reason).
@@ -403,12 +419,12 @@ const hasPictures = computed(() =>
 const showPicturesTitle = computed(() => {
   if (!hasPictures.value) {
     return cards.value.length > 1
-      ? "These workflows have no pictures to show"
-      : "This workflow has no pictures to show";
+      ? `These workflows have no ${noun.value}s to show`
+      : `This workflow has no ${noun.value}s to show`;
   }
   return cards.value.length > 1
-    ? `Show the pictures of these ${cards.value.length.toLocaleString()} workflows`
-    : "Show the pictures of this workflow";
+    ? `Show the ${noun.value}s of these ${cards.value.length.toLocaleString()} workflows`
+    : `Show the ${noun.value}s of this workflow`;
 });
 
 const renameTitle = computed(() =>
@@ -465,13 +481,13 @@ const deleteTitle = computed(() => {
   if (!deletable.value) {
     return (
       "Only a manual workflow can be deleted. One PixlStash groups from " +
-      "your pictures is hidden instead"
+      `your ${noun.value}s is hidden instead`
     );
   }
   const n = store.selectedKeys.length;
   return n === 1
-    ? "Delete this workflow. Its pictures stay, on their automatic workflow"
-    : `Delete these ${n.toLocaleString()} workflows. Their pictures stay, on their automatic workflows`;
+    ? `Delete this workflow. Its ${noun.value}s stay, on their automatic workflow`
+    : `Delete these ${n.toLocaleString()} workflows. Their ${noun.value}s stay, on their automatic workflows`;
 });
 
 const exportTitle = computed(() =>

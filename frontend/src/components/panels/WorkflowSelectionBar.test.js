@@ -326,6 +326,52 @@ describe("the two menus cannot diverge", () => {
     expect(wrapper.vm.openTarget.id).toBe(11);
   });
 
+  it("says video, not picture, for a workflow that saves video", async () => {
+    const store = useWorkflowsStore();
+    const covers = [
+      { url: "/1", picture_id: 11 },
+      { url: "/2", picture_id: 22 },
+    ];
+    store.cards = [
+      ...CARDS,
+      card("v", { type: "video", manual: true, covers }),
+      card("w", { type: "video", picture_count: 0 }),
+    ];
+    store.selectRange(["v"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    const labels = () => rowLabels(verbMenus(wrapper)[0]);
+
+    expect(labels()).toEqual(
+      expect.arrayContaining([
+        "Open cover video",
+        "Show all videos using this workflow",
+      ]),
+    );
+    expect(tooltip(wrapper, "show-pictures")).toBe(
+      "Show the videos of this workflow",
+    );
+    expect(tooltip(wrapper, "delete")).toContain("Its videos stay");
+    await wrapper.vm.openContextMenu(1, 2, { id: 22, index: 2, total: 2 });
+    await wrapper.vm.$nextTick();
+    expect(labels()).toContain("Open video 2 of 2");
+
+    store.selectRange(["w"]);
+    await wrapper.vm.$nextTick();
+    expect(tooltip(wrapper, "show-pictures")).toBe(
+      "This workflow has no videos to show",
+    );
+
+    // Every selected workflow saves video, so the plural rows say so too.
+    store.selectRange(["v", "w"]);
+    await wrapper.vm.$nextTick();
+    expect(labels()).toContain("Show all videos using these 2 workflows");
+
+    // A selection that is not all video keeps the library's own word.
+    store.selectRange(["v", "p"]);
+    await wrapper.vm.$nextTick();
+    expect(labels()).toContain("Show all pictures using these 2 workflows");
+  });
+
   it("refuses a verb with aria-disabled, so its reason stays hoverable", () => {
     // Rename with two workflows selected is listed anyway and refused with
     // its reason.

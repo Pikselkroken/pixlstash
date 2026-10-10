@@ -1264,6 +1264,13 @@ describe("the verbs the bar fires", () => {
     expect(asked).toContain("automatic workflow");
     expect(asked).toContain("Unfiled recipes");
     expect(wrapper.find('[role="status"]').text()).toBe("Workflow deleted");
+
+    // A workflow that saves video is told its videos stay.
+    store.cards = [card("v", { manual: true, type: "video" })];
+    store.selectRange(["v"]);
+    await bar(wrapper).vm.$emit("delete");
+    await flush();
+    expect(ask.mock.calls.at(-1)[0]).toContain("The videos stay");
     ask.mockRestore();
   });
 
@@ -2119,6 +2126,27 @@ describe("the card menu opens the picture you pointed at", () => {
       name: "all-pictures",
       query: { overlay: "33", from: "/workflows" },
     });
+  });
+
+  it("names a video tile a video, even in a mixed selection", async () => {
+    const wrapper = await threeGrid();
+    const store = useWorkflowsStore();
+    store.cards = [{ ...WITH_THREE[0], type: "video" }, card("a")];
+    store.selectRange(["p", "a"]);
+    await flush();
+
+    const tiles = wrapper.findAll('.wfv-row[data-key="p"] .wf-card__pic');
+    await tiles[1].find("img").trigger("contextmenu", {
+      clientX: 5,
+      clientY: 6,
+    });
+    await flush();
+
+    // The selection as a whole is "pictures"; the tile is its own card's.
+    expect(store.selectedKeys).toHaveLength(2);
+    expect(openRow(wrapper).find(".ctx-label-text").text()).toBe(
+      "Open video 2 of 3",
+    );
   });
 
   it("falls back to the cover when the right-click missed a tile", async () => {

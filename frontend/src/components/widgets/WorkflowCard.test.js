@@ -804,6 +804,14 @@ describe("WorkflowCard", () => {
     expect(wrapper.find(".wf-card__empty-line").text()).toBe("No pictures yet");
   });
 
+  it("counts a video workflow's output in videos", () => {
+    const empty = mountCard({ ...BARE, type: "video", covers: [], picture_count: 0 });
+    expect(empty.find(".wf-card__empty-line").text()).toBe("No videos yet");
+    expect(empty.attributes("aria-label")).toContain("0 videos");
+    const one = mountCard({ ...BARE, type: "video", picture_count: 1 });
+    expect(one.attributes("aria-label")).toContain("1 video,");
+  });
+
   it("says a card's models were not read rather than that it has none", () => {
     const wrapper = mountCard(UNREAD);
     const rows = wrapper.findAll(".wf-card__meta > .wf-card__row");

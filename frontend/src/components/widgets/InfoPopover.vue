@@ -104,7 +104,7 @@ import { VIcon, VMenu } from "vuetify/components";
 
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { quantBadge } from "../../utils/modelShelf";
-import { modelDisplayName } from "../../utils/workflowCard";
+import { modelDisplayName, outputCount } from "../../utils/workflowCard";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
@@ -125,10 +125,7 @@ watch(open, async (isOpen) => {
 
 // Split in two so the figure can be the link (F7) while the words around it
 // stay text.
-const picturesLabel = computed(() => {
-  const n = props.card.picture_count ?? 0;
-  return n === 1 ? "1 picture" : `${n} pictures`;
-});
+const picturesLabel = computed(() => outputCount(props.card));
 
 const subtitlePrefix = "Found in ";
 
