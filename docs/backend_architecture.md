@@ -2492,7 +2492,8 @@ edit holding `off` takes a LoRA out.
 one attached to a person on the Models shelf
 (`model_shelf_service.character_lora_hashes`: the `adapter_attachment` rows of
 the open library whose character still exists, since the table has no foreign
-key and a deleted person's rows stay; never a guess from a filename). Who a
+key and a person deleted before the delete route cleared them left rows
+behind; never a guess from a filename). Who a
 picture is of is not part of a workflow, so `workflow_defaults` puts a majority
 LoRA attached to a person in `DefaultRecipe.person_loras` instead of `loras`:
 the card's `default_recipe.loras`, the export and the Workflow tab's default
@@ -2515,6 +2516,26 @@ splice the graph may refuse. A run made from pictures or a saved recipe places
 `recipe_loras(people=None)`, every one of them, exactly as before. Naming the
 person is `add_loras`: the Run popup's person picker
 (`docs/frontend_architecture.md`, `RunDialog.vue`) and the MCP run tools.
+
+**The run's pictures are of the person whose LoRA it loaded.** `_submit_every`
+asks `_lora_person` of each graph as it is submitted, so a LoRA a recipe
+placed, one `add_loras` named and one the workflow kept all answer alike: the
+shelf digests of its live LoRA slots (every slot when ComfyUI did not answer),
+less a slot at model strength zero, looked up in
+`model_shelf_service.lora_people`. Exactly one person is handed to
+`_process_comfyui_outputs` as `lora_character_id`, and
+`_assign_outputs_to_lora_person` links what the run imported or its saver
+reported, after the import event, through
+`move_reconciliation_service.add_person`: `Picture.pending_character_id` for
+a picture with no faces yet, which face extraction turns into its largest face
+and drops when it finds none, or the largest unassigned face of one already
+extracted. A duplicate keeps the people it has, as it keeps its workflow, and
+projects are not touched: the run's destination decides those. **LoRAs of two
+or more people name nobody**: a picture holds one pending person, so the run
+is logged and its pictures are left for the owner to assign. `DELETE
+/characters/{id}` deletes the person's `adapter_attachment` rows and clears
+the `pending_character_id` naming them, because `Character.id` is reused by
+the next person created.
 
 **A run by `workflow_id`** starts from the base card's source and has the
 server apply the default recipe **under** the request: the recipe's values

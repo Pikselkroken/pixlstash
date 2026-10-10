@@ -1997,7 +1997,7 @@ def test_a_deleted_pictures_row_is_dropped_rather_than_crashing(library):
 
 def test_add_person_prefers_an_unassigned_face_and_never_steals_one(library):
     """An addition is supposed to be safe. Stealing Sara's face is not."""
-    from pixlstash.services.move_reconciliation_service import _add_person
+    from pixlstash.services.move_reconciliation_service import add_person
 
     session = library["session"]
     sara = Character(name="Sara (steal-test)")
@@ -2013,7 +2013,7 @@ def test_add_person_prefers_an_unassigned_face_and_never_steals_one(library):
     session.add_all([sara_face, free_face])
     session.commit()
 
-    changed = _add_person(session, picture, mira.id)
+    changed = add_person(session, picture, mira.id)
     session.commit()
 
     assert changed is True
@@ -2024,7 +2024,7 @@ def test_add_person_prefers_an_unassigned_face_and_never_steals_one(library):
 
 
 def test_add_person_is_a_safe_no_op_when_every_face_already_names_someone(library):
-    from pixlstash.services.move_reconciliation_service import _add_person
+    from pixlstash.services.move_reconciliation_service import add_person
 
     session = library["session"]
     sara = Character(name="Sara (no-room)")
@@ -2038,7 +2038,7 @@ def test_add_person_is_a_safe_no_op_when_every_face_already_names_someone(librar
     session.add(Face(picture_id=picture.id, character_id=sara.id))
     session.commit()
 
-    assert _add_person(session, picture, mira.id) is False
+    assert add_person(session, picture, mira.id) is False
     faces = session.exec(select(Face).where(Face.picture_id == picture.id)).all()
     assert [f.character_id for f in faces] == [sara.id]
 

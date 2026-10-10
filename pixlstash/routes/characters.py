@@ -22,7 +22,7 @@ from fastapi import (
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from sqlalchemy import exists, func
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select, update
 
 from pixlstash.authz.membership import (
     enforce_character_scope,
@@ -30,6 +30,8 @@ from pixlstash.authz.membership import (
 )
 from pixlstash.database import DBPriority
 from pixlstash.db_models import (
+    ENTITY_CHARACTER,
+    AdapterAttachment,
     Character,
     CharacterProjectMember,
     Face,
@@ -1151,6 +1153,19 @@ def create_router(server) -> APIRouter:
                 for face in faces:
                     face.character_id = None
                     session.add(face)
+                # SQLite hands a deleted person's id to the next one created,
+                # who must not inherit these LoRAs or these pending pictures.
+                session.exec(
+                    delete(AdapterAttachment).where(
+                        AdapterAttachment.entity_type == ENTITY_CHARACTER,
+                        AdapterAttachment.entity_id == character_id,
+                    )
+                )
+                session.exec(
+                    update(Picture)
+                    .where(Picture.pending_character_id == character_id)
+                    .values(pending_character_id=None)
+                )
                 session.commit()
                 session.delete(character)
                 session.commit()
