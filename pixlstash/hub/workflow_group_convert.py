@@ -1250,6 +1250,7 @@ _WORKFLOW_ID_COLUMNS = (
     ("workflow_group_default", "workflow_id"),
     ("workflow_group_pins", "workflow_id"),
     ("workflow_group_picture_input", "workflow_id"),
+    ("workflow_group_graph", "workflow_id"),
     ("workflow_key_successor", "workflow_id"),
     ("workflow_id_successor", "successor_id"),
     ("workflow_document", "from_workflow_id"),
@@ -1581,6 +1582,19 @@ def _carry_group_state(
             conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (group,))
     if not keep:
         conn.execute("DELETE FROM workflow_group_attr WHERE workflow_id = ?", (group,))
+        # The graph saved over the workflow is the one owner row not carried:
+        # the heirs may hold another base-model family, and a graph edited
+        # for these pictures is not theirs. It goes with the id, out loud.
+        dropped = conn.execute(
+            "DELETE FROM workflow_group_graph WHERE workflow_id = ?", (group,)
+        ).rowcount
+        if dropped:
+            logger.warning(
+                "Workflow %s is retired: the graph saved over it is not "
+                "carried to %s, which reads its graph off its pictures again.",
+                group,
+                heir,
+            )
 
 
 def _run_strength(run, node_id: str):

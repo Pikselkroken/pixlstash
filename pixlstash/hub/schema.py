@@ -1424,6 +1424,9 @@ CREATE TABLE IF NOT EXISTS workflow_version (
 # ``workflow_version``. **Not carried when an ``auto:`` id changes** (a new
 # core rule, a re-identified family): the graph was edited for the pictures
 # that id held, and the workflow that follows it falls back to its pictures'.
+# The row is deleted with the retired id, and logged
+# (``workflow_group_convert._carry_group_state``). An automatic workflow
+# cannot be deleted, so like its name and pins the row otherwise stays.
 _V2_WORKFLOW_GROUP_GRAPH = """
 CREATE TABLE IF NOT EXISTS workflow_group_graph (
     workflow_id  TEXT PRIMARY KEY,

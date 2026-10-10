@@ -37,6 +37,7 @@ from pixlstash.hub import workflow_origin
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
+    set_group_graph,
 )
 import pixlstash.routes.comfyui as comfyui_routes
 import pixlstash.hub.workflow_group_convert as convert
@@ -55,6 +56,7 @@ from pixlstash.hub.workflow_group_convert import (
     dissolve_manual_groups,
     rederive_cores,
     rederive_cores_from,
+    stranded_workflow_ids,
 )
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflow_cards import auto_workflow_id
@@ -3093,3 +3095,25 @@ def test_an_adopted_file_with_no_pictures_lists_once_as_its_manual_workflow(
                 "DELETE FROM workflow_group_attr WHERE workflow_id = ?",
                 (auto["twin-empty.json"],),
             )
+
+
+def test_a_retired_workflows_edited_graph_goes_with_it_and_is_not_carried(tmp_path):
+    """The graph saved over an automatic workflow is deleted when its id retires.
+
+    Never copied to an heir, which may hold another base-model family. An id
+    that lives on through a split (``keep``) keeps its own, and a row on an id
+    nothing is in is counted as stranded like any other owner row.
+    """
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    retired, living, heir = (f"auto:{digit * 64}" for digit in "123")
+    graph = {"1": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}}}
+    set_group_graph(hub, retired, graph)
+    set_group_graph(hub, living, graph)
+    assert stranded_workflow_ids(hub, {living}, set()) == [retired]
+
+    with hub.transaction() as conn:
+        _carry_group_state(conn, living, heir, keep=True)
+        _carry_group_state(conn, retired, heir)
+
+    rows = hub.fetchall("SELECT workflow_id FROM workflow_group_graph")
+    assert [row[0] for row in rows] == [living]
