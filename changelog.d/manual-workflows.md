@@ -1,4 +1,4 @@
-- Workflows you import, pull from ComfyUI or make yourself are now manual
+- Workflows you import or make yourself are now manual
   workflows: each is its own entry on the Workflows grid, badged Manual, and
   is never folded into a workflow PixlStash grouped from your pictures. A
   duplicate, a fixed copy, a clone or a LoRA edit says which workflow it came
