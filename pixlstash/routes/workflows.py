@@ -447,6 +447,10 @@ class WorkflowDefault(BaseModel):
     and up), ``all`` (the same over every picture of the card, when none is
     rated that highly) or ``edited`` (the owner's own value, which replaces
     both); a client renders ``best`` as "from your best pictures".
+
+    ``exposed`` is a parameter the owner added (``GET …/form-inputs`` lists
+    what can be): its pictures do not vote on it, so a ``PUT …/defaults``
+    without it removes the row rather than putting a computed value back.
     """
 
     label: str
@@ -454,6 +458,7 @@ class WorkflowDefault(BaseModel):
     input_name: str
     value: bool | int | float | str
     provenance: str
+    exposed: bool = False
 
 
 class WorkflowCover(BaseModel):
@@ -1054,6 +1059,51 @@ class CardPins(BaseModel):
     """
 
     pins: list[ParameterAddress] | None = Field(None, max_length=MAX_PINS)
+
+
+class FormInput(BaseModel):
+    """One input of a workflow's graph a parameter row can set."""
+
+    slot_label: str
+    input_name: str
+    value: bool | int | float | str = Field(
+        description="What the workflow's graph holds, which a run uses unasked."
+    )
+    kind: Literal["number", "text", "boolean", "choice"] | None = Field(
+        None,
+        description=(
+            "What ComfyUI's `object_info` declares it as. Null where ComfyUI "
+            "did not answer or does not know the node; the type of `value` is "
+            "then the only clue."
+        ),
+    )
+    options: list[str] | None = Field(
+        None, description="What a `choice` may be set to, as ComfyUI lists it."
+    )
+    exposed: bool = Field(
+        description="Whether it is one of the workflow's parameters already."
+    )
+
+
+class FormNode(BaseModel):
+    """One node of a workflow's graph, with the inputs a row can set."""
+
+    node_id: str = Field(
+        description=(
+            "The node's id in the graph read, for telling two nodes of one "
+            "class apart on screen. Not an address: every re-serialisation "
+            "renumbers it."
+        )
+    )
+    title: str
+    class_type: str
+    inputs: list[FormInput]
+
+
+class WorkflowFormInputs(BaseModel):
+    """``GET /workflows/{workflow_id}/form-inputs``."""
+
+    nodes: list[FormNode] = Field(default_factory=list)
 
 
 class CardPictureInput(ParameterAddress):
@@ -2746,6 +2796,7 @@ def _defaults_payload(values) -> list[WorkflowDefault]:
             input_name=default.input_name,
             value=default.value,
             provenance=default.provenance,
+            exposed=default.exposed,
         )
         for default in values
     ]
@@ -3817,6 +3868,55 @@ def create_router(server) -> APIRouter:
         )
         _announce(request, [workflow_id], "changed")
         return payload
+
+    @router.get(
+        "/workflows/{workflow_id}/form-inputs",
+        summary="The inputs of a workflow a parameter can be made of",
+        description=(
+            "Every literal input of this workflow's graph that a run can set "
+            "by address, grouped by node, each with its value, what ComfyUI's "
+            "object_info declares it as and, for a drop-down, its options. "
+            "Left out: a wired input, and what PixlStash already has a control "
+            "for or decides itself (the prompts, the seeds, a picture batch, a "
+            "picture input, a model or LoRA loader's file and strengths, the "
+            "save node, a credential). `exposed` marks the ones that are "
+            "parameters already; any other becomes one by naming its address "
+            "in `PUT /workflows/{workflow_id}/defaults`, and is asked for by "
+            "the Run form once `PUT /workflows/{workflow_id}/pins` names it."
+        ),
+        response_model=WorkflowFormInputs,
+        responses={
+            400: {"description": "The workflow's graph will not reduce."},
+            404: {"description": "This machine has no such workflow."},
+            409: {"description": "There is no graph for this workflow."},
+        },
+    )
+    def get_form_inputs(request: Request, workflow_id: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, card = _require_base(hub, workflow_id)
+        # Cached, for the LoRA chain's reason: the inspector asks on every
+        # workflow it selects.
+        object_info, _error = _read_object_info(
+            _comfyui_url(_user(request)), cached=True
+        )
+        graph = _card_source(card, object_info=object_info).graph
+        labels, core = _graph_labels(graph, "parameters")
+        recipe = _defaults(hub, workflow.workflow_id)
+        return WorkflowFormInputs(
+            nodes=run_service.form_inputs(
+                graph,
+                labels,
+                # A manual workflow's parameters are addressed by slot label
+                # alone (`_manual_sample`), so its new ones are too.
+                {} if workflow.workflow_id.startswith(MANUAL_PREFIX) else core,
+                object_info,
+                {(d.slot_label, d.input_name) for d in recipe.values}
+                if recipe
+                else set(),
+                MAX_VALUE_LENGTH,
+            )
+        )
 
     @router.put(
         "/workflows/{workflow_id}/inputs",

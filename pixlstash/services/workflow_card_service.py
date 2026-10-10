@@ -1252,6 +1252,8 @@ class Default:
     on it, so it is unique within a workflow); ``slot_label`` and
     ``input_name`` are the address ``workflow_group_default`` is keyed on
     (``<slot_label>/<input_name>``) and are what ``PUT …/defaults`` edits.
+    ``exposed`` is a parameter that is here only because the owner set it: no
+    picture votes on it, so clearing the edit takes the row away.
     """
 
     label: str
@@ -1259,6 +1261,7 @@ class Default:
     input_name: str
     value: bool | int | float | str
     provenance: str
+    exposed: bool = False
 
 
 def _address_order(address: tuple[str, str]) -> tuple:
@@ -1625,7 +1628,13 @@ def workflow_defaults(
     for address in addresses:
         if address in value_overrides:
             recipe.values.append(
-                Default(labels[address], *address, value_overrides[address], EDITED)
+                Default(
+                    labels[address],
+                    *address,
+                    value_overrides[address],
+                    EDITED,
+                    address not in values,
+                )
             )
         else:
             recipe.values.append(
