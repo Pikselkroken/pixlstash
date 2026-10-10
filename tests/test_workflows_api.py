@@ -72,7 +72,11 @@ from pixlstash.hub.workflow_card_reads import (
     workflow_index,
 )
 from pixlstash.hub import workflow_card_reads
-from pixlstash.hub.workflow_card_reads import _manual_facts_of, manual_document
+from pixlstash.hub.workflow_card_reads import (
+    _manual_facts_of,
+    manual_document,
+    manual_workflow_ids,
+)
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
@@ -89,13 +93,10 @@ from pixlstash.services.workflow_hash import (
     structural_document,
     topology_hash,
 )
-from pixlstash.hub import workflow_origin, workflow_versions
-from tests.test_comfyui_workflow_pull import BASE as FAKE_COMFYUI
-from tests.test_comfyui_workflow_pull import FakeComfyUI
+from pixlstash.hub import workflow_versions
 from pixlstash.services import (
     comfyui_link_service,
     comfyui_pack_service,
-    comfyui_userdata,
     model_shelf_service,
     workflow_card_service,
 )
@@ -161,7 +162,11 @@ from pixlstash.stacking import parse_workflow_tag_from_filename
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK
-from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
+from tests.authz_guard import (  # noqa: F401
+    assert_real_route,
+    matched_route_paths,
+    no_spa_fallback,
+)
 from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4
 
 API = "/api/v1"
@@ -1136,59 +1141,19 @@ def _ghost_shas(server) -> set[str]:
     }
 
 
-def test_the_comfyui_pull_routes_are_the_owners_alone(workflow_env, monkeypatch):
-    """#1440: both directions on the pull and its summary, measured at the gate.
-
-    The GET belts are emptied so a refusal is the gate's (the rollback case the
-    belt exists for is covered by it being in ``READ_BLOCKED_GET_PATHS``); the
-    POST is refused to a READ token before routing either way. The runner is
-    stubbed so the owner's pull is queued and never reaches a ComfyUI.
-    """
-    server = workflow_env.server
-    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
-    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
-    queued = []
-    monkeypatch.setattr(
-        server.vault, "submit_task", lambda task: queued.append(task) or task.id
-    )
+def test_nothing_starts_or_reports_a_pull_of_comfyuis_saved_workflows(workflow_env):
+    """#1854: PixlStash does not read ComfyUI's saved workflows by itself, so
+    no route starts a pull or reports one, and none is declared."""
+    app = workflow_env.server.api
     path = f"{API}/comfyui/workflows/pull"
-    assert_real_route(server.api, "GET", path)
-    assert_real_route(server.api, "POST", path)
-    tokens = {
-        "unscoped": _mint(workflow_env.owner, "pull unscoped"),
-        "scoped": _mint(
-            workflow_env.owner,
-            "pull scoped",
-            resource_type="character",
-            resource_id=workflow_env.character_id,
-        ),
-    }
-    previously_enforcing = server.authz._enforcing
-    server.authz._enforcing = True
-    try:
-        for label, token in tokens.items():
-            client = _bearer(server, token)
-            assert client.get(f"{API}/pictures").status_code == 200, label
-            r = client.get(path)
-            assert r.status_code == 403, f"{label} GET: {r.status_code} {r.text}"
-            assert "Owner-level" in r.text, f"{label} GET not refused by the gate"
-            r = client.post(path)
-            assert r.status_code == 403, f"{label} POST: {r.status_code} {r.text}"
-        assert queued == []
-
-        r = workflow_env.owner.get(path)
-        assert r.status_code == 200 and r.json()["status"] == "idle", r.text
-        r = workflow_env.owner.post(path)
-        assert r.status_code == 202 and r.json()["status"] == "started", r.text
-        assert len(queued) == 1
-        r = workflow_env.owner.get(path)
-        assert r.status_code == 200 and r.json()["status"] == "pending", r.text
-    finally:
-        server.authz._enforcing = previously_enforcing
-        # The stubbed runner never runs it, so it would hold the module's pull
-        # gate for every later test.
-        for task in queued:
-            server.workflow_pulls.release(task)
+    # The sibling the pull sat beside resolves, so the reads below are of the
+    # real route table.
+    assert_real_route(app, "POST", f"{API}/comfyui/workflows/convert")
+    for method in ("GET", "POST"):
+        # A templated sibling may match the string; the pull's own route must not.
+        assert path not in matched_route_paths(app, method, path)
+        assert (method, path) not in ROUTE_POLICIES
+    assert workflow_env.owner.post(path).status_code in (404, 405)
 
 
 def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
@@ -1881,36 +1846,25 @@ def test_the_link_routes_are_owner_only(workflow_env):
     assert workflow_env.owner.get(path).status_code == 200
 
 
-def test_a_link_ends_with_one_pull_when_the_owner_wants_pulls(
+def test_a_link_reads_none_of_comfyuis_saved_workflows(
     workflow_env, comfy_at, monkeypatch
 ):
-    """The last step of a Link pulls ComfyUI's saved workflows, through the
-    poll's gate and only while "Pull workflows from ComfyUI" is on."""
-    pulls = workflow_env.server.workflow_pulls
-    started: list[str] = []
-    monkeypatch.setattr(pulls, "automatic", True)
-    monkeypatch.setattr(
-        pulls,
-        "start",
-        lambda url, origin_client_id=None: started.append(url) or ("started", "task"),
-    )
-    comfy_at("http://127.0.0.1:18188/")
-    owner = workflow_env.owner
-    assert owner.get(f"{API}/users/me/config").json()["pull_comfyui_workflows"] is True
+    """#1854: a Link asks ComfyUI for its link steps and nothing else. Its
+    saved workflows and its run history are not read, and no workflow is made."""
+    fake = comfy_at("http://127.0.0.1:18188/")
+    asked: list[str] = []
 
-    assert owner.post(f"{API}/comfyui/link").json()["linked"] is True
-    assert started == ["http://127.0.0.1:18188"]
+    def get(url, **kwargs):
+        asked.append(urlsplit(url).path)
+        return fake.get(url, **kwargs)
 
-    r = owner.patch(f"{API}/users/me/config", json={"pull_comfyui_workflows": False})
-    assert r.status_code == 200, r.text
-    assert owner.get(f"{API}/users/me/config").json()["pull_comfyui_workflows"] is False
-    try:
-        assert owner.post(f"{API}/comfyui/link").json()["linked"] is True
-        assert started == ["http://127.0.0.1:18188"]
-        assert pulls.owner_wants_pulls() is None
-    finally:
-        owner.patch(f"{API}/users/me/config", json={"pull_comfyui_workflows": True})
-    assert pulls.owner_wants_pulls() == "http://127.0.0.1:18188"
+    monkeypatch.setattr(comfyui_link_service.requests, "get", get)
+    hub = workflow_env.server.hub
+    before = manual_workflow_ids(hub)
+    assert workflow_env.owner.post(f"{API}/comfyui/link").json()["linked"] is True
+    assert asked, "the Link reached ComfyUI through another client"
+    assert not [path for path in asked if "userdata" in path or "history" in path]
+    assert manual_workflow_ids(hub) == before
 
 
 def test_linking_a_comfyui_on_this_computer_writes_a_working_full_access_token(
@@ -3244,7 +3198,7 @@ def test_a_card_says_when_it_was_created_and_last_changed(workflow_env):
 
     An automatic workflow is dated by its recipes: the first the hub saw and
     the newest. A manual one by its document and its newest version, so a
-    pull of a changed ComfyUI file moves it up.
+    graph saved over it moves it up.
     """
     server, owner = workflow_env.server, workflow_env.owner
     busy = _by_key(_cards(owner))[BUSY_WF]
@@ -3255,11 +3209,14 @@ def test_a_card_says_when_it_was_created_and_last_changed(workflow_env):
     )
 
     manual = create_manual_workflow(
-        server.hub, "Dated", {"1": {"class_type": "SaveImage", "inputs": {}}}, "pull"
+        server.hub, "Dated", {"1": {"class_type": "SaveImage", "inputs": {}}}, "import"
     )
     with server.hub.transaction() as conn:
         workflow_versions.append_version(
-            conn, manual, {"1": {"class_type": "SaveImage", "inputs": {"x": 1}}}
+            conn,
+            manual,
+            {"1": {"class_type": "SaveImage", "inputs": {"x": 1}}},
+            source="chain",
         )
     # Fixed and a day apart, so two writes in one clock tick cannot make a
     # card that ignores the version read the same as one that reads it.
@@ -4323,7 +4280,7 @@ def _detail_defaults(owner, workflow_id) -> dict:
 def test_the_inspectors_read_alone_converts_stores_and_answers_parameters(
     workflow_env, tmp_path, monkeypatch
 ):
-    """The owner's report: a pulled editor workflow had no parameters until
+    """The owner's report: an editor workflow had no parameters until
     *Convert for PixlStash*. The first read that needs the graph - here the
     inspector's, with no Run and no Open - converts it and stores it."""
     hub = workflow_env.server.hub
@@ -4431,7 +4388,7 @@ def test_pixlstashs_conversion_never_overwrites_one_the_node_stored_meanwhile(
 def test_a_conversion_never_lands_on_the_version_after_the_one_it_converted(
     workflow_env, tmp_path, monkeypatch
 ):
-    """V6: a pull that makes a new version between the read and the store
+    """V6: a save that makes a new version between the read and the store
     never gets the old graph: the read starts again on the new version, and
     that one's own conversion is what is stored and returned."""
     hub = workflow_env.server.hub
@@ -4441,13 +4398,13 @@ def test_a_conversion_never_lands_on_the_version_after_the_one_it_converted(
     newer = json.loads(json.dumps(RUN_EDITOR_GRAPH))
     newer["nodes"][1]["widgets_values"] = [123, 40, 7.0]
 
-    def a_pull_lands_meanwhile():
+    def a_save_lands_meanwhile():
         with hub.transaction() as conn:
-            workflow_versions.append_version(conn, manual, newer)
+            workflow_versions.append_version(conn, manual, newer, source="chain")
         return json.loads(json.dumps(RUN_OBJECT_INFO))
 
     document, version, problems = workflow_card_service.converted_manual_document(
-        hub, manual, a_pull_lands_meanwhile
+        hub, manual, a_save_lands_meanwhile
     )
     # The read answers the current version, converted...
     assert (version, problems) == (2, [])
@@ -4484,44 +4441,34 @@ def test_a_card_that_will_not_convert_says_why_in_its_409(workflow_env, converti
     assert NO_OBJECT_INFO in r.json()["detail"]
 
 
-def _pulled_editor_card(workflow_env, monkeypatch, document=None):
-    """A pulled editor-format card with a live ComfyUI file, ComfyUI unasked."""
-    server = workflow_env.server
+def _card_the_pull_made(server, name: str, document: dict, path: str) -> str:
+    """A workflow as the removed pull of ComfyUI's saved workflows stored it
+    (#1854): origin ``pull``, with its origin row under the ComfyUI address."""
     origin = comfyui_module._comfyui_url(server.auth.user)
-    document = document or _EDITOR_WORKFLOW
-    with workflow_inbox.INBOX_LOCK:
-        stored = comfyui_module.store_pulled_workflow(
-            server.hub,
-            "editor.json",
-            document,
-            (origin, "qa/editor.json", 1000, workflow_inbox.content_hash(document)),
-        )
-    monkeypatch.setattr(
-        comfyui_userdata,
-        "saved_workflow_info",
-        lambda base_url, path, timeout_s: comfyui_userdata.SavedWorkflow(
-            path, 10, 1000
-        ),
+    return comfyui_module.store_manual_workflow(
+        server.hub,
+        name,
+        document,
+        "pull",
+        record=(origin, path, 1000, workflow_inbox.content_hash(document)),
+    )
+
+
+def test_a_card_the_pull_made_that_will_not_convert_is_a_409_like_any_other(
+    workflow_env, tmp_path, monkeypatch
+):
+    """#1854: Open no longer hands ComfyUI the file the card was pulled from,
+    so an editor document PixlStash cannot convert answers 409 with the reason."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    key = _card_the_pull_made(
+        workflow_env.server, "editor", _EDITOR_WORKFLOW, "qa/editor.json"
     )
     monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
     )
-    return stored["workflow_id"]
-
-
-def test_a_live_file_that_will_not_convert_opens_for_comfyui_to_convert(
-    workflow_env, tmp_path, monkeypatch
-):
-    """200 with no graph: the node opens the file and converts it in ComfyUI."""
-    _isolate_workflow_folders(tmp_path, monkeypatch)
-    key = _pulled_editor_card(workflow_env, monkeypatch)
     r = workflow_env.owner.get(f"{API}/workflows/{key}/graph")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["workflow"] is None
-    assert body["needs_conversion"] is True
-    assert body["comfyui_file"] == "qa/editor.json"
-    assert body["detail"] == NO_OBJECT_INFO
+    assert r.status_code == 409, r.text
+    assert NO_OBJECT_INFO in r.json()["detail"]
     # The plan carries the same sentence as a reason, for the run popup.
     reason = next(
         r_
@@ -4533,25 +4480,24 @@ def test_a_live_file_that_will_not_convert_opens_for_comfyui_to_convert(
     assert reason["problems"] == [NO_OBJECT_INFO]
 
 
-def test_a_graph_that_opens_says_it_needs_no_conversion(workflow_env, converting):
-    _convert(workflow_env.owner)
-    r = workflow_env.owner.get(f"{API}/workflows/{converting.manual}/graph")
-    assert r.status_code == 200, r.text
-    assert r.json()["needs_conversion"] is False
-
-
 def test_a_conversion_attaches_to_the_current_version_of_a_pulled_card(
     workflow_env, tmp_path, monkeypatch
 ):
-    """A file that changed in ComfyUI is version 2; opening it posts version 2's
-    content, which finds the card and converts that version, not version 1."""
+    """*Convert for PixlStash* on a card the pull made (#1854): it finds the
+    card by its document, so a card saved over is found by version 2's content
+    and that version is converted, not version 1."""
     _isolate_workflow_folders(tmp_path, monkeypatch)
     hub = workflow_env.server.hub
-    key = _pulled_editor_card(workflow_env, monkeypatch)
+    key = _card_the_pull_made(
+        workflow_env.server, "editor", _EDITOR_WORKFLOW, "qa/editor.json"
+    )
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
+    )
     edited = json.loads(json.dumps(_EDITOR_WORKFLOW))
     edited["nodes"][2]["widgets_values"] = ["version-two"]
     with hub.transaction() as conn:
-        assert workflow_versions.append_version(conn, key, edited) == 2
+        assert workflow_versions.append_version(conn, key, edited, source="chain") == 2
     r = _convert(workflow_env.owner, workflow=edited)
     assert r.status_code == 200, r.text
     assert (r.json()["matched"], r.json()["workflow_id"]) == (True, key)
@@ -4635,188 +4581,63 @@ def _builtin_edit_graph(steps: int) -> dict:
     return graph
 
 
-def test_a_pulled_workflow_opens_its_comfyui_file_at_its_newest_version(
+def test_a_card_the_pull_made_is_an_ordinary_workflow_no_file_feeds(
     workflow_env, tmp_path, monkeypatch
 ):
-    """One card per ComfyUI file: Open names the file, a file saved again in
-    ComfyUI is taken as the next version first, and ComfyUI not answering
-    opens the stored one."""
+    """#1854: a card the pull made before it was removed opens, plans a run
+    and exports from the graph PixlStash stored. Open names no ComfyUI file,
+    nothing reads one, and deleting the card takes its origin row with it."""
     _isolate_workflow_folders(tmp_path, monkeypatch)
     server, owner = workflow_env.server, workflow_env.owner
-    origin = comfyui_module._comfyui_url(server.auth.user)
-    first = _builtin_edit_graph(7)
-    with workflow_inbox.INBOX_LOCK:
-        stored = comfyui_module.store_pulled_workflow(
-            server.hub,
-            "flux.json",
-            first,
-            (origin, "portraits/flux.json", 1000, workflow_inbox.content_hash(first)),
-        )
-    key = stored["workflow_id"]
+    stored = _builtin_edit_graph(7)
+    key = _card_the_pull_made(server, "flux", stored, "portraits/flux.json")
     imported = _file_a_workflow(
         server, tmp_path, monkeypatch, "mine.json", _builtin_edit_graph(8)
     )
     asked: list[str] = []
+    real_get = requests.get
 
-    def listing(base_url, relative_path, timeout_s):
-        asked.append(relative_path)
-        assert base_url == origin and 0 < timeout_s <= 2.0
-        return comfyui_userdata.SavedWorkflow(relative_path, 10, 1000)
+    def get(url, *args, **kwargs):
+        asked.append(url)
+        return real_get(url, *args, **kwargs)
 
-    monkeypatch.setattr(comfyui_userdata, "saved_workflow_info", listing)
+    monkeypatch.setattr(requests, "get", get)
+
     r = owner.get(f"{API}/workflows/{key}/graph")
     assert r.status_code == 200, r.text
-    assert r.json()["comfyui_file"] == "portraits/flux.json"
     assert r.json()["workflow"]["75:62"]["inputs"]["steps"] == 7
-    assert asked == ["portraits/flux.json"]
-    # A workflow with no ComfyUI file opens from its graph and asks nobody.
-    r = owner.get(f"{API}/workflows/{imported}/graph")
-    assert (r.status_code, r.json()["comfyui_file"]) == (200, None)
-    assert asked == ["portraits/flux.json"]
+    assert "comfyui_file" not in r.json() and "needs_conversion" not in r.json()
+    assert _preflight(owner, workflow_id=key)["groups"]
+    r = owner.get(f"{API}/workflows/{key}/export")
+    assert r.status_code == 200, r.text
+    assert not [url for url in asked if "userdata" in url]
+    assert _by_key(_cards(owner))[key]["versions"] == 1
 
+    # Still listed apart, so the ones the pull left can be found together.
     cards = _by_key(_cards(owner))
-    assert (cards[key]["origin_category"], cards[key]["versions"]) == ("comfyui", 1)
+    assert (cards[key]["origin_category"], cards[key]["manual"]) == ("comfyui", True)
     assert cards[imported]["origin_category"] == "own"
     assert {
         card["origin_category"]
         for wid, card in cards.items()
         if wid.startswith("auto:")
     } <= {"pictures"}
-
-    # Saved again in ComfyUI: Open takes it first, as version 2 of this card.
-    def newer(base_url, relative_path, timeout_s):
-        return comfyui_userdata.SavedWorkflow(relative_path, 10, 2000)
-
-    monkeypatch.setattr(comfyui_userdata, "saved_workflow_info", newer)
-    monkeypatch.setattr(
-        comfyui_userdata,
-        "read_saved_workflow",
-        lambda base_url, path, timeout_s=None: _builtin_edit_graph(9),
-    )
-    r = owner.get(f"{API}/workflows/{key}/graph")
-    assert r.status_code == 200, r.text
-    assert r.json()["workflow"]["75:62"]["inputs"]["steps"] == 9
-    card = _by_key(_cards(owner))[key]
-    assert (card["versions"], card["origin_category"]) == (2, "comfyui")
-
-    # ComfyUI not answering: the stored version opens, and nothing says so.
-    def down(base_url, relative_path, timeout_s):
-        raise RuntimeError("Could not reach ComfyUI")
-
-    monkeypatch.setattr(comfyui_userdata, "saved_workflow_info", down)
-    r = owner.get(f"{API}/workflows/{key}/graph")
-    assert r.status_code == 200, r.text
-    assert r.json()["workflow"]["75:62"]["inputs"]["steps"] == 9
-    assert r.json()["comfyui_file"] == "portraits/flux.json"
-
-
-@pytest.fixture
-def comfy_saved(workflow_env, tmp_path, monkeypatch):
-    """The owner's ComfyUI as `test_comfyui_workflow_pull.FakeComfyUI`, at a
-    saved address, pulled from for real. The address and the pull setting are
-    put back for the rest of the module."""
-    _isolate_workflow_folders(tmp_path, monkeypatch)
-    fake = FakeComfyUI({})
-    monkeypatch.setattr(requests, "get", fake.get)
-    owner = workflow_env.owner
-    r = owner.patch(f"{API}/users/me/config", json={"comfyui_url": FAKE_COMFYUI})
-    assert r.status_code == 200, r.text
-    try:
-        yield fake
-    finally:
-        owner.patch(
-            f"{API}/users/me/config",
-            json={"comfyui_url": None, "pull_comfyui_workflows": True},
-        )
-
-
-def _pull_now(server) -> dict:
-    """One pull through the server's own gate, run here rather than queued."""
-    pulls = server.workflow_pulls
-    task, new = pulls.claim(FAKE_COMFYUI)
-    assert new, f"a pull an earlier test left holds the gate: {task}"
-    try:
-        return task._run_task()
-    finally:
-        pulls.release(task)
-
-
-def _opened(owner, workflow_id) -> tuple:
-    """``(the graph's step count, comfyui_file)`` as Open answers them."""
-    r = owner.get(f"{API}/workflows/{workflow_id}/graph")
-    assert r.status_code == 200, r.text
-    return r.json()["workflow"]["75:62"]["inputs"]["steps"], r.json()["comfyui_file"]
-
-
-def test_a_pulled_file_is_a_comfyui_card_that_opens_its_file_until_it_is_gone(
-    workflow_env, comfy_saved
-):
-    server, owner = workflow_env.server, workflow_env.owner
-    path = "qa-gone/flux.json"
-    comfy_saved.workflows = {
-        path: _builtin_edit_graph(701),
-        "qa-gone/keep.json": _builtin_edit_graph(702),
-    }
-    _pull_now(server)
-    key = workflow_origin.stored_at(server.hub, FAKE_COMFYUI, path)
-    card = _by_key(_cards(owner))[key]
-    assert (card["origin_category"], card["versions"]) == ("comfyui", 1)
-    assert _opened(owner, key) == (701, path)
-
-    # Deleted in ComfyUI, another file still listed: the card stays, and Open
-    # has no file to open, so it opens the stored graph.
-    saved = comfy_saved.workflows.pop(path)
-    _pull_now(server)
-    assert key in _by_key(_cards(owner))
-    assert _opened(owner, key) == (701, None)
-
-    # Saved there again: the link comes back.
-    comfy_saved.workflows[path] = saved
-    _pull_now(server)
-    assert _opened(owner, key) == (701, path)
-
-
-def test_a_duplicate_of_a_comfyui_card_is_its_own_and_never_versioned(
-    workflow_env, comfy_saved
-):
-    server, owner = workflow_env.server, workflow_env.owner
-    path = "qa-dup/flux.json"
-    comfy_saved.workflows = {path: _builtin_edit_graph(711)}
-    _pull_now(server)
-    key = workflow_origin.stored_at(server.hub, FAKE_COMFYUI, path)
+    # A copy of one is the owner's own.
     r = owner.post(f"{API}/workflows/{key}/duplicate")
     assert r.status_code == 201, r.text
-    dup = r.json()["workflow_id"]
-    card = _by_key(_cards(owner))[dup]
-    assert (card["origin_category"], card["versions"]) == ("own", 1)
-    assert _opened(owner, dup) == (711, None)
+    duplicate = r.json()["workflow_id"]
+    assert _by_key(_cards(owner))[duplicate]["origin_category"] == "own"
 
-    comfy_saved.edit(path, _builtin_edit_graph(712))
-    _pull_now(server)
-    cards = _by_key(_cards(owner))
-    assert (cards[key]["versions"], cards[dup]["versions"]) == (2, 1)
-    assert _opened(owner, key) == (712, path)
-    assert _opened(owner, dup) == (711, None)
+    def origin_rows(workflow_id):
+        return server.hub.fetchall(
+            "SELECT origin FROM workflow_origin WHERE workflow_name = ?",
+            (workflow_id,),
+        )
 
-
-def test_open_does_not_check_comfyui_while_pulls_are_off(workflow_env, comfy_saved):
-    server, owner = workflow_env.server, workflow_env.owner
-    path = "qa-off/flux.json"
-    comfy_saved.workflows = {path: _builtin_edit_graph(721)}
-    _pull_now(server)
-    key = workflow_origin.stored_at(server.hub, FAKE_COMFYUI, path)
-    r = owner.patch(f"{API}/users/me/config", json={"pull_comfyui_workflows": False})
-    assert r.status_code == 200, r.text
-    comfy_saved.edit(path, _builtin_edit_graph(722))
-    comfy_saved.requested.clear()
-    assert _opened(owner, key) == (721, path)
-    assert not [url for url in comfy_saved.requested if "/api/userdata?" in url]
-    assert _by_key(_cards(owner))[key]["versions"] == 1
-
-    # On again, the same Open takes the saved file: the negative above is the
-    # setting, not a check that could never fire.
-    owner.patch(f"{API}/users/me/config", json={"pull_comfyui_workflows": True})
-    assert _opened(owner, key) == (722, path)
+    assert len(origin_rows(key)) == 1
+    assert owner.delete(f"{API}/workflows/{key}").status_code == 200
+    assert key not in _by_key(_cards(owner))
+    assert origin_rows(key) == []
 
 
 def test_deleting_a_converted_workflow_takes_its_conversion_with_it(
@@ -5399,28 +5220,6 @@ def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
             "(workflow_name, topology_hash, structural_hash, workflow_key) "
             "VALUES ('binned.json', ?, ?, ?)",
             (BINNED_TOPOLOGY, BINNED_RECIPE, BINNED_CARD),
-        )
-    payload = _cards(workflow_env.owner)
-    assert payload["one_offs"] == 0
-    assert _by_key(payload)[BINNED_WF]["imported"] is True
-
-
-def test_a_file_a_pull_wrote_takes_a_card_out_of_the_one_offs_too(workflow_env):
-    """One-offs are workflows known from their pictures alone.
-
-    The same file row as the test above, written by a pull from ComfyUI
-    (``workflow_pulled_file``): it is a stored workflow like any other, so
-    BINNED comes back into the grid.
-    """
-    with workflow_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_file "
-            "(workflow_name, topology_hash, structural_hash, workflow_key) "
-            "VALUES ('binned.json', ?, ?, ?)",
-            (BINNED_TOPOLOGY, BINNED_RECIPE, BINNED_CARD),
-        )
-        conn.execute(
-            "INSERT INTO workflow_pulled_file (workflow_name) VALUES ('binned.json')"
         )
     payload = _cards(workflow_env.owner)
     assert payload["one_offs"] == 0
@@ -7838,11 +7637,11 @@ def test_a_run_records_the_version_it_submitted_on_its_pictures(runnable):
     document["3"]["inputs"]["steps"] = 31
     document["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
     document["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
-    manual = create_manual_workflow(server.hub, "Versioned", document, "pull")
+    manual = create_manual_workflow(server.hub, "Versioned", document, "import")
     second = json.loads(json.dumps(document))
     second["3"]["inputs"]["steps"] = 32
     with server.hub.transaction() as conn:
-        workflow_versions.append_version(conn, manual, second)
+        workflow_versions.append_version(conn, manual, second, source="chain")
     importing: list[dict] = []
     runnable.monkeypatch.setattr(
         workflows_routes,
@@ -7879,7 +7678,7 @@ def test_a_run_records_the_version_it_submitted_on_its_pictures(runnable):
         third = json.loads(json.dumps(second))
         third["3"]["inputs"]["steps"] = 33
         with server.hub.transaction() as conn:
-            workflow_versions.append_version(conn, manual, third)
+            workflow_versions.append_version(conn, manual, third, source="chain")
         # A later report of the same picture does not move it either.
         comfyui_service._set_run_workflow_id(server, manual, [pid], 3)
         assert server.vault.db.run_task(recorded) == (manual, 2)
@@ -15852,20 +15651,23 @@ def test_an_overwrite_of_a_manual_workflow_is_its_next_version(chained):
 
 
 def test_an_overwrite_does_not_bury_a_version_made_meanwhile(chained):
-    """A pull that lands between the read and the write wins, and says so."""
+    """A save that lands between the read and the write wins, and says so."""
     r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
     assert r.status_code == 201, r.text
     manual = r.json()["workflow_id"]
     real = workflows_routes.store_over_workflow
 
-    def pulled_first(hub, workflow_id, *args, **kwargs):
+    def saved_first(hub, workflow_id, *args, **kwargs):
         with hub.transaction() as conn:
             workflow_versions.append_version(
-                conn, workflow_id, json.loads(json.dumps(CHAIN_DOCUMENT))
+                conn,
+                workflow_id,
+                json.loads(json.dumps(CHAIN_DOCUMENT)),
+                source="chain",
             )
         return real(hub, workflow_id, *args, **kwargs)
 
-    chained.monkeypatch.setattr(workflows_routes, "store_over_workflow", pulled_first)
+    chained.monkeypatch.setattr(workflows_routes, "store_over_workflow", saved_first)
     r = chained.owner.put(
         f"{API}/workflows/{manual}/lora-chain",
         json={"entries": [], "overwrite": True},
@@ -15877,7 +15679,7 @@ def test_an_overwrite_does_not_bury_a_version_made_meanwhile(chained):
         "ORDER BY version",
         (manual,),
     )
-    assert [tuple(row) for row in versions] == [(1, "chain"), (2, "pull")]
+    assert [tuple(row) for row in versions] == [(1, "chain"), (2, "chain")]
 
 
 def test_an_overwrite_is_refused_where_it_would_never_be_read_back(chained):
@@ -15945,7 +15747,7 @@ def test_the_edited_graph_is_the_first_source_and_keeps_its_bindings():
 
 
 def test_a_manual_overwrite_is_refused_without_the_version_it_was_made_on(chained):
-    """No version, no write: the check against a pulled version cannot be skipped."""
+    """No version, no write: the check against a newer version cannot be skipped."""
     r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
     assert r.status_code == 201, r.text
     manual = r.json()["workflow_id"]

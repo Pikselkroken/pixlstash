@@ -1085,18 +1085,17 @@ CREATE TABLE IF NOT EXISTS workflow_unstacked (
 )
 """
 
-# Where a stored workflow FILE came from when it was pulled from a ComfyUI's
-# saved workflows (#1440), one row per path over there. Its own table rather
-# than columns on ``workflow_file``, because ``workflow_cards.forget_file``
-# deletes that row when the file is deleted, and ``dismissed`` exists precisely
-# to outlive that delete: a workflow the owner deleted here is not pulled back.
-# ``workflow_name`` is many-to-one - a pull matches by content, so two paths
-# holding one document both name the file it was stored as. ``remote_modified``
-# is the remote machine's clock in milliseconds, a hint and never an identity.
-# ``content_hash`` is ``workflow_inbox.content_hash`` of the document last read
-# from that path. It is what a dismissal really keys on: the same workflow
-# renamed in ComfyUI, reached through another spelling of its URL, or listed
-# again after an empty listing is still the workflow the owner deleted.
+# Where a stored workflow came from, one row per ``(origin, remote_path)``:
+# the watched inbox (keyed by content hash), a user-folder file data step 7
+# adopted and a built-in (both keyed by file name). Every way in that must not
+# store a content twice deduplicates here (``hub/workflow_origin.py``).
+# ``workflow_name`` is the manual workflow the document is stored as;
+# ``content_hash`` is ``workflow_inbox.content_hash`` of it.
+#
+# Built for the pull of ComfyUI's saved workflows (#1440), which is gone
+# (#1854): rows whose origin is a ComfyUI address, and the columns
+# ``remote_modified``, ``dismissed`` and ``gone_at``, are what it left. Nothing
+# writes them any more; a leftover row still says its content is stored.
 _V2_WORKFLOW_ORIGIN = """
 CREATE TABLE IF NOT EXISTS workflow_origin (
     origin           TEXT NOT NULL,
@@ -1114,9 +1113,8 @@ CREATE TABLE IF NOT EXISTS workflow_origin (
 # The stored workflow files a pull WROTE (#1440), as opposed to ones the owner
 # put there. Per FILE and not per path, so what a pull wrote stays pull-written
 # when ComfyUI renames, edits or stops listing the path it came from. Legacy:
-# only data step 7 reads it, to tell a pulled file's origin. The owner handing
-# a file over (the import route, the watched inbox) takes it off; deleting the
-# file does too, since there is nothing left to describe.
+# only data step 7 reads it, to tell a pulled file's origin, and nothing
+# writes it.
 _V2_WORKFLOW_PULLED_FILE = """
 CREATE TABLE IF NOT EXISTS workflow_pulled_file (
     workflow_name  TEXT PRIMARY KEY
@@ -1124,7 +1122,9 @@ CREATE TABLE IF NOT EXISTS workflow_pulled_file (
 """
 
 # Which shelf models ran together in one ComfyUI run, read off ComfyUI's own
-# ``GET /history`` by the workflow pull (#1518). Companion proposals count it
+# ``GET /history`` (#1518) by the pull of its saved workflows while there was
+# one (#1854 removed it, and nothing reads the history now: the rows are what
+# was recorded until then). Companion proposals count it
 # beside ``workflow_recipe_asset``, so a checkpoint used in ComfyUI but never in
 # a picture PixlStash filed still has evidence - kept here because ComfyUI
 # forgets its history on restart and the shelf must not need it running.
@@ -1304,7 +1304,7 @@ CREATE TABLE IF NOT EXISTS workflow_key_successor (
 """
 
 # A MANUAL workflow: its own document, not a topology and not a file. What the
-# owner imported, pulled, duplicated or extracted, verbatim (placeholders
+# owner imported, duplicated or extracted, verbatim (placeholders
 # migrated, `pixlstash_bindings` kept), editor or API format. `api_document` is
 # the API graph ComfyUI converted an editor document into
 # (`POST /comfyui/workflows/convert`). Name, notes, defaults, pins and picture
@@ -1389,19 +1389,19 @@ CREATE TABLE IF NOT EXISTS workflow_card_move (
 )
 """
 
-# Every version of a MANUAL workflow's document, 1 first. A ComfyUI file whose
-# content changed is a new version of the card its origin row names, not a new
-# card. **``workflow_document.document`` and ``api_document`` are a copy of the
+# Every version of a MANUAL workflow's document, 1 first. A graph saved over a
+# workflow is a new version of it, not a new card.
+# **``workflow_document.document`` and ``api_document`` are a copy of the
 # highest version**, written in the same transaction as it
 # (``hub/workflow_versions.py``), so every reader of the current graph reads
 # the one row it always did and an older build sharing this hub still reads the
 # current graph. ``api_document`` belongs to a version: a conversion is of one
 # document. ``content_hash`` is ``workflow_inbox.content_hash``;
 # ``topology_hash`` is NULL where it was not computed (data step 12 leaves it);
-# ``remote_modified`` is ComfyUI's clock in milliseconds for a pulled version;
 # ``source`` is how the version arrived (the document's origin for version 1;
-# ``pull`` for a changed ComfyUI file, ``chain`` for a LoRA chain edit saved
-# over the workflow).
+# ``chain`` for a LoRA chain edit saved over the workflow). ``source`` ``pull``
+# and ``remote_modified`` (ComfyUI's clock in milliseconds) are on versions the
+# removed pull of ComfyUI's saved workflows made (#1854); nothing writes them.
 #
 # **An automatic workflow has versions only once the owner saves over it.** It
 # holds no ``workflow_document`` row: its graph is read off its best picture.
@@ -1448,7 +1448,7 @@ _V2_WORKFLOW_INDEXES = (
     # with the code that runs them.
     "CREATE INDEX IF NOT EXISTS ix_workflow_variant_key "
     "ON workflow_variant(workflow_key)",
-    # "Which pulled paths name this file" - a delete's dismissal. The primary
+    # "Which rows name this workflow" - what a delete removes. The primary
     # key is by path, so without this it is a scan.
     "CREATE INDEX IF NOT EXISTS ix_workflow_origin_name "
     "ON workflow_origin(workflow_name)",
@@ -1664,14 +1664,10 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     ):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} INTEGER")
-    # "Pull workflows from ComfyUI", on by default: NOT NULL DEFAULT 1, so an
-    # existing owner and a row an older build inserts both read on, where a
-    # nullable column would read None into the model's bool.
-    if "pull_comfyui_workflows" not in user_columns:
-        conn.execute(
-            "ALTER TABLE user ADD COLUMN pull_comfyui_workflows INTEGER "
-            "NOT NULL DEFAULT 1"
-        )
+    # A hub an earlier build opened also has ``user.pull_comfyui_workflows``
+    # (NOT NULL DEFAULT 1), the switch of the removed pull of ComfyUI's saved
+    # workflows (#1854). Nothing reads or adds it; it is not worth a migration
+    # to drop.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS identity_migration_operation ("
         "library_uuid TEXT PRIMARY KEY REFERENCES library(uuid), "
@@ -1804,22 +1800,20 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     if "traits" not in core_columns:
         conn.execute("ALTER TABLE workflow_topology_core ADD COLUMN traits TEXT")
 
-    # The dismissal's content key (#1440), guarded the same way. No released
-    # hub has this table; a development hub that ran an earlier commit of the
-    # pull does, and would otherwise fail every pull on the missing column. A
-    # NULL there means "not read since", which the next pull fills in.
+    # The content key (#1440), guarded the same way. No released hub has this
+    # table; a development hub that ran an earlier commit of the pull does,
+    # and ``workflow_origin.stored_as`` reads the column.
     origin_columns = {
         row[1] for row in conn.execute("PRAGMA table_info(workflow_origin)").fetchall()
     }
     if "content_hash" not in origin_columns:
         conn.execute("ALTER TABLE workflow_origin ADD COLUMN content_hash TEXT")
-    # When the path was last missing from a listing; NULL while it is listed.
-    # A row whose file left ComfyUI is kept and marked, so its card keeps its
-    # versions and Open can tell the link is gone.
+    # When the removed pull last found the path missing from ComfyUI's
+    # listing. Nothing reads or writes it now; added so every hub has one shape.
     if "gone_at" not in origin_columns:
         conn.execute("ALTER TABLE workflow_origin ADD COLUMN gone_at TEXT")
-    # "Was this content dismissed, at any path or origin" - once per pulled
-    # document. Here and not in `_V2_WORKFLOW_INDEXES`: those run before this
+    # "Is this content already stored, at any origin" - once per inbox
+    # file. Here and not in `_V2_WORKFLOW_INDEXES`: those run before this
     # ALTER, and on a hub that needed it the column would not exist yet.
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_workflow_origin_content "

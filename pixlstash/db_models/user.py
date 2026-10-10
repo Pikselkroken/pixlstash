@@ -76,11 +76,6 @@ class User(SQLModel, table=True):
     telemetry_consent_prompted: bool = Field(default=False)
     show_keyboard_hint: bool = Field(default=True)
     embed_watermark: bool = Field(default=True)
-    # "Pull workflows from ComfyUI": the minute poll of the saved ComfyUI's
-    # workflows, and the pull at the end of a Link. On by default. A hub-only
-    # setting: the hub adds the column (``hub/schema.py``), and the vault's own
-    # legacy ``user`` table is never read through this model.
-    pull_comfyui_workflows: bool = Field(default=True)
     watermark_image: Optional[bytes] = Field(
         default=None,
         sa_column=Column(LargeBinary, nullable=True),

@@ -1928,7 +1928,10 @@ def _second_version(store, workflow_id):
     edited = copy.deepcopy(stored_document(store, workflow_id))
     edited["nodes"][0]["pos"] = [321, 654]
     with store.hub.transaction() as conn:
-        assert workflow_versions.append_version(conn, workflow_id, edited) == 2
+        assert (
+            workflow_versions.append_version(conn, workflow_id, edited, source="chain")
+            == 2
+        )
     return stored_document(store, workflow_id)
 
 
@@ -5343,3 +5346,15 @@ def test_the_member_order_is_the_whole_ranking_not_only_its_head(store, set_shel
         "text_encoder",
         "adapter",
     ]
+
+
+def test_nothing_that_keys_a_workflow_reads_the_advisory_model_names():
+    """Recovered model names never enter a hash or a card key (#1440 plan §3.4)."""
+    import pixlstash.hub.workflow_cards as cards_module
+    import pixlstash.hub.workflows as hub_workflows_module
+    import pixlstash.services.workflow_hash as hash_module
+    import pixlstash.services.workflow_identity as identity_module
+
+    for module in (hash_module, identity_module, hub_workflows_module, cards_module):
+        source = Path(module.__file__).read_text("utf-8")
+        assert "loaded_model_widgets" not in source, module.__name__

@@ -255,7 +255,7 @@ from pixlstash.utils.adapter_header import (
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import family_of, modality_of
 from pixlstash.utils.comfyui_utilities import NotAWorkflowError
-from pixlstash.hub.workflow_origin import FILE_ORIGIN, INBOX_ORIGIN, live_file
+from pixlstash.hub.workflow_origin import FILE_ORIGIN, INBOX_ORIGIN
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX, WORKFLOW_ID_PATTERN
 from send2trash import TrashPermissionError
 
@@ -632,7 +632,7 @@ class WorkflowCard(BaseModel):
     manual: bool = Field(
         False,
         description=(
-            "A manual workflow: its own stored document, imported, pulled, "
+            "A manual workflow: its own stored document, imported, "
             "duplicated or extracted, never grouped with another. Deletable."
         ),
     )
@@ -641,14 +641,16 @@ class WorkflowCard(BaseModel):
         description=(
             "The name of the workflow or recipe a manual workflow was made "
             "from (duplicate, fixed copy, clone, LoRA edit, extract), as it "
-            "was called then; null for an imported or pulled one."
+            "was called then; null for an imported one."
         ),
     )
     origin_category: Literal["comfyui", "pictures", "own"] = Field(
         "pictures",
         description=(
             "Where the workflow came from, for the Workflows view's filter: "
-            "`comfyui` for one pulled from ComfyUI's saved workflows, "
+            "`comfyui` for one an earlier build pulled from ComfyUI's saved "
+            "workflows (nothing is pulled any more, so no new workflow gets "
+            "it; it is how the ones already here are listed together), "
             "`pictures` for an automatic one (`auto:`, known from pictures), "
             "`own` for every other manual one (imported, dropped in the "
             "inbox, a built-in, a duplicate, a fixed copy, a clone, a chain "
@@ -1650,23 +1652,7 @@ class WorkflowRunnableGraph(BaseModel):
     """
 
     name: str = Field(description="What to call the workflow in ComfyUI.")
-    workflow: dict | None = Field(
-        description=(
-            "The ComfyUI API-format graph, or null when `needs_conversion`: "
-            "there is only an editor file, for the node to open and convert."
-        )
-    )
-    needs_conversion: bool = Field(
-        False,
-        description=(
-            "True when PixlStash could not build a runnable graph but the "
-            "workflow has a live ComfyUI file (`comfyui_file`): the node opens "
-            "that file and converts it in ComfyUI. `detail` says why."
-        ),
-    )
-    detail: str | None = Field(
-        None, description="With `needs_conversion`: why the file did not convert."
-    )
+    workflow: dict = Field(description="The ComfyUI API-format graph.")
     source: str | None = Field(
         description="Where the graph was resolved from: edit, file, picture or instance."
     )
@@ -1680,18 +1666,6 @@ class WorkflowRunnableGraph(BaseModel):
     forgotten: int = Field(
         0,
         description="How many model names the library could no longer name.",
-    )
-    comfyui_file: str | None = Field(
-        None,
-        description=(
-            "The ComfyUI file this workflow was pulled from, relative to "
-            "ComfyUI's `workflows/` user folder (`portraits/flux.json`), "
-            "when it has one there that is neither gone nor deleted here, at "
-            "the owner's ComfyUI address. The node opens that file, so Save "
-            "writes back to it, and falls back to `workflow` without it. "
-            "Checked against ComfyUI before this answer, so it is the version "
-            "`workflow` was built from."
-        ),
     )
 
 
@@ -1970,8 +1944,8 @@ class SwapProposal(BaseModel):
     history_runs: int = Field(
         default=0,
         description=(
-            "How many runs in ComfyUI's own history, as of the last workflow "
-            "pull, loaded the two together; 0 for grouped."
+            "How many runs read off ComfyUI's own history loaded the two "
+            "together; 0 for grouped."
         ),
     )
     set_name: str | None = Field(
@@ -4141,23 +4115,6 @@ def create_router(server) -> APIRouter:
             return document, problems
         return with_converted_graph(document, graph), []
 
-    def _freshen(user, workflow_id: str) -> None:
-        """Take a pulled workflow's ComfyUI file now if it changed there.
-
-        Run and Open only, before the workflow is read: one listing of the
-        file's folder, and a newer file becomes the workflow's next version,
-        which the default recipe and the resolve then read. Not for an
-        automatic workflow, one with no live ComfyUI file, or an owner who
-        turned "Pull workflows from ComfyUI" off. Any failure leaves the stored
-        version to run (``WorkflowPulls.freshen`` logs it and never raises).
-        """
-        pulls = getattr(server, "workflow_pulls", None)
-        if pulls is None or not workflow_id.startswith(MANUAL_PREFIX):
-            return
-        if not getattr(user, "pull_comfyui_workflows", True):
-            return
-        pulls.freshen(_comfyui_url(user), workflow_id)
-
     def _edited_graph_for(card) -> tuple[dict | None, int | None]:
         """``(graph, version)`` the owner saved over the automatic workflow
         *card* is the base of.
@@ -5484,9 +5441,6 @@ def create_router(server) -> APIRouter:
             )
             workflow_id = None
         user = _user(request)
-        if workflow_id and not extract:
-            # Before the default recipe, which is read off the graph too.
-            _freshen(user, workflow_id)
         recipe = _workflow_recipe(workflow_id) if workflow_id else None
         # A workflow run by itself is nobody's portrait: a person's LoRA is a
         # recipe's business, so only a run made from pictures places one the
@@ -6763,7 +6717,7 @@ def create_router(server) -> APIRouter:
     def get_runnable_graph(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        workflow, _card = _require_base(hub, workflow_id)
+        workflow, _ = _require_base(hub, workflow_id)
         # Run's own plan, so what opens is what Run would submit (#1623 left a
         # workflow several graphs; this is the one Run picks).
         # `RecursionError` for `_card_source`'s reason: the source graph came
@@ -6785,12 +6739,6 @@ def create_router(server) -> APIRouter:
                     "too deeply to walk."
                 ),
             ) from exc
-        # The workflow's ComfyUI file, when it was pulled from one.
-        link = (
-            live_file(hub, _comfyui_url(_user(request)), _card.workflow_key)
-            if _card.manual
-            else None
-        )
         if not plan.built:
             reasons = [r for group in plan.groups for r in group.reasons]
             logger.info(
@@ -6799,17 +6747,6 @@ def create_router(server) -> APIRouter:
                 [r["code"] for r in reasons],
             )
             first = reasons[0] if reasons else None
-            # An editor file ComfyUI itself can open and convert is not a
-            # dead end: answer with the file and let the node do it.
-            if link:
-                return WorkflowRunnableGraph(
-                    name=_file_stem(_card, workflow.name),
-                    workflow=None,
-                    needs_conversion=True,
-                    detail=(first or {}).get("detail") or _no_graph_sentence(first),
-                    source=None,
-                    comfyui_file=link["remote_path"],
-                )
             raise HTTPException(status_code=409, detail=_no_graph_sentence(first))
         # One entry: a body naming a `workflow_id` resolves to exactly one
         # group (`_groups_for`), the workflow's base card, so there is no
@@ -6850,7 +6787,6 @@ def create_router(server) -> APIRouter:
             source=source.origin,
             seedless=False,
             forgotten=source.forgotten,
-            comfyui_file=link["remote_path"] if link else None,
         )
 
     @router.post(
@@ -7749,7 +7685,7 @@ def create_router(server) -> APIRouter:
             "The model files this workflow loads, the shelf's checkpoints, VAEs "
             "and text encoders to choose from, and - once a checkpoint is "
             "chosen - the VAEs and text encoders recipes on this machine, or "
-            "runs in ComfyUI's history as of the last workflow pull, have run "
+            "runs read off ComfyUI's history, have run "
             "beside it, and the LoRAs and ControlNets trained on another "
             "family. When no recipe or run answers, support files whose layout "
             "the checkpoint's architecture declares are proposed as "
@@ -8572,8 +8508,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Delete one manual workflow: its document is written back to the "
             "watched workflows folder and sent to the system trash from there, "
-            "so restoring it from the trash imports it again; a pull from "
-            "ComfyUI does not bring it back. Its pictures stay, on the "
+            "so restoring it from the trash imports it again. Its pictures "
+            "stay, on the "
             "automatic workflow their graph is in, and its saved recipes stay, "
             "unfiled. An automatic workflow is not a record and cannot be "
             "deleted: hide it instead."
@@ -8628,9 +8564,8 @@ def create_router(server) -> APIRouter:
             else:
                 with workflow_inbox.INBOX_LOCK:
                     # The trash copy first, the rows once it is there: a
-                    # failed trash never loses the workflow. Under the lock a
-                    # pull checks its dismissals under, so it cannot land
-                    # between.
+                    # failed trash never loses the workflow. Under the lock
+                    # the inbox stores under, so it cannot land between.
                     workflow_inbox.trash_workflow(
                         workflow_inbox.workflow_inbox_dir(),
                         f"{download_stem(name) or 'workflow'}.json",

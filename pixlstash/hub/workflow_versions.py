@@ -1,9 +1,8 @@
 """The versions of a manual workflow's document.
 
-A ComfyUI file whose content changed is a new **version** of the card its
-``workflow_origin`` row names, not a new card, so its pictures, recipes,
-defaults and pins stay where they are. So is a LoRA chain edit the owner saved
-over the workflow instead of as a copy.
+A graph the owner saves over a workflow (a LoRA chain edit, say) is a new
+**version** of it, not a new card, so its pictures, recipes, defaults and pins
+stay where they are.
 
 **An automatic workflow has versions too, once it is saved over.** It has no
 ``workflow_document`` row, so nothing here copies onto one: its version 1 is
@@ -37,8 +36,7 @@ from pixlstash.utils.workflow_ids import AUTO_PREFIX, stamp_workflow_id
 logger = get_logger(__name__)
 
 # The most versions one workflow keeps: version 1 and the newest
-# ``MAX_VERSIONS - 1``. A ComfyUI file is written by whoever reaches ComfyUI,
-# and the poll takes every change, so history is bounded or the hub is not.
+# ``MAX_VERSIONS - 1``, so history is bounded.
 MAX_VERSIONS = 50
 
 # ``source`` of an automatic workflow's version 1: the graph its pictures held
@@ -149,17 +147,15 @@ def append_version(
     workflow_id: str,
     document: dict,
     *,
-    source: str = "pull",
-    content_hash: Optional[str] = None,
-    topology_hash: Optional[str] = None,
-    remote_modified: Optional[int] = None,
+    source: str,
     first: Optional[dict] = None,
 ) -> int:
     """Make *document* the next version of *workflow_id*, inside the caller's
     transaction, and return its number.
 
-    *source* is how the version arrived: ``pull`` for a changed ComfyUI file,
-    ``chain`` for a LoRA chain edit the owner saved over the workflow.
+    *source* is how the version arrived: ``chain`` for a LoRA chain edit the
+    owner saved over the workflow. (``pull`` on a stored row is a ComfyUI file
+    the removed pull read.)
 
     *first* is version 1 of a workflow that has no document row to take it
     from: an automatic workflow's graph as read off its pictures, stored the
@@ -194,9 +190,6 @@ def append_version(
         stored,
         None,
         source,
-        content_hash=content_hash,
-        topology_hash=topology_hash,
-        remote_modified=remote_modified,
     )
     conn.execute(
         "UPDATE workflow_document SET document = ?, api_document = NULL "

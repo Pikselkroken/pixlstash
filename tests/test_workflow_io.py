@@ -34,7 +34,6 @@ from pixlstash.services.workflow_inputs import (
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     reduce_ui_graph,
-    topology_hash,
 )
 from pixlstash.services.workflow_bindings import run_targets
 from pixlstash.services.workflow_io import (
@@ -1017,9 +1016,10 @@ def test_deleting_an_adopted_workflow_trashes_its_file_and_never_a_built_in(
     graph = _t2i_graph()
     (user_dir / "old.json").write_text(json.dumps(graph), encoding="utf-8")
     adopted = create_manual_workflow(hub, "old", graph, "import")
-    workflow_origin.record_pulled(
-        hub, workflow_origin.FILE_ORIGIN, "old.json", adopted, None, None
-    )
+    with hub.transaction() as conn:
+        workflow_origin.upsert(
+            conn, workflow_origin.FILE_ORIGIN, "old.json", adopted, None, None
+        )
     shipped = _t2i_graph()
     shipped["2"]["inputs"]["text"] = "shipped"
     (built_in / "Shipped.json").write_text(json.dumps(shipped), encoding="utf-8")
@@ -1351,7 +1351,6 @@ def test_an_editor_hint_on_the_envelope_does_not_make_the_graph_an_editor_graph(
 
     body = call(name="envelope", workflow=envelope)
     assert api_graph(manual_document(_hub, body["workflow_id"])) == envelope["prompt"]
-    assert comfyui_module._topology_of(envelope) == topology_hash(envelope["prompt"])
     assert run_targets(envelope)["caption"] == [
         {"path": ["prompt", "2", "inputs", "text"], "template": None}
     ]
@@ -1367,8 +1366,8 @@ def test_a_file_that_carries_both_graphs_is_read_as_the_one_it_can_run(import_ro
     nothing", and a title came off the editor's own node ids - while the
     executable graph sat in the file unread. One sniff makes the wrapped
     prompt the answer to all three, which is the graph this file can actually
-    run. **Three of the moved sites are pinned here and nowhere else**: revert
-    `_topology_of`, `run_targets` or `_raw_node` and one of these fails.
+    run. **Two of the moved sites are pinned here and nowhere else**: revert
+    `run_targets` or `_raw_node` and one of these fails.
     """
     call, _user_dir, _built_in, hub = import_route
     prompt = _t2i_graph()
@@ -1393,7 +1392,6 @@ def test_a_file_that_carries_both_graphs_is_read_as_the_one_it_can_run(import_ro
 
     body = call(name="both", workflow=document)
     assert api_graph(manual_document(hub, body["workflow_id"])) is not None
-    assert comfyui_module._topology_of(document) == topology_hash(prompt)
     assert run_targets(document)["image"] == [
         {"path": ["prompt", "7", "inputs", "image"], "template": None}
     ]

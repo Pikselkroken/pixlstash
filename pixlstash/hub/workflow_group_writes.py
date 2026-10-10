@@ -21,7 +21,6 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub import workflow_origin, workflow_versions
-from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN, FILE_ORIGIN, INBOX_ORIGIN
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import workflow_bindings
 from pixlstash.services.workflow_identity import model_fix_kind
@@ -194,9 +193,11 @@ def create_manual_workflow(
     row and the name go in one transaction, so a workflow never shows nameless.
 
     Args:
-        origin: How it arrived (``import``, ``inbox``, ``pull``, ``builtin``,
+        origin: How it arrived (``import``, ``inbox``, ``builtin``,
             ``duplicate``, ``fixed``, ``clone``, ``chain``, ``recipe``); the
-            table's CHECK refuses anything else.
+            table's CHECK refuses anything else. ``pull`` is allowed and no
+            longer written: rows the removed pull of ComfyUI's saved
+            workflows made keep it.
         from_workflow_id: The workflow (or, for ``recipe``, the recipe's
             workflow) it was made from, and *from_name* what that was called.
         api_document: The API graph an editor *document* converted into.
@@ -271,7 +272,7 @@ def set_manual_api_document(
     On ``workflow_document`` and on the current version, which is the one it
     converts. With *canonical* (``workflow_bindings.canonical`` of the document
     that was converted), a workflow whose current document no longer is that
-    one - a pull made a new version since it was matched - is left alone, read
+    one - a save made a new version since it was matched - is left alone, read
     and written in one write transaction, so the conversion of one version
     never lands on the next. Returns the ids it was stored on.
 
@@ -326,21 +327,14 @@ def _holds(document: str, canonical: str) -> bool:
 def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
     """Forget one manual workflow's rows, in one transaction.
 
-    Its inbox and built-in origin rows go, so handing the same content over
-    again stores it again; every pull row naming it is **dismissed**, so the
-    next pull does not bring it back. Then its document, name, defaults, pins
-    and picture inputs. Nothing in any vault is written: its pictures fall
-    back to the automatic workflow their graph is in.
+    Its origin rows go, so handing the same content over again stores it
+    again. Then its document, name, defaults, pins and picture inputs. Nothing
+    in any vault is written: its pictures fall back to the automatic workflow
+    their graph is in.
     """
     with hub.transaction() as conn:
         conn.execute(
-            "DELETE FROM workflow_origin WHERE workflow_name = ? "
-            "AND origin IN (?, ?, ?)",
-            (workflow_id, INBOX_ORIGIN, BUILTIN_ORIGIN, FILE_ORIGIN),
-        )
-        conn.execute(
-            "UPDATE workflow_origin SET dismissed = 1 WHERE workflow_name = ?",
-            (workflow_id,),
+            "DELETE FROM workflow_origin WHERE workflow_name = ?", (workflow_id,)
         )
         for table in (
             "workflow_group_default",
