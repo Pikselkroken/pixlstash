@@ -2,7 +2,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import Column, ForeignKey
+from sqlalchemy import Boolean, Column, ForeignKey
 from sqlmodel import SQLModel, Field, Integer, Relationship, UTCDateTime
 
 if TYPE_CHECKING:
@@ -96,7 +96,14 @@ class UserToken(SQLModel, table=True):
     # next library), and only set through ``AuthService.set_token_libraries``.
     # ``library_uuid`` keeps the library it was minted in; see
     # ``auth.token_covers_library``, the one place the two are read together.
-    all_libraries: bool = Field(default=False)
+    #
+    # A server default, as the hub's own column has: this model also creates
+    # the vault's legacy ``usertoken`` table, and a row written without the
+    # column (an old vault's, or a snapshot's) is a pinned token, not an error.
+    all_libraries: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0"),
+    )
 
     user: Optional["User"] = Relationship(
         back_populates="tokens",
