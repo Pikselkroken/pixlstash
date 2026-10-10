@@ -9162,8 +9162,10 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   (`TEXT_NODE_CLASSES`: WAS's `Text Multiline`, Comfyroll's `CR Text`,
   Chibi-Nodes' `Textbox`, core's `PrimitiveStringMultiline` on an older
   ComfyUI) only hands its string on, so every link from it becomes that string, however many
-  inputs it fed. It runs after `_apply_prompts`, which writes a Run popup
-  prompt through `prompt_text_target`: past a linked encoder into the text
+  inputs it fed. It runs after `run_service.apply_prompts`, which writes a Run popup
+  prompt through `prompt_text_target` (the field is `workflow_io.prompt_field`'s,
+  the one rule the bindings share; a prompt with no place to go is reported
+  on `RunGroup.flags` as `prompt_not_applied`): past a linked encoder into the text
   node itself, when that node feeds only that encoder, so the typed prompt is
   what gets inlined. Any other wired `text` (a prompt-builder node, a shared
   or overridden text node) is replaced by the typed prompt as a literal,

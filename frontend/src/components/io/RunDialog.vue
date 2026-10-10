@@ -201,13 +201,20 @@
           <span class="rund-l">
             Prompt
             <RunResetChip
-              v-if="prompt !== basePrompt"
+              v-if="!promptUnset && prompt !== basePrompt"
               :value="basePrompt || 'no prompt'"
               label="Prompt"
               @reset="prompt = basePrompt"
             />
           </span>
+          <!-- No box the run cannot honour (#1832): a prompt typed here would
+               be dropped, so the field says so instead of taking one. -->
+          <p v-if="promptUnset" class="rund-note" role="status" data-testid="rund-prompt-unset">
+            This workflow has no prompt that can be set here. The run uses the
+            workflow as it is saved.
+          </p>
           <AppTextarea
+            v-else
             v-model="prompt"
             label="Prompt"
             :placeholder="isEdit ? 'Describe the change, e.g. make it night time' : ''"
@@ -583,7 +590,16 @@
           <!-- The negative prompt only opens when the original had one: an
                empty box under every run would read as a field somebody forgot
                to fill in. -->
-          <details v-if="baseNegative" class="rund-disc">
+          <p
+            v-if="baseNegative && negativeUnset"
+            class="rund-note"
+            role="status"
+            data-testid="rund-negative-unset"
+          >
+            This workflow has no negative prompt to set, so the picture's is
+            not used.
+          </p>
+          <details v-else-if="baseNegative" class="rund-disc">
             <summary>Negative prompt</summary>
             <AppTextarea
               v-model="negative"
@@ -927,6 +943,8 @@ const drafts = reactive({});
 const fellBack = ref([]);
 
 const prompt = ref("");
+/** `RunGroup.prompt` of the last pre-flight: the graph's own prompt facts. */
+const graphPrompt = ref(null);
 const negative = ref("");
 const count = ref(1);
 const seedMode = ref("new");
@@ -1762,8 +1780,21 @@ const basePrompt = computed(
     props.source?.prompt ||
     recipe.value?.positive_prompt ||
     savedRecipe.value?.prompt ||
+    graphPrompt.value?.positive_text ||
     "",
 );
+/**
+ * A run with nothing else to prefill from shows the workflow's own prompt once
+ * the pre-flight has read it, so what will run is visible (#1832), and follows
+ * it to the next workflow picked. Only a box still showing the last base:
+ * text the owner typed is theirs.
+ */
+watch(basePrompt, (now, was) => {
+  if (prompt.value === was) prompt.value = now;
+});
+/** The graph has nowhere to put a prompt, so the form offers no box for one. */
+const promptUnset = computed(() => graphPrompt.value?.positive_settable === false);
+const negativeUnset = computed(() => graphPrompt.value?.negative_settable === false);
 
 /**
  * What to send as `prompt`, or `null` to leave the graph's own alone.
@@ -1773,6 +1804,7 @@ const basePrompt = computed(
  * nothing filled it, which is not the same thing.
  */
 const promptOverride = computed(() => {
+  if (promptUnset.value) return null;
   const typed = prompt.value;
   if (typed) return typed;
   return basePrompt.value ? "" : null;
@@ -2382,12 +2414,12 @@ function runBody() {
   const values = displayedValues();
   const body = {
     // `null` means "leave the graph's own text alone"; `""` means "blank it",
-    // and `_apply_prompts` honours both literally. A card or a multi-picture
-    // selection reads no recipe, so the box is empty because there was nothing
-    // to prefill it with - sending that emptiness would wipe every positive
+    // and `apply_prompts` honours both literally. A card or a multi-picture
+    // selection reads no recipe, so until the pre-flight has read the graph's
+    // own prompt the box is empty because there was nothing to prefill it with - sending that emptiness would wipe every positive
     // prompt node in the graph and generate from no prompt at all.
     prompt: promptOverride.value,
-    negative: baseNegative.value ? negative.value : null,
+    negative: baseNegative.value && !negativeUnset.value ? negative.value : null,
     // Only the rows that DIFFER from the graph. An untouched slot needs no
     // override - ComfyUI loads what the graph already names - and a slot the
     // shelf could not name has no digest to send, which `RunLora.sha256`
@@ -2843,6 +2875,7 @@ async function runPreflight(token = loadToken) {
     // One group: this popup always runs one workflow (`target`, an id or a saved
     // recipe), so the first group's inputs are the card's.
     pictureInputs.value = answer?.groups?.[0]?.picture_inputs || [];
+    graphPrompt.value = answer?.groups?.[0]?.prompt || null;
     inputsKey.value = askedFor;
   } catch (err) {
     // The route answers 400/404/422 here exactly as it does on the run, "so
@@ -2854,6 +2887,7 @@ async function runPreflight(token = loadToken) {
     reasons.value = [];
     bypassed.value = [];
     changedNodes.value = false;
+    graphPrompt.value = null;
     // What the card's inputs are is no longer known, so nothing may be
     // written from the last answer: that is how a pin reverted the one before.
     pictureInputs.value = [];

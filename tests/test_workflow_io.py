@@ -234,11 +234,44 @@ def test_a_positive_only_passthrough_is_followed():
 
 def test_a_dead_end_is_not_found_rather_than_no_prompt():
     graph = _t2i_graph()
-    graph["7"] = _node("ImpactWildcardEncode", wildcard_text="a cat", clip=["1", 1])
+    graph["7"] = _node("ConditioningFromNowhere", strength=1.0)
     graph["4"]["inputs"]["positive"] = ["7", 0]
     found = detect_workflow_io(graph)
     assert (found.positive_prompts, found.negative_prompts) == ((), ("3",))
     assert found.ambiguities == ("positive prompt not found",)
+
+
+def _i2v_graph() -> dict:
+    """MiniMax H3's shape: one node takes clip and text and makes the conditioning."""
+    return {
+        "1": _node("CLIPLoader", clip_name="clip.safetensors"),
+        "2": _node("LoadImage", image="a.png"),
+        "3": _node(
+            "MiniMaxH3ImageToVideo", prompt="a cat", clip=["1", 0], first_frame=["2", 0]
+        ),
+        "4": _node("BasicGuider", conditioning=["3", 0]),
+        "5": _node("SamplerCustomAdvanced", guider=["4", 0], latent_image=["3", 1]),
+        "6": _node("SaveImage", images=["5", 0]),
+    }
+
+
+def test_a_node_taking_clip_and_no_conditioning_is_the_prompt_node():
+    """Whatever its class is called (#1832)."""
+    found = detect_workflow_io(_i2v_graph())
+    assert (found.positive_prompts, found.ambiguities) == (("3",), ())
+    assert run_targets(_i2v_graph())["caption"] == [
+        {"path": ["3", "inputs", "prompt"], "template": None}
+    ]
+
+
+def test_a_node_taking_clip_and_conditioning_is_walked_through():
+    """`GLIGENTextBoxApply` adds a box to a prompt; it is not the prompt."""
+    graph = _t2i_graph()
+    graph["7"] = _node(
+        "GLIGENTextBoxApply", text="a hat", clip=["1", 1], conditioning_to=["2", 0]
+    )
+    graph["4"]["inputs"]["positive"] = ["7", 0]
+    assert detect_workflow_io(graph).positive_prompts == ("2",)
 
 
 def test_conditioning_nodes_taking_prompts_are_not_samplers():

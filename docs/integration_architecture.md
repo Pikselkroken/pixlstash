@@ -797,7 +797,14 @@ Seven rules the client must not re-derive:
    `flags: [{code, address, was, now, ...}]`, facts rather than reasons:
    `family_mismatch` (a model for another family or modality than the one it
    replaced, still run) and `model_not_applied` (ComfyUI cannot load it; the
-   loader keeps its file).
+   loader keeps its file), and `prompt_not_applied` with its `side` (a
+   `prompt` or `negative` the request sent that the graph has no place for;
+   said, never dropped). Each resolved group also carries `prompt:
+   {positive_settable, negative_settable, positive_text}`: whether a prompt
+   has anywhere to go, and the graph's own positive prompt before the
+   request's was written. The Run popup offers no prompt box where
+   `positive_settable` is false, and opens an otherwise empty box on
+   `positive_text`.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.

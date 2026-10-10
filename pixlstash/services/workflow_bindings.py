@@ -28,7 +28,11 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import INPUT_IMAGE_FIELDS
 from pixlstash.services.comfyui_service import PIXLSTASH_PICTURE_LOADER
 from pixlstash.services.workflow_hash import WorkflowGraphError
-from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.services.workflow_io import (
+    api_graph,
+    detect_workflow_io,
+    prompt_field,
+)
 from pixlstash.utils.workflow_ids import untagged
 
 logger = get_logger(__name__)
@@ -50,8 +54,6 @@ MIGRATION_MARKER = ".placeholder-bindings-migrated"
 # The file as it was before the migration rewrote it. Not ``.json``, so the
 # workflow list never shows it.
 BACKUP_SUFFIX = ".pre-bindings"
-
-_PROMPT_FIELDS = ("text", "prompt", "value")
 
 
 class BindingError(ValueError):
@@ -407,13 +409,13 @@ def picture_target(document: dict, node_id: str, class_type: str) -> dict | None
 
 def _text_path(graph: dict, node_id: str, hops: int = 1) -> list | None:
     inputs = (graph.get(node_id) or {}).get("inputs") or {}
-    for field in _PROMPT_FIELDS:
-        value = inputs.get(field)
-        if isinstance(value, str):
-            return [node_id, "inputs", field]
-        if isinstance(value, list) and len(value) == 2 and hops > 0:
-            return _text_path(graph, str(value[0]), hops - 1)
-    return None
+    field = prompt_field(inputs)
+    if field is None:
+        return None
+    value = inputs[field]
+    if isinstance(value, str):
+        return [node_id, "inputs", field]
+    return _text_path(graph, value[0], hops - 1) if hops > 0 else None
 
 
 def fill(document: dict, targets: dict[str, list[dict]], values: dict) -> None:

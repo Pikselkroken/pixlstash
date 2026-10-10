@@ -213,7 +213,6 @@ from pixlstash.services.workflow_inputs import (
 from pixlstash.services.comfyui_ui_graph import convert_ui_graph_to_api
 from pixlstash.services.workflow_io import (
     api_graph,
-    detect_workflow_io,
     with_converted_graph,
 )
 from pixlstash.services.workflow_parameters import is_latent_size, set_latent_size
@@ -1403,6 +1402,18 @@ class RunPictureInput(ParameterAddress):
     fill: Literal["request", "fixed", "selection", "graph"] | None = None
 
 
+class RunPrompt(BaseModel):
+    """Where one group's graph takes a run's prompts, and what it holds (#1832)."""
+
+    # False where a prompt sent with the run has nowhere to go: no prompt node
+    # was found, or it keeps its text in a field PixlStash does not write.
+    positive_settable: bool = False
+    negative_settable: bool = False
+    # The graph's own positive prompt, before this request's was written. Null
+    # where it is not a literal or the graph's prompt nodes disagree.
+    positive_text: str | None = None
+
+
 class RunGroup(BaseModel):
     """One graph a request resolved to, and whether it would run.
 
@@ -1474,8 +1485,12 @@ class RunGroup(BaseModel):
     # What this run does that the owner may not expect, and runs anyway
     # (#1620 Q3): `family_mismatch` for a model loaded in place of one made for
     # another family or modality, `model_not_applied` for one this ComfyUI
-    # cannot load where it was asked for. Not reasons: nothing here refuses.
+    # cannot load where it was asked for, `prompt_not_applied` (with its
+    # `side`) for a prompt this request sent that the graph has no place for
+    # (#1832). Not reasons: nothing here refuses.
     flags: list[dict] = Field(default_factory=list)
+    # Null for a group refused before its graph was resolved.
+    prompt: RunPrompt | None = None
 
 
 class RunPreflight(BaseModel):
@@ -4236,26 +4251,6 @@ def create_router(server) -> APIRouter:
                         )
         return flags
 
-    def _apply_prompts(graph: dict, prompt: str | None, negative: str | None) -> None:
-        """Put this run's prompts into the detected text nodes."""
-        if prompt is None and negative is None:
-            return
-        try:
-            detected = detect_workflow_io(graph)
-        except WorkflowGraphError as exc:
-            logger.info("Prompts not applied, the graph will not reduce: %s", exc)
-            return
-        for node_ids, text in (
-            (detected.positive_prompts, prompt),
-            (detected.negative_prompts, negative),
-        ):
-            if text is None:
-                continue
-            for node_id in node_ids:
-                target = run_service.prompt_text_target(graph, node_id, text)
-                if target is not None:
-                    graph[target[0]]["inputs"][target[1]] = text
-
     def _swapped_to_digest_loader(
         graph: dict,
         item: RunLora,
@@ -5303,7 +5298,16 @@ def create_router(server) -> APIRouter:
                     body.count,
                 )
             group.flags = _apply_models(hub, graph, body.models, object_info)
-            _apply_prompts(graph, body.prompt, body.negative)
+            placed = run_service.apply_prompts(graph, body.prompt, body.negative)
+            group.prompt = RunPrompt(
+                positive_settable=placed["positive_settable"],
+                negative_settable=placed["negative_settable"],
+                positive_text=placed["positive_text"],
+            )
+            group.flags += [
+                {"code": "prompt_not_applied", "side": side}
+                for side in placed["unplaced"]
+            ]
             # A saved recipe's LoRAs are matched against the graph as it stood
             # BEFORE the skip: matched after it, the LoRA a skipped loader held
             # moved on to the next free slot and replaced a LoRA the owner had
