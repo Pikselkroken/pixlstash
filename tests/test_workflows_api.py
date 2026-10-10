@@ -14172,11 +14172,12 @@ def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
             _unshelve(conn, [digest for _kind, digest in digests.values()])
 
 
-def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
+def test_a_missing_checkpoint_is_offered_its_own_base_model_first(cloneable):
     """A replacement of another base model would not match the LoRAs around it.
 
     The missing file's shelf base model decides; without one, the one base
-    model the graph's LoRAs agree on; with neither, nothing is narrowed.
+    model the graph's LoRAs agree on; with neither, or with no loadable
+    checkpoint of that base model, nothing is narrowed.
     """
     hub = cloneable.server.hub
     with hub.transaction() as conn:
@@ -14227,9 +14228,30 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
         set_base("sha256 = ?", "FLUX.1 dev", RUN_ADAPTER_DIGEST)
         assert offered() == ([CLONE_CHECKPOINT], None)
         assert narrowed[-1] is True
-        # A base model nothing on the shelf has is said as such.
+        # A base model nothing on the shelf has leaves every checkpoint to
+        # pick from, never none: the LoRAs' word is a guess (the missing
+        # file's own is unknown), and the owner cannot correct it.
         set_base("sha256 = ?", "SD 1.5", RUN_ADAPTER_DIGEST)
-        assert offered() == ([], "none_same_base_model")
+        assert offered() == every
+        assert narrowed[-1] is False, "an offer of every checkpoint said narrowed"
+        listed = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
+        # Still only what the loader can load.
+        listed.remove(CLONE_CHECKPOINT)
+        assert offered() == ([_REPLACEMENT_FILENAME], None)
+        # Nor does a base model only an unloadable checkpoint has narrow it.
+        set_base("sha256 = ?", "FLUX.1 dev", RUN_ADAPTER_DIGEST)
+        assert offered() == ([_REPLACEMENT_FILENAME], None)
+        assert narrowed[-1] is False
+        # The missing one's own base model widens the same way.
+        set_base("filename = ?", "FLUX.1 dev", _SHELF_FILENAME)
+        assert offered() == ([_REPLACEMENT_FILENAME], None)
+        assert narrowed[-1] is False
+        set_base("filename = ?", None, _SHELF_FILENAME)
+        # Nothing loadable at all is said as that, of no base model.
+        listed.remove(_REPLACEMENT_FILENAME)
+        assert offered() == ([], "none_loadable")
+        assert narrowed[-1] is False
+        listed += [CLONE_CHECKPOINT, _REPLACEMENT_FILENAME]
         # LoRAs that disagree say nothing.
         cloneable.graph["8"] = {
             "class_type": "LoraLoader",

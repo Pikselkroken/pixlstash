@@ -1475,12 +1475,12 @@ describe("the body it sends", () => {
       preflightWorkflowRun.mockResolvedValueOnce(missing());
       readModelSwap.mockResolvedValue({
         replacements: [],
-        replacements_reason: "none_same_base_model",
+        replacements_reason: "none_loadable",
       });
       const wrapper = await mountRun({ kind: "card", workflowId: KEY });
       expect(wrapper.find("[aria-label='Checkpoint']").exists()).toBe(true);
       expect(wrapper.find("[data-testid='rund-checkpoint-missing']").text()).toContain(
-        "No checkpoint on your model shelf is known to have its base model",
+        "Nothing on your model shelf can be loaded by this workflow",
       );
       // Asked once per file, however often the pre-flight says it again.
       preflightWorkflowRun.mockResolvedValueOnce(missing());
@@ -1538,8 +1538,8 @@ describe("the body it sends", () => {
       });
       const wrapper = await mountRun({ kind: "card", workflowId: KEY });
       const note = wrapper.find("[data-testid='rund-checkpoint-missing']").text();
-      expect(note).toContain("Nothing says which base model it was");
-      expect(note).not.toContain("same base model");
+      expect(note).toContain("is known to match it, so every one it can load is listed");
+      expect(note).not.toContain("base model");
     });
 
     it("leaves a name typed during the read in its box", async () => {

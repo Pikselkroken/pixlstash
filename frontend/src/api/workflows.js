@@ -295,7 +295,7 @@ export async function duplicateWorkflow(workflowId) {
  * With `replacing` (the Workflow tab's "Replace with…", #1596): also
  * `replacements`, the shelf models that go with the workflow's checkpoint (for
  * a checkpoint: that share the missing one's base model, where anything says
- * which) and that the loader naming that file can load, and
+ * which and any does) and that the loader naming that file can load, and
  * `replacements_reason` when there are none.
  *
  * @param {string} workflowId

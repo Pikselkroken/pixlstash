@@ -29,6 +29,13 @@
               : `${row.manual.length} manual workflows load it${row.fixable.length ? " too" : ""}; clone them with other models instead.`
           }}
         </p>
+        <p
+          v-if="row.unmatched && row.options.length"
+          class="rmd-note rmd-quiet"
+          data-testid="rmd-unmatched"
+        >
+          {{ UNMATCHED_REPLACEMENTS_TEXT }}
+        </p>
         <p v-if="row.loading" class="rmd-note rmd-quiet">
           Reading what could replace it…
         </p>
@@ -93,6 +100,7 @@ import { onSessionReset } from "../../utils/apiClient";
 import {
   NO_REPLACEMENT_TEXT,
   replacementOptions,
+  UNMATCHED_REPLACEMENTS_TEXT,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -181,6 +189,7 @@ function rowsFor(heads) {
       manual: sorted.filter((id) => id.startsWith(MANUAL_PREFIX)),
       loading: false,
       options: [],
+      unmatched: false,
       reason: "",
     };
   });
@@ -204,6 +213,7 @@ async function load() {
         });
         if (mine !== token) return;
         row.options = replacementOptions(body.replacements);
+        row.unmatched = body.replacements_narrowed === false;
         row.reason =
           NO_REPLACEMENT_TEXT[body.replacements_reason] ||
           "Nothing on your shelf can replace it.";
