@@ -8870,12 +8870,34 @@ route since #1410. The pieces, all called from `_plan` / `_submit_every` in
 - **Resolution is `workflow_inputs.resolve_fills`**, first answer wins: the
   body's `inputs` entry (`picture_id: null` sends the selection there), a
   `fixed` pin whose `pixel_sha` a kept picture still holds (the **oldest** kept
-  copy, `oldest_kept_by_pixel_sha`, so importing a duplicate never moves it), a
+  copy, `oldest_kept_by_pixel_sha`, so importing a duplicate never moves it), on
+  a replay the picture's own original (below), a
   stored `selection` when the body has pictures and has not sent them elsewhere,
   and then - decided over the whole card, after the rest - the one input still
   open when exactly one is, which the selection fills unasked. A dead pin does not
   resolve its input. That rule is what lets a two-input card with a pinned
   reference, and "Make more like these", run with no `inputs` at all.
+- **A replay reads what the picture was made from, not the picture.** The
+  selection is normally what a workflow runs *over*; on "Run recipe" it is the
+  workflow's own output, and fed back in an upscale is upscaled again. With
+  `replay: true` and exactly one picture in the request, `_made_from` reads
+  that picture's own graph: a loader still holding a name `_upload_files` wrote
+  names its content, and the oldest kept picture with that `pixel_sha` fills the
+  input (`fill: "original"`), after the body's entry and a pin and before the
+  selection. **Naming any original spends the selection**: neither a stored
+  `selection` nor the lone-open-input rule then feeds the picture in beside the
+  one it was made from; only the body's own entry can. Matched by address
+  alone: a loader's label comes from what feeds it, so a lone input keeps its
+  address on every topology, and loaders told apart by what they feed are not
+  guessed between when another topology moves theirs. An input whose original
+  cannot be named - a file the owner put in ComfyUI's input folder, an upload
+  made before the picture was hashed, a
+  PixlStash picture loader's ids, a wired input, a picture since binned or
+  whose file has gone - is filled as on any other run. Several pictures are
+  left alone: each has its own original and a feed carries one. `replay` is
+  the caller's word; that the workflow made the picture is not checked.
+  Nothing is stored: `generation_input` is still unwritten, and this reads the
+  graph.
 - **An open input refuses only when the graph cannot run it.**
   `picture_input_unfilled` (it replaced `fixed_input_deleted`) names the open
   inputs whose own value is empty or in the pre-flight's `missing_input_images`,

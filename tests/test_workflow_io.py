@@ -1463,6 +1463,38 @@ def test_a_selection_routed_on_one_card_does_not_move_another_cards():
     assert [fill.how for fill in fills] == [None, None, "selection"]
 
 
+def test_an_original_stands_in_for_the_selection_and_spends_it():
+    """A replay's original fills its input, and the picture goes nowhere else.
+
+    Without the second half the lone rule sees one input still open and hands
+    the replayed picture to the reference beside the one its original took.
+    """
+    subject, reference = ("subject", "image"), ("reference", "image")
+    card = [_card_input("subject", SELECTION), _card_input("reference")]
+    fills = resolve_fills(card, {}, {}, True, {subject: 7})
+    assert [(fill.how, fill.picture_id) for fill in fills] == [
+        ("original", 7),
+        (None, None),
+    ]
+    # The request and a pin both come first.
+    fills = resolve_fills(card, {subject: None}, {}, True, {subject: 7})
+    assert [fill.how for fill in fills] == ["selection", None]
+    pinned = [_card_input("subject", "fixed", "sha"), _card_input("reference")]
+    fills = resolve_fills(pinned, {}, {"sha": 3}, True, {subject: 7, reference: 8})
+    assert [(fill.how, fill.picture_id) for fill in fills] == [
+        ("fixed", 3),
+        ("original", 8),
+    ]
+    # Spent for a stored Selection too, not only for the lone rule: the
+    # original is in one input, and the picture does not go in the other.
+    swapped = [_card_input("subject"), _card_input("reference", SELECTION)]
+    fills = resolve_fills(swapped, {}, {}, True, {subject: 7})
+    assert [fill.how for fill in fills] == ["original", None]
+    # With no original named, the same card takes the selection as it always did.
+    fills = resolve_fills(swapped, {}, {}, True, {})
+    assert [fill.how for fill in fills] == [None, "selection"]
+
+
 def test_a_converted_graph_keeps_the_workflows_own_keys():
     """The editor workflow's output choice wins over one the conversion carried."""
     editor = {"nodes": [], "links": [], "pixlstash_output": "mine"}

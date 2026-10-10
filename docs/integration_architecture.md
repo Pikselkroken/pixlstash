@@ -703,11 +703,12 @@ stacker's `lora_name_1` and `lora_name_2` are two slots), `values:
 [{slot_label, input_name, value}]` addressed the way a card's defaults are,
 `count`, `seed_mode: "new" | "keep" | "fixed"` with `seed`,
 `destination: {set_id?, project_id?, character_id?}`, `inputs: [{slot_label,
-input_name, picture_id}]`, `stack` and `allow_unchecked`.
+input_name, picture_id}]`, `replay`, `stack` and `allow_unchecked`.
 
 **`inputs` fills the card's picture inputs (#1457), and is usually empty.**
 The server answers each input in order: the body's entry (`picture_id: null`
-means "the selection goes here"), a `fixed` pin whose picture is still kept, a
+means "the selection goes here"), a `fixed` pin whose picture is still kept, on
+a `replay` the picture's own original (below), a
 stored `selection` fed from `picture_ids`, and then — over the whole card —
 **the one input still open when exactly one is, which the selection fills with
 nothing in the body saying so.** A two-input card with a pinned reference
@@ -720,10 +721,20 @@ kept, or whose file is gone, is a 404. At most one entry may take the selection
 refusal is decided**, once per distinct picture per request; the pre-flight
 uploads nothing.
 
+**`replay: true` says the one picture named is the workflow's own output**
+("Run recipe"), not a picture to run it over. A picture input then takes what
+that picture's run loaded, where the library still holds it (`fill:
+"original"`, with its `picture_id`), after the body's entry and a pin and ahead
+of the selection; an input whose original is not known is filled as usual, and
+once any original is named the picture itself goes only where the body sends
+it. The Run popup sends it only for a picture opened on its own recipe (Run
+recipe, Make more like these… on one picture), so an edit of an edit still
+reads the edit. Ignored unless the request names exactly one picture.
+
 Each `RunGroup` carries `picture_inputs: [{slot_label, input_name, title, mode,
 pixel_sha, picture_id, picture_missing, fill}]`: every picture input of the
 card, enumerated from the graph with the stored setup over it. `fill` is how
-this run answers it — `request`, `fixed`, `selection`, `graph` (open, and the
+this run answers it — `request`, `fixed`, `original`, `selection`, `graph` (open, and the
 file the graph already names is on this ComfyUI, so it runs as authored) or
 `null` (unfilled). `picture_missing` is a pin whose picture has gone: an empty
 slot to choose again, not a separate refusal.

@@ -1449,6 +1449,39 @@ describe("the body it sends", () => {
     expect(body.workflow_id).toBeUndefined();
   });
 
+  it("says a picture's own recipe is a replay, and an edit or another workflow is not", async () => {
+    // The server feeds a replay what the picture was made FROM. Sent for an
+    // edit, an edit of an edit would re-edit the original instead.
+    const own = await mountRun();
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].replay).toBe(true);
+    await own.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].replay).toBe(true);
+
+    // "Make more like these…" on one picture is its own recipe again too.
+    await mountRun({ kind: "selection", pictureIds: [42], workflowId: KEY });
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].replay).toBe(true);
+
+    await mountRun({ kind: "edit", pictureIds: [42], workflowId: KEY });
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].replay).toBeUndefined();
+
+    // "Use as input for…", whose workflow the owner picks - the very one that
+    // made the picture included: it runs over the picture.
+    listWorkflowCards.mockResolvedValue({ cards: [card()] });
+    const picked = await mountRun({
+      kind: "selection",
+      pictureIds: [42],
+      workflowId: KEY,
+      pickWorkflow: true,
+    });
+    expect(picked.vm.runsOwnWorkflow).toBe(true);
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].replay).toBeUndefined();
+
+    // Opened on a workflow that did not make the picture.
+    await mountRun({ kind: "picture", pictureIds: [42], workflowId: OTHER });
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].replay).toBeUndefined();
+  });
+
   it("names the card itself when there is no picture behind it", async () => {
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     await wrapper.vm.submit();
@@ -2465,6 +2498,55 @@ describe("the pictures a workflow takes", () => {
     expect(wrapper.vm.runNotes).toEqual([]);
     expect(wrapper.vm.canRun).toBe(false);
     expect(wrapper.vm.runBlocker).toBe("Choose a picture for Reference first.");
+  });
+
+  it("shows what the picture was made from, and can be sent the picture instead", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer([input(SUBJECT, { mode: "selection", picture_id: 7, fill: "original" })]),
+    );
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1] });
+
+    const row = wrapper.find(".rund-in");
+    expect(row.text()).toContain("The picture this one was made from");
+    expect(row.find(".rund-in-img").exists()).toBe(true);
+    // The picture itself is not fed in, so nothing is another take of it.
+    expect(wrapper.find(".rund-box").element.checked).toBe(false);
+    // One bar button, the pin: nothing was picked, so nothing to clear.
+    expect(row.findAllComponents({ name: "AppBarButton" })).toHaveLength(1);
+
+    // The original stands ahead of anything the card stores, so a write to
+    // the card could not move it: this run is told, and nothing is stored.
+    await wrapper.vm.useSelectionHere(wrapper.vm.pictureInputs[0]);
+    await flushPromises();
+    expect(setWorkflowInputs).not.toHaveBeenCalled();
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].inputs).toEqual([
+      { slot_label: SUBJECT, input_name: "image", picture_id: null },
+    ]);
+    expect(wrapper.find(".rund-in").findAllComponents({ name: "AppBarButton" })).toHaveLength(2);
+
+    // And back: the pick is what the clear button takes away.
+    await wrapper.vm.clearPick(wrapper.vm.pictureInputs[0]);
+    await flushPromises();
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].inputs).toEqual([]);
+  });
+
+  it("sends the selection to one input only, however many rows are asked", async () => {
+    // Two `picture_id: null` entries are a 422 that clears the rows, and with
+    // them every control that could take one back.
+    preflightWorkflowRun.mockResolvedValue(
+      answer([
+        input(SUBJECT, { picture_id: 7, fill: "original" }),
+        input(REFERENCE, { picture_id: 8, fill: "original" }),
+      ]),
+    );
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1] });
+    await wrapper.vm.useSelectionHere(wrapper.vm.pictureInputs[0]);
+    await flushPromises();
+    await wrapper.vm.useSelectionHere(wrapper.vm.pictureInputs[1]);
+    await flushPromises();
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].inputs).toEqual([
+      { slot_label: REFERENCE, input_name: "image", picture_id: null },
+    ]);
   });
 
   it("sends only the picture picked for this run, and asks again", async () => {
