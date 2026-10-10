@@ -42,7 +42,7 @@ from pixlstash.db_models import (
 from pixlstash.event_types import EventType
 from pixlstash.services import import_dedup_service
 from pixlstash.services.layout_move_service import resolve_placement
-from pixlstash.services.move_reconciliation_service import _add_person
+from pixlstash.services.move_reconciliation_service import add_person
 from pixlstash.services.comfyui_recipe_service import (
     VIDEO_SAVE_CLASSES,
     format_prompt_rejection,
@@ -1382,7 +1382,7 @@ def _assign_outputs_to_lora_person(
             return 0, 0
         named = deferred = 0
         for pic in session.exec(select(Picture).where(Picture.id.in_(new_ids))).all():
-            if not _add_person(session, pic, character_id):
+            if not add_person(session, pic, character_id):
                 continue
             if pic.pending_character_id == character_id:
                 deferred += 1

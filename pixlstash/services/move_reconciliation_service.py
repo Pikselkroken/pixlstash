@@ -405,7 +405,7 @@ def _remove_person(session: Session, picture: Picture, character_id: int) -> boo
     return changed
 
 
-def _add_person(session: Session, picture: Picture, character_id: int) -> bool:
+def add_person(session: Session, picture: Picture, character_id: int) -> bool:
     """Assign *character_id* to the picture's largest UNASSIGNED real face.
 
     Mirrors the no-reference-faces fallback ``POST /characters/{id}/faces``
@@ -459,7 +459,7 @@ _REMOVERS = {
     Facet.SET: _remove_set,
     Facet.PERSON: _remove_person,
 }
-_ADDERS = {Facet.PROJECT: _add_project, Facet.SET: _add_set, Facet.PERSON: _add_person}
+_ADDERS = {Facet.PROJECT: _add_project, Facet.SET: _add_set, Facet.PERSON: add_person}
 
 
 def _apply_one(

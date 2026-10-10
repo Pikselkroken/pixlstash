@@ -2528,7 +2528,7 @@ less a slot at model strength zero, looked up in
 `_process_comfyui_outputs` as `lora_character_id`, and
 `_assign_outputs_to_lora_person` links what the run imported or its saver
 reported, after the import event, through
-`move_reconciliation_service._add_person`: `Picture.pending_character_id` for
+`move_reconciliation_service.add_person`: `Picture.pending_character_id` for
 a picture with no faces yet, which face extraction turns into its largest face
 and drops when it finds none, or the largest unassigned face of one already
 extracted. A duplicate keeps the people it has, as it keeps its workflow, and

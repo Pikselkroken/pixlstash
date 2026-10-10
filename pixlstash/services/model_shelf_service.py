@@ -30,6 +30,7 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import func
 from sqlmodel import Session, delete, select
 
 from pixlstash.database import DBPriority
@@ -1844,21 +1845,17 @@ def lora_people(vault, digests) -> set[int]:
     def fetch(session: Session):
         return list(
             session.exec(
-                select(
-                    AdapterAttachment.adapter_sha256, AdapterAttachment.entity_id
-                ).where(
+                select(AdapterAttachment.entity_id).where(
                     AdapterAttachment.entity_type == ENTITY_CHARACTER,
                     AdapterAttachment.entity_id.in_(select(Character.id)),
+                    func.lower(AdapterAttachment.adapter_sha256).in_(wanted),
                 )
             ).all()
         )
 
     return {
         int(character_id)
-        for sha256, character_id in vault.db.run_task(
-            fetch, priority=DBPriority.IMMEDIATE
-        )
-        if str(sha256).lower() in wanted
+        for character_id in vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
     }
 
 
