@@ -521,11 +521,12 @@ describe("Create with LoRA… in a person's or a set's context menu", () => {
     wrapper.unmount();
   });
 
-  it("makes no read while the row is not offered, and never fails open", async () => {
+  it("makes no read while the row is not offered, then asks once it is", async () => {
     // ComfyUI's configuration lands after start-up. A menu opened before it
-    // has made no read, so the row that then appears must not be live, and
-    // must not carry the answer the last menu got.
-    serveAdapters(() => [LORA]);
+    // has made no read, so the row that then appears must not be live on the
+    // last menu's answer, and must not sit at "Checking…" for good either.
+    let answer = () => [LORA];
+    serveAdapters((params) => answer(params));
     const wrapper = await mountSidebar({ teleport: true });
     expect((await loraItem(characterRow(wrapper, GRACE.name))).disabled).toBe(
       false,
@@ -538,10 +539,22 @@ describe("Create with LoRA… in a person's or a set's context menu", () => {
       apiGet.mock.calls.filter(([url]) => String(url).includes("/adapters")),
     ).toEqual([]);
 
+    const pending = [];
+    answer = () => new Promise((resolve) => pending.push(resolve));
     useFilterStore().comfyuiConfigured = true;
     await flushPromises();
     expect(loraButton().disabled).toBe(true);
     expect(itemTip(loraButton())).toBe("Checking for an attached LoRA…");
+
+    // The read it was owed, for the person the menu is open on.
+    expect(
+      apiGet.mock.calls
+        .filter(([url]) => String(url).includes("/adapters"))
+        .map(([, config]) => config.params.character_id),
+    ).toEqual([ADA.id, ADA.id]);
+    pending.forEach((resolve) => resolve([LORA]));
+    await flushPromises();
+    expect(loraButton().disabled).toBe(false);
     wrapper.unmount();
   });
 

@@ -2860,6 +2860,17 @@ async function primeLoraCheck(type, item) {
   if (mine === loraCheckEpoch) sidebarCtxLoraState.value = state;
 }
 
+// ComfyUI's configuration lands after start-up, possibly under an open menu.
+// The row it reveals was skipped by the check above, so ask again.
+watch([() => filterStore.comfyuiConfigured, isReadOnly], () => {
+  if (!sidebarCtxVisible.value) return;
+  if (sidebarCtxCharacter.value) {
+    primeLoraCheck("character", sidebarCtxCharacter.value);
+  } else if (sidebarCtxSet.value) {
+    primeLoraCheck("set", sidebarCtxSet.value);
+  }
+});
+
 /**
  * Why "Create with LoRA…" is disabled on the open menu, or "" when it is live.
  * @param {string} name - the person or set the menu was opened on.
