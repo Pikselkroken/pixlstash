@@ -220,8 +220,8 @@ describe("triggerChip", () => {
     expect(chip.isDefault).toBe(true);
     expect(chip.label).toBe("Ada");
     expect(chip.title).toContain("the name of the person");
-    // What an editor seeds from: a default is not stored, so seeding it would
-    // store it on the first Enter.
+    // What a bulk write counts as replaced: a default is not stored, so
+    // writing over it loses nothing.
     expect(recordedTriggerWords(row)).toEqual([]);
     expect(
       recordedTriggerWords({

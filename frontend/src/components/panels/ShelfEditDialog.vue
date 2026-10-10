@@ -50,7 +50,7 @@
         placeholder="e.g. ohwx"
         aria-describedby="sed-trigger-hint"
         @input="triggerTouched = true"
-        @keydown.enter.prevent="submit"
+        @keydown.enter.exact="onTriggerEnter"
       ></textarea>
       <!-- The instruction lives here and not in the placeholder, which is gone
            the moment the field has a value - and it usually opens with one. -->
@@ -220,9 +220,11 @@ const capabilities = ref([]);
 const capabilitiesTouched = ref(false);
 const capabilitiesDiffer = ref(false);
 const triggerText = ref("");
-// The same two flags the capabilities carry, for the same reason: a selection
-// that does not agree opens EMPTY, and an untouched empty field applied across
-// it would clear every row on a verb the reader only opened to look at.
+// The same two flags the capabilities carry, for the same reason. An empty
+// field is a real answer here - "this LoRA needs no trigger word" - so an
+// untouched one must not be sent: a selection that does not agree opens empty,
+// and applying that would blank every row on a verb the reader only opened to
+// look at. Untouched, the field writes nothing at all.
 const triggerTouched = ref(false);
 const triggerDiffer = ref(false);
 const working = ref(false);
@@ -271,19 +273,22 @@ const confirmLabel = computed(() =>
  * the file or a person stated.
  */
 const overwriteWarning = computed(() => {
-  if (count.value < 2) return "";
   if (props.verb === "trigger-words") {
+    // Per MODEL, a ticked stack expanded into its members: the write reaches
+    // every file in a run, so one selected row can still be a bulk overwrite.
+    if (store.selectedModels.length < 2) return "";
     // The person's name served as a default is not on record, so writing over
     // it loses nothing - the same exclusion a guessed base model gets.
     const next = typedTriggerWords.value.join("\n");
-    const replacing = store.selectedRows.filter((row) => {
+    const replacing = store.selectedModels.filter((row) => {
       const recorded = recordedTriggerWords(row);
       return recorded.length && recorded.join("\n") !== next;
     }).length;
     if (!replacing || !triggerTouched.value) return "";
-    return `This replaces the trigger words recorded on ${replacing} of them. There is no undo.`;
+    // "files", not "of them": a selected run is one row and several files.
+    return `This replaces the trigger words recorded on ${replacing} ${replacing === 1 ? "file" : "files"}. There is no undo.`;
   }
-  if (props.verb !== "base-model") return "";
+  if (props.verb !== "base-model" || count.value < 2) return "";
   const replacing = store.selectedRows.filter(
     (row) => row.base_model && row.base_model !== baseModel.value,
   ).length;
@@ -304,14 +309,14 @@ const typedTriggerWords = computed(() =>
 
 /**
  * The line under the trigger field: how to write several, and what an empty
- * field means for THIS selection - which is a person's name whenever every
- * selected model is already showing one as its default.
+ * field means - NO trigger word, which is an answer in its own right (a style
+ * LoRA has none) and not a way back to the person's name.
  */
 const triggerHint = computed(() => {
   if (triggerDiffer.value && !triggerTouched.value) {
     return "The selected models do not share trigger words. Typing here sets all of them.";
   }
-  const rows = store.selectedRows;
+  const rows = store.selectedModels;
   const fallback = rows[0]?.trigger_words?.[0];
   const allDefault =
     rows.length > 0 &&
@@ -320,19 +325,15 @@ const triggerHint = computed(() => {
         row.trigger_words_source === "character" &&
         row.trigger_words?.[0] === fallback,
     );
-  const empty = allDefault
-    ? `Leave empty to use ${fallback}, the person ${rows.length === 1 ? "this is" : "these are"} assigned to.`
-    : "Leave empty to clear them.";
+  if (allDefault && !triggerTouched.value) {
+    return `Nothing is set yet, so the name of the person ${rows.length === 1 ? "this is" : "these are"} assigned to is used. Leave empty for no trigger word.`;
+  }
   const listed = typedTriggerWords.value.length;
-  return `${listed > TRIGGER_COUNT_FROM ? `${listed.toLocaleString()} words. ` : ""}Separate several with commas. ${empty}`;
+  return `${listed > TRIGGER_COUNT_FROM ? `${listed.toLocaleString()} words. ` : ""}Separate several with commas. Leave empty for no trigger word.`;
 });
 
 const canSubmit = computed(() => {
   if (working.value || !count.value) return false;
-  // Nothing typed over a selection that disagrees is nothing to apply.
-  if (props.verb === "trigger-words" && triggerDiffer.value) {
-    return triggerTouched.value;
-  }
   // An adapter without an algorithm is refused by the hub's own CHECK, so the
   // button is the honest place to say so rather than the error that follows.
   if (props.verb === "kind" && fileKind.value === "adapter") {
@@ -379,9 +380,16 @@ watch(
       ? []
       : (rows[0]?.capabilities || []).filter((c) => CAPABILITIES.includes(c));
     capabilitiesTouched.value = false;
-    // Only what is on record: a person's name standing in as the default is
-    // not stored, and seeding it would store it on the first Enter.
-    const triggers = rows.map((row) => recordedTriggerWords(row).join(", "));
+    // What each row is showing, the person's name standing in as a default
+    // included: the field has to read as the chip does, or emptying it - which
+    // means "none" - could not be told from leaving the default alone. Seeding
+    // a default is safe because an untouched field is never written.
+    // Read off every MODEL the write will reach, not the rows on screen: a
+    // collapsed run is one row carrying its cover's words, and seeding from
+    // that alone would present six files as agreeing when one of them does.
+    const triggers = store.selectedModels.map((row) =>
+      (Array.isArray(row.trigger_words) ? row.trigger_words : []).join(", "),
+    );
     triggerDiffer.value = triggers.some((text) => text !== triggers[0]);
     triggerText.value = triggerDiffer.value ? "" : triggers[0] || "";
     triggerTouched.value = false;
@@ -390,7 +398,9 @@ watch(
     firstFieldEl.value?.focus();
     // A seeded tag table is taller than the field, and focus leaves it scrolled
     // to the caret at its end - past the first word, which is the trigger.
-    if (verb === "trigger-words") firstFieldEl.value.scrollTop = 0;
+    if (verb === "trigger-words" && firstFieldEl.value) {
+      firstFieldEl.value.scrollTop = 0;
+    }
   },
   { immediate: true },
 );
@@ -413,8 +423,25 @@ function changes() {
   return patch;
 }
 
+/**
+ * Enter applies, as it does in the fields beside this one. Not while an input
+ * method is composing, where Enter picks a candidate; Shift+Enter is left to
+ * the textarea, which makes a line break the parser reads as a comma.
+ */
+function onTriggerEnter(event) {
+  if (event.isComposing) return;
+  event.preventDefault();
+  submit();
+}
+
 async function submit() {
   if (!canSubmit.value) return;
+  // Nothing was changed, so there is nothing to write - and writing the seed
+  // back would store a person's name that was only standing in.
+  if (props.verb === "trigger-words" && !triggerTouched.value) {
+    emit("close");
+    return;
+  }
   working.value = true;
   const ok = await store.editSelected(changes());
   working.value = false;

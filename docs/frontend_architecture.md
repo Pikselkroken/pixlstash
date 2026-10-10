@@ -5214,11 +5214,15 @@ serves `trigger_words` as a list plus `trigger_words_source`; `triggerChip`
 and the same helper feeds `AdapterTray`. A `character` source is the name of the
 person the model is assigned to standing in for a word nobody recorded, so it
 takes the dashed `shelf-chip--none` treatment in the UI face rather than the
-mono one, which claims the string is on record. The dialog seeds from
-`recordedTriggerWords` only: seeding the default would store it on the first
-Enter and it would stop following a rename. A selection whose rows disagree
-opens empty and cannot be applied until something is typed, for the reason the
-capability boxes are not sent untouched. The verb is listed on every selection
+mono one, which claims the string is on record. **An empty field is an answer**
+(`trigger_words: []`, "this LoRA needs no trigger word"), so the dialog shows
+what the row shows, default included, and an untouched field writes nothing at
+all: sent back unchanged, a default would be stored and stop following a
+rename, and a selection whose rows disagree opens empty, which applied would
+blank every one of them. Seed, hint and warning all read `selectedModels`, a
+ticked run expanded into its files, because that is what the write reaches;
+`recordedTriggerWords` is what the warning counts, since writing over a default
+loses nothing. The verb is listed on every selection
 and disabled, with its reason, when the selection holds anything but adapters
 and unclassified files.
 

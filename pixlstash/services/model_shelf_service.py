@@ -457,9 +457,9 @@ def fetch_character_names(vault) -> dict[int, str]:
 def decode_trigger_words(raw: Optional[str]) -> list[str]:
     """Return the stored ``model.trigger_words`` column as a list.
 
-    Every writer stores a JSON list. A value that is not one is served as a
-    single word rather than dropped, so nothing a row carries goes missing on
-    the way out.
+    Every writer stores a JSON list of strings. A value that is not JSON at
+    all is served as one word rather than dropped; inside JSON, anything that
+    is not a non-blank string is not a word and is left out.
     """
     if not raw:
         return []
@@ -475,15 +475,21 @@ def decode_trigger_words(raw: Optional[str]) -> list[str]:
     return [word.strip() for word in decoded if isinstance(word, str) and word.strip()]
 
 
-def encode_trigger_words(words: Optional[list[str]]) -> str:
+def encode_trigger_words(words: Optional[list[str]]) -> Optional[str]:
     """Return the owner's trigger words as the column stores them.
 
-    Never NULL. The scanner fills a NULL from the file's header on its next
-    pass, so "none" has to be a stored answer (``[]``) or clearing a header's
-    tag list would last until the next scan.
+    Two different empties. A list with nothing in it is the owner saying this
+    model needs no trigger word, and is stored as ``[]``: an answer, which no
+    default and no later scan may overrule. ``None`` is "not set", stored as
+    NULL, which is what lets the person's name stand in and lets the scanner
+    fill the column from the file's header.
     """
-    cleaned = dict.fromkeys(word.strip() for word in words or [] if word.strip())
-    return json.dumps(list(cleaned))
+    if words is None:
+        return None
+    cleaned = dict.fromkeys(word.strip() for word in words if word.strip())
+    # Not ASCII-escaped: the shelf's search is a LIKE over this column, and an
+    # escaped `café` is not a string anyone types.
+    return json.dumps(list(cleaned), ensure_ascii=False)
 
 
 TRIGGER_SOURCE_RECORDED = "recorded"
@@ -495,9 +501,11 @@ def effective_trigger_words(
 ) -> tuple[list[str], Optional[str]]:
     """Return ``(trigger words, source)`` for one model.
 
-    The words the file or the owner recorded win. With none, a model attached
-    to a person takes that person's name; the lowest character id when it is
-    attached to several, so the answer does not move between requests.
+    The words the file or the owner recorded win. A column that was never set
+    (NULL) on a model attached to a person takes that person's name; the lowest
+    character id when it is attached to several, so the answer does not move
+    between requests. A stored empty list is the owner's "none" and takes no
+    default: not every LoRA has a trigger word.
 
     Args:
         raw: The stored ``model.trigger_words`` column.
@@ -510,6 +518,8 @@ def effective_trigger_words(
     recorded = decode_trigger_words(raw)
     if recorded:
         return recorded, TRIGGER_SOURCE_RECORDED
+    if raw is not None:
+        return [], None
     named = sorted(
         int(att["entity_id"])
         for att in attachments
@@ -1944,6 +1954,10 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
     IS written: clearing a wrong base model back to "not set" is a correction
     the owner is entitled to make, and it puts the row back in the `Needs a
     name` / unset queues where it belongs.
+
+    ``trigger_words`` arrives as a list and is stored as JSON
+    (:func:`encode_trigger_words`): an empty list is "needs none" and is not
+    the same write as ``None``.
 
     ``capabilities`` is the one entry that is not a column. It is the complete
     set for every id, written to ``model_capability``: replaced wholesale rather

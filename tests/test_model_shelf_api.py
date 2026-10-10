@@ -62,6 +62,7 @@ from pixlstash.routes.model_imports import (
 from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
 from pixlstash.services import builtin_models, comfyui_service
+from pixlstash.services import model_shelf_service
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.model_mover import SHELF_IO_LOCK
@@ -5318,13 +5319,13 @@ def test_trigger_words_are_set_across_a_selection_and_served_as_a_list(shelf_env
     assert untouched["trigger_words_source"] is None
 
 
-@pytest.mark.parametrize("cleared", [[], None, ["  "]])
-def test_cleared_trigger_words_are_stored_as_none_not_left_for_a_scan(
+@pytest.mark.parametrize("cleared", [[], ["  "]])
+def test_an_empty_list_is_stored_as_no_trigger_word_not_left_for_a_scan(
     shelf_env, cleared
 ):
-    """The scanner upserts ``COALESCE(model.trigger_words, excluded…)``, so a
-    NULL here would have the next scan put the header's tag table straight
-    back. "None" has to be a stored answer."""
+    """Not every LoRA has a trigger word, so "none" is an answer. The scanner
+    upserts ``COALESCE(model.trigger_words, excluded…)``: stored as NULL, the
+    next scan would put the header's tag table straight back."""
     alice = shelf_env.model_ids["alice.safetensors"]
     with shelf_env.server.hub.transaction() as conn:
         conn.execute(
@@ -5382,11 +5383,104 @@ def test_a_model_with_no_trigger_word_takes_its_persons_name(shelf_env):
     assert served["trigger_words"] == ["ohwx"]
     assert served["trigger_words_source"] == "recorded"
 
-    # Cleared, the person's name is what is left.
-    shelf_env.owner.patch(f"{API}/models", json={"ids": [alice], "trigger_words": []})
+
+def test_a_blank_trigger_word_stays_blank_on_a_model_with_a_person(shelf_env):
+    """The person's name is a default for a model nobody has answered for. An
+    owner who empties the field has answered - a style LoRA attached to a
+    person needs no trigger word, and the name must not come back."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    _attach(shelf_env.server, ADAPTER_WITH_BASE, "character", shelf_env.character_id)
     assert _adapter(shelf_env, ADAPTER_WITH_BASE)["trigger_words"] == [
         "Shelf Character"
     ]
+
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": []}
+    )
+    assert r.status_code == 200, r.text
+    served = _adapter(shelf_env, ADAPTER_WITH_BASE)
+    assert served["trigger_words"] == []
+    assert served["trigger_words_source"] is None
+    listed = {
+        row["filename"]: row["trigger_words"]
+        for row in shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    }
+    assert listed["alice.safetensors"] == []
+
+    # Null is the other empty: back to "not set", where the default applies.
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": None}
+    )
+    assert r.status_code == 200, r.text
+    assert _model_row(shelf_env, alice)["trigger_words"] is None
+    served = _adapter(shelf_env, ADAPTER_WITH_BASE)
+    assert served["trigger_words"] == ["Shelf Character"]
+    assert served["trigger_words_source"] == "character"
+
+
+def test_the_person_default_is_only_for_models_a_prompt_calls_up(shelf_env):
+    """A VAE can be attached to a person as well, and has no trigger word for
+    their name to stand in for."""
+    vae = _h("vaeattached")
+    _add_model(shelf_env, "vae", "person_vae.safetensors", vae)
+    _attach(shelf_env.server, vae, "character", shelf_env.character_id)
+    _attach(shelf_env.server, UNKNOWN_HASH, "character", shelf_env.character_id)
+
+    served = _adapter(shelf_env, vae)
+    assert served["attachments"], "the VAE was not attached, so this proves nothing"
+    assert served["trigger_words"] == []
+    assert served["trigger_words_source"] is None
+    # An unclassified file is as likely a LoRA as anything, and keeps it.
+    assert _adapter(shelf_env, UNKNOWN_HASH)["trigger_words"] == ["Shelf Character"]
+
+
+def test_a_model_with_several_people_takes_the_first_ones_name(shelf_env):
+    """The lowest character id, whatever order the attachments come back in, so
+    the word does not move between two requests."""
+    r = shelf_env.owner.post(f"{API}/characters", json={"name": "Second Person"})
+    assert r.status_code in {200, 201}, r.text
+    second = r.json().get("id") or r.json()["character"]["id"]
+    assert second > shelf_env.character_id
+    try:
+        # Newest first, so insertion order would name the wrong one.
+        _attach(shelf_env.server, ADAPTER_WITH_BASE, "character", second)
+        _attach(
+            shelf_env.server, ADAPTER_WITH_BASE, "character", shelf_env.character_id
+        )
+        assert _adapter(shelf_env, ADAPTER_WITH_BASE)["trigger_words"] == [
+            "Shelf Character"
+        ]
+    finally:
+        shelf_env.owner.delete(f"{API}/characters/{second}")
+
+
+def test_checkpoints_serve_trigger_words_as_a_list_too(shelf_env):
+    rows = shelf_env.owner.get(f"{API}/checkpoints").json()["checkpoints"]
+    assert rows, "no checkpoint was listed, so this proves nothing"
+    assert {
+        (type(row["trigger_words"]), row["trigger_words_source"]) for row in rows
+    } == {(list, None)}
+
+
+def test_a_trigger_word_outside_ascii_is_found_by_the_search(shelf_env):
+    """The search is a LIKE over the stored column, so the word has to be
+    stored as typed and not as a JSON escape."""
+    alice = shelf_env.model_ids["alice.safetensors"]
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": ["café"]}
+    )
+    assert r.status_code == 200, r.text
+    r = shelf_env.owner.get(f"{API}/adapters", params={"q": "café"})
+    assert _names(r.json()["adapters"]) == {"alice.safetensors"}
+
+
+def test_a_stored_value_that_is_not_a_list_of_words_is_decoded_safely():
+    decode = model_shelf_service.decode_trigger_words
+    assert decode(None) == []
+    assert decode('["ohwx", 2, "  ", " woman "]') == ["ohwx", "woman"]
+    assert decode('{"a": 1}') == []
+    # Not JSON at all: served as the one word it is rather than dropped.
+    assert decode("ohwx") == ["ohwx"]
 
 
 def test_trigger_words_are_bounded(shelf_env):
@@ -5400,6 +5494,19 @@ def test_trigger_words_are_bounded(shelf_env):
         f"{API}/models", json={"ids": [alice], "trigger_words": ["x" * limit]}
     )
     assert r.status_code == 200, r.text
+    # A file's whole tag table comes back from the dialog it seeded, so the
+    # list bound has to sit above one; past it is an unbounded body.
+    count = model_shelf_routes.MAX_TRIGGER_WORDS
+    words = [f"tag{i}" for i in range(count + 1)]
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": words}
+    )
+    assert r.status_code == 422, r.text
+    r = shelf_env.owner.patch(
+        f"{API}/models", json={"ids": [alice], "trigger_words": words[:count]}
+    )
+    assert r.status_code == 200, r.text
+    assert len(_adapter(shelf_env, ADAPTER_WITH_BASE)["trigger_words"]) == count
 
 
 def test_a_rename_is_refused_across_a_selection(shelf_env):

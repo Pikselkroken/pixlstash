@@ -635,8 +635,11 @@ Rules neither side may drift from:
    for what the file or the owner stored, `character` when the list is the name
    of the person the model is attached to standing in for a word nobody
    recorded, null when it is empty. `PATCH /models` takes `trigger_words` as
-   the complete list; `[]` clears it. A client seeds an editor from `recorded`
-   rows only (`recordedTriggerWords`), or the default is stored on save.
+   the complete list. `[]` is "this model needs no trigger word" and sticks:
+   no default and no later scan overrules it. `null` is "not set", which
+   brings the person default back. An editor may show a `character` default but
+   must not write it back unchanged, or the name is stored and stops following
+   a rename.
 
 ### 2.3 The `/workflows` contract
 

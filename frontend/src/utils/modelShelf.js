@@ -233,10 +233,10 @@ const TRIGGER_TITLE_WORDS = 12;
 
 /**
  * The trigger words a row has ON RECORD, as opposed to the person's name the
- * server serves in their place when there are none.
+ * server serves in their place while nothing has been set.
  *
- * What an editor seeds from and what a bulk write would replace: a default is
- * not stored, so it is neither.
+ * What a bulk write would replace: a default is not stored, so writing over it
+ * loses nothing.
  *
  * @param {Object} row - a model row from the API.
  * @returns {string[]}
@@ -268,7 +268,7 @@ export function triggerChip(row) {
   if (row.trigger_words_source === "character") {
     return {
       label: words[0],
-      title: `Trigger word: ${words[0]}, the name of the person this is assigned to. None is recorded.`,
+      title: `Trigger word: ${words[0]}, the name of the person this is assigned to. None has been set.`,
       isDefault: true,
     };
   }

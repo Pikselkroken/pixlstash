@@ -428,10 +428,11 @@ class ModelResponse(BaseModel):
         default_factory=list,
         description=(
             "What to type in a prompt to call this model up. The words the "
-            "file's header or the owner recorded, most significant first; with "
-            "none recorded, the name of the person it is attached to in the "
-            "active library. `trigger_words_source` says which. Empty when "
-            "there is neither."
+            "file's header or the owner recorded, most significant first; "
+            "while nothing has been set, the name of the person it is "
+            "attached to in the active library. `trigger_words_source` says "
+            "which. Empty when there is neither, and when the owner said it "
+            "needs none."
         ),
     )
     trigger_words_source: Optional[str] = Field(
@@ -547,11 +548,13 @@ class AttachmentsResponse(BaseModel):
     attachments: list[ModelAttachment]
 
 
-# Ceilings on one PATCH's trigger words. A header's tag table runs to a few
-# hundred entries and the dialog sends back what it was seeded with, so the list
-# bound sits above that; the per-word bound is a prompt phrase, not a document.
-MAX_TRIGGER_WORDS = 1000
-MAX_TRIGGER_WORD_LENGTH = 200
+# Ceilings on one PATCH's trigger words. The dialog sends back what it was
+# seeded with, and a file trained on tagged captions records its whole tag
+# table - thousands of entries off a large dataset - so the bounds sit well
+# above anything a person types. They exist to stop an unbounded body, not to
+# say what a trigger word is.
+MAX_TRIGGER_WORDS = 5000
+MAX_TRIGGER_WORD_LENGTH = 500
 
 
 class ModelEditRequest(BaseModel):
@@ -623,10 +626,13 @@ class ModelEditRequest(BaseModel):
         description=(
             "What to type in a prompt to call the model up, most significant "
             "first. The complete list for every id sent. Blank entries and "
-            "repeats are dropped. `[]` or null clears it, and the clearing is "
-            "stored: a later scan does not put the file's own tags back. A "
-            "model with none recorded is served the name of the person it is "
-            "attached to instead."
+            "repeats are dropped.\n\n"
+            "**`[]` and null are different answers.** `[]` says the model needs "
+            "no trigger word, and it is stored: the row is served an empty "
+            "list whoever it is attached to, and a later scan does not put the "
+            "file's own tags back. Null puts the column back to *not set*, "
+            "where a model attached to a person is served that person's name "
+            "and the next scan may fill it from the file's header."
         ),
     )
     capabilities: Optional[list[str]] = Field(
@@ -1493,8 +1499,12 @@ def _to_response(
 ) -> ModelResponse:
     counts = picture_counts.get(int(row["id"]), {})
     attached = attachments.get(row["sha256"] or "", [])
+    # A person's name stands in only on something a prompt calls up. A VAE can
+    # be attached to a person too, and it has no trigger word to default.
     trigger_words, trigger_words_source = effective_trigger_words(
-        row["trigger_words"], attached, character_names
+        row["trigger_words"],
+        attached if row["file_kind"] in (FILE_ADAPTER, FILE_UNKNOWN) else [],
+        character_names,
     )
     return ModelResponse(
         id=int(row["id"]),
