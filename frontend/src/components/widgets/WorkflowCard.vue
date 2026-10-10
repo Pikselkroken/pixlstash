@@ -156,7 +156,7 @@
       </div>
     </div>
 
-    <!-- Pulled from ComfyUI (#1440). Top-start of the card, the one corner the
+    <!-- Came from ComfyUI (#1440). Top-start of the card, the one corner the
          cover leaves free: the picture count is top-end, the rating
          bottom-end and a superseded cover's flag bottom-start. The mark is
          decoration for the sighted, so the name is on the span itself and in

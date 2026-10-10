@@ -498,7 +498,6 @@ describe("the second step", () => {
     expect(textOf(wrapper)).toContain(
       "The graph it replaces is kept as the version before.",
     );
-    expect(textOf(wrapper)).not.toContain("follows a file in ComfyUI");
     // A dry run only: nothing is written until the second press.
     expect(saveLoraChain).toHaveBeenCalledTimes(1);
   });
@@ -588,14 +587,6 @@ describe("the second step", () => {
     expect(saveLoraChain).toHaveBeenCalledTimes(2);
     expect(saveLoraChain.mock.calls[1][1]).not.toHaveProperty("overwrite");
     expect(wrapper.emitted("overwritten")).toBeFalsy();
-  });
-
-  it("says a ComfyUI file can put its own version on top", async () => {
-    const wrapper = await mountDialog({ originCategory: "comfyui" });
-    await deleteButton(wrapper, 3).trigger("click");
-    await button(wrapper, "Save…").trigger("click");
-    await flushPromises();
-    expect(textOf(wrapper)).toContain("This workflow follows a file in ComfyUI");
   });
 
   it("says so in the live region when the choice goes back to the original", async () => {

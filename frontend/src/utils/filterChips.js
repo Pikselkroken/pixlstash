@@ -132,9 +132,10 @@ export const WORKFLOW_SOURCE_LABELS = Object.freeze({
 });
 
 /**
- * Where a workflow card came from, by the server's `origin_category`: pulled
- * from ComfyUI, made automatically from pictures, or one of the owner's own
- * (a clone, import, edit or built-in).
+ * Where a workflow card came from, by the server's `origin_category`: ComfyUI's
+ * saved workflows (cards made while PixlStash still read them, #1854), made
+ * automatically from pictures, or one of the owner's own (a clone, import,
+ * edit or built-in).
  */
 export const WORKFLOW_ORIGIN_LABELS = Object.freeze({
   comfyui: "ComfyUI",

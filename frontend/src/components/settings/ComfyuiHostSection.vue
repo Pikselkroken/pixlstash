@@ -6,7 +6,7 @@
 // ComfyUI answers there (`POST /comfyui/probe`). On this machine nothing has
 // to be typed: the usual ports are probed on open.
 import { computed, nextTick, ref, watch } from "vue";
-import { VIcon, VProgressCircular, VSwitch } from "vuetify/components";
+import { VIcon, VProgressCircular } from "vuetify/components";
 import { isReadOnly } from "../../utils/apiClient";
 import { getUserConfig, patchUserConfig } from "../../api/config";
 import {
@@ -21,7 +21,6 @@ import FieldLabel from "../widgets/FieldLabel.vue";
 import Segmented from "../widgets/Segmented.vue";
 import ComfyuiExposureNotice from "./ComfyuiExposureNotice.vue";
 import ComfyuiLinkDialog from "./ComfyuiLinkDialog.vue";
-import SettingsRow from "./SettingsRow.vue";
 import SettingsSection from "./SettingsSection.vue";
 import { errorMessage } from "../../utils/apiError";
 import {
@@ -65,22 +64,6 @@ const scheme = ref("http");
 const host = ref("127.0.0.1");
 const port = ref("8188");
 const formError = ref("");
-
-// `pull_comfyui_workflows`: the server checks ComfyUI's saved workflows every
-// minute. On unless the owner turned it off.
-const pullEnabled = ref(true);
-
-async function setPullEnabled(value) {
-  const before = pullEnabled.value;
-  pullEnabled.value = value;
-  try {
-    await patchUserConfig({ pull_comfyui_workflows: value });
-  } catch (e) {
-    console.warn("[settings] could not save pull_comfyui_workflows", e);
-    pullEnabled.value = before;
-    actionError.value = "Could not save that setting.";
-  }
-}
 
 const unreachable = computed(() => lastProbe.value?.reachable === false);
 
@@ -228,7 +211,6 @@ async function fetchComfyuiUrl() {
     return;
   }
   comfyuiUrl.value = String(cfg?.comfyui_url || "").trim();
-  pullEnabled.value = cfg?.pull_comfyui_workflows !== false;
   if (comfyuiUrl.value) {
     detectRun++;
     state.value = "connected";
@@ -585,21 +567,6 @@ watch(
             <ComfyuiExposureNotice v-if="exposure" :exposure="exposure" />
           </template>
         </div>
-        <SettingsRow
-          label="Pull workflows from ComfyUI"
-          sub="Checks ComfyUI's saved workflows every minute and keeps each one's versions on its card."
-        >
-          <v-switch
-            :model-value="pullEnabled"
-            color="primary"
-            density="compact"
-            hide-details
-            aria-label="Pull workflows from ComfyUI"
-            data-testid="comfyui-pull-switch"
-            :disabled="busy || isReadOnly"
-            @update:model-value="setPullEnabled"
-          />
-        </SettingsRow>
         <div class="cf-row">
           <AppButton
             ref="checkAgainButton"

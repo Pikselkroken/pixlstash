@@ -360,7 +360,7 @@ describe("a manual workflow's facts", () => {
     );
   });
 
-  it("names no source for an import or a pull", () => {
+  it("names no source for an import", () => {
     const labels = factChips({ ...MANUAL, from_name: null }).map(
       (chip) => chip.label,
     );

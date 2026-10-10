@@ -252,8 +252,8 @@ function isOriginal(model) {
 }
 
 /**
- * The proposal's only evidence is ComfyUI's own run history (#1518), read at
- * the last workflow pull, rather than a picture or workflow in this library.
+ * The proposal's only evidence is ComfyUI's own run history (#1518), recorded
+ * earlier, rather than a picture or workflow in this library.
  */
 function onlyComfyUI(proposal) {
   return !proposal.recipes && proposal.history_runs > 0;

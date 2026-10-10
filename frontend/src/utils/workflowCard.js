@@ -13,7 +13,7 @@
 //                                       // grid's `workflow=` filter take it
 //     name, type, type_label, imported, hidden,
 //     manual, from_name,                // `manual`: a stored document of its
-//                                       // own (imported, pulled, duplicated,
+//                                       // own (imported, duplicated,
 //                                       // extracted from a recipe), never
 //                                       // grouped. `from_name` names what a
 //                                       // manual one was made from, or null

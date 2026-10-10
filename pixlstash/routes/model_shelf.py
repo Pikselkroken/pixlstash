@@ -901,7 +901,9 @@ class WorkflowSetCombination(BaseModel):
         0,
         description=(
             "Finished ComfyUI runs whose models resolve to exactly this set, "
-            "read off `GET /history` by the last workflow pull and counted "
+            "as recorded from `GET /history` (nothing reads the history "
+            "since the pull of ComfyUI's saved workflows was removed, so the "
+            "count no longer grows) and counted "
             "apart from recipes. Hub-wide, not library-scoped: ComfyUI's "
             "history belongs to the machine."
         ),
@@ -2179,7 +2181,7 @@ def create_router(server) -> APIRouter:
             "A model appears in every combination it has run in, so membership "
             "overlaps and is stored nowhere - the evidence is a self-join over "
             "`workflow_recipe_asset`, which is read here and nowhere written, "
-            "plus the ComfyUI runs the workflow pull stored in "
+            "plus the ComfyUI runs stored in "
             "`comfyui_history_model` (`history_runs`, counted apart).\n\n"
             "**Co-occurrence is evidence; its absence is not.** Two models in "
             "one recipe proves they ran together. Two models never seen "
@@ -2194,7 +2196,7 @@ def create_router(server) -> APIRouter:
             "`POST /models/companions`, which counts every recipe the hub "
             "holds: that one keeps a file some other library needs, this one "
             "draws what the library in front of the reader has made - or has "
-            "run in ComfyUI (the history rows the workflow pull stored; "
+            "run in ComfyUI (the stored history rows; "
             "ComfyUI need not be running). Changes nothing."
         ),
         tags=["model_shelf"],

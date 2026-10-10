@@ -31,7 +31,7 @@ export const useFilterStore = defineStore("filter", () => {
   // (the Workflow tab's Open in ComfyUI). Empty when none is configured.
   const comfyuiUrl = ref("");
   // The owner's ComfyUI is not the next session's: a share token cannot read
-  // the config that would overwrite it (useWorkflowPullStore does the same).
+  // the config that would overwrite it.
   onScopeDispose(
     onSessionReset(() => {
       comfyuiUrl.value = "";

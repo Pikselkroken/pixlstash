@@ -554,32 +554,7 @@ def _link(server, request: Request, saved_url: Optional[str]) -> dict:
         f"ComfyUI reached PixlStash with its new key, which now works only "
         f"from {bound}.",
     )
-    _pull_after_link(server)
     return reply(linked=True)
-
-
-def _pull_after_link(server) -> None:
-    """Pull ComfyUI's saved workflows once, as the last step of a Link.
-
-    Only when the owner's "Pull workflows from ComfyUI" setting is on, through
-    the same gate as the minute poll. Never fails the link it follows: the
-    link is made, and the poll pulls later.
-    """
-    pulls = getattr(server, "workflow_pulls", None)
-    try:
-        comfyui_url = pulls.owner_wants_pulls() if pulls is not None else None
-        if comfyui_url is None:
-            return
-        status, task_id = pulls.start(comfyui_url)
-    except Exception as exc:
-        logger.warning(
-            "ComfyUI is linked, but its saved workflows could not be pulled "
-            "now; the minute poll pulls them later: %s: %s",
-            type(exc).__name__,
-            exc,
-        )
-        return
-    logger.info("Pull after Link from %s: %s (task %s).", comfyui_url, status, task_id)
 
 
 def unlink(server, request: Request) -> dict:

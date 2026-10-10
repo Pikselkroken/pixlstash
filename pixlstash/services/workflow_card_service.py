@@ -298,7 +298,7 @@ class WorkflowFigures:
         """Too small, unrated, never imported and never saved from.
 
         Only a workflow known from its pictures alone can be one: anything
-        stored here, a pull from ComfyUI included, is listed from the start.
+        stored here is listed from the start.
         """
         return (
             self.pictures < ONE_OFF_PICTURES
@@ -578,8 +578,8 @@ def read_grid(
 def _describe_dates(hub: HubDatabase, figures: list[WorkflowFigures]) -> None:
     """Fill in when each workflow was created and when it last changed.
 
-    A manual workflow: its document's row, and its newest version (a pull of
-    a changed ComfyUI file). An automatic one: the first and the newest recipe
+    A manual workflow: its document's row, and its newest version (a graph
+    saved over it). An automatic one: the first and the newest recipe
     of it the hub has seen, a new variant being the workflow changing. The
     owner's own edits (name, notes, defaults) carry no date and do not count.
     """
@@ -1742,8 +1742,7 @@ def converted_manual_document(
 
     **The one read every reader of a manual workflow's graph goes through**:
     the Run, its preflight and Open (``routes/workflows._source_graph_for``),
-    the inspector's defaults (:func:`workflow_defaults`) and a pull that just
-    stored the workflow. A document with a conversion stored (ComfyUI's own, or
+    and the inspector's defaults (:func:`workflow_defaults`). A document with a conversion stored (ComfyUI's own, or
     an earlier one of these) reads as that and converts nothing. An editor
     document without one is converted with *object_info* and the conversion is
     **stored on the version it was made from** (``set_manual_api_document``
@@ -1755,7 +1754,7 @@ def converted_manual_document(
     and returns the document as it was with the converter's sentences, so the
     next read tries again and the caller can say why.
 
-    A store that is refused because the workflow moved on meanwhile (a pull
+    A store that is refused because the workflow moved on meanwhile (a save
     made a new version, or ComfyUI's own conversion landed first) reads the
     workflow again, so the caller gets what is stored now rather than this
     read's conversion of what was.
@@ -1764,7 +1763,7 @@ def converted_manual_document(
         ``(document, version, problems)``; ``(None, None, [])`` for no such
         workflow.
     """
-    # Twice at most: a workflow a pull moves on again between the re-read and
+    # Twice at most: a workflow a save moves on again between the re-read and
     # its store is answered with the re-read's own version, document and
     # number together.
     for attempt in range(2):

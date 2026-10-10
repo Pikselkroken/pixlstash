@@ -4,7 +4,6 @@ import hashlib
 import json
 import math
 import os
-import sqlite3
 import time
 import uuid
 from collections import Counter
@@ -98,7 +97,6 @@ from pixlstash.services.workflow_io import (
     detect_workflow_io,
     with_converted_graph,
 )
-from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
@@ -218,7 +216,7 @@ def _load_workflow_json(path: str) -> dict:
 # The API graph ComfyUI converted an editor-format file into (#1530), kept
 # BESIDE the file rather than over it: the file stays byte-identical to what
 # ComfyUI holds, so it still re-opens there and still deduplicates against a
-# re-pull. Not ``.json``, so the folder listing never reads it as a workflow.
+# second hand-over. Not ``.json``, so the folder listing never reads it as a workflow.
 CONVERTED_SUFFIX = ".api"
 
 
@@ -305,7 +303,7 @@ def store_manual_workflow(
     """Store *workflow* as a new manual workflow called *name*; return its id.
 
     What every way a workflow arrives goes through - an import, the watched
-    inbox, a pull, a built-in, a duplicate, a fixed copy, a clone, a LoRA
+    inbox, a built-in, a duplicate, a fixed copy, a clone, a LoRA
     edit, an extract - so each stores the same kind of record. Always a new
     record: identical copies are allowed. No file is written.
 
@@ -354,7 +352,7 @@ def store_over_workflow(
     Name, notes, defaults, pins and pictures stay where they are.
 
     *expected_version* is the version the edit was made on, checked inside the
-    write transaction: a version made in between (a pull, another tab's
+    write transaction: a version made in between (another tab's
     overwrite) is not buried under an edit of the older graph. A manual
     workflow is not written without it; for an automatic one ``None`` says
     the edit was made on its pictures' graph, before any version.
@@ -386,7 +384,7 @@ def store_over_workflow(
             # Made by a build before versions: its document is version 1.
             current = 1
         # A manual `None` is refused too: an unguarded write is the one that
-        # could bury a pulled version.
+        # could bury a version made since.
         if current != expected_version:
             raise WorkflowChanged(
                 f"{workflow_id} is at version {current}, and the edit was "
@@ -417,123 +415,13 @@ def _within_the_cap(document: dict) -> None:
         )
 
 
-def _topology_of(workflow: dict, name: str = "workflow") -> str | None:
-    """*workflow*'s topology hash, or ``None`` when it will not reduce. No write."""
-    try:
-        graph = api_graph(workflow)
-        return api_topology_hash(graph) if graph else ui_topology_hash(workflow)
-    except Exception as exc:
-        # The reducers index into whatever the document holds; the hash is
-        # only the pull's has-pictures count, so a document without one is
-        # counted as having none.
-        logger.info(
-            "Pulled workflow %s: its topology could not be read (%s): %s",
-            name,
-            type(exc).__name__,
-            exc,
-        )
-        return None
-
-
-def store_pulled_workflow(
-    hub,
-    name: str,
-    workflow: dict,
-    record: tuple[str, str, int | None, str | None],
-) -> dict:
-    """File one document pulled from ComfyUI (#1440): one workflow per file.
-
-    **The caller holds ``workflow_inbox.INBOX_LOCK``.** In order:
-
-    * a content a pull already stored as a live workflow is ``matched`` and
-      the path is linked to it (:func:`workflow_origin.stored_as`). Only a
-      workflow whose origin is ``pull``: one the owner made (an import, the
-      inbox, a copy) is never linked, so never versioned, by a ComfyUI file;
-    * a copy of a workflow PixlStash ships is not stored: ``builtin``;
-    * a path already linked to a live pulled workflow is a **new version** of it
-      (``versioned``, ``version``): its pictures, recipes, defaults and pins
-      stay where they are;
-    * anything else is a new manual workflow, version 1, unless *origin*
-      already has ``MAX_PULL_CARDS_PER_ORIGIN`` live pulled workflows: then
-      nothing is stored (``capped``).
-
-    *record* is ``(origin, remote_path, remote_modified, content_hash)`` of
-    the ``workflow_origin`` row, written whatever the outcome; for a new
-    workflow or version in the same transaction as the row (#1694), since one
-    stored without it would come back after a delete.
-    """
-    origin, remote_path, remote_modified, content_hash = record
-    check_comfy_workflow(workflow)
-    migrated, _ = workflow_bindings.migrate_placeholders(workflow)
-    topology_hash = _topology_of(migrated, name)
-    digest = workflow_inbox.content_hash(workflow)
-    # Only a workflow a pull made is ever linked or versioned (`pulled_only`):
-    # ComfyUI is written by whoever reaches it, and a file holding a copy of
-    # a card the owner made must not become that card's next version. Such a
-    # file is a pulled workflow of its own.
-    linked = workflow_origin.stored_at(hub, origin, remote_path, pulled_only=True)
-    stored = workflow_origin.stored_as(hub, digest, pulled_only=True)
-    # The content is already this path's own workflow, but not its current
-    # version (an edit in ComfyUI undone): that is a version, not a match.
-    if (
-        stored is not None
-        and stored == linked
-        and workflow_versions.current_content_hash(hub, linked) != digest
-    ):
-        stored = None
-    base = {
-        "name": _stem(name),
-        "matched": False,
-        "builtin": False,
-        "topology_hash": topology_hash,
-    }
-    if stored is not None:
-        workflow_origin.record_pulled(
-            hub, origin, remote_path, stored, remote_modified, content_hash
-        )
-        return {**base, "matched": True, "workflow_id": stored}
-    if _builtin_copy(workflow_bindings.canonical(migrated)):
-        workflow_origin.record_pulled(
-            hub, origin, remote_path, None, remote_modified, content_hash
-        )
-        return {**base, "matched": True, "builtin": True, "workflow_id": None}
-    # The listing's size can be missing, so the stored row's cap is held here.
-    _within_the_cap(migrated)
-    if linked is not None:
-        with hub.transaction() as conn:
-            version = workflow_versions.append_version(
-                conn,
-                linked,
-                migrated,
-                content_hash=digest,
-                topology_hash=topology_hash,
-                remote_modified=remote_modified,
-            )
-            workflow_origin.upsert(
-                conn, origin, remote_path, linked, remote_modified, content_hash
-            )
-        return {**base, "versioned": True, "version": version, "workflow_id": linked}
-    if (
-        workflow_origin.live_pull_cards(hub, origin)
-        >= workflow_origin.MAX_PULL_CARDS_PER_ORIGIN
-    ):
-        # Nothing stored and no origin row, so the file is read again by a
-        # later pull, once the owner has deleted some.
-        return {**base, "capped": True, "workflow_id": None}
-    return {
-        **base,
-        "workflow_id": create_manual_workflow(
-            hub, _stem(name), migrated, "pull", record=record
-        ),
-    }
-
-
 def store_inbox_workflow(hub, name: str, workflow: dict) -> dict:
     """Store one inbox file as a manual workflow, once per content.
 
     **The caller holds ``workflow_inbox.INBOX_LOCK``** (the reconcile does).
-    Deduplicated on ``workflow_origin`` alone: a content the inbox, a pull or
-    a built-in already stored as a live workflow is matched, so a restart,
+    Deduplicated on ``workflow_origin`` alone: a content the inbox, a
+    built-in or an earlier pull already stored as a live workflow is matched,
+    so a restart,
     which reads every inbox file again, re-imports nothing. A new one is
     recorded under the ``inbox`` origin keyed by its content hash; deleting
     the workflow removes that row, so restoring the file from the trash
@@ -624,11 +512,6 @@ def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
     try:
         with workflow_inbox.INBOX_LOCK:
             _trash_stored_workflow(path, normalized, sweep)
-            # Inside the lock, unlike the forgets below: a pull checks for a
-            # dismissal and stores under this same lock, so a delete landing
-            # mid-pull is seen by the very next entry instead of being undone.
-            if hub is not None:
-                _dismiss_from_pulls(hub, stored_name, normalized)
     except (TrashPermissionError, OSError, RecursionError, ValueError) as exc:
         logger.warning("Failed to delete workflow %s: %s", normalized, exc)
         raise HTTPException(status_code=500, detail="Failed to delete workflow")
@@ -677,25 +560,6 @@ def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
     return normalized
 
 
-def _dismiss_from_pulls(hub, stored_name: str, normalized: str) -> None:
-    """Mark every ComfyUI path *stored_name* was pulled from dismissed.
-
-    The opposite of the forgets that follow a delete: it REMEMBERS, so the
-    next pull does not bring the file back. Logged rather than raised - the
-    file is already in the trash, and failing the delete now would report a
-    deletion that happened as one that did not.
-    """
-    try:
-        workflow_origin.dismiss_file(hub, stored_name)
-    except sqlite3.Error as exc:
-        logger.warning(
-            "Deleted workflow %s but could not record the dismissal; a later "
-            "pull from ComfyUI may bring it back: %s",
-            normalized,
-            exc,
-        )
-
-
 def _builtin_path(name: str) -> str | None:
     """The built-in workflow file called *name*, or ``None``. Never a user file."""
     normalized = _normalize_workflow_name(name)
@@ -708,31 +572,6 @@ def _builtin_path(name: str) -> str | None:
             return None
         if os.path.isfile(path):
             return path
-    return None
-
-
-def _builtin_copy(wanted: str) -> str | None:
-    """The built-in workflow file whose canonical content is *wanted*, or None.
-
-    Shipped data, not the owner's: a pulled copy of a workflow PixlStash
-    ships is reported as shipped rather than stored as a manual workflow.
-    """
-    for source, folder in _workflow_dirs():
-        if source != "built-in" or not os.path.isdir(folder):
-            continue
-        for entry in sorted(os.listdir(folder)):
-            if not entry.lower().endswith(".json"):
-                continue
-            path = os.path.join(folder, entry)
-            try:
-                stored = _load_workflow_json(path)
-                if (
-                    isinstance(stored, dict)
-                    and workflow_bindings.canonical(stored) == wanted
-                ):
-                    return entry
-            except (OSError, ValueError, RecursionError) as exc:
-                logger.warning("Could not read built-in workflow %s: %s", path, exc)
     return None
 
 
@@ -1752,89 +1591,6 @@ class ComfyUIWorkflowConvertResponse(BaseModel):
     workflow_id: Optional[str] = None
 
 
-class ComfyUIWorkflowPullStartResponse(BaseModel):
-    """A pull of ComfyUI's saved workflows, queued or already running."""
-
-    # "started" or "already_running".
-    status: str
-    task_id: Optional[str] = None
-
-
-class ComfyUIWorkflowPullSummary(BaseModel):
-    """What one finished pull found, computed with it and never stored."""
-
-    # How many workflows ComfyUI listed.
-    listed: int = 0
-    # Stored here for the first time.
-    pulled: int = 0
-    # A path pulled before that now holds different content: a new version of
-    # the workflow it was pulled as.
-    changed: int = 0
-    # Listed with the `modified` it had when last read, so not read again.
-    unchanged: int = 0
-    # The per-pull budget this pull stopped at ("100 new workflows", "200 new
-    # versions", "64 MB written"), the rest left for the next pull; null when
-    # it read everything.
-    budget_exhausted: Optional[str] = None
-    # This ComfyUI address already has as many pulled workflows as one may
-    # (2000), so new files made no workflow; existing ones still took versions.
-    card_cap_reached: bool = False
-    # Already stored here, matched by content.
-    matched: int = 0
-    # Identical to a workflow PixlStash ships.
-    already_shipped: int = 0
-    # Deleted here after an earlier pull, so not brought back.
-    skipped_dismissed: int = 0
-    # Could not be read from ComfyUI or stored here.
-    failed: int = 0
-    # Pulled before and no longer listed by ComfyUI: the workflow and its
-    # versions stay, and its link is marked gone.
-    gone: int = 0
-    # False when ComfyUI's node list could not be read, which makes every
-    # workflow unchecked rather than fine.
-    nodes_checked: bool = False
-    # Workflows naming a node class this ComfyUI does not have.
-    missing_nodes: int = 0
-    # Workflows whose node classes were not checked.
-    nodes_unchecked: int = 0
-    # The absent classes, by name. Which pack provides one is not known here.
-    missing_node_classes: list[str] = []
-    # Stored workflows whose shape a picture in the library already made: the
-    # ones the owner had, as opposed to new to PixlStash.
-    known_from_pictures: int = 0
-    # Workflows naming a model file this ComfyUI does not list. Advisory for an
-    # editor-format file, whose model names are read by position.
-    missing_models: int = 0
-    # Model values across the pull that could not be read at all, so were
-    # never checked. A short missing list is only as good as this is small.
-    models_unread: int = 0
-    # Workflows whose models were not checked (ComfyUI unreachable, or the
-    # document would not read).
-    models_unchecked: int = 0
-    # The absent model files, by name.
-    missing_model_files: list[str] = []
-    # The workflows the pull filed a file in.
-    workflow_ids: list[str] = []
-    # Finished runs in ComfyUI's /history that named a shelf model, filed as
-    # companion evidence (#1518); None when the history could not be read.
-    history_runs: int | None = None
-
-
-class ComfyUIWorkflowPullStateResponse(BaseModel):
-    """The most recent pull since the server started.
-
-    ``status`` is ``idle`` when there has been none, else the task state:
-    ``pending``, ``running``, ``completed`` or ``failed``. ``summary`` is set
-    once it completed, ``error`` once it failed.
-    """
-
-    status: str
-    task_id: Optional[str] = None
-    comfyui_url: Optional[str] = None
-    error: Optional[str] = None
-    summary: Optional[ComfyUIWorkflowPullSummary] = None
-
-
 class ComfyUIRecipeModelSlot(BaseModel):
     """One model the graph loads, as the overlay's Recipe section shows it.
 
@@ -2418,7 +2174,7 @@ def create_router(server) -> APIRouter:
                     stored = _load_workflow_json(path)
                     converted = converted_graph(path, stored)
                     # Its origin row in the same transaction, with the content
-                    # hash, so the inbox and a pull dedupe against it too.
+                    # hash, so the inbox dedupes against it too.
                     workflow_id = store_manual_workflow(
                         hub,
                         _stem(name),
@@ -2559,7 +2315,7 @@ def create_router(server) -> APIRouter:
             canonical = workflow_bindings.canonical(migrated)
             matched = manual_documents_holding(hub, canonical)
             if matched:
-                # Re-checked inside the write: a pull may have made a new
+                # Re-checked inside the write: a save may have made a new
                 # version between the match and here.
                 matched = (
                     set_manual_api_document(hub, matched, output, canonical) or matched
@@ -2588,73 +2344,6 @@ def create_router(server) -> APIRouter:
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
         return {"name": name, "matched": bool(matched), "workflow_id": workflow_id}
-
-    @router.post(
-        "/comfyui/workflows/pull",
-        summary="Pull every workflow ComfyUI has saved",
-        description=(
-            "Lists the workflows the configured ComfyUI has saved, over its "
-            "userdata API, and stores each one the way an import does: a copy "
-            "of a workflow already stored is matched rather than stored twice, "
-            "so a pull is safe to repeat, and a file whose content changed is "
-            "a new version of the workflow it was pulled as. A file whose "
-            "`modified` is unchanged is not read. A workflow deleted here "
-            "after an earlier pull is skipped rather than brought back. "
-            "Nothing is written to ComfyUI. The server also polls once a "
-            "minute while a ComfyUI address is saved and the owner's "
-            "`pull_comfyui_workflows` setting is on, and pulls at the end of "
-            "a Link; all share one gate. Returns 202 with the id of the task "
-            "now queued, or `already_running` with the one that holds the "
-            "gate; watch it in `GET /workers/progress` under "
-            "`workers.ComfyUIWorkflowPullTask` and read its summary from "
-            "`GET /comfyui/workflows/pull`."
-        ),
-        status_code=202,
-        response_model=ComfyUIWorkflowPullStartResponse,
-    )
-    def pull_comfyui_workflows(request: Request):
-        require_hub(
-            server, "The workflow library is not open, so nothing can be pulled."
-        )
-        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
-        status, task_id = server.workflow_pulls.start(
-            comfyui_url, getattr(request.state, "origin_client_id", None)
-        )
-        if status == "unavailable":
-            raise HTTPException(
-                status_code=503,
-                detail="The task runner is not available, so the pull cannot be queued.",
-            )
-        return {"status": status, "task_id": task_id}
-
-    @router.get(
-        "/comfyui/workflows/pull",
-        summary="The most recent pull of ComfyUI's saved workflows",
-        description=(
-            "`idle` when nothing has been pulled since the server started; "
-            "otherwise the pull's state, and once it completed, what it found: "
-            "how many workflows were new, already stored, shipped with "
-            "PixlStash, deleted here and skipped, or failed, and how many name "
-            "a node class the configured ComfyUI does not have. When ComfyUI's "
-            "node list could not be read, `nodes_checked` is false and every "
-            "workflow counts as unchecked, never as fine."
-        ),
-        response_model=ComfyUIWorkflowPullStateResponse,
-    )
-    def get_comfyui_workflow_pull():
-        task = server.workflow_pulls.last
-        if task is None:
-            return {"status": "idle"}
-        state = {
-            "status": task.status.value,
-            "task_id": task.id,
-            "comfyui_url": task.params.get("comfyui_url"),
-        }
-        if task.status == TaskStatus.COMPLETED and isinstance(task.result, dict):
-            state["summary"] = task.result
-        elif task.status == TaskStatus.FAILED:
-            state["error"] = str(task.error) if task.error else "The pull failed."
-        return state
 
     @router.get(
         "/comfyui/pictures/{picture_id}/workflow",

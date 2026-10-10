@@ -370,28 +370,20 @@ describe("the version line", () => {
     expect(line(wrapper).text()).toMatch(/^Version 61 · /);
   });
 
-  it("shows it for a pulled card even at version 1", async () => {
-    const pulled = card({
-      versions: 1,
-      version: 1,
-      version_at: "2026-10-06T09:30:00Z",
-      origin_category: "comfyui",
-    });
-    getWorkflowCard.mockResolvedValue(detail({ card: pulled }));
-    const { wrapper } = await mountWith([KEY], [pulled]);
-    expect(line(wrapper).text()).toMatch(/^Version 1 · /);
-  });
-
-  it("is absent for a card with a single version that did not come from ComfyUI", async () => {
-    const plain = card({
-      versions: 1,
-      version_at: "2026-10-06T09:30:00Z",
-      origin_category: "pictures",
-    });
-    getWorkflowCard.mockResolvedValue(detail({ card: plain }));
-    const { wrapper } = await mountWith([KEY], [plain]);
-    expect(line(wrapper).exists()).toBe(false);
-  });
+  it.each(["pictures", "own", "comfyui"])(
+    "is absent for a card with a single version, whatever its origin (%s)",
+    async (origin) => {
+      const plain = card({
+        versions: 1,
+        version: 1,
+        version_at: "2026-10-06T09:30:00Z",
+        origin_category: origin,
+      });
+      getWorkflowCard.mockResolvedValue(detail({ card: plain }));
+      const { wrapper } = await mountWith([KEY], [plain]);
+      expect(line(wrapper).exists()).toBe(false);
+    },
+  );
 });
 
 describe("the models the panel names", () => {

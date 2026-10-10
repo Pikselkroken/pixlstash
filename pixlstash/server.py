@@ -69,7 +69,6 @@ from pixlstash.hub.bootstrap import (
 )
 from pixlstash.hub.registry import LibraryRegistry
 from pixlstash.services.library_switch_service import LibrarySwitchService
-from pixlstash.services.comfyui_workflow_pulls import WorkflowPulls
 from pixlstash.services.workflow_bindings import migrate_workflow_folder
 from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.services.workflow_inbox import (
@@ -109,7 +108,6 @@ from pixlstash.routes.pictures import (
 from pixlstash.routes.comfyui import (
     create_router as create_comfyui_router,
     store_inbox_workflow,
-    store_pulled_workflow,
     workflow_user_dir,
 )
 from pixlstash.routes.tag_predictions import (
@@ -326,10 +324,6 @@ class Server(
         DEFAULT_WATCH_WORKFLOW_INBOX: Whether start-up imports the watched
             ``workflows/`` folder and keeps watching it. ``False`` in the test
             suite: that folder is machine-global too.
-        DEFAULT_POLL_COMFYUI_WORKFLOWS: Whether pulls nobody asked for run:
-            the work planner's minute poll of the owner's ComfyUI and the pull
-            after a Link. ``False`` in the test suite, where a background pull
-            would take the pull gate from under the tests that drive one.
     """
 
     DEFAULT_MAX_VRAM_GB: float | None = None
@@ -341,7 +335,6 @@ class Server(
     DEFAULT_DECLARE_MODEL_ROOTS: bool = True
     DEFAULT_MIGRATE_WORKFLOW_TOKENS: bool = True
     DEFAULT_WATCH_WORKFLOW_INBOX: bool = True
-    DEFAULT_POLL_COMFYUI_WORKFLOWS: bool = True
 
     @staticmethod
     def running_in_docker() -> bool:
@@ -730,12 +723,6 @@ class Server(
                 self.hub.path,
             )
 
-        # Before the vault: its poll finder offers pulls through this gate.
-        self.workflow_pulls = WorkflowPulls(
-            self,
-            store_pulled_workflow,
-            automatic=Server.DEFAULT_POLL_COMFYUI_WORKFLOWS,
-        )
         self.vault = self._open_registered_vault()
         self._hub_bootstrap.library = (
             self.library_registry.by_uuid(self._hub_bootstrap.library.uuid)
@@ -1161,7 +1148,6 @@ class Server(
             ghost_retention=workflow_ghost_service.read_ghost_retention(
                 self._server_config
             ),
-            workflow_pulls=getattr(self, "workflow_pulls", None),
         )
 
     def _active_library_uuid(self):

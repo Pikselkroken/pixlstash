@@ -105,8 +105,9 @@ class Card:
     # the id as both key and topology, and the workflow it was made from.
     manual: bool = False
     from_name: Optional[str] = None
-    # How a manual workflow arrived (``workflow_document.origin``: ``pull``,
-    # ``import``, ``duplicate``, ...); ``None`` for an automatic one.
+    # How a manual workflow arrived (``workflow_document.origin``: ``import``,
+    # ``duplicate``, ..., and ``pull`` for one the removed pull of ComfyUI's
+    # saved workflows made); ``None`` for an automatic one.
     origin: Optional[str] = None
     # A manual workflow's versions (``workflow_version``): how many are kept,
     # the current one's number (past the 50 kept, more than ``versions``), and
@@ -193,7 +194,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     nothing keyed per topology (a model fix, a slot mark, a core hash) can
     reach it from an automatic workflow or reach an automatic one from it. No
     variants: the document is the whole of it. Always ``imported``, so a
-    stored workflow, pulled or otherwise, is never folded into the one-offs.
+    stored workflow is never folded into the one-offs.
     """
     rows = hub.fetchall(
         "SELECT d.workflow_id, d.origin, d.from_name, d.document, d.created_at, "
@@ -236,7 +237,7 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
 
 
 # ``{workflow id: (version, (workflow_type, traits))}``: one entry per manual
-# workflow, replaced when a pull makes a new version (`hub/workflow_versions.py`)
+# workflow, replaced when a save makes a new version (`hub/workflow_versions.py`)
 # and dropped when the workflow is (`_manual_cards`), so no document is held
 # and an old version is never described.
 _MANUAL_FACTS: dict[str, tuple[object, tuple]] = {}
@@ -424,7 +425,7 @@ def manual_document_and_version(
     """:func:`manual_document`, and the number of the version it is.
 
     Read in one statement, so the number is the version of the document
-    returned even while a pull appends another. A workflow an older build made
+    returned even while a save appends another. A workflow an older build made
     has no version row: its document is version 1. ``(None, None)`` for no
     such workflow.
     """

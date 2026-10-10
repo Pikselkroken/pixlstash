@@ -41,7 +41,9 @@ from sqlmodel import delete as sqlmodel_delete, select
 from pixlstash.db_models import DeletedFileLog, Generation, Picture
 from pixlstash.event_types import EventType
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub import workflow_card_reads, workflow_versions
+from pixlstash.hub import workflow_card_reads, workflow_cards, workflow_versions
+from pixlstash.hub import workflows as hub_workflows
+from pixlstash.services import workflow_hash, workflow_identity
 from pixlstash.hub.workflow_card_reads import workflow_of_variant
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
@@ -1928,7 +1930,10 @@ def _second_version(store, workflow_id):
     edited = copy.deepcopy(stored_document(store, workflow_id))
     edited["nodes"][0]["pos"] = [321, 654]
     with store.hub.transaction() as conn:
-        assert workflow_versions.append_version(conn, workflow_id, edited) == 2
+        assert (
+            workflow_versions.append_version(conn, workflow_id, edited, source="chain")
+            == 2
+        )
     return stored_document(store, workflow_id)
 
 
@@ -5343,3 +5348,10 @@ def test_the_member_order_is_the_whole_ranking_not_only_its_head(store, set_shel
         "text_encoder",
         "adapter",
     ]
+
+
+def test_nothing_that_keys_a_workflow_reads_the_advisory_model_names():
+    """Recovered model names never enter a hash or a card key (#1440 plan §3.4)."""
+    for module in (workflow_hash, workflow_identity, hub_workflows, workflow_cards):
+        source = Path(module.__file__).read_text("utf-8")
+        assert "loaded_model_widgets" not in source, module.__name__

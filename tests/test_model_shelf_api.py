@@ -1041,7 +1041,7 @@ def test_workflow_sets_flags_a_member_two_shelf_rows_answer_to(shelf_env):
 
 
 def _seed_run(server, prompt_id: str, model_ids) -> None:
-    """One finished ComfyUI run, as the workflow pull stores it (#1518)."""
+    """One finished ComfyUI run, as `record_comfyui_history` stores it (#1518)."""
     with server.hub.transaction() as conn:
         conn.executemany(
             "INSERT INTO comfyui_history_model (prompt_id, model_id) VALUES (?, ?)",

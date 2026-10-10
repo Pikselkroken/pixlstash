@@ -58,19 +58,6 @@ export async function importWorkflow({ name, workflow }) {
 }
 
 /**
- * The most recent pull since the server started.
- *
- * `status` is `idle`, `pending`, `running`, `completed` or `failed`;
- * `summary` is set once it completed and `error` once it failed.
- *
- * @returns {Promise<{status: string, task_id: ?string, comfyui_url: ?string,
- *   error: ?string, summary: ?Object}>}
- */
-export async function getWorkflowPull() {
-  return unwrap(apiClient.get(comfyUrl("/workflows/pull")));
-}
-
-/**
  * Read the ComfyUI workflow embedded in a generated picture.
  *
  * Rejects with a 404 when the picture carries no workflow, which is the normal

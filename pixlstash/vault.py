@@ -105,7 +105,6 @@ class Vault:
         scrapheap_retention_reduced_at: Optional[datetime.datetime] = None,
         db_filename: Optional[str] = None,
         ghost_retention: str = DEFAULT_GHOST_RETENTION,
-        workflow_pulls=None,
     ):
         """
         Initialize a Vault instance.
@@ -123,9 +122,6 @@ class Vault:
                 the vault is opened through one, which is what puts a library
                 still on its first import onto the temporary name without any
                 caller having to know. Falls back to ``vault.db``.
-            workflow_pulls: The server's ``WorkflowPulls``, which the minute
-                poll of ComfyUI's saved workflows offers its pulls through.
-                ``None`` registers no poll.
         """
         registered_hub = getattr(image_root, "hub", None)
         registered_library = getattr(image_root, "library", None)
@@ -383,16 +379,6 @@ class Vault:
                     library_uuid=self._library_uuid,
                     vault=self,
                 )
-            )
-        # The minute poll of ComfyUI's saved workflows. A pull is a fact about
-        # the machine (the hub), so it needs the server's gate, not a library.
-        if registered_hub is not None and workflow_pulls is not None:
-            from pixlstash.tasks.comfyui_workflow_poll_finder import (
-                ComfyUIWorkflowPollFinder,
-            )
-
-            self._planner_work_finders[TaskType.COMFYUI_WORKFLOW_PULL] = (
-                ComfyUIWorkflowPollFinder(workflow_pulls)
             )
         self._work_planner = WorkPlanner(
             task_runner=self._task_runner,
@@ -1717,32 +1703,6 @@ class Vault:
                     processed = sum(
                         int(getattr(t, "_processed_count", 0))
                         for t in active_scan_tasks
-                    )
-                    missing = max(0, total - processed)
-                    worker_active_override = True
-                else:
-                    total = 0
-                    missing = 0
-                    worker_active_override = False
-            elif worker_type == TaskType.COMFYUI_WORKFLOW_PULL:
-                # User-triggered (no finder), the MODEL_FOLDER_SCAN shape.
-                # Counted in ComfyUI's saved workflows, which live on the
-                # ComfyUI machine rather than in the library.
-                label = "comfyui_workflow_pull"
-                active_pull_tasks = (
-                    self._task_runner.get_active_tasks_of_type(
-                        TaskType.COMFYUI_WORKFLOW_PULL.value
-                    )
-                    if self._task_runner is not None
-                    else []
-                )
-                if active_pull_tasks:
-                    total = sum(
-                        int(getattr(t, "_total_count", 0)) for t in active_pull_tasks
-                    )
-                    processed = sum(
-                        int(getattr(t, "_processed_count", 0))
-                        for t in active_pull_tasks
                     )
                     missing = max(0, total - processed)
                     worker_active_override = True

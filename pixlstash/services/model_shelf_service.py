@@ -1042,6 +1042,11 @@ def record_comfyui_history(hub, history: dict) -> int:
     Idempotent: a run read twice writes nothing new, and one re-read after the
     shelf gained a file gains that file.
 
+    **Nothing calls this now.** The history was read by the pull of ComfyUI's
+    saved workflows, which #1854 removed, so the rows are what was recorded
+    until then. Kept with its reader (:func:`_history_runs`) for whatever
+    hands the history over next.
+
     Returns:
         How many finished runs named at least one shelf model.
     """
@@ -1138,9 +1143,10 @@ def propose_companions(
        ``recipes`` 0 and the caller must present them as untested.
 
     **ComfyUI's own runs count too** (#1518): the ``comfyui_history_model``
-    rows a workflow pull read off ``GET /history``, so a checkpoint used in
+    rows read off ``GET /history`` (:func:`record_comfyui_history`), so a
+    checkpoint used in
     ComfyUI but in nothing PixlStash filed still has evidence. Nothing here asks
-    ComfyUI; the rows are whatever the last pull left. The two are counted
+    ComfyUI; the rows are whatever was last recorded. The two are counted
     apart, ``recipes`` and ``history_runs``, and recipe evidence ranks first.
     A run is evidence at every step, so ``declared`` answers only when neither
     kind does.
@@ -1371,7 +1377,7 @@ def _history_runs(hub) -> dict[str, set[int]]:
     """Return each stored ComfyUI run's model ids, keyed on its ``prompt_id``.
 
     The one reader of ``comfyui_history_model`` (#1518). The rows were resolved
-    to unambiguous model ids when the workflow pull stored them, so a caller
+    to unambiguous model ids when they were stored, so a caller
     has no doubt to add; ComfyUI itself is never contacted.
     """
     runs: dict[str, set[int]] = {}
@@ -1547,7 +1553,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
     with no kept picture here is therefore not a set, unless ComfyUI ran it.
 
     **ComfyUI's own runs are witnesses too** (#1565): every finished run the
-    workflow pull stored in ``comfyui_history_model`` counts one
+    stored in ``comfyui_history_model`` counts one
     ``history_runs`` against the combination its models resolve to exactly,
     kept apart from ``recipes`` and ``picture_count``. A combination survives
     the cut with a kept picture here OR a stored run, so one that has only ever
@@ -1642,7 +1648,8 @@ def fetch_workflow_sets(hub, vault) -> dict:
 
     # One witness per exact set, like a recipe: a run counts against the
     # combination its STORED models are, never against every subset of it.
-    # Those are the names the pull could pin to one shelf row; a name it could
+    # Those are the names that could be pinned to one shelf row; a name that
+    # could
     # not (#1518) is not stored, so a run proves at least this set ran. `unsure`
     # is left alone - a run cannot add doubt, and cannot remove a recipe's.
     for members in runs.values():
