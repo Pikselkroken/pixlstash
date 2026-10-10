@@ -1,5 +1,5 @@
 <template>
-  <div class="tbm fm-sub" role="group" :aria-label="title">
+  <div class="tbm fm-sub fm-checklist" role="group" :aria-label="title">
     <div class="tbm-header">
       <span class="tbm-title">{{ title }}</span>
       <span class="tbm-spacer"></span>
@@ -87,8 +87,8 @@
 
 <script setup>
 /**
- * A filter field over a checklist with counts: the Tags, Checkpoint, LoRA
- * and Workflow menus. Ticking emits `toggle`; the parent owns what that means.
+ * A filter field over a checklist with counts: the Checkpoint, LoRA and
+ * Workflow menus. Ticking emits `toggle`; the parent owns what that means.
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 
@@ -161,12 +161,25 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
 </script>
 
 <style scoped>
-.fm-list-field {
-  margin-bottom: var(--space-2);
+/* The root menu's width, as the tag field takes: at --filter-submenu-w a
+   workflow's name beside its cover, kind and count clips to a few letters. */
+.fm-checklist {
+  width: var(--filter-menu-w);
 }
+/* --space-3, not --space-2: the field's focus ring reaches 4px out, and would
+   fuse with the highlighted first row's ring into one thick bar. */
+.fm-list-field {
+  margin-bottom: var(--space-3);
+}
+/* The rows bleed --space-3 past the section's column, so the list bleeds with
+   them. Left at the column's width it clipped their highlight ring to two bars
+   and scrolled sideways by the overhang. Names ellipsise (the row's title has
+   them whole), so nothing here ever needs a horizontal scrollbar. */
 .fm-list {
   max-height: 320px;
-  overflow-y: auto;
+  margin-inline: calc(var(--space-3) * -1);
+  padding-inline: var(--space-3);
+  overflow: hidden auto;
   overscroll-behavior: contain;
 }
 /* 32×24, the card's own arrangement: the cover tall on the left. */
