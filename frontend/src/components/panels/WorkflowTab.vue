@@ -169,6 +169,15 @@
             <p v-else class="wftab-note wftab-quiet">
               No file name was kept for it anywhere.
             </p>
+            <!-- The pick is saved on the workflow, so an offer that is not
+                 of the missing one's base model says so before it. -->
+            <p
+              v-if="checkpointUnmatched"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-replace-unmatched"
+            >
+              {{ UNMATCHED_REPLACEMENTS_TEXT }}
+            </p>
             <!-- The fix: another shelf model in its place. The card keeps its
                  pictures, and what the replacement makes is filed on it. -->
             <AppSelect
@@ -874,6 +883,7 @@ import {
   modelDisplayName,
   NO_REPLACEMENT_TEXT,
   replacementOptions,
+  UNMATCHED_REPLACEMENTS_TEXT,
 } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
 import { pictureCount } from "../../utils/workflowSets";
@@ -1299,6 +1309,14 @@ const replaceOptions = computed(() =>
     : [],
 );
 
+/** Whether the picker lists every loadable checkpoint, none known to match. */
+const checkpointUnmatched = computed(
+  () =>
+    replaceOptions.value.length > 0 &&
+    replacementsByFile.value[`checkpoint:${missingCheckpointFile.value}`]
+      ?.replacements_narrowed === false,
+);
+
 /**
  * Why the missing checkpoint has no "Replace with…", or "" while it has one or
  * has not been asked. Every answer without one says so: a missing checkpoint
@@ -1311,7 +1329,7 @@ const checkpointNoReplacement = computed(() => {
   const reason = answer.replacements_reason;
   if (reason === "none_loadable")
     return "No checkpoint on your shelf that could replace it is one this loader can load.";
-  return ["none_same_base_model", "none_go_with_it", "unread"].includes(reason)
+  return ["none_go_with_it", "unread"].includes(reason)
     ? NO_REPLACEMENT_TEXT[reason]
     : "Nothing on your shelf can replace it.";
 });

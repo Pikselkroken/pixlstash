@@ -582,7 +582,8 @@
             />
           </span>
           <!-- A checkpoint this ComfyUI does not have is offered the shelf's
-               of the same base model, so the recipe's LoRAs still fit. -->
+               of the same base model, so the recipe's LoRAs still fit, or
+               every one the workflow can load when none is known to be. -->
           <AppSelect
             v-if="checkpointFix?.options.length"
             :model-value="checkpointValue"
@@ -840,6 +841,7 @@ import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
 import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
 import { wouldDuplicate } from "../../utils/recipeKey";
+import { UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
 import { setEachRun } from "../../utils/workflowPins";
 import {
   changesNodes,
@@ -1410,7 +1412,7 @@ const BASE_MODEL_FOLDERS = ["checkpoints", "diffusion_models"];
  * replacement for one that is gone, with what may replace it:
  * `{file, missing, was, options, reason, narrowed}`, or null. `options` are the
  * shelf checkpoints this workflow's loader can load, held to the missing one's
- * base model where anything says which (`narrowed`), so the LoRAs still fit
+ * base model where anything says which and any has it (`narrowed`), so the LoRAs still fit
  * (`model-swap?replacing=`, the Workflow tab's "Replace with…"); `reason` says
  * why there are none. Kept once offered, so the picker stays after a pick
  * clears the reason.
@@ -1448,13 +1450,11 @@ const checkpointFixNote = computed(() => {
   if (fix.options.length) {
     return fix.narrowed
       ? `${gone} Pick another of the same base model for this run.`
-      : `${gone} Nothing says which base model it was, so every checkpoint this workflow can load is listed: pick one its LoRAs were made for.`;
+      : `${gone} ${UNMATCHED_REPLACEMENTS_TEXT}`;
   }
   // No `needs_pixlstash_nodes` case: the PixlStash swap loaders are VAE and
   // text-encoder ones only, so a checkpoint ask never gets that reason.
   switch (fix.reason) {
-    case "none_same_base_model":
-      return `${gone} No checkpoint on your model shelf is known to have its base model.`;
     case "none_loadable":
       return fix.narrowed
         ? `${gone} None of the same base model on your model shelf can be loaded by this workflow.`

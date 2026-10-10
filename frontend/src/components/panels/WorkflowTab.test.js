@@ -302,11 +302,12 @@ async function settle(wrapper) {
  * `replacements` already filtered to what goes with the checkpoint and what
  * the loader lists (#1596).
  */
-function replacementsByKind(byKind, reasons = {}) {
+function replacementsByKind(byKind, reasons = {}, narrowed = true) {
   return (_key, { slotKind } = {}) =>
     Promise.resolve({
       replacements: byKind[slotKind] ?? [],
       replacements_reason: reasons[slotKind] ?? null,
+      replacements_narrowed: slotKind === "checkpoint" ? narrowed : null,
     });
 }
 
@@ -669,6 +670,10 @@ describe("a checkpoint that will not load", () => {
 
     const picker = wrapper.find('[data-testid="wftab-replace-model"] select');
     expect(picker.text()).toContain("RealVis 5");
+    // Held to the missing one's base model: nothing to warn of.
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(
+      false,
+    );
     preflightWorkflowRun.mockResolvedValue({ groups: [] });
     await picker.setValue("realvisXL_v5_bf16.safetensors");
     await settle(wrapper);
@@ -700,8 +705,25 @@ describe("a checkpoint that will not load", () => {
     });
   });
 
+  it("says so when the picker lists every checkpoint, none known to match", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(
+        replacementsByKind({ checkpoint: [{ id: 7, filename: "sd15.safetensors" }] }, {}, false),
+      );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').text()).toContain(
+      "is known to match it",
+    );
+  });
+
   it.each([
-    ["none_same_base_model", "is known to have this checkpoint's base model"],
     ["none_go_with_it", "is known to work with this checkpoint"],
     ["none_loadable", "is one this loader can load"],
     ["unread", "Could not read what could replace it"],
