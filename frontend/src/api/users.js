@@ -70,6 +70,28 @@ export async function patchToken(id, body) {
 }
 
 /**
+ * Set which libraries a token works in.
+ *
+ * A token works only in the library it was created in unless this says
+ * otherwise. The server refuses anyone but the owner on the machine PixlStash
+ * runs on (`can_manage` from `GET /libraries` is the same answer), and refuses
+ * a share link outright: its ids mean something else in the next library.
+ *
+ * @param {number|string} id
+ * @param {boolean} allLibraries - true: whichever library is open; false: only
+ *   the library that is open now.
+ * @returns {Promise<Object>} the response body, whose `all_libraries` is what
+ *   the token is now set to.
+ */
+export async function setTokenLibraries(id, allLibraries) {
+  return unwrap(
+    apiClient.put(`${ME_URL}/token/${id}/libraries`, {
+      all_libraries: allLibraries,
+    }),
+  );
+}
+
+/**
  * Revoke a token. Any share link built on it stops working immediately.
  * @param {number|string} id
  * @returns {Promise<Object>} the response body.

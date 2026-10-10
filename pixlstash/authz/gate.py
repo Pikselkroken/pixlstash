@@ -59,6 +59,7 @@ from pixlstash.auth import (
     is_auth_excluded_path,
     is_local_or_tailscale_ip,
     is_loopback_ip,
+    token_covers_library,
 )
 from pixlstash.authz.membership import (
     ID_RESOLVERS,
@@ -695,6 +696,10 @@ class AuthzGate:
         show me what is active", and following the switch is the entire point of
         the feature; a token says "programmatic access to *this* library".
 
+        The one token that is not refused is one the owner set to cover every
+        library (#1787, ``auth.token_covers_library``): an agent's token that
+        is meant to follow the switch, as a session does.
+
         Fails closed in both directions that matter: a token with no stamp at all
         is refused rather than treated as universal.
         """
@@ -726,7 +731,7 @@ class AuthzGate:
             return
 
         token_library = getattr(matched_token, "library_uuid", None)
-        if token_library == active_uuid:
+        if token_covers_library(matched_token, active_uuid):
             return
 
         # A resource-scoped share token learns nothing: 404 is what every other

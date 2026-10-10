@@ -16,6 +16,13 @@ import { mount } from "@vue/test-utils";
 vi.mock("vuetify/components", () => ({
   VIcon: { name: "v-icon", template: "<i><slot /></i>" },
   VDialog: { name: "v-dialog", template: "<div><slot /></div>" },
+  VSwitch: {
+    name: "v-switch",
+    props: ["modelValue", "label"],
+    emits: ["update:modelValue"],
+    template:
+      '<button role="switch" :aria-checked="String(!!modelValue)" @click="$emit(\'update:modelValue\', !modelValue)">{{ label }}</button>',
+  },
   VTooltip: {
     name: "VTooltip",
     setup:
@@ -36,8 +43,10 @@ vi.mock("../../utils/apiClient", () => ({
 }));
 
 const createToken = vi.fn();
+const setTokenLibraries = vi.fn();
 vi.mock("../../api/users", () => ({
   createToken: (...args) => createToken(...args),
+  setTokenLibraries: (...args) => setTokenLibraries(...args),
 }));
 
 vi.mock("../../utils/clipboard", () => ({ copyText: vi.fn(async () => true) }));
@@ -60,7 +69,9 @@ async function mintedDialog() {
 
 beforeEach(() => {
   createToken.mockReset();
-  createToken.mockResolvedValue({ token: "example-minted-token" });
+  createToken.mockResolvedValue({ token: "example-minted-token", token_id: 7 });
+  setTokenLibraries.mockReset();
+  setTokenLibraries.mockResolvedValue({ all_libraries: true });
 });
 
 describe("the configuration handed to the agent", () => {
@@ -198,5 +209,58 @@ describe("the configuration handed to the agent", () => {
 
     expect(wrapper.find(".cad-error").exists()).toBe(true);
     expect(wrapper.findAll(".cad-code")).toHaveLength(0);
+  });
+});
+
+describe("a token that works in every library", () => {
+  async function mint(props, { everyLibrary = false } = {}) {
+    const wrapper = mount(ConnectAgentDialog, {
+      props: { open: true, ...props },
+      global: { stubs: { "v-icon": true } },
+    });
+    if (everyLibrary) await wrapper.find('[role="switch"]').trigger("click");
+    await wrapper.find(".app-dialog__footer button:last-child").trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  it("is not offered unless the caller may set it", async () => {
+    const mountDialog = (props) =>
+      mount(ConnectAgentDialog, {
+        props: { open: true, ...props },
+        global: { stubs: { "v-icon": true } },
+      });
+
+    // Looked for before minting: step 2 has no switch whoever is asking.
+    expect(mountDialog({}).find('[role="switch"]').exists()).toBe(false);
+    expect(
+      mountDialog({ offerEveryLibrary: true }).find('[role="switch"]').exists(),
+    ).toBe(true);
+  });
+
+  it("stays in this library unless asked", async () => {
+    const wrapper = await mint({ offerEveryLibrary: true });
+
+    expect(setTokenLibraries).not.toHaveBeenCalled();
+    expect(wrapper.text()).not.toMatch(/every library/i);
+  });
+
+  it("widens the minted token, by its id, when asked", async () => {
+    const wrapper = await mint({ offerEveryLibrary: true }, { everyLibrary: true });
+
+    expect(setTokenLibraries).toHaveBeenCalledWith(7, true);
+    expect(wrapper.text()).toMatch(/works in every library/i);
+    expect(wrapper.find(".cad-error").exists()).toBe(false);
+  });
+
+  it("still hands over the token when widening it is refused, and says so", async () => {
+    setTokenLibraries.mockRejectedValue(new Error("403"));
+    const wrapper = await mint({ offerEveryLibrary: true }, { everyLibrary: true });
+
+    expect(wrapper.findAll(".cad-code")).toHaveLength(2);
+    expect(wrapper.text()).toContain("example-minted-token");
+    expect(wrapper.find(".cad-error").text()).toMatch(/only for this library/i);
   });
 });

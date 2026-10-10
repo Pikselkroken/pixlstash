@@ -460,6 +460,11 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     whatever answers at the saved ComfyUI address on its own network, and
     saving that address is allowed remotely, so a remote owner could aim it.
 
+    60 = 52 + 8 with ``PUT /users/me/token/{token_id}/libraries`` (#1787): it
+    lets a token reach libraries it was not minted in, which is the owner's
+    decision at the machine and not one a remote session or a leaked token
+    may take.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -473,7 +478,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 8, sorted(loopback)
-    assert len(local) == 51, sorted(local)
+    assert len(local) == 52, sorted(local)
 
 
 # ===========================================================================

@@ -320,6 +320,224 @@ class TestPinnedRoutes:
             server.library_registry.detach(other.id)
 
 
+def _token_row(server, description="pin test") -> UserToken:
+    """The one token a test minted, as the hub has it now."""
+    return server.hub_engine.run_immediate_read_task(
+        lambda session: session.exec(
+            select(UserToken).where(UserToken.description == description)
+        ).one()
+    )
+
+
+def _cover(client, token_id: int, all_libraries: bool, **kwargs):
+    """Ask for a token to cover every library, or only the active one."""
+    return client.put(
+        f"{API}/users/me/token/{token_id}/libraries",
+        json={"all_libraries": all_libraries},
+        **kwargs,
+    )
+
+
+class TestATokenThatCoversEveryLibrary:
+    """The owner's opt-out from the pin (#1787), and who may take it.
+
+    Every refusal here sits beside the same request succeeding, so a negative
+    cannot pass because the credential or the route was simply missing.
+    """
+
+    def test_it_works_in_a_library_it_was_not_minted_in(self, server, other_library):
+        owner = _owner_client(server)
+        token = _mint(owner)
+        bearer = {"Authorization": f"Bearer {token}"}
+        _restamp_tokens(server, other_library)
+        # The control: pinned, it is refused, and told the way out.
+        refused = TestClient(server.api).get(f"{API}/pictures", headers=bearer)
+        assert refused.status_code == 403
+        assert "cover every library" in refused.json()["detail"]
+
+        _restamp_tokens(server, server.auth.active_library_uuid())
+        widened = _cover(owner, _token_row(server).id, True)
+        assert widened.status_code == 200, widened.text
+        assert widened.json()["all_libraries"] is True
+        _restamp_tokens(server, other_library)
+
+        response = TestClient(server.api).get(f"{API}/pictures", headers=bearer)
+        assert response.status_code == 200, response.text
+        # Signing in with it works from here too, not only from its own library.
+        signed_in = TestClient(server.api).post("/login", json={"token": token})
+        assert signed_in.status_code == 200, signed_in.text
+        listed = owner.get(f"{API}/users/me/token").json()
+        assert [row["all_libraries"] for row in listed] == [True]
+
+    def test_it_follows_a_real_switch_and_so_does_its_session(self, server, tmp_path):
+        owner = _owner_client(server)
+        token = _mint(owner)
+        assert _cover(owner, _token_row(server).id, True).status_code == 200
+        token_session = TestClient(server.api)
+        assert token_session.post("/login", json={"token": token}).status_code == 200
+
+        original = server.library_registry.active_library()
+        other = server.library_registry.create(str(tmp_path / "covered"), "Covered")
+        try:
+            server.library_switch.switch_to(other.uuid)
+            bearer = TestClient(server.api).get(
+                f"{API}/pictures", headers={"Authorization": f"Bearer {token}"}
+            )
+            assert bearer.status_code == 200, bearer.text
+            assert token_session.get(f"{API}/pictures").status_code == 200
+        finally:
+            server.library_switch.switch_to(original.uuid)
+            server.library_registry.detach(other.id)
+
+    def test_pinning_it_again_pins_it_to_the_active_library(
+        self, server, other_library
+    ):
+        owner = _owner_client(server)
+        token = _mint(owner)
+        bearer = {"Authorization": f"Bearer {token}"}
+        token_id = _token_row(server).id
+        assert _cover(owner, token_id, True).status_code == 200
+        token_session = TestClient(server.api)
+        assert token_session.post("/login", json={"token": token}).status_code == 200
+        assert token_session.get(f"{API}/pictures").status_code == 200
+        _restamp_tokens(server, other_library)
+
+        narrowed = _cover(owner, token_id, False)
+        assert narrowed.status_code == 200, narrowed.text
+        row = _token_row(server)
+        assert row.all_libraries is False
+        assert row.library_uuid == server.auth.active_library_uuid()
+        # The session it made while it covered everything does not outlive that.
+        assert token_session.get(f"{API}/pictures").status_code == 401
+        assert (
+            TestClient(server.api).get(f"{API}/pictures", headers=bearer).status_code
+            == 200
+        )
+        _restamp_tokens(server, other_library)
+        assert (
+            TestClient(server.api).get(f"{API}/pictures", headers=bearer).status_code
+            == 403
+        )
+
+    def test_a_read_only_token_can_cover_every_library_and_stays_read_only(
+        self, server, other_library
+    ):
+        owner = _owner_client(server)
+        token = _mint(owner, scope="READ")
+        bearer = {"Authorization": f"Bearer {token}"}
+        assert _cover(owner, _token_row(server).id, True).status_code == 200
+        _restamp_tokens(server, other_library)
+
+        client = TestClient(server.api)
+        assert client.get(f"{API}/pictures", headers=bearer).status_code == 200
+        write = client.post(
+            f"{API}/users/me/token", json={"scope": "ALL"}, headers=bearer
+        )
+        assert write.status_code == 403
+
+    def test_a_share_link_cannot_be_widened(self, server, other_library):
+        owner = _owner_client(server)
+        minted = owner.post(
+            "/users/me/token",
+            json={
+                "description": "pin test",
+                "scope": "READ",
+                "resource_type": "picture_set",
+                "resource_id": 1,
+            },
+        )
+        assert minted.status_code == 200, minted.text
+        bearer = {"Authorization": f"Bearer {minted.json()['token']}"}
+        token_id = _token_row(server).id
+
+        refused = _cover(owner, token_id, True)
+        assert refused.status_code == 400, refused.text
+        assert _token_row(server).all_libraries is False
+
+        # And a row that carries the flag anyway (a hand-edited hub) stays
+        # pinned: the flag is only ever read on a token naming no resource.
+        def _forge(session: Session):
+            token = session.get(UserToken, token_id)
+            token.all_libraries = True
+            session.add(token)
+            session.commit()
+
+        server.hub_engine.run_task(_forge)
+        server.auth._flush_token_cache()
+        client = TestClient(server.api)
+        assert client.get(f"{API}/picture_sets", headers=bearer).status_code == 200
+        _restamp_tokens(server, other_library)
+        assert _token_row(server).all_libraries is True
+        assert client.get(f"{API}/picture_sets", headers=bearer).status_code == 403
+
+    def test_only_the_owner_at_the_machine_may_set_it(self, server):
+        owner = _owner_client(server)
+        token_id = owner.post(
+            "/users/me/token", json={"description": "pin test", "scope": "ALL"}
+        ).json()["token_id"]
+        read_token = owner.post(
+            "/users/me/token", json={"description": "reader", "scope": "READ"}
+        ).json()["token"]
+        route = ("PUT", f"{API}/users/me/token/{{token_id}}/libraries")
+        assert ROUTE_POLICIES[route].policy is AccessPolicy.LOCAL_OWNER_ONLY
+
+        # A read-only token is not the owner.
+        by_reader = _cover(
+            TestClient(server.api),
+            token_id,
+            True,
+            headers={"Authorization": f"Bearer {read_token}"},
+        )
+        assert by_reader.status_code == 403
+        # Nor is nobody at all.
+        assert _cover(TestClient(server.api), token_id, True).status_code == 401
+
+        # The owner's own session, from somewhere else, is refused too.
+        config = server.auth._server_config
+        previous = config.get("trusted_proxies")
+        config["trusted_proxies"] = ["testclient"]
+        try:
+            remote = _cover(
+                owner, token_id, True, headers={"X-Forwarded-For": "8.8.8.8"}
+            )
+            assert remote.status_code == 403
+            assert "allow_remote_host_ops" in remote.json()["detail"]
+            assert _token_row(server).all_libraries is False
+            # The same session, the same proxy, from the machine: allowed.
+            local = _cover(
+                owner, token_id, True, headers={"X-Forwarded-For": "127.0.0.1"}
+            )
+            assert local.status_code == 200, local.text
+        finally:
+            if previous is None:
+                config.pop("trusted_proxies", None)
+            else:
+                config["trusted_proxies"] = previous
+        assert _token_row(server).all_libraries is True
+
+    def test_a_token_refused_in_this_library_cannot_lift_its_own_pin(
+        self, server, other_library
+    ):
+        owner = _owner_client(server)
+        token = _mint(owner)
+        bearer = {"Authorization": f"Bearer {token}"}
+        token_id = _token_row(server).id
+        _restamp_tokens(server, other_library)
+
+        refused = _cover(TestClient(server.api), token_id, True, headers=bearer)
+        assert refused.status_code == 403
+        assert _token_row(server).all_libraries is False
+
+        # In its own library the same token is the owner, and may.
+        _restamp_tokens(server, server.auth.active_library_uuid())
+        allowed = _cover(TestClient(server.api), token_id, True, headers=bearer)
+        assert allowed.status_code == 200, allowed.text
+
+    def test_an_unknown_token_is_not_found(self, server):
+        owner = _owner_client(server)
+        assert _cover(owner, 987654321, True).status_code == 404
+
+
 class TestLibraryIndependentRoutes:
     def test_auth_info_answers_even_for_a_non_active_library_token(
         self, server, other_library

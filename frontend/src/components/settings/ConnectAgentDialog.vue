@@ -10,9 +10,15 @@
  * straight into a client. Scope is a plain unpinned READ token - narrowing it
  * to one set, character or project is what the "New token" dialog is for, and
  * duplicating that picker here would be a second place to keep correct.
+ *
+ * A token works only in the library that is open when it is minted, so an
+ * agent is refused the moment the owner switches. "Use in every library"
+ * lifts that, as a second call: the server lets only the owner at the machine
+ * widen a token, which the mint route does not require.
  */
 import { computed, ref, watch } from "vue";
-import { createToken } from "../../api/users";
+import { VSwitch } from "vuetify/components";
+import { createToken, setTokenLibraries } from "../../api/users";
 import { copyText } from "../../utils/clipboard";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -20,6 +26,9 @@ import Segmented from "../widgets/Segmented.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
+  // Whether to offer "Use in every library": there is more than one, and this
+  // caller is the one the server lets widen a token.
+  offerEveryLibrary: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["close", "created"]);
@@ -55,6 +64,10 @@ const MODES = [
   { id: "write", label: "Read and write workflows" },
 ];
 const allowWrite = computed(() => mode.value === "write");
+const everyLibrary = ref(false);
+// "every" once the token is widened, "failed" when it was minted and the
+// widening was refused: the token is real either way and is still shown.
+const coverage = ref("");
 
 // `-s user` is load-bearing. `claude mcp add` defaults to `-s local`, which
 // registers the server only inside the directory it was run from, so the agent
@@ -96,6 +109,8 @@ watch(
     token.value = "";
     copied.value = "";
     mode.value = "read";
+    everyLibrary.value = false;
+    coverage.value = "";
   },
 );
 
@@ -110,6 +125,14 @@ async function create() {
         : { description: "AI agent (MCP)", scope: "READ" },
     );
     if (!created?.token) throw new Error("No token returned");
+    if (props.offerEveryLibrary && everyLibrary.value) {
+      try {
+        await setTokenLibraries(created.token_id, true);
+        coverage.value = "every";
+      } catch {
+        coverage.value = "failed";
+      }
+    }
     token.value = created.token;
     emit("created");
   } catch {
@@ -170,6 +193,23 @@ async function copy(key, text) {
           tools it is offered.
         </p>
       </template>
+      <div v-if="offerEveryLibrary" class="cad-block">
+        <v-switch
+          v-model="everyLibrary"
+          color="primary"
+          density="compact"
+          hide-details
+          label="Use in every library"
+          :disabled="loading"
+        />
+        <p class="cad-step">
+          {{
+            everyLibrary
+              ? "The agent works on whichever library is open, and follows you when you switch."
+              : "The token works in this library only. The agent is refused while another library is open."
+          }}
+        </p>
+      </div>
       <p v-if="error" class="cad-error">{{ error }}</p>
     </template>
 
@@ -182,6 +222,14 @@ async function copy(key, text) {
             : "Read-only token."
         }}
         The token is shown once and cannot be read back. Copy one of these now.
+      </p>
+      <p v-if="coverage === 'every'" class="cad-hint">
+        It works in every library: the agent sees whichever one is open.
+      </p>
+      <p v-else-if="coverage === 'failed'" class="cad-error">
+        The token was created, but only for this library: PixlStash could not
+        set it to work in every library. Turn on Every library for it in the
+        token list.
       </p>
       <p v-if="remoteUrl" class="cad-warn">
         You are viewing PixlStash over the network, so these name

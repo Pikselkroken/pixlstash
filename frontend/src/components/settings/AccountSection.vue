@@ -9,6 +9,7 @@ import {
   createToken,
   patchToken,
   deleteToken,
+  setTokenLibraries,
   uploadWatermark,
   deleteWatermark,
 } from "../../api/users";
@@ -25,6 +26,7 @@ import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
 import ConnectAgentDialog from "./ConnectAgentDialog.vue";
 import { errorDetail } from "../../utils/apiError";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -344,6 +346,29 @@ async function updateTokenWatermark(token, value) {
   }
 }
 
+// A token works in the library it was made in. With one library that is not
+// worth a column; with several, the owner at the machine may let a token work
+// in whichever is open (`can_manage`, the answer the Libraries tab is given).
+const librariesStore = useLibrariesStore();
+const severalLibraries = computed(() => librariesStore.libraries.length > 1);
+const librariesUpdating = reactive(new Set());
+
+async function updateTokenLibraries(token, value) {
+  if (librariesUpdating.has(token.id)) return;
+
+  const previousValue = token.all_libraries;
+  token.all_libraries = value;
+  librariesUpdating.add(token.id);
+  try {
+    await setTokenLibraries(token.id, value);
+  } catch (e) {
+    tokensError.value = errorDetail(e) || "Failed to update token.";
+    token.all_libraries = previousValue;
+  } finally {
+    librariesUpdating.delete(token.id);
+  }
+}
+
 function confirmDeleteToken(token) {
   tokenToDelete.value = token;
   tokenDeleteDialogOpen.value = true;
@@ -621,6 +646,9 @@ watch(
               <th>Created</th>
               <th>Used</th>
               <th>Expires</th>
+              <th v-if="severalLibraries" class="account-token-th-wm">
+                Every library
+              </th>
               <th class="account-token-th-wm">Mark</th>
               <th class="account-token-th-actions"></th>
             </tr>
@@ -671,6 +699,27 @@ watch(
               >
                 {{ formatTokenExpiry(token) }}
               </td>
+              <td v-if="severalLibraries" class="account-token-wm">
+                <!-- Off: the token works only in the library it was made in.
+                     A share link stays off for good, because its set,
+                     character or project is a different one in every other
+                     library. -->
+                <v-switch
+                  :model-value="token.all_libraries"
+                  color="primary"
+                  density="compact"
+                  hide-details
+                  class="account-token-wm-switch"
+                  :aria-label="`${token.description || 'Token'} works in every library`"
+                  :disabled="
+                    tokensLoading ||
+                    librariesUpdating.has(token.id) ||
+                    Boolean(token.resource_type) ||
+                    !librariesStore.canManage
+                  "
+                  @update:model-value="updateTokenLibraries(token, $event)"
+                />
+              </td>
               <td class="account-token-wm">
                 <v-switch
                   :model-value="token.watermark"
@@ -710,6 +759,7 @@ watch(
   <!-- ── Connect an AI agent (MCP) ───────────────────────────────────── -->
   <ConnectAgentDialog
     :open="connectAgentDialogOpen"
+    :offer-every-library="severalLibraries && librariesStore.canManage"
     @close="connectAgentDialogOpen = false"
     @created="fetchUserTokens"
   />

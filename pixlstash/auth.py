@@ -427,6 +427,35 @@ def is_unscoped_owner_token(token: UserToken) -> bool:
     return token.scope == "ALL" and token.resource_type is None
 
 
+def token_follows_active_library(token: UserToken) -> bool:
+    """Return True when the owner has set *token* to cover every library.
+
+    The opt-out from the library pin (#1787). Honoured only on a token that
+    names no resource: a share link's ids mean something else in the next
+    library, so a resource-scoped row carrying the flag (which
+    :meth:`AuthService.set_token_libraries` never writes) stays pinned. Fails
+    closed: anything but an explicit ``True`` is "pinned".
+    """
+    return getattr(token, "all_libraries", False) is True and (
+        token.resource_type is None
+    )
+
+
+def token_covers_library(token: UserToken, library_uuid: Optional[str]) -> bool:
+    """Return True when *token* may be used while *library_uuid* is active.
+
+    A token works in the library it is stamped with, and nowhere else unless
+    :func:`token_follows_active_library`.
+
+    This is the single spelling of the pin. The request middleware, the authz
+    gate, the WebSocket handshake and the token login all ask it, so they
+    cannot drift apart.
+    """
+    if token_follows_active_library(token):
+        return True
+    return getattr(token, "library_uuid", None) == library_uuid
+
+
 # ``UserToken.bound_address`` of a source-bound token nothing has used yet (the
 # ComfyUI link token, between minting and its round-trip check). Until a
 # request binds it, it is good for exactly one request, :data:`TOKEN_BIND_CHECK`
@@ -1791,7 +1820,7 @@ class AuthService:
                     matched = candidate
 
         if matched is not None:
-            if getattr(matched, "library_uuid", None) != self.active_library_uuid():
+            if not token_covers_library(matched, self.active_library_uuid()):
                 return None
             if self.source_refusal(
                 matched,
@@ -2148,6 +2177,7 @@ class AuthService:
                         "last_used_at": token.last_used_at,
                         "include_attachments": token.include_attachments,
                         "watermark": token.watermark,
+                        "all_libraries": token_follows_active_library(token),
                     }
                 )
             return result
@@ -2224,6 +2254,68 @@ class AuthService:
         # Flush the token cache so the updated watermark setting takes effect immediately.
         self._flush_token_cache()
         return {"status": "success", "id": token.id, "watermark": token.watermark}
+
+    def set_token_libraries(self, request: Request, token_id: int, all_libraries: bool):
+        """Set whether a token covers every library or only the active one.
+
+        ``all_libraries=True`` lifts the library pin: the token works in
+        whichever library is open, so an agent's token survives a switch
+        (#1787). ``False`` pins it again, to the library that is active now,
+        which is the one the owner is looking at when they say "only this
+        library".
+
+        Only a token that names no resource can be widened. A share link's
+        ``resource_id`` means a different set, character or project in every
+        other library, so widening one would serve somebody else's pictures.
+
+        Who may call this is the authz gate's business (``LOCAL_OWNER_ONLY``:
+        an unscoped owner at the machine), not this method's.
+        """
+        self.ensure_secure_when_required(request)
+        user_id = self.require_user_id(request)
+        self._refuse_bound_token(request, "change tokens")
+        active_uuid = self.active_library_uuid()
+
+        def _update(session: Session, user_id: int, token_id: int):
+            token = session.get(UserToken, token_id)
+            if token is None or token.user_id != user_id:
+                raise HTTPException(status_code=404, detail="Token not found")
+            if token.resource_type is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "A share link belongs to the library its pictures are "
+                        "in and cannot cover other libraries."
+                    ),
+                )
+            token.all_libraries = all_libraries
+            if not all_libraries and active_uuid is not None:
+                token.library_uuid = active_uuid
+            session.add(token)
+            session.commit()
+            session.refresh(token)
+            return token
+
+        token = self._db.run_task(
+            _update, user_id, token_id, priority=DBPriority.IMMEDIATE
+        )
+        self._logger.info(
+            "Token %s now covers %s.",
+            token.public_id,
+            "every library" if token.all_libraries else f"library {token.library_uuid}",
+        )
+        # A session this token created holds the reach the token had when it
+        # logged in, so end it rather than leave it wider than its credential.
+        # Then the cache, which still serves the row as it was (see delete_token
+        # for why both, and why in this order).
+        if token.public_id is not None:
+            self._drop_sessions_for_tokens((token.public_id,))
+        self._flush_token_cache()
+        return {
+            "status": "success",
+            "id": token.id,
+            "all_libraries": token.all_libraries,
+        }
 
     def revoke_tokens_for_resource(
         self,
@@ -2453,12 +2545,19 @@ class AuthService:
                 )
                 raise HTTPException(status_code=401, detail="Invalid token")
             session_token_public_id = matched_token.public_id
-            session_library_uuid = matched_token.library_uuid
-            if session_library_uuid != self.active_library_uuid():
+            if not token_covers_library(matched_token, self.active_library_uuid()):
                 raise HTTPException(
                     status_code=403,
                     detail="This token belongs to a library that is not currently active.",
                 )
+            # The session inherits the token's reach: pinned to the token's
+            # library, or, for a token that covers every library, following
+            # switches like a password session (None, exactly as theirs is).
+            session_library_uuid = (
+                None
+                if token_follows_active_library(matched_token)
+                else matched_token.library_uuid
+            )
 
             def update_token_last_used(session: Session, token_id: int):
                 db_token = session.get(UserToken, token_id)
@@ -2695,14 +2794,20 @@ class AuthService:
 
                 if matched_token is not None:
                     lease = getattr(request.state, "library_lease", None)
-                    if (
-                        lease is not None
-                        and matched_token.library_uuid != lease.library_uuid
+                    if lease is not None and not token_covers_library(
+                        matched_token, lease.library_uuid
                     ):
-                        return JSONResponse(
-                            status_code=403,
-                            content={"detail": "Token belongs to a different library"},
-                        )
+                        detail = "Token belongs to a different library"
+                        # The way out is the owner's to take, so only a token
+                        # that could be widened is told about it; a share link
+                        # learns nothing about how this server is set up.
+                        if matched_token.resource_type is None:
+                            detail += (
+                                ". Switch to that library, or let the token "
+                                "cover every library under API Tokens in "
+                                "the settings, on the machine PixlStash runs on."
+                            )
+                        return JSONResponse(status_code=403, content={"detail": detail})
                     refusal = self.source_refusal(
                         matched_token,
                         self._get_real_client_ip(request),

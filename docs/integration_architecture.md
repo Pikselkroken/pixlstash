@@ -1407,6 +1407,20 @@ the row, so the `inert_share_links` it reports stop working rather than being
 revoked, and adding the same folder again revives the row — same uuid, same
 tokens live again. The active library is refused (`409`); switch away first.
 
+**A token is good in one library unless the owner says otherwise (#1787).** A
+bearer token used while another library is active is answered `403 Token
+belongs to a different library`, and for a token that names no resource the
+detail goes on to say how to lift that. `PUT /users/me/token/{token_id}/libraries`
+with `{"all_libraries": true}` makes the token act on whichever library is
+active; `false` pins it to the library active now. It answers `{status, id,
+all_libraries}`, `400` for a share link (its ids mean something else in the
+next library) and `403` to anyone but the owner on the machine PixlStash runs
+on, which is why minting cannot set it and the client makes two calls. `GET
+/users/me/token` reports `all_libraries` per row. `AccountSection` shows it as
+the **Every library** switch and `ConnectAgentDialog` as **Use in every
+library**; both read `can_manage` from `GET /libraries` to know whether this
+caller may change it, the same answer the Libraries tab is told.
+
 `PATCH` and `DELETE` take the **uuid only**, and only of an **attached**
 library. The registry's `get` also accepts a row id and a name, which is right
 for a CLI a person types at; over HTTP the handlers resolve through `by_uuid`,

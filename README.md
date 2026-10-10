@@ -122,7 +122,11 @@ a time. Pictures, tags, scores, snapshots, guest sessions, and guest scores stay
 with their library; your owner account and preferences stay with the
 installation. API tokens and share links are pinned to the library where they
 were created: they become inactive while a different library is open and work
-again when you switch back.
+again when you switch back. An API token for a script or an AI agent can be set
+to work in every library instead (the **Every library** switch in the token
+list, or **Use in every library** in **Connect AI agent**); it then acts on
+whichever library is open. Only the owner, on the machine PixlStash runs on,
+can change that, and a share link always stays with its library.
 
 **Settings → Libraries** does all of it: add a library, rename one, switch
 between them, and stop using one. **Add a library…** takes a single folder and
@@ -760,6 +764,11 @@ workflows**) and hands back the finished configuration to paste, either a one-li
 That token covers the whole library. To narrow it to one set, character or
 project, mint a **Read-only share** token with **New token** instead and put it
 in the configuration yourself.
+
+A token works only in the library that was open when you made it, so the agent
+is refused once you switch. If you keep several libraries, turn on **Use in every
+library** before creating it (or turn on **Every library** for it in the token
+list afterwards): the agent then sees whichever library is open.
 
 For read-only use, do not give it a full-access token: any agent that can read
 its own config file then has full owner control of PixlStash - not just read
