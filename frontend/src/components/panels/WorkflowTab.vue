@@ -1806,7 +1806,7 @@ const pileSummary = computed(() => ({
   varying: alsoUsed.value,
   without:
     alsoUsed.value.length === (summary.value?.varying?.length ?? 0) &&
-    alsoUsed.value.every((use) => summary.value.varying.includes(use))
+    alsoUsed.value.every((use) => summary.value?.varying?.includes(use))
       ? (summary.value?.without ?? null)
       : null,
   cover_asset: alsoUsed.value.some(
