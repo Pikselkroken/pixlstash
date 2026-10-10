@@ -39,6 +39,7 @@ import sqlite3
 import os
 import re
 import threading
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field as dataclass_field
 from difflib import SequenceMatcher
@@ -2029,7 +2030,8 @@ class SetCloneAsk(BaseModel):
         description=(
             "The owner's own pairing, a VAE or text-encoder file of the graph "
             "-> the model of `model_ids` its loaders take: applied before "
-            "anything is paired for them."
+            "anything is paired for them. One for a file the graph has no "
+            "loader of that kind for is ignored."
         ),
     )
 
@@ -2106,8 +2108,9 @@ class SetClonePlan(BaseModel):
     takes: dict[str, int] = Field(
         default_factory=dict,
         description=(
-            "Each VAE or text-encoder file of the graph -> the set's model "
-            "its loaders take, changed or not: what `picks` re-pairs."
+            "Each VAE or text-encoder file of the graph that takes one of the "
+            "set's models -> that model, changed or not: what `picks` "
+            "re-pairs. A file the set has nothing for is absent."
         ),
     )
     choices: dict[str, list[int]] = Field(
@@ -7346,7 +7349,9 @@ def create_router(server) -> APIRouter:
         return options
 
     def _closest_pairs(
-        slots: list[SwapSlot], models: list[SwapModel], fits=None
+        slots: list[SwapSlot],
+        models: list[SwapModel],
+        fits: Callable[[SwapSlot, SwapModel], bool] | None = None,
     ) -> list[tuple[SwapSlot, SwapModel]]:
         """*slots* paired with *models* by filename, the closest pair first.
 
@@ -7420,6 +7425,7 @@ def create_router(server) -> APIRouter:
         )
 
     def _same_layout(slot: SwapSlot, model: SwapModel) -> bool:
+        """Whether *model* has the layout of the file *slot* loads, when known."""
         family = slot.model.family if slot.model else None
         return bool(family) and model.family == family
 
@@ -7445,10 +7451,12 @@ def create_router(server) -> APIRouter:
            set's checkpoint, so a Krea 2 text encoder replaces a Z-Image one
            whatever their layouts.
 
-        Passes 3 and 4 pair by filename, closest pair first
+        Where a pass leaves a choice (two files of one layout, or the fill of
+        pass 4) it pairs by filename, closest pair first
         (:func:`_closest_pairs`), never in order: a ``video_vae`` slot takes
         the set's ``video_vae`` wherever the set lists it. A slot the set has
-        nothing for keeps its file. Two slots of a kind are two different
+        nothing for keeps its file, and so does one no pass fills; a pick
+        naming a file the graph has no slot of that kind for is ignored. Two slots of a kind are two different
         files (the slot list merges loaders naming one file), so one set file
         is never written over both.
 
@@ -7469,7 +7477,7 @@ def create_router(server) -> APIRouter:
             slots = [slot for _c, _w, slot in found if slot.kind == kind]
             taken: set[int] = set()
 
-            def pair(fits) -> None:
+            def pair(fits: Callable[[SwapSlot, SwapModel], bool] | None) -> None:
                 pairs = _closest_pairs(
                     [slot for slot in slots if slot.filename not in chosen],
                     [m for m in files if m.id not in taken],
@@ -7590,7 +7598,8 @@ def create_router(server) -> APIRouter:
             # the rest would present a partial set as this one, so the set is
             # refused on its own, never the whole read.
             gone = [i for i in (*ask.model_ids, *ask.checkpoint_ids) if i not in models]
-            members = [models[i] for i in ask.model_ids if i in models]
+            # Each once: a repeated id would be one file for two loaders.
+            members = [models[i] for i in dict.fromkeys(ask.model_ids) if i in models]
             # Named by the caller, never guessed from the members: a set's
             # checkpoint slot takes a checkpoint or an unclassified diffusion
             # file, and an upscaler beside no checkpoint is no base model.

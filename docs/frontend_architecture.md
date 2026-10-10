@@ -1498,12 +1498,14 @@ in the Workflow tab's Models panel head, both through
   call** (#1831). Where the set holds two or more VAEs (or text encoders),
   each loader file taking one is a compact `AppSelect` of the set's files of
   that kind (the plan's `takes` and `choices`), in changed and unchanged rows
-  alike. Picking the file another loader has swaps the two. The dialog never
+  alike. Picking the file another loader has swaps the two, and a status line
+  says so, since the other row changed untouched. The dialog never
   builds the swap itself: it re-asks `set-clone-plans` for that one set with
   the whole pairing as `picks` and replaces the set's plan with the answer, so
   the diff, the fit and the `swaps` Clone sends stay the server's. The selects
   are not disabled while that is asked (disabling the focused one drops focus
-  to the page); Clone is.
+  to the page); Clone is. A pick ComfyUI will not load shows the plan's
+  `reason` beside the diff and Clone waits for another pick.
 - **LoRAs go only when the base model changes** (`keeps_loras`, the server's
   rule). Then "Removed <checkpoint> LoRAs" with a struck chip per loader and a
   reason naming the new base model (or saying which one is unknown), and Clone

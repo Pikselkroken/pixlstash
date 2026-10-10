@@ -13463,6 +13463,10 @@ def test_two_files_of_a_kind_are_kept_then_paired_by_name_then_as_picked(cloneab
                     ask("named", named),
                     # Three VAEs for two slots, so nothing is paired by name.
                     ask("wide", [*own, named[0]]),
+                    # One id twice is one file, and a pick for no loader is
+                    # ignored: the plan is the one the set gets unasked.
+                    ask("twice", [named[0], named[0]]),
+                    ask("stray", own, picks={"no-such.safetensors": own[0]}),
                     ask("picked", own, picks={video: own[0], audio: own[1]}),
                 ]
             },
@@ -13487,6 +13491,8 @@ def test_two_files_of_a_kind_are_kept_then_paired_by_name_then_as_picked(cloneab
     assert plans["own"]["choices"] == {"vae": own, "clip": []}
     # Kept because they are the files loaded, not because the names pair.
     assert plans["wide"]["takes"] == plans["own"]["takes"]
+    assert plans["twice"]["takes"] == {}
+    assert plans["stray"]["takes"] == plans["own"]["takes"]
     assert plans["named"]["swaps"] == {
         _SHELF_FILENAME: CLONE_CHECKPOINT,
         video: "h3_video_vae_ft.safetensors",

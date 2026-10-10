@@ -1632,6 +1632,10 @@ describe("Clone onto a workflow set", () => {
       },
     ]);
     expect(picks().map((p) => p.value)).toEqual(["31", "32"]);
+    // The row nobody touched changed too: said, in a status region.
+    expect(wrapper.find('[data-testid="cos-swapped"]').text()).toContain(
+      "Swapped with the loader of audio",
+    );
     await cloneButton(wrapper).trigger("click");
     await flush();
     expect(cloneWorkflowWithModels).toHaveBeenCalledWith(
@@ -1669,8 +1673,8 @@ describe("Clone onto a workflow set", () => {
         loader(`${file}.safetensors`, `${file}.safetensors`, {
           node_id: String(8 + index),
           kind: file === "t5" ? "clip" : "vae",
-          was_class: "VAELoader",
-          now_class: "VAELoader",
+          was_class: file === "t5" ? "CLIPLoader" : "VAELoader",
+          now_class: file === "t5" ? "CLIPLoader" : "VAELoader",
         }),
       ),
     };
@@ -1679,9 +1683,11 @@ describe("Clone onto a workflow set", () => {
     await openOn(wrapper);
     await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
     planSetClones.mockRejectedValue(new Error("offline"));
-    await wrapper
-      .find('[data-testid="cos-pick-video.safetensors"] select')
-      .setValue("31");
+    const pickVideo = () =>
+      wrapper
+        .find('[data-testid="cos-pick-video.safetensors"] select')
+        .setValue("31");
+    await pickVideo();
     await flush();
     expect(wrapper.find('[role="alert"]').text()).toContain("offline");
     expect(
@@ -1689,6 +1695,21 @@ describe("Clone onto a workflow set", () => {
         .findAll('[data-testid="cos-loaders"] select')
         .map((s) => s.element.value),
     ).toEqual(["32", "31"]);
+
+    // A pick ComfyUI refuses: the reason is said beside the diff, where the
+    // owner is looking, and Clone waits for another pick.
+    planSetClones.mockResolvedValue({
+      ...reply,
+      plans: [
+        { ...plan, fit: "wont_load", reason: "ComfyUI does not list audio" },
+      ],
+    });
+    await pickVideo();
+    await flush();
+    expect(wrapper.find('[data-testid="cos-reason"]').text()).toContain(
+      "ComfyUI does not list audio",
+    );
+    expect(cloneButton(wrapper).attributes("disabled")).toBeDefined();
   });
 
   it("names the clone after the model the plan loads and marks a set with no cover", async () => {

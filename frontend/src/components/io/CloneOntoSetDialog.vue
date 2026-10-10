@@ -165,6 +165,21 @@
               </span>
             </li>
           </ul>
+          <!-- The other row changed without being touched: said, and read
+               out, rather than left to be noticed. -->
+          <p v-if="swapNotice" class="cos-note" role="status" data-testid="cos-swapped">
+            {{ swapNotice }}
+          </p>
+          <!-- Only after a pick: a set that will not load cannot be chosen,
+               but the file picked for a loader may be one ComfyUI refuses. -->
+          <p
+            v-if="chosen.plan.reason"
+            class="cos-note cos-bad"
+            role="alert"
+            data-testid="cos-reason"
+          >
+            {{ chosen.plan.reason }}. Pick another file to clone.
+          </p>
           <p v-if="baseKept" class="cos-note cos-warn" data-testid="cos-base-kept">
             <v-icon size="14" aria-hidden="true">mdi-alert-outline</v-icon>
             <span
@@ -377,6 +392,8 @@ const chosenKey = ref("");
 const name = ref("");
 const nameTouched = ref(false);
 const cloning = ref(false);
+/** Said after a pick that moved another loader's file too. */
+const swapNotice = ref("");
 /** A pick is being re-planned: the diff on show is about to be replaced. */
 const replanning = ref(false);
 const cloneError = ref("");
@@ -743,6 +760,7 @@ async function load() {
   loadError.value = "";
   cloneError.value = "";
   replanning.value = false;
+  swapNotice.value = "";
   sets.value = [];
   chain.value = null;
   chosenKey.value = "";
@@ -803,6 +821,9 @@ function choose(key) {
       (added.length ? `, including ${added.map((row) => row.name).join(", ")}.` : ".")
     : "";
   edited.value = null;
+  // What went wrong was about the set left behind.
+  cloneError.value = "";
+  swapNotice.value = "";
   chosenKey.value = key;
   if (!nameTouched.value) {
     name.value = cloneOntoSetName(
@@ -835,6 +856,7 @@ async function pick(slot, modelId) {
   const mine = token;
   replanning.value = true;
   cloneError.value = "";
+  swapNotice.value = "";
   try {
     const answer = await planSetClones(props.workflowId, [
       {
@@ -846,8 +868,13 @@ async function pick(slot, modelId) {
     ]);
     if (mine !== token) return;
     const plan = (answer?.plans ?? []).find((found) => found.key === set.key);
-    if (plan) set.plan = plan;
-    else cloneError.value = "Could not change that file.";
+    if (!plan) cloneError.value = "Could not change that file.";
+    else {
+      set.plan = plan;
+      if (other) {
+        swapNotice.value = `Swapped with the loader of ${deriveModelName(other) || other}, which had that file.`;
+      }
+    }
   } catch (err) {
     if (mine !== token) return;
     console.warn(
