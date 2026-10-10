@@ -41,6 +41,7 @@ from pixlstash.hub.workflow_card_reads import (
     asset_names,
     card_index,
     default_overrides,
+    kept_variants,
     key_pins,
     model_fixes,
     slot_marks,
@@ -55,10 +56,12 @@ from pixlstash.hub.workflow_cards import (
     _cache_topology,
     auto_workflow_id,
     variant_families,
+    variant_workflow_id,
     loader_swaps_of,
     topology_only_key,
 )
 from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN
+from pixlstash.hub.workflow_versions import saved_over_ids
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
 from pixlstash.services.model_shelf_service import adapter_digest_index
@@ -678,13 +681,17 @@ def _move_topologies(
     move: Callable[[str], Optional[tuple]],
     rule: str,
     unmoved: str,
-) -> tuple[dict, dict, dict, dict, dict, dict]:
+) -> tuple[dict, dict, dict, dict, dict, dict, dict]:
     """Run *move* on each topology in a savepoint; :func:`_retire_all`'s maps.
 
     *move* returns ``(label map, stage slots, new core, [(card, old id, new id,
     variants)])``, ``None`` when no stored graph reduces. The result is
     ``(heirs_of, topologies_of, labels_of, stage_slots_of, new_of_card,
-    core_of_heir)``, in :func:`_retire_all`'s argument order.
+    core_of_heir)``, in :func:`_retire_all`'s argument order, and then
+    ``kept_on``: ``{saved-over workflow: the topologies it keeps variants
+    on}``, from each move whose old and new id are the same. Such a workflow
+    is in none of the other maps, so it is never retired
+    (:func:`_keep_saved_over`).
 
     Shared by data steps 8, 10, 13 and 15. This runs at hub open inside the
     data-version transaction, so an uncaught error would refuse the hub on
@@ -699,6 +706,7 @@ def _move_topologies(
     stage_slots_of: dict[str, dict[str, str]] = {}
     new_of_card: dict[str, dict[str, str]] = {}  # old id -> {card: new id}
     core_of_heir: dict[str, str] = {}
+    kept_on: dict[str, set[str]] = {}
     for topology_hash in sorted(topologies):
         conn.execute("SAVEPOINT rederive_topology")
         try:
@@ -732,13 +740,121 @@ def _move_topologies(
         labels_of[topology_hash] = labels
         stage_slots_of[topology_hash] = stage_slots
         for workflow_key, old_id, new_id, variants in moves:
+            if old_id == new_id:
+                kept_on.setdefault(old_id, set()).add(topology_hash)
+                continue
             topologies_of.setdefault(old_id, set()).add(topology_hash)
             heirs_of.setdefault(old_id, Counter())[new_id] += variants
             # Per old id: a card's variants of other families are in other
             # workflows and go to other heirs, so one heir per card.
             new_of_card.setdefault(old_id, {})[workflow_key] = new_id
             core_of_heir[new_id] = new_core
-    return heirs_of, topologies_of, labels_of, stage_slots_of, new_of_card, core_of_heir
+    return (
+        heirs_of,
+        topologies_of,
+        labels_of,
+        stage_slots_of,
+        new_of_card,
+        core_of_heir,
+        kept_on,
+    )
+
+
+def _keep_saved_over(
+    conn: sqlite3.Connection, variants: list[str], workflow_id: str
+) -> None:
+    """Keep *variants* in the saved-over automatic workflow *workflow_id*.
+
+    Rule 5 of #1846 (#1849): an automatic workflow the owner saved over is
+    never retired. Where a new core rule or a re-identified family computes
+    another id for a variant it holds, the variant is not moved: this row
+    says it stays (``workflow_cards.variant_workflow_id`` reads it ahead of
+    the rule), and the caller records no heir and no successor for it, so
+    :func:`_retire_workflow` never runs and the versions, name, notes,
+    defaults, pins and picture inputs stay on the id. ``IGNORE``: a variant
+    already kept stays where it was first kept.
+    """
+    conn.executemany(
+        "INSERT OR IGNORE INTO workflow_kept_variant (structural_hash, workflow_id) "
+        "VALUES (?, ?)",
+        [(variant, workflow_id) for variant in variants],
+    )
+    logger.info(
+        "Workflow %s has versions saved over it, so it is not regrouped: "
+        "variant(s) %s stay in it.",
+        workflow_id,
+        variants,
+    )
+
+
+def _merged_labels(
+    topologies: list[str], labels_of: dict[str, dict[str, Optional[str]]]
+) -> dict[str, Optional[str]]:
+    """One old-to-live label map over *topologies*, the earlier one winning.
+
+    A label one topology pruned (None) yields to one another topology of the
+    same workflow keeps, or its state is dropped.
+    """
+    labels: dict[str, Optional[str]] = {}
+    for topology_hash in topologies:
+        for old, new in labels_of[topology_hash].items():
+            if labels.get(old) is None:
+                labels[old] = new
+    return labels
+
+
+def _rewrite_kept(
+    conn: sqlite3.Connection,
+    hub,
+    kept_on: dict[str, set[str]],
+    labels_of: dict[str, dict[str, Optional[str]]],
+    stage_slots_of: dict[str, dict[str, str]],
+) -> None:
+    """Put each kept workflow's ``core:`` addresses on the live core, in place.
+
+    A saved-over workflow keeps its id, but the rule still re-labelled the
+    core of each topology it keeps variants on, and its defaults, pins and
+    picture inputs are addressed by those labels. They are rewritten through
+    its base topology's map first (the graph a run addresses), a node the
+    rule stripped going to its slot there. Only when the base is one of the
+    topologies that moved: on a base the rule left alone the addresses
+    already resolve, and another topology's map would break them. In a
+    savepoint of its own, as a retirement is.
+    """
+    if not kept_on:
+        return
+    bases = {w.workflow_id: w.base_topology for w in workflow_index(hub)}
+    for workflow_id, topologies in sorted(kept_on.items()):
+        base = bases.get(workflow_id)
+        if base not in topologies:
+            logger.info(
+                "Workflow %s is kept, and its base topology %s was not "
+                "re-derived, so its addresses are left as they are.",
+                workflow_id,
+                base,
+            )
+            continue
+        labels = _merged_labels(
+            sorted(topologies, key=lambda t: (t != base, t)), labels_of
+        )
+        conn.execute("SAVEPOINT rewrite_kept")
+        try:
+            _rewrite_addresses(conn, workflow_id, labels, stage_slots_of[base])
+            conn.execute("RELEASE rewrite_kept")
+        except sqlite3.Error:
+            raise
+        except Exception as exc:
+            conn.execute("ROLLBACK TO rewrite_kept")
+            conn.execute("RELEASE rewrite_kept")
+            logger.error(
+                "Workflow %s is kept, but its addresses failed to move onto "
+                "core rule %s (%s: %s); they stay as they were, and a default "
+                "naming a node by its old label is skipped by a run.",
+                workflow_id,
+                CORE_VERSION,
+                type(exc).__name__,
+                exc,
+            )
 
 
 def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> int:
@@ -802,16 +918,24 @@ def rederive_cores(conn: sqlite3.Connection, include_uncached: bool = True) -> i
     if not todo:
         return 0
     shelf: list = []  # one shelf index for the whole step
-    moved = _move_topologies(
+    saved = saved_over_ids(hub)
+    *moved, kept_on = _move_topologies(
         conn,
         todo,
         lambda topology_hash: _rederive_topology(
-            conn, hub, topology_hash, cards_of.get(topology_hash, []), v1_rows, shelf
+            conn,
+            hub,
+            topology_hash,
+            cards_of.get(topology_hash, []),
+            v1_rows,
+            shelf,
+            saved,
         ),
         _CORE_RULE_V1,
         _CORE_RULE_V1_UNMOVED,
     )
     heirs_of, labels_of = moved[0], moved[2]
+    _rewrite_kept(conn, hub, kept_on, labels_of, moved[3])
     _retire_all(conn, hub, *moved)
     logger.info(
         "Core rule v1 to %s: %d topologies re-derived; %d workflows become %d.",
@@ -864,20 +988,22 @@ def rederive_cores_from(conn: sqlite3.Connection, rule: str) -> int:
         if not card.manual and card.topology_hash in old_rows:
             cards_of.setdefault(card.topology_hash, []).append(card)
     # Before anything moves: the workflows there are, and the hidden ones.
+    kept = kept_variants(hub)
     existed = {w.workflow_id for w in workflow_index(hub)} | {
-        auto_workflow_id(old_rows[topology_hash], families)
+        variant_workflow_id(kept.get(variant), old_rows[topology_hash], families)
         for topology_hash, cards in cards_of.items()
         for card in cards
-        for families in card.families.values()
+        for variant, families in card.families.items()
         if families is not None
     }
+    saved = saved_over_ids(hub)
     hidden = {
         row[0]
         for row in conn.execute(
             "SELECT workflow_id FROM workflow_group_attr WHERE hidden"
         )
     }
-    moved = _move_topologies(
+    *moved, kept_on = _move_topologies(
         conn,
         old_rows,
         lambda topology_hash: _rederive_topology_from(
@@ -887,11 +1013,16 @@ def rederive_cores_from(conn: sqlite3.Connection, rule: str) -> int:
             cards_of.get(topology_hash, []),
             old_rows[topology_hash],
             rule,
+            saved,
+            kept,
         ),
         stamp,
         unmoved,
     )
     heirs_of, labels_of = moved[0], moved[2]
+    # Before the retirements, so what they carry onto a kept workflow (it can
+    # still be another's heir) is not rewritten a second time.
+    _rewrite_kept(conn, hub, kept_on, labels_of, moved[3])
     live = {w.workflow_id for w in workflow_index(hub)}
     for old_id in sorted(heirs_of.keys() & live):
         # Some variant of it kept its core (only where the live rule is not a
@@ -940,12 +1071,18 @@ def _rederive_topology_from(
     cards: list[Card],
     old_core: str,
     rule: str,
+    saved: frozenset[str] | set[str] = frozenset(),
+    kept: Optional[dict[str, str]] = None,
 ) -> Optional[tuple[dict, dict, str, list[tuple[str, str, str, int]]]]:
     """Write one topology's live row; ``None`` when no stored graph reduces.
 
     Returns :func:`_move_topologies`' shape, one move per variant whose id
-    changes.
+    changes. A variant whose old id is in *saved* (the automatic workflows
+    the owner saved over), or which *kept* (``kept_variants``) already holds
+    in one, is not moved: its move names that workflow as both ends
+    (:func:`_keep_saved_over`).
     """
+    kept = kept or {}
     found = next(filter(None, (card_document(hub, c) for c in cards)), None)
     if found is None:
         logger.warning(
@@ -997,6 +1134,15 @@ def _rederive_topology_from(
                 continue
             old_id = auto_workflow_id(old_core, families)
             new_id = auto_workflow_id(new_core, families)
+            held = kept.get(variant)
+            if held is None and old_id != new_id and old_id in saved:
+                _keep_saved_over(conn, [variant], old_id)
+                held = old_id
+            if held is not None:
+                # No successor row: nothing retires, and a recipe naming the
+                # workflow stays on it.
+                moves.append((card.workflow_key, held, held, 1))
+                continue
             if old_id == new_id:
                 continue
             moves.append((card.workflow_key, old_id, new_id, 1))
@@ -1043,13 +1189,7 @@ def _retire_all(
                 CORE_VERSION,
                 dict(heirs),
             )
-        labels: dict[str, Optional[str]] = {}
-        for topology_hash in sorted(topologies_of[old_id]):
-            for old, new in labels_of[topology_hash].items():
-                # A label one topology pruned (None) yields to one another
-                # topology of the same workflow keeps, or its state is dropped.
-                if labels.get(old) is None:
-                    labels[old] = new
+        labels = _merged_labels(sorted(topologies_of[old_id]), labels_of)
         base = bases.get(primary)
         # ponytail: one stage-slot resolution, the primary's base; a split
         # successor on another base topology gets the same slot labels.
@@ -1112,10 +1252,12 @@ def _rederive_topology(
     cards: list[Card],
     v1_rows: dict[str, str],
     shelf: list,
+    saved: frozenset[str] | set[str] = frozenset(),
 ) -> Optional[tuple[dict, dict, str, list[tuple[str, str, str, int]]]]:
     """Write one topology's v2 rows; ``None`` when no stored graph reduces.
 
     Returns :func:`_move_topologies`' shape, one move per card off the v1 id.
+    A v1 id in *saved* keeps its cards' variants (:func:`_keep_saved_over`).
     """
     documents = {c.workflow_key: card_document(hub, c) for c in cards}
     found = next(filter(None, documents.values()), None)
@@ -1172,6 +1314,10 @@ def _rederive_topology(
             "(structural_hash, families) VALUES (?, ?)",
             [(variant, families) for variant in card.variants],
         )
+        if old_id in saved:
+            _keep_saved_over(conn, card.variants, old_id)
+            moves.append((card.workflow_key, old_id, old_id, len(card.variants)))
+            continue
         new_id = auto_workflow_id(new_core, families)
         moves.append((card.workflow_key, old_id, new_id, len(card.variants)))
         conn.execute(
@@ -1251,6 +1397,7 @@ _WORKFLOW_ID_COLUMNS = (
     ("workflow_group_pins", "workflow_id"),
     ("workflow_group_picture_input", "workflow_id"),
     ("workflow_version", "workflow_id"),
+    ("workflow_change", "workflow_id"),
     ("workflow_key_successor", "workflow_id"),
     ("workflow_id_successor", "successor_id"),
     ("workflow_document", "from_workflow_id"),
@@ -1293,6 +1440,11 @@ def reidentify_families(hub) -> dict:
     gets an empty label map: the vault's conversion re-files a recipe on its
     own card's workflow and rewrites nothing.
 
+    A variant of a workflow the owner saved over is not moved
+    (:func:`_keep_saved_over`): its family row is still rewritten, being
+    what the shelf now knows of its model, and it stays where it is, counted
+    in nothing below.
+
     Returns:
         ``{"moved": variants moved, "keys": every old and new id involved,
         "renamed": {retired id: the heir holding most of its variants}}``.
@@ -1330,6 +1482,9 @@ def reidentify_families(hub) -> dict:
     if not moves:
         return {"moved": 0, "keys": [], "renamed": {}}
     renamed: dict[str, str] = {}
+    saved = saved_over_ids(hub)
+    kept = kept_variants(hub)
+    moved = 0
     with hub.transaction() as conn:
         heirs_of: dict[str, Counter] = {}
         # Per old workflow, per card: where its moved variants went.
@@ -1337,13 +1492,19 @@ def reidentify_families(hub) -> dict:
         parts: dict[str, tuple[str, str]] = {}
         for row, families in moves:
             old_id = auto_workflow_id(row["core_hash"], row["families"])
-            parts[old_id] = (row["families"], row["core_hash"])
             new_id = auto_workflow_id(row["core_hash"], families)
             conn.execute(
                 "UPDATE workflow_variant_family SET families = ? "
                 "WHERE structural_hash = ?",
                 (families, row["structural_hash"]),
             )
+            if row["structural_hash"] in kept:
+                continue
+            if old_id in saved:
+                _keep_saved_over(conn, [row["structural_hash"]], old_id)
+                continue
+            moved += 1
+            parts[old_id] = (row["families"], row["core_hash"])
             conn.execute(
                 "INSERT OR IGNORE INTO workflow_core_successor (topology_hash, "
                 "old_workflow_id, new_workflow_id, label_map) VALUES (?, ?, ?, '{}')",
@@ -1354,12 +1515,15 @@ def reidentify_families(hub) -> dict:
                 new_id
             ] += 1
         # A variant still in the old workflow, for the workflow or one card.
+        # One a saved-over workflow keeps is in that workflow, whatever its
+        # family and core compute.
         still_in = (
             "SELECT 1 FROM workflow_variant v JOIN workflow_variant_family vf "
             "ON vf.structural_hash = v.structural_hash "
             "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
             "AND c.core_version = ? WHERE v.key_version = ? "
-            "AND vf.families = ? AND c.core_hash = ?"
+            "AND vf.families = ? AND c.core_hash = ? AND NOT EXISTS (SELECT 1 "
+            "FROM workflow_kept_variant k WHERE k.structural_hash = v.structural_hash)"
         )
         for old_id, heirs in sorted(heirs_of.items()):
             if not hub.fetchone(
@@ -1405,11 +1569,12 @@ def reidentify_families(hub) -> dict:
                     _carry_group_state(conn, old_id, heir, keep=True)
     logger.info(
         "Base-model families: %d variants moved to the workflow of the family "
-        "now known for them.",
-        len(moves),
+        "now known for them; %d stay in a workflow the owner saved over.",
+        moved,
+        len(moves) - moved,
     )
     return {
-        "moved": len(moves),
+        "moved": moved,
         "keys": sorted(
             set(heirs_of) | {heir for heirs in heirs_of.values() for heir in heirs}
         ),
@@ -1582,6 +1747,19 @@ def _carry_group_state(
             conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (group,))
     if not keep:
         conn.execute("DELETE FROM workflow_group_attr WHERE workflow_id = ?", (group,))
+        # Changes that waited unsaved name loaders of the graph this id read
+        # off its pictures; an heir may read another, so they go with the id.
+        waiting = conn.execute(
+            "DELETE FROM workflow_change WHERE workflow_id = ?", (group,)
+        ).rowcount
+        if waiting:
+            logger.info(
+                "Workflow %s is retired: the unsaved change(s) waiting on it "
+                "(%d row(s)) are dropped, not carried to %s.",
+                group,
+                waiting,
+                heir,
+            )
         # The versions the owner's overwrites made are the one owner state
         # not carried: the heirs may hold another base-model family, and a
         # graph edited for these pictures is not theirs. They go with the id,

@@ -1874,6 +1874,47 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Write a copy of a workflow's graph with model files replaced; POST blocked for READ tokens; owner only",
     ),
+    # Saving over a workflow (#1849). The changes that wait on a workflow name
+    # its loaders and shelf models; a save resolves the base graph out of the
+    # whole library as a run does and writes a version of it; the versions are
+    # the owner's own history of one workflow; and the people read names every
+    # person a LoRA is attached to. None is one object a scoped token holds.
+    ("GET", "/api/v1/workflows/{workflow_id}/changes"): RoutePolicy(
+        _OWNER,
+        justification="A workflow's unsaved changes and which save is open for them, read against the whole shelf; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_id}/changes"): RoutePolicy(
+        _OWNER,
+        justification="Replace a workflow's unsaved changes; PUT blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/workflows/{workflow_id}/changes"): RoutePolicy(
+        _OWNER,
+        justification="Discard a workflow's unsaved changes; DELETE blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/workflows/{workflow_id}/save"): RoutePolicy(
+        _OWNER,
+        justification="Write a workflow's changes over it as its next version; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/workflows/{workflow_id}/save-as-new"): RoutePolicy(
+        _OWNER,
+        justification="Write a workflow's graph with its changes as a new workflow; POST blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/workflows/{workflow_id}/versions"): RoutePolicy(
+        _OWNER,
+        justification="The versions kept of a workflow's graph; owner only",
+    ),
+    ("POST", "/api/v1/workflows/{workflow_id}/versions/{version}/restore"): RoutePolicy(
+        _OWNER,
+        justification="Make an earlier version of a workflow's graph its newest; POST blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_id}/graph"): RoutePolicy(
+        _OWNER,
+        justification="Store a whole graph over a workflow as its next version, or as a new workflow; PUT blocked for READ tokens; owner only",
+    ),
+    ("GET", "/api/v1/workflows/{workflow_id}/people"): RoutePolicy(
+        _OWNER,
+        justification="Every person with a LoRA for a workflow's base model, read across the whole library and shelf; owner only",
+    ),
     ("DELETE", "/api/v1/workflows/{workflow_id}"): RoutePolicy(
         _OWNER,
         justification="Send a workflow's imported file to the trash; DELETE blocked for READ tokens; owner only",

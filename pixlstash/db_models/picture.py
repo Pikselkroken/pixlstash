@@ -350,12 +350,13 @@ class Picture(SQLModel, table=True):
             "workflow_instance_hash", String, default=None, nullable=True, index=True
         ),
     )
-    # The MANUAL workflow (``manual:<uuid>``, a hub row) a run of which made
-    # this picture, or NULL. Written once, by the import of a manual run's
-    # outputs; filing is exclusive, so such a picture counts on the manual
-    # workflow and not on the automatic one its graph is in - while the
-    # manual workflow lives. Delete it and the picture falls back, with no
-    # write here (the reads take the hub's list of live ids).
+    # The workflow a run of which made this picture, or NULL: a MANUAL one
+    # (``manual:<uuid>``, a hub row), or an automatic one the owner has saved
+    # over (``auto:<digest>`` with a ``workflow_version``, #1849). Written
+    # once, by the import of that run's outputs; filing is exclusive, so such
+    # a picture counts on that workflow and not on the automatic one its
+    # graph is in - while the workflow lives. Delete it and the picture falls
+    # back, with no write here (the reads take the hub's list of live ids).
     run_workflow_id: Optional[str] = Field(
         default=None,
         sa_column=Column(

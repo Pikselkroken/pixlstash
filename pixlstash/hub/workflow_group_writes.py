@@ -33,6 +33,16 @@ logger = get_logger(__name__)
 # spells the same prefix; the service imports the hub, not the other way).
 LORA_ADDRESS_PREFIX = "lora:"
 
+# How a stage's default is addressed: ``stage:upscale`` holding ``on`` or
+# ``off``. The owner's own answer to "does this workflow run its upscale",
+# over the vote of its pictures (``workflow_card_service.workflow_defaults``).
+STAGE_ADDRESS_PREFIX = "stage:"
+STAGE_ON, STAGE_OFF = "on", "off"
+
+# The two sets of changes a workflow holds (``workflow_change.kind``): what
+# waits in the Workflow tab, and what its last run was made with.
+WAITING, RAN = "waiting", "run"
+
 # Sentinel: this attribute was not in the request, so it stands.
 UNSET = object()
 
@@ -44,7 +54,7 @@ def is_parameter_address(address: str) -> bool:
     ``lora:`` row and a model loader's row belong to the default recipe's
     LoRAs and models, which the conversion writes and no parameter form shows.
     """
-    if address.startswith(LORA_ADDRESS_PREFIX):
+    if address.startswith((LORA_ADDRESS_PREFIX, STAGE_ADDRESS_PREFIX)):
         return False
     return not model_fix_kind("", address.rpartition("/")[2])
 
@@ -127,6 +137,125 @@ def set_default_lora(
             "ON CONFLICT(workflow_id, address) DO UPDATE SET value = excluded.value",
             (workflow_id, address, value),
         )
+
+
+def write_saved_defaults(
+    conn,
+    workflow_id: str,
+    superseded: list[str],
+    defaults: list[tuple[str, str]],
+) -> None:
+    """What a Save does to the default rows, inside the caller's transaction.
+
+    *superseded* are addresses whose row goes: a model or a LoRA the saved
+    graph now carries itself, so an older edit of the default no longer
+    speaks over it. *defaults* are ``[(address, value)]`` written over what
+    is there: each stage's ``on`` or ``off``, and any parameter the save
+    carried.
+    """
+    conn.executemany(
+        "DELETE FROM workflow_group_default WHERE workflow_id = ? AND address = ?",
+        [(workflow_id, address) for address in superseded],
+    )
+    conn.executemany(
+        "INSERT INTO workflow_group_default (workflow_id, address, value) "
+        "VALUES (?, ?, ?) "
+        "ON CONFLICT(workflow_id, address) DO UPDATE SET value = excluded.value",
+        [(workflow_id, address, value) for address, value in defaults],
+    )
+
+
+def read_changes(
+    hub: HubDatabase, workflow_id: str
+) -> dict[str, tuple[dict, Optional[int]]]:
+    """``{kind: (changes, base_version)}`` of one workflow: :data:`WAITING`
+    and :data:`RAN`, each absent when there is none.
+
+    A row that will not parse is logged and left out, so one bad row never
+    stops the workflow from being read or saved.
+    """
+    found: dict[str, tuple[dict, Optional[int]]] = {}
+    for row in hub.fetchall(
+        "SELECT kind, changes, base_version FROM workflow_change WHERE workflow_id = ?",
+        (workflow_id,),
+    ):
+        try:
+            changes = json.loads(row["changes"])
+        except ValueError as exc:
+            logger.warning(
+                "Workflow %s: its %s changes will not read, so they are left out: %s",
+                workflow_id,
+                row["kind"],
+                exc,
+            )
+            continue
+        if isinstance(changes, dict):
+            found[row["kind"]] = (changes, row["base_version"])
+    return found
+
+
+def write_changes(
+    hub: HubDatabase,
+    workflow_id: str,
+    kind: str,
+    changes: Optional[dict],
+    base_version: Optional[int] = None,
+) -> None:
+    """Replace one kind of a workflow's changes, or drop it with ``None``.
+
+    *base_version* is the workflow's version the changes were made against.
+    A waiting set that is replaced keeps the version it was started on:
+    editing it further does not make a stale set current. A run's set is the
+    run's, so each run writes its own.
+    """
+    rebase = ", base_version = excluded.base_version" if kind == RAN else ""
+    with hub.transaction() as conn:
+        if changes is None:
+            conn.execute(
+                "DELETE FROM workflow_change WHERE workflow_id = ? AND kind = ?",
+                (workflow_id, kind),
+            )
+            return
+        conn.execute(
+            "INSERT INTO workflow_change (workflow_id, kind, changes, "
+            "base_version, updated_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(workflow_id, kind) DO UPDATE SET "
+            "changes = excluded.changes, updated_at = excluded.updated_at" + rebase,
+            (
+                workflow_id,
+                kind,
+                json.dumps(changes),
+                base_version,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def clear_changes(conn, workflow_id: str) -> None:
+    """Drop everything waiting on a workflow, inside the caller's transaction:
+    a save has made it part of the graph, or the owner discarded it."""
+    conn.execute("DELETE FROM workflow_change WHERE workflow_id = ?", (workflow_id,))
+
+
+def waiting_counts(hub: HubDatabase) -> dict[str, dict]:
+    """``{workflow id: its waiting changes}`` for every workflow that has any:
+    what the grid marks a card *Unsaved* from, read in one statement."""
+    found = {}
+    for row in hub.fetchall(
+        "SELECT workflow_id, changes FROM workflow_change WHERE kind = ?", (WAITING,)
+    ):
+        try:
+            changes = json.loads(row["changes"])
+        except ValueError as exc:
+            logger.warning(
+                "Workflow %s: its waiting changes will not read: %s",
+                row["workflow_id"],
+                exc,
+            )
+            continue
+        if isinstance(changes, dict):
+            found[row["workflow_id"]] = changes
+    return found
 
 
 def replace_group_pins(
@@ -351,6 +480,7 @@ def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
             "workflow_group_pins",
             "workflow_group_picture_input",
             "workflow_group_attr",
+            "workflow_change",
             "workflow_version",
             "workflow_document",
         ):

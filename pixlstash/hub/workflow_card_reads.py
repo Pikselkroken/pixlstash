@@ -33,8 +33,9 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import (
     CORE_RULE_VERSION,
     STRIP_LORAS_FOR_STACKS,
-    auto_workflow_id,
+    variant_workflow_id,
 )
+from pixlstash.hub.workflow_versions import saved_over_ids
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
@@ -54,7 +55,7 @@ from pixlstash.services.workflow_identity import (
 from pixlstash.services import workflow_bindings
 from pixlstash.services.workflow_io import api_graph, with_converted_graph
 from pixlstash.utils.sql_chunking import chunked
-from pixlstash.utils.workflow_ids import AUTO_PREFIX
+from pixlstash.utils.workflow_ids import AUTO_PREFIX, MANUAL_PREFIX
 
 logger = get_logger(__name__)
 
@@ -347,6 +348,33 @@ def manual_workflow_ids(hub: HubDatabase) -> list[str]:
             "SELECT workflow_id FROM workflow_document ORDER BY workflow_id"
         )
     ]
+
+
+def run_filed_workflow_ids(hub: HubDatabase) -> list[str]:
+    """Every workflow whose own runs file on it, sorted.
+
+    Each live manual workflow, and each automatic one the owner saved over
+    (rule 5 of #1846): what it runs is the graph they saved, which need not
+    reduce to any variant the workflow holds (a checkpoint replaced by one of
+    another family computes another workflow's id), so its runs are filed by
+    ``picture.run_workflow_id`` as a manual workflow's are. What the vault's
+    per-workflow picture reads take as *live*.
+    """
+    return sorted({*manual_workflow_ids(hub), *saved_over_ids(hub)})
+
+
+def is_run_filed_workflow(hub: HubDatabase, workflow_id: str) -> bool:
+    """Whether a run of *workflow_id* files its pictures on it
+    (:func:`run_filed_workflow_ids`), for one id."""
+    if workflow_id.startswith(MANUAL_PREFIX):
+        return is_manual_workflow(hub, workflow_id)
+    return (
+        workflow_id.startswith(AUTO_PREFIX)
+        and hub.fetchone(
+            "SELECT 1 FROM workflow_version WHERE workflow_id = ?", (workflow_id,)
+        )
+        is not None
+    )
 
 
 def adopted_file_variants(hub: HubDatabase) -> set[str]:
@@ -743,6 +771,11 @@ def key_pins(hub: HubDatabase, workflow_key: str) -> Optional[list[tuple[str, st
 # ``Card.core_hash`` gives: a NULL bucket would read as one enormous workflow.
 # A MANUAL workflow is its own ``workflow_document`` row, ``manual:<uuid>``,
 # on no topology: it never joins an automatic one and none absorbs it.
+#
+# One exception to "the rule decides" (#1849): a variant with a
+# ``workflow_kept_variant`` row is in the saved-over automatic workflow that
+# row names, whatever the rule now computes for it. Every read below places a
+# variant through ``workflow_cards.variant_workflow_id``, which says why.
 # ---------------------------------------------------------------------------
 
 
@@ -779,17 +812,36 @@ class Workflow:
 
 
 # Every current variant with its automatic workflow: the topology's core under
-# this build's rule and the variant's own base-model families.
+# this build's rule and the variant's own base-model families, and the
+# saved-over workflow keeping it (``kept``), if one is. Read through
+# :func:`_placed`, never by hashing the two columns at the call site.
 _AUTO_VARIANTS = (
     "SELECT v.structural_hash AS structural_hash, v.topology_hash AS topology_hash, "
-    "c.core_hash AS core_hash, vf.families AS families "
+    "c.core_hash AS core_hash, vf.families AS families, k.workflow_id AS kept "
     "FROM workflow_variant v "
     "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
     "AND c.core_version = ? "
     "JOIN workflow_variant_family vf ON vf.structural_hash = v.structural_hash "
+    "LEFT JOIN workflow_kept_variant k ON k.structural_hash = v.structural_hash "
     "WHERE v.key_version = ? AND NOT EXISTS (SELECT 1 FROM workflow_group_member m "
     "WHERE m.topology_hash = v.topology_hash)"
 )
+
+
+def _placed(row) -> str:
+    """The workflow an ``_AUTO_VARIANTS`` row's variant is in."""
+    return variant_workflow_id(row["kept"], row["core_hash"], row["families"])
+
+
+def kept_variants(hub: HubDatabase) -> dict[str, str]:
+    """``{structural_hash: workflow_id}``: every variant a saved-over
+    automatic workflow keeps (``workflow_kept_variant``)."""
+    return {
+        row[0]: row[1]
+        for row in hub.fetchall(
+            "SELECT structural_hash, workflow_id FROM workflow_kept_variant"
+        )
+    }
 
 
 def workflow_of_variant(hub: HubDatabase, structural_hash: str) -> Optional[str]:
@@ -810,7 +862,7 @@ def workflow_of_variant(hub: HubDatabase, structural_hash: str) -> Optional[str]
         f"{_AUTO_VARIANTS} AND v.structural_hash = ?",
         (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, structural_hash),
     )
-    return auto_workflow_id(row["core_hash"], row["families"]) if row else None
+    return _placed(row) if row else None
 
 
 def variant_workflows(hub: HubDatabase) -> dict[str, str]:
@@ -822,7 +874,7 @@ def variant_workflows(hub: HubDatabase) -> dict[str, str]:
     ``{structural_hash: workflow_id}``; a variant in no workflow yet is absent.
     """
     found = {
-        row["structural_hash"]: auto_workflow_id(row["core_hash"], row["families"])
+        row["structural_hash"]: _placed(row)
         for row in hub.fetchall(
             _AUTO_VARIANTS, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION)
         )
@@ -881,7 +933,7 @@ def variants_in_workflows(hub: HubDatabase, workflow_ids: list[str]) -> set[str]
             for row in hub.fetchall(
                 _AUTO_VARIANTS, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION)
             )
-            if auto_workflow_id(row["core_hash"], row["families"]) in auto
+            if _placed(row) in auto
         }
         if auto
         else set()
@@ -903,7 +955,7 @@ def _auto_variants_of(hub: HubDatabase, workflow_id: str) -> list[tuple[str, str
         for row in hub.fetchall(
             _AUTO_VARIANTS, (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION)
         )
-        if auto_workflow_id(row["core_hash"], row["families"]) == workflow_id
+        if _placed(row) == workflow_id
     ]
 
 
@@ -941,6 +993,7 @@ def workflow_index(
     core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
     manual: list[Workflow] = []
     topology_of: dict[str, str] = {}
+    kept = kept_variants(hub)
     for card in cards:
         if card.manual:
             manual.append(
@@ -955,7 +1008,7 @@ def workflow_index(
         for structural_hash in card.variants:
             families = card.families.get(structural_hash)
             workflow_id = placed.get(card.topology_hash) or (
-                auto_workflow_id(core, families)
+                variant_workflow_id(kept.get(structural_hash), core, families)
                 if core and families is not None
                 else None
             )
@@ -1038,6 +1091,21 @@ def workflow_index(
             )
         )
     return sorted(workflows.values(), key=lambda entry: entry.workflow_id)
+
+
+def picture_keys(workflow: Workflow, run_filed) -> list[str]:
+    """What a workflow's kept pictures are filed under in the vault.
+
+    The keys ``predicate_filter.filed_as`` spells, given *run_filed*
+    (:func:`run_filed_workflow_ids`): a manual workflow's own id, since its
+    pictures are its runs'; an automatic one's variants, and its own id as
+    well once it is saved over, for the runs filed on it whose variant the
+    rule puts elsewhere.
+    """
+    if workflow.workflow_id.startswith(MANUAL_PREFIX):
+        return [workflow.workflow_id]
+    own = [workflow.workflow_id] if workflow.workflow_id in run_filed else []
+    return [*workflow.variants, *own]
 
 
 def find_workflow(

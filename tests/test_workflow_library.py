@@ -44,7 +44,12 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.hub import workflow_card_reads, workflow_cards, workflow_versions
 from pixlstash.hub import workflows as hub_workflows
 from pixlstash.services import workflow_hash, workflow_identity
-from pixlstash.hub.workflow_card_reads import workflow_of_variant
+from pixlstash.hub.workflow_card_reads import (
+    find_workflow,
+    picture_keys,
+    run_filed_workflow_ids,
+    workflow_of_variant,
+)
 from pixlstash.hub.workflow_group_writes import (
     create_manual_workflow,
     delete_manual_workflow,
@@ -84,7 +89,10 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
     ui_topology_hash,
 )
+from pixlstash.routes.comfyui import _picture_workflow
+from pixlstash.routes.pictures._listing import _resolve_workflow_filter
 from pixlstash.services import model_shelf_service
+from pixlstash.services.workflow_card_service import read_grid
 from pixlstash.services.model_shelf_service import (
     fetch_companions,
     propose_companions,
@@ -93,7 +101,10 @@ from pixlstash.services.model_shelf_service import (
     fetch_workflow_sets,
 )
 from pixlstash.services.model_workflow_sets import create_set, delete_set
-from pixlstash.services.workflow_library_service import recipe_picture_counts
+from pixlstash.services.workflow_library_service import (
+    read_card_picture_ids,
+    recipe_picture_counts,
+)
 from pixlstash.services.scrapheap_service import purge_scrapheap_pictures
 from pixlstash.services.workflow_ghost_service import (
     DEFAULT_GHOST_RETENTION,
@@ -119,6 +130,7 @@ from pixlstash.tasks.missing_comfyui_extraction_finder import (
 from pixlstash.utils.comfyui_utilities import find_comfy_workflow
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import KNOWN_BASE_MODELS
+from pixlstash.utils.query.predicate_filter import workflow_keys_predicate
 from pixlstash.utils.workflow_ids import WORKFLOW_TAG_KEY
 
 LIBRARY = "11111111-2222-4333-8444-555555555555"
@@ -2067,6 +2079,223 @@ def test_the_finder_announces_the_workflows_a_batch_filed_pictures_on(store):
     assert [(event, data["keys"], data["reason"]) for event, data in events] == [
         (EventType.CHANGED_WORKFLOWS, ["auto:a"], "pictures")
     ]
+
+
+# ── #1849: an automatic workflow the owner saved over files its own runs ────
+
+
+@pytest.fixture
+def save_over(store):
+    """Save a graph over an automatic workflow, as its first overwrite does;
+    every version written this way is gone again afterwards."""
+    graph = {"1": {"class_type": "SaveImage", "inputs": {"filename_prefix": "x"}}}
+
+    def save(workflow_id):
+        with store.hub.transaction() as conn:
+            workflow_versions.append_version(
+                conn, workflow_id, graph, source="chain", first=graph
+            )
+
+    try:
+        yield save
+    finally:
+        with store.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_version WHERE workflow_id LIKE 'auto:%'")
+
+
+def test_a_comfyui_run_tagged_with_a_saved_over_workflow_is_filed_on_it(
+    store, save_over
+):
+    """The tag files a picture on an automatic workflow only once the owner
+    has saved over it: before that the id is one the hub holds no run-filed
+    workflow for, and the picture is filed by its graph."""
+    keys = record_api_graph(store.hub, api_graph(TXT2IMG), LIBRARY)
+    automatic = workflow_of_variant(store.hub, keys.structural_hash)
+    assert automatic.startswith("auto:")
+    tagged = {**ui_workflow(UPSCALE), "extra": {WORKFLOW_TAG_KEY: automatic}}
+    before = add_picture(
+        store,
+        write_png(
+            Path(store.image_root),
+            "before.png",
+            api=api_graph(UPSCALE),
+            workflow=tagged,
+        ),
+    )
+    run_extraction(store, [before])
+    assert read_picture(store, before).run_workflow_id is None
+
+    save_over(automatic)
+    after = add_picture(
+        store,
+        write_png(
+            Path(store.image_root), "after.png", api=api_graph(UPSCALE), workflow=tagged
+        ),
+    )
+    result = run_extraction(store, [after])
+
+    picture = read_picture(store, after)
+    assert picture.run_workflow_id == automatic
+    # Keyed by its own graph all the same: the tag reaches no key.
+    assert picture.workflow_structural_hash == structural_hash(api_graph(UPSCALE))
+    assert result["workflow_ids"] == [automatic]
+
+
+def _filed_picture(store, name, structural, run=None, loras=()) -> int:
+    def insert(session):
+        picture = Picture(
+            file_path=name,
+            workflow_structural_hash=structural,
+            workflow_hash_version=HASH_VERSION,
+            run_workflow_id=run,
+            comfyui_loras=json.dumps(list(loras)),
+        )
+        session.add(picture)
+        session.commit()
+        return picture.id
+
+    return store.vault.run_task(insert)
+
+
+def _filing(store, workflow_id, lora=None) -> dict[str, set[int]]:
+    """The pictures each per-workflow read files on *workflow_id*.
+
+    ``filter`` is ``GET /pictures?workflow=`` (its resolver and predicate),
+    ``pictures`` what ``GET /workflows/{id}/pictures`` reads, ``covers`` the
+    grid's figures (its count checked against them), and ``own`` the pictures
+    whose own workflow it is. *lora* narrows the filter alone.
+    """
+    vault = SimpleNamespace(db=store.vault, library_uuid=LIBRARY)
+    server = SimpleNamespace(hub=store.hub, vault=vault)
+    params = {"workflow": workflow_id}
+    if lora is not None:
+        params["workflow_lora"] = lora
+    keys = _resolve_workflow_filter(server, params)
+
+    def read(session):
+        return (
+            set(session.exec(select(Picture.id).where(workflow_keys_predicate(keys)))),
+            list(session.exec(select(Picture.id))),
+        )
+
+    listed, everything = store.vault.run_immediate_read_task(read)
+    if lora is not None:
+        return {"filter": listed}
+    live = run_filed_workflow_ids(store.hub)
+    figure = read_grid(store.hub, vault, include_one_offs=True).figure(workflow_id)
+    covers = {cover.picture_id for cover in figure.covers}
+    assert figure.pictures == len(covers), "the fixture fits in one cover strip"
+    return {
+        "filter": listed,
+        "pictures": set(
+            read_card_picture_ids(
+                vault,
+                picture_keys(find_workflow(store.hub, workflow_id), live),
+                50,
+                live,
+            )
+        ),
+        "covers": covers,
+        "own": {
+            pid
+            for pid in everything
+            if _picture_workflow(server, pid)["workflow_id"] == workflow_id
+        },
+    }
+
+
+def test_a_saved_over_workflows_runs_are_its_pictures_whatever_their_variant(
+    store, save_over
+):
+    """Its run replaced the checkpoint with one of another family, so the
+    picture's variant computes another workflow's id: it is the saved-over
+    workflow's picture in every read, and not the other's. Before the save
+    its ``run_workflow_id`` names nothing the hub files runs on."""
+    own = record_api_graph(
+        store.hub,
+        generation_graph(
+            "sd_xl_base_1.0.safetensors", "v.safetensors", "c.safetensors"
+        ),
+        LIBRARY,
+    )
+    other = record_api_graph(
+        store.hub,
+        generation_graph(
+            "flux1-dev.safetensors",
+            "v.safetensors",
+            "c.safetensors",
+            lora="detail.safetensors",
+        ),
+        LIBRARY,
+    )
+    saved = workflow_of_variant(store.hub, own.structural_hash)
+    elsewhere = workflow_of_variant(store.hub, other.structural_hash)
+    assert saved != elsewhere, "the two graphs must be two base-model families"
+    manual = create_manual_workflow(store.hub, "Mine", api_graph(TXT2IMG), "import")
+    try:
+        mine = _filed_picture(store, "own.png", own.structural_hash)
+        ran = _filed_picture(
+            store,
+            "ran.png",
+            other.structural_hash,
+            run=saved,
+            loras=["detail.safetensors"],
+        )
+        theirs = _filed_picture(
+            store, "theirs.png", other.structural_hash, loras=["theirs.safetensors"]
+        )
+        # A run of it that kept its graph, so loads no LoRA.
+        ran_plain = _filed_picture(
+            store, "ran-plain.png", own.structural_hash, run=saved
+        )
+        by_hand = _filed_picture(store, "by-hand.png", own.structural_hash, run=manual)
+        detail = asset_reference("detail.safetensors")
+
+        # The control: not saved over, so its id on a picture files nothing.
+        for read, found in _filing(store, saved).items():
+            assert found == {mine, ran_plain}, read
+        for read, found in _filing(store, elsewhere).items():
+            assert found == {ran, theirs}, read
+
+        save_over(saved)
+
+        for read, found in _filing(store, saved).items():
+            assert found == {mine, ran, ran_plain}, read
+        for read, found in _filing(store, elsewhere).items():
+            assert found == {theirs}, read
+        # A manual workflow's run of the same variant is still the manual one's.
+        for read, found in _filing(store, manual).items():
+            assert found == {by_hand}, read
+        assert _picture_workflow(
+            SimpleNamespace(hub=store.hub, vault=SimpleNamespace(db=store.vault)),
+            ran,
+        ) == {"workflow_id": saved, "workflow_version": None}
+        # The LoRAs its pictures used are counted where the pictures are.
+        grid = read_grid(
+            store.hub,
+            SimpleNamespace(db=store.vault, library_uuid=LIBRARY),
+            include_one_offs=True,
+        )
+        assert grid.figure(saved).recipe_values["loras"] == [("detail.safetensors", 1)]
+        assert grid.figure(elsewhere).recipe_values["loras"] == [
+            ("theirs.safetensors", 1)
+        ]
+        # Narrowed by a LoRA: its own run that loaded it, and not the picture
+        # of the same variant somebody else made.
+        assert _filing(store, saved, detail) == {"filter": {ran}}
+        assert _filing(store, elsewhere, detail) == {"filter": {theirs}}
+        # Several at once are still each picture once, on the right side.
+        server = SimpleNamespace(hub=store.hub, vault=SimpleNamespace(db=store.vault))
+        both = _resolve_workflow_filter(server, {"workflow": [saved, elsewhere]})
+        assert set(
+            store.vault.run_immediate_read_task(
+                lambda session: session.exec(
+                    select(Picture.id).where(workflow_keys_predicate(both))
+                ).all()
+            )
+        ) == {mine, ran, ran_plain, theirs}
+    finally:
+        delete_manual_workflow(store.hub, manual)
 
 
 def test_a_picture_with_no_graph_is_marked_scanned_rather_than_re_read(store):

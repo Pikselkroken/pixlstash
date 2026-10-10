@@ -18,6 +18,7 @@ import socket
 import ssl
 import tempfile
 import threading
+import urllib.parse
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -829,8 +830,8 @@ def test_the_workflow_tools_exist_only_with_allow_write():
         "list_workflows": (True, None),
         "get_workflow": (True, None),
         "export_workflow_graph": (False, True),
-        # Adds a workflow and never replaces one.
-        "import_workflow_graph": (False, False),
+        # Adds a workflow, or a version over one: a client should ask.
+        "import_workflow_graph": (False, True),
         "preflight_workflow": (True, None),
         "run_workflow": (False, True),
         "get_workflow_run": (True, None),
@@ -1035,6 +1036,45 @@ def test_import_posts_json_through_http_fetch(monkeypatch):
     assert request.headers["Content-type"] == "application/json"
     assert request.headers["Authorization"] == "Bearer example-token"
     assert json.loads(request.data) == {"name": "x.json", "workflow": graph}
+
+
+def test_an_import_naming_a_workflow_saves_the_graph_over_it():
+    """#1849: with a `workflow_id` the graph is that workflow's next version,
+    through the whole-graph write; without one it is a new workflow, as before."""
+    seen = []
+
+    def fetch(path, params, method="GET", body=None):
+        seen.append((method, path, body))
+        return 200, "application/json", b'{"version": 3}'
+
+    graph = {"1": {"class_type": "KSampler", "inputs": {}}}
+    over = _write(
+        fetch,
+        "import_workflow_graph",
+        workflow_id=WORKFLOW_ID,
+        workflow=graph,
+        read_version=2,
+    )
+    assert over["isError"] is False, over
+    assert seen == [
+        (
+            "PUT",
+            f"/workflows/{urllib.parse.quote(WORKFLOW_ID, safe='')}/graph",
+            {"workflow": graph, "source": "mcp", "read_version": 2},
+        )
+    ]
+    del seen[:]
+    new = _write(fetch, "import_workflow_graph", name="x.json", workflow=graph)
+    assert new["isError"] is False, new
+    assert [(m, p) for m, p, _b in seen] == [("POST", "/comfyui/workflows/import")]
+    # A new workflow has to be called something; saving over one does not.
+    nameless = _write(
+        lambda *a, **k: pytest.fail("reached the transport"),
+        "import_workflow_graph",
+        workflow=graph,
+    )
+    assert nameless["isError"] is True
+    assert "name" in nameless["content"][0]["text"]
 
 
 def test_a_created_answer_is_success_and_a_refusal_carries_its_detail():

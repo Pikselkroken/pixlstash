@@ -84,6 +84,7 @@ from pixlstash.utils.known_base_models import (
     modality_of,
     rank,
 )
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
 
 logger = get_logger(__name__)
@@ -1864,6 +1865,98 @@ def lora_people(vault, digests) -> set[int]:
         int(character_id)
         for character_id in vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE)
     }
+
+
+def lora_owners(vault) -> dict[str, set[int]]:
+    """``{sha256: the ids of the people it is attached to}`` for this library.
+
+    :func:`character_lora_hashes` with whose each one is: what a write that
+    leaves a person's LoRA out of a workflow names in its answer.
+    """
+
+    def fetch(session: Session):
+        return list(
+            session.exec(
+                select(
+                    AdapterAttachment.adapter_sha256, AdapterAttachment.entity_id
+                ).where(
+                    AdapterAttachment.entity_type == ENTITY_CHARACTER,
+                    AdapterAttachment.entity_id.in_(select(Character.id)),
+                )
+            ).all()
+        )
+
+    owners: dict[str, set[int]] = {}
+    for sha256, character_id in vault.db.run_task(fetch, priority=DBPriority.IMMEDIATE):
+        owners.setdefault(str(sha256).lower(), set()).add(int(character_id))
+    return owners
+
+
+def people_who_fit(hub, vault, family: Optional[str]) -> dict:
+    """The people a run of a workflow can be of, for a checkpoint of *family*.
+
+    **The one answer to "who fits this workflow"** (rule 4 of #1846), read by
+    the Run popup's *Person* field and by the people loader ComfyUI-PixlStash
+    puts on the canvas, so the two offer the same people. A person is offered
+    when a LoRA attached to them is for the base model of the workflow's
+    checkpoint: both sides read :func:`base_model_family`, the shelf's
+    identified base model with filename guesses included. Only a match is
+    offered. A person nothing vouches for (their LoRA's base model, or the
+    workflow's, was never identified) is counted in ``unknown``, and one whose
+    every LoRA is for another base model in ``clash``. A workflow that starts
+    from a picture still takes a person, so its type is not asked.
+
+    Returns:
+        ``{"family", "people": [{"id", "name", "loras": [{"sha256",
+        "filename", "name", "trigger_words"}]}], "clash", "unknown"}``:
+        people by name, each one's matching LoRAs in the shelf's order.
+    """
+    owners = lora_owners(vault)
+    names = fetch_character_names(vault)
+    rows = {}
+    for batch in chunked(sorted(owners)):
+        placeholders = ",".join("?" * len(batch))
+        for row in hub.fetchall(
+            "SELECT id, sha256, filename, display_name, base_model, "
+            "base_model_canonical, trigger_words FROM model "
+            f"WHERE lower(sha256) IN ({placeholders}) ORDER BY id",
+            tuple(batch),
+        ):
+            rows[str(row["sha256"]).lower()] = row
+    attached: dict[int, list] = {}
+    for sha256, row in sorted(rows.items(), key=lambda item: item[1]["id"]):
+        for character_id in owners[sha256]:
+            attached.setdefault(character_id, []).append(row)
+    people, clash, unknown = [], 0, 0
+    for character_id in sorted(attached, key=lambda cid: (names.get(cid, ""), cid)):
+        own = attached[character_id]
+        families = [base_model_family(row) for row in own]
+        matching = [
+            row
+            for row, lora_family in zip(own, families)
+            if family and lora_family == family
+        ]
+        if matching:
+            people.append(
+                {
+                    "id": character_id,
+                    "name": names.get(character_id),
+                    "loras": [
+                        {
+                            "sha256": str(row["sha256"]).lower(),
+                            "filename": row["filename"],
+                            "name": row["display_name"],
+                            "trigger_words": decode_trigger_words(row["trigger_words"]),
+                        }
+                        for row in matching
+                    ],
+                }
+            )
+        elif not family or any(lora_family is None for lora_family in families):
+            unknown += 1
+        else:
+            clash += 1
+    return {"family": family, "people": people, "clash": clash, "unknown": unknown}
 
 
 def replace_attachments(

@@ -26,7 +26,7 @@ from pixlstash.hub import workflow_cards, workflow_origin, workflow_versions
 from pixlstash.hub.workflow_card_reads import (
     find_workflow,
     manual_documents_holding,
-    manual_workflow_ids,
+    run_filed_workflow_ids,
     workflow_of_variant,
 )
 from pixlstash.hub.workflow_group_writes import (
@@ -340,6 +340,7 @@ def store_over_workflow(
     *,
     expected_version: int | None = None,
     original: dict | None = None,
+    also=None,
 ) -> int:
     """Store *workflow* as the next version of the existing workflow *workflow_id*.
 
@@ -356,6 +357,10 @@ def store_over_workflow(
     overwrite) is not buried under an edit of the older graph. A manual
     workflow is not written without it; for an automatic one ``None`` says
     the edit was made on its pictures' graph, before any version.
+
+    *also* is called with the connection once the version is written, inside
+    the same transaction: what a save changes beside the graph (default rows,
+    the changes that waited) lands with the version or not at all.
 
     Returns:
         The number of the version written.
@@ -390,13 +395,16 @@ def store_over_workflow(
                 f"{workflow_id} is at version {current}, and the edit was "
                 f"made on version {expected_version}"
             )
-        return workflow_versions.append_version(
+        version = workflow_versions.append_version(
             conn,
             workflow_id,
             workflow,
             source=source,
             first=None if manual else original,
         )
+        if also is not None:
+            also(conn)
+        return version
 
 
 def _within_the_cap(document: dict) -> None:
@@ -1095,10 +1103,13 @@ def _picture_workflow(server, pic_id: int) -> dict:
     (``workflow_of_variant``): the same resolution ``GET /pictures?workflow=``
     makes the other way, so a link built from this id lists this picture.
     ``None`` for a variant not filed at the current key version, or a topology
-    in no workflow yet. A picture a live manual workflow made is filed on that
-    workflow, and ``workflow_version`` is the version of its document that
-    made it (``picture.run_workflow_version``): null when that is not known,
-    and always null for an automatic workflow, which has no versions.
+    in no workflow yet. A picture made by a run of a workflow whose runs file
+    on it (a live manual workflow, or an automatic one the owner saved over:
+    ``run_filed_workflow_ids``) is filed on that workflow, and
+    ``workflow_version`` is the version of it that made the picture
+    (``picture.run_workflow_version``): null when that is not known, and
+    always null for an automatic workflow never saved over, which has no
+    versions.
     """
     found = {"workflow_id": None, "workflow_version": None}
     hub = getattr(server, "hub", None)
@@ -1116,8 +1127,8 @@ def _picture_workflow(server, pic_id: int) -> dict:
             ],
         )
         made_by = getattr(pics[0], "run_workflow_id", None) if pics else None
-        if made_by and made_by in manual_workflow_ids(hub):
-            # Filed on the manual workflow that made it, while that lives.
+        if made_by and made_by in run_filed_workflow_ids(hub):
+            # Filed on the workflow whose run made it, while that lives.
             return {
                 "workflow_id": made_by,
                 "workflow_version": getattr(pics[0], "run_workflow_version", None),

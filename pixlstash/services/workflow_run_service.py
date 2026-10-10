@@ -30,6 +30,7 @@ from typing import Any, Callable, Optional
 
 from pixlstash.services.comfyui_recipe_service import (
     LORA_DIGEST_FIELD_RE,
+    PIXLSTASH_MULTI_ADAPTER_LOADER,
     LORA_FILENAME_FIELD_RE,
     VIDEO_SAVE_CLASSES,
     bypass_node,
@@ -1448,6 +1449,148 @@ def skip_requested_loras(
             for field in asked
         )
     return skipped, reasons, found
+
+
+def take_out_person_loras(
+    graph: dict,
+    slots: list[tuple[str, str]],
+    object_info: Optional[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Take the LoRA slots holding a person's LoRA out of a graph being STORED.
+
+    A person's LoRA is never part of a workflow (rule 4 of #1846), so a graph
+    saved over one goes without it. Unlike :func:`skip_requested_loras`,
+    which is one run's choice and may leave a loader in, this is a write: a
+    slot that cannot be taken out is refused, never stored.
+
+    Per node, the rule is per row:
+
+    * a **digest row** (``adapter_sha256``, ``adapter_sha256_2``, ...) is
+      emptied, and on the multi-adapter loader the rows below move up with
+      their strengths, as the node itself removes a row;
+    * a node left with **no adapter at all** is bypassed, its readers wired to
+      what it read (:func:`bypass_node`). Where that cannot be done (ComfyUI
+      not answering, an output nothing stands in for), the multi-adapter
+      loader stays, empty, since with every row empty it passes MODEL and
+      CLIP straight through; any other loader is refused;
+    * a **filename slot** on a node that also loads another LoRA (a stacker)
+      has no empty value every pack accepts, so it is refused.
+
+    Args:
+        graph: The API-format graph, mutated in place.
+        slots: ``[(node_id, field), ...]`` holding a person's LoRA.
+        object_info: This ComfyUI's map, or ``None`` when it could not be asked.
+
+    Returns:
+        ``(taken, refused)``: each ``{node_id, class_type, field, file}``, a
+        refused one with the ``message`` saying why.
+    """
+    wanted: dict[str, set[str]] = {}
+    for node_id, slot_field in slots:
+        wanted.setdefault(str(node_id), set()).add(str(slot_field))
+    taken: list[dict] = []
+    refused: list[dict] = []
+    for node_id, fields in sorted(wanted.items()):
+        node = graph.get(node_id)
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        here = lora_slot_fields(inputs)
+        asked = sorted(fields & set(here))
+        if not asked:
+            continue
+        class_type = node.get("class_type")
+        entries = [
+            {
+                "node_id": node_id,
+                "class_type": class_type,
+                "field": slot_field,
+                "file": inputs[slot_field]
+                if isinstance(inputs.get(slot_field), str)
+                else "",
+            }
+            for slot_field in asked
+        ]
+        kept = [
+            slot_field
+            for slot_field in here
+            if slot_field not in asked
+            and (
+                is_link(inputs.get(slot_field))
+                or (isinstance(inputs.get(slot_field), str) and inputs[slot_field])
+            )
+        ]
+        rows = all(LORA_DIGEST_FIELD_RE.match(slot_field) for slot_field in asked)
+        message = None
+        if kept and not rows:
+            message = (
+                f"Node {node_id} ({class_type}) also loads "
+                f"{', '.join(str(inputs[f]) for f in kept)}, and it has no empty "
+                "slot PixlStash can leave in its place."
+            )
+        elif kept:
+            for slot_field in asked:
+                inputs[slot_field] = ""
+            if class_type == PIXLSTASH_MULTI_ADAPTER_LOADER:
+                _close_adapter_rows(inputs)
+        else:
+            try:
+                if object_info is None:
+                    raise LookupError(
+                        "PixlStash could not reach ComfyUI, so it cannot tell "
+                        f"what to wire in place of node {node_id} ({class_type})."
+                    )
+                bypass_node(graph, node_id, object_info)
+            except LookupError as exc:
+                if class_type == PIXLSTASH_MULTI_ADAPTER_LOADER and rows:
+                    # Every row empty passes MODEL and CLIP through.
+                    for slot_field in asked:
+                        inputs[slot_field] = ""
+                else:
+                    message = str(exc)
+        if message is not None:
+            logger.info(
+                "A person's LoRA in node %s (%s) cannot be taken out of a graph "
+                "being stored: %s",
+                node_id,
+                class_type,
+                message,
+            )
+            refused += [{**entry, "message": message} for entry in entries]
+            continue
+        taken += entries
+    return taken, refused
+
+
+def _close_adapter_rows(inputs: dict) -> None:
+    """Move the multi-adapter loader's filled rows up over its empty ones.
+
+    Each row is ``adapter_sha256``, ``strength_model`` and ``strength_clip``
+    with the row's own suffix (none, ``_2``, ``_3``, ...); a row moves with
+    its strengths, and the rows left at the end are empty.
+    """
+
+    def suffix(digest: str) -> str:
+        row = re.search(r"_\d+$", digest)
+        return row.group(0) if row else ""
+
+    digests = sorted(
+        (f for f in inputs if LORA_DIGEST_FIELD_RE.match(f)),
+        key=lambda digest: int(suffix(digest)[1:] or 1),
+    )
+    widgets = ("strength_model", "strength_clip")
+
+    filled = [
+        (inputs[d], [inputs.get(f"{w}{suffix(d)}") for w in widgets])
+        for d in digests
+        if is_link(inputs[d]) or (isinstance(inputs[d], str) and inputs[d])
+    ]
+    for index, digest in enumerate(digests):
+        value, strengths = filled[index] if index < len(filled) else ("", None)
+        inputs[digest] = value
+        for widget, strength in zip(widgets, strengths or ()):
+            if strength is not None:
+                inputs[f"{widget}{suffix(digest)}"] = strength
 
 
 def skip_requested_stages(

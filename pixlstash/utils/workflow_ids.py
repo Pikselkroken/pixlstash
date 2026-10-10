@@ -40,14 +40,17 @@ def stamp_workflow_id(document: dict, workflow_id: str) -> dict:
 
 
 def tagged_workflow_id(document) -> str | None:
-    """The manual workflow id an editor-format *document* is tagged with.
+    """The workflow id an editor-format *document* is tagged with.
 
-    ``None`` for no tag, and for anything that is not a manual id: the tag
-    came in with a picture, from wherever that picture was made.
+    A manual id, or an automatic one: an automatic workflow the owner saved
+    over files its runs on itself as a manual one does (#1849), and whether
+    the hub holds the id as such is the reader's to check. ``None`` for no
+    tag, and for anything that is not a workflow id: the tag came in with a
+    picture, from wherever that picture was made.
     """
     extra = document.get("extra") if isinstance(document, dict) else None
     tag = extra.get(WORKFLOW_TAG_KEY) if isinstance(extra, dict) else None
-    if not isinstance(tag, str) or not tag.startswith(MANUAL_PREFIX):
+    if not isinstance(tag, str):
         return None
     return tag if re.fullmatch(WORKFLOW_ID_PATTERN, tag) else None
 

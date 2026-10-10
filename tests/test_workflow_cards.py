@@ -1794,7 +1794,12 @@ def test_a_manual_default_recipe_is_its_own_graph_by_its_own_slot_labels(
         d.slot_label.startswith("core:") for d in recipe.values
     )
     assert {d.input_name: d.value for d in recipe.values}["steps"] == 33
-    assert recipe.models == []
+    # Its loaders are rows too (#1849), so a model pick has an address to
+    # name: by slot label like the rest, and spelled as the graph spells it.
+    assert [(m.kind, m.filename) for m in recipe.models] == [
+        ("checkpoint", "a.safetensors")
+    ]
+    assert not any(m.address.startswith("core:") for m in recipe.models)
     assert [(lora.filename, lora.strength) for lora in recipe.loras] == [
         ("x.safetensors", 1.0)
     ]

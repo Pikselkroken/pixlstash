@@ -503,6 +503,7 @@ PIXLSTASH_LIBRARY_LOADERS: dict[str, tuple[str, str]] = {
 PIXLSTASH_ALLOWED_NODES = frozenset(
     {
         "PixlStashAdapterLoader",
+        "PixlStashMultiAdapterLoader",
         "PixlStashVAELoader",
         "PixlStashCLIPLoader",
         "PixlStashLikenessSearch",

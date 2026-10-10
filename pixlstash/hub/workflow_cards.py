@@ -132,6 +132,22 @@ def auto_workflow_id(core: str, families: str) -> str:
     return f"{AUTO_PREFIX}{_digest([core, families])}"
 
 
+def variant_workflow_id(kept: Optional[str], core: str, families: str) -> str:
+    """The automatic workflow a variant is in: the one keeping it, else the rule's.
+
+    The one place this precedence lives (rule 5 of #1846, #1849). *kept* is
+    the variant's ``workflow_kept_variant`` row, if it has one: an automatic
+    workflow the owner saved over is never retired, so a variant it held when
+    a new core rule or a re-identified family would have moved it stays in
+    it, and is listed under no other id. A variant with no row is filed by
+    the live rule, :func:`auto_workflow_id`. That is also where one arriving
+    later goes (a picture made elsewhere whose graph matches what the
+    workflow was): the saved-over workflow while the rule still computes its
+    id, another workflow once it does not.
+    """
+    return kept or auto_workflow_id(core, families)
+
+
 # A base model named by digest rather than by file: A1111's `Model hash`
 # (`a1111_recipe._CHECKPOINT_HASHES`). Beside `base_model_kind`'s widgets,
 # which include the shelf loader's `checkpoint_id`.
@@ -547,16 +563,20 @@ def revive_workflows(conn: sqlite3.Connection, structural_hashes: list[str]) -> 
     """
     for structural_hash in structural_hashes:
         row = conn.execute(
-            "SELECT c.core_hash, vf.families FROM workflow_variant v "
+            "SELECT c.core_hash, vf.families, k.workflow_id FROM workflow_variant v "
             "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
             "AND c.core_version = ? "
             "JOIN workflow_variant_family vf ON vf.structural_hash = v.structural_hash "
+            "LEFT JOIN workflow_kept_variant k "
+            "ON k.structural_hash = v.structural_hash "
             "WHERE v.structural_hash = ?",
             (CORE_RULE_VERSION, structural_hash),
         ).fetchone()
         if row is None:
             continue
-        live = auto_workflow_id(row[0], row[1])
+        # A kept variant is in the workflow keeping it, so it brings back no
+        # id the rule merely computes for it.
+        live = variant_workflow_id(row[2], row[0], row[1])
         if conn.execute(
             "DELETE FROM workflow_id_successor WHERE workflow_id = ?", (live,)
         ).rowcount:
