@@ -170,6 +170,11 @@ _V1_USER_USERNAME_INDEX = (
 # "unpinned" state to interpret; routes that legitimately need no library are
 # marked library-independent at the gate instead.
 #
+# The one exception is asked for, never inferred (#1787): ``all_libraries``,
+# added by ``_apply_v2``, which a local owner sets on a token that names no
+# resource so an agent's token survives a switch. The stamp stays NOT NULL
+# beside it, so a missing stamp is still an error rather than a wider token.
+#
 # Referenced by uuid, not by ``library.id``, and deliberately without
 # ON DELETE CASCADE: detaching a library must not destroy its share links (see
 # the note on _V1_LIBRARY). A token whose library is detached is inert, because
@@ -1873,6 +1878,12 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "bound_address" not in token_columns:
         conn.execute("ALTER TABLE usertoken ADD COLUMN bound_address TEXT")
+    # The owner's opt-out from the library pin (#1787), guarded the same way.
+    # 0, every existing token, means "only the library it is stamped with".
+    if "all_libraries" not in token_columns:
+        conn.execute(
+            "ALTER TABLE usertoken ADD COLUMN all_libraries INTEGER NOT NULL DEFAULT 0"
+        )
 
     # Rows from the earliest feature-lane v1 may predate the column entirely.
     # Backfill in Python so every library gets a distinct cryptographic value;

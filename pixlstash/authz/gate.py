@@ -59,6 +59,7 @@ from pixlstash.auth import (
     is_auth_excluded_path,
     is_local_or_tailscale_ip,
     is_loopback_ip,
+    token_covers_library,
 )
 from pixlstash.authz.membership import (
     ID_RESOLVERS,
@@ -686,14 +687,18 @@ class AuthzGate:
     def _enforce_library_pin(self, request: Request, route_policy: RoutePolicy) -> None:
         """Refuse a token whose library is not the active one.
 
-        Every token belongs to exactly one library (multi-library plan §4).
-        Without this, switching library would silently change what an existing
+        A token belongs to exactly one library (multi-library plan §4) unless
+        the owner set it to cover them all. Without this, switching library would silently change what an existing
         token grants: a share link would start serving somebody else's pictures,
         and an automation holding an ALL token would write into the wrong place.
 
         Cookie sessions are deliberately exempt. A session says "I am the owner,
         show me what is active", and following the switch is the entire point of
         the feature; a token says "programmatic access to *this* library".
+
+        The one token that is not refused is one the owner set to cover every
+        library (#1787, ``auth.token_covers_library``): an agent's token that
+        is meant to follow the switch, as a session does.
 
         Fails closed in both directions that matter: a token with no stamp at all
         is refused rather than treated as universal.
@@ -726,7 +731,7 @@ class AuthzGate:
             return
 
         token_library = getattr(matched_token, "library_uuid", None)
-        if token_library == active_uuid:
+        if token_covers_library(matched_token, active_uuid):
             return
 
         # A resource-scoped share token learns nothing: 404 is what every other
@@ -751,8 +756,9 @@ class AuthzGate:
             status_code=403,
             detail=(
                 "This token belongs to a library that is not currently active. "
-                "Switch to that library, or use a token created for the active "
-                "one."
+                "Switch to that library, use a token created for the active "
+                "one, or let this one cover every library under API Tokens in "
+                "the settings."
             ),
         )
 

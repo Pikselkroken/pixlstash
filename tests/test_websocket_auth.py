@@ -423,6 +423,34 @@ def test_authenticate_websocket_rejects_token_for_inactive_library(
         server.auth.library_uuid_provider = original_provider
 
 
+def test_authenticate_websocket_accepts_a_token_that_covers_every_library(
+    server, owner_client
+):
+    """The handshake reads the same pin as HTTP, so it honours the same opt-out
+    (#1787). The refusal above is this test's control: same token shape, same
+    inactive library, without the owner having widened it."""
+    minted = owner_client.post(
+        f"{API}/users/me/token", json={"description": "covers all", "scope": "READ"}
+    )
+    assert minted.status_code == 200, minted.text
+    token = minted.json()["token"]
+    handshake = _FakeHandshake(headers={"authorization": f"Bearer {token}"})
+    original_provider = server.auth.library_uuid_provider
+    try:
+        server.auth.library_uuid_provider = lambda: "inactive-library"
+        assert server.auth.authenticate_websocket(handshake) is None
+        server.auth.library_uuid_provider = original_provider
+        widened = owner_client.put(
+            f"{API}/users/me/token/{minted.json()['token_id']}/libraries",
+            json={"all_libraries": True},
+        )
+        assert widened.status_code == 200, widened.text
+        server.auth.library_uuid_provider = lambda: "inactive-library"
+        assert server.auth.authenticate_websocket(handshake) is not None
+    finally:
+        server.auth.library_uuid_provider = original_provider
+
+
 @pytest.mark.parametrize("client_ip", ["8.8.8.8", "100.64.0.1"])
 def test_authenticate_websocket_rejects_remote_all_bearer(
     server, owner_client, client_ip

@@ -50,6 +50,7 @@ vi.mock("../../api/users", () => ({
   createToken: vi.fn(),
   patchToken: vi.fn(),
   deleteToken: vi.fn(),
+  setTokenLibraries: vi.fn(),
   uploadWatermark: vi.fn(),
   deleteWatermark: vi.fn(),
 }));
@@ -58,6 +59,10 @@ vi.mock("../../api/pictureSets", () => ({ listPictureSets: vi.fn(async () => [])
 vi.mock("../../api/projects", () => ({ listProjects: vi.fn(async () => []) }));
 vi.mock("../../api/characters", () => ({ listCharacters: vi.fn(async () => []) }));
 vi.mock("../../utils/clipboard", () => ({ copyText: vi.fn() }));
+// One library: the token table has no "Every library" column to render.
+vi.mock("../../stores/useLibrariesStore", () => ({
+  useLibrariesStore: () => ({ libraries: [], canManage: false }),
+}));
 
 vi.mock("vuetify/components", () => ({
   VSwitch: { name: "v-switch", template: "<div><slot /></div>" },

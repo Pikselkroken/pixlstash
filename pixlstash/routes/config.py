@@ -279,6 +279,9 @@ def create_router(server) -> APIRouter:
         last_used_at: Optional[datetime] = None
         include_attachments: bool
         watermark: bool
+        all_libraries: bool = False
+        # Bound to one client address (the ComfyUI link key): never widened.
+        source_bound: bool = False
 
     class DeleteTokenResponse(BaseModel):
         model_config = ConfigDict(extra="allow")
@@ -802,6 +805,34 @@ def create_router(server) -> APIRouter:
     )
     def patch_me_token(token_id: int, payload: UpdateTokenRequest, request: Request):
         return server.auth.update_token(request, token_id, watermark=payload.watermark)
+
+    class TokenLibrariesRequest(BaseModel):
+        all_libraries: bool
+
+    class TokenLibrariesResponse(BaseModel):
+        status: str
+        id: int
+        all_libraries: bool
+
+    @router.put(
+        "/users/me/token/{token_id}/libraries",
+        summary="Set which libraries an API token covers",
+        response_model=TokenLibrariesResponse,
+        description=(
+            "A token works only in the library it was created in. "
+            "`all_libraries: true` lets it work in whichever library is open, "
+            "so an agent's token keeps working when the library is switched; "
+            "`false` pins it to the library that is open now. Share links "
+            "and the ComfyUI link key cannot be widened. Only the owner's own "
+            "session, on the local network, may call this; a token cannot."
+        ),
+    )
+    def put_me_token_libraries(
+        token_id: int, payload: TokenLibrariesRequest, request: Request
+    ):
+        return server.auth.set_token_libraries(
+            request, token_id, all_libraries=payload.all_libraries
+        )
 
     # ── Watermark image endpoints ─────────────────────────────────────────────
 

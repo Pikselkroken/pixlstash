@@ -211,6 +211,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Update API token; PATCH blocked for READ tokens; owner only",
     ),
+    ("PUT", "/api/v1/users/me/token/{token_id}/libraries"): RoutePolicy(
+        _LOCAL,
+        justification=(
+            "Sets whether a token is pinned to one library or covers every "
+            "one (#1787). Widening a credential across libraries is the "
+            "owner's decision on the local network: a remote owner session "
+            "is refused here, and any token, local or not, by the handler "
+            "(_refuse_token_credential). Deliberately NOT library_independent."
+        ),
+    ),
     ("GET", "/api/v1/users/me/watermark"): RoutePolicy(_ANY),
     ("POST", "/api/v1/users/me/watermark"): RoutePolicy(
         _OWNER,

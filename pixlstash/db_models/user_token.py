@@ -2,7 +2,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
-from sqlalchemy import Column, ForeignKey
+from sqlalchemy import Boolean, Column, ForeignKey
 from sqlmodel import SQLModel, Field, Integer, Relationship, UTCDateTime
 
 if TYPE_CHECKING:
@@ -53,10 +53,11 @@ class UserToken(SQLModel, table=True):
     user_id: int = Field(
         sa_column=Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), index=True)
     )
-    # The library this token grants access to. Every token belongs to exactly
-    # one: an unpinned token would change what it grants the moment the owner
-    # switched library, so a share link would start serving different pictures
-    # and an automation would silently write into the wrong place.
+    # The library this token grants access to. A token belongs to exactly one
+    # unless the owner has said otherwise (``all_libraries`` below): an unpinned
+    # token changes what it grants the moment the owner switches library, so a
+    # share link would start serving different pictures and an automation would
+    # silently write into the wrong place.
     #
     # Declared Optional because this model maps to two tables. In the hub
     # (``pixlstash/hub/schema.py``) the column is NOT NULL and is the live
@@ -89,6 +90,21 @@ class UserToken(SQLModel, table=True):
     # ComfyUI link token is minted ``"pending"`` and bound to the address its
     # first (round-trip check) request came from; see ``AuthService``.
     bound_address: Optional[str] = Field(default=None)
+    # The owner's opt-out from the library pin (#1787): the token works in
+    # whichever library is active. Only ever honoured on a token with no
+    # ``resource_type`` (a share link names ids that mean something else in the
+    # next library) and no ``bound_address``, and only set through
+    # ``AuthService.set_token_libraries``.
+    # ``library_uuid`` keeps the library it was minted in; see
+    # ``auth.token_covers_library``, the one place the two are read together.
+    #
+    # A server default, as the hub's own column has: this model also creates
+    # the vault's legacy ``usertoken`` table, and a row written without the
+    # column (an old vault's, or a snapshot's) is a pinned token, not an error.
+    all_libraries: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="0"),
+    )
 
     user: Optional["User"] = Relationship(
         back_populates="tokens",
