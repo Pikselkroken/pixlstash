@@ -2022,6 +2022,23 @@ class SetCloneAsk(BaseModel):
         max_length=MAX_SET_MODELS,
         description="Its other models: VAEs and text encoders are used.",
     )
+    picks: dict[str, int] = Field(
+        default_factory=dict,
+        max_length=MAX_SET_MODELS,
+        description=(
+            "The owner's own pairing, a VAE or text-encoder file of the graph "
+            "-> the model of `model_ids` its loaders take: applied before "
+            "anything is paired for them."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _picks_are_members(self) -> "SetCloneAsk":
+        # One set file is never written over two loaders.
+        ids = list(self.picks.values())
+        if len(ids) != len(set(ids)) or not set(ids) <= set(self.model_ids):
+            raise ValueError("each pick must name a different model of model_ids")
+        return self
 
 
 class SetClonePlansRequest(BaseModel):
@@ -2084,6 +2101,17 @@ class SetClonePlan(BaseModel):
             "Base-model files of the graph no set checkpoint was paired with "
             "(the set holds fewer than the graph loads): they keep their file."
         ),
+    )
+    takes: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Each VAE or text-encoder file of the graph -> the set's model "
+            "its loaders take, changed or not: what `picks` re-pairs."
+        ),
+    )
+    choices: dict[str, list[int]] = Field(
+        default_factory=dict,
+        description="The set's models by the loader kind taking them (vae, clip).",
     )
     maps_cleanly: bool = Field(
         False,
@@ -7308,6 +7336,37 @@ def create_router(server) -> APIRouter:
                 )
         return options
 
+    def _closest_pairs(
+        slots: list[SwapSlot], models: list[SwapModel], fits=None
+    ) -> list[tuple[SwapSlot, SwapModel]]:
+        """*slots* paired with *models* by filename, the closest pair first.
+
+        Each slot and each model is paired at most once, and only where
+        *fits* (``(slot, model) -> bool``, when given) allows.
+        """
+        # ponytail: name similarity, the only thing telling two files of one
+        # kind apart (two experts of a base model, a video and an audio VAE);
+        # a shelf role per file would replace it.
+        ranked = sorted(
+            (
+                -SequenceMatcher(
+                    None,
+                    normalized_filename(slot.filename),
+                    normalized_filename(model.filename),
+                ).ratio(),
+                i,
+                j,
+            )
+            for i, slot in enumerate(slots)
+            for j, model in enumerate(models)
+            if fits is None or fits(slot, model)
+        )
+        paired: dict[int, int] = {}
+        for _ratio, i, j in ranked:
+            if i not in paired and j not in paired.values():
+                paired[i] = j
+        return [(slots[i], models[paired[i]]) for i in sorted(paired)]
+
     def _pair_bases(
         found: list[tuple[str, str, SwapSlot]], checkpoints: list[SwapModel]
     ) -> list[tuple[SwapSlot, SwapModel]]:
@@ -7320,26 +7379,7 @@ def create_router(server) -> APIRouter:
         file.
         """
         bases = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
-        # ponytail: name similarity, the only thing telling two experts of one
-        # base model apart; a shelf role per expert would replace it.
-        ranked = sorted(
-            (
-                -SequenceMatcher(
-                    None,
-                    normalized_filename(slot.filename),
-                    normalized_filename(model.filename),
-                ).ratio(),
-                i,
-                j,
-            )
-            for i, slot in enumerate(bases)
-            for j, model in enumerate(checkpoints)
-        )
-        paired: dict[int, int] = {}
-        for _ratio, i, j in ranked:
-            if i not in paired and j not in paired.values():
-                paired[i] = j
-        return [(bases[i], checkpoints[paired[i]]) for i in sorted(paired)]
+        return _closest_pairs(bases, checkpoints)
 
     def _clip_type(node: dict) -> str | None:
         """A CLIP loader node's ``type``, or None for any other node."""
@@ -7355,88 +7395,103 @@ def create_router(server) -> APIRouter:
             return value
         return None
 
+    def _loads(slot: SwapSlot, model: SwapModel) -> bool:
+        """Whether *slot* already loads *model*'s file.
+
+        Only when its name is that shelf row (``SwapSlot.model``); a name the
+        shelf cannot pin to one row is compared whole, so a generic
+        ``diffusion_pytorch_model.safetensors`` in another folder is swapped
+        rather than read as the same file.
+        """
+        if slot.model is not None:
+            return slot.model.id == model.id
+        return (
+            slot.filename.replace("\\", "/").casefold()
+            == model.filename.replace("\\", "/").casefold()
+        )
+
+    def _same_layout(slot: SwapSlot, model: SwapModel) -> bool:
+        family = slot.model.family if slot.model else None
+        return bool(family) and model.family == family
+
     def _set_swaps(
         found: list[tuple[str, str, SwapSlot]],
         bases: list[tuple[SwapSlot, SwapModel]],
         members: list[SwapModel],
+        picks: dict[str, int] | None = None,
     ) -> tuple[dict[str, str], dict[str, SwapModel]]:
         """The set's checkpoints, and which graph file each of its files replaces.
 
         Each base slot takes the checkpoint :func:`_pair_bases` paired it with
-        (*bases*). A VAE or text-encoder
-        slot takes the set's file of the same layout (``family``) nobody has
-        taken yet. When the set holds exactly as many files of a kind as the
-        graph has slots, every slot takes one, the layout matches first and
-        the rest in order: the set's files go with the set's checkpoint, so a
-        Krea 2 text encoder replaces a Z-Image one whatever their layouts. A
-        slot the set has nothing for keeps its file. Two slots of a kind are
-        two different files (the slot list merges loaders naming one file), so
-        one set file is never written over both.
+        (*bases*). The VAE and the text-encoder slots are each paired with the
+        set's files of that kind in four passes, a file taken once:
 
-        A slot already loads the set's file only when its name is that shelf
-        row (``SwapSlot.model``); a name the shelf cannot pin to one row is
-        compared whole, so a generic ``diffusion_pytorch_model.safetensors``
-        in another folder is swapped rather than read as the same file.
+        1. the owner's own pairing (*picks*, slot filename -> model id);
+        2. a slot that already loads one of the set's files keeps it
+           (:func:`_loads`), so a set holding the very files the workflow
+           loads changes none of them;
+        3. a slot takes the set's file of its own layout (``family``);
+        4. when the set holds exactly as many files of the kind as the graph
+           has slots, every slot left takes one: the set's files go with the
+           set's checkpoint, so a Krea 2 text encoder replaces a Z-Image one
+           whatever their layouts.
+
+        Passes 3 and 4 pair by filename, closest pair first
+        (:func:`_closest_pairs`), never in order: a ``video_vae`` slot takes
+        the set's ``video_vae`` wherever the set lists it. A slot the set has
+        nothing for keeps its file. Two slots of a kind are two different
+        files (the slot list merges loaders naming one file), so one set file
+        is never written over both.
 
         Returns:
             ``(swaps, filled)``: the graph's filename -> the set's, for the
             files that change, and every slot's filename -> the set's model
             it now loads, changed or not.
         """
-        of_kind = {
-            "vae": [m for m in members if m.file_kind == FILE_VAE],
-            "clip": [m for m in members if m.file_kind == FILE_TEXT_ENCODER],
-        }
-        slots_of = {
-            kind: sum(slot.kind == kind for _c, _w, slot in found) for kind in of_kind
-        }
+        picks = picks or {}
         paired = {slot.filename: new for slot, new in bases}
-        swaps: dict[str, str] = {}
-        taken: set[int] = set()
-        chosen: dict[str, SwapModel] = {}
-        # Layout matches first, so an in-order fill never takes a file a
-        # later slot of its layout needed.
-        for _cls, _widget, slot in found:
-            if slot.kind in BASE_MODEL_KINDS:
-                if slot.filename in paired:
-                    chosen[slot.filename] = paired[slot.filename]
-            elif slot.kind in of_kind:
-                family = slot.model.family if slot.model else None
-                new = next(
-                    (
-                        m
-                        for m in of_kind[slot.kind]
-                        if m.id not in taken and family and m.family == family
-                    ),
-                    None,
+        chosen: dict[str, SwapModel] = {
+            slot.filename: paired[slot.filename]
+            for _c, _w, slot in found
+            if slot.kind in BASE_MODEL_KINDS and slot.filename in paired
+        }
+        for kind, file_kind in (("vae", FILE_VAE), ("clip", FILE_TEXT_ENCODER)):
+            files = [m for m in members if m.file_kind == file_kind]
+            slots = [slot for _c, _w, slot in found if slot.kind == kind]
+            taken: set[int] = set()
+
+            def pair(fits) -> None:
+                pairs = _closest_pairs(
+                    [slot for slot in slots if slot.filename not in chosen],
+                    [m for m in files if m.id not in taken],
+                    fits,
                 )
-                if new is not None:
-                    taken.add(new.id)
-                    chosen[slot.filename] = new
-        for _cls, _widget, slot in found:
-            kind = slot.kind
-            if (
-                kind in of_kind
-                and slot.filename not in chosen
-                and len(of_kind[kind]) == slots_of[kind]
-            ):
-                # ponytail: in graph order; a dual text encoder of two unknown
-                # layouts may pair crosswise, the dialog's diff shows it.
-                new = next((m for m in of_kind[kind] if m.id not in taken), None)
-                if new is not None:
-                    taken.add(new.id)
-                    chosen[slot.filename] = new
-        slots = {slot.filename: slot for _c, _w, slot in found}
-        for filename, new in chosen.items():
-            own = slots[filename].model
-            same = (
-                own.id == new.id
-                if own is not None
-                else filename.replace("\\", "/").casefold()
-                == new.filename.replace("\\", "/").casefold()
+                for slot, model in pairs:
+                    taken.add(model.id)
+                    chosen[slot.filename] = model
+
+            pair(lambda slot, model: picks.get(slot.filename) == model.id)
+            pair(_loads)
+            pair(_same_layout)
+            if len(files) == len(slots):
+                pair(None)
+        ignored = {
+            filename: model_id
+            for filename, model_id in picks.items()
+            if filename not in chosen or chosen[filename].id != model_id
+        }
+        if ignored:
+            # A pick for a file the graph has no VAE or text-encoder slot for,
+            # or of a model of another kind: the plan answers without it.
+            logger.warning(
+                "Ignored set-clone picks that fit no loader of their kind: %s",
+                ignored,
             )
-            if not same:
-                swaps[filename] = new.filename
+        swaps = {
+            slot.filename: chosen[slot.filename].filename
+            for _c, _w, slot in found
+            if slot.filename in chosen and not _loads(slot, chosen[slot.filename])
+        }
         return swaps, chosen
 
     def _wont_load(
@@ -7543,7 +7598,7 @@ def create_router(server) -> APIRouter:
                 (new for slot, new in bases if slot is base),
                 bases[0][1] if bases else None,
             )
-            swaps, filled = _set_swaps(found, bases, members)
+            swaps, filled = _set_swaps(found, bases, members, ask.picks)
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
@@ -7652,6 +7707,17 @@ def create_router(server) -> APIRouter:
                     key=ask.key,
                     fit=fit,
                     maps_cleanly=maps_cleanly,
+                    takes={
+                        slot.filename: filled[slot.filename].id
+                        for _c, _w, slot in found
+                        if slot.kind in ("vae", "clip") and slot.filename in filled
+                    },
+                    choices={
+                        "vae": [m.id for m in members if m.file_kind == FILE_VAE],
+                        "clip": [
+                            m.id for m in members if m.file_kind == FILE_TEXT_ENCODER
+                        ],
+                    },
                     reason=reason,
                     base_model=checkpoint.base_model if checkpoint else None,
                     keeps_loras=keeps,

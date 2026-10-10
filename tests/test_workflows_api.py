@@ -13347,6 +13347,126 @@ def test_a_set_vae_of_another_layout_replaces_the_graphs_only_one(cloneable):
     assert plans["bare"]["maps_cleanly"] is False
 
 
+def test_two_files_of_a_kind_are_kept_then_paired_by_name_then_as_picked(cloneable):
+    """#1831: a graph loading a video and an audio VAE, and two text encoders
+    of one layout. A set holding the very VAEs changes neither, whatever order
+    it lists them in; other files pair by name, never in order; and the
+    owner's own pairing wins over both."""
+    video, audio = "H3/H3_Video_VAE.safetensors", "H3/H3_Audio_VAE.safetensors"
+    graph = _embedded_export_graph()
+    graph["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": video}}
+    graph["9"] = {"class_type": "VAELoader", "inputs": {"vae_name": audio}}
+    graph["10"] = {
+        "class_type": "DualCLIPLoader",
+        "inputs": {
+            "clip_name1": "enc_video.safetensors",
+            "clip_name2": "enc_audio.safetensors",
+            "type": "flux",
+        },
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "down")
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        ids = {
+            filename: conn.execute(
+                "INSERT INTO model (file_kind, filename, family, provenance) "
+                "VALUES (?, ?, ?, 'scanned')",
+                (file_kind, filename, family),
+            ).lastrowid
+            # The audio file first throughout: in-order pairing crosses them.
+            for file_kind, filename, family in (
+                ("vae", "h3_audio_vae.safetensors", None),
+                ("vae", "h3_video_vae.safetensors", None),
+                ("vae", "h3_audio_vae_ft.safetensors", None),
+                ("vae", "h3_video_vae_ft.safetensors", None),
+                ("text_encoder", "enc_video.safetensors", "t5_xxl"),
+                ("text_encoder", "enc_audio.safetensors", "t5_xxl"),
+                ("text_encoder", "enc_audio_ft.safetensors", "t5_xxl"),
+                ("text_encoder", "enc_video_ft.safetensors", "t5_xxl"),
+            )
+        }
+    own = [ids["h3_audio_vae.safetensors"], ids["h3_video_vae.safetensors"]]
+    named = [
+        ids["h3_audio_vae_ft.safetensors"],
+        ids["h3_video_vae_ft.safetensors"],
+        # Three encoders for two slots: paired on layout alone, still by name.
+        ids["enc_audio_ft.safetensors"],
+        ids["enc_video_ft.safetensors"],
+        ids["enc_audio.safetensors"],
+    ]
+
+    def ask(key, model_ids, **extra):
+        return {
+            "key": key,
+            "checkpoint_ids": [cloneable.checkpoint_id],
+            "model_ids": model_ids,
+            **extra,
+        }
+
+    url = f"{API}/workflows/{RUN_WF}/set-clone-plans"
+    try:
+        r = cloneable.owner.post(
+            url,
+            json={
+                "sets": [
+                    ask("own", own),
+                    ask("named", named),
+                    # Three VAEs for two slots, so nothing is paired by name.
+                    ask("wide", [*own, named[0]]),
+                    ask("picked", own, picks={video: own[0], audio: own[1]}),
+                ]
+            },
+        )
+        refused = [
+            cloneable.owner.post(url, json={"sets": [ask("bad", own, picks=picks)]})
+            for picks in (
+                # Not a model of the set, and one model for both loaders.
+                {video: cloneable.checkpoint_id},
+                {video: own[0], audio: own[0]},
+            )
+        ]
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "DELETE FROM model WHERE id = ?", [(i,) for i in ids.values()]
+            )
+    assert r.status_code == 200, r.text
+    plans = {plan["key"]: plan for plan in r.json()["plans"]}
+    assert plans["own"]["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+    assert plans["own"]["takes"] == {video: own[1], audio: own[0]}
+    assert plans["own"]["choices"] == {"vae": own, "clip": []}
+    # Kept because they are the files loaded, not because the names pair.
+    assert plans["wide"]["takes"] == plans["own"]["takes"]
+    assert plans["named"]["swaps"] == {
+        _SHELF_FILENAME: CLONE_CHECKPOINT,
+        video: "h3_video_vae_ft.safetensors",
+        audio: "h3_audio_vae_ft.safetensors",
+        "enc_video.safetensors": "enc_video_ft.safetensors",
+    }
+    # The third encoder is the file its slot already loads: kept, not swapped.
+    assert plans["named"]["takes"]["enc_audio.safetensors"] == named[4]
+    # The owner crossed them: both loaders are rewritten at once, not in turn.
+    assert plans["picked"]["swaps"] == {
+        _SHELF_FILENAME: CLONE_CHECKPOINT,
+        video: "h3_audio_vae.safetensors",
+        audio: "h3_video_vae.safetensors",
+    }
+    assert plans["picked"]["takes"] == {video: own[0], audio: own[1]}
+    now = {row["node_id"]: row["now"] for row in plans["picked"]["loaders"]}
+    assert (now["8"], now["9"]) == (
+        ["h3_audio_vae.safetensors"],
+        ["h3_video_vae.safetensors"],
+    )
+    assert [bad.status_code for bad in refused] == [422, 422]
+
+
 def test_a_set_of_another_family_fits_only_when_its_encoder_is_retyped(cloneable):
     """The plan runs the clone's retype: the diff shows the type it writes,
     and a type it cannot name keeps the set out of Fits."""

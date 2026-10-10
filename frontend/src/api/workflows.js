@@ -320,10 +320,12 @@ export async function readModelSwap(
  * loader before and after (`loaders`, with the node `pack` a new loader class
  * comes from and whether ComfyUI has it), whether the set's checkpoint has the
  * workflow's base model so its LoRAs are kept, and `fit` / `reason`. Asked once
- * per open, for every set on the shelf; nothing is written.
+ * per open, for every set on the shelf, and again for one set when the owner
+ * picks which of its files a loader takes (`picks`, the plan's `takes` with
+ * the choice made); nothing is written.
  *
  * @param {string} workflowId
- * @param {Array<{key: string, model_ids: Array<number>}>} sets
+ * @param {Array<{key: string, checkpoint_ids: Array<number>, model_ids: Array<number>, picks?: Object<string, number>}>} sets
  * @returns {Promise<{base_filename: ?string, base_model: ?string, plans: Array<Object>}>}
  */
 export async function planSetClones(workflowId, sets) {

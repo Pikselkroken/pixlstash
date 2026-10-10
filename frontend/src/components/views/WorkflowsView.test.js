@@ -1542,6 +1542,155 @@ describe("Clone onto a workflow set", () => {
     expect(clip.find(".cos-now").text()).toContain("chroma");
   });
 
+  it("lets the owner swap the two VAEs of a set before cloning (#1831)", async () => {
+    const sets = await fetchWorkflowSets();
+    fetchWorkflowSets.mockResolvedValue({
+      ...sets,
+      hand_made: [
+        {
+          ...sets.hand_made[0],
+          members: [
+            ...sets.hand_made[0].members,
+            { id: 31, slot: "vae", on_shelf: true, name: "Audio VAE" },
+            { id: 32, slot: "vae", on_shelf: true, name: "Video VAE" },
+          ],
+        },
+      ],
+    });
+    const vae = (node_id, was, now) =>
+      loader(was, now, {
+        node_id,
+        kind: "vae",
+        was_class: "VAELoader",
+        now_class: "VAELoader",
+      });
+    const reply = await planSetClones();
+    const plan = {
+      ...reply.plans[0],
+      takes: { "h3/video.safetensors": 32, "h3/audio.safetensors": 31 },
+      choices: { vae: [31, 32], clip: [] },
+      loaders: [
+        ...reply.plans[0].loaders,
+        vae("8", "h3/video.safetensors", "h3/video.safetensors"),
+        vae("9", "h3/audio.safetensors", "h3/audio.safetensors"),
+      ],
+    };
+    const crossed = {
+      ...plan,
+      swaps: {
+        ...plan.swaps,
+        "h3/video.safetensors": "h3/audio.safetensors",
+        "h3/audio.safetensors": "h3/video.safetensors",
+      },
+      takes: { "h3/video.safetensors": 31, "h3/audio.safetensors": 32 },
+      loaders: [
+        plan.loaders[0],
+        vae("8", "h3/video.safetensors", "h3/audio.safetensors"),
+        vae("9", "h3/audio.safetensors", "h3/video.safetensors"),
+      ],
+    };
+    planSetClones.mockResolvedValue({ ...reply, plans: [plan] });
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    const picks = () =>
+      wrapper.findAll('[data-testid="cos-loaders"] select').map((s) => ({
+        value: s.element.value,
+        label: s.attributes("aria-label"),
+        options: s.findAll("option").map((o) => o.text()),
+      }));
+    // Each loader starts on the file it already loads; the checkpoint row,
+    // which the set holds one file for, offers nothing.
+    expect(picks()).toEqual([
+      {
+        value: "32",
+        label: "VAE in place of video",
+        options: ["Audio VAE", "Video VAE"],
+      },
+      {
+        value: "31",
+        label: "VAE in place of audio",
+        options: ["Audio VAE", "Video VAE"],
+      },
+    ]);
+
+    planSetClones.mockClear();
+    planSetClones.mockResolvedValue({ ...reply, plans: [crossed] });
+    await wrapper
+      .find('[data-testid="cos-pick-h3/video.safetensors"] select')
+      .setValue("31");
+    await flush();
+    // The loader that had the audio VAE takes this one's: a swap, one re-plan
+    // of this set alone, with the whole pairing.
+    expect(planSetClones).toHaveBeenCalledTimes(1);
+    expect(planSetClones).toHaveBeenCalledWith("a", [
+      {
+        key: "hand:7",
+        checkpoint_ids: [11],
+        model_ids: [31, 32],
+        picks: { "h3/video.safetensors": 31, "h3/audio.safetensors": 32 },
+      },
+    ]);
+    expect(picks().map((p) => p.value)).toEqual(["31", "32"]);
+    await cloneButton(wrapper).trigger("click");
+    await flush();
+    expect(cloneWorkflowWithModels).toHaveBeenCalledWith(
+      "a",
+      expect.objectContaining({ swaps: crossed.swaps }),
+    );
+  });
+
+  it("puts a pick the server refused back and keeps the plan it had", async () => {
+    const sets = await fetchWorkflowSets();
+    fetchWorkflowSets.mockResolvedValue({
+      ...sets,
+      hand_made: [
+        {
+          ...sets.hand_made[0],
+          members: [
+            ...sets.hand_made[0].members,
+            { id: 31, slot: "vae", on_shelf: true, name: "Audio VAE" },
+            { id: 32, slot: "vae", on_shelf: true, name: "Video VAE" },
+          ],
+        },
+      ],
+    });
+    const reply = await planSetClones();
+    const plan = {
+      ...reply.plans[0],
+      // The one text encoder the set holds is no choice: its row is text.
+      takes: {
+        "video.safetensors": 32,
+        "audio.safetensors": 31,
+        "t5.safetensors": 41,
+      },
+      choices: { vae: [31, 32], clip: [41] },
+      loaders: ["video", "audio", "t5"].map((file, index) =>
+        loader(`${file}.safetensors`, `${file}.safetensors`, {
+          node_id: String(8 + index),
+          kind: file === "t5" ? "clip" : "vae",
+          was_class: "VAELoader",
+          now_class: "VAELoader",
+        }),
+      ),
+    };
+    planSetClones.mockResolvedValue({ ...reply, plans: [plan] });
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    planSetClones.mockRejectedValue(new Error("offline"));
+    await wrapper
+      .find('[data-testid="cos-pick-video.safetensors"] select')
+      .setValue("31");
+    await flush();
+    expect(wrapper.find('[role="alert"]').text()).toContain("offline");
+    expect(
+      wrapper
+        .findAll('[data-testid="cos-loaders"] select')
+        .map((s) => s.element.value),
+    ).toEqual(["32", "31"]);
+  });
+
   it("names the clone after the model the plan loads and marks a set with no cover", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();

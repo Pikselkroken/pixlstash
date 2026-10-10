@@ -3,6 +3,7 @@
   tab) shows the sets with their pictures and, before anything is written, each
   loader the clone rewrites. A GGUF set swaps the core loaders for the
   ComfyUI-GGUF ones, with a warning if ComfyUI does not have that node pack
-  yet. LoRAs are kept on the same base model and removed on another one, and
+  yet. Where a set holds two VAEs or two text encoders, each loader's file can
+  be picked before cloning. LoRAs are kept on the same base model and removed on another one, and
   Edit LoRAs… can pick new ones for the clone first. Picking files one at a
   time is still there, as Pick files myself.

@@ -120,27 +120,47 @@
               :class="{ 'cos-row--same': !changed(row) }"
             >
               <span class="cos-row-kind">{{ kindLabel(row.kind) }}</span>
-              <span v-if="!changed(row)" class="cos-row-body">
-                <span class="cos-class">{{ row.was_class }}</span>
-                · {{ fileNames(row.was) }}
-                <span class="cos-same">Unchanged</span>
-              </span>
-              <span v-else class="cos-row-body">
-                <span class="cos-was">
+              <span class="cos-row-body">
+                <span v-if="changed(row)" class="cos-was">
                   <span class="cos-class">{{ row.was_class }}</span>
                   {{ fileNames(row.was) }}
                   <template v-if="row.was_type !== row.now_type">
                     · {{ row.was_type }}</template
                   >
                 </span>
+                <!-- An unchanged row is its "now" half alone: the class and
+                     the files are the ones it has. -->
                 <span class="cos-now">
-                  <v-icon size="14" aria-hidden="true">mdi-arrow-right</v-icon>
+                  <v-icon v-if="changed(row)" size="14" aria-hidden="true"
+                    >mdi-arrow-right</v-icon
+                  >
                   <span class="cos-class">{{ row.now_class }}</span>
-                  {{ fileNames(row.now) }}
+                  <template v-if="!changed(row)">·</template>
+                  <!-- A file the set holds an alternative for is a select:
+                       the pairing is a guess the owner can overrule. -->
+                  <template v-for="(part, index) in nowParts(row)" :key="index">
+                    <AppSelect
+                      v-if="part.options.length"
+                      class="cos-pick"
+                      compact
+                      hide-label
+                      :label="`${kindLabel(row.kind)} in place of ${part.wasName}`"
+                      :model-value="part.taken"
+                      :options="part.options"
+                      :disabled="cloning"
+                      :data-testid="`cos-pick-${part.slot}`"
+                      @update:model-value="pick(part.slot, $event)"
+                    />
+                    <span v-else
+                      >{{ part.name
+                      }}{{ index < row.now.length - 1 ? "," : "" }}</span
+                    >
+                  </template>
                   <template v-if="row.was_type !== row.now_type">
                     · {{ row.now_type }}</template
                   >
                   <span v-if="row.pack" class="cos-pack">{{ row.pack }}</span>
+                  <span v-if="!changed(row)" class="cos-same">Unchanged</span>
                 </span>
               </span>
             </li>
@@ -276,6 +296,12 @@
  * pending mode, on the clone's chain; *Done* hands the chain back here, and
  * the clone is still one write.
  *
+ * **The pairing is a guess the owner can overrule.** Where the set holds more
+ * than one VAE (or text encoder), each loader taking one draws it as a select
+ * of the set's files of that kind. Picking the file another loader has swaps
+ * the two; the server re-plans that one set with the choice (`picks`), so the
+ * diff, the swaps Clone sends and the fit are still the server's.
+ *
  * Replaces *Clone with new models* in the menu; *Pick files myself* (the All
  * tab's last card) opens that dialog instead.
  */
@@ -299,6 +325,7 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import EditLorasDialog from "./EditLorasDialog.vue";
 
@@ -337,7 +364,7 @@ const KIND_LABELS = {
 
 const loading = ref(false);
 const loadError = ref("");
-/** Every set, each `{key, name, files, cover, pictures, handMade, loraIds, checkpointIds, plan}`. */
+/** Every set, each `{key, name, files, cover, pictures, handMade, loraIds, checkpointIds, namesById, plan}`. */
 const sets = ref([]);
 /** `set-clone-plans`' `base_filename` and `base_model`. */
 const base = ref({ filename: null, model: null });
@@ -350,6 +377,8 @@ const chosenKey = ref("");
 const name = ref("");
 const nameTouched = ref(false);
 const cloning = ref(false);
+/** A pick is being re-planned: the diff on show is about to be replaced. */
+const replanning = ref(false);
 const cloneError = ref("");
 const editOpen = ref(false);
 /** Edit LoRAs' Done for the chosen set: `{key, rows, body}`, or null. */
@@ -498,6 +527,7 @@ const canClone = computed(
     !sameFiles.value &&
     Boolean(name.value.trim()) &&
     !cloning.value &&
+    !replanning.value &&
     // Removing LoRAs rewires the graph, which needs the chain's planner; an
     // unread chain may hold LoRAs of the old base model.
     (chosen.value.plan.keeps_loras || Boolean(chain.value)) &&
@@ -540,6 +570,38 @@ function fileNames(files) {
   return files.map((file) => deriveModelName(file) || file).join(", ");
 }
 
+/**
+ * A row's new files, each with the set's files it could be instead: the set's
+ * models of the kind its loader takes (`choices`), when there are two or more.
+ * `slot` is the graph's own name for the file, which `takes` and `picks` key.
+ */
+function nowParts(row) {
+  const { takes = {}, choices = {} } = chosen.value.plan;
+  // A loader rewritten to a class with other fields has no file-for-file row.
+  const aligned = row.was.length === row.now.length;
+  return row.now.map((file, index) => {
+    const slot = aligned ? row.was[index] : "";
+    const taken = takes[slot];
+    const ids =
+      taken == null
+        ? []
+        : (Object.values(choices).find((of) => of.includes(taken)) ?? []);
+    return {
+      slot,
+      taken,
+      name: deriveModelName(file) || file,
+      wasName: deriveModelName(slot) || slot,
+      options:
+        ids.length > 1
+          ? ids.map((id) => ({
+              value: id,
+              label: chosen.value.namesById[id] || `Model ${id}`,
+            }))
+          : [],
+    };
+  });
+}
+
 function coverSrc(cover) {
   return pictureThumbnailUrl(cover.picture_id, { version: cover.version });
 }
@@ -577,6 +639,13 @@ function ranWith(checkpointId) {
 function namesByFile(members) {
   return Object.fromEntries(
     members.filter((m) => m.filename).map((m) => [loraBase(m.filename), m.name]),
+  );
+}
+
+/** Each member's shelf name by its id: what a file select calls it. */
+function namesById(members) {
+  return Object.fromEntries(
+    members.map((m) => [m.id, m.name || deriveModelName(m.filename || "")]),
   );
 }
 
@@ -633,6 +702,7 @@ function candidates(payload) {
         .map((m) => m.id),
       checkpointName: checkpoint?.name || "",
       modelNames: namesByFile(members),
+      namesById: namesById(members),
     };
   });
   // A set whose base model is off the shelf has no checkpoint to clone onto.
@@ -661,6 +731,7 @@ function candidates(payload) {
       ],
       checkpointName: group.head?.name || "",
       modelNames: namesByFile(models),
+      namesById: namesById(models),
     };
   });
   return [...handMade, ...evidence];
@@ -671,6 +742,7 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   cloneError.value = "";
+  replanning.value = false;
   sets.value = [];
   chain.value = null;
   chosenKey.value = "";
@@ -739,6 +811,52 @@ function choose(key) {
       chosen.value?.name,
       loadedModelName(chosen.value),
     );
+  }
+}
+
+/**
+ * The owner's choice of *modelId* for the loaders of the graph file *slot*.
+ * A file another loader has swaps with this one's, so one file is never on
+ * two. The whole pairing is sent, and the server's plan for it replaces the
+ * one on show; a refused re-plan leaves that one as it was. The selects stay
+ * enabled meanwhile (disabling the focused one drops focus to the page), so a
+ * pick made before the answer is dropped rather than queued: the redraw the
+ * answer causes puts every select back on what the plan says.
+ */
+async function pick(slot, modelId) {
+  const set = chosen.value;
+  if (replanning.value) return;
+  // A native select hands its value back as text.
+  const id = Number(modelId);
+  const picks = { ...set.plan.takes };
+  const other = Object.keys(picks).find((file) => picks[file] === id);
+  if (other) picks[other] = picks[slot];
+  picks[slot] = id;
+  const mine = token;
+  replanning.value = true;
+  cloneError.value = "";
+  try {
+    const answer = await planSetClones(props.workflowId, [
+      {
+        key: set.key,
+        checkpoint_ids: set.checkpointIds,
+        model_ids: set.modelIds,
+        picks,
+      },
+    ]);
+    if (mine !== token) return;
+    const plan = (answer?.plans ?? []).find((found) => found.key === set.key);
+    if (plan) set.plan = plan;
+    else cloneError.value = "Could not change that file.";
+  } catch (err) {
+    if (mine !== token) return;
+    console.warn(
+      `[workflows] could not re-plan the clone of ${props.workflowId} onto ${set.key}`,
+      err,
+    );
+    cloneError.value = errorMessage(err, "Could not change that file.");
+  } finally {
+    if (mine === token) replanning.value = false;
   }
 }
 
@@ -953,6 +1071,9 @@ watch(
 .cos-row {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
+  /* The kind sits on the first line's baseline, whether that line is text or
+     holds a select. */
+  align-items: baseline;
   gap: var(--space-3);
   padding: var(--space-3);
   border: 1px solid rgb(var(--v-theme-border));
@@ -998,6 +1119,23 @@ watch(
 
 .cos-same {
   margin-left: auto;
+}
+
+/* The line runs the row's width, changed or not: "Unchanged" sits at its end
+   and a select has room to be a field. */
+.cos-now {
+  align-self: stretch;
+}
+
+.cos-row--same .cos-now {
+  flex: 1;
+}
+
+/* A field, not a chip: it takes the line's spare width, so a short name does
+   not leave the chevron pressed against it. */
+.cos-pick {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .cos-pack,
