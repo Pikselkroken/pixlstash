@@ -291,8 +291,9 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   margin-left: var(--space-3);
   font-size: var(--text-xs);
 }
+/* --space-3: clear of the field's focus ring, as the checklist's list is. */
 .ftf-list {
-  margin-top: var(--space-2);
+  margin-top: var(--space-3);
 }
 .ftf-list .fm-check {
   align-items: center;

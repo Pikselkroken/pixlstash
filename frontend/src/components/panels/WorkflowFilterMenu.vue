@@ -317,6 +317,10 @@ watch(sub, () => {
    height, then it scrolls. */
 .wff-scroll {
   max-height: calc(var(--control-h-bar) * 6);
+  /* Room for a row's focus ring, which reaches --space-2 past it and was
+     clipped to two bars at the list's edge. */
+  margin: calc(var(--space-2) * -1);
+  padding: var(--space-2);
   overflow-y: auto;
   scrollbar-width: thin;
 }

@@ -289,7 +289,9 @@
 
   /* The toolbar filter menu (FilterMenu) and each submenu beside it. Narrower
      than a lone toolbar panel (the old filter panel was 376px) because two sit
-     side by side: 320 + 280 keeps the pair near 610px with Score open. */
+     side by side: 320 + 280 keeps the pair near 610px with Score open. The
+     submenus with long rows (the tag field, the checklists) take the menu's
+     own 320. */
   --filter-menu-w: 320px;
   --filter-submenu-w: 280px;
 
