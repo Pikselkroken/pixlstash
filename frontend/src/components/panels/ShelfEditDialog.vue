@@ -33,6 +33,32 @@
       />
     </label>
 
+    <!-- A div, not a wrapping label like its neighbours: the hint sits inside
+         the block, and a wrapping label would read it out as part of the
+         field's name. -->
+    <div v-else-if="verb === 'trigger-words'" class="sed-field">
+      <label class="sed-label" for="sed-trigger-words">Trigger words</label>
+      <!-- A textarea, because a file trained on tagged captions records its
+           whole tag table and a one-line field would show the first few of
+           several hundred. Enter still applies: these are words, not prose. -->
+      <textarea
+        ref="firstFieldEl"
+        id="sed-trigger-words"
+        v-model="triggerText"
+        class="sed-input sed-textarea"
+        rows="2"
+        placeholder="e.g. ohwx"
+        aria-describedby="sed-trigger-hint"
+        @input="triggerTouched = true"
+        @keydown.enter.exact="onTriggerEnter"
+      ></textarea>
+      <!-- The instruction lives here and not in the placeholder, which is gone
+           the moment the field has a value - and it usually opens with one. -->
+      <span id="sed-trigger-hint" class="sed-hint sed-hint--below">
+        {{ triggerHint }}
+      </span>
+    </div>
+
     <template v-else-if="verb === 'kind'">
       <fieldset class="sed-field sed-fieldset">
         <legend class="sed-label">What these files are</legend>
@@ -119,10 +145,11 @@
 </template>
 
 <script setup>
-// Three of the shelf's five verbs, one dialog (shelf plan F3).
+// Four of the shelf's verbs, one dialog (shelf plan F3).
 //
-// Rename, Set base model and Set kind write one curated column each and differ
-// only in which one, exactly as `PATCH /models` does on the other side. The
+// Rename, Set base model, Set kind and Set trigger words write one curated
+// column each and differ only in which one, exactly as `PATCH /models` does on
+// the other side. The
 // dialog mirrors the route rather than inventing a shape of its own, so there
 // is one place where "which fields does this verb send" is decided.
 //
@@ -137,10 +164,17 @@ import AppDialog from "../widgets/AppDialog.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { adapterKindKey, capabilityLabel } from "../../utils/modelShelf";
+import {
+  adapterKindKey,
+  capabilityLabel,
+  recordedTriggerWords,
+} from "../../utils/modelShelf";
 
 const props = defineProps({
-  /** `rename` | `base-model` | `kind`, or `""` when the dialog is closed. */
+  /**
+   * `rename` | `base-model` | `kind` | `trigger-words`, or `""` when the
+   * dialog is closed.
+   */
   verb: { type: String, default: "" },
 });
 const emit = defineEmits(["close"]);
@@ -172,6 +206,9 @@ const CAPABILITIES = [
   "scorer",
 ];
 
+/** Past this many words the field no longer shows them all, so it counts them. */
+const TRIGGER_COUNT_FROM = 12;
+
 const name = ref("");
 const baseModel = ref("");
 const kind = ref("");
@@ -182,6 +219,14 @@ const capabilities = ref([]);
 // verb the reader opened to change the file kind.
 const capabilitiesTouched = ref(false);
 const capabilitiesDiffer = ref(false);
+const triggerText = ref("");
+// The same two flags the capabilities carry, for the same reason. An empty
+// field is a real answer here - "this LoRA needs no trigger word" - so an
+// untouched one must not be sent: a selection that does not agree opens empty,
+// and applying that would blank every row on a verb the reader only opened to
+// look at. Untouched, the field writes nothing at all.
+const triggerTouched = ref(false);
+const triggerDiffer = ref(false);
 const working = ref(false);
 const firstFieldEl = ref(null);
 
@@ -202,6 +247,7 @@ const title = computed(
       rename: "Rename model",
       "base-model": "Set base model",
       kind: "Set kind",
+      "trigger-words": "Set trigger words",
     })[props.verb] || "",
 );
 
@@ -227,12 +273,63 @@ const confirmLabel = computed(() =>
  * the file or a person stated.
  */
 const overwriteWarning = computed(() => {
+  if (props.verb === "trigger-words") {
+    // Per MODEL, a ticked stack expanded into its members: the write reaches
+    // every file in a run, so one selected row can still be a bulk overwrite.
+    if (store.selectedModels.length < 2) return "";
+    // The person's name served as a default is not on record, so writing over
+    // it loses nothing - the same exclusion a guessed base model gets.
+    const next = typedTriggerWords.value.join("\n");
+    const replacing = store.selectedModels.filter((row) => {
+      const recorded = recordedTriggerWords(row);
+      return recorded.length && recorded.join("\n") !== next;
+    }).length;
+    if (!replacing || !triggerTouched.value) return "";
+    // "files", not "of them": a selected run is one row and several files.
+    return `This replaces the trigger words recorded on ${replacing} ${replacing === 1 ? "file" : "files"}. There is no undo.`;
+  }
   if (props.verb !== "base-model" || count.value < 2) return "";
   const replacing = store.selectedRows.filter(
     (row) => row.base_model && row.base_model !== baseModel.value,
   ).length;
   if (!replacing) return "";
   return `This replaces the base model recorded on ${replacing} of them. There is no undo.`;
+});
+
+/**
+ * The field as the list the route takes: split on commas and line breaks,
+ * because a phrase ("photo of ohwx") is one trigger and has spaces in it.
+ */
+const typedTriggerWords = computed(() =>
+  triggerText.value
+    .split(/[,\n]/)
+    .map((word) => word.trim())
+    .filter(Boolean),
+);
+
+/**
+ * The line under the trigger field: how to write several, and what an empty
+ * field means - NO trigger word, which is an answer in its own right (a style
+ * LoRA has none) and not a way back to the person's name.
+ */
+const triggerHint = computed(() => {
+  if (triggerDiffer.value && !triggerTouched.value) {
+    return "The selected models do not share trigger words. Typing here sets all of them.";
+  }
+  const rows = store.selectedModels;
+  const fallback = rows[0]?.trigger_words?.[0];
+  const allDefault =
+    rows.length > 0 &&
+    rows.every(
+      (row) =>
+        row.trigger_words_source === "character" &&
+        row.trigger_words?.[0] === fallback,
+    );
+  if (allDefault && !triggerTouched.value) {
+    return `Nothing is set yet, so the name of the person ${rows.length === 1 ? "this is" : "these are"} assigned to is used. Leave empty for no trigger word.`;
+  }
+  const listed = typedTriggerWords.value.length;
+  return `${listed > TRIGGER_COUNT_FROM ? `${listed.toLocaleString()} words. ` : ""}Separate several with commas. Leave empty for no trigger word.`;
 });
 
 const canSubmit = computed(() => {
@@ -283,9 +380,27 @@ watch(
       ? []
       : (rows[0]?.capabilities || []).filter((c) => CAPABILITIES.includes(c));
     capabilitiesTouched.value = false;
+    // What each row is showing, the person's name standing in as a default
+    // included: the field has to read as the chip does, or emptying it - which
+    // means "none" - could not be told from leaving the default alone. Seeding
+    // a default is safe because an untouched field is never written.
+    // Read off every MODEL the write will reach, not the rows on screen: a
+    // collapsed run is one row carrying its cover's words, and seeding from
+    // that alone would present six files as agreeing when one of them does.
+    const triggers = store.selectedModels.map((row) =>
+      (Array.isArray(row.trigger_words) ? row.trigger_words : []).join(", "),
+    );
+    triggerDiffer.value = triggers.some((text) => text !== triggers[0]);
+    triggerText.value = triggerDiffer.value ? "" : triggers[0] || "";
+    triggerTouched.value = false;
     working.value = false;
     await nextTick();
     firstFieldEl.value?.focus();
+    // A seeded tag table is taller than the field, and focus leaves it scrolled
+    // to the caret at its end - past the first word, which is the trigger.
+    if (verb === "trigger-words" && firstFieldEl.value) {
+      firstFieldEl.value.scrollTop = 0;
+    }
   },
   { immediate: true },
 );
@@ -297,6 +412,9 @@ function changes() {
   if (props.verb === "base-model") {
     return { base_model: baseModel.value.trim() || null };
   }
+  if (props.verb === "trigger-words") {
+    return { trigger_words: typedTriggerWords.value };
+  }
   const patch = { file_kind: fileKind.value };
   if (fileKind.value === "adapter" && kind.value.trim()) {
     patch.kind = kind.value.trim();
@@ -305,8 +423,25 @@ function changes() {
   return patch;
 }
 
+/**
+ * Enter applies, as it does in the fields beside this one. Not while an input
+ * method is composing, where Enter picks a candidate; Shift+Enter is left to
+ * the textarea, which makes a line break the parser reads as a comma.
+ */
+function onTriggerEnter(event) {
+  if (event.isComposing) return;
+  event.preventDefault();
+  submit();
+}
+
 async function submit() {
   if (!canSubmit.value) return;
+  // Nothing was changed, so there is nothing to write - and writing the seed
+  // back would store a person's name that was only standing in.
+  if (props.verb === "trigger-words" && !triggerTouched.value) {
+    emit("close");
+    return;
+  }
   working.value = true;
   const ok = await store.editSelected(changes());
   working.value = false;
@@ -345,6 +480,15 @@ async function submit() {
   border-radius: var(--radius-md);
 }
 
+/* Padding-sized, as a textarea is: two lines by default, and it grows with the
+   reader's own drag rather than with the tag table it may be seeded with. */
+.sed-textarea {
+  display: block;
+  padding-block: var(--space-2);
+  line-height: var(--leading-body);
+  resize: vertical;
+}
+
 .sed-radio {
   display: flex;
   align-items: center;
@@ -362,6 +506,11 @@ async function submit() {
   margin: 0 0 var(--space-2);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), 0.7);
+}
+
+.sed-hint--below {
+  display: block;
+  margin: var(--space-2) 0 0;
 }
 
 .sed-warning {

@@ -97,8 +97,8 @@ export async function listBaseModelCompletions() {
 /**
  * Write curated columns onto one or more models.
  *
- * Three of the shelf's verbs land here - Rename, Set base model, Set kind -
- * because all three write one column and differ in nothing else. **Only the
+ * Four of the shelf's verbs land here - Rename, Set base model, Set kind, Set
+ * trigger words - because they all write one column and differ in nothing else. **Only the
  * keys present in `changes` are sent**, so setting a base model across a
  * selection cannot blank the names in it, and an explicit `null` is a *clear*
  * rather than "leave it alone".
@@ -106,9 +106,11 @@ export async function listBaseModelCompletions() {
  * @param {Array<number>} ids - hub `model.id` values. Ids rather than hashes:
  *   an unhashed 24 GB checkpoint has no hash to be addressed by.
  * @param {Object} changes - any of `display_name` (one id only), `base_model`,
- *   `kind`, `file_kind`, `capabilities`. The last is the COMPLETE feature set
- *   for every id sent, so `[]` clears it; the server replaces rather than
- *   merges, or there would be no way to take one off.
+ *   `kind`, `file_kind`, `capabilities`, `trigger_words`. `capabilities` is the
+ *   COMPLETE feature set for every id sent, so `[]` clears it; the server
+ *   replaces rather than merges, or there would be no way to take one off.
+ *   `trigger_words` is the complete list too, and its `[]` is an answer ("needs
+ *   none") where `null` is "not set".
  * @returns {Promise<{updated: Array<number>, fields: Array<string>}>}
  */
 export async function editModels(ids, changes) {

@@ -1176,8 +1176,9 @@ every adapter on the machine to the client and filtering it there, plus a second
 statement of what "attached" means.
 
 Each card is `ModelMark` + the `modelName` chain + the base model (`Base model
-not set` when there is none, never a blank) + the trigger words when there are
-any, keyed on the hub `model.id`. Ordering is newest-first on
+not set` when there is none, never a blank) + the trigger word when there is
+one (`triggerChip`: the first word and a count, the list in the hover text),
+keyed on the hub `model.id`. Ordering is newest-first on
 `newest_member_at || added_at` — a stack's date is its newest member's, the same
 rule `useModelShelfStore`'s sort accessor applies, so a six-step run does not
 order one way here and the other way on the shelf.
@@ -5197,13 +5198,33 @@ is N calls a partial failure is a real outcome rather than an error: it reports
 what landed first, or the reader re-runs the verb on the rows that already have
 it.
 
-**Three verbs, one dialog.** `ShelfEditDialog.vue` carries Rename, Set base
-model and Set kind because all three write one curated column and differ only in
+**Four verbs, one dialog.** `ShelfEditDialog.vue` carries Rename, Set base
+model, Set kind and Set trigger words because all of them write one curated
+column and differ only in
 which one, mirroring `PATCH /models` rather than inventing a shape of its own.
 It sends **only** the field its verb owns, which is why the route distinguishes
 an absent field from a null one. Fields are seeded from the selection on open
 (shared value, or empty when the selection disagrees) so the box shows what is
 there rather than something the reader has to interpret.
+
+**Trigger words: a chip on the row, a default that is never seeded.** The API
+serves `trigger_words` as a list plus `trigger_words_source`; `triggerChip`
+(`utils/modelShelf.js`) turns that into the row's chip — the first word and a
+`+N`, because a file trained on tagged captions records its whole tag table —
+and the same helper feeds `AdapterTray`. A `character` source is the name of the
+person the model is assigned to standing in for a word nobody recorded, so it
+takes the dashed `shelf-chip--none` treatment in the UI face rather than the
+mono one, which claims the string is on record. **An empty field is an answer**
+(`trigger_words: []`, "this LoRA needs no trigger word"), so the dialog shows
+what the row shows, default included, and an untouched field writes nothing at
+all: sent back unchanged, a default would be stored and stop following a
+rename, and a selection whose rows disagree opens empty, which applied would
+blank every one of them. Seed, hint and warning all read `selectedModels`, a
+ticked run expanded into its files, because that is what the write reaches;
+`recordedTriggerWords` is what the warning counts, since writing over a default
+loses nothing. The verb is listed on every selection
+and disabled, with its reason, when the selection holds anything but adapters
+and unclassified files.
 
 **The base-model field completes; it never constrains.** Both places it appears
 — the dialog above and the inline editor on a row — are `BaseModelInput.vue`,

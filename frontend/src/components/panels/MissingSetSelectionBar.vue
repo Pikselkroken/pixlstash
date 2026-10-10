@@ -120,6 +120,7 @@ const MENU = [
   SEP,
   { icon: "mdi-cube-outline", verb: null, label: "Set base model…" },
   { icon: "mdi-shape-outline", verb: null, label: "Set kind…" },
+  { icon: "mdi-format-quote-close-outline", verb: null, label: "Set trigger words…" },
   { icon: "mdi-account-plus", verb: null, label: "Assign to person" },
   { icon: "mdi-folder-plus", verb: null, label: "Assign to set" },
   { icon: "mdi-layers-outline", verb: null, label: "Stack with selection" },

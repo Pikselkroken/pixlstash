@@ -228,6 +228,59 @@ export function quantBadge(quant) {
   };
 }
 
+/** How many trigger words a tooltip spells out before it counts the rest. */
+const TRIGGER_TITLE_WORDS = 12;
+
+/**
+ * The trigger words a row has ON RECORD, as opposed to the person's name the
+ * server serves in their place while nothing has been set.
+ *
+ * What a bulk write would replace: a default is not stored, so writing over it
+ * loses nothing.
+ *
+ * @param {Object} row - a model row from the API.
+ * @returns {string[]}
+ */
+export function recordedTriggerWords(row) {
+  return row?.trigger_words_source === "recorded" &&
+    Array.isArray(row.trigger_words)
+    ? row.trigger_words
+    : [];
+}
+
+/**
+ * The chip for one model's trigger words, or null when it has none.
+ *
+ * `isDefault` is the person's name standing in for a word nobody recorded. It
+ * is drawn differently because it is a different claim: a recorded word is in
+ * the file or was typed here, and the default only says who the model is
+ * assigned to.
+ *
+ * A file trained on tagged captions records its whole tag table, most frequent
+ * first, so the label is the first word and a count rather than the list.
+ *
+ * @param {Object} row - a model row from the API.
+ * @returns {{label: string, title: string, isDefault: boolean}|null}
+ */
+export function triggerChip(row) {
+  const words = Array.isArray(row?.trigger_words) ? row.trigger_words : [];
+  if (!words.length) return null;
+  if (row.trigger_words_source === "character") {
+    return {
+      label: words[0],
+      title: `Trigger word: ${words[0]}, the name of the person this is assigned to. None has been set.`,
+      isDefault: true,
+    };
+  }
+  const rest = words.length - TRIGGER_TITLE_WORDS;
+  const listed = words.slice(0, TRIGGER_TITLE_WORDS).join(", ");
+  return {
+    label: words.length > 1 ? `${words[0]} +${words.length - 1}` : words[0],
+    title: `Trigger ${words.length > 1 ? "words" : "word"}: ${listed}${rest > 0 ? ` and ${rest} more` : ""}`,
+    isDefault: false,
+  };
+}
+
 /**
  * Resolve what a row is called, and WHO decided it.
  *

@@ -630,6 +630,16 @@ Rules neither side may drift from:
    carries `set_verdicts: [{combo_key, names, verdict}]`, the owner's member
    answers about that model, `names` being the set's members in shelf names,
    base model first.
+   The same rows carry `trigger_words` as a **list** (it was a JSON string
+   before trigger words could be set) and `trigger_words_source`: `recorded`
+   for what the file or the owner stored, `character` when the list is the name
+   of the person the model is attached to standing in for a word nobody
+   recorded, null when it is empty. `PATCH /models` takes `trigger_words` as
+   the complete list. `[]` is "this model needs no trigger word" and sticks:
+   no default and no later scan overrules it. `null` is "not set", which
+   brings the person default back. An editor may show a `character` default but
+   must not write it back unchanged, or the name is stored and stops following
+   a rename.
 
 ### 2.3 The `/workflows` contract
 
