@@ -2736,6 +2736,8 @@ describe("Add LoRA", () => {
     expect(wrapper.vm.runBlocker).toBe(
       "Choose a LoRA for each added row, or remove it.",
     );
+    // A row with nothing picked is no LoRA to save as part of the look.
+    expect(wrapper.vm.recipeLoras).toEqual([]);
     wrapper.vm.addedLoras[0].sha256 = "s".repeat(64);
     await flushPromises();
     await wrapper.vm.submit();
