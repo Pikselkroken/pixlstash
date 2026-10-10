@@ -43,12 +43,20 @@ from pixlstash.services.comfyui_recipe_service import (
 from pixlstash.services.comfyui_service import pixlstash_node_refusals
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
     asset_reference,
     is_link,
     normalized_filename,
 )
 from pixlstash.services.workflow_identity import model_fix_kind
-from pixlstash.services.workflow_io import api_graph
+from pixlstash.services.workflow_io import (
+    NEGATIVE_FIELDS,
+    PROMPT_FIELDS,
+    WorkflowIO,
+    api_graph,
+    detect_workflow_io,
+    prompt_field,
+)
 from pixlstash.services.workflow_parameters import is_picture_batch
 from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER, FILE_VAE
 from pixlstash.utils.comfyui_utilities import collect_seed_inputs, iter_model_fields_api
@@ -151,34 +159,18 @@ def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
     ]
 
 
-def prompt_text_target(
-    graph: dict, node_id: str, prompt: Optional[str]
+def _literal_prompt_target(
+    graph: dict, node_id: str, field: Optional[str]
 ) -> Optional[tuple[str, str]]:
-    """Where a detected prompt node's text literally lives, as ``(node, field)``.
+    """Where a prompt node's text is a literal string, as ``(node, field)``.
 
-    The encoder's own ``text`` when it holds a string; otherwise, when that
-    input is a link from output 0 of a :data:`TEXT_NODE_CLASSES` node, that
-    node's text field. Without the hop a prompt typed into the Run popup was
-    skipped, and a missing text node's repair then inlined the stored prompt.
-    A text node feeding more than one input is not a target: writing the
-    positive prompt and then the negative into it would leave both negative.
-    Nor is one with another input overriding its text (Textbox's
-    ``passthrough``): the node would ignore the prompt written into it.
-
-    Any other wired ``text`` (a prompt builder, a shared or overridden text
-    node) is the encoder's own field, and the literal replaces the link.
-    Except when *prompt* is a string a recipe reads from the wired node: the
-    picture's recipe echoed back by an untouched Run popup (a builder's recipe
-    prompt is read from its widgets), and cutting the wire would generate from
-    the builder's template instead of what it builds. ``None`` also when the
-    encoder has no string or linked ``text``.
+    The encoder's own *field*, or the text field of the one unshared,
+    unoverridden :data:`TEXT_NODE_CLASSES` node wired into it.
     """
-    inputs = (graph.get(node_id) or {}).get("inputs")
-    if not isinstance(inputs, dict):
-        return None
-    text = inputs.get("text")
+    inputs = (graph.get(node_id) or {}).get("inputs") or {}
+    text = inputs.get(field)
     if isinstance(text, str):
-        return node_id, "text"
+        return node_id, field
     if is_link(text) and text[1] == 0:
         source = graph.get(str(text[0]))
         field = TEXT_NODE_CLASSES.get((source or {}).get("class_type"))
@@ -197,8 +189,45 @@ def prompt_text_target(
             and not overriding_text_inputs(source["class_type"], source_inputs)
         ):
             return str(text[0]), field
-    if not is_link(text):
+    return None
+
+
+def prompt_text_target(
+    graph: dict,
+    node_id: str,
+    prompt: Optional[str],
+    fields: tuple[str, ...] = PROMPT_FIELDS,
+) -> Optional[tuple[str, str]]:
+    """Where a detected prompt node's text literally lives, as ``(node, field)``.
+
+    The encoder's own text field (:func:`workflow_io.prompt_field` over
+    *fields*) when it holds a string; otherwise, when that
+    input is a link from output 0 of a :data:`TEXT_NODE_CLASSES` node, that
+    node's text field. Without the hop a prompt typed into the Run popup was
+    skipped, and a missing text node's repair then inlined the stored prompt.
+    A text node feeding more than one input is not a target: writing the
+    positive prompt and then the negative into it would leave both negative.
+    Nor is one with another input overriding its text (Textbox's
+    ``passthrough``): the node would ignore the prompt written into it.
+
+    Any other wired text (a prompt builder, a shared or overridden text
+    node) is the encoder's own field, and the literal replaces the link.
+    Except when *prompt* is a string a recipe reads from the wired node: the
+    picture's recipe echoed back by an untouched Run popup (a builder's recipe
+    prompt is read from its widgets), and cutting the wire would generate from
+    the builder's template instead of what it builds. ``None`` also when the
+    encoder has no string or linked text field.
+    """
+    inputs = (graph.get(node_id) or {}).get("inputs")
+    if not isinstance(inputs, dict):
         return None
+    name = prompt_field(inputs, fields)
+    if name is None:
+        return None
+    literal = _literal_prompt_target(graph, node_id, name)
+    if literal is not None:
+        return literal
+    text = inputs[name]
     source = graph.get(str(text[0]))
     source_inputs = (source or {}).get("inputs") or {}
     # The strings a recipe may read from this node (comfyui_utilities: a named
@@ -227,7 +256,67 @@ def prompt_text_target(
         text[0],
         (source or {}).get("class_type"),
     )
-    return node_id, "text"
+    return node_id, name
+
+
+def apply_prompts(graph: dict, prompt: Optional[str], negative: Optional[str]) -> dict:
+    """Put this run's prompts into the detected prompt nodes, and report on it.
+
+    Returns:
+        ``positive_settable`` / ``negative_settable``: whether the graph has
+        anywhere to put that side's prompt. ``positive_text``: the positive
+        prompt the graph held before this call, ``None`` where it holds none
+        as a literal or its prompt nodes disagree. ``unplaced``: the sides a
+        prompt was given for and had nowhere to go - said, never dropped
+        (#1832).
+    """
+    report = {
+        "positive_settable": False,
+        "negative_settable": False,
+        "positive_text": None,
+        "unplaced": [],
+    }
+    try:
+        detected = detect_workflow_io(graph)
+    except WorkflowGraphError as exc:
+        logger.info("Prompts not applied, the graph will not reduce: %s", exc)
+        detected = WorkflowIO()
+    both = set(detected.positive_prompts) & set(detected.negative_prompts)
+    for side, text in (("positive", prompt), ("negative", negative)):
+        node_ids = getattr(detected, f"{side}_prompts")
+        held = set()
+        for node_id in node_ids:
+            # An encoder that makes both sides keeps its negative in a field
+            # of its own; its positive field must not take the negative.
+            fields = (
+                NEGATIVE_FIELDS
+                if side == "negative" and node_id in both
+                else PROMPT_FIELDS
+            )
+            inputs = (graph.get(node_id) or {}).get("inputs") or {}
+            name = prompt_field(inputs, fields)
+            if name is None:
+                continue
+            report[f"{side}_settable"] = True
+            literal = _literal_prompt_target(graph, node_id, name)
+            held.add(graph[literal[0]]["inputs"][literal[1]] if literal else None)
+            if text is None:
+                continue
+            target = prompt_text_target(graph, node_id, text, fields)
+            if target is not None:
+                graph[target[0]]["inputs"][target[1]] = text
+        if side == "positive" and len(held) == 1:
+            report["positive_text"] = held.pop()
+        if text is not None and not report[f"{side}_settable"]:
+            logger.warning(
+                "The run's %s prompt was not applied: the graph has no prompt "
+                "node PixlStash can write it into (detected %s, ambiguities %s).",
+                side,
+                list(node_ids),
+                list(detected.ambiguities),
+            )
+            report["unplaced"].append(side)
+    return report
 
 
 # Where the source of a runnable graph came from, in the order tried.

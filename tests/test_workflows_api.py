@@ -11054,7 +11054,7 @@ def test_a_pinned_checkpoint_of_another_family_is_flagged_and_still_runs(runnabl
                 (_OTHER_FAMILY_CHECKPOINT,),
             )
         (group,) = _preflight(runnable.owner, **body)["groups"]
-        assert group["flags"] == []
+        assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
     finally:
         with hub.transaction() as conn:
             conn.execute(
@@ -11069,11 +11069,6 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         "inputs": {"text": None, "clip": ["1", 1]},
     }
     document["3"]["inputs"]["positive"] = ["5", 0]
-    runnable.monkeypatch.setattr(
-        workflows_routes,
-        "detect_workflow_io",
-        lambda graph: SimpleNamespace(positive_prompts=("5",), negative_prompts=()),
-    )
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info["CLIPTextEncode"] = {"input": {"required": {"text": ["STRING", {}]}}}
     runnable.monkeypatch.setattr(
@@ -11095,6 +11090,22 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
     assert r.json()["status"] == "success", r.json()
     assert (
         runnable.submitted[0]["graph"]["5"]["inputs"]["text"] == "a lighthouse at dusk"
+    )
+    group = r.json()["groups"][0]
+    assert group["prompt"] == {
+        "positive_settable": True,
+        "negative_settable": False,
+        "positive_text": "the saved prompt",
+    }
+    assert "prompt_not_applied" not in [flag["code"] for flag in group["flags"]]
+    # A negative this graph has no node for is said before the run (#1832).
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": RUN_WF, "negative": "blurry"},
+    )
+    assert r.status_code == 200, r.text
+    assert {"code": "prompt_not_applied", "side": "negative"} in (
+        r.json()["groups"][0]["flags"]
     )
 
 
@@ -11926,6 +11937,83 @@ def test_an_untouched_run_keeps_the_prompt_builder_wired():
     graph["68"]["inputs"].update(text="a ui prompt", value="an api prompt")
     assert prompt_text_target(graph, "91", "a ui prompt") is None
     assert prompt_text_target(graph, "91", "an api prompt") is None
+
+
+def _encoder_graph(class_type: str, **texts) -> dict:
+    """One encoder feeding both sides of a sampler, or only its positive."""
+    return {
+        "1": {"class_type": "CLIPLoader", "inputs": {"clip_name": "c.safetensors"}},
+        "2": {"class_type": class_type, "inputs": {**texts, "clip": ["1", 0]}},
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "positive": ["2", 0],
+                **({"negative": ["2", 1]} if "negative_prompt" in texts else {}),
+            },
+        },
+    }
+
+
+def test_the_run_prompt_lands_in_the_field_the_encoder_keeps_it_in():
+    """`text` alone left every `prompt` encoder with the workflow's own (#1832)."""
+    graph = _encoder_graph("TextEncodeQwenImageEdit", prompt="the saved prompt")
+    assert prompt_text_target(graph, "2", "typed") == ("2", "prompt")
+    report = run_service.apply_prompts(graph, "typed", None)
+    assert graph["2"]["inputs"]["prompt"] == "typed"
+    assert report == {
+        "positive_settable": True,
+        "negative_settable": False,
+        "positive_text": "the saved prompt",
+        "unplaced": [],
+    }
+
+
+def test_an_encoder_making_both_sides_keeps_each_prompt_in_its_own_field():
+    """The negative written into `prompt` would run as the positive."""
+    graph = _encoder_graph("TextEncodeBooguEdit", prompt="a cat", negative_prompt="")
+    report = run_service.apply_prompts(graph, "a dog", "blurry")
+    assert graph["2"]["inputs"]["prompt"] == "a dog"
+    assert graph["2"]["inputs"]["negative_prompt"] == "blurry"
+    assert report["unplaced"] == []
+    # With no field of its own the negative has nowhere to go, and says so.
+    graph = _encoder_graph("TextEncodeBooguEdit", prompt="a cat")
+    graph["3"]["inputs"]["negative"] = ["2", 1]
+    report = run_service.apply_prompts(graph, "a dog", "blurry")
+    assert graph["2"]["inputs"]["prompt"] == "a dog"
+    assert (report["negative_settable"], report["unplaced"]) == (False, ["negative"])
+
+
+def test_a_prompt_with_nowhere_to_go_is_reported_and_nothing_is_written(caplog):
+    """SDXL's encoder keeps its text in two fields no run writes."""
+    graph = _encoder_graph("CLIPTextEncodeSDXL", text_g="a cat", text_l="a cat")
+    before = json.dumps(graph)
+    with caplog.at_level("WARNING"):
+        report = run_service.apply_prompts(graph, "a dog", None)
+    assert json.dumps(graph) == before
+    assert report == {
+        "positive_settable": False,
+        "negative_settable": False,
+        "positive_text": None,
+        "unplaced": ["positive"],
+    }
+    assert "positive prompt was not applied" in caplog.text
+    # Nothing was sent, so nothing is unplaced: only the popup needs telling.
+    assert run_service.apply_prompts(graph, None, None)["unplaced"] == []
+
+
+def test_the_graphs_own_prompt_is_read_only_where_it_is_one_literal():
+    graph = _text_graph()
+    del graph["7"]
+    graph["3"] = {"class_type": "KSampler", "inputs": {"positive": ["6", 0]}}
+    # Through the text node the encoder reads, as the run writes it.
+    assert (
+        run_service.apply_prompts(graph, None, None)["positive_text"]
+        == (graph["103"]["inputs"]["text"])
+    )
+    graph["6"]["inputs"]["text"] = ["68", 0]
+    graph["68"] = {"class_type": "LoRACharacterPromptBuilder", "inputs": {"seed": 1}}
+    report = run_service.apply_prompts(graph, None, None)
+    assert (report["positive_settable"], report["positive_text"]) == (True, None)
 
 
 def test_a_primitive_string_multiline_is_replaced_from_its_value():

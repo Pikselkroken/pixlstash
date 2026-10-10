@@ -1948,7 +1948,7 @@ describe("the body it sends", () => {
   });
 
   it("sends null, NOT \"\", when no recipe ever filled the prompt box", async () => {
-    // `_apply_prompts` short-circuits on `None` and writes on `""`, so an
+    // `apply_prompts` leaves the graph alone on `None` and writes on `""`, so an
     // empty string here overwrites every positive-prompt node in the graph and
     // the run generates from no prompt at all. A card and a multi-picture
     // selection both read no recipe, so the box is empty because nothing
@@ -1958,6 +1958,53 @@ describe("the body it sends", () => {
     await wrapper.vm.submit();
     await flushPromises();
     expect(runWorkflowCard.mock.calls[0][0].prompt).toBe(null);
+  });
+
+  it("opens a card on the workflow's own prompt, so what will run is visible", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [
+        { prompt: { positive_settable: true, positive_text: "the saved prompt" } },
+      ],
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY, emptyPrompt: true });
+    expect(wrapper.vm.prompt).toBe("the saved prompt");
+    expect(wrapper.find('[data-testid="rund-prompt-unset"]').exists()).toBe(false);
+    // Typed text is the owner's: a later answer does not take it back.
+    wrapper.vm.prompt = "typed";
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [{ prompt: { positive_settable: true, positive_text: "another" } }],
+    });
+    await wrapper.vm.runPreflight();
+    await flushPromises();
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].prompt).toBe("typed");
+  });
+
+  it("offers no prompt box, and sends none, where the graph has no place for one", async () => {
+    // #1832: the picture's own prompt was sent, dropped, and nothing said so.
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [{ prompt: { positive_settable: false, negative_settable: false } }],
+    });
+    const wrapper = await mountRun();
+    expect(wrapper.find('[data-testid="rund-prompt-unset"]').text()).toContain(
+      "no prompt that can be set here",
+    );
+    expect(
+      wrapper
+        .findAllComponents({ name: "AppTextarea" })
+        .some((c) => c.props("label") === "Prompt"),
+    ).toBe(false);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].prompt).toBe(null);
+    expect(runWorkflowCard.mock.calls[0][0].negative).toBe(null);
   });
 
   it("does send \"\" when the owner clears a prompt that WAS there", async () => {

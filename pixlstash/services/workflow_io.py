@@ -13,9 +13,11 @@ ambiguity is reported and the prompts are left empty rather than guessed.
 
 Prompts are found by following each guider's own ``positive`` / ``negative``
 inputs upstream, through conditioning-only nodes (``ReferenceLatent``,
-``ControlNetApplyAdvanced``, ...), to the text encoder that feeds them. A path
-through ``ConditioningZeroOut`` carries no prompt: that is how a model without
-a negative prompt is wired. A path that ends anywhere else is reported as not
+``ControlNetApplyAdvanced``, ...), to the text encoder that feeds them: a
+``TextEncode`` class, or any node that takes ``clip`` and no conditioning, so
+makes the conditioning itself (``MiniMaxH3ImageToVideo``). A path through
+``ConditioningZeroOut`` carries no prompt: that is how a model without a
+negative prompt is wired. A path that ends anywhere else is reported as not
 found, never as no prompt.
 """
 
@@ -27,12 +29,37 @@ from pixlstash.services.comfyui_recipe_service import INPUT_IMAGE_FIELDS
 from pixlstash.services.comfyui_service import SAVE_NODE_CLASSES
 from pixlstash.services.workflow_hash import (
     ReducedNode,
+    is_link,
     reduce_api_graph,
     reduce_ui_graph,
 )
 from pixlstash.utils.comfyui_utilities import is_api_format
 
 _PROMPT_SIDES = ("positive", "negative")
+
+# The input a prompt node keeps its text in, first found: ``text`` on core's
+# encoders, ``prompt`` on the edit and video ones, ``value`` on a primitive
+# feeding one. One rule for the run and the bindings (#1832).
+# ponytail: one field per node. An encoder with a field per model (SDXL's
+# ``text_g``/``text_l``, Flux's ``clip_l``/``t5xxl``) has no place for a run's
+# prompt, and the Run popup says so; write every field when that is wanted.
+PROMPT_FIELDS = ("text", "prompt", "value")
+# Where an encoder that makes both sides (``TextEncodeBooguEdit``) keeps the
+# negative. Never ``PROMPT_FIELDS`` for it: that is its positive.
+NEGATIVE_FIELDS = ("negative_prompt", "negative")
+
+
+def prompt_field(inputs: dict, fields: tuple[str, ...] = PROMPT_FIELDS) -> str | None:
+    """The first of *fields* that *inputs* holds as a string or a link."""
+    return next(
+        (
+            name
+            for name in fields
+            if isinstance(inputs.get(name), str) or is_link(inputs.get(name))
+        ),
+        None,
+    )
+
 
 # Loaders the name rule below misses.
 _PICTURE_INPUT_CLASSES = frozenset(INPUT_IMAGE_FIELDS) | {
@@ -243,6 +270,12 @@ def _guiders(nodes: dict[str, ReducedNode]) -> list[str]:
     )
 
 
+def _encodes_text(node: ReducedNode) -> bool:
+    """A node that takes ``clip`` and no conditioning makes the conditioning."""
+    names = [name for name, _source, _slot in node.inputs]
+    return "clip" in names and not any(map(_is_conditioning_input, names))
+
+
 def _prompts_for(
     nodes: dict[str, ReducedNode], guider_id: str, side: str
 ) -> tuple[str, ...] | None:
@@ -263,7 +296,7 @@ def _prompts_for(
         node = nodes.get(key)
         if node is None:
             return None
-        if "TextEncode" in node.class_type:
+        if "TextEncode" in node.class_type or _encodes_text(node):
             found.add(key)
             continue
         if node.class_type == "ConditioningZeroOut":
