@@ -952,14 +952,53 @@ def test_a_wait_is_held_to_the_most_the_server_allows(monkeypatch):
     assert len(seen) == 2, seen
 
 
+def test_one_bad_answer_does_not_stop_a_run_being_followed(monkeypatch):
+    """A 500 while polling is a blip, not the run's ending: the run is asked
+    about again, and its real ending is what the tool answers with."""
+    monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
+    fetch, seen = _run_fetch({"p1": [dict(FAILED)]})
+    blips = [(500, "application/json", b'{"detail": "busy"}')]
+
+    def flaky(path, params, method="GET", body=None):
+        if path.startswith("/workflows/runs/") and blips:
+            seen.append((method, path, body))
+            return blips.pop()
+        return fetch(path, params, method, body)
+
+    result = _write(flaky, "run_workflow", workflow_id=WORKFLOW_ID, wait_seconds=5)
+    assert result["isError"] is True
+    assert "UNETLoader" in result["content"][0]["text"]
+    assert [path for _m, path, _b in seen[1:]] == ["/workflows/runs/p1"] * 2
+
+
+def test_a_bad_answer_that_lasts_the_whole_wait_is_reported_unknown(monkeypatch):
+    monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
+    seen = []
+
+    def broken(path, params, method="GET", body=None):
+        seen.append(path)
+        if path == "/workflows/run":
+            answer = {"status": "success", "prompts": [{"prompt_id": "p1"}]}
+            return 200, "application/json", json.dumps(answer).encode()
+        return 500, "application/json", b'{"detail": "busy"}'
+
+    result = _write(broken, "run_workflow", workflow_id=WORKFLOW_ID, wait_seconds=0)
+    assert result["isError"] is False, result
+    (prompt,) = json.loads(result["content"][0]["text"])["prompts"]
+    assert prompt["status"] == "unknown" and "500" in prompt["message"]
+    assert seen == ["/workflows/run", "/workflows/runs/p1"]
+
+
 def test_a_run_whose_ending_cannot_be_read_is_still_reported_queued(monkeypatch):
     """An older PixlStash without the route: the run is queued all the same."""
     monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
-    fetch, _seen = _run_fetch({}, prompts=[{"prompt_id": "p9"}])
-    result = _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID)
+    fetch, seen = _run_fetch({}, prompts=[{"prompt_id": "p9"}])
+    result = _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID, wait_seconds=1)
     assert result["isError"] is False, result
     (prompt,) = json.loads(result["content"][0]["text"])["prompts"]
     assert prompt["status"] == "unknown" and "404" in prompt["message"]
+    # A 404 is an answer: the run is not asked about a second time.
+    assert [path for _m, path, _b in seen[1:]] == ["/workflows/runs/p9"]
 
 
 @pytest.mark.parametrize("wait", [-1, "soon", True, float("nan")])

@@ -536,6 +536,10 @@ class ToolError(Exception):
     """A tool call that failed in a way the agent should be told about."""
 
 
+class NotFoundError(ToolError):
+    """PixlStash answered 404: an answer, where any other failure may pass."""
+
+
 def unreachable_message(base: str, reason) -> str:
     """Why nothing answered, in terms the owner can act on.
 
@@ -760,7 +764,8 @@ def _checked(status: int, content_type: str, body: bytes) -> tuple[str, bytes]:
                 "PIXLSTASH_TOKEN only when it starts, so after changing the "
                 "token, restart or reconnect this MCP server in the client."
             )
-        raise ToolError(f"PixlStash answered {status}: {detail}")
+        kind = NotFoundError if status == 404 else ToolError
+        raise kind(f"PixlStash answered {status}: {detail}")
     return content_type, body
 
 
@@ -926,7 +931,12 @@ def _follow_runs(fetch: Fetch, answer, wait_seconds: float) -> None:
             except ToolError as exc:
                 # The run is queued all the same; only its ending is unread.
                 entry.update(status="unknown", message=str(exc))
-                pending.remove(entry)
+                if isinstance(exc, NotFoundError):
+                    # Not on record (an older PixlStash, or one restarted
+                    # since): asking again will not change the answer.
+                    pending.remove(entry)
+                # Anything else may be a blip, so the run is asked about
+                # again until the wait is over.
                 continue
             for key in ("status", "message", "stopped", "picture_ids"):
                 entry[key] = outcome.get(key)
