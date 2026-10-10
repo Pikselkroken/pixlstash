@@ -880,6 +880,12 @@ watch(
         markComfyuiPromptComplete(promptKey, "plugin-progress-completed");
       } else {
         comfyuiFinishedEarlyPromptIds.add(promptKey);
+        // Another tab's runs are never registered here, so the oldest goes.
+        if (comfyuiFinishedEarlyPromptIds.size > 100) {
+          comfyuiFinishedEarlyPromptIds.delete(
+            comfyuiFinishedEarlyPromptIds.values().next().value,
+          );
+        }
       }
       return;
     }

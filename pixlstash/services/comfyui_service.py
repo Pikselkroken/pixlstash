@@ -804,7 +804,12 @@ def _emit_comfyui_progress(
             },
         )
     except Exception as exc:
-        logger.debug("Failed to emit ComfyUI %s progress event: %s", status, exc)
+        logger.debug(
+            "Failed to emit ComfyUI %s progress event for prompt %s: %s",
+            status,
+            prompt_id,
+            exc,
+        )
 
 
 def _emit_comfyui_failure_progress(server, prompt_id: str, message: str) -> None:
