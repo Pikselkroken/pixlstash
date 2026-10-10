@@ -107,19 +107,21 @@ function familyFit(checkpoint, lora) {
 
 /**
  * The people a run of *card* can be of: each person with a LoRA attached that
- * works with the card's checkpoint.
+ * is for the base model of the card's checkpoint.
  *
- * The other way round from {@link fitWorkflows}, on the same family rule: a
- * `match` first, an `unknown` after it (never hidden, since nothing says it
- * will not work), and a person whose every LoRA is for another base model
- * counted in `clash` rather than offered. A workflow that starts from a
- * picture still takes a person, so the card's type is not asked.
+ * The other way round from {@link fitWorkflows}, and stricter: only a `match`
+ * is offered. A person is shown because their LoRA works with this
+ * checkpoint, so one nothing vouches for (the LoRA's base model, or the
+ * workflow's, was never identified) is counted in `unknown` and one whose
+ * every LoRA is for another base model in `clash`. A workflow that starts
+ * from a picture still takes a person, so the card's type is not asked.
  *
  * @param {Object|null} card - a `GET /workflows` card.
  * @param {Array<Object>} loras - shelf rows (`listAdapters`), with `attachments`.
  * @param {Array<Object>} characters - `[{id, name}]`.
  * @returns {{people: Array<{id: number, name: string, loras: Array<Object>}>,
- *   clash: number}} each person's fitting LoRAs, best first.
+ *   clash: number, unknown: number, family: string|null}} each person's
+ *   matching LoRAs, in the shelf's order, and the checkpoint's own family.
  */
 export function fitPeople(card, loras, characters) {
   const checkpoint = card ? checkpointModel(card) : null;
@@ -131,30 +133,23 @@ export function fitPeople(card, loras, characters) {
       attached.set(id, [...(attached.get(id) || []), lora]);
     }
   }
-  const rank = { match: 0, unknown: 1 };
   const people = [];
   let clash = 0;
+  let unknown = 0;
   for (const person of characters || []) {
     const own = attached.get(Number(person.id));
     if (!own) continue;
-    const fitting = own
-      .map((lora) => ({ lora, fit: familyFit(checkpoint, lora) }))
-      .filter((entry) => entry.fit in rank)
-      // `sort` is stable, so ties keep the shelf's order.
-      .sort((a, b) => rank[a.fit] - rank[b.fit]);
-    if (!fitting.length) {
+    const fits = own.map((lora) => familyFit(checkpoint, lora));
+    const matching = own.filter((_, index) => fits[index] === "match");
+    if (matching.length) {
+      people.push({ id: Number(person.id), name: person.name, loras: matching });
+    } else if (fits.includes("unknown")) {
+      unknown += 1;
+    } else {
       clash += 1;
-      continue;
     }
-    people.push({
-      id: Number(person.id),
-      name: person.name,
-      best: rank[fitting[0].fit],
-      loras: fitting.map((entry) => entry.lora),
-    });
   }
-  people.sort((a, b) => a.best - b.best);
-  return { people, clash };
+  return { people, clash, unknown, family: checkpoint?.base_model_family || null };
 }
 
 /**
