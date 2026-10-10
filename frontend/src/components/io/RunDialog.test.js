@@ -516,7 +516,7 @@ describe("a refusal the popup offers to fix", () => {
     // One list, for the sampler; the step count beside it is still typed.
     const lists = wrapper
       .findAllComponents({ name: "AppSelect" })
-      .filter((list) => list.attributes("data-testid") === "rund-choice");
+      .filter((list) => list.attributes("data-testid") === "rund-param-choice");
     expect(lists).toHaveLength(1);
     expect(lists[0].props("label")).toBe("Sampler");
     // The workflow's own value stays listed though ComfyUI does not offer it.
@@ -527,6 +527,34 @@ describe("a refusal the popup offers to fix", () => {
       (field) => field.input_name === "sampler_name",
     );
     expect(wrapper.vm.runValue(sampler)).toBe("dpmpp_2m");
+  });
+
+  it("sets an on-or-off parameter to the value, and names an added one's node", async () => {
+    const tiled = { ...def("tiled", "tiled", true, "core:up"), exposed: true };
+    getWorkflowCard.mockResolvedValue({
+      card: card({ defaults: [...card().defaults, tiled] }),
+      pins: [{ slot_label: "core:up", input_name: "tiled" }],
+    });
+    getWorkflowFormInputs.mockResolvedValue({
+      nodes: [
+        {
+          node_id: "8",
+          title: "Final upscale",
+          inputs: [{ slot_label: "core:up", input_name: "tiled", options: null }],
+        },
+      ],
+    });
+    const wrapper = await mountRun();
+    const [list] = wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .filter((entry) => entry.attributes("data-testid") === "rund-param-choice");
+    expect(list.props("options")).toEqual(["true", "false"]);
+    expect(list.element.closest(".rund-f").textContent).toContain("Final upscale");
+    list.vm.$emit("update:modelValue", "false");
+    await flushPromises();
+    const field = wrapper.vm.defaults.find((entry) => entry.input_name === "tiled");
+    // The boolean, never the word: ComfyUI reads the text "false" as on.
+    expect(wrapper.vm.runValue(field)).toBe(false);
   });
 
   it("types every parameter when ComfyUI's choices cannot be read", async () => {
@@ -540,7 +568,7 @@ describe("a refusal the popup offers to fix", () => {
     getWorkflowFormInputs.mockRejectedValue(new Error("down"));
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const wrapper = await mountRun();
-    expect(wrapper.find('[data-testid="rund-choice"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="rund-param-choice"]').exists()).toBe(false);
     expect(wrapper.vm.otherRunFields.map((f) => f.input_name)).toEqual([
       "sampler_name",
     ]);

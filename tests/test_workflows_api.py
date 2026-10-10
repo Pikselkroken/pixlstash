@@ -8785,28 +8785,37 @@ def test_an_input_nothing_maps_is_offered_and_a_run_sets_it_once_exposed(runnabl
     ]
 
     address = {k: scale[k] for k in ("slot_label", "input_name")}
+    steps = {k: listed[("KSampler", "steps")][k] for k in ("slot_label", "input_name")}
+    method = {
+        k: listed[("ImageScaleBy", "upscale_method")][k]
+        for k in ("slot_label", "input_name")
+    }
     r = runnable.owner.put(
         f"{API}/workflows/{manual}/defaults",
-        json={"defaults": [{**address, "value": 2.5}]},
+        json={
+            "defaults": [
+                {**address, "value": 2.5},
+                {**steps, "value": 9},
+                # Text that looks like a number is still text on the way back.
+                {**method, "value": "1024"},
+            ]
+        },
     )
     assert r.status_code == 200, r.text
-    row = next(
-        v
-        for v in r.json()["card"]["default_recipe"]["values"]
-        if v["input_name"] == "scale_by"
-    )
+    rows = {v["input_name"]: v for v in r.json()["card"]["default_recipe"]["values"]}
+    row = rows["scale_by"]
     assert (row["value"], row["provenance"], row["exposed"]) == (2.5, "edited", True)
-    # A parameter its pictures vote on is not one the owner added.
-    assert not any(
-        v["exposed"]
-        for v in r.json()["card"]["default_recipe"]["values"]
-        if v["input_name"] != "scale_by"
-    )
+    # An edit of a parameter the graph votes on is the owner's value, and
+    # still not a parameter the owner added.
+    assert (rows["steps"]["provenance"], rows["steps"]["exposed"]) == ("edited", False)
+    assert rows["cfg"]["exposed"] is False
+    assert rows["upscale_method"]["value"] == "1024"
     assert form()[("ImageScaleBy", "scale_by")]["exposed"] is True
 
     r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": manual})
     assert r.status_code == 200 and runnable.submitted, r.text
-    assert runnable.submitted[0]["graph"]["8"]["inputs"]["scale_by"] == 2.5
+    ran = runnable.submitted[0]["graph"]["8"]["inputs"]
+    assert (ran["scale_by"], ran["upscale_method"]) == (2.5, "1024")
 
 
 @pytest.fixture

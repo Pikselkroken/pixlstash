@@ -458,6 +458,11 @@
         >
           <span class="rund-l">
             {{ field.label }}
+            <!-- A parameter the owner added is named after its setting alone:
+                 the node says which of two "text"s this is. -->
+            <span v-if="field.exposed && formNodeNames[address(field)]">
+              · {{ formNodeNames[address(field)] }}
+            </span>
             <RunResetChip
               v-if="isEdited(field)"
               :value="baseOf(field)"
@@ -475,7 +480,7 @@
             compact
             :options="choicesFor(formOptions, field, currentValue(field))"
             :disabled="submitting"
-            data-testid="rund-choice"
+            data-testid="rund-param-choice"
             @update:model-value="(v) => typeValue(field, v)"
           />
           <AppInput
@@ -883,6 +888,7 @@ import { wouldDuplicate } from "../../utils/recipeKey";
 import { UNMATCHED_REPLACEMENTS_TEXT } from "../../utils/workflowCard";
 import {
   choicesFor,
+  nodesByAddress,
   optionsByAddress,
   setEachRun,
 } from "../../utils/workflowPins";
@@ -976,6 +982,8 @@ const card = ref(null);
 const pins = ref(null);
 /** What ComfyUI offers for each of the card's parameters that is a choice. */
 const formOptions = ref({});
+/** The node each parameter is a setting of, for the ones the owner added. */
+const formNodeNames = ref({});
 /** The address "Set each run" is writing, and what went wrong if it failed. */
 const freeing = ref("");
 const fixedSummary = ref(null);
@@ -1678,6 +1686,12 @@ function isEdited(field) {
  * answer, since `JSON.stringify(NaN)` is `null` and `RunValue` refuses it.
  */
 function coerce(field, raw) {
+  // On or off: the word is the value, and any other word is not one. Sent as
+  // text, ComfyUI would read "false" as on.
+  if (typeof baseOf(field) === "boolean") {
+    const word = String(raw ?? "").trim();
+    return word === "true" ? true : word === "false" ? false : undefined;
+  }
   if (typeof baseOf(field) !== "number") return raw;
   const text = String(raw ?? "").trim();
   if (!text) return undefined;
@@ -2995,12 +3009,14 @@ async function loadCard(key, { keepEdits = false } = {}) {
   // card; this one's answer must not replace it.
   const token = loadToken;
   formOptions.value = {};
+  formNodeNames.value = {};
   // Beside the card, never ahead of it: the options only turn a typed box
   // into a list, so a ComfyUI that does not answer leaves the boxes typed.
   getWorkflowFormInputs(key)
     .then((body) => {
       if (token === loadToken && key === activeKey.value) {
         formOptions.value = optionsByAddress(body.nodes);
+        formNodeNames.value = nodesByAddress(body.nodes);
       }
     })
     .catch((err) => {

@@ -3107,6 +3107,11 @@ describe("expose a parameter", () => {
     expect(dialog(wrapper).exists()).toBe(false);
     expect(lockOf(wrapper, "scale_by").attributes("aria-pressed")).toBe("false");
     expect(inFixedGroup(wrapper, "scale_by")).toBe(false);
+    // Named after its setting alone, so the row says which node's it is; a
+    // parameter the pictures vote on needs no telling, though its node is
+    // in the same read.
+    expect(rowNamed(wrapper, "scale_by").find(".wfdef-node").text()).toBe("Final upscale");
+    expect(rowNamed(wrapper, "sampler_name").find(".wfdef-node").exists()).toBe(false);
     // Its ↺ would have nothing to go back to: the button removes the row.
     expect(
       rowNamed(wrapper, "scale_by").find("[data-testid='wfdef-reset']").attributes("aria-label"),
@@ -3141,6 +3146,31 @@ describe("expose a parameter", () => {
     await flush(wrapper);
     expect(setWorkflowDefaults).toHaveBeenCalledWith(KEY, [
       { slot_label: SAMPLER.slot_label, input_name: "sampler_name", value: "euler" },
+    ]);
+  });
+
+  it("offers an on-or-off value as the two words, and writes the value they mean", async () => {
+    const tiled = {
+      label: "tiled",
+      slot_label: "core:up",
+      input_name: "tiled",
+      value: true,
+      provenance: "edited",
+      exposed: true,
+    };
+    const wrapper = await mountExposing(
+      detail({
+        card: { defaults: [STEPS, tiled] },
+        pins: [{ slot_label: "core:up", input_name: "tiled" }],
+      }),
+    );
+    const list = rowNamed(wrapper, "tiled").find("[data-testid='wfdef-select'] select");
+    expect(list.findAll("option").map((o) => o.text())).toEqual(["true", "false"]);
+    await list.setValue("false");
+    await flush(wrapper);
+    // The boolean, never the word: ComfyUI reads the text "false" as on.
+    expect(setWorkflowDefaults).toHaveBeenCalledWith(KEY, [
+      { slot_label: "core:up", input_name: "tiled", value: false },
     ]);
   });
 

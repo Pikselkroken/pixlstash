@@ -57,7 +57,6 @@ from pixlstash.services.workflow_io import (
     WorkflowIO,
     api_graph,
     detect_workflow_io,
-    picture_fields,
     prompt_field,
 )
 from pixlstash.services.workflow_parameters import is_picture_batch
@@ -1767,8 +1766,9 @@ def form_inputs(
     Every literal input a run writes by address (``labels`` / ``core``, as
     ``_apply_addressed`` reads them), less the ones PixlStash already has a
     control for or decides itself: the prompts, the seeds, a picture batch, a
-    picture input, a model or LoRA loader's file and strengths, the save node
-    (a run swaps it) and a credential. A wired input is not a form field.
+    picture loader, a model or LoRA loader's file and strengths, the save node
+    (a run swaps it) and a credential. A wired input is not a form field, and
+    text of several lines is left out because a row edits one line.
 
     *exposed* is the addresses that are parameter rows already; those are kept
     and flagged, so a row can be drawn with its options. An input is addressed
@@ -1780,7 +1780,8 @@ def form_inputs(
         ``[{node_id, title, class_type, inputs: [{slot_label, input_name,
         value, kind, options, exposed}]}]``, in graph order. ``kind`` is
         ``number`` / ``text`` / ``boolean`` / ``choice`` from *object_info*, or
-        ``None`` where ComfyUI did not answer or does not declare the input.
+        ``None`` where ComfyUI did not answer, does not declare the input, or
+        declares a list it names no choices of.
     """
     try:
         detected = detect_workflow_io(graph)
@@ -1792,10 +1793,6 @@ def form_inputs(
         (target["node_id"], target["field"])
         for target in run_seed_targets(graph, object_info)
     )
-    for node_id, class_type in zip(
-        detected.picture_inputs, detected.picture_input_classes
-    ):
-        owned.update((node_id, name) for name in picture_fields(class_type))
     owned.update(
         (str(node_id), widget)
         for node_id, _class, widget, _value in iter_model_fields_api(graph)
@@ -1809,6 +1806,7 @@ def form_inputs(
         if (
             not isinstance(inputs, dict)
             or node_id in detected.save_nodes
+            or node_id in detected.picture_inputs
             or lora_slot_fields(inputs)
         ):
             continue
@@ -1827,12 +1825,16 @@ def form_inputs(
             if (
                 not forms
                 or not isinstance(value, (bool, int, float, str))
+                # The address is `<slot label>/<input name>`, split at the last one.
+                or "/" in name
                 or (node_id, name) in owned
                 # A credential is text; `max_tokens` is a number and stays.
                 or (isinstance(value, str) and SECRET_FIELD_RE.search(name))
                 or model_fix_kind("", name)
                 or is_picture_batch(class_type, name, object_info)
-                or (isinstance(value, str) and len(value) > max_text)
+                # ponytail: one-line text only; a textarea row if prompts of
+                # several lines are to be exposed.
+                or (isinstance(value, str) and (len(value) > max_text or "\n" in value))
             ):
                 continue
             row = next((form for form in forms if (form, name) in exposed), None)
@@ -1846,11 +1848,10 @@ def form_inputs(
                 kind = "choice"
             elif spec is None:
                 kind = None
-            elif isinstance(spec[0], (list, tuple)) or spec[0] == "COMBO":
-                # A combo ComfyUI fills at run time: typed, with nothing listed.
-                kind = "text"
             else:
-                kind = _FORM_KINDS.get(spec[0])
+                # A list with no choices named (filled at run time, or of
+                # numbers) has no entry here, so it is untyped like the rest.
+                kind = _FORM_KINDS.get(spec[0]) if isinstance(spec[0], str) else None
             found.append(
                 {
                     "slot_label": address[0],

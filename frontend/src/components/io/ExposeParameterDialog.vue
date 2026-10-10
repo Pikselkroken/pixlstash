@@ -76,6 +76,7 @@
  */
 import { computed, nextTick, ref, watch } from "vue";
 
+import { nodeNames } from "../../utils/workflowPins";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppSelect from "../widgets/AppSelect.vue";
@@ -111,13 +112,9 @@ const input = computed(() =>
 
 /** Two nodes of one name are told apart by ComfyUI's own node number. */
 const nodeOptions = computed(() => {
-  const count = {};
-  for (const entry of props.nodes) {
-    count[entry.title] = (count[entry.title] || 0) + 1;
-  }
+  const names = nodeNames(props.nodes);
   return props.nodes.map((entry) => ({
-    label:
-      count[entry.title] > 1 ? `${entry.title} #${entry.node_id}` : entry.title,
+    label: names[entry.node_id],
     value: entry.node_id,
   }));
 });

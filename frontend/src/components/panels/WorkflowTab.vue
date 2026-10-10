@@ -627,6 +627,7 @@
               :row="row"
               :busy="busy === `default:${row.label}`"
               :options="choicesFor(formOptions, row)"
+              :node="nodeOf(row)"
               @toggle-pin="togglePin(row)"
               @reset="writeDefault(row)"
               @edit="(value) => writeDefault(row, { value })"
@@ -656,6 +657,7 @@
                     :row="row"
                     :busy="busy === `default:${row.label}`"
                     :options="choicesFor(formOptions, row)"
+                    :node="nodeOf(row)"
                     @toggle-pin="togglePin(row)"
                     @reset="writeDefault(row)"
                     @edit="(value) => writeDefault(row, { value })"
@@ -672,6 +674,7 @@
                   :row="row"
                   :busy="busy === `default:${row.label}`"
                   :options="choicesFor(formOptions, row)"
+                  :node="nodeOf(row)"
                   @toggle-pin="togglePin(row)"
                   @reset="writeDefault(row)"
                   @edit="(value) => writeDefault(row, { value })"
@@ -914,6 +917,7 @@ import {
 } from "../../utils/workflowCard";
 import {
   choicesFor,
+  nodesByAddress,
   optionsByAddress,
   parameterAddress,
   setEachRun,
@@ -1570,6 +1574,12 @@ const exposeOpen = ref(false);
 
 /** What ComfyUI offers for each parameter that is a choice there. */
 const formOptions = computed(() => optionsByAddress(formNodes.value));
+const formNodeNames = computed(() => nodesByAddress(formNodes.value));
+
+/** The node an exposed row is a setting of; a computed row needs no telling. */
+function nodeOf(row) {
+  return row.exposed ? formNodeNames.value[parameterAddress(row)] || "" : "";
+}
 
 /**
  * The nodes with a setting that is not a parameter yet, and only those

@@ -2,6 +2,9 @@
   <div :class="['wfdef', { 'wfdef--fixed': fixed, 'wfdef--choice': choosing }]">
     <span class="wfdef-name">
       {{ row.label }}
+      <!-- An added parameter is named after its setting alone, and two nodes
+           can have a setting of one name: the node says which. -->
+      <span v-if="node" class="wfdef-node">{{ node }}</span>
       <!-- Only the exception is marked (#1653): where the computed values
            come from is drawn once, in the tab's head, and "Yours" is the one
            provenance the owner can act on (↺). -->
@@ -21,7 +24,7 @@
         :options="options"
         :disabled="busy"
         data-testid="wfdef-select"
-        @update:model-value="(value) => emit('edit', value)"
+        @update:model-value="(value) => emit('edit', parse(String(value)))"
       />
       <input
         v-else
@@ -88,6 +91,8 @@ const props = defineProps({
   row: { type: Object, required: true },
   /** What ComfyUI offers for this value, when it is a choice there. */
   options: { type: Array, default: null },
+  /** The node an exposed parameter is a setting of, as the dialog named it. */
+  node: { type: String, default: "" },
   /** A write for this row is out; both its controls wait for it. */
   busy: { type: Boolean, default: false },
 });
@@ -151,6 +156,10 @@ function onChange(event) {
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   color: rgb(var(--v-theme-on-surface));
+}
+
+.wfdef-node {
+  font-size: var(--text-2xs);
 }
 
 .wfdef-value {

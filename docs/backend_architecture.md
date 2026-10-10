@@ -2554,10 +2554,15 @@ variant is in (`RunGroup.workflow_id`); `workflow_key` is no longer a source.
   (`workflow_run_service.form_inputs`, over the graph Run resolves and the
   labels `_apply_addressed` reads, so a listed address is one a run sets):
   every literal input, less what PixlStash has a control for or overwrites
-  (prompts, seeds, a picture batch, picture inputs, a model or LoRA loader's
-  file and strengths, the save node, a credential). Each carries ComfyUI's
-  type and, for a combo, its options, read from the cached `object_info`;
-  both are null where ComfyUI did not answer. A new address is the node's
+  (prompts, seeds, a picture batch, a picture loader, a model or LoRA
+  loader's file and strengths, the save node, a text credential), text of
+  several lines (a row edits one) and a name holding the address separator.
+  Each carries ComfyUI's type and, for a combo, its options, read from the
+  cached `object_info`; both are null where ComfyUI did not answer or names
+  no choices. **A default keeps its type**: the column is TEXT and `30` reads
+  back as the number, so text that would read back as anything else (a
+  drop-down's `"1024"`, the word `"true"`) is stored as a JSON string
+  (`routes/workflows._stored_value`) and comes back as that text. A new address is the node's
   `core:` label where it has one, which survives another topology; a slot
   label on a non-core node goes stale when the graph's topology changes, as
   any slot-label default does.

@@ -1903,13 +1903,14 @@ def _stored_value(text: str) -> bool | int | float | str:
 
     ``"30"`` is the number 30 and ``"true"`` the boolean, the way the card
     routes write them (``routes/workflows._stored_value``); anything else is
-    the string it is, a sampler name say.
+    the string it is, a sampler name say. Text that would otherwise read as a
+    number is stored as a JSON string, and comes back as that text.
     """
     try:
         value = json.loads(text)
     except (TypeError, ValueError):
         return text
-    return value if isinstance(value, (bool, int, float)) else text
+    return value if isinstance(value, (bool, int, float, str)) else text
 
 
 def _mode(counter: Counter):

@@ -1073,8 +1073,8 @@ class FormInput(BaseModel):
         None,
         description=(
             "What ComfyUI's `object_info` declares it as. Null where ComfyUI "
-            "did not answer or does not know the node; the type of `value` is "
-            "then the only clue."
+            "did not answer, does not know the node, or declares a list it "
+            "names no choices of; the type of `value` is then the only clue."
         ),
     )
     options: list[str] | None = Field(
@@ -2327,9 +2327,20 @@ def _shelf_digest(hub, kind: str):
 def _stored_value(value: bool | int | float | str) -> str:
     """An override as the hub keeps it. ``workflow_default_override.value`` is
     TEXT and the read side hands it back verbatim, so a bool is written the way
-    a graph writes one rather than as Python's ``True``."""
+    a graph writes one rather than as Python's ``True``.
+
+    The read side takes ``30`` for the number (``workflow_card_service.
+    _stored_value``), so text that would read back as something else - a
+    drop-down's ``"1024"``, the word ``"true"`` - is kept as a JSON string,
+    which reads back as the text it was."""
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+        except ValueError:
+            return value
+        return json.dumps(value)
     return str(value)
 
 
@@ -3876,10 +3887,11 @@ def create_router(server) -> APIRouter:
             "Every literal input of this workflow's graph that a run can set "
             "by address, grouped by node, each with its value, what ComfyUI's "
             "object_info declares it as and, for a drop-down, its options. "
-            "Left out: a wired input, and what PixlStash already has a control "
-            "for or decides itself (the prompts, the seeds, a picture batch, a "
-            "picture input, a model or LoRA loader's file and strengths, the "
-            "save node, a credential). `exposed` marks the ones that are "
+            "Left out: a wired input, text of several lines, and what "
+            "PixlStash already has a control for or decides itself (the "
+            "prompts, the seeds, a picture batch, a picture loader, a model or "
+            "LoRA loader's file and strengths, the save node, a credential). "
+            "`exposed` marks the ones that are "
             "parameters already; any other becomes one by naming its address "
             "in `PUT /workflows/{workflow_id}/defaults`, and is asked for by "
             "the Run form once `PUT /workflows/{workflow_id}/pins` names it."

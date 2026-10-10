@@ -199,7 +199,16 @@ _FORM_GRAPH = {
             "max_tokens": 77,
             "notes": "x" * 50,
             "mode": {"nested": True},
+            "verse": "one line\nand another",
+            "a/b": 1,
+            "ratio": 2,
         },
+    },
+    "10": {"class_type": "LoadImage", "inputs": {"image": "in.png", "upload": "image"}},
+    # Told apart from node 8 by nothing the labels below can see.
+    "11": {
+        "class_type": "ImageScaleBy",
+        "inputs": {"upscale_method": "bicubic", "scale_by": 3.0, "image": ["10", 0]},
     },
     "4": {
         "class_type": "SaveImage",
@@ -228,6 +237,7 @@ _FORM_INFO = {
 
 def _form(object_info=_FORM_INFO, exposed=(), core=None, max_text=2000):
     labels = {node_id: f"label-{node_id}" for node_id in _FORM_GRAPH}
+    labels["11"] = labels["8"]
     nodes = run_service.form_inputs(
         _FORM_GRAPH, labels, core or {}, object_info, set(exposed), max_text
     )
@@ -239,7 +249,11 @@ def _form(object_info=_FORM_INFO, exposed=(), core=None, max_text=2000):
 
 
 def test_form_inputs_leave_out_what_pixlstash_already_sets():
-    """Wrong if a prompt, seed, batch, model, LoRA, saver or key is offered."""
+    """Wrong if a prompt, seed, batch, model, LoRA, saver, picture or key is offered.
+
+    Nor text of several lines (a row edits one), a name the address cannot
+    carry, or the twin of a node already listed: one write reaches both.
+    """
     rows = _form()
     assert set(rows) == {
         ("3", "steps"),
@@ -249,6 +263,7 @@ def test_form_inputs_leave_out_what_pixlstash_already_sets():
         ("8", "scale_by"),
         ("9", "max_tokens"),
         ("9", "notes"),
+        ("9", "ratio"),
     }
     # Text longer than a default may hold could not be stored, so is not offered.
     assert ("9", "notes") not in _form(max_text=10)
@@ -266,6 +281,10 @@ def test_form_inputs_are_typed_and_listed_from_object_info():
     assert rows[("8", "scale_by")]["kind"] == "number"
     # A node ComfyUI does not declare, and any node when it did not answer.
     assert rows[("9", "max_tokens")]["kind"] is None
+    # A list of numbers names no choice a row could offer: untyped, not text.
+    listed = {"SomePackNode": {"input": {"required": {"ratio": [[1, 2, 4], {}]}}}}
+    ratio = _form(object_info=listed)[("9", "ratio")]
+    assert (ratio["kind"], ratio["options"]) == (None, None)
     offline = _form(object_info=None)[("8", "upscale_method")]
     assert (offline["kind"], offline["options"]) == (None, None)
 
