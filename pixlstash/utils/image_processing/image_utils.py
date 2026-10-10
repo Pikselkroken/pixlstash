@@ -94,13 +94,13 @@ class ImageUtils:
     def extract_embedded_metadata(file_path: str) -> dict:
         """Extract embedded EXIF and PNG metadata from an image file.
 
+        A video answers with its container's tags instead, at the top level
+        (``VideoUtils.extract_embedded_metadata``).
+
         Results are cached in memory keyed by (file_path, mtime) so repeated
         calls for the same unchanged file (e.g. on every overlay open) are free.
         """
         if not file_path or not os.path.exists(file_path):
-            return {}
-        # Pillow cannot open video files - skip metadata extraction for them.
-        if VideoUtils.is_video_file(file_path):
             return {}
         try:
             mtime = os.stat(file_path).st_mtime
@@ -111,6 +111,9 @@ class ImageUtils:
     @staticmethod
     @functools.lru_cache(maxsize=512)
     def _extract_embedded_metadata_cached(file_path: str, mtime: float) -> dict:
+        # Pillow cannot open a video; its tags are read off the container.
+        if VideoUtils.is_video_file(file_path):
+            return VideoUtils.extract_embedded_metadata(file_path)
         metadata = {}
         try:
             with Image.open(file_path) as img:

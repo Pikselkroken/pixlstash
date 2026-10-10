@@ -24,7 +24,6 @@ from pixlstash.utils.comfyui_utilities import (
     is_api_format,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.workflow_ids import tagged_workflow_id
 
 
@@ -160,13 +159,6 @@ class ComfyUIExtractionTask(BaseTask):
 
             if not resolved or not os.path.exists(resolved):
                 # Write the sentinel so the finder never re-queues this picture.
-                updates.append((pic.id, None, "[]", "[]", False, write_comfyui))
-                self._record(workflow_updates, pic.id, None, revisit)
-                checked += 1
-                continue
-
-            if VideoUtils.is_video_file(resolved):
-                # Videos cannot contain ComfyUI metadata; mark as done.
                 updates.append((pic.id, None, "[]", "[]", False, write_comfyui))
                 self._record(workflow_updates, pic.id, None, revisit)
                 checked += 1
@@ -368,8 +360,8 @@ class ComfyUIExtractionTask(BaseTask):
 
         The rule the two outcomes turn on: **a property of the picture marks it
         scanned; a failure of our own machinery does not.** No graph, an
-        unreadable file, a video and a graph the hash layer refuses are all
-        facts about the picture and will not change on a re-read, so the marker
+        unreadable file and a graph the hash layer refuses are all facts about
+        the picture and will not change on a re-read, so the marker
         goes down and the finder stops offering it. A hub that could not be
         written is neither, so the picture is left unmarked -- "this could not
         be filed" and "this picture has no workflow" must never be the same row.
