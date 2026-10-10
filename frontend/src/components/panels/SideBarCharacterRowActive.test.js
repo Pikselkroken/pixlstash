@@ -90,6 +90,7 @@ vi.mock("vue-router", async () => {
 });
 
 import { isReadOnly, sessionContext } from "../../utils/apiClient";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import SideBar from "./SideBar.vue";
@@ -119,7 +120,7 @@ function respond(url) {
   return { data: [] };
 }
 
-async function mountSidebar({ docked = false } = {}) {
+async function mountSidebar({ docked = false, teleport = docked } = {}) {
   if (docked) useSidebarStore().sidebarDocked = true;
   const options = {
     shallow: true,
@@ -128,7 +129,7 @@ async function mountSidebar({ docked = false } = {}) {
       config: {
         compilerOptions: { isCustomElement: (tag) => tag.startsWith("v-") },
       },
-      ...(docked ? { stubs: { teleport: false } } : {}),
+      ...(teleport ? { stubs: { teleport: false } } : {}),
     },
   };
   if (docked) options.attachTo = document.body;
@@ -388,6 +389,181 @@ describe("the docked library menu", () => {
     expect(document.querySelector("#sidebar-project-menu")).toBeNull();
     expect(document.activeElement).toBe(trigger.element);
 
+    wrapper.unmount();
+  });
+});
+
+describe("Create with LoRA… in a person's or a set's context menu", () => {
+  // The row opened the Run popup on anybody, and the popup then said there
+  // was no LoRA to run. It is now live only once a LoRA is known to be
+  // attached to the person or set the menu was opened on.
+  const PORTRAITS = { id: 4, name: "Portraits", picture_count: 2 };
+  const LORA = { sha256: "a".repeat(64), name: "ada-v1" };
+  const NO_LORA =
+    "No LoRA is attached to Ada. Assign one from the Models shelf.";
+
+  /** Right-click `row` and return the menu's Create with LoRA… button. */
+  async function loraItem(row) {
+    await row.trigger("contextmenu");
+    await flushPromises();
+    return loraButton();
+  }
+
+  /**
+   * The row as it is now: re-queried, since a re-render may replace it. The
+   * menu is teleported to <body>, so it is not under the wrapper.
+   */
+  function loraButton() {
+    return Array.from(
+      document.querySelectorAll(".sidebar-ctx-menu .ctx-item"),
+    ).find((el) => /Create with LoRA|No LoRA attached/.test(el.textContent));
+  }
+
+  function itemTip(el) {
+    return el.querySelector("tooltip-stub")?.getAttribute("text");
+  }
+
+  /** Serve `/adapters` from `answer(params)`; everything else as before. */
+  function serveAdapters(answer) {
+    apiGet.mockImplementation((url, config) => {
+      const u = String(url ?? "");
+      if (u.includes("/adapters")) {
+        return Promise.resolve(answer(config?.params ?? {})).then((rows) => ({
+          data: { adapters: rows },
+        }));
+      }
+      if (u.includes("/picture_sets")) {
+        return Promise.resolve({ data: [PORTRAITS] });
+      }
+      return Promise.resolve(respond(url));
+    });
+  }
+
+  beforeEach(() => {
+    useFilterStore().comfyuiConfigured = true;
+  });
+
+  it("is disabled, with the reason, for a person with no LoRA", async () => {
+    serveAdapters(() => []);
+    const wrapper = await mountSidebar({ teleport: true });
+    const item = await loraItem(characterRow(wrapper, ADA.name));
+
+    expect(item.disabled).toBe(true);
+    // Said in the row itself, not only in a tooltip a keyboard cannot reach.
+    expect(item.textContent).toContain("No LoRA attached");
+    expect(itemTip(item)).toBe(NO_LORA);
+    // Both attachable file kinds were asked about, for this person.
+    const asked = apiGet.mock.calls
+      .filter(([url]) => String(url).includes("/adapters"))
+      .map(([, config]) => config.params);
+    expect(asked).toEqual([
+      { file_kind: "adapter", character_id: ADA.id },
+      { file_kind: "unknown", character_id: ADA.id },
+    ]);
+    wrapper.unmount();
+  });
+
+  it("is live for a person with a LoRA attached", async () => {
+    serveAdapters((params) => (params.file_kind === "adapter" ? [LORA] : []));
+    const wrapper = await mountSidebar({ teleport: true });
+    const item = await loraItem(characterRow(wrapper, ADA.name));
+
+    expect(item.disabled).toBe(false);
+    expect(item.textContent).toContain("Create with LoRA…");
+    expect(itemTip(item)).toBe("Run a workflow with Ada's LoRA");
+    wrapper.unmount();
+  });
+
+  it("counts a LoRA the shelf has not classified", async () => {
+    serveAdapters((params) => (params.file_kind === "unknown" ? [LORA] : []));
+    const wrapper = await mountSidebar({ teleport: true });
+    const item = await loraItem(characterRow(wrapper, ADA.name));
+
+    expect(item.disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("stays disabled until the answer lands, and when it cannot be read", async () => {
+    let fail;
+    serveAdapters(() => new Promise((_, reject) => (fail = reject)));
+    const wrapper = await mountSidebar({ teleport: true });
+    const item = await loraItem(characterRow(wrapper, ADA.name));
+
+    expect(item.disabled).toBe(true);
+    expect(itemTip(item)).toBe("Checking for an attached LoRA…");
+
+    fail(new Error("shelf unavailable"));
+    await flushPromises();
+    expect(loraButton().disabled).toBe(true);
+    expect(itemTip(loraButton())).toBe("Could not read the Models shelf.");
+    wrapper.unmount();
+  });
+
+  it("does not let a late answer for one person enable another's row", async () => {
+    // Ada's read is still out when the menu is reopened on Grace, who has no
+    // LoRA. Ada's answer must not make Grace's row live.
+    const pending = [];
+    serveAdapters((params) =>
+      params.character_id === ADA.id
+        ? new Promise((resolve) => pending.push(resolve))
+        : [],
+    );
+    const wrapper = await mountSidebar({ teleport: true });
+    await loraItem(characterRow(wrapper, ADA.name));
+    await loraItem(characterRow(wrapper, GRACE.name));
+    pending.forEach((resolve) => resolve([LORA]));
+    await flushPromises();
+
+    expect(loraButton().disabled).toBe(true);
+    expect(itemTip(loraButton())).toBe(
+      "No LoRA is attached to Grace. Assign one from the Models shelf.",
+    );
+    wrapper.unmount();
+  });
+
+  it("makes no read while the row is not offered, and never fails open", async () => {
+    // ComfyUI's configuration lands after start-up. A menu opened before it
+    // has made no read, so the row that then appears must not be live, and
+    // must not carry the answer the last menu got.
+    serveAdapters(() => [LORA]);
+    const wrapper = await mountSidebar({ teleport: true });
+    expect((await loraItem(characterRow(wrapper, GRACE.name))).disabled).toBe(
+      false,
+    );
+    apiGet.mockClear();
+
+    useFilterStore().comfyuiConfigured = false;
+    expect(await loraItem(characterRow(wrapper, ADA.name))).toBeUndefined();
+    expect(
+      apiGet.mock.calls.filter(([url]) => String(url).includes("/adapters")),
+    ).toEqual([]);
+
+    useFilterStore().comfyuiConfigured = true;
+    await flushPromises();
+    expect(loraButton().disabled).toBe(true);
+    expect(itemTip(loraButton())).toBe("Checking for an attached LoRA…");
+    wrapper.unmount();
+  });
+
+  it("follows the same rule on a picture set", async () => {
+    let attached = [];
+    serveAdapters((params) =>
+      params.set_id === PORTRAITS.id && params.file_kind === "adapter"
+        ? attached
+        : [],
+    );
+    const wrapper = await mountSidebar({ teleport: true });
+    // `characterRow` finds a row by its tooltip, which a set's row shares.
+    const row = characterRow(wrapper, PORTRAITS.name);
+
+    const item = await loraItem(row);
+    expect(item.disabled).toBe(true);
+    expect(itemTip(item)).toBe(
+      "No LoRA is attached to Portraits. Assign one from the Models shelf.",
+    );
+
+    attached = [LORA];
+    expect((await loraItem(row)).disabled).toBe(false);
     wrapper.unmount();
   });
 });
