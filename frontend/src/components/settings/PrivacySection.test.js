@@ -73,7 +73,7 @@ beforeEach(() => {
 describe("ghost retention", () => {
   it("shows the three positions and a count on each purge", async () => {
     const wrapper = await mountPane();
-    for (const label of ["Off", "Covered only", "On"]) {
+    for (const label of ["Never", "While matched", "Always"]) {
       expect(button(wrapper, label)).toBeTruthy();
     }
     expect(button(wrapper, "Purge 12")).toBeTruthy();
@@ -85,7 +85,7 @@ describe("ghost retention", () => {
       payload({ workflow_ghost_retention: "off" }),
     );
     const wrapper = await mountPane();
-    await button(wrapper, "Off").trigger("click");
+    await button(wrapper, "Never").trigger("click");
     await flushPromises();
     expect(api.setGhostRetention).toHaveBeenCalledWith("off");
   });
@@ -93,9 +93,9 @@ describe("ghost retention", () => {
   it("puts the saved position back when the save fails", async () => {
     api.setGhostRetention.mockRejectedValue(new Error("offline"));
     const wrapper = await mountPane();
-    await button(wrapper, "On").trigger("click");
+    await button(wrapper, "Always").trigger("click");
     await flushPromises();
-    expect(button(wrapper, "Covered only").attributes("aria-checked")).toBe(
+    expect(button(wrapper, "While matched").attributes("aria-checked")).toBe(
       "true",
     );
     expect(wrapper.find("[role='alert']").text()).toContain(
@@ -112,14 +112,14 @@ describe("ghost retention", () => {
       payload({ workflow_ghost_retention: "on" }),
     );
     const wrapper = await mountPane();
-    await button(wrapper, "Off").trigger("click");
-    expect(button(wrapper, "On").attributes("disabled")).toBeUndefined();
-    await button(wrapper, "Covered only").trigger("click");
-    await button(wrapper, "On").trigger("click");
+    await button(wrapper, "Never").trigger("click");
+    expect(button(wrapper, "Always").attributes("disabled")).toBeUndefined();
+    await button(wrapper, "While matched").trigger("click");
+    await button(wrapper, "Always").trigger("click");
     finish(payload({ workflow_ghost_retention: "off" }));
     await flushPromises();
     expect(api.setGhostRetention.mock.calls).toEqual([["off"], ["on"]]);
-    expect(button(wrapper, "On").attributes("aria-checked")).toBe("true");
+    expect(button(wrapper, "Always").attributes("aria-checked")).toBe("true");
   });
 
   it("purges picture ghosts only after the confirm, then re-reads the count", async () => {

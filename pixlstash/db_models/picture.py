@@ -342,7 +342,7 @@ class Picture(SQLModel, table=True):
     # The third tier: that recipe with ONE set of parameters, the prompt
     # included and the seed excluded (a generation is an instance plus a seed).
     # Two pictures share an instance exactly when they share this value, which
-    # is what "Covered only" asks, and the join to the hub's per-library
+    # is what "While matched" asks, and the join to the hub's per-library
     # ``workflow_recipe_instance`` row and this picture's ``generation``.
     workflow_instance_hash: Optional[str] = Field(
         default=None,

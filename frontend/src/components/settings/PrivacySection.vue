@@ -1,5 +1,5 @@
 <template>
-  <SettingsSection title="Privacy">
+  <SettingsSection title="Privacy" first>
     <SettingsTwoCol>
       <SettingsRow
         label="Check for updates"
@@ -96,7 +96,7 @@
   <SettingsSection
     v-if="ghosts"
     title="Ghosts"
-    desc="A ghost is what PixlStash keeps of something that is gone: the thumbnail and prompt of a permanently deleted picture, kept with the workflow that made it so it can be made again, or the name of a model that is not on your shelf. Workflows › Ghosts lists the workflows that hold them."
+    desc="What is left of pictures you deleted for good. Workflows › Ghosts lists their workflows."
   >
     <SettingsRow
       label="Keep picture ghosts"
@@ -126,7 +126,7 @@
     <SettingsRow
       v-if="ghosts.model_ghosts != null"
       label="Model ghosts"
-      sub="Names and digests of models that are not on your shelf, as workflows remember them, including models from imported pictures you never added. Forgotten, the workflows still group and read as names forgotten."
+      sub="Names and file hashes of models that are not on your shelf, including models from imported pictures you never added."
     >
       <AppButton
         variant="secondary"
@@ -275,18 +275,18 @@ const ghostError = ref("");
 const purgeKind = ref(null);
 
 const retentionOptions = [
-  { id: "off", label: "Off" },
-  { id: "covered", label: "Covered only" },
-  { id: "on", label: "On" },
+  { id: "off", label: "Never" },
+  { id: "covered", label: "While matched" },
+  { id: "on", label: "Always" },
 ];
 
 // Saving a position destroys nothing already kept (the server says so too), so
-// Off must not read as a purge: somebody choosing it for privacy would believe
+// Never must not read as a purge: somebody choosing it for privacy would believe
 // the ghosts were gone.
 const RETENTION_SUBS = {
   off: "From now on, none: a permanently deleted picture cannot be made again. Ghosts already kept stay until you purge them below.",
   covered:
-    "Only while a picture you kept has the same workflow and prompt. Deleting the last one removes the ghosts it covered.",
+    "Only while a picture you kept has the same workflow and prompt. Deleting the last one removes the ghosts it matched.",
   on: "Every permanently deleted picture, until you purge them below.",
 };
 
@@ -446,7 +446,7 @@ watch(
 }
 
 .pv__note {
-  margin: var(--space-5) 0 0;
+  margin: var(--space-2) 0 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
 }

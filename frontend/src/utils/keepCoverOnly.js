@@ -88,9 +88,9 @@ export function keepRecipesOnlyLede(ghostRetention) {
  * assume wrongly: the setting is not per library, and undo does not reach it.
  */
 export const KEEP_EVERY_GHOST_NOTE =
-  "Turns on Keep picture ghosts (Settings › Privacy) for every library, so " +
-  "the thumbnail and prompt of anything you delete for good stay until you " +
-  "purge them. Ctrl+Z does not turn it back off.";
+  "Sets Keep picture ghosts (Settings › Privacy) to Always for every library, " +
+  "so the thumbnail and prompt of anything you delete for good stay until " +
+  "you purge them. Ctrl+Z does not undo that.";
 
 /**
  * The glyph, once: the inverse of the mdi-layers-plus the user pressed to build
@@ -458,7 +458,7 @@ export function keepRecipesOnlyStayingReasons(preview) {
       // double negative nobody parsed on the first read.
       text:
         preview.ghost_retention === "off"
-          ? `${ghost.toLocaleString()} would keep nothing, because your ghost setting is Off.`
+          ? `${ghost.toLocaleString()} would keep nothing, because Keep picture ghosts is set to Never.`
           : ghost === 1
             ? "1 shares its prompt with no picture that stays, so your ghost setting would keep nothing of it."
             : `${ghost.toLocaleString()} share their prompt with no picture that stays, so your ghost setting would keep nothing of them.`,
