@@ -114,8 +114,13 @@ from pixlstash.services.workflow_parameters import (
     linked_size,
     size_inputs,
 )
-from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_TEXT_ENCODER, FILE_UNKNOWN
-from pixlstash.utils.known_base_models import fold
+from pixlstash.utils.adapter_header import (
+    FILE_ADAPTER,
+    FILE_CHECKPOINT,
+    FILE_TEXT_ENCODER,
+    FILE_UNKNOWN,
+)
+from pixlstash.utils.known_base_models import fold, identify, model_tile
 from pixlstash.utils.model_utils import (
     canonical_quant,
     derive_model_name,
@@ -246,6 +251,14 @@ class SlotModel:
     # file.
     sha256: Optional[str] = None
     base_model_family: Optional[str] = None
+    # The tile a model with no icon is drawn with
+    # (:func:`~pixlstash.utils.known_base_models.model_tile`): its name's one
+    # or two lines, the tab, the colour stops and the family icon. All
+    # ``None`` for a model of no known base model, which keeps the initials.
+    mark: Optional[list[str]] = None
+    mark_tab: Optional[str] = None
+    mark_colors: Optional[list[str]] = None
+    mark_icon: Optional[str] = None
     # The value the recipe recorded, as ``default_recipe.models[].filename``
     # spells it (a shelf loader's id included), so a client can tell which
     # slot a recipe model is by identity rather than by a derived name.
@@ -736,6 +749,8 @@ class ShelfMark:
     base_model_family: Optional[str] = None
     # The shelf row's own file, which is what a shelf loader's id names.
     filename: Optional[str] = None
+    # ``model_tile``'s answer for the row, or None.
+    tile: Optional[dict] = None
 
 
 # What a default recipe's shelf loader shows when its id names no shelf row any
@@ -795,25 +810,33 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
         placeholders = ",".join("?" * len(batch))
         for row in hub.fetchall(
             "SELECT id, icon_sha256, base_model, base_model_canonical, "
-            "quant, sha256, filename "
+            "quant, sha256, filename, display_name, file_kind "
             f"FROM model WHERE id IN ({placeholders})",
             tuple(batch),
         ):
+            canonical = row["base_model_canonical"] or fold(row["base_model"])
+            tile = model_tile(
+                canonical,
+                row["filename"],
+                row["display_name"],
+                checkpoint=row["file_kind"] == FILE_CHECKPOINT,
+            )
             for value in single[row["id"]]:
                 pictures[value] = (
                     row["icon_sha256"],
                     row["base_model"],
-                    row["base_model_canonical"] or fold(row["base_model"]),
+                    canonical,
                     canonical_quant(row["quant"]),
                     row["sha256"],
                     base_model_family(row),
                     row["filename"],
+                    tile,
                 )
     marks = {}
     for value, models in candidates.items():
         claimed = {titles.get(model_id) for model_id in models}
         title = claimed.pop() if len(claimed) == 1 and None not in claimed else None
-        marks[value] = ShelfMark(title, *pictures.get(value, (None,) * 7))
+        marks[value] = ShelfMark(title, *pictures.get(value, (None,) * 8))
     return marks
 
 
@@ -1017,17 +1040,17 @@ def _describe_slots(
             else:
                 name = next_name(slot)
                 filename = _slot_filename(widget, name, marks_by_name)
+                kind = _seedvr2_kind(
+                    str(slot.get("class_type") or ""), seedvr2_is_base
+                ) or (slot_kind(widget) if widget else "model")
                 figure.models.append(
                     SlotModel(
                         name=_derived(filename),
-                        kind=_seedvr2_kind(
-                            str(slot.get("class_type") or ""), seedvr2_is_base
-                        )
-                        or (slot_kind(widget) if widget else "model"),
+                        kind=kind,
                         label=str(slot.get("label") or "") or None,
                         filename=name,
                         **_mark_fields(
-                            marks_by_name.get((name or "").lower()), filename
+                            marks_by_name.get((name or "").lower()), filename, kind
                         ),
                     )
                 )
@@ -1041,7 +1064,11 @@ def _describe_slots(
         # the document, and there is no recipe to fill it.
         for widget, filename in recovered.get(card.workflow_key, ()):
             shown = _slot_filename(widget, filename, marks_by_name)
-            fields = _mark_fields(marks_by_name.get(filename.lower()), shown)
+            fields = _mark_fields(
+                marks_by_name.get(filename.lower()),
+                shown,
+                slot_kind(widget) if widget else "model",
+            )
             name = _derived(shown)
             if widget == "lora_name":
                 figure.loras.append(
@@ -1124,7 +1151,9 @@ def _fill_base_model(
             name=_derived(filename),
             kind=slot_kind(widget),
             filename=name,
-            **_mark_fields(marks_by_name.get(name.lower()), filename),
+            **_mark_fields(
+                marks_by_name.get(name.lower()), filename, slot_kind(widget)
+            ),
         )
     )
 
@@ -1190,12 +1219,18 @@ def _derived(name: Optional[str]) -> Optional[str]:
     return derive_model_name(name) or name
 
 
-def _mark_fields(mark: Optional[ShelfMark], name: Optional[str] = None) -> dict:
+def _mark_fields(
+    mark: Optional[ShelfMark], name: Optional[str] = None, kind: str = "model"
+) -> dict:
     """The shelf's fields for one model, as :class:`SlotModel` keywords.
 
-    Only ``quant`` for a model the shelf does not hold, so the slot keeps the
-    dataclass's own defaults rather than being told three times that a file
-    this machine has never scanned has no title, no picture and no base model.
+    Only ``quant`` and the tile for a model the shelf does not hold, so the
+    slot keeps the dataclass's own defaults rather than being told three times
+    that a file this machine has never scanned has no title, no picture and no
+    base model. The tile is the one the shelf would name from the filename
+    alone (``flux1-dev.sft`` is F1D), with *kind* saying whether the slot loads
+    a base model, so a workflow whose files live outside the shelf's folders
+    still draws named tiles.
 
     **``quant`` is the one field a card can answer without the shelf**, which
     is why it is computed here rather than left to the caller: the header wins
@@ -1206,7 +1241,9 @@ def _mark_fields(mark: Optional[ShelfMark], name: Optional[str] = None) -> dict:
     """
     quant = (mark.quant if mark else None) or quant_from_filename(name or "")
     if mark is None:
-        return {"quant": quant}
+        canonical, _source = identify((), (name,))
+        tile = model_tile(canonical, name, checkpoint=kind in BASE_MODEL_KINDS)
+        return {"quant": quant, **(tile or {})}
     return {
         "title": mark.title,
         "icon": mark.icon,
@@ -1215,6 +1252,7 @@ def _mark_fields(mark: Optional[ShelfMark], name: Optional[str] = None) -> dict:
         "quant": quant,
         "sha256": mark.sha256,
         "base_model_family": mark.base_model_family,
+        **(mark.tile or {}),
     }
 
 

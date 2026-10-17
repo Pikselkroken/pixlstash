@@ -1138,7 +1138,9 @@ the two sides have agreed:
    backend serves that document** with no mapping layer. Since #1623 it is one
    entry per workflow keyed `id`, and the fields are the ones in the `GET
    /workflows` row above; each slot is `{name, title, icon, base_model,
-   base_model_folded, sha256, base_model_family, kind, quant, slot_label}` with no `mark`, and the stack
+   base_model_folded, sha256, base_model_family, mark, mark_tab, mark_colors,
+   mark_icon, kind, quant, slot_label}` (the `mark*` fields are #1951's named
+   tile, not the pre-#1623 card mark), and the stack
    fields are gone. The historical notes below that speak of a card, a stack
    or a mark describe the contract before #1623.
 
@@ -1282,6 +1284,13 @@ the two sides have agreed:
    the card was read either. A client renders any empty row on a
    `variant_count: 0` card as unread; `checkpointUnread` and `lorasUnread` in
    `utils/workflowCard.js` are the shipped reading of it.
+
+   `mark`, `mark_tab`, `mark_colors` and `mark_icon` (#1951) are the tile the
+   server names for a slot of a known base model, the same four fields as on
+   its `GET /checkpoints` or `GET /adapters` row
+   (`known_base_models.model_tile`), so a client draws the tile without a
+   table of its own; all null keeps the generated mark. The card draws it; the
+   ComfyUI pack does not read these fields yet.
 
    `icon`, `base_model` and `base_model_folded` are served on **every** card's
    slots, not only

@@ -319,3 +319,69 @@ describe("ModelMark", () => {
     expect(mountMark().find(".mmark").classes()).not.toContain("mmark--ring");
   });
 });
+
+// The named tile (#1951): the server's name for a model of a known base
+// model, drawn only where the host asks (the workflow card).
+describe("ModelMark, named", () => {
+  const named = {
+    mark: ["SDXL", "1.0"],
+    mark_tab: "REFI",
+    mark_colors: ["#9d39ff", "#e80000"],
+    mark_icon: null,
+  };
+  const mountNamed = (overrides, props = {}) =>
+    mount(ModelMark, {
+      props: { row: row({ ...named, ...overrides }), named: true, ...props },
+    });
+
+  it("prints the name's lines and the role on the tab, not the initials", () => {
+    const wrapper = mountNamed();
+    const lines = wrapper.findAll(".mmark-name > span").map((s) => s.text());
+    expect(lines).toEqual(["SDXL", "1.0"]);
+    expect(wrapper.find(".mmark-initials").exists()).toBe(false);
+    expect(wrapper.find(".mmark-version").text()).toBe("REFI");
+    expect(wrapper.find(".mmark-named").attributes("style")).toContain(
+      "linear-gradient(135deg, rgb(157, 57, 255), rgb(232, 0, 0))",
+    );
+  });
+
+  it("is the shelf's generated mark where the host does not ask for it", () => {
+    const wrapper = mount(ModelMark, { props: { row: row(named) } });
+    expect(wrapper.find(".mmark-named").exists()).toBe(false);
+    expect(wrapper.find(".mmark-initials").text()).toBe("CS");
+  });
+
+  it("keeps the generated mark for a row the server named nothing for", () => {
+    const wrapper = mountNamed({ mark: null, mark_tab: null });
+    expect(wrapper.find(".mmark-named").exists()).toBe(false);
+    expect(wrapper.find(".mmark-initials").text()).toBe("CS");
+  });
+
+  it("draws a few-step tab as a bolt with the step count", () => {
+    const wrapper = mountNamed({ mark: ["Qwen", "LI"], mark_tab: "⚡4" });
+    const tab = wrapper.find(".mmark-version");
+    expect(tab.find(".mmark-bolt").text()).toBe("mdi-lightning-bolt");
+    expect(tab.text()).toBe("mdi-lightning-bolt4");
+  });
+
+  it("lays a family icon under one line of the name, and the tab over it", () => {
+    const wrapper = mountNamed({
+      mark: ["CHRO"],
+      mark_tab: "HD",
+      mark_colors: ["#7a3b12"],
+      mark_icon: "chroma",
+    });
+    expect(wrapper.find(".mmark-named img").attributes("src")).toContain(
+      "chroma",
+    );
+    expect(wrapper.find(".mmark-name--band").text()).toBe("CHRO");
+    expect(wrapper.find(".mmark-version").text()).toBe("HD");
+  });
+
+  it("lets the owner's own picture of the model win, tab and all", () => {
+    const wrapper = mountNamed({ icon_sha256: "a".repeat(64) });
+    expect(wrapper.find("img").attributes("src")).toBe(icon("a".repeat(64)));
+    expect(wrapper.find(".mmark-named").exists()).toBe(false);
+    expect(wrapper.find(".mmark-version").exists()).toBe(false);
+  });
+});

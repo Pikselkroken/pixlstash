@@ -35,6 +35,29 @@
         :color="ring.iconHue || undefined"
         >{{ ring.icon }}</v-icon
       >
+      <!-- The named tile (#1951): a family icon fills it and carries the
+           name across its top; otherwise the name sits on the maker's
+           colour. -->
+      <span
+        v-else-if="tile"
+        class="mmark-named"
+        :style="{
+          background: tile.background,
+          color: mark.ink,
+          '--mmark-name': tile.scale,
+        }"
+      >
+        <img v-if="tile.icon" class="mmark-img" :src="tile.icon.url" alt="" />
+        <span
+          class="mmark-name"
+          :class="{
+            'mmark-name--over': tile.icon,
+            'mmark-name--band': tile.icon?.band,
+          }"
+        >
+          <span v-for="(line, i) in tile.lines" :key="i">{{ line }}</span>
+        </span>
+      </span>
       <span
         v-else
         class="mmark-initials"
@@ -47,8 +70,22 @@
     </span>
     <!-- Outside the face, because the face clips: the tab sits over the
          corner rather than inside it. -->
+    <!-- The named tile's tab: a role, or a bolt for a few-step model with a
+         speed LoRA's step count. Drawn over a family icon too. -->
     <span
-      v-if="showVersion"
+      v-if="showTab"
+      class="mmark-version mmark-tab"
+      aria-hidden="true"
+      :style="{
+        backgroundColor: mark.ink,
+        color: tile.edge,
+        borderColor: tile.edge,
+      }"
+      ><v-icon v-if="tile.tab.bolt" class="mmark-bolt">mdi-lightning-bolt</v-icon
+      >{{ tile.tab.text }}</span
+    >
+    <span
+      v-else-if="showVersion"
       class="mmark-version"
       aria-hidden="true"
       :style="{
@@ -90,6 +127,7 @@ import { characterThumbnailUrl } from "../../api/characters";
 import { modelIconUrl } from "../../api/modelIcons";
 import { pictureSetThumbnailUrl } from "../../api/pictureSets";
 import { generatedMark } from "../../utils/modelShelf";
+import { namedTile } from "../../utils/modelTile";
 import Tooltip from "./Tooltip.vue";
 
 /** entity type → the resource module that addresses its thumbnail. */
@@ -117,6 +155,13 @@ const props = defineProps({
    * workflow card, `markDetails`).
    */
   detail: { type: String, default: null },
+  /**
+   * Draw the server's named tile (`mark`, `mark_tab`, `mark_colors`,
+   * `mark_icon`) where the row has one, for a host that prints no name beside
+   * the mark (the workflow card). The shelf leaves it off: its rows say the
+   * name already.
+   */
+  named: { type: Boolean, default: false },
 });
 
 const iconUrl = computed(() =>
@@ -201,10 +246,25 @@ const faceUrl = computed(() => {
 
 const mark = computed(() => generatedMark(props.row));
 
+const tile = computed(() =>
+  props.named ? namedTile(props.row, mark.value.color) : null,
+);
+
+// Like the version, the tab belongs to the tile and not to a picture of the
+// model's own or a set's icon.
+const showTab = computed(
+  () => Boolean(tile.value?.tab) && !faceUrl.value && !props.ring?.icon,
+);
+
 // The version belongs to the generated mark: a picture or a set's icon in the
-// square says nothing about which version the file is.
+// square says nothing about which version the file is. A named tile carries
+// its version in its name.
 const showVersion = computed(
-  () => Boolean(mark.value.version) && !faceUrl.value && !props.ring?.icon,
+  () =>
+    Boolean(mark.value.version) &&
+    !tile.value &&
+    !faceUrl.value &&
+    !props.ring?.icon,
 );
 
 const ringClass = computed(() =>
@@ -272,7 +332,7 @@ const ringClass = computed(() =>
 }
 
 /* Two lines of two, packed into the top-start corner so the version tab over
-   the bottom-end one covers no letter: 0.36 of the card's 28px mark is 10px,
+   the bottom-end one covers no letter: 0.36 of the card's 30px mark is 11px,
    and two lines of it at 0.9 end 2px above the tab. Semibold, because 10px
    at the single line's medium weight thins out on the tile. Measured in a
    browser against the widest pair (WM beside a two-digit tab). */
@@ -284,6 +344,58 @@ const ringClass = computed(() =>
   font-size: calc(var(--entity-thumb) * 0.36);
   font-weight: var(--weight-semibold);
   line-height: 0.9;
+}
+
+/* The named tile (#1951). The name is packed into the top-start corner like
+   the two-line initials, so the tab over the bottom-end one covers none of
+   it, and sized by `namedTile` as a share of the tile's line (the tile less
+   its padding), so it fills the line at whatever size the mark is drawn.
+   Never below 8.25px, a FIXED floor and the design's own value rather than a
+   step of the type ramp: the smallest a name stays legible on the tile.
+   `model-tile-names.spec.js` holds every known name to it. */
+.mmark-named {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.mmark-name {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  box-sizing: border-box;
+  padding: var(--space-1) 0 0 var(--space-1);
+  font-size: max(
+    8.25px,
+    calc((var(--entity-thumb) - 2 * var(--space-1)) * var(--mmark-name))
+  );
+  /* The face `namedTile` measures, named rather than inherited: the card sits
+     inside Vuetify's application font, which is not the one measured. */
+  font-family: var(--font-ui);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: 0.9;
+  white-space: nowrap;
+}
+
+/* Across the top of a family icon, whose motif sits in the lower two-thirds
+   so the name never covers it. */
+.mmark-name--over {
+  position: absolute;
+  inset: 0 0 auto 0;
+  padding-bottom: var(--space-1);
+  line-height: 0.95;
+}
+
+/* Over a busy picture, a solid band: a gradient left the name illegible over
+   the eye's stripes on the card. */
+.mmark-name--band {
+  background: var(--scrim-photo-strong);
+}
+
+.mmark-bolt {
+  font-size: var(--text-2xs);
 }
 
 /* The version tab (the mark design round's D2): the tile's own pair inverted,
@@ -308,6 +420,12 @@ const ringClass = computed(() =>
   font-size: var(--text-2xs);
   font-weight: var(--weight-bold);
   line-height: 1;
+}
+
+/* A named tile's tab, a step down: its widest word, BASE, is 29.4px at 10px
+   in DejaVu Sans (32.3px at 11px), inside the card's 30px tile. */
+.mmark-tab {
+  font-size: var(--text-3xs);
 }
 
 /* ── The assignment ring ───────────────────────────────────────────────────

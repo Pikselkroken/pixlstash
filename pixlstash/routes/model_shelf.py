@@ -172,6 +172,7 @@ from pixlstash.utils.known_base_models import (
     family_label,
     family_named,
     fold,
+    model_tile,
 )
 from pixlstash.utils.model_utils import canonical_quant, derive_model_name
 from pixlstash.utils.path_utils import path_is_within
@@ -396,6 +397,39 @@ class ModelResponse(BaseModel):
             "base model (`flux1-dev.safetensors`), that model's label, to show "
             "where the row has no name of its own. Never set for an adapter, "
             "whose base model is not its name, nor from a guessed base model."
+        ),
+    )
+    mark: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "The short name a workflow card's tile prints for a model with no "
+            'icon, on one or two lines read together: `["SDXL", "1.0"]` '
+            'for the release, `["SDXL", "JU9"]` for a fine-tune or LoRA '
+            "made for it. Null for a model of no known base model, which "
+            "keeps the generated initials. Worked out by the server "
+            "(`known_base_models.model_tile`) so every client draws the same."
+        ),
+    )
+    mark_tab: Optional[str] = Field(
+        default=None,
+        description=(
+            "The tile's tab: a role (`BASE`, `REFI`, `EDIT`, `RAW`, `HD`), or "
+            "`⚡` for a few-step model followed by a speed LoRA's step count "
+            "(`⚡4`). Null for no tab."
+        ),
+    )
+    mark_colors: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "The tile's colour, one `#rrggbb` stop or a gradient's two: the "
+            "maker's, white text clearing 4:1 on each. Null keeps the hashed hue."
+        ),
+    )
+    mark_icon: Optional[str] = Field(
+        default=None,
+        description=(
+            "The family icon a base checkpoint's tile wears (`chroma`, "
+            "`pony`, `illustrious`), or null. Never on a LoRA or fine-tune."
         ),
     )
     family: Optional[str] = Field(
@@ -1625,6 +1659,12 @@ def _to_response(
         attached if row["file_kind"] in (FILE_ADAPTER, FILE_UNKNOWN) else [],
         character_names,
     )
+    tile = model_tile(
+        row["base_model_canonical"] or fold(row["base_model"]),
+        row["filename"],
+        row["display_name"],
+        checkpoint=row["file_kind"] == FILE_CHECKPOINT,
+    )
     return ModelResponse(
         id=int(row["id"]),
         sha256=row["sha256"],
@@ -1638,6 +1678,7 @@ def _to_response(
         base_model_canonical=row["base_model_canonical"],
         base_model_source=row["base_model_source"],
         matched_name=_matched_name(row),
+        **(tile or {}),
         family=served_family(row),
         base_model_family=base_model_family(row),
         base_model_family_label=family_label(base_model_family(row)),

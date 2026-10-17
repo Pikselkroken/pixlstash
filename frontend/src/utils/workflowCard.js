@@ -326,11 +326,14 @@ export function loraGroups(card) {
  * (`Lightning 4steps V1.0` is LI, `Refiner` RE). A name with nothing left takes
  * it from the words after its initials (`qwen image edit 2511` is ED). Only the
  * tile changes: tooltips and the accessible name still say the whole name.
+ *
+ * A row the server named (`mark`, #1951) draws its own name instead and takes
+ * no second line here.
  */
 export function markDetails(rows) {
   const lookalikes = new Map();
   rows.forEach((row, i) => {
-    if (row.icon_sha256) return;
+    if (row.icon_sha256 || row.mark?.length) return;
     const { color, initials, version } = generatedMark(row);
     const key = `${color}|${initials}|${version}`;
     lookalikes.set(key, [...(lookalikes.get(key) ?? []), i]);

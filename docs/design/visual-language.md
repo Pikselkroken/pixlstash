@@ -101,6 +101,7 @@ why nested labels wander. **Size text from the ramp, in rem, full stop.**
 
 | Token | Size | Use |
 |---|---|---|
+| `--text-3xs` | 10px | a role word on a workflow card tile's tab (BASE fits a 30px tile in DejaVu Sans); nothing else |
 | `--text-2xs` | 11px | uppercase section labels, badge counts |
 | `--text-xs` | 12px | captions, metadata, dense secondary text |
 | `--text-sm` | 13px | secondary body, toolbar labels |

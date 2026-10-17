@@ -8,16 +8,23 @@ lost or duplicated in tab-completion.
 
 import re
 
+import pytest
+
+from pixlstash.services.workflow_card_service import _mark_fields
 from pixlstash.utils.known_base_models import (
     COMPANION_LAYOUTS,
+    FAMILY_ICONS,
     FAMILY_LABELS,
     KNOWN_BASE_MODELS,
+    KNOWN_FINE_TUNES,
+    MAKERS,
     _norm,
     completions,
     family_named,
     family_of,
     fold,
     modality_of,
+    model_tile,
     suggest,
 )
 
@@ -148,3 +155,398 @@ def test_every_family_has_one_label_that_names_it_back():
     for name, info in KNOWN_BASE_MODELS.items():
         assert family_named(name) == info["family"], name
     assert family_named("not a family") is None
+
+
+# --- Tiles (#1951) -----------------------------------------------------------
+
+
+def test_every_open_base_model_has_a_tile_and_no_closed_one_does():
+    """A closed model never exists as a file, so nothing draws it."""
+    for canonical, info in KNOWN_BASE_MODELS.items():
+        if info["family"] == "closed":
+            assert "mark" not in info, canonical
+            continue
+        assert 1 <= len(info["mark"]) <= 2, canonical
+        assert all(line and line.strip() == line for line in info["mark"])
+        assert info.get("maker") is None or info["maker"] in MAKERS, canonical
+        assert info.get("icon") is None or info["icon"] in FAMILY_ICONS, canonical
+
+
+def _contrast_with_white(hex_colour: str) -> float:
+    channels = [int(hex_colour[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [
+        c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels
+    ]
+    luminance = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    return 1.05 / (luminance + 0.05)
+
+
+def test_every_tile_colour_carries_white_text_at_four_to_one():
+    stops = [
+        *(stop for colours in MAKERS.values() for stop in colours),
+        *FAMILY_ICONS.values(),
+        *(stop for tile in KNOWN_FINE_TUNES.values() for stop in tile["colors"]),
+    ]
+    for stop in stops:
+        assert re.fullmatch(r"#[0-9a-f]{6}", stop), stop
+        assert _contrast_with_white(stop) >= 4.0, stop
+
+
+SDXL = ["#9d39ff", "#e80000"]
+GRAPHITE = ["#484c53"]
+
+
+@pytest.mark.parametrize(
+    ("canonical", "filename", "name", "checkpoint", "mark", "tab", "colours", "icon"),
+    [
+        # The release, told from its refiner by the role word in its filename.
+        (
+            "SDXL 1.0",
+            "sd_xl_base_1.0.safetensors",
+            None,
+            True,
+            ["SDXL", "1.0"],
+            "BASE",
+            SDXL,
+            None,
+        ),
+        (
+            "SDXL 1.0",
+            "sd_xl_refiner_1.0.safetensors",
+            None,
+            True,
+            ["SDXL", "1.0"],
+            "REFI",
+            SDXL,
+            None,
+        ),
+        # A fine-tune run together with its base's name is still a fine-tune.
+        (
+            "SDXL 1.0",
+            "sdxlUnstableDiffusers_v11.safetensors",
+            None,
+            True,
+            ["SDXL", "UN11"],
+            None,
+            SDXL,
+            None,
+        ),
+        # Juggernaut XL has a mark of its own, base model identified or not;
+        # a LoRA of that name is only named like it.
+        (
+            "SDXL 1.0",
+            "juggernautXL_v9.safetensors",
+            None,
+            True,
+            ["J"],
+            None,
+            ["#6b46c1"],
+            None,
+        ),
+        (
+            None,
+            "juggernautXL_v9.safetensors",
+            None,
+            True,
+            ["J"],
+            None,
+            ["#6b46c1"],
+            None,
+        ),
+        (
+            "SDXL 1.0",
+            "jugg.safetensors",
+            "Juggernaut XL v9",
+            False,
+            ["SDXL", "JU9"],
+            None,
+            SDXL,
+            None,
+        ),
+        # The version comes from the file; the role from the entry.
+        (
+            "Qwen-Image-Edit",
+            "qwen_image_edit_2511_bf16.safetensors",
+            None,
+            True,
+            ["Qwen", "2511"],
+            "EDIT",
+            ["#615ced"],
+            None,
+        ),
+        # A speed LoRA: its own initials, and its step count beside the bolt.
+        (
+            "Qwen-Image-Edit",
+            "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+            None,
+            False,
+            ["Qwen", "LI"],
+            "⚡4",
+            ["#615ced"],
+            None,
+        ),
+        (
+            "Qwen-Image-Edit",
+            "qwen_edit_2511_multiple_angles.safetensors",
+            None,
+            False,
+            ["Qwen", "MA"],
+            None,
+            ["#615ced"],
+            None,
+        ),
+        (
+            "FLUX.1 dev",
+            "flux1-dev-fp8.safetensors",
+            None,
+            True,
+            ["F1D"],
+            None,
+            GRAPHITE,
+            None,
+        ),
+        (
+            "FLUX.1 schnell",
+            "flux1-schnell.safetensors",
+            None,
+            True,
+            ["F1S"],
+            "⚡",
+            GRAPHITE,
+            None,
+        ),
+        (
+            "Z-Image Turbo",
+            "z_image_turbo_bf16.safetensors",
+            None,
+            True,
+            ["ZIT"],
+            "⚡",
+            ["#dc5100"],
+            None,
+        ),
+        # The base's own words, across the family, are not the LoRA's name;
+        # nor does its base being few-step make a LoRA one.
+        (
+            "Z-Image Turbo",
+            "zimage_turbo_clementine.safetensors",
+            None,
+            False,
+            ["ZIT", "CL"],
+            None,
+            ["#dc5100"],
+            None,
+        ),
+        # A role word that is the base model's own name is no tab.
+        (
+            "Z-Image Base",
+            "z_image_base_bf16.safetensors",
+            None,
+            True,
+            ["ZIB"],
+            None,
+            ["#dc5100"],
+            None,
+        ),
+        (
+            "Krea 2 Raw",
+            "krea2_raw.safetensors",
+            None,
+            True,
+            ["Krea", "2"],
+            "RAW",
+            GRAPHITE,
+            None,
+        ),
+        (
+            "Wan 2.2",
+            "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+            None,
+            True,
+            ["Wan", "2.2"],
+            None,
+            ["#dc5100"],
+            None,
+        ),
+        # Only the base checkpoint wears the family icon; its LoRA is a text
+        # tile in the icon's colour.
+        (
+            "Chroma1 HD",
+            "Chroma1-HD.safetensors",
+            None,
+            True,
+            ["CHRO"],
+            "HD",
+            ["#7a3b12"],
+            "chroma",
+        ),
+        (
+            "Chroma1 HD",
+            "chroma_ada.safetensors",
+            "Ada v3",
+            False,
+            ["CHRO", "AD3"],
+            None,
+            ["#7a3b12"],
+            None,
+        ),
+        # A fine-tune checkpoint is not one of the base's releases, so the
+        # role that tells those apart is not its tab.
+        (
+            "Chroma1 HD",
+            "chroma1_hd_myanime.safetensors",
+            None,
+            True,
+            ["CHRO", "MY"],
+            None,
+            ["#7a3b12"],
+            None,
+        ),
+        (
+            "Pony Diffusion V6 XL",
+            "ponyDiffusionV6XL_v6StartWithThisOne.safetensors",
+            None,
+            True,
+            ["PDXL"],
+            None,
+            ["#4b2373"],
+            "pony",
+        ),
+        (
+            "Pony V7",
+            "pony_v7_base.safetensors",
+            None,
+            True,
+            ["Pony"],
+            "V7",
+            ["#4b2373"],
+            "pony",
+        ),
+        (
+            "Illustrious XL",
+            "waiNSFWIllustrious_v140.safetensors",
+            None,
+            True,
+            ["ILXL", "WA14"],
+            None,
+            ["#0c183e"],
+            None,
+        ),
+        # Packaging and file-kind words are nobody's initials.
+        (
+            "Wan 2.2",
+            "wan22_style_high.safetensors",
+            None,
+            False,
+            ["Wan", "ST"],
+            None,
+            ["#dc5100"],
+            None,
+        ),
+        (
+            "SDXL 1.0",
+            "my_style_lora.safetensors",
+            None,
+            False,
+            ["SDXL", "MS"],
+            None,
+            SDXL,
+            None,
+        ),
+        # A family with no maker colour keeps the client's hashed hue.
+        (
+            "NoobAI-XL",
+            "noobai_style.safetensors",
+            "Style",
+            False,
+            ["Noob", "ST"],
+            None,
+            None,
+            None,
+        ),
+        # A precision mid-name is packaging too.
+        (
+            "SeedVR2",
+            "seedvr2_7b_int8_convrot.safetensors",
+            None,
+            True,
+            ["Seed", "VR2"],
+            None,
+            None,
+            None,
+        ),
+        # Klein's distilled build is few-step; its base says so on the tab.
+        (
+            "FLUX.2 Klein",
+            "flux-2-klein-9b-fp8.safetensors",
+            None,
+            True,
+            ["Flux", "Klein"],
+            "\u26a1",
+            GRAPHITE,
+            None,
+        ),
+        (
+            "FLUX.2 Klein",
+            "flux-2-klein-base-9b.safetensors",
+            None,
+            True,
+            ["Flux", "Klein"],
+            "BASE",
+            GRAPHITE,
+            None,
+        ),
+        (
+            "SeedVR2",
+            "seedvr2_ema_7b_fp16.safetensors",
+            None,
+            True,
+            ["Seed", "VR2"],
+            None,
+            None,
+            None,
+        ),
+        (
+            "Ideogram 4",
+            "ideogram4_fp8.safetensors",
+            None,
+            True,
+            ["IDEO", "4"],
+            None,
+            GRAPHITE,
+            None,
+        ),
+    ],
+)
+def test_a_model_is_drawn_with_the_name_people_write(
+    canonical, filename, name, checkpoint, mark, tab, colours, icon
+):
+    assert model_tile(canonical, filename, name, checkpoint=checkpoint) == {
+        "mark": mark,
+        "mark_tab": tab,
+        "mark_colors": colours,
+        "mark_icon": icon,
+    }
+
+
+def test_an_unknown_or_closed_base_model_keeps_the_generated_mark():
+    assert model_tile(None, "portrait_mix_v2.safetensors", checkpoint=True) is None
+    assert model_tile("my private base", "x.safetensors") is None
+    assert model_tile("GPT Image 2", "x.safetensors", checkpoint=True) is None
+
+
+def test_a_card_slot_the_shelf_does_not_hold_is_named_from_its_filename():
+    """A workflow's file outside the shelf's folders still draws its tile."""
+    fields = _mark_fields(None, "flux1-dev.sft", "unet")
+    assert (fields["mark"], fields["mark_colors"]) == (["F1D"], ["#484c53"])
+    assert (
+        _mark_fields(None, "z_image_turbo_bf16.safetensors", "unet")["mark_tab"]
+        == "\u26a1"
+    )
+    # Not a base-model slot, so not the release: no few-step bolt.
+    assert (
+        _mark_fields(None, "z_image_turbo_bf16.safetensors", "vae")["mark_tab"] is None
+    )
+    assert "mark" not in _mark_fields(None, "add_detail.safetensors", "lora")
+    # A slot whose name was never recorded names no tile, and does not fail.
+    assert _mark_fields(None, None, "unet") == {"quant": None}

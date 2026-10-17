@@ -6984,6 +6984,39 @@ def test_a_checkpoint_named_after_its_base_model_is_matched_by_name(shelf_env):
     assert matched() is None
 
 
+def test_a_row_carries_the_tile_a_workflow_card_draws_it_with(shelf_env):
+    """The server names the tile (#1951), so every client draws the same one:
+    a known release by its short name and role, an adapter of it by its base
+    over its own initials, and a row of no known base model not at all."""
+    huge = shelf_env.model_ids["huge_unhashed.safetensors"]
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET filename = 'sd_xl_refiner_1.0.safetensors', "
+            "base_model_canonical = 'SDXL 1.0', base_model_source = 'filename' "
+            "WHERE id = ?",
+            (huge,),
+        )
+        conn.execute(
+            "UPDATE model SET base_model = 'Qwen-Image-Edit', "
+            "display_name = 'Lightning 4steps V1.0' WHERE id = ?",
+            (alice,),
+        )
+
+    checkpoint = next(
+        r
+        for r in shelf_env.owner.get(f"{API}/checkpoints").json()["checkpoints"]
+        if r["id"] == huge
+    )
+    assert (checkpoint["mark"], checkpoint["mark_tab"]) == (["SDXL", "1.0"], "REFI")
+    assert checkpoint["mark_colors"] == ["#9d39ff", "#e80000"]
+    adapters = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    adapter = next(r for r in adapters if r["id"] == alice)
+    assert (adapter["mark"], adapter["mark_tab"]) == (["Qwen", "LI"], "\u26a14")
+    dana = next(r for r in adapters if r["filename"] == "dana.safetensors")
+    assert dana["mark"] is dana["mark_tab"] is dana["mark_colors"] is None
+
+
 # ── Stack detection over HTTP (shelf plan F5) ───────────────────────────────
 
 

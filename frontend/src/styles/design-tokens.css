@@ -92,6 +92,7 @@
      sizes mixing px, rem, AND em. `em` compounds with its parent and is the main
      reason nested labels drift; do not size body text in em.
      --------------------------------------------------------------------------- */
+  --text-3xs: 0.625rem;  /* 10px - a role word on a 30px model tile's tab only */
   --text-2xs: 0.6875rem; /* 11px - uppercase section labels, badge counts */
   --text-xs:  0.75rem;   /* 12px - captions, metadata, dense secondary text */
   --text-sm:  0.8125rem; /* 13px - secondary body, toolbar labels */
