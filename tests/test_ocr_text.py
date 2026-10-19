@@ -499,6 +499,30 @@ def test_a_failed_batch_is_deferred_but_a_cancelled_one_is_not(server, pictures)
     assert pictures["unread"] not in candidate_ids()
 
 
+def test_a_failed_batch_is_deferred_before_its_claims_are_released(server, pictures):
+    # The planner can run find_task the instant a claim is let go, on another
+    # thread, so an id released before its deferral is handed straight back.
+    _set_files(server, {pictures["unread"]: "/home/me/unread.png"})
+    finder = MissingOcrFinder(server.vault.db, engine_getter=lambda: object())
+    task = SimpleNamespace(params={"picture_ids": [pictures["unread"]]})
+    eligible_at_release = []
+
+    def candidate_ids():
+        found = server.vault.db.run_immediate_read_task(finder._fetch_candidates, 50)
+        return {pic.id for pic in found}
+
+    class Claims(set):
+        def discard(self, picture_id):
+            super().discard(picture_id)
+            eligible_at_release.append(picture_id in candidate_ids())
+
+    assert pictures["unread"] in candidate_ids()
+    finder._claimed_picture_ids = Claims({pictures["unread"]})
+    finder.on_task_complete(task, RuntimeError("reader returned nothing"))
+
+    assert eligible_at_release == [False]
+
+
 def test_text_match_flags_are_looked_up_only_for_the_ids_given(server, pictures):
     def lookup(session: Session, ids):
         return Picture.ids_matching_text(session, "coffee", ids)

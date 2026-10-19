@@ -10943,9 +10943,9 @@ CLIP text forward pass (`ClipService.encode_texts`) for the batch's distinct
 cleaned prompts, cached per prompt for the process. `ImageEmbeddingTask` NULLs
 the score whenever it writes a new embedding, and `ComfyUIExtractionTask`
 whenever it writes a prompt, so a stale score re-queues itself. A task whose
-encoder fails raises, and the finder defers that batch for the session (the
-`MissingOcrFinder` pattern), so a broken text tower is not re-run every cycle
-and a restart retries it.
+encoder fails raises, and the finder defers that batch for the session
+(`BaseDeferringFinder`, as `MissingOcrFinder` does), so a broken text tower is
+not re-run every cycle and a restart retries it.
 
 **Served** as `prompt_match` in every payload built from
 `Picture.metadata_fields()`, and with the derived `looks_like_prompt` on
