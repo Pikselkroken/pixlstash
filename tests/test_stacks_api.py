@@ -313,3 +313,39 @@ def test_removing_a_member_records_the_scrapheaped_members_so_undo_restores_them
         server.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_reorder_needs_only_the_live_members_of_a_stack_with_a_scrapheaped_one():
+    """The client only ever sees live members, so that list is complete.
+
+    A scrapheaped member keeps its ``stack_id`` but ``/stacks/{id}/pictures``
+    leaves it out, so the UI's reorder sent the live members and was refused
+    with "picture_ids must include every picture in the stack".
+    """
+    temp_dir, client, server = _setup_direct()
+    try:
+        stack_id, ids = _make_stack_directly(server, 4, deleted_positions={1})
+        live = [ids[0], ids[2], ids[3]]
+
+        resp = client.patch(
+            f"/stacks/{stack_id}/order", json={"picture_ids": list(reversed(live))}
+        )
+        assert resp.status_code == 200, resp.text
+
+        state = _stack_state(server, ids)
+        assert [state[pid] for pid in reversed(live)] == [
+            (stack_id, 0),
+            (stack_id, 1),
+            (stack_id, 2),
+        ]
+        assert state[ids[1]] == (stack_id, 3), "the deleted member ranks last"
+
+        # Over-blocking's twin: a live member left out is still refused.
+        resp = client.patch(
+            f"/stacks/{stack_id}/order", json={"picture_ids": [ids[0], ids[2]]}
+        )
+        assert resp.status_code == 400
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()

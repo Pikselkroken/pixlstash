@@ -1060,7 +1060,7 @@ def create_router(server) -> APIRouter:
     @router.patch(
         "/stacks/{stack_id}/order",
         summary="Reorder stack",
-        description="Sets explicit order for all members in a stack using a complete ordered id list.",
+        description="Sets explicit order for all live members in a stack using a complete ordered id list; Scrapheap members follow them.",
         response_model=StackOrderResponse,
     )
     def reorder_stack(
@@ -1085,19 +1085,21 @@ def create_router(server) -> APIRouter:
                 select(Picture).where(Picture.stack_id == stack_id_value)
             ).all()
             pic_by_id = {pic.id: pic for pic in pics}
-            stack_ids = set(pic_by_id.keys())
-            if stack_ids != set(ordered_ids):
+            # Scrapheaped members keep their stack but no client can see them,
+            # so only the live members are required; listing a deleted one is
+            # still accepted. Normalizing then ranks deleted members after the
+            # live ones, in their existing order.
+            live_ids = {pic.id for pic in pics if not pic.deleted}
+            if not live_ids <= set(ordered_ids) <= set(pic_by_id):
                 raise HTTPException(
                     status_code=400,
                     detail="picture_ids must include every picture in the stack",
                 )
 
             for idx, pic_id in enumerate(ordered_ids):
-                pic = pic_by_id.get(pic_id)
-                if pic is None:
-                    continue
-                pic.stack_position = idx
-                session.add(pic)
+                pic_by_id[pic_id].stack_position = idx
+                session.add(pic_by_id[pic_id])
+            normalize_stack_positions(session, stack_id_value)
 
             stack.updated_at = datetime.now(timezone.utc)
             session.add(stack)
