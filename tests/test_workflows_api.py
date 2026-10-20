@@ -24182,8 +24182,9 @@ def comfyui_templates_served(workflow_env, monkeypatch):
     """A ComfyUI serving _TEMPLATE_INDEX, one pack and their graphs.
 
     Every path the service asks for is recorded, so a test can show a path
-    was never asked for. The conversion reads no ComfyUI by default, so an
-    added template is a draft; ``.object_info`` lets it convert.
+    was never asked for. By default ComfyUI lists only the saver, so an
+    added template does not convert and is a draft; ``.object_info`` set to
+    _EDITOR_OBJECT_INFO lets it convert, and to None makes ComfyUI not answer.
     """
     from pixlstash.services import comfyui_templates
 
@@ -24194,7 +24195,11 @@ def comfyui_templates_served(workflow_env, monkeypatch):
         "/templates/image_example-1.webp": b"RIFF-not-really-webp",
         "/api/workflow_templates/Example-Pack/pack%20example.json": _EDITOR_WORKFLOW,
     }
-    state = SimpleNamespace(asked=[], served=served, object_info=None)
+    state = SimpleNamespace(
+        asked=[],
+        served=served,
+        object_info={"SaveImage": _EDITOR_OBJECT_INFO["SaveImage"]},
+    )
 
     def get(url, *, max_bytes):
         assert url.startswith(_TEMPLATE_URL), url
@@ -24297,8 +24302,17 @@ def test_the_template_list_reads_the_owners_comfyui(
     assert listed["default/api_example"]["source"] == "partner"
     assert listed["default/api_example"]["files"] == []
     assert "/templates/api_example.json" not in comfyui_templates_served.asked
+    # ComfyUI lists no node from the pack, so its template is said not to load,
+    # and does once a node of it is listed.
     pack = listed["Example-Pack/pack example"]
-    assert (pack["source"], pack["pack_loaded"]) == ("pack", None)
+    assert (pack["source"], pack["pack_loaded"]) == ("pack", False)
+    comfyui_templates_served.object_info = {
+        **comfyui_templates_served.object_info,
+        "ExampleNode": {"python_module": "custom_nodes.example-pack"},
+    }
+    body = _templates(workflow_env.owner, refresh="true")
+    pack = next(t for t in body["templates"] if t["module"] == "Example-Pack")
+    assert pack["pack_loaded"] is True
 
 
 def test_the_template_list_says_when_comfyui_does_not_answer(
@@ -24395,7 +24409,7 @@ def test_a_template_that_does_not_convert_is_a_draft_until_comfyui_saves_it(
     assert opened["editor"]["nodes"][0]["type"] == "UNETLoader"
     assert opened["editor"]["extra"]["pixlstash_workflow_id"] == workflow_id
 
-    # ComfyUI's save of it is its graph from then on.
+    # A save sent as a new workflow is not the draft's: it is left a draft.
     graph = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": _SHELF_FILENAME}},
         "3": {
@@ -24403,6 +24417,11 @@ def test_a_template_that_does_not_convert_is_a_draft_until_comfyui_saves_it(
             "inputs": {"images": ["1", 0], "filename_prefix": "out"},
         },
     }
+    r = _put_graph(workflow_env, workflow_id, graph, as_new=True)
+    assert r.status_code == 409, r.text
+    assert _card(owner, workflow_id)["draft"] is True
+
+    # ComfyUI's save of it is its graph from then on.
     r = _put_graph(workflow_env, workflow_id, graph, editor=opened["editor"])
     assert r.status_code == 200, r.text
     assert (r.json()["version"], r.json()["new_workflow"]) == (2, False)
@@ -24421,6 +24440,55 @@ def test_a_template_that_does_not_convert_is_a_draft_until_comfyui_saves_it(
             "SELECT COUNT(*) FROM workflow_origin WHERE workflow_name = ?", (second,)
         )[0]
         == 0
+    )
+
+
+def test_templates_are_not_added_while_comfyui_does_not_list_its_nodes(
+    workflow_env, comfyui_templates_served
+):
+    """A 503 and nothing stored: without ComfyUI's nodes nothing could convert,
+    and every template would become a draft that never needed to be one."""
+    comfyui_templates_served.object_info = None
+    before = workflow_env.server.hub.fetchone("SELECT COUNT(*) FROM workflow_document")[
+        0
+    ]
+    r = workflow_env.owner.post(
+        f"{API}/comfyui/templates/add",
+        json={"templates": [{"module": "default", "name": "image_example"}]},
+    )
+    assert r.status_code == 503, r.text
+    assert (
+        workflow_env.server.hub.fetchone("SELECT COUNT(*) FROM workflow_document")[0]
+        == before
+    )
+
+
+def test_a_listing_comfyui_shapes_otherwise_is_read_as_far_as_it_goes(
+    workflow_env, comfyui_templates_served
+):
+    """It is somebody else's server: what does not read is left out, and a
+    name it lists stays one path segment however it is spelled."""
+    comfyui_templates_served.served["/templates/index.json"] = [
+        "not a category",
+        {"moduleName": "default", "title": "Image", "templates": [{"name": 7}, None]},
+        *_TEMPLATE_INDEX,
+    ]
+    comfyui_templates_served.served["/api/workflow_templates"] = {
+        "../escape": ["a/../b"],
+        "Example-Pack": "not a list",
+    }
+    body = _templates(workflow_env.owner, refresh="true")
+    assert {t["key"] for t in body["templates"]} == {
+        "default/image_example",
+        "default/api_example",
+        "../escape/a/../b",
+    }
+    assert "/api/workflow_templates/..%2Fescape/a%2F..%2Fb.json" in (
+        comfyui_templates_served.asked
+    )
+    assert not any(
+        path.startswith("/api/workflow_templates/../")
+        for path in comfyui_templates_served.asked
     )
 
 

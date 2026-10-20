@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 import threading
 import time
 import uuid
@@ -2577,7 +2578,12 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ComfyUITemplatesAddResponse,
         responses={
-            503: {"description": "ComfyUI is not answering, or no hub is attached."}
+            503: {
+                "description": (
+                    "ComfyUI is not answering, or did not list its nodes; or no "
+                    "hub is attached. Nothing is stored."
+                )
+            }
         },
     )
     def add_comfyui_templates(
@@ -2585,8 +2591,24 @@ def create_router(server) -> APIRouter:
     ):
         hub = require_hub(server, "The workflow library is not open.")
         comfyui_url, listing = _template_listing(request)
-        # Fresh, not the minute-old map: whether it runs is decided here.
-        object_info, _error = _read_object_info(comfyui_url)
+        # Fresh, not the minute-old map: whether it runs is decided here. Without
+        # it nothing could convert, and every template would be stored as a
+        # draft that a ComfyUI answering a moment later could have run.
+        object_info, error = _read_object_info(comfyui_url)
+        if object_info is None:
+            logger.info(
+                "[comfyui] Templates not added: ComfyUI at %s did not list its "
+                "nodes: %s",
+                comfyui_url,
+                error,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"ComfyUI at {comfyui_url} did not say which nodes it has, "
+                    "so nothing was added. Try again once it answers."
+                ),
+            )
         added, failed = [], []
         for ref in payload.templates:
             template = listing.find(ref.module, ref.name)
@@ -2630,7 +2652,12 @@ def create_router(server) -> APIRouter:
                     }
                 )
                 continue
-            except (NotAWorkflowError, WorkflowFileTooLarge, RecursionError) as exc:
+            except (
+                NotAWorkflowError,
+                WorkflowFileTooLarge,
+                RecursionError,
+                sqlite3.Error,
+            ) as exc:
                 logger.warning("Template %s cannot be stored: %s", template.key, exc)
                 failed.append(
                     {

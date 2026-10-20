@@ -1500,7 +1500,8 @@ picture is `GET /comfyui/templates/thumbnail?module=&name=`, built by
 `templateThumbnailUrl` and never as a raw path. `POST /comfyui/templates/add`
 takes `{templates: [{module, name}]}` (1 to 50) and answers `{added:
 [{module, name, workflow_id, title, draft, problems}], failed: [{module,
-name, detail}]}`, announcing the new workflows as `imported` like an import.
+name, detail}]}`, announcing the new workflows as `imported` like an import;
+a 503 when ComfyUI does not list its nodes, and then nothing is stored.
 A stored template that did not convert is a **draft**: `WorkflowCard.draft`
 on the grid and detail reads, until ComfyUI saves it. The client offers no
 Run on one and offers *Open in ComfyUI* as the way to finish it; the server

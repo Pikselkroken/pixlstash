@@ -139,25 +139,37 @@ def forget_listings() -> None:
 
 
 def _get(url: str, *, max_bytes: int) -> requests.Response:
-    response = requests.get(
-        url, timeout=TIMEOUT_S, allow_redirects=False, proxies=NO_PROXY
-    )
-    if response.status_code != 200:
-        raise requests.HTTPError(f"ComfyUI answered HTTP {response.status_code}")
-    if len(response.content) > max_bytes:
-        raise requests.HTTPError(f"{len(response.content)} bytes, past {max_bytes}")
-    return response
+    """GET *url* from ComfyUI, refusing a body past *max_bytes* as it arrives."""
+    with requests.get(
+        url, timeout=TIMEOUT_S, allow_redirects=False, proxies=NO_PROXY, stream=True
+    ) as response:
+        if response.status_code != 200:
+            raise requests.HTTPError(f"ComfyUI answered HTTP {response.status_code}")
+        body = bytearray()
+        for chunk in response.iter_content(64 * 1024):
+            body += chunk
+            if len(body) > max_bytes:
+                raise requests.HTTPError(f"past the {max_bytes} bytes allowed")
+        # Read whole, so `.content` and `.json()` serve what was counted.
+        response._content = bytes(body)
+        return response
 
 
 def _get_json(url: str):
     return _get(url, max_bytes=MAX_GRAPH_BYTES).json()
 
 
+def _segment(value: str) -> str:
+    """*value* as one path segment: a `/` or `..` in a name ComfyUI listed
+    stays inside it rather than reaching another of ComfyUI's paths."""
+    return quote(value, safe="")
+
+
 def graph_url(base_url: str, module: str, name: str) -> str:
     """Where ComfyUI serves one template's graph."""
     if module == BUILTIN_MODULE:
-        return f"{base_url}/templates/{quote(name)}.json"
-    return f"{base_url}/api/workflow_templates/{quote(module)}/{quote(name)}.json"
+        return f"{base_url}/templates/{_segment(name)}.json"
+    return f"{base_url}/api/workflow_templates/{_segment(module)}/{_segment(name)}.json"
 
 
 def template_files(graph) -> list[TemplateFile]:
@@ -417,11 +429,11 @@ def fetch_thumbnail(base_url: str, template: Template) -> tuple[bytes, str]:
         if template.thumbnail_ext is None:
             raise LookupError(f"{template.key} has no thumbnail")
         ext = template.thumbnail_ext.lower()
-        candidates = [(f"{base_url}/templates/{quote(template.name)}-1.{ext}", ext)]
+        candidates = [(f"{base_url}/templates/{_segment(template.name)}-1.{ext}", ext)]
     else:
         stem = (
             f"{base_url}/api/workflow_templates/"
-            f"{quote(template.module)}/{quote(template.name)}"
+            f"{_segment(template.module)}/{_segment(template.name)}"
         )
         candidates = [(f"{stem}.{ext}", ext) for ext in ("jpg", "png", "webp")]
     for url, ext in candidates:
