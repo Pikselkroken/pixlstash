@@ -150,5 +150,11 @@ describe("usePaintSelection", () => {
     expect(id).toBe(7);
     expect(body).toMatchObject({ version: 1, refine: { grow: 6, feather: 0, fill_holes: 0 } });
     expect(paint.maskUrl.value).toBe("blob:mask");
+    // A failed render shows no mask rather than the last selection's.
+    renderPictureMask.mockRejectedValueOnce(new Error("offline"));
+    paint.setRefine("grow", 8);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(paint.maskError.value).toBe("Could not show the selection.");
+    expect(paint.maskUrl.value).toBe("");
   });
 });

@@ -8775,6 +8775,17 @@ def create_router(server) -> APIRouter:
             and _holds_class(graph, "LoadImage")
             else None,
             library_uuid=_library_uuid(),
+            # A selection's mask rides in its upload, which the pack's loader,
+            # fetching the picture by id, would lose: those stay Load Image.
+            keep_loaders=frozenset(
+                str(node_id)
+                for node_id, node in graph.items()
+                if isinstance(node, dict)
+                and node.get("class_type") == "LoadImage"
+                and isinstance((node.get("inputs") or {}).get("image"), str)
+                and (named := _UPLOAD_NAME_RE.fullmatch(node["inputs"]["image"]))
+                and "-mask-" in named.group(0)
+            ),
             checkpoint_id=_shelf_checkpoint(hub) if by_row else None,
             shelf_uuid=("trial" if trial else shelf_uuid(hub)) if by_row else None,
             controlnet_digest=_shelf_digest(hub, FILE_CONTROLNET),
@@ -9068,7 +9079,6 @@ def create_router(server) -> APIRouter:
                             "class_type": "LoadImage",
                             "inputs": {"image": uploaded[picture_id]},
                         }
-                        filled[str(node_id)] = picture_id
                 continue
             value = str(picture_id) if by_id else uploaded[picture_id]
             for target in feed.targets:

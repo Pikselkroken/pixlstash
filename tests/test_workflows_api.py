@@ -22253,6 +22253,35 @@ def test_a_held_run_opens_on_the_picture_it_put_in_not_on_the_pin(id_loaders):
     assert loader()["inputs"]["picture_ids"] == str(env.picture)
 
 
+def test_a_held_run_with_a_selection_opens_on_the_masked_upload(id_loaders):
+    """Open swaps a Load Image of a picture PixlStash holds for the pack's
+    loader, which fetches by id and would lose the mask. Wrong if the picture
+    the selection is drawn on opens in the pack's loader."""
+    env = id_loaders
+    seen: list[str] = []
+
+    def upload(url, path, name=None):
+        seen.append(name)
+        return name
+
+    env.monkeypatch.setattr(workflows_routes, "_upload_image_to_comfyui", upload)
+    picture = _real_picture(env.server, env.tmp_path, "held-masked.png")
+    document = _picture_document("subject.png")
+    document["9"] = {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "mask", "images": ["7", 1]},
+    }
+    workflow = workflows_routes.store_manual_workflow(
+        env.server.hub, "Masked", document, "import"
+    )
+    held = _hold_run(env, target=workflow, picture_ids=[picture], selection=LEFT_HALF)
+    assert held.status_code == 200, held.text
+    [name] = seen
+    assert "-mask-" in name
+    loader = _opened(env, workflow, run=held.json()["opening"])["workflow"]["7"]
+    assert loader == {"class_type": "LoadImage", "inputs": {"image": name}}
+
+
 def test_a_graph_opened_on_pixlstashs_own_ids_and_saved_untouched_stores_nothing(
     id_loaders,
 ):

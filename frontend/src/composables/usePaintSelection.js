@@ -257,6 +257,8 @@ export function usePaintSelection({ pictureId, dims }) {
     } catch (err) {
       if (abort.signal.aborted) return;
       console.warn(`Could not render the selection on picture ${id}:`, err);
+      // The last mask is of another selection: not shown beside the error.
+      dropMask();
       maskError.value = "Could not show the selection.";
     }
   }
