@@ -1,0 +1,128 @@
+{
+  "job": "extension",
+  "config": {
+    "name": "{{JOB_NAME}}",
+    "process": [
+      {
+        "type": "diffusion_trainer",
+        "training_folder": "{{TRAINING_FOLDER}}",
+        "sqlite_db_path": "{{SQLITE_DB_PATH}}",
+        "device": "cuda",
+        "trigger_word": "{{TRIGGER_WORD}}",
+        "performance_log_every": 10,
+        "network": {
+          "type": "lora",
+          "linear": 32,
+          "linear_alpha": 32,
+          "conv": 16,
+          "conv_alpha": 16,
+          "lokr_full_rank": true,
+          "lokr_factor": -1,
+          "network_kwargs": {
+            "ignore_if_contains": []
+          }
+        },
+        "save": {
+          "dtype": "bf16",
+          "save_every": 250,
+          "max_step_saves_to_keep": 4,
+          "save_format": "diffusers",
+          "push_to_hub": false
+        },
+        "datasets": [
+          {
+            "folder_path": "{{DATASET_FOLDER}}",
+            "mask_path": null,
+            "mask_min_value": 0.1,
+            "default_caption": "",
+            "caption_ext": "txt",
+            "caption_dropout_rate": 0.05,
+            "cache_latents_to_disk": false,
+            "is_reg": false,
+            "network_weight": 1,
+            "resolution": [512, 768, 1024],
+            "controls": [],
+            "shrink_video_to_frames": true,
+            "num_frames": 1,
+            "flip_x": false,
+            "flip_y": false,
+            "num_repeats": 1
+          }
+        ],
+        "train": {
+          "batch_size": 1,
+          "bypass_guidance_embedding": true,
+          "steps": 3000,
+          "gradient_accumulation": 1,
+          "train_unet": true,
+          "train_text_encoder": false,
+          "gradient_checkpointing": true,
+          "noise_scheduler": "flowmatch",
+          "optimizer": "adamw8bit",
+          "timestep_type": "weighted",
+          "content_or_style": "balanced",
+          "optimizer_params": {
+            "weight_decay": 0.0001
+          },
+          "unload_text_encoder": false,
+          "cache_text_embeddings": false,
+          "lr": 0.0001,
+          "ema_config": {
+            "use_ema": false,
+            "ema_decay": 0.99
+          },
+          "skip_first_sample": false,
+          "force_first_sample": false,
+          "disable_sampling": false,
+          "dtype": "bf16",
+          "diff_output_preservation": false,
+          "diff_output_preservation_multiplier": 1.0,
+          "diff_output_preservation_class": "person",
+          "switch_boundary_every": 1,
+          "loss_type": "mse"
+        },
+        "logging": {
+          "log_every": 1,
+          "use_ui_logger": true
+        },
+        "model": {
+          "name_or_path": "Tongyi-MAI/Z-Image-Turbo",
+          "quantize": true,
+          "qtype": "qfloat8",
+          "quantize_te": true,
+          "qtype_te": "qfloat8",
+          "arch": "zimage:turbo",
+          "low_vram": true,
+          "model_kwargs": {},
+          "compile": false,
+          "assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors",
+          "layer_offloading": false,
+          "layer_offloading_text_encoder_percent": 1.0,
+          "layer_offloading_transformer_percent": 1.0
+        },
+        "sample": {
+          "sampler": "flowmatch",
+          "sample_every": 250,
+          "width": 1024,
+          "height": 1024,
+          "samples": [
+            { "prompt": "{{TRIGGER_WORD}}, portrait, studio lighting, white background" },
+            { "prompt": "{{TRIGGER_WORD}}, walking down a city street at golden hour" },
+            { "prompt": "{{TRIGGER_WORD}}, sitting at a cafe holding a coffee cup" }
+          ],
+          "neg": "",
+          "seed": 42,
+          "walk_seed": true,
+          "guidance_scale": 1,
+          "sample_steps": 8,
+          "num_frames": 1,
+          "fps": 1
+        }
+      }
+    ]
+  },
+  "meta": {
+    "name": "{{JOB_NAME}}",
+    "version": "1.0"
+  }
+}

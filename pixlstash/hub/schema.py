@@ -147,6 +147,9 @@ CREATE TABLE IF NOT EXISTS user (
 
     -- machine / deployment settings (owner-level, not library-level)
     comfyui_url                 TEXT,
+    ai_toolkit_repo_path        TEXT,
+    ai_toolkit_python           TEXT,
+    ai_toolkit_commit           TEXT,
     public_url                  TEXT,
     keep_models_in_memory       INTEGER,
     max_vram_gb                 REAL,
@@ -1823,6 +1826,11 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     ):
         if column not in user_columns:
             conn.execute(f"ALTER TABLE user ADD COLUMN {column} INTEGER")
+    # ai-toolkit training paths and the pinned trainer commit are owner-level
+    # machine settings, so they live on the hub's user row like comfyui_url.
+    for column in ("ai_toolkit_repo_path", "ai_toolkit_python", "ai_toolkit_commit"):
+        if column not in user_columns:
+            conn.execute(f"ALTER TABLE user ADD COLUMN {column} TEXT")
     # A hub an earlier build opened also has ``user.pull_comfyui_workflows``
     # (NOT NULL DEFAULT 1), the switch of the removed pull of ComfyUI's saved
     # workflows (#1854). Nothing reads or adds it; it is not worth a migration

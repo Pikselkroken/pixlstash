@@ -177,6 +177,9 @@ def create_router(server) -> APIRouter:
         date_format: Optional[str] = None
         theme_mode: Optional[str] = None
         comfyui_url: Optional[str] = None
+        ai_toolkit_repo_path: Optional[str] = None
+        ai_toolkit_python: Optional[str] = None
+        ai_toolkit_commit: Optional[str] = None
         public_url: Optional[str] = None
         similarity_character: Optional[int] = None
         stack_strictness: Optional[float] = None

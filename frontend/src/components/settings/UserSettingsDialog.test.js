@@ -34,6 +34,7 @@ vi.mock("./ModelFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
+vi.mock("./TrainingSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComfyuiHostSection.vue", () => ({
   default: {
@@ -90,6 +91,7 @@ describe("UserSettingsDialog library navigation", () => {
     ).toEqual([
       "settings-nav-appearance",
       "settings-nav-models",
+      "settings-nav-training",
       "settings-nav-behaviour",
       "settings-nav-smart-score",
       "settings-nav-libraries",
@@ -155,6 +157,7 @@ describe("UserSettingsDialog library navigation", () => {
       ).toEqual([
         "settings-nav-appearance",
         "settings-nav-models",
+      "settings-nav-training",
         "settings-nav-behaviour",
         "settings-nav-smart-score",
         "settings-nav-libraries",

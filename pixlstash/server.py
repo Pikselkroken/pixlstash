@@ -153,6 +153,7 @@ from pixlstash.routes.guest_scores import create_router as create_guest_scores_r
 from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
+from pixlstash.routes.training import create_router as create_training_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.routes.workflows import create_router as create_workflows_router
@@ -1984,6 +1985,11 @@ class Server(
             create_snapshots_router(self),
             prefix=API_V1_PREFIX,
             tags=["snapshots"],
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_training_router(self),
+            prefix=API_V1_PREFIX,
             dependencies=gate,
         )
         # The workflow library's read side (implementation plan §F1/§F2). No

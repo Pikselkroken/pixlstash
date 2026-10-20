@@ -80,6 +80,18 @@ class TaskRunner:
         )
         self._queue_seq = itertools.count()
         self._stop = threading.Event()
+        # GPU lease gate.  When *set*, the single GPU worker is allowed to start
+        # new GPU tasks; when *cleared* it parks between tasks (a task already
+        # mid-execution is never interrupted; it drains cooperatively).  Set by
+        # default so the GPU queue runs normally until a lease is acquired.  CPU
+        # workers and the CPU queue ignore this gate entirely.
+        self._gpu_allowed = threading.Event()
+        self._gpu_allowed.set()
+        # Set while the GPU worker is idle or parked at the gate; cleared while
+        # it is executing a task.  Used by ``pause_gpu_queue(wait=True)`` to
+        # confirm the in-flight GPU task has drained (wait for it to be set).
+        self._gpu_idle = threading.Event()
+        self._gpu_idle.set()
         self._threads: list[threading.Thread] = []
         self._lock = threading.Lock()
         self._vram_gate_lock = threading.Lock()
@@ -688,15 +700,94 @@ class TaskRunner:
     def is_running(self) -> bool:
         return any(t.is_alive() for t in self._threads)
 
+    def pause_gpu_queue(
+        self, wait: bool = False, timeout: Optional[float] = None
+    ) -> bool:
+        """Pause the single GPU worker so no NEW GPU task starts.
+
+        Clears the GPU gate.  The GPU worker checks the gate *between* tasks, so
+        a task already mid-execution is allowed to finish (cooperative drain: we
+        never interrupt a running task).  Queued GPU tasks are left in place and
+        run when the queue is resumed; nothing is dropped.  CPU workers and the
+        CPU queue are completely unaffected.
+
+        Args:
+            wait: When True, block until the in-flight GPU task (if any) has
+                finished and the GPU worker is parked at the gate, so the caller
+                knows the GPU is quiesced before it proceeds.
+            timeout: Maximum seconds to wait for the in-flight task to drain when
+                ``wait`` is True.  ``None`` waits indefinitely.
+
+        Returns:
+            True if the GPU queue is paused and (when ``wait``) drained; False if
+            ``wait`` was requested but the in-flight task did not drain within
+            ``timeout``.
+        """
+        self._gpu_allowed.clear()
+        logger.debug("TaskRunner %s: GPU queue paused (wait=%s).", self._name, wait)
+        if not wait:
+            return True
+        # Wait for the currently-executing GPU task (if any) to finish.  A task
+        # that has not yet passed the gate will block there rather than start, so
+        # once _gpu_idle is set the GPU worker is parked with nothing running.
+        drained = self._gpu_idle.wait(timeout=timeout)
+        if not drained:
+            logger.warning(
+                "TaskRunner %s: GPU queue pause timed out after %ss waiting for "
+                "the in-flight GPU task to drain.",
+                self._name,
+                timeout,
+            )
+        return drained
+
+    def resume_gpu_queue(self) -> None:
+        """Resume the GPU worker so queued GPU tasks run again.
+
+        Sets the GPU gate, unblocking the parked GPU worker.  Idempotent: calling
+        it when the queue is already running is a harmless no-op.
+        """
+        self._gpu_allowed.set()
+        logger.debug("TaskRunner %s: GPU queue resumed.", self._name)
+
+    def is_gpu_queue_paused(self) -> bool:
+        """Return True if the GPU queue is currently paused (gate cleared)."""
+        return not self._gpu_allowed.is_set()
+
     def _run(self, work_queue: queue.PriorityQueue):
         logger.debug("TaskRunner %s worker started.", self._name)
+        is_gpu_worker = work_queue is self._gpu_queue
         while not self._stop.is_set():
+            # GPU lease gate.  Only the single GPU worker honours it, and only
+            # *between* tasks: park here before pulling the next task so no NEW
+            # GPU task starts while paused.  Checked before dequeue so queued
+            # tasks keep their priority ordering and nothing is held out of the
+            # queue.  We poll with a short timeout (rather than block on the
+            # event) so the stop sentinel and self._stop are still honoured
+            # promptly while paused; that keeps stop() from deadlocking.
+            if is_gpu_worker and not self._gpu_allowed.is_set():
+                if self._gpu_allowed.wait(timeout=0.1):
+                    continue
+                if self._stop.is_set():
+                    break
+                continue
+
             try:
                 _priority, _seq, task = work_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
 
             if isinstance(task, _StopTask):
+                continue
+
+            # Re-check the gate after dequeue in case a pause landed between the
+            # gate poll above and the dequeue.  Put the task back (priority and
+            # sequence preserved) and park, so a paused queue never starts it.
+            if (
+                is_gpu_worker
+                and not self._gpu_allowed.is_set()
+                and not self._stop.is_set()
+            ):
+                work_queue.put((_priority, _seq, task))
                 continue
 
             if self._stop.is_set():
@@ -733,6 +824,11 @@ class TaskRunner:
             thread_ident = threading.current_thread().ident
             with self._active_task_lock:
                 self._active_tasks[thread_ident] = task
+            # Mark the GPU worker busy for the duration of the task so a
+            # pause_gpu_queue(wait=True) caller can confirm the in-flight task
+            # has drained (it waits for _gpu_idle to be set again).
+            if is_gpu_worker:
+                self._gpu_idle.clear()
             try:
                 task.run(on_vram_oom=self._pause_and_report_vram_oom)
                 # ``vram_oom_attempts`` decides whether the user has a card open
@@ -831,6 +927,11 @@ class TaskRunner:
                     elapsed_s,
                 )
                 self._fire_task_complete_callbacks(task, error)
+                # Mark the GPU worker idle only after all post-task cleanup
+                # (CUDA cache flush, callbacks) has run, so a pause(wait=True)
+                # caller sees the GPU genuinely quiesced before it proceeds.
+                if is_gpu_worker:
+                    self._gpu_idle.set()
         logger.debug("TaskRunner %s stopped.", self._name)
 
     def _fire_task_complete_callbacks(

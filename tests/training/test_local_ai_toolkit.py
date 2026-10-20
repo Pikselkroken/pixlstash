@@ -1,0 +1,392 @@
+"""Integration tests for the LocalAiToolkit adapter, driven by fake_run.py.
+
+These exercise the full prepare → submit → poll → (cancel) lifecycle against a
+faithful CPU-only stub of ai-toolkit's ``run.py`` (``fake_run.py`` in this
+directory). No GPU, no torch, and no fixed long sleeps: all waits are
+poll-with-timeout loops so the suite runs in well under a second.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import sys
+import time
+
+import pytest
+
+from pixlstash.training.backend import TrainingSpec
+from pixlstash.training.local_ai_toolkit import LocalAiToolkit, safe_job_stem
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+# A trimmed, fast template (12 steps, save_every 4) used to drive the stub.
+# We adjust steps/save_every per test by writing a derived template, rather
+# than via config_overrides: deep_merge replaces a list (process[]) wholesale,
+# so patching process[0] would drop the placeholders it carries, and that
+# wholesale-replacement contract is covered in test_config_render.py instead.
+_FAST_TEMPLATE_PATH = os.path.join(_THIS_DIR, "fast_template.json")
+
+
+def _make_backend() -> LocalAiToolkit:
+    """Construct a LocalAiToolkit pointed at the in-tree fake run script."""
+    return LocalAiToolkit(
+        ai_toolkit_repo_path=_THIS_DIR,
+        ai_toolkit_python=sys.executable,
+        run_script="fake_run.py",
+    )
+
+
+def _write_template(tmp_path, *, steps: int, save_every: int) -> str:
+    """Write a per-test copy of the fast template with the given step config.
+
+    Args:
+        tmp_path: Pytest tmp dir to write the derived template into.
+        steps: Value for ``train.steps``.
+        save_every: Value for ``save.save_every``.
+
+    Returns:
+        Path to the written template JSON.
+    """
+    with open(_FAST_TEMPLATE_PATH, encoding="utf-8") as fh:
+        template = json.load(fh)
+    process = template["config"]["process"][0]
+    process["train"]["steps"] = steps
+    process["save"]["save_every"] = save_every
+    path = os.path.join(str(tmp_path), "template.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(template, fh)
+    return path
+
+
+def _make_spec(tmp_path, *, steps: int = 12, save_every: int = 4, **kwargs):
+    """Build a TrainingSpec with sensible defaults for the fast stub run."""
+    dataset_dir = os.path.join(str(tmp_path), "dataset")
+    os.makedirs(dataset_dir, exist_ok=True)
+    defaults = dict(
+        job_id="job-uuid-1234",
+        job_name="testjob",
+        template_path=_write_template(tmp_path, steps=steps, save_every=save_every),
+        dataset_dir=dataset_dir,
+        trigger_word="ohwx_person",
+        work_dir=os.path.join(str(tmp_path), "work"),
+        gpu_ids="0",
+        config_overrides=None,
+    )
+    defaults.update(kwargs)
+    return TrainingSpec(**defaults)
+
+
+def _poll_until(predicate, *, timeout=15.0, interval=0.02):
+    """Poll *predicate* until it returns truthy or *timeout* elapses.
+
+    Args:
+        predicate: Zero-arg callable; its truthy return ends the wait.
+        timeout: Max seconds to wait.
+        interval: Sleep between polls.
+
+    Returns:
+        The truthy value, or the final (falsy) value on timeout.
+    """
+    deadline = time.monotonic() + timeout
+    value = predicate()
+    while not value and time.monotonic() < deadline:
+        time.sleep(interval)
+        value = predicate()
+    return value
+
+
+def test_prepare_creates_db_row_and_config(tmp_path):
+    """prepare() lays out paths, creates the Job table + queued row, writes config."""
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+
+    handle = backend.prepare(spec)
+
+    # Layout matches SEAM.md.
+    assert handle.training_folder == os.path.join(handle.work_dir, "output")
+    assert handle.save_root == os.path.join(handle.training_folder, "testjob")
+    assert handle.sqlite_db_path == os.path.join(handle.work_dir, "job.db")
+    assert handle.loss_db_path == os.path.join(handle.save_root, "loss_log.db")
+    assert handle.pid is None
+    assert os.path.isdir(handle.training_folder)
+    assert os.path.isdir(handle.save_root)
+
+    # Config rendered + written, placeholders gone, overrides applied.
+    assert os.path.exists(handle.config_path)
+    import json
+
+    with open(handle.config_path, encoding="utf-8") as fh:
+        config = json.load(fh)
+    assert config["config"]["name"] == "testjob"
+    assert config["config"]["process"][0]["sqlite_db_path"] == handle.sqlite_db_path
+    assert config["config"]["process"][0]["training_folder"] == handle.training_folder
+    assert config["config"]["process"][0]["train"]["steps"] == 12
+
+    # Job table exists with exactly one queued row keyed by job_id.
+    conn = sqlite3.connect(handle.sqlite_db_path)
+    try:
+        rows = conn.execute("SELECT id, status FROM Job").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("job-uuid-1234", "queued")]
+
+
+def test_config_written_ascii_only(tmp_path):
+    """A non-ASCII trigger word is escaped to \\uXXXX in the written config."""
+    backend = _make_backend()
+    spec = _make_spec(tmp_path, trigger_word="naïve_café")
+
+    handle = backend.prepare(spec)
+
+    with open(handle.config_path, "rb") as fh:
+        raw = fh.read()
+    # ensure_ascii=True means no raw non-ASCII bytes in the file.
+    assert raw.decode("ascii")  # would raise if non-ASCII bytes present
+    assert b"\\u00ef" in raw  # 'ï' escaped
+
+
+def test_submit_spawns_and_records_pid(tmp_path):
+    """submit() launches the process, records a pid, and sets status running."""
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    handle = backend.prepare(spec)
+
+    backend.submit(handle, spec)
+    try:
+        assert handle.pid is not None
+        assert handle.pid > 0
+        # pid.txt recorded.
+        pid_file = os.path.join(handle.work_dir, "pid.txt")
+        assert _poll_until(lambda: os.path.exists(pid_file))
+        with open(pid_file, encoding="utf-8") as fh:
+            assert int(fh.read().strip()) == handle.pid
+    finally:
+        # Make sure we don't leak the process if assertions fail.
+        backend.cancel(handle)
+
+
+def test_full_run_progresses_to_completed(tmp_path):
+    """Polling shows running→completed, advancing step, loss curve, artifacts."""
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    handle = backend.prepare(spec)
+
+    backend.submit(handle, spec)
+
+    # Observe at least one running snapshot with a real step before completion.
+    saw_running = _poll_until(
+        lambda: (
+            backend.progress(handle).status == "running"
+            and backend.progress(handle).step >= 1
+        )
+    )
+    assert saw_running, "never observed a running snapshot with step >= 1"
+
+    assert _poll_until(lambda: backend.progress(handle).status == "completed")
+    progress = backend.progress(handle)
+    assert progress.status == "completed", f"status was {progress.status!r}"
+    assert progress.step == 12
+    assert progress.total_steps == 12
+    assert progress.speed  # non-empty speed string
+
+    # Loss curve populated and ordered by step.
+    assert len(progress.loss_curve) == 12
+    steps = [point["step"] for point in progress.loss_curve]
+    assert steps == sorted(steps)
+    assert all("loss" in point for point in progress.loss_curve)
+
+    # Checkpoints (every 4 of 12 steps → 3 intermediate) + final + a sample.
+    assert len(progress.checkpoints) == 3
+    assert progress.final_checkpoint is not None
+    assert progress.final_checkpoint.endswith("testjob.safetensors")
+    assert os.path.exists(progress.final_checkpoint)
+    assert progress.final_checkpoint not in progress.checkpoints
+    assert len(progress.samples) >= 1
+
+    # Process should have exited on its own.
+    assert _poll_until(lambda: not backend.is_alive(handle))
+
+
+def test_cancel_midrun_stops_job_and_kills_process(tmp_path, monkeypatch):
+    """cancel() mid-run leaves Job status 'stopped' and the process dead."""
+    backend = _make_backend()
+    # Slow each step down and use plenty of steps so cancel reliably lands
+    # mid-run (the stub inherits this env from the parent at submit time).
+    monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.02")
+    spec = _make_spec(tmp_path, steps=500, save_every=50)
+    handle = backend.prepare(spec)
+
+    backend.submit(handle, spec)
+
+    # Wait until it is genuinely running and has advanced at least one step.
+    assert _poll_until(
+        lambda: (
+            backend.progress(handle).status == "running"
+            and backend.progress(handle).step >= 1
+        )
+    ), "job did not reach running state"
+
+    backend.cancel(handle)
+
+    # The process must be dead.
+    assert _poll_until(lambda: not backend.is_alive(handle)), "process still alive"
+
+    # Status must be 'stopped' (cooperative), not 'completed'.
+    assert _poll_until(lambda: backend.progress(handle).status in {"stopped", "error"})
+    progress = backend.progress(handle)
+    assert progress.status == "stopped", (
+        f"expected cooperative stop, got {progress.status!r}"
+    )
+    # It stopped before reaching the full step count.
+    assert progress.step < 500
+
+
+def test_hf_token_never_written_to_log(tmp_path):
+    """The HF token value must never appear in the trainer log file."""
+    backend = _make_backend()
+    secret = "fake-hf-token-value-123"
+    spec = _make_spec(tmp_path, hf_token=secret)
+    handle = backend.prepare(spec)
+
+    backend.submit(handle, spec)
+    try:
+        # Let the run finish so the full log is written.
+        assert _poll_until(lambda: not backend.is_alive(handle))
+        assert os.path.exists(handle.log_path)
+        with open(handle.log_path, encoding="utf-8") as fh:
+            log_contents = fh.read()
+        assert secret not in log_contents
+        # But the env key *name* is fine to have appeared.
+        assert "HF_TOKEN" in log_contents
+    finally:
+        backend.cancel(handle)
+
+
+def test_reconcile_marks_interrupted_when_dead_and_nonterminal(tmp_path):
+    """reconcile() flags a dead, non-terminal job as error (interrupted)."""
+    backend = _make_backend()
+    spec = _make_spec(tmp_path)
+    handle = backend.prepare(spec)
+
+    # Simulate a server that launched a job, recorded a (now-dead) pid, and left
+    # the Job row 'running' before a crash/restart.
+    handle.pid = 999_999_999  # almost certainly not a live pid
+    conn = sqlite3.connect(handle.sqlite_db_path)
+    try:
+        conn.execute(
+            "UPDATE Job SET status='running', step=5 WHERE id=?", (handle.job_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert not backend.is_alive(handle)
+    progress = backend.reconcile(handle)
+    assert progress.status == "error"
+    assert progress.info  # an interrupted reason is filled in
+
+
+@pytest.fixture(autouse=True)
+def _fast_step_delay(monkeypatch):
+    """Default the stub to a tiny per-step delay unless a test overrides it."""
+    monkeypatch.setenv("FAKE_RUN_STEP_DELAY", "0.002")
+
+
+# ----------------------------------------------------------------------
+# Job-name sanitisation (CSO residual condition 1: a user-supplied name
+# must not flow unsanitised into a filesystem path).
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, expected_stem",
+    [
+        ("../../etc/passwd", "etc_passwd"),
+        ("a/b/c", "a_b_c"),
+        ("  ", "job-uuid-fallback"),  # all-whitespace → uuid fallback
+        ("", "job-uuid-fallback"),  # empty → uuid fallback
+        ("...", "job-uuid-fallback"),  # only dots → stripped → uuid fallback
+        ("My LoRA 🎨!", "My_LoRA"),  # emoji/space/punct collapse to one "_"
+        ("-rf", "rf"),  # leading dash (flag-looking) stripped
+        ("good_name-1.2", "good_name-1.2"),  # already safe, preserved verbatim
+    ],
+)
+def test_safe_job_stem_maps_hostile_names(name, expected_stem):
+    """safe_job_stem confines any name to a [A-Za-z0-9._-] stem (uuid fallback)."""
+    stem = safe_job_stem(name, "job-uuid-fallback")
+    assert stem == expected_stem
+    assert stem  # never empty
+    # No path separators or leading dot/dash survive.
+    assert "/" not in stem and "\\" not in stem
+    assert os.sep not in stem
+    assert stem[0] not in ".-"
+    # The stem is a single path component (basename == itself, no parent escape).
+    assert os.path.basename(stem) == stem
+
+
+def test_safe_job_stem_caps_length():
+    """An over-long name is capped so save_root stays within OS limits."""
+    stem = safe_job_stem("x" * 500, "uuid")
+    assert len(stem) <= 64
+    assert stem == "x" * 64
+
+
+def test_prepare_confines_malicious_name_under_work_dir(tmp_path):
+    """A traversal-style name lands under work_dir, not outside it."""
+    backend = _make_backend()
+    spec = _make_spec(tmp_path, job_name="../../etc/passwd")
+
+    handle = backend.prepare(spec)
+
+    work_dir = os.path.abspath(spec.work_dir)
+    # save_root must be strictly inside the per-job work dir.
+    assert os.path.commonpath([handle.save_root, work_dir]) == work_dir
+    assert handle.save_root == os.path.join(work_dir, "output", "etc_passwd")
+    assert os.path.isdir(handle.save_root)
+
+    # The rendered config name is the SAME sanitised stem (drives ai-toolkit's
+    # own save_root = training_folder/name), never the raw display name.
+    with open(handle.config_path, encoding="utf-8") as fh:
+        config = json.load(fh)
+    assert config["config"]["name"] == "etc_passwd"
+    assert "/" not in config["config"]["name"]
+
+
+def test_malicious_name_run_completes_and_handle_round_trips(tmp_path):
+    """A hostile name still completes the run and the handle round-trips.
+
+    Proves the sanitised stem is consistent across (a) prepare's config.name
+    (which the stub uses for its save_root), (b) the adapter's save_root /
+    checkpoint scan, and (c) a handle reconstructed from the stored display name
+    via handle_for (the cancel/reattach/reconcile path).
+    """
+    backend = _make_backend()
+    display_name = "a/b/c"
+    spec = _make_spec(tmp_path, job_name=display_name)
+    handle = backend.prepare(spec)
+
+    backend.submit(handle, spec)
+
+    assert _poll_until(lambda: backend.progress(handle).status == "completed")
+    progress = backend.progress(handle)
+    assert progress.status == "completed", f"status was {progress.status!r}"
+    # Final checkpoint stem is the sanitised stem, under save_root.
+    assert progress.final_checkpoint is not None
+    assert progress.final_checkpoint.endswith("a_b_c.safetensors")
+    assert os.path.exists(progress.final_checkpoint)
+    work_dir = os.path.abspath(spec.work_dir)
+    assert os.path.commonpath([progress.final_checkpoint, work_dir]) == work_dir
+
+    # Reconstruct the handle from the stored DISPLAY name (as cancel/reattach do
+    # via TrainingService._handle_for_job); it must resolve the identical paths.
+    rebuilt = LocalAiToolkit.handle_for(
+        handle.work_dir, spec.job_id, display_name, handle.pid
+    )
+    assert rebuilt.save_root == handle.save_root
+    assert rebuilt.loss_db_path == handle.loss_db_path
+    assert rebuilt.log_path == handle.log_path
+    # The reconstructed handle sees the same finished run.
+    rebuilt_progress = backend.progress(rebuilt)
+    assert rebuilt_progress.status == "completed"
+    assert rebuilt_progress.final_checkpoint == progress.final_checkpoint

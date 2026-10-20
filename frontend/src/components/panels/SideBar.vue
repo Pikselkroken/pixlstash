@@ -247,6 +247,7 @@ const emit = defineEmits([
   "select-workflows",
   "select-character",
   "select-set",
+  "train-lora",
   "import-finished",
   "set-error",
   "set-loading",
@@ -8115,6 +8116,21 @@ defineExpose({
         </button>
         <button
           class="ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            emit('train-lora', {
+              type: 'character',
+              id: sidebarCtxCharacter.id,
+              name: sidebarCtxCharacter.name,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-school-outline</v-icon>
+          <span class="ctx-label-text">Train LoRA</span>
+        </button>
+        <button
+          class="ctx-item"
           :disabled="sidebarCtxDeleteIds.length > 1 || isReadOnly"
           :class="{
             'ctx-item--disabled': sidebarCtxDeleteIds.length > 1 || isReadOnly,
@@ -8235,6 +8251,21 @@ defineExpose({
         >
           <v-icon class="ctx-icon">mdi-share-variant-outline</v-icon>
           <span class="ctx-label-text">Share "{{ sidebarCtxSet.name }}"</span>
+        </button>
+        <button
+          class="ctx-item"
+          :disabled="isReadOnly"
+          @click="
+            emit('train-lora', {
+              type: 'set',
+              id: sidebarCtxSet.id,
+              name: sidebarCtxSet.name,
+            });
+            closeSidebarCtxMenu();
+          "
+        >
+          <v-icon class="ctx-icon">mdi-school-outline</v-icon>
+          <span class="ctx-label-text">Train LoRA</span>
         </button>
         <button
           class="ctx-item"
