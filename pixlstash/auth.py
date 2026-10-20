@@ -352,6 +352,11 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # Every stored workflow file by name: the workflow library's listing
         # under another path, hidden workflows included.
         "/api/v1/comfyui/workflows",
+        # In-app LoRA training: the owner's jobs (rendered configs carry host
+        # paths), the LoRAs it produced and the trainer templates.
+        "/api/v1/loras",
+        "/api/v1/training/jobs",
+        "/api/v1/training/templates",
     }
 )
 
@@ -368,6 +373,8 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
 READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/adapters/",
     "/api/v1/dedup/",
+    # A trained LoRA's bytes, its host path, and a training job's detail.
+    "/api/v1/loras/",
     "/api/v1/model-folders/",
     "/api/v1/model-icons/",
     "/api/v1/models/",
@@ -380,6 +387,7 @@ READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/recipes/",
     "/api/v1/reviews/",
     "/api/v1/snapshots/",
+    "/api/v1/training/jobs/",
     "/api/v1/workflows/",
 )
 
