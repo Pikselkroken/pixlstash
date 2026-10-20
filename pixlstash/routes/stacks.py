@@ -1088,7 +1088,7 @@ def create_router(server) -> APIRouter:
             # Scrapheaped members keep their stack but no client can see them,
             # so only the live members are required; listing a deleted one is
             # still accepted. Normalizing then ranks deleted members after the
-            # live ones, in their existing order.
+            # live ones.
             live_ids = {pic.id for pic in pics if not pic.deleted}
             if not live_ids <= set(ordered_ids) <= set(pic_by_id):
                 raise HTTPException(
