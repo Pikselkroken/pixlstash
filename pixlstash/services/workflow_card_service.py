@@ -1072,26 +1072,21 @@ def _describe_slots(
         # document by widget, not by topology. A LoRA here is named: it is in
         # the document, and there is no recipe to fill it.
         for widget, filename in recovered.get(card.workflow_key, ()):
-            shown = _slot_filename(widget, filename, marks_by_name)
-            fields = _mark_fields(
-                marks_by_name.get(filename.lower()),
-                shown,
-                slot_kind(widget) if widget else "model",
+            # `slot_kind` leaves a LoRA widget as itself, which would draw the
+            # tile of a LoRA the shelf does not hold as no adapter (#1990).
+            kind = (
+                "lora"
+                if is_lora_widget(widget)
+                else (slot_kind(widget) if widget else "model")
             )
-            name = _derived(shown)
-            if widget == "lora_name":
-                figure.loras.append(
-                    SlotModel(name=name, kind="lora", filename=filename, **fields)
-                )
-            else:
-                figure.models.append(
-                    SlotModel(
-                        name=name,
-                        kind=slot_kind(widget) if widget else "model",
-                        filename=filename,
-                        **fields,
-                    )
-                )
+            shown = _slot_filename(widget, filename, marks_by_name)
+            slot = SlotModel(
+                name=_derived(shown),
+                kind=kind,
+                filename=filename,
+                **_mark_fields(marks_by_name.get(filename.lower()), shown, kind),
+            )
+            (figure.loras if kind == "lora" else figure.models).append(slot)
 
 
 def _seedvr2_kind(class_type: str, is_base: bool) -> Optional[str]:

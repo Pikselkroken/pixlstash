@@ -743,8 +743,9 @@ def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     built from these is read beside one built from a stored slot list, and two
     answers to "which widget names a model" is how the two drift. That map
     carries the VAE, CLIP, ControlNet, upscale and Diffusers loaders as well as
-    the three that name a base model, so each recovered slot arrives under the
-    widget ``workflow_card_service.slot_kind`` turns into its real kind.
+    the three that name a base model, so each recovered slot arrives under a
+    widget ``workflow_card_service.slot_kind`` turns into its real kind, or a
+    LoRA widget (``is_lora_widget``), which the card files as a LoRA.
 
     It is still a list of classes, and no list of classes is every loader there
     is: a graph loading through a custom node recovers nothing for it. That is

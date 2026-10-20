@@ -130,10 +130,13 @@ def test_watch_and_reference_folders_refuse_overlapping_another_library(
     )
     assert refused.status_code == 409, refused.text
     assert "overlaps a library" in refused.json().get("detail", "")
+    # Named, so the owner can tell which library is in the way (#1986).
+    assert other.path in refused.json().get("detail", "")
 
     around = _add_import_folder(client, parent, "around-another-library")
     assert around.status_code == 409, around.text
     assert "overlaps a library" in around.json().get("detail", "")
+    assert other.path in around.json().get("detail", "")
 
     # The reference-folder routes apply the same rule, both ways round.
     for folder in (_mkdir(other.path, "ref-photos"), parent):
@@ -283,6 +286,28 @@ def test_relocating_a_reference_folder_into_another_library_is_refused(
     assert accepted.status_code == 200, accepted.text
     assert os.path.isfile(os.path.join(good, "a-file.txt"))
     assert not os.path.exists(os.path.join(source, "a-file.txt"))
+
+
+def test_relocating_a_reference_folder_into_the_data_folder_names_it(
+    client, server, workspace
+):
+    """Relocation checks ``image_root`` before the library-overlap rule, so its
+    refusal is the one the owner reads - and it must say which folder (#1986)."""
+    source = _mkdir(workspace, "relocatable-toward-the-data-folder")
+    added = _add_reference_folder(client, source, "toward-data-folder")
+    assert added.status_code == 200, added.text
+    image_root = server.vault.image_root
+    into_root = os.path.join(image_root, "issue-1986-relocated")
+
+    refused = client.post(
+        f"/reference-folders/{added.json()['id']}/relocate",
+        json={"destination_folder": into_root},
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == (
+        f"This folder is inside the PixlStash data folder ({image_root})."
+    ), refused.text
+    assert not os.path.exists(into_root), "nothing may be created on a refusal"
 
 
 def test_repointing_a_reference_folder_into_its_own_subfolder_still_works(

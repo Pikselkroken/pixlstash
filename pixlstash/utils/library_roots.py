@@ -57,12 +57,6 @@ PATH_INSIDE_LIBRARY_DETAIL = (
     "library's folder."
 )
 
-#: Said to a watch or reference folder that overlaps a library's own folder.
-FOLDER_OVERLAPS_LIBRARY_DETAIL = (
-    "That folder overlaps a library's folder. Watch folders and reference "
-    "folders must sit outside every library and must not contain one. Choose "
-    "a folder outside your libraries."
-)
 
 #: The lists below are a *blocklist*, so one that cannot be read must refuse.
 #: Treating a failed read as an empty list turns the check off silently and
@@ -72,6 +66,20 @@ ROOTS_UNAVAILABLE_DETAIL = (
     "libraries just now, so it cannot confirm this folder is outside them. "
     "Try again in a moment."
 )
+
+
+def folder_overlaps_library_detail(library: str) -> str:
+    """Said to a watch or reference folder that overlaps the library at *library*.
+
+    Named for the reason :func:`folder_overlaps_folder_detail` names its folder:
+    a library kept inside Downloads refused Downloads without saying which
+    library was in the way (#1986).
+    """
+    return (
+        f"That folder overlaps a library's folder ({library}). Watch folders and "
+        "reference folders must sit outside every library and must not contain "
+        "one. Choose a folder outside your libraries."
+    )
 
 
 def folder_overlaps_folder_detail(other: str) -> str:
@@ -256,7 +264,9 @@ def refuse_overlapping_folder(
     """
     for root in _roots_or_503(lambda: library_folders(server, vault), path):
         if _overlaps(path, root):
-            raise HTTPException(status_code=409, detail=FOLDER_OVERLAPS_LIBRARY_DETAIL)
+            raise HTTPException(
+                status_code=409, detail=folder_overlaps_library_detail(root)
+            )
     excluded = canonical_path(exclude) if exclude else None
     for root in _roots_or_503(lambda: watch_and_reference_folders(vault), path):
         if excluded is not None and canonical_path(root) == excluded:

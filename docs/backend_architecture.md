@@ -7428,16 +7428,23 @@ Only `faces` is expensive, and it is the reason the constants are constants.
 hour: a few hundred folders × 20 pictures is a few thousand detections, and the
 folders themselves hold tens of thousands. `MIN_FACE_SAMPLE = 5` keeps the
 signal quiet on folders too small to say anything — *"one face, 2 of 3"* is not
-evidence — and `FACE_MAJORITY = 0.7` is the share of the *sampled* pictures that
-must carry the same identity.
+evidence — and `FACE_MAJORITY_PCT = 80` is the share of the *sampled* pictures
+that must carry the same identity. It was 70 until #1988: over a twenty-picture
+sample, a folder only 60% one person cleared 70% about a quarter of the time,
+and clears 80% about one time in twenty.
 
-`SAME_IDENTITY_COSINE = 0.35` is deliberately strict. ArcFace embeddings arrive
+`SAME_IDENTITY_COSINE = 0.45` is deliberately strict; 0.35 merged look-alike
+generated faces into one person (#1988). ArcFace embeddings arrive
 L2-normalised, so identity comparison is a dot product and the whole folder is
 one `n×n` matrix over at most 20 vectors — 400 products, nothing. The threshold
 is set where a **missed** Person costs the owner one dropdown and a **wrong**
 one costs them trust in every other row on the screen. The identity itself is a
-medoid vote, not a clustering library: for each sampled face, count the faces
-within the threshold of it, and take the largest count. That is the number the
+group vote, not a clustering library: every sampled face proposes the group of
+faces within the threshold of it, a member counts only if it matches at least
+`_GROUP_COHERENCE_PCT = 70` of that group, and the best group wins. Matching
+the proposer alone let one average-looking face near many different people
+read as one person (#1988); matching just over half let one face bridging two
+look-alike groups merge them. That is the number the
 evidence string says out loud (`"one face, 19 of 20"`).
 
 The sample is **evenly spaced through the folder's sorted filenames**, never the

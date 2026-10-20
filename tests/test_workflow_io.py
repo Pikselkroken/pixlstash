@@ -3,6 +3,7 @@ and the watched workflows folder (#1304)."""
 
 import copy
 import json
+import logging
 import sqlite3
 import os
 import pathlib
@@ -1140,6 +1141,130 @@ def test_an_unreadable_stored_workflow_is_trashed_as_it_is(import_route):
     call.delete("broken")
     assert not (user_dir / "broken.json").exists()
     assert (call.trash / "broken.json").read_text(encoding="utf-8") == "{not json"
+
+
+def _stored(user_dir, name="flow"):
+    user_dir.mkdir(exist_ok=True)
+    (user_dir / f"{name}.json").write_text(json.dumps(_t2i_graph()), encoding="utf-8")
+
+
+def test_a_stored_workflow_windows_holds_is_refused_before_any_trash_copy(
+    import_route, monkeypatch
+):
+    """A held file fails the rename aside, so a retry trashes just one copy (#1989)."""
+    call, user_dir, _built_in, _hub = import_route
+    _stored(user_dir)
+    held = str(user_dir / "flow.json")
+    replace = os.replace
+
+    def locked(src, dst):
+        if os.fspath(src) == held:
+            raise PermissionError(13, "in use by another process", held)
+        replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", locked)
+    with pytest.raises(HTTPException) as refused:
+        call.delete("flow")
+    assert refused.value.status_code == 500
+    assert (user_dir / "flow.json").exists()
+    assert list(call.trash.iterdir()) == []
+
+    monkeypatch.setattr(os, "replace", replace)
+    call.delete("flow")
+    assert sorted(os.listdir(user_dir)) == []
+    assert len(list(call.trash.iterdir())) == 1
+
+
+def test_a_stored_workflow_whose_file_stays_is_still_deleted(
+    import_route, monkeypatch, caplog
+):
+    """Once the trash copy exists, a failed remove is a warning, not a 500."""
+    call, user_dir, _built_in, _hub = import_route
+    _stored(user_dir)
+
+    def stuck(path):
+        raise PermissionError(13, "in use by another process", path)
+
+    monkeypatch.setattr(os, "remove", stuck)
+    with caplog.at_level(logging.WARNING):
+        result = call.delete("flow")
+    assert result["status"] == "success"
+    (leftover,) = os.listdir(user_dir)
+    assert leftover.startswith("flow.json.")
+    assert leftover.endswith(comfyui_module.DELETING_SUFFIX)
+    assert len(list(call.trash.iterdir())) == 1
+    assert "could not be removed" in caplog.text
+    # Not .json: the leftover no longer lists, so there is nothing to retry.
+    with pytest.raises(HTTPException) as gone:
+        call.delete("flow")
+    assert gone.value.status_code == 404
+
+
+def test_a_stored_workflow_the_trash_refuses_is_put_back(import_route, monkeypatch):
+    call, user_dir, _built_in, _hub = import_route
+    _stored(user_dir)
+
+    def no_trash(path):
+        raise OSError("no trash on this mount")
+
+    monkeypatch.setattr(workflow_inbox, "send2trash", no_trash)
+    with pytest.raises(HTTPException) as refused:
+        call.delete("flow")
+    assert refused.value.status_code == 500
+    assert os.listdir(user_dir) == ["flow.json"]
+    assert _load(user_dir / "flow.json") == _t2i_graph()
+
+
+def test_a_put_back_keeps_the_files_own_spelling(import_route, monkeypatch):
+    """Asked for as ``Flow``, ``flow.json`` comes back as ``flow.json``."""
+    _call, user_dir, _built_in, _hub = import_route
+    _stored(user_dir)
+    spelled = os.path.join(str(user_dir), "Flow.json")
+    monkeypatch.setattr(
+        comfyui_module, "_load_workflow_json", lambda path: _t2i_graph()
+    )
+
+    def no_trash(path):
+        raise OSError("no trash on this mount")
+
+    replace, moves = os.replace, []
+
+    def recorded(src, dst):
+        moves.append((os.path.basename(src), os.path.basename(dst)))
+        replace(src, dst)
+
+    monkeypatch.setattr(workflow_inbox, "send2trash", no_trash)
+    monkeypatch.setattr(os, "replace", recorded)
+    with pytest.raises(OSError, match="no trash"):
+        comfyui_module._trash_stored_workflow(spelled, "Flow.json")
+    # Both ways by the file's own name, which a case-sensitive test disk
+    # would otherwise hide by failing the first rename.
+    assert [moves[0][0], moves[-1][1]] == ["flow.json", "flow.json"]
+    assert os.listdir(user_dir) == ["flow.json"]
+
+
+def test_a_put_back_that_fails_names_where_the_workflow_is(
+    import_route, monkeypatch, caplog
+):
+    call, user_dir, _built_in, _hub = import_route
+    _stored(user_dir)
+    replace = os.replace
+
+    def no_trash(path):
+        raise OSError("no trash on this mount")
+
+    def no_put_back(src, dst):
+        if os.fspath(src).endswith(comfyui_module.DELETING_SUFFIX):
+            raise PermissionError(13, "in use by another process", src)
+        replace(src, dst)
+
+    monkeypatch.setattr(workflow_inbox, "send2trash", no_trash)
+    monkeypatch.setattr(os, "replace", no_put_back)
+    with caplog.at_level(logging.ERROR), pytest.raises(HTTPException):
+        call.delete("flow")
+    (leftover,) = os.listdir(user_dir)
+    assert leftover in caplog.text
+    assert "no trash on this mount" in caplog.text
 
 
 def test_the_watcher_imports_a_file_put_in_the_inbox(import_route, monkeypatch):
