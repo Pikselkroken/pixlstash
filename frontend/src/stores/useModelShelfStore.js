@@ -4314,6 +4314,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       });
       return null;
     }
+    // A file forgotten since the notice: its "all here" no longer holds.
+    if (!now.complete) {
+      useNoticeStore().push({
+        level: "error",
+        text: `Not every file for ${templateName(variant)} is on the shelf any more. Try again from New workflow set.`,
+      });
+      return null;
+    }
     return createSetFromTemplate(now);
   }
 

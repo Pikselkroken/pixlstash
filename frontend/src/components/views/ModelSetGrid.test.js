@@ -3612,6 +3612,27 @@ describe("hand-made sets (#1520)", () => {
       expect(notices.notices.at(-1).text).toContain("no longer in the template list");
     });
 
+    it("makes nothing from the notice when a file has left the shelf", async () => {
+      const fresh = { ...READY, new: true };
+      const { store } = await mountGrid({
+        rows: [row(1, "a", "checkpoint")],
+        templates: [{ key: "head:zit", variants: [fresh] }],
+      });
+      const notices = useNoticeStore();
+      store.onModelsArrived([2]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fetchWorkflowTemplates.mockResolvedValue({
+        version: "0.1.117",
+        comfyuiVersion: null,
+        rows: [{ key: "head:zit", variants: [{ ...READY, complete: false }] }],
+      });
+
+      await notices.notices[0].action.handler();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).not.toHaveBeenCalled();
+      expect(notices.notices.at(-1).text).toContain("Not every file for zit model");
+    });
+
     it("a failed make shows why and puts focus back on the tile", async () => {
       createWorkflowSet.mockRejectedValue(new Error("is still being hashed"));
       const { wrapper } = await openPicker({ attach: true });
