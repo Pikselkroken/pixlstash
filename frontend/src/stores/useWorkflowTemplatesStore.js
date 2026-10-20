@@ -146,19 +146,33 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   const addRequest = ref(0);
 
   let inflight = null;
+  // Whether the read in flight asked ComfyUI again (`refresh`).
+  let inflightRefresh = false;
+  // Bumped by `reset`: a read that left before a session reset applies
+  // nothing when it lands, so a previous owner's list cannot come back.
+  let generation = 0;
 
   /**
    * Read the list. Once per session unless `refresh`, which also asks the
-   * server to read ComfyUI again; concurrent calls share one read.
+   * server to read ComfyUI again; concurrent calls share one read, except
+   * that a re-read asked for during a plain read is made once that one lands
+   * rather than answered with a list ComfyUI was not asked for again.
    */
   async function fetchTemplates({ refresh = false } = {}) {
-    if (inflight) return inflight;
+    if (inflight) {
+      if (!refresh || inflightRefresh) return inflight;
+      await inflight;
+      return fetchTemplates({ refresh: true });
+    }
     if (loaded.value && !refresh) return undefined;
     loading.value = true;
     error.value = "";
-    inflight = (async () => {
+    const mine = generation;
+    inflightRefresh = refresh;
+    const read = (async () => {
       try {
         const body = await listTemplates({ refresh });
+        if (mine !== generation) return;
         templates.value = Array.isArray(body?.templates) ? body.templates : [];
         reachable.value = body?.reachable !== false;
         comfyuiUrl.value = body?.comfyui_url ?? "";
@@ -168,13 +182,19 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         selectedKeys.value = selectedKeys.value.filter((key) => keys.has(key));
       } catch (err) {
         console.warn("[templates] could not read the template list", err);
-        error.value = errorMessage(err, "Could not read the templates.");
+        if (mine === generation) {
+          error.value = errorMessage(err, "Could not read the templates.");
+        }
       } finally {
-        loading.value = false;
-        inflight = null;
+        if (mine === generation) loading.value = false;
+        if (inflight === read) {
+          inflight = null;
+          inflightRefresh = false;
+        }
       }
     })();
-    return inflight;
+    inflight = read;
+    return read;
   }
 
   const partnerCount = computed(
@@ -334,6 +354,10 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   }
 
   function reset() {
+    generation += 1;
+    inflight = null;
+    inflightRefresh = false;
+    loading.value = false;
     shown.value = false;
     templates.value = [];
     loaded.value = false;

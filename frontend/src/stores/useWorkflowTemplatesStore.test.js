@@ -151,6 +151,34 @@ describe("the Templates tab's list", () => {
     expect(listTemplates).toHaveBeenLastCalledWith({ refresh: true });
   });
 
+  it("makes a re-read asked for during a plain read, once that one lands", async () => {
+    let land;
+    listTemplates.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    listTemplates.mockResolvedValue({ templates: [] });
+    const store = useWorkflowTemplatesStore();
+    const plain = store.fetchTemplates();
+    const again = store.fetchTemplates({ refresh: true });
+    land({ templates: [] });
+    await Promise.all([plain, again]);
+    expect(listTemplates.mock.calls).toEqual([[{ refresh: false }], [{ refresh: true }]]);
+  });
+
+  it("applies nothing from a read that was in flight when the session reset", async () => {
+    let land;
+    listTemplates.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    const store = useWorkflowTemplatesStore();
+    const read = store.fetchTemplates();
+    store.reset();
+    land({ comfyui_url: "http://127.0.0.1:8188", templates: [{ key: "default/old" }] });
+    await read;
+    expect(store.comfyuiUrl).toBe("");
+    expect([store.loaded, store.templates]).toEqual([false, []]);
+    // And the next read is a read of its own, not the stale one.
+    listTemplates.mockResolvedValue({ templates: [{ key: "default/new" }] });
+    await store.fetchTemplates();
+    expect(store.templates.map((t) => t.key)).toEqual(["default/new"]);
+  });
+
   it("keeps what ComfyUI's silence says rather than an empty list", async () => {
     listTemplates.mockResolvedValue({
       comfyui_url: "http://127.0.0.1:8188",
