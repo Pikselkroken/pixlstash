@@ -10387,20 +10387,15 @@ def create_router(server) -> APIRouter:
         ran = " and ".join(sorted(_MATCH_TYPE_LABELS.get(k, k) for k in kinds))
         return f"Used for {ran}, not {_MATCH_TYPE_LABELS.get(wants, wants)}"
 
-    def _wont_load(
-        found, unswapped: list[dict], object_info: dict | None
-    ) -> str | None:
+    def _wont_load(base, unswapped: list[dict], object_info: dict | None) -> str | None:
         """Why a set's clone would be refused, in words, or None.
 
-        The base loader's refusal names the loader that would read the file,
-        as far as ComfyUI says one does.
+        The refusal of *base*, the plan's base slot, names the loader that
+        would read the file, as far as ComfyUI says one does.
         """
         if not unswapped:
             return None
         first = unswapped[0]
-        base = next(
-            (slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS), None
-        )
         if base is not None and first["was"] == base.filename and object_info:
             for cls, widget in (
                 ("CheckpointLoaderSimple", "ckpt_name"),
@@ -10580,7 +10575,7 @@ def create_router(server) -> APIRouter:
                 if checkpoint is None
                 else _other_type(kinds, wants)
                 if kinds and wants not in kinds
-                else _wont_load(found, unswapped, object_info)
+                else _wont_load(base, unswapped, object_info)
             )
             if reason:
                 fit = "wont_load"
@@ -10632,10 +10627,12 @@ def create_router(server) -> APIRouter:
                         now_type=_clip_type(now_node),
                     )
                 )
+            # A loader wired into nothing is no loader the set has to fill.
             essentials = [
                 slot
                 for _c, _w, slot in found
                 if slot.kind in (*BASE_MODEL_KINDS, "vae", "clip")
+                and (live_files is None or slot.filename in live_files)
             ]
             set_ids = {
                 m.id
@@ -10657,7 +10654,7 @@ def create_router(server) -> APIRouter:
             typed = fit != "other" or all(
                 diff.now_type == wanted_type
                 for diff in diffs
-                if diff.now_type is not None
+                if diff.now_type is not None and (live is None or diff.node_id in live)
             )
             maps_cleanly = (
                 fit != "wont_load"

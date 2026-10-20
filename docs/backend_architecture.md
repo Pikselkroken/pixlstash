@@ -2714,7 +2714,7 @@ whether a conversion is stored, since one lands on a version after it is first
 read). The conversion names every widget; an editor file's bare
 `widgets_values` name a loader's model only where it is the first widget
 (`comfyui_utilities._NAME_FIRST_CLASSES`: the checkpoint, UNET and LoRA
-families and the one-widget ControlNet, upscale and style loaders, #1939). A saved recipe on a manual workflow stores the id as both
+families and the one-widget ControlNet, upscale and style loaders, #1939). A loader no node reads is left out where some loader is read (`loaded_model_widgets`), so a leftover second checkpoint loader wired into nothing is not the model the card names; a graph wiring none of its loaders keeps them all, since nothing says which are used. A saved recipe on a manual workflow stores the id as both
 `workflow_id` and `workflow_key`.
 
 **Its pictures** (vault migration 0126). `picture.run_workflow_id` names the

@@ -5494,6 +5494,9 @@ def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(
             "inputs": {"unet_name": "WAN_T2V_LOW.safetensors"},
         },
         "4": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+        # Every loader wired: one no node reads is not on the card.
+        "5": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}},
+        "6": {"class_type": "PreviewImage", "inputs": {"images": ["3", 0]}},
     }
     key = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "pair.json", graph
@@ -5519,6 +5522,7 @@ def test_the_pack_loaders_digests_reach_the_card_as_their_kind(
             "inputs": {"upscale_model_sha256": unknown},
         },
         "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+        "4": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}},
     }
     key = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "pack.json", graph
@@ -10365,6 +10369,7 @@ def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
             "class_type": "PixlStashCheckpointLoader",
             "inputs": {"checkpoint_id": 987654321},
         }
+        instance["10"] = {"class_type": "PreviewImage", "inputs": {"images": ["9", 0]}}
         conn.execute(
             "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
             (json.dumps(instance), RUN_INSTANCE),
@@ -10463,6 +10468,7 @@ def test_a_gone_shelf_loader_is_named_by_the_pictures_editor_graph(
         "class_type": "PixlStashCheckpointLoader",
         "inputs": {"checkpoint_id": "987654322"},
     }
+    embedded["10"] = {"class_type": "PreviewImage", "inputs": {"images": ["9", 0]}}
     editor["nodes"].append(
         {
             "id": 9,
@@ -15469,17 +15475,28 @@ def test_a_sets_checkpoint_goes_to_the_loader_the_run_reads(cloneable):
             "VALUES ('checkpoint', ?, 'scanned', ?, ?)",
             (moss, *identify([], [moss])),
         ).lastrowid
+        encoder = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('text_encoder', 'moss_encoder.safetensors', 'scanned')"
+        ).lastrowid
     try:
-        body, plans = _plans(cloneable, moss=[checkpoint])
+        body, plans = _plans(cloneable, moss=[checkpoint, encoder])
     finally:
         with hub.transaction() as conn:
-            conn.execute("DELETE FROM model WHERE id = ?", (checkpoint,))
+            conn.executemany(
+                "DELETE FROM model WHERE id = ?", [(checkpoint,), (encoder,)]
+            )
     plan = plans["moss"]
     assert body["base_filename"] == _SHELF_FILENAME
-    assert plan["swaps"] == {_SHELF_FILENAME: moss}, plan
+    assert plan["swaps"] == {
+        _SHELF_FILENAME: moss,
+        "qwen3vl_4b_bf16.safetensors": "moss_encoder.safetensors",
+    }, plan
     assert plan["unpaired_bases"] == [leftover]
     clip = next(row for row in plan["loaders"] if row["node_id"] == "8")
     assert (clip["was_type"], clip["now_type"]) == ("krea2", "moss_image")
+    # The leftover loader is no slot the set has to fill.
+    assert plan["maps_cleanly"] is True, plan
 
 
 def test_a_set_with_two_builds_of_its_encoder_fills_the_one_loader(cloneable):
