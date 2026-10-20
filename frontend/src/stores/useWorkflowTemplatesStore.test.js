@@ -134,6 +134,10 @@ describe("the Templates tab's list", () => {
     // Asking for partner templates by source shows them whatever the toggle.
     store.setFilters({ source: "partner" });
     expect(keys(store)).toEqual(["partner"]);
+    store.clearFilters();
+    // And by readiness, which would otherwise always come back empty.
+    store.setFilters({ readiness: "partner" });
+    expect(keys(store)).toEqual(["partner"]);
   });
 
   it("sorts by use", async () => {

@@ -205,11 +205,13 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     const f = filters.value;
     const words = f.name.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return templates.value.filter((template) => {
-      // An explicit Source: Partner API shows them whatever the toggle says.
+      // Asking for them by Source or by Readiness shows them whatever the
+      // toggle says: either filter would otherwise always come back empty.
       if (
         template.source === "partner" &&
         !f.showPartner &&
-        f.source !== "partner"
+        f.source !== "partner" &&
+        f.readiness !== "partner"
       ) {
         return false;
       }

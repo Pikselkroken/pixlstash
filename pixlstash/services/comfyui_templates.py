@@ -390,8 +390,12 @@ def read_listing(
     with _listings_lock:
         # Pruned on write, as the object_info cache is: an address the owner
         # changed away from is not kept for the life of the process.
+        # The clock read again: the listing above can take seconds to read.
+        pruned_at = time.monotonic()
         stale = [
-            u for u, kept in _listings.items() if now - kept.read_at >= LISTING_TTL_S
+            u
+            for u, kept in _listings.items()
+            if pruned_at - kept.read_at >= LISTING_TTL_S
         ]
         for url in stale:
             del _listings[url]
