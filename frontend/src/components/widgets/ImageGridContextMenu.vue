@@ -525,14 +525,14 @@
           v-if="comfyuiConfigured"
           class="ctx-item"
           :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('edit-with-comfyui')"
+          @click="delegate('edit-pictures')"
         >
           <Tooltip
-            text="Change these pictures with a written instruction, using the Flux.2 Klein edit workflow"
+            text="Open the lightbox on the Edit tab: mark where, say what should change, or crop"
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
-          Edit with ComfyUI…
+          Edit…
         </button>
         <button
           class="ctx-item"
@@ -905,7 +905,7 @@ const emit = defineEmits([
   "open-plugin-panel",
   "make-more",
   "run-workflow",
-  "edit-with-comfyui",
+  "edit-pictures",
   "use-as-input",
   "segment",
   "auto-tag",

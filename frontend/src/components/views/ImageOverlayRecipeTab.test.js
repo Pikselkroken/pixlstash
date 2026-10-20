@@ -125,7 +125,14 @@ const STUBS = {
   VTooltip: true,
   OverlayEditPanel: {
     name: "OverlayEditPanel",
-    props: ["pictureId", "active", "comfyuiProgress", "comfyuiProgressPercent"],
+    props: [
+      "pictureId",
+      "active",
+      "comfyuiProgress",
+      "comfyuiProgressPercent",
+      "paint",
+      "applyToIds",
+    ],
     template: "<div class='edit-stub'></div>",
   },
 };
@@ -459,6 +466,58 @@ describe("the lightbox Edit tab", () => {
     expect(editPanel(wrapper).props("pictureId")).toBe(7);
     expect(wrapper.emitted("show-picture")).toBeUndefined();
     expect(error).toHaveBeenCalledOnce();
+  });
+
+  it("lays the original over a result it stepped to, for the compare slider", async () => {
+    gridRows = [{ id: 8, stack_id: "s1", tags: [], format: "png" }];
+    const wrapper = await openOn(
+      7,
+      [
+        { id: 7, stack_id: "s1", tags: [], format: "png" },
+        { id: 5, tags: [] },
+      ],
+      configured,
+    );
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await flush();
+    await flush();
+    expect(wrapper.vm.compare).toMatchObject({ resultId: "8" });
+    expect(wrapper.vm.compare.beforeSrc).toContain("/7");
+  });
+
+  it("sets no compare when the reader was not on the original", async () => {
+    gridRows = [{ id: 8, tags: [] }];
+    const wrapper = await openOn(5, [{ id: 5, tags: [] }], configured);
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await flush();
+    await flush();
+    expect(wrapper.vm.compare).toBeNull();
+  });
+
+  it("opens on the Edit tab for the grid's Edit…, offering every picture", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    expect(activeTab(wrapper)).toBe("Info");
+    await wrapper.setProps({ editRequest: { pictureIds: [7, 5, 3] } });
+    await flush();
+    expect(activeTab(wrapper)).toBe("Edit");
+    expect(editPanel(wrapper).props("applyToIds")).toEqual([7, 5, 3]);
+    // One picture is no batch: nothing extra to offer.
+    await wrapper.setProps({ editRequest: { pictureIds: [7] } });
+    await flush();
+    expect(editPanel(wrapper).props("applyToIds")).toEqual([]);
+  });
+
+  it("takes the Paint keys only while the Edit tab is open", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    const press = (key) =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    press("b");
+    expect(wrapper.vm.paint.tool.value).toBe("hand");
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    press("b");
+    expect(wrapper.vm.paint.tool.value).toBe("brush");
+    press("e");
+    expect(wrapper.vm.paint.tool.value).toBe("eraser");
   });
 
   it("does not move a reader who stepped on while the result was read", async () => {

@@ -31,8 +31,82 @@
 
     <template v-else>
       <div class="edit-scroll">
+        <!-- Where the edit goes (Paint tools, the toolbox beside the
+             filmstrip). Without a selection the whole picture changes. -->
+        <template v-if="paint">
+          <div class="section-label section-label--on-dark edit-sec">
+            <span>{{ hasSelection ? "Refine selection" : "Where" }}</span>
+            <span v-if="hasSelection" class="edit-sec-end">
+              <button
+                class="edit-sec-act"
+                type="button"
+                :aria-pressed="paint.showMask.value ? 'true' : 'false'"
+                aria-label="Show the mask in black and white"
+                @click="paint.toggleMask()"
+              >
+                <Tooltip
+                  text="Show the mask in black and white, as the workflow gets it"
+                  activator="parent"
+                  :describe="false"
+                />
+                <v-icon size="16">{{
+                  paint.showMask.value ? "mdi-eye-off-outline" : "mdi-eye-outline"
+                }}</v-icon>
+              </button>
+              <button class="edit-sec-act" type="button" @click="paint.clear()">
+                Clear
+              </button>
+            </span>
+          </div>
+          <p v-if="!hasSelection" class="edit-note edit-note--lead">
+            Mark where with the tools beside the picture. Without a selection
+            the whole picture changes.
+          </p>
+          <template v-else>
+            <label
+              v-for="row in refineRows"
+              :key="row.key"
+              class="edit-slider"
+            >
+              <span>{{ row.label }}</span>
+              <input
+                :value="paint.refine[row.key]"
+                type="range"
+                :min="row.min"
+                :max="row.max"
+                step="1"
+                @input="paint.setRefine(row.key, $event.target.value)"
+              />
+              <output
+                >{{ row.key === "grow" && paint.refine.grow > 0 ? "+" : ""
+                }}{{ paint.refine[row.key] }} px</output
+              >
+            </label>
+            <p v-if="paint.maskError.value" class="edit-note" role="alert">
+              {{ paint.maskError.value }}
+            </p>
+          </template>
+        </template>
+
+        <template v-if="applyToIds.length > 1">
+          <div class="section-label section-label--on-dark edit-sec">
+            <span>Apply to</span>
+          </div>
+          <Segmented
+            :model-value="hasSelection ? 'this' : applyTo"
+            full
+            aria-label="Apply to"
+            :options="applyToOptions"
+            @update:model-value="(value) => (applyTo = value)"
+          />
+          <p v-if="hasSelection" class="edit-note">
+            A hand selection stays on the picture it was drawn on. Clear it to
+            run on all {{ applyToIds.length }}.
+          </p>
+        </template>
+
         <div class="section-label section-label--on-dark edit-sec">
-          <span :id="workflowLabelId">Workflow</span>
+          <span :id="workflowLabelId">Runs with</span>
           <span class="edit-sec-end">
             <span v-if="workflowId === rememberedKey" class="edit-aside"
               >last used</span
@@ -114,6 +188,10 @@
             </p>
           </div>
         </v-menu>
+        <p v-if="hasSelection && chosenCard && !usesMask" class="edit-note">
+          {{ chosenCard.type_label }} workflows do not use a mask, so this
+          would change the whole picture. Choose an Inpaint workflow.
+        </p>
 
         <label
           :for="instructionFieldId"
@@ -154,7 +232,9 @@
               <i :style="{ width: `${comfyuiProgressPercent}%` }"></i>
             </div>
             <p class="edit-note">
-              You can keep browsing.
+              <template v-if="run.count > 1"
+                >Running on {{ run.count }} pictures. </template
+              >You can keep browsing.
               {{
                 run.stack
                   ? "The result joins the original's stack when it lands."
@@ -213,7 +293,9 @@
           @click="submit"
         >
           <v-icon v-if="!submitting" size="16">mdi-play</v-icon>
-          Run edit
+          {{
+            runsOnAll ? `Run on ${applyToIds.length} pictures` : "Run edit"
+          }}
         </AppButton>
         <div class="edit-foot-row">
           <button type="button" class="edit-link" @click="onMoreOptions()">
@@ -262,6 +344,7 @@
 import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
 import AppButton from "../widgets/AppButton.vue";
+import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import {
   listWorkflowCards,
@@ -291,6 +374,10 @@ const props = defineProps({
   /** The grid's ComfyUI progress, `{status, message}`. */
   comfyuiProgress: { type: Object, default: null },
   comfyuiProgressPercent: { type: Number, default: 0 },
+  /** The lightbox's Paint selection (`usePaintSelection`), or null. */
+  paint: { type: Object, default: null },
+  /** Every picture the grid's *Edit…* named, when it named several. */
+  applyToIds: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits(["show-picture", "more-options", "running"]);
@@ -298,6 +385,17 @@ const router = useRouter();
 
 /** The card types this tab lists, as `workflow_type` spells them. */
 const EDIT_TYPES = new Set(["img2img", "inpaint", "outpaint"]);
+/**
+ * The ones whose graph reads a mask (`workflow_type` says so by its nodes).
+ * Not outpaint: it makes its own mask from the padding it adds.
+ */
+const MASK_TYPES = new Set(["inpaint"]);
+
+const refineRows = [
+  { key: "grow", label: "Grow", min: -100, max: 100 },
+  { key: "feather", label: "Feather", min: 0, max: 100 },
+  { key: "fill_holes", label: "Fill holes", min: 0, max: 200 },
+];
 
 const LAST_KEY_PREFIX = "pixlstash:editTabWorkflow:";
 
@@ -342,9 +440,46 @@ const chosenCard = computed(
   () => cards.value.find((card) => card.id === workflowId.value) || null,
 );
 
+const hasSelection = computed(() => !!props.paint?.hasSelection.value);
+const usesMask = computed(() => MASK_TYPES.has(chosenCard.value?.type));
+
+// *Apply to*: this picture, or every one the grid's *Edit…* named. A hand
+// selection belongs to its picture, so it holds the choice on this one.
+const applyTo = ref("all");
+const applyToOptions = computed(() => [
+  { id: "this", label: "This picture" },
+  {
+    id: "all",
+    label: `${props.applyToIds.length} selected`,
+    disabled: hasSelection.value,
+  },
+]);
+const runsOnAll = computed(
+  () =>
+    props.applyToIds.length > 1 &&
+    applyTo.value === "all" &&
+    !hasSelection.value,
+);
+watch(
+  () => props.applyToIds,
+  () => {
+    applyTo.value = "all";
+  },
+);
+
 // Whether the reader has picked a card by hand since the list loaded, which the
 // late library key below must not overrule.
 let choseByHand = false;
+
+// The first selection moves the tab onto a workflow that reads it, unless
+// the reader chose the card by hand.
+watch(hasSelection, (has) => {
+  if (!has || choseByHand || usesMask.value) return;
+  const masked = cards.value.find(
+    (card) => MASK_TYPES.has(card.type) && runsHere(card.id),
+  );
+  if (masked) workflowId.value = masked.id;
+});
 
 function choose(key) {
   pickerOpen.value = false;
@@ -621,6 +756,8 @@ function onMoreOptions(key = workflowId.value, edit = false) {
     // Trimmed as Run trims it, so a blank box means the same thing on both
     // paths: no instruction.
     prompt: instruction.value.trim(),
+    // Where: the Paint selection, which the popup sends as the run's.
+    selection: hasSelection.value ? props.paint.selection.value : undefined,
   });
 }
 
@@ -646,9 +783,12 @@ async function submit() {
       project_id: view.project_id ?? null,
       character_id: view.character_id ?? null,
     };
+    const pictureIds = runsOnAll.value ? props.applyToIds.map(Number) : [id];
     const answer = await runWorkflowCard({
-      picture_ids: [id],
+      picture_ids: pictureIds,
       target: workflowId.value,
+      // Where on the picture: rendered server-side into its MASK.
+      ...(hasSelection.value ? { selection: props.paint.selection.value } : {}),
       // An empty box leaves the workflow's own prompt alone: `""` would blank
       // every positive prompt node in the graph.
       prompt: text || null,
@@ -668,7 +808,7 @@ async function submit() {
       return;
     }
     remember(workflowId.value);
-    follow(id, card?.name, text, stack.value, before);
+    follow(id, card?.name, text, stack.value, before, pictureIds.length);
     // No picture ids: see the component's docstring.
     runDialog.started(prompts, []);
   } catch (err) {
@@ -678,8 +818,9 @@ async function submit() {
   }
 }
 
-function follow(sourceId, workflowName, text, stacked, before) {
+function follow(sourceId, workflowName, text, stacked, before, count = 1) {
   run.value = {
+    count,
     sourceId,
     workflowName: workflowName || "Untitled workflow",
     instruction: text,
@@ -847,6 +988,41 @@ defineExpose({ submit });
   resize: vertical;
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.edit-note--lead {
+  margin-top: 0;
+}
+
+/* Grow, feather, fill holes: label, slider, value (mono). */
+.edit-slider {
+  display: grid;
+  grid-template-columns: 64px 1fr 52px;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.edit-slider input {
+  width: 100%;
+  min-width: 0;
+  accent-color: rgb(var(--v-theme-primary));
+}
+
+.edit-slider output {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.edit-pane :deep(.seg) {
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --track-trough: rgba(var(--v-theme-scrim), 0.34);
+  --track-ring: rgba(var(--v-theme-on-dark-surface), 0.4);
 }
 
 .edit-check {

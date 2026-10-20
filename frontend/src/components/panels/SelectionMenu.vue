@@ -242,12 +242,12 @@
         class="ctx-item"
         :disabled="selectedCount === 0 || isReadOnly"
         @click="
-          $emit('edit-with-comfyui');
+          $emit('edit-pictures');
           $emit('close');
         "
       >
         <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
-        Edit with ComfyUI…
+        Edit…
       </button>
       <div class="ctx-sep" />
     </template>
@@ -502,7 +502,7 @@ const emit = defineEmits([
   "open-plugin-panel",
   "make-more",
   "run-workflow",
-  "edit-with-comfyui",
+  "edit-pictures",
   "reverse-image-search",
   "segment",
   "rotate-left",

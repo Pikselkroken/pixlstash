@@ -544,6 +544,15 @@
   right: calc(16px + var(--sidebar-width));
 }
 
+/* The Paint toolbox floats beside the filmstrip: the arrow steps past it
+   (34px tools, --space-2 padding each side, a 1px border each side). */
+.overlay-canvas--paint .overlay-nav-left {
+  left: calc(
+    16px + var(--filmstrip-rail-width) + 34px + 2 * var(--space-2) + 2px +
+      var(--space-3)
+  );
+}
+
 .overlay-swipe-hint {
   position: absolute;
   bottom: 16px;
@@ -873,6 +882,94 @@
      takes every pointerdown until a box is drawn or cancelled. */
   z-index: var(--z-dropdown);
   cursor: crosshair;
+}
+
+/* The Edit tab's Paint tools take the pointer over the picture. Positioned,
+   no z-index: the nav arrows after it in the DOM stay on top and clickable. */
+.paint-input-layer {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.paint-input-layer--brush,
+.paint-input-layer--eraser {
+  cursor: cell;
+}
+
+/* Before / after: the original laid over the result, cut at the slider. */
+.paint-compare {
+  position: absolute;
+}
+
+.paint-compare-before {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.paint-compare-tag {
+  position: absolute;
+  top: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo-strong);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-2xs);
+  pointer-events: none;
+}
+
+.paint-compare-tag--before {
+  left: var(--space-3);
+}
+
+.paint-compare-tag--after {
+  right: var(--space-3);
+}
+
+.paint-compare-split {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: rgb(var(--v-theme-on-dark-surface));
+  box-shadow: var(--elevation-2);
+  pointer-events: none;
+}
+
+.paint-compare-split .v-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 30px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-on-dark-surface));
+  color: rgb(var(--v-theme-dark-surface));
+  box-shadow: var(--elevation-3);
+}
+
+/* The slider itself: the whole picture is its track, so a drag anywhere
+   moves the cut. Invisible; the split above draws it. */
+.paint-compare-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+}
+
+.paint-compare:has(.paint-compare-range:focus-visible) .paint-compare-split {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
 }
 
 .overlay-draw-rect {

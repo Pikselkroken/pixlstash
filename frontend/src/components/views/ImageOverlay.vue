@@ -473,6 +473,7 @@
         <div
           ref="overlayCanvasRef"
           class="overlay-canvas"
+          :class="{ 'overlay-canvas--paint': paintActive && !chromeHidden }"
           tabindex="0"
           aria-label="Image - right-click or press the menu key for actions"
           @touchstart="onTouchStart"
@@ -626,8 +627,71 @@
                 class="overlay-draw-rect"
                 :style="drawRectStyle"
               ></div>
+              <!-- The Edit tab's selection and crop frame (Paint tools). -->
+              <PaintLayer
+                v-if="paintActive && overlayReady"
+                :paint="paint"
+                :dims="overlayDims"
+              />
+              <!-- After an edit, the original over the result, cut at the
+                   slider: drag to compare. -->
+              <div
+                v-if="compareShown"
+                class="paint-compare"
+                :style="wordLayerStyle(overlayDims)"
+              >
+                <img
+                  class="paint-compare-before"
+                  :src="compare.beforeSrc"
+                  alt=""
+                  :style="{ clipPath: `inset(0 ${100 - comparePosition}% 0 0)` }"
+                />
+                <span class="paint-compare-tag paint-compare-tag--before"
+                  >Before</span
+                >
+                <span class="paint-compare-tag paint-compare-tag--after"
+                  >After</span
+                >
+                <span
+                  class="paint-compare-split"
+                  :style="{ left: `${comparePosition}%` }"
+                  aria-hidden="true"
+                >
+                  <v-icon size="18">mdi-compare-horizontal</v-icon>
+                </span>
+                <input
+                  v-model.number="comparePosition"
+                  class="paint-compare-range"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  aria-label="Compare with the original: how much of the original shows"
+                  @pointerdown.stop
+                  @dblclick.stop
+                />
+              </div>
             </div>
           </div>
+
+          <!-- Takes the pointer while a Paint tool is in hand; the Hand tool
+               leaves it to the lightbox's own pan. A stroke's click and
+               touches stop here: on the canvas they hide the chrome (the
+               toolbox with it) or read as a swipe to the next picture. -->
+          <div
+            v-if="paintActive && overlayReady && paint.tool.value !== 'hand'"
+            class="paint-input-layer"
+            :class="`paint-input-layer--${paint.tool.value}`"
+            @pointerdown.prevent="onPaintStart"
+            @pointermove.prevent="onPaintMove"
+            @pointerup.prevent="onPaintEnd"
+            @pointercancel.prevent="onPaintCancel"
+            @click.stop
+            @dblclick.stop
+            @touchstart.stop
+            @touchmove.stop
+            @touchend.stop
+          ></div>
 
           <div
             v-if="drawMode"
@@ -698,6 +762,15 @@
             <span>Click or <kbd>Space</kbd> to show controls</span>
           </div>
         </div>
+
+        <template v-if="paintActive && !chromeHidden">
+          <PaintToolbox :paint="paint" />
+          <PaintOptionsBar
+            :paint="paint"
+            :framings="cropFramingsHere"
+            @apply-crop="applyCrop"
+          />
+        </template>
 
         <OverlayFilmstrip
           ref="filmstripRef"
@@ -856,6 +929,8 @@
             :active="sidebarTab === 'edit'"
             :comfyui-progress="comfyuiProgress"
             :comfyui-progress-percent="comfyuiProgressPercent"
+            :paint="paint"
+            :apply-to-ids="applyToIds"
             @show-picture="showEditResult"
             @running="(on) => (editRunning = on)"
             @more-options="(payload) => emit('edit-more-options', payload)"
@@ -966,6 +1041,14 @@ import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 import OverlayEditPanel from "./OverlayEditPanel.vue";
+import PaintLayer from "./PaintLayer.vue";
+import PaintOptionsBar from "./PaintOptionsBar.vue";
+import PaintToolbox from "./PaintToolbox.vue";
+import {
+  PAINT_TOOLS,
+  usePaintSelection,
+} from "../../composables/usePaintSelection";
+import { cropFramings } from "../../utils/cropFramings";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
@@ -1072,6 +1155,9 @@ const props = defineProps({
   pluginProgressPercent: { type: Number, default: 0 },
   comfyuiConfigured: { type: Boolean, default: false },
   guestScore: { type: Number, default: 0 },
+  // The grid's *Edit…* (`{pictureIds}`, a new object per gesture): open on
+  // the Edit tab, with *Apply to* offering every picture named.
+  editRequest: { type: Object, default: null },
 });
 
 const {
@@ -1097,6 +1183,7 @@ const {
   pluginProgressPercent,
   comfyuiConfigured,
   guestScore,
+  editRequest,
 } = toRefs(props);
 
 const image = ref(null);
@@ -1455,6 +1542,9 @@ async function showEditResult(id, sourceId) {
   const idKey = String(id);
   const fromId = image.value?.id;
   if (!open.value || idKey === "") return;
+  // Stepping from the original: it is the before side of the compare.
+  const beforeSrc =
+    String(fromId) === String(sourceId) ? fullImageSrc.value : "";
   if (!allImageById.value.has(idKey) && !filmstripImageById.value.has(idKey)) {
     let row = null;
     try {
@@ -1490,6 +1580,10 @@ async function showEditResult(id, sourceId) {
   }
   setOverlayImageById(idKey);
   void ensureOverlayFilmstripForImage();
+  if (beforeSrc) {
+    compare.value = { resultId: idKey, beforeSrc };
+    comparePosition.value = 50;
+  }
   emit("show-picture", id);
 }
 
@@ -2547,7 +2641,9 @@ function handleKeydown(e) {
     if (isReadOnly.value) return;
     if (commandKey === "z" && !e.shiftKey) {
       e.preventDefault();
-      operationStore.undo();
+      // The selection's own steps first, while there are any to take back.
+      if (paintActive.value && paint.hasSelection.value) paint.undo();
+      else operationStore.undo();
       return;
     }
     if (commandKey === "y" || (commandKey === "z" && e.shiftKey)) {
@@ -2637,6 +2733,17 @@ function handleKeydown(e) {
     }
   }
 
+  if (
+    paintActive.value &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    handlePaintKey(e.key)
+  ) {
+    e.preventDefault();
+    return;
+  }
+
   if (e.key === "Escape") {
     // Focus is inside the receipt: retire it and hand the keyboard back to the
     // canvas, without closing the lightbox. A keyboard user who tabbed into the
@@ -2649,7 +2756,11 @@ function handleKeydown(e) {
       overlayCanvasRef.value?.focus?.();
       return;
     }
-    if (drawMode.value) {
+    if (paintActive.value && (paint.draft.value || paint.cropBox.value)) {
+      // The gesture or the crop frame, not the lightbox.
+      paint.cancel();
+      paint.cropBox.value = null;
+    } else if (drawMode.value) {
       clearDrawMode();
     } else if (pluginMenuOpen.value) {
       pluginMenuOpen.value = false;
@@ -3449,6 +3560,126 @@ function onDrawCancel(event) {
   }
   clearDrawMode();
 }
+// ── Paint: the Edit tab's selection and crop ───────────────────────────────
+//
+// Here and not with the Edit block above: it reads `overlayDims`. The tools
+// are out only while the Edit tab is the one on screen, so every other tab
+// keeps the lightbox's own pointer and keys.
+const paint = usePaintSelection({
+  pictureId: computed(() => image.value?.id ?? null),
+  dims: overlayDims,
+});
+const paintActive = computed(
+  () => editTabShown.value && sidebarOpen.value && sidebarTab.value === "edit",
+);
+
+// The pictures *Apply to* offers, from the grid's *Edit…* on a selection.
+const applyToIds = ref([]);
+watch(editRequest, (request) => {
+  const ids = (request?.pictureIds || []).map(Number).filter(Boolean);
+  applyToIds.value = ids.length > 1 ? ids : [];
+  if (!request) return;
+  sidebarOpen.value = true;
+  chosenSidebarTab.value = "edit";
+}, { immediate: true });
+watch(open, (isOpen) => {
+  if (isOpen) return;
+  applyToIds.value = [];
+  compare.value = null;
+});
+
+// The largest stored face, which Square on face frames.
+const cropFramingsHere = computed(() => {
+  const { naturalWidth, naturalHeight } = overlayDims.value;
+  const area = (box) => (box[2] - box[0]) * (box[3] - box[1]);
+  const face = faceBboxes.value
+    .map((row) => row.bbox)
+    .reduce((best, box) => (!best || area(box) > area(best) ? box : best), null);
+  return cropFramings(naturalWidth, naturalHeight, face);
+});
+
+/** Crop runs as the built-in `crop` plugin: a new picture in this stack. */
+function applyCrop(box) {
+  if (!image.value?.id || !box) return;
+  const [left, top, width, height] = box;
+  emit("run-plugin", {
+    pluginName: "crop",
+    pictureIds: [image.value.id],
+    parameters: { left, top, width, height },
+    stack: true,
+  });
+  paint.cropBox.value = null;
+  paint.tool.value = "hand";
+}
+
+function paintPoint(event) {
+  const at = getDrawPoint(event);
+  if (!at) return null;
+  const { naturalWidth, naturalHeight } = overlayDims.value;
+  return { x: at.x / naturalWidth, y: at.y / naturalHeight };
+}
+
+function releasePaintPointer(event) {
+  const target = event?.currentTarget;
+  if (target?.hasPointerCapture?.(event.pointerId)) {
+    target.releasePointerCapture(event.pointerId);
+  }
+}
+
+function onPaintStart(event) {
+  if (event.button !== 0) return;
+  const at = paintPoint(event);
+  if (!at) return;
+  paint.begin(at, { shift: event.shiftKey, alt: event.altKey });
+  event.currentTarget?.setPointerCapture?.(event.pointerId);
+}
+
+function onPaintMove(event) {
+  if (!paint.draft.value) return;
+  const at = paintPoint(event);
+  if (at) paint.move(at);
+}
+
+function onPaintEnd(event) {
+  releasePaintPointer(event);
+  paint.end();
+}
+
+function onPaintCancel(event) {
+  releasePaintPointer(event);
+  paint.cancel();
+}
+
+const PAINT_KEYS = new Map(
+  PAINT_TOOLS.map((tool) => [tool.key.toLowerCase(), tool.id]),
+);
+
+/** A Paint tool's key, or I to invert. True when the key was the toolbox's. */
+function handlePaintKey(key) {
+  const lower = String(key || "").toLowerCase();
+  if (PAINT_KEYS.has(lower)) {
+    paint.tool.value = PAINT_KEYS.get(lower);
+    return true;
+  }
+  if (lower === "i" && paint.hasSelection.value) {
+    paint.invert();
+    return true;
+  }
+  return false;
+}
+
+// ── Before / after: the original over an edit's result ─────────────────────
+// Set by *Show it* (or a run's own result) when the lightbox steps from the
+// original to what was made from it, and shown while that result is on screen.
+const compare = ref(null);
+const comparePosition = ref(50);
+const compareShown = computed(
+  () =>
+    !!compare.value &&
+    overlayReady.value &&
+    String(image.value?.id) === String(compare.value.resultId),
+);
+
 let overlayResizeObserver = null;
 let mediaResizeObserver = null;
 
