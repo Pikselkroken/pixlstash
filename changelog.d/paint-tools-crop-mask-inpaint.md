@@ -1,6 +1,7 @@
 - The lightbox's Edit tab has Paint tools: mark where the edit goes with a
-  rectangle, ellipse, lasso, brush, eraser or colour wand, then grow, feather
-  or fill the holes in the selection. An inpaint workflow changes only what is
+  rectangle, ellipse, lasso, brush, eraser or colour wand (drag on from the
+  click to widen or narrow it, as in GIMP), then grow, feather or fill the
+  holes in the selection. An inpaint workflow changes only what is
   marked, and the result can be compared with the original on a before/after
   slider.
 - Crop a picture from the Edit tab, to a square on the face, 3:4, the nearest

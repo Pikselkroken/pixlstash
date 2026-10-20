@@ -27,7 +27,7 @@
           v-bind="line"
         />
       </template>
-      <template v-else-if="draft">
+      <template v-else-if="draft && draft.tool !== 'wand'">
         <rect
           v-if="draft.tool === 'rect'"
           class="paint-draft-shape"
@@ -183,7 +183,6 @@ async function rebuild() {
   const height = Math.max(1, Math.round(props.dims.height));
   canvas.width = width;
   canvas.height = height;
-  // Read back once per mask, then written every ant step.
   const context = canvas.getContext("2d", { willReadFrequently: true });
   context.clearRect(0, 0, width, height);
   if (!url) return;
@@ -196,8 +195,14 @@ async function rebuild() {
     return;
   }
   if (token !== loadToken) return;
-  context.drawImage(image, 0, 0, width, height);
-  const mask = context.getImageData(0, 0, width, height).data;
+  // Read on a canvas of its own: the black-and-white mask never reaches the
+  // screen, so nothing short of the finished wash is ever shown.
+  const reader = document.createElement("canvas");
+  reader.width = width;
+  reader.height = height;
+  const readContext = reader.getContext("2d", { willReadFrequently: true });
+  readContext.drawImage(image, 0, 0, width, height);
+  const mask = readContext.getImageData(0, 0, width, height).data;
   const [r, g, b] = washColour(canvas);
   base = context.createImageData(width, height);
   const found = [];

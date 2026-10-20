@@ -2999,7 +2999,7 @@ function handleOverlayClick(event) {
   const interactiveSelector =
     "button, a, input, select, textarea, label, summary, details";
   const interactiveContainerSelector =
-    ".overlay-sidebar, .overlay-rail, .overlay-nav";
+    ".overlay-sidebar, .overlay-rail, .overlay-nav, .paint-toolbox, .paint-options";
   if (
     target.closest(interactiveSelector) ||
     target.closest(interactiveContainerSelector)
@@ -3887,7 +3887,7 @@ function onTouchEnd(event) {
     const interactiveSelector =
       "button, a, input, select, textarea, label, summary, details";
     const interactiveContainerSelector =
-      ".overlay-sidebar, .overlay-rail, .overlay-nav";
+      ".overlay-sidebar, .overlay-rail, .overlay-nav, .paint-toolbox, .paint-options";
     if (
       target &&
       (target.closest(interactiveSelector) ||

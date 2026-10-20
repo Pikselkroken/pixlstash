@@ -520,6 +520,21 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.paint.tool.value).toBe("eraser");
   });
 
+  it("keeps the chrome up when the toolbox or options strip is clicked between its buttons", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+    for (const selector of [".paint-toolbox", ".paint-options"]) {
+      const strip = wrapper.find(selector);
+      expect(strip.exists()).toBe(true);
+      await strip.trigger("click");
+      expect(wrapper.find(".overlay-shell").classes()).not.toContain(
+        "chrome-hidden",
+      );
+    }
+    later.mockRestore();
+  });
+
   it("does not move a reader who stepped on while the result was read", async () => {
     gridRows = [{ id: 8, tags: [] }];
     const wrapper = await openOn(

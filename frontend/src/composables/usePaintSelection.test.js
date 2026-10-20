@@ -60,6 +60,21 @@ describe("usePaintSelection", () => {
     expect(paint.steps.value[0]).toMatchObject({ point: [0.5, 0.5], tolerance: 32 });
   });
 
+  it("retunes the wand's tolerance by dragging on from the click, as GIMP does", () => {
+    const paint = make();
+    paint.setTool("wand");
+    paint.begin({ x: 0.5, y: 0.5 });
+    paint.move({ x: 0.7, y: 0.5 });
+    expect(paint.steps.value).toHaveLength(1);
+    expect(paint.steps.value[0].tolerance).toBe(32 + 51);
+    paint.move({ x: 0.3, y: 0.3 });
+    paint.end();
+    // Left and up take away, never below zero; the next click starts there.
+    expect(paint.steps.value[0].tolerance).toBe(0);
+    expect(paint.tolerance.value).toBe(0);
+    expect(paint.draft.value).toBeNull();
+  });
+
   it("sizes a brush stroke by the picture's shorter side; the eraser subtracts", () => {
     const paint = make();
     paint.setTool("brush");
@@ -95,6 +110,18 @@ describe("usePaintSelection", () => {
     paint.end();
     expect(paint.steps.value).toEqual([]);
     expect(paint.cropBox.value).toEqual([0.1, 0.1, 0.4, 0.5]);
+  });
+
+  it("leaves the black-and-white view on the next gesture and on Clear", () => {
+    const paint = make();
+    paint.setTool("wand");
+    paint.toggleMask();
+    expect(paint.showMask.value).toBe(true);
+    paint.begin({ x: 0.5, y: 0.5 });
+    expect(paint.showMask.value).toBe(false);
+    paint.toggleMask();
+    paint.clear();
+    expect(paint.showMask.value).toBe(false);
   });
 
   it("undoes, inverts, and starts afresh on another picture", async () => {

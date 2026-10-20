@@ -41,6 +41,8 @@ const PREVIEW_DELAY_MS = 120;
 // A path point closer than this to the last one (a fraction of the picture)
 // adds nothing a mask could show, and a long stroke stays a short document.
 const MIN_POINT_STEP = 0.002;
+// Tolerance gained by dragging the wand across the whole picture.
+const WAND_DRAG_RANGE = 255;
 
 function round(value) {
   return Math.round(value * 10000) / 10000;
@@ -92,8 +94,11 @@ export function usePaintSelection({ pictureId, dims }) {
     return mode.value;
   }
 
+  // A new gesture is drawn to be seen on the picture, so it leaves the
+  // black-and-white view; the eye is a look, not a mode.
   function commit(step) {
     steps.value = [...steps.value, step];
+    showMask.value = false;
   }
 
   /** A pointer went down at `p` (fractions) with the tool in hand. */
@@ -107,6 +112,9 @@ export function usePaintSelection({ pictureId, dims }) {
         point: point(p),
         tolerance: tolerance.value,
       });
+      // As in GIMP: dragging on from the click retunes that region's
+      // tolerance, right or down for more, left or up for less.
+      draft.value = { tool: "wand", start: p, tolerance: tolerance.value };
       return;
     }
     if (chosen === "rect" || chosen === "ellipse" || chosen === "crop") {
@@ -119,6 +127,18 @@ export function usePaintSelection({ pictureId, dims }) {
   function move(p) {
     const current = draft.value;
     if (!current) return;
+    if (current.tool === "wand") {
+      const drag = p.x - current.start.x + (p.y - current.start.y);
+      const retuned = Math.max(
+        0,
+        Math.min(255, Math.round(current.tolerance + drag * WAND_DRAG_RANGE)),
+      );
+      const last = steps.value[steps.value.length - 1];
+      if (last?.tool !== "wand" || last.tolerance === retuned) return;
+      tolerance.value = retuned;
+      steps.value = [...steps.value.slice(0, -1), { ...last, tolerance: retuned }];
+      return;
+    }
     if (current.points) {
       const last = current.points[current.points.length - 1];
       if (Math.hypot(p.x - last.x, p.y - last.y) < MIN_POINT_STEP) return;
@@ -131,7 +151,7 @@ export function usePaintSelection({ pictureId, dims }) {
   function end() {
     const current = draft.value;
     draft.value = null;
-    if (!current) return;
+    if (!current || current.tool === "wand") return;
     if (current.start) {
       const box = [
         round(Math.min(current.start.x, current.end.x)),
@@ -206,6 +226,7 @@ export function usePaintSelection({ pictureId, dims }) {
   function clear() {
     steps.value = [];
     draft.value = null;
+    showMask.value = false;
   }
 
   // A hand selection belongs to the picture it was drawn on.
