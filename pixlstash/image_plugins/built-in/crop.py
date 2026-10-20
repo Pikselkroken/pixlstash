@@ -22,7 +22,7 @@ class CropPlugin(ImagePlugin):
     name = "crop"
     display_name = "Crop"
     description = "Crop pictures to a box given as fractions of each picture."
-    author = "Gaute Lindkvist <lindkvis@gmail.com>"
+    author = "Gaute Lindkvist <https://github.com/pikselkroken/pixlstash>"
     license = "GPL-3.0-only"
     models = []
     supports_images = True
