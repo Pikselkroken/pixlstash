@@ -580,6 +580,27 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.paint.tool.value).toBe("eraser");
   });
 
+  it("clears the selection on the first Escape and closes on the next", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    wrapper.vm.paint.setTool("wand");
+    wrapper.vm.paint.begin({ x: 0.5, y: 0.5 });
+    wrapper.vm.paint.end();
+    // From a Refine slider just let go of, as from anywhere else.
+    const slider = document.createElement("input");
+    slider.type = "range";
+    document.body.appendChild(slider);
+    slider.focus();
+    slider.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    slider.remove();
+    expect(wrapper.vm.paint.hasSelection.value).toBe(false);
+    expect(wrapper.emitted("close")).toBeUndefined();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
   it("keeps the chrome up when the toolbox or options strip is clicked between its buttons", async () => {
     const wrapper = await openOn(7, undefined, configured);
     await wrapper.findAll(".inspector-tab")[2].trigger("click");

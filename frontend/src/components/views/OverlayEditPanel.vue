@@ -53,8 +53,14 @@
                   paint.showMask.value ? "mdi-eye-off-outline" : "mdi-eye-outline"
                 }}</v-icon>
               </button>
-              <button class="edit-sec-act" type="button" @click="paint.clear()">
+              <button
+                class="edit-sec-act edit-sec-act--clear"
+                type="button"
+                aria-keyshortcuts="Escape"
+                @click="paint.clear()"
+              >
                 Clear
+                <kbd class="edit-kbd" aria-hidden="true">Esc</kbd>
               </button>
             </span>
           </div>
@@ -905,6 +911,27 @@ defineExpose({ submit });
 
 .edit-sec-act:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+/* Clear is what Escape does first, so it carries the selection's olive (the
+   dark-surface one: the lightbox is dark in either theme). */
+.edit-sec-act--clear {
+  background: rgba(var(--v-theme-dark-surface-primary), 0.2);
+  color: rgb(var(--v-theme-dark-surface-primary));
+}
+
+.edit-sec-act--clear:hover {
+  background: rgba(var(--v-theme-dark-surface-primary), 0.32);
+  color: rgb(var(--v-theme-dark-surface-primary));
+}
+
+.edit-kbd {
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-dark-surface), 0.15);
   color: rgb(var(--v-theme-on-dark-surface));
 }
 

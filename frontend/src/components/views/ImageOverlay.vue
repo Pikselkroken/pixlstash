@@ -2747,6 +2747,10 @@ function handleKeydown(e) {
       } else if (target.tagName === "SELECT") {
         // Close the select dropdown on ESC, since it doesn't do that by default.
         target.blur();
+      } else if (target.type === "range" || target.type === "checkbox") {
+        // Nothing is typed into a slider or a checkbox: a Refine slider
+        // just let go of must not stop Escape clearing the selection.
+        target.blur();
       } else {
         return;
       }
@@ -2787,6 +2791,9 @@ function handleKeydown(e) {
       // The gesture or the crop frame, not the lightbox.
       paint.cancel();
       paint.cropBox.value = null;
+    } else if (paintActive.value && paint.hasSelection.value) {
+      // The selection goes first; the next Escape closes the lightbox.
+      paint.clear();
     } else if (drawMode.value) {
       clearDrawMode();
     } else if (pluginMenuOpen.value) {
