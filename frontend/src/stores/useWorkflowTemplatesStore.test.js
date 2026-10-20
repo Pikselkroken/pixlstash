@@ -138,6 +138,8 @@ describe("the Templates tab's list", () => {
     // And by readiness, which would otherwise always come back empty.
     store.setFilters({ readiness: "partner" });
     expect(keys(store)).toEqual(["partner"]);
+    // Nor does the chip then claim they are hidden.
+    expect(store.filterChips.map((chip) => chip.key)).toEqual(["readiness"]);
   });
 
   it("sorts by use", async () => {

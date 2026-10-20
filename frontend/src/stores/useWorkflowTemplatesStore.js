@@ -287,7 +287,12 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         remove: () => setFilters({ readiness: null }),
       });
     }
-    if (!f.showPartner && f.source !== "partner" && partnerCount.value) {
+    if (
+      !f.showPartner &&
+      f.source !== "partner" &&
+      f.readiness !== "partner" &&
+      partnerCount.value
+    ) {
       chips.push({
         key: "partner",
         kind: "Partner API",
