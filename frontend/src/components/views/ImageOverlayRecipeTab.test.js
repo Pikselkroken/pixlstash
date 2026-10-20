@@ -601,6 +601,24 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.emitted("close")).toHaveLength(1);
   });
 
+  it("keeps the chrome up when a control's own click re-renders the part clicked", async () => {
+    // Run edit's play icon goes as the run starts, before the lightbox sees
+    // the click: detached, it has no button left to find above it.
+    const wrapper = await openOn(7, undefined, configured);
+    const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+    const button = document.createElement("button");
+    const icon = document.createElement("i");
+    button.appendChild(icon);
+    wrapper.find(".overlay-canvas").element.appendChild(button);
+    icon.addEventListener("click", () => icon.remove());
+    icon.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    expect(wrapper.find(".overlay-shell").classes()).not.toContain(
+      "chrome-hidden",
+    );
+    later.mockRestore();
+  });
+
   it("keeps the chrome up when the toolbox or options strip is clicked between its buttons", async () => {
     const wrapper = await openOn(7, undefined, configured);
     await wrapper.findAll(".inspector-tab")[2].trigger("click");

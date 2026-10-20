@@ -3015,7 +3015,10 @@ function handleOverlayClick(event) {
     return;
   }
   const target = event?.target;
-  if (!target || !(target instanceof HTMLElement)) {
+  // A control whose own click re-rendered it away (Run edit becoming the
+  // run's progress) is detached by now, so `closest` below finds nothing: it
+  // was a control, not the picture.
+  if (!target || !(target instanceof HTMLElement) || !target.isConnected) {
     handleUserActivity();
     return;
   }
