@@ -11841,6 +11841,22 @@ def test_a_loader_pinned_to_the_selected_picture_reads_its_mask():
     )
 
 
+def test_a_load_image_mask_on_alpha_reads_the_selection():
+    """LoadImageMask hands on MASK at output 0, and only its alpha channel is
+    the selection; a colour channel is the picture, not the mask."""
+    graph = _i2i_graph()
+    graph["5"] = {
+        "class_type": "LoadImageMask",
+        "inputs": {"image": "subject.png", "channel": "alpha"},
+    }
+    graph["3"]["inputs"]["noise_mask"] = ["5", 0]
+    target = workflow_bindings.picture_target(graph, "5", "LoadImageMask")
+    feeds = [workflows_routes.Feed([target], 9)]
+    assert workflows_routes._reads_mask(graph, feeds, 9)
+    graph["5"]["inputs"]["channel"] = "red"
+    assert not workflows_routes._reads_mask(graph, feeds, 9)
+
+
 def test_a_selection_turns_a_pack_picture_loader_into_an_upload(pack):
     """The pack's loader would fetch the picture by id, without the mask, so
     the selected picture loads through LoadImage instead, wired the same."""

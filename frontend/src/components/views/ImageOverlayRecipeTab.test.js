@@ -697,6 +697,23 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.paint.steps.value).toEqual([]);
   });
 
+  it("counts a pick whose row is not loaded, refusing only a known video", async () => {
+    const wrapper = await openOn(7, [
+      { id: 7, tags: [], format: "png" },
+      { id: 4, tags: [], format: "mp4" },
+    ]);
+    const filmstrip = wrapper.findComponent({ name: "OverlayFilmstrip" });
+    filmstrip.vm.$emit("pick", { id: 99, index: 5 });
+    await flush();
+    expect(wrapper.vm.filmstripCompareReason).toBeNull();
+    filmstrip.vm.$emit("pick", { id: 99, index: 5 });
+    filmstrip.vm.$emit("pick", { id: 4, index: 1 });
+    await flush();
+    expect(wrapper.vm.filmstripCompareReason).toBe(
+      "Compare works on pictures, not videos",
+    );
+  });
+
   it("lays the grid's first picked picture over the second", async () => {
     const wrapper = await openOn(5, [
       { id: 7, tags: [], format: "png" },

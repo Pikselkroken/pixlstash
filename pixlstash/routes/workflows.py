@@ -3160,18 +3160,26 @@ def _reads_mask(graph: dict, feeds: list[Feed], picture_id: int) -> bool:
 
     ``LoadImage`` and the ComfyUI-PixlStash picture loader both hand on
     ``IMAGE`` then ``MASK``, so a link to output 1 of either is a mask read.
+    ``LoadImageMask`` hands on only ``MASK``, at output 0, and it is the
+    selection only from the ``alpha`` channel: any other is a colour of the
+    picture.
     """
-    loaders = {
-        str(workflow_bindings.target_node(graph, target.get("path")))
-        for feed in feeds
-        if feed.picture_id in (None, picture_id)
-        for target in feed.targets
-    }
+    mask_output: dict[str, int] = {}
+    for feed in feeds:
+        if feed.picture_id not in (None, picture_id):
+            continue
+        for target in feed.targets:
+            node_id = str(workflow_bindings.target_node(graph, target.get("path")))
+            node = graph.get(node_id)
+            if isinstance(node, dict) and node.get("class_type") == "LoadImageMask":
+                if (node.get("inputs") or {}).get("channel") == "alpha":
+                    mask_output[node_id] = 0
+            else:
+                mask_output[node_id] = 1
     return any(
         isinstance(value, list)
         and len(value) == 2
-        and str(value[0]) in loaders
-        and value[1] == 1
+        and mask_output.get(str(value[0])) == value[1]
         for node in graph.values()
         if isinstance(node, dict)
         for value in (node.get("inputs") or {}).values()

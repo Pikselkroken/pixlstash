@@ -3905,17 +3905,18 @@ function onFilmstripPick(item) {
     : [...picks, id];
 }
 
-const filmstripPickRows = computed(() =>
-  filmstripPicks.value.map(
-    (id) => filmstripImageById.value.get(id) || allImageById.value.get(id),
-  ),
-);
-
 const filmstripCompareReason = computed(() => {
   if (filmstripPicks.value.length !== 2) {
     return "Ctrl-click a picture in the filmstrip to compare it with this one";
   }
-  return compareBlockReason(filmstripPickRows.value);
+  // A pick whose row is not in the lightbox's lists is still a picture
+  // (`startCompare` reads it by id): only a known video blocks.
+  const rows = filmstripPicks.value.map(
+    (id) =>
+      filmstripImageById.value.get(id) ||
+      allImageById.value.get(id) || { id, format: "png" },
+  );
+  return compareBlockReason(rows);
 });
 
 function compareFilmstripPicks() {
