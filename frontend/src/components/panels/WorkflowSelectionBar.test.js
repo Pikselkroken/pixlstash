@@ -598,3 +598,24 @@ describe("Open in ComfyUI", () => {
     wrapper.unmount();
   });
 });
+
+// #2000: a draft has no graph to run, and Open in ComfyUI is how it is
+// finished, so only Run is refused, with the way out in its tooltip.
+describe("a draft's gates", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("refuses Run and says what finishes it", async () => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("x", { manual: true, draft: true })];
+    store.selectRange(["x"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    expect(enabled(wrapper, "run")).toBe(false);
+    expect(tooltip(wrapper, "run")).toBe(
+      "Finish it in ComfyUI first: open it there and save it",
+    );
+    // A workflow that is not a draft still runs.
+    store.selectRange(["a"]);
+    await flushPromises();
+    expect(enabled(wrapper, "run")).toBe(true);
+  });
+});

@@ -1576,6 +1576,20 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Store ComfyUI's API conversion of an editor workflow beside its stored file, storing the file first as an import would; writes stored workflow files like the import beside it; owner only",
     ),
+    # The templates the owner's ComfyUI serves (#2000): reads that make this
+    # server ask the owner's ComfyUI, and a write that stores workflows.
+    ("GET", "/api/v1/comfyui/templates"): RoutePolicy(
+        _OWNER,
+        justification="Makes this server read the owner's ComfyUI template list and says which model files the shelf holds; owner only like GET /comfyui/pixlstash-node",
+    ),
+    ("GET", "/api/v1/comfyui/templates/thumbnail"): RoutePolicy(
+        _OWNER,
+        justification="Passes through a picture from the owner's ComfyUI for a template the list holds, never a caller-made path; owner only like the list",
+    ),
+    ("POST", "/api/v1/comfyui/templates/add"): RoutePolicy(
+        _OWNER,
+        justification="Stores templates read from the owner's ComfyUI as manual workflows, the authority POST /comfyui/workflows/import already has; owner only",
+    ),
     ("GET", "/api/v1/comfyui/pictures/{picture_id}/workflow"): RoutePolicy(
         _PIC, id_param="picture_id"
     ),

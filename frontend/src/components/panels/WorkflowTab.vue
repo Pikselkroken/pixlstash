@@ -1056,7 +1056,7 @@
           variant="primary"
           icon-left="play"
           block
-          :aria-disabled="runTarget ? undefined : 'true'"
+          :aria-disabled="runTarget && !runTarget.draft ? undefined : 'true'"
           :aria-describedby="runDescribedBy"
           @click="run"
         >
@@ -1172,6 +1172,17 @@
         </p>
         <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
           Run one workflow at a time
+        </p>
+        <!-- A draft (#2000): made from a ComfyUI template, with no graph
+             PixlStash can run until ComfyUI has saved it. Open in ComfyUI
+             beside Run… is how it is finished. -->
+        <p
+          v-else-if="runTarget?.draft"
+          id="wftab-draft-reason"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-draft-reason"
+        >
+          Finish it in ComfyUI first: open it there and save it.
         </p>
       </div>
     </template>
@@ -4204,9 +4215,10 @@ function toggleHidden() {
 const runTarget = computed(() => (multiple.value ? null : card.value));
 
 /** Why Run… refuses, when it is a reason worth a sentence. */
-const runDescribedBy = computed(() =>
-  multiple.value ? "wftab-run-reason" : undefined,
-);
+const runDescribedBy = computed(() => {
+  if (multiple.value) return "wftab-run-reason";
+  return runTarget.value?.draft ? "wftab-draft-reason" : undefined;
+});
 
 /** What Open in ComfyUI is described by: why it refuses, or what it opens. */
 const openDescribedBy = computed(() => {
@@ -4228,7 +4240,7 @@ const openDescribedBy = computed(() => {
  */
 function run() {
   const target = runTarget.value;
-  if (!target) return;
+  if (!target || target.draft) return;
   runDialog.openRun({
     kind: "card",
     workflowId: target.id,

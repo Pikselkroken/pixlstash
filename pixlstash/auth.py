@@ -353,6 +353,11 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # Every stored workflow file by name: the workflow library's listing
         # under another path, hidden workflows included.
         "/api/v1/comfyui/workflows",
+        # The templates the owner's ComfyUI serves (#2000): it makes this
+        # server read the owner's ComfyUI and says which model files the
+        # shelf holds, so the rollback must not hand either out.
+        "/api/v1/comfyui/templates",
+        "/api/v1/comfyui/templates/thumbnail",
     }
 )
 

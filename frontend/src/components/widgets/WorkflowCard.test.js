@@ -1472,3 +1472,54 @@ describe("a run that ended without a picture", () => {
     );
   });
 });
+
+// #2000: a workflow made from a ComfyUI template that PixlStash could not
+// convert has no graph to run until ComfyUI has saved it.
+describe("a draft", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  const draft = {
+    id: "manual:abc",
+    name: "Flux.1 Krea Dev",
+    manual: true,
+    draft: true,
+    picture_count: 0,
+    covers: [],
+  };
+
+  it("is hatched, says why it cannot run and offers Finish where Run would be", () => {
+    const wrapper = mountCard(draft);
+    const cover = wrapper.find('[data-testid="wf-card-draft"]');
+    expect(cover.exists()).toBe(true);
+    expect(cover.text()).toContain("Not runnable until ComfyUI has saved it");
+    expect(wrapper.find('[data-testid="wf-card-finish"]').text()).toContain(
+      "Finish in ComfyUI…",
+    );
+    expect(wrapper.text()).not.toContain("Run it…");
+    expect(
+      wrapper.findComponent({ name: "ChipRow" }).props("items")[0].label,
+    ).toBe("Draft · from a template");
+    expect(wrapper.find("article").attributes("aria-label")).toContain(
+      "Draft · from a template",
+    );
+  });
+
+  it("opens it in ComfyUI, the one way a draft is finished", async () => {
+    const { useFilterStore } = await import("../../stores/useFilterStore");
+    useFilterStore().comfyuiUrl = "http://127.0.0.1:8188";
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    try {
+      const wrapper = mountCard(draft);
+      await wrapper.find('[data-testid="wf-card-finish"]').trigger("click");
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open.mock.calls[0][0]).toContain("pixlstash_workflow=manual%3Aabc");
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("is an ordinary card once it is not a draft", () => {
+    const wrapper = mountCard({ ...draft, draft: false });
+    expect(wrapper.find('[data-testid="wf-card-draft"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("Run it…");
+  });
+});

@@ -20,6 +20,7 @@ import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
+import { useWorkflowTemplatesStore } from "./stores/useWorkflowTemplatesStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useRunDialogStore } from "./stores/useRunDialogStore";
 import { useFolderMappingStore } from "./stores/useFolderMappingStore";
@@ -95,6 +96,9 @@ const WorkflowsView = defineAsyncComponent(
 // Its right rail (v1.12 F3), a component of its own rather than a branch
 // inside StatsSidebar: that panel fetches on watchers, so a
 // hidden-but-mounted copy would keep asking for numbers nobody is looking at.
+const TemplateInspector = defineAsyncComponent(
+  () => import("./components/panels/TemplateInspector.vue"),
+);
 const WorkflowTab = defineAsyncComponent(
   () => import("./components/panels/WorkflowTab.vue"),
 );
@@ -118,6 +122,7 @@ const selectionStore = useSelectionStore();
 const filterStore = useFilterStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
+const workflowTemplatesStore = useWorkflowTemplatesStore();
 const userPrefsStore = useUserPrefsStore();
 const runDialogStore = useRunDialogStore();
 const projectStore = useProjectStore();
@@ -944,7 +949,12 @@ defineExpose({
              went with the shelf in F1b, and the run panel that used to outrank
              both became a popup in F5, so `/workflows` is the one branch left
              ahead of the stats panel. -->
-        <WorkflowTab v-if="isWorkflowsView" />
+        <!-- The Workflows view's Templates tab (#2000) has its own: a template
+             is not a workflow yet, so nothing of the Workflow tab applies. -->
+        <TemplateInspector
+          v-if="isWorkflowsView && workflowTemplatesStore.shown"
+        />
+        <WorkflowTab v-else-if="isWorkflowsView" />
         <ModelsRail v-else-if="isModelsView" />
         <StatsSidebar v-else />
       </div>

@@ -1487,6 +1487,28 @@ the workflow the picture's own variant is in. `workflow_key` and
 
 ---
 
+**Templates from the owner's ComfyUI, and drafts (#2000).** The Workflows
+view's Templates tab reads `GET /comfyui/templates` (`listTemplates`):
+`{comfyui_url, reachable, detail, templates}`, always 200, `reachable: false`
+with `detail` being the tab's empty state. Each template is `{key, module,
+name, source: builtin|pack|partner, pack_loaded, title, description,
+category, media_type, tags, model_names, date, usage, size, tutorial_url,
+thumbnail, files: [{name, directory, url, present}]}`; readiness (ready,
+missing, partner, pack not loaded) is the client's reading of `source`,
+`pack_loaded` and `present`, and the server sends no sizes per file. Its
+picture is `GET /comfyui/templates/thumbnail?module=&name=`, built by
+`templateThumbnailUrl` and never as a raw path. `POST /comfyui/templates/add`
+takes `{templates: [{module, name}]}` (1 to 50) and answers `{added:
+[{module, name, workflow_id, title, draft, problems}], failed: [{module,
+name, detail}]}`, announcing the new workflows as `imported` like an import.
+A stored template that did not convert is a **draft**: `WorkflowCard.draft`
+on the grid and detail reads, until ComfyUI saves it. The client offers no
+Run on one and offers *Open in ComfyUI* as the way to finish it; the server
+refuses a run of it with the `ui_format` reason all the same.
+`GET /workflows/{id}/graph` answers a draft with a 409 unless asked with
+`drafts=true`, which ComfyUI-PixlStash does from #2000 on: then `draft: true`,
+`workflow: null` and the template as `editor`.
+
 ### 2.4 The `/libraries` contract
 
 Six routes, and the split between them is a locality split rather than a

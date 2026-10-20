@@ -84,9 +84,15 @@ vi.mock("../../api/recipes", () => ({
 }));
 const importWorkflow = vi.fn();
 const getPixlstashNode = vi.fn();
+const listTemplates = vi.fn();
+const addTemplates = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   importWorkflow: (...args) => importWorkflow(...args),
   getPixlstashNode: (...args) => getPixlstashNode(...args),
+  // The Templates tab (#2000).
+  listTemplates: (...args) => listTemplates(...args),
+  addTemplates: (...args) => addTemplates(...args),
+  templateThumbnailUrl: ({ name }) => `/thumbs/${name}`,
 }));
 
 import WorkflowsView from "./WorkflowsView.vue";
@@ -1017,11 +1023,17 @@ describe("the app-wide toolbar tail", () => {
     const { readFileSync } = await import("node:fs");
     const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
     expect(app).not.toContain("WorkflowRunPanel");
-    const rail = app.indexOf("<WorkflowTab v-if");
+    // The Templates tab's inspector (#2000) is the one other branch, and only
+    // on this view while that tab is shown; the Workflow tab follows it.
+    const rail = app.indexOf("<TemplateInspector");
     expect(rail).toBeGreaterThan(-1);
-    expect(app.slice(rail, rail + 80)).toContain('v-if="isWorkflowsView"');
+    expect(app.slice(rail, rail + 120)).toContain(
+      'v-if="isWorkflowsView && workflowTemplatesStore.shown"',
+    );
+    const tab = app.indexOf('<WorkflowTab v-else-if="isWorkflowsView"');
+    expect(tab).toBeGreaterThan(rail);
     // The stats panel is still the fallback, not a second branch above it.
-    expect(app.slice(rail, rail + 200)).toContain("<StatsSidebar v-else");
+    expect(app.slice(tab, tab + 200)).toContain("<StatsSidebar v-else");
   });
 });
 
@@ -1823,4 +1835,123 @@ it("names a card's shelf files for a model file dropped on it", async () => {
   expect(
     wrapper.find(".wfv-cell").attributes("data-model-drop-models"),
   ).toBe(`${"a".repeat(64)} ${"b".repeat(64)}`);
+});
+
+// #2000: the Templates tab beside Mine. The grid, the toolbar's controls and
+// the right rail switch over; Mine is left exactly as it was.
+describe("Mine | Templates", () => {
+  const TEMPLATES = [
+    {
+      key: "default/ready",
+      module: "default",
+      name: "ready",
+      source: "builtin",
+      title: "Ready one",
+      files: [{ name: "ae.safetensors", directory: "vae", present: true }],
+    },
+    {
+      key: "default/api_x",
+      module: "default",
+      name: "api_x",
+      source: "partner",
+      title: "Partner one",
+      files: [],
+    },
+  ];
+
+  beforeEach(() => {
+    listTemplates.mockReset();
+    addTemplates.mockReset();
+  });
+
+  it("reads the templates only when the tab is first shown, and draws them", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: true,
+      templates: TEMPLATES,
+    });
+    const wrapper = await grid();
+    expect(listTemplates).not.toHaveBeenCalled();
+    const tab = wrapper.find('[data-testid="wfv-tab-templates"]');
+    expect(tab.attributes("aria-selected")).toBe("false");
+
+    await tab.trigger("click");
+    await flush();
+
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+    expect(tab.attributes("aria-selected")).toBe("true");
+    expect(wrapper.find(".wfv-grid").exists()).toBe(false);
+    // The partner template is hidden by default, and the strip says so.
+    const titles = wrapper
+      .findAll('[data-testid="template-card"]')
+      .map((card) => card.attributes("aria-label"));
+    expect(titles).toEqual(["Ready one, ComfyUI template, Ready to run"]);
+    expect(wrapper.text()).toContain("hidden (1)");
+    expect(wrapper.find('[data-testid="wtp-source"]').text()).toContain(
+      "http://127.0.0.1:8188",
+    );
+
+    await wrapper.find('[data-testid="wfv-tab-mine"]').trigger("click");
+    expect(cardKeys(wrapper)).toEqual(["a", "b", "c", "d", "e", "f"]);
+  });
+
+  it("moves between the tabs with the arrow keys", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-mine"]').trigger("keydown", {
+      key: "ArrowRight",
+    });
+    expect(
+      wrapper.find('[data-testid="wfv-tab-templates"]').attributes("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("says where the list comes from when ComfyUI does not answer", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: false,
+      detail: "Nothing is answering for templates at http://127.0.0.1:8188.",
+      templates: [],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    const empty = wrapper.find('[data-testid="wtp-unreachable"]');
+    expect(empty.text()).toContain("Templates come from your ComfyUI");
+    expect(empty.text()).toContain("Nothing is answering at http://127.0.0.1:8188");
+    await empty.find("button").trigger("click");
+    expect(wrapper.emitted("open-settings")).toEqual([["comfyui"]]);
+  });
+
+  it("adds the selection, then lands on Mine with what was made selected", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: true,
+      templates: TEMPLATES,
+    });
+    addTemplates.mockResolvedValue({
+      added: [{ module: "default", name: "ready", workflow_id: "c", draft: true }],
+      failed: [],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="template-card"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="wtp-add"]').trigger("click");
+    await flush();
+    await flush();
+
+    expect(addTemplates.mock.calls[0][0].map((t) => t.key)).toEqual([
+      "default/ready",
+    ]);
+    expect(
+      wrapper.find('[data-testid="wfv-tab-mine"]').attributes("aria-selected"),
+    ).toBe("true");
+    expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(JSON.stringify(useNoticeStore().$state)).toContain(
+      "It is a draft: open it in ComfyUI and save it to finish it.",
+    );
+  });
 });

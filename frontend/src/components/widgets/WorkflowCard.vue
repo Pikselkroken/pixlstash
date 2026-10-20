@@ -10,8 +10,31 @@
          whether or not there was an image for it, so a workflow with one or two
          pictures showed its picture beside painted `input-background`
          rectangles and read as a card that had failed to load (#1456). -->
+    <!-- A draft (#2000): a workflow made from a ComfyUI template that has no
+         graph PixlStash can run yet. Hatched, says why, and offers the one
+         verb that finishes it where Run would be. -->
     <div
-      v-if="hasPictures"
+      v-if="card.draft"
+      class="wf-card__cover wf-card__cover--empty wf-card__cover--draft"
+      data-testid="wf-card-draft"
+    >
+      <span class="wf-card__draft-label" aria-hidden="true">Draft</span>
+      <span class="wf-card__empty-line" aria-hidden="true"
+        >Not runnable until ComfyUI has saved it</span
+      >
+      <AppButton
+        variant="outline"
+        size="sm"
+        tabindex="-1"
+        data-testid="wf-card-finish"
+        @click.stop="openWorkflowInComfyui(card.id)"
+      >
+        <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
+        Finish in ComfyUI…
+      </AppButton>
+    </div>
+    <div
+      v-else-if="hasPictures"
       class="wf-card__cover"
       :class="`wf-card__cover--${coverCells.length}`"
     >
@@ -204,6 +227,7 @@ import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { workflowCoverUrl } from "../../api/workflows";
+import { openWorkflowInComfyui } from "../../composables/useComfyuiOpen";
 import { quantBadge } from "../../utils/modelShelf";
 import {
   cardAccessibleName,
@@ -594,6 +618,26 @@ const accessibleName = computed(() =>
 .wf-card__badge--bottom {
   top: auto;
   bottom: var(--space-3);
+}
+
+/* The draft's cover: the empty cover's ground under a hatch, so it reads as
+   not finished from across the grid, in the selection olive at a wash. */
+.wf-card__cover--draft {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(var(--v-theme-primary), 0.12) 0 var(--space-2),
+      transparent var(--space-2) var(--space-4)
+    ),
+    rgb(var(--v-theme-input-background));
+}
+
+.wf-card__draft-label {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wf-card__cover--empty {

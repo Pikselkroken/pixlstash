@@ -6449,3 +6449,20 @@ describe("the tab as the editor (#1850)", () => {
     });
   });
 });
+
+// #2000: a draft has no graph PixlStash can run until ComfyUI has saved it.
+describe("a draft", () => {
+  it("keeps Run… on screen, refused, with what finishes it attached", async () => {
+    const { wrapper } = await mountWith([KEY], [card({ draft: true, manual: true })]);
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
+    expect(run.attributes("aria-disabled")).toBe("true");
+    expect(wrapper.find(`#${run.attributes("aria-describedby")}`).text()).toBe(
+      "Finish it in ComfyUI first: open it there and save it.",
+    );
+    await run.trigger("click");
+    await flush(wrapper);
+    expect(useRunDialogStore().source).toBe(null);
+  });
+});

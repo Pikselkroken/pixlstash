@@ -24094,3 +24094,396 @@ def test_saves_of_one_opening_in_comfyui_are_one_version(saving):
 
     r = _put_graph(env, env.manual, _strength(0.8), opening="../not an id")
     assert r.status_code == 422, r.text
+
+
+# ===========================================================================
+# Workflows from the templates the owner's ComfyUI serves (#2000)
+# ===========================================================================
+
+_TEMPLATE_SUBGRAPH_VAE = "template-only-vae.safetensors"
+# A built-in template: _EDITOR_WORKFLOW with the files its loaders name, one at
+# the top level and one inside a subgraph definition, as real templates do.
+_TEMPLATE_GRAPH = {
+    **json.loads(json.dumps(_EDITOR_WORKFLOW)),
+    "definitions": {
+        "subgraphs": [
+            {
+                "id": "sub",
+                "nodes": [
+                    {
+                        "id": 9,
+                        "type": "VAELoader",
+                        "properties": {
+                            "models": [
+                                {
+                                    "name": _TEMPLATE_SUBGRAPH_VAE,
+                                    "url": "https://example.com/vae.safetensors",
+                                    "directory": "vae",
+                                }
+                            ]
+                        },
+                    }
+                ],
+            }
+        ]
+    },
+}
+_TEMPLATE_GRAPH["nodes"][0]["properties"] = {
+    "models": [
+        {
+            "name": _SHELF_FILENAME.upper(),
+            "url": "https://example.com/unet.safetensors",
+            "directory": "diffusion_models",
+        }
+    ]
+}
+_TEMPLATE_INDEX = [
+    {
+        "moduleName": "default",
+        "category": "Foundation",
+        "title": "Image",
+        "templates": [
+            {
+                "name": "image_example",
+                "title": "Example, text to image",
+                "description": "A template for the tests.",
+                "mediaType": "image",
+                "mediaSubtype": "webp",
+                "tags": ["Text to Image"],
+                "models": ["Example"],
+                "size": 1234,
+            },
+            {
+                "name": "api_example",
+                "title": "Partner example",
+                "mediaType": "image",
+                "openSource": False,
+            },
+        ],
+    }
+]
+_TEMPLATE_PACKS = {"Example-Pack": ["pack example"]}
+_TEMPLATE_URL = "http://127.0.0.1:8188"
+
+
+class _Served:
+    """What the stand-in ComfyUI answers for one path."""
+
+    def __init__(self, body):
+        self.body = body
+        self.content = body if isinstance(body, bytes) else json.dumps(body).encode()
+
+    def json(self):
+        return self.body
+
+
+@pytest.fixture
+def comfyui_templates_served(workflow_env, monkeypatch):
+    """A ComfyUI serving _TEMPLATE_INDEX, one pack and their graphs.
+
+    Every path the service asks for is recorded, so a test can show a path
+    was never asked for. The conversion reads no ComfyUI by default, so an
+    added template is a draft; ``.object_info`` lets it convert.
+    """
+    from pixlstash.services import comfyui_templates
+
+    served = {
+        "/templates/index.json": _TEMPLATE_INDEX,
+        "/api/workflow_templates": _TEMPLATE_PACKS,
+        "/templates/image_example.json": _TEMPLATE_GRAPH,
+        "/templates/image_example-1.webp": b"RIFF-not-really-webp",
+        "/api/workflow_templates/Example-Pack/pack%20example.json": _EDITOR_WORKFLOW,
+    }
+    state = SimpleNamespace(asked=[], served=served, object_info=None)
+
+    def get(url, *, max_bytes):
+        assert url.startswith(_TEMPLATE_URL), url
+        path = url[len(_TEMPLATE_URL) :]
+        state.asked.append(path)
+        if path not in state.served:
+            raise requests.HTTPError("ComfyUI answered HTTP 404")
+        return _Served(state.served[path])
+
+    monkeypatch.setattr(comfyui_templates, "_get", get)
+    monkeypatch.setattr(
+        comfyui_module,
+        "_read_object_info",
+        lambda url, **_: (
+            (json.loads(json.dumps(state.object_info)), None)
+            if state.object_info
+            else (None, "refused")
+        ),
+    )
+    comfyui_templates.forget_listings()
+    try:
+        yield state
+    finally:
+        comfyui_templates.forget_listings()
+
+
+def _templates(owner, **params):
+    r = owner.get(f"{API}/comfyui/templates", params=params)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _add_templates(owner, *refs):
+    r = owner.post(
+        f"{API}/comfyui/templates/add",
+        json={"templates": [{"module": m, "name": n} for m, n in refs]},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _card(owner, workflow_id):
+    r = owner.get(f"{API}/workflows")
+    assert r.status_code == 200, r.text
+    return next(card for card in r.json()["cards"] if card["id"] == workflow_id)
+
+
+def test_the_template_list_reads_the_owners_comfyui(
+    workflow_env, comfyui_templates_served
+):
+    """Built-ins, partner and pack templates, each with what it downloads.
+
+    Wrong if the subgraph's file is missing (most templates keep their loaders
+    there), if the shelf's file is not matched across case, or if a partner
+    template's graph is read at all.
+    """
+    hub = workflow_env.server.hub
+    model_id = hub.fetchone(
+        "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )[0]
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable) "
+            "VALUES ('/home/me/unet', 'reference', 'fixed')"
+        )
+        folder_id = conn.execute(
+            "SELECT id FROM model_folder WHERE path = '/home/me/unet'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, ?, 'present')",
+            (model_id, folder_id, f"diffusion_models/{_SHELF_FILENAME}"),
+        )
+    try:
+        body = _templates(workflow_env.owner)
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,)
+            )
+            conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
+    assert (body["reachable"], body["comfyui_url"]) == (True, _TEMPLATE_URL)
+    listed = {t["key"]: t for t in body["templates"]}
+    assert set(listed) == {
+        "default/image_example",
+        "default/api_example",
+        "Example-Pack/pack example",
+    }
+    example = listed["default/image_example"]
+    assert (example["source"], example["category"], example["size"]) == (
+        "builtin",
+        "Image",
+        1234,
+    )
+    assert example["thumbnail"] is True
+    assert {(f["name"], f["directory"], f["present"]) for f in example["files"]} == {
+        (_SHELF_FILENAME.upper(), "diffusion_models", True),
+        (_TEMPLATE_SUBGRAPH_VAE, "vae", False),
+    }
+    assert listed["default/api_example"]["source"] == "partner"
+    assert listed["default/api_example"]["files"] == []
+    assert "/templates/api_example.json" not in comfyui_templates_served.asked
+    pack = listed["Example-Pack/pack example"]
+    assert (pack["source"], pack["pack_loaded"]) == ("pack", None)
+
+
+def test_the_template_list_says_when_comfyui_does_not_answer(
+    workflow_env, comfyui_templates_served
+):
+    """No list, and the address it asked: the Templates tab's empty state."""
+    comfyui_templates_served.served.clear()
+    body = _templates(workflow_env.owner, refresh="true")
+    assert body["reachable"] is False
+    assert body["templates"] == []
+    assert _TEMPLATE_URL in body["detail"]
+
+
+def test_a_template_thumbnail_is_fetched_only_for_a_listed_template(
+    workflow_env, comfyui_templates_served
+):
+    """Passed through with its type; a name the list lacks never reaches ComfyUI."""
+    owner = workflow_env.owner
+    r = owner.get(
+        f"{API}/comfyui/templates/thumbnail",
+        params={"module": "default", "name": "image_example"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "image/webp"
+    assert r.content == b"RIFF-not-really-webp"
+    r = owner.get(
+        f"{API}/comfyui/templates/thumbnail",
+        params={"module": "default", "name": "../../system_stats"},
+    )
+    assert r.status_code == 404, r.text
+    assert not any("system_stats" in path for path in comfyui_templates_served.asked)
+
+
+def test_a_template_that_converts_is_an_ordinary_workflow(
+    workflow_env, comfyui_templates_served
+):
+    """Stored with its conversion, runnable at once, and nothing marks it."""
+    comfyui_templates_served.object_info = _EDITOR_OBJECT_INFO
+    body = _add_templates(workflow_env.owner, ("default", "image_example"))
+    assert body["failed"] == []
+    (added,) = body["added"]
+    assert (added["title"], added["draft"]) == ("Example, text to image", False)
+    workflow_id = added["workflow_id"]
+    assert _api_document(workflow_env.server.hub, workflow_id) is not None
+    card = _card(workflow_env.owner, workflow_id)
+    assert (card["name"], card["draft"]) == ("Example, text to image", False)
+    assert (
+        workflow_env.server.hub.fetchone(
+            "SELECT COUNT(*) FROM workflow_origin WHERE workflow_name = ?",
+            (workflow_id,),
+        )[0]
+        == 0
+    )
+
+
+def test_a_template_that_does_not_convert_is_a_draft_until_comfyui_saves_it(
+    workflow_env, comfyui_templates_served, monkeypatch
+):
+    """The draft's whole life: refused, opened as its template, finished by a save.
+
+    Wrong if Run or the MCP export get a graph out of a draft, if an older
+    ComfyUI-PixlStash node is handed `workflow: null`, or if the save from
+    ComfyUI is refused for having nothing to compare with.
+    """
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
+    )
+    owner = workflow_env.owner
+    body = _add_templates(
+        owner, ("default", "image_example"), ("default", "not_listed")
+    )
+    (added,) = body["added"]
+    assert added["draft"] is True and added["problems"]
+    assert [f["name"] for f in body["failed"]] == ["not_listed"]
+    workflow_id = added["workflow_id"]
+    assert _card(owner, workflow_id)["draft"] is True
+
+    # Every reader of an API graph is refused, and told what the workflow is.
+    r = owner.get(f"{API}/workflows/{workflow_id}/graph")
+    assert r.status_code == 409, r.text
+    assert "draft made from a ComfyUI template" in r.json()["detail"]
+    reasons = [
+        reason["code"]
+        for group in _preflight(owner, workflow_id=workflow_id)["groups"]
+        for reason in group["reasons"]
+    ]
+    assert "ui_format" in reasons
+
+    # The node that asks for drafts gets the template to open as it is.
+    r = owner.get(f"{API}/workflows/{workflow_id}/graph", params={"drafts": "true"})
+    assert r.status_code == 200, r.text
+    opened = r.json()
+    assert (opened["draft"], opened["workflow"], opened["version"]) == (True, None, 1)
+    assert opened["editor"]["nodes"][0]["type"] == "UNETLoader"
+    assert opened["editor"]["extra"]["pixlstash_workflow_id"] == workflow_id
+
+    # ComfyUI's save of it is its graph from then on.
+    graph = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": _SHELF_FILENAME}},
+        "3": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["1", 0], "filename_prefix": "out"},
+        },
+    }
+    r = _put_graph(workflow_env, workflow_id, graph, editor=opened["editor"])
+    assert r.status_code == 200, r.text
+    assert (r.json()["version"], r.json()["new_workflow"]) == (2, False)
+    assert _card(owner, workflow_id)["draft"] is False
+    r = owner.get(f"{API}/workflows/{workflow_id}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["workflow"]["1"]["inputs"]["unet_name"] == _SHELF_FILENAME
+
+    # Deleting a draft takes its template row with it.
+    body = _add_templates(owner, ("default", "image_example"))
+    second = body["added"][0]["workflow_id"]
+    r = owner.delete(f"{API}/workflows/{second}")
+    assert r.status_code in {200, 204}, r.text
+    assert (
+        workflow_env.server.hub.fetchone(
+            "SELECT COUNT(*) FROM workflow_origin WHERE workflow_name = ?", (second,)
+        )[0]
+        == 0
+    )
+
+
+def test_the_templates_are_the_owners_alone(
+    workflow_env, comfyui_templates_served, monkeypatch
+):
+    """No share token reads the list or a picture, or adds; each layer refuses alone.
+
+    The owner reading both is the control that keeps the refusals from
+    proving a dead path.
+    """
+    server = workflow_env.server
+    reads = (
+        (f"{API}/comfyui/templates", {}),
+        (
+            f"{API}/comfyui/templates/thumbnail",
+            {"module": "default", "name": "image_example"},
+        ),
+    )
+    for path, _params in reads:
+        assert_real_route(server.api, "GET", path, path)
+        assert ROUTE_POLICIES[("GET", path)].policy is AccessPolicy.OWNER_ONLY
+    add = f"{API}/comfyui/templates/add"
+    assert_real_route(server.api, "POST", add, add)
+    assert ROUTE_POLICIES[("POST", add)].policy is AccessPolicy.OWNER_ONLY
+    clients = (
+        _bearer(server, _mint(workflow_env.owner, "template probe unscoped")),
+        _bearer(
+            server,
+            _mint(
+                workflow_env.owner,
+                "template probe scoped",
+                resource_type="character",
+                resource_id=workflow_env.character_id,
+            ),
+        ),
+    )
+
+    def refused_everywhere(detail: str) -> None:
+        for client in clients:
+            assert client.get(f"{API}/pictures").status_code == 200, (
+                "the token is dead; the refusal below would prove nothing"
+            )
+            for path, params in reads:
+                r = client.get(path, params=params)
+                assert r.status_code == 403, f"{path}: {r.status_code} {r.text}"
+                assert detail in r.text, r.text
+            r = client.post(
+                add,
+                json={"templates": [{"module": "default", "name": "image_example"}]},
+            )
+            assert r.status_code == 403, r.text
+        for path, params in reads:
+            r = workflow_env.owner.get(path, params=params)
+            assert r.status_code == 200, f"{path}: {r.text}"
+
+    previously_enforcing = server.authz._enforcing
+    try:
+        server.authz._enforcing = False
+        refused_everywhere("Token is read-only")
+        server.authz._enforcing = True
+        monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+        monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+        refused_everywhere("Owner-level")
+    finally:
+        server.authz._enforcing = previously_enforcing

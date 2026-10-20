@@ -6983,6 +6983,52 @@ pictures" as a *grid* would mean a new picture filter carried through
 four files owned by the grid, for a button §F1 does not ask for. The rail's tiles
 answer the same question inside the surface that raised it.
 
+#### The Templates tab: workflows from ComfyUI templates (#2000)
+
+**A second source on the same screen, not a dialog.** The toolbar leads with a
+`Mine | Templates` switch (`.tbm-seg`, `role="tablist"`, arrow keys activate on
+arrival, as the model shelf's Shelf | Training runs). Which tab is shown is
+`useWorkflowTemplatesStore.shown`, not view state, because the right rail is
+`App.vue`'s: it mounts `TemplateInspector.vue` in place of `WorkflowTab` while
+it is true. A `?workflow=` or `?topology=` link always lands on Mine. Mine is
+unchanged by the tab's existence.
+
+- **The list is read live and lazily**: `GET /comfyui/templates` the first time
+  the tab is shown, again only from the strip's re-read button (`refresh`). The
+  server reads the owner's ComfyUI and keeps the answer ten minutes; nothing
+  here asks ComfyUI itself, and every thumbnail goes through
+  `templateThumbnailUrl` (`api/comfyui.js`), never a raw path in `<img src>`.
+- **The tab's controls are the toolbar's own.** Sort, Filters and the name field
+  act on the templates store while the tab is shown (`WorkflowTemplateFilterMenu`
+  is flat: Media, Source, Readiness, Partner API; the name matches title,
+  description, tags, model names and file names). Partner API templates are
+  hidden by a default the strip shows as a chip with its count, so they are
+  never left out silently. The strip leads with "Downloaded from your ComfyUI at
+  <url>", so nothing on the tab reads as the owner's own work.
+- **Readiness is one function** (`templateReadiness`): `partner`, else
+  `pack_not_loaded` when the server says the pack's nodes did not load, else
+  `ready` when the shelf holds every file the loaders name (by file name, the
+  server's match), else `missing`. The card's state line, the inspector, the
+  Readiness filter and the default sort (ready first, then fewest missing) all
+  read it.
+- **`WorkflowTemplatesPanel.vue`** draws the cards (`WorkflowTemplateCard.vue`,
+  on the workflow card's frame and the Mine grid's column arithmetic, handed in
+  as props), the click / Ctrl / Shift / keyboard selection and the pill, or the
+  empty state when ComfyUI does not answer ("Templates come from your ComfyUI",
+  with *ComfyUI settings…*). There is no fallback list.
+- **Add** (pill or inspector, the inspector asking through `requestAdd`) posts
+  `POST /comfyui/templates/add`, re-reads Mine, switches to it and selects what
+  was made. A template the server could convert is an ordinary workflow at once;
+  one it could not is a **draft** (`WorkflowCard.draft`).
+- **A draft** is drawn hatched in Mine with *Finish in ComfyUI…* where Run would
+  be (`openWorkflowInComfyui`), and the facts row leads with "Draft · from a
+  template". Run is refused for it in the pill, the context menu and the
+  Workflow tab, with the reason; *Open in ComfyUI* stays, since saving it there
+  is what finishes it.
+- **Not built:** the design's *Download the missing* button. The app has no
+  model download path yet (#1866); a missing file's row in the inspector links
+  to where its template says to get it (`https:` only).
+
 ---
 
 ### 13.3 Duplicates

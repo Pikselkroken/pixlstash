@@ -5,7 +5,7 @@
 // /api/v1 prefix and the backend origin, injects the share token on same-origin
 // absolute URLs, and leaves foreign hosts alone.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient, appendShareToken, API_BASE_URL } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
@@ -220,4 +220,51 @@ export async function unlinkComfyui() {
  */
 export async function installComfyuiPack() {
   return unwrap(apiClient.post(comfyUrl("/pack/install")));
+}
+
+// ── Templates from the owner's ComfyUI (#2000) ──────────────────────────────
+
+/**
+ * Every workflow template the owner's ComfyUI serves, read through PixlStash.
+ *
+ * Always resolves for a ComfyUI that does not answer: `reachable` is false and
+ * `detail` says why, which the Templates tab draws as its empty state.
+ *
+ * @param {{refresh?: boolean}} [options] - read ComfyUI again now, past the
+ *   server's ten-minute keep.
+ * @returns {Promise<{comfyui_url: string, reachable: boolean, detail: ?string,
+ *   templates: Array<Object>}>}
+ */
+export async function listTemplates({ refresh = false } = {}) {
+  const query = refresh ? "?refresh=true" : "";
+  return unwrap(apiClient.get(comfyUrl(`/templates${query}`)));
+}
+
+/**
+ * Store templates as new workflows. A template PixlStash cannot convert comes
+ * back `draft: true` (finished by opening it in ComfyUI and saving it there).
+ *
+ * @param {Array<{module: string, name: string}>} refs
+ * @returns {Promise<{added: Array<Object>, failed: Array<Object>}>}
+ */
+export async function addTemplates(refs) {
+  return unwrap(
+    apiClient.post(comfyUrl("/templates/add"), {
+      templates: refs.map(({ module, name }) => ({ module, name })),
+    }),
+  );
+}
+
+/**
+ * The URL an `<img>` loads a template's picture from. An `<img src>` bypasses
+ * Axios, so the API base and the share token are spelled out here.
+ *
+ * @param {{module: string, name: string}} template
+ * @returns {string}
+ */
+export function templateThumbnailUrl({ module, name }) {
+  const query = new URLSearchParams({ module, name });
+  return appendShareToken(
+    `${API_BASE_URL}/comfyui/templates/thumbnail?${query}`,
+  );
 }
