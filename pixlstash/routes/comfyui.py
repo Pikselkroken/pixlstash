@@ -5,6 +5,7 @@ import math
 import os
 import threading
 import time
+import uuid
 from collections import Counter
 from copy import deepcopy
 
@@ -226,6 +227,9 @@ def _load_workflow_json(path: str) -> dict:
 # ComfyUI holds, so it still re-opens there and still deduplicates against a
 # second hand-over. Not ``.json``, so the folder listing never reads it as a workflow.
 CONVERTED_SUFFIX = ".api"
+
+# A stored file on its way to the trash: not ``.json``, so it no longer lists.
+DELETING_SUFFIX = ".deleting"
 
 
 def _editor_digest(workflow: dict) -> str:
@@ -462,7 +466,10 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
     """Move a stored workflow to the system trash by way of the inbox.
 
     The trash copy comes first and the stored file goes only once it is there,
-    so a failed trash never loses the workflow.
+    so a failed trash never loses the workflow. The file is first renamed out
+    of the listing: a file Windows will not let go of fails that rename before
+    any copy is made, and once the trash is done the workflow is deleted even
+    if the renamed file cannot be removed (#1989).
     """
     try:
         workflow = _load_workflow_json(path)
@@ -478,10 +485,40 @@ def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
         )
         send2trash(path)
         return
-    workflow_inbox.trash_workflow(
-        workflow_inbox.workflow_inbox_dir(), name, workflow, sweep=sweep
-    )
-    os.remove(path)
+    # The file's own spelling, so a put-back never renames it; a unique name,
+    # so it never lands over an earlier leftover.
+    # ponytail: a crash before the put-back leaves the only copy as the
+    # leftover, which nothing lists; recover it by hand from the log.
+    disk = os.path.join(os.path.dirname(path), _on_disk_name(path))
+    aside = f"{disk}.{uuid.uuid4().hex[:8]}{DELETING_SUFFIX}"
+    os.replace(disk, aside)
+    try:
+        workflow_inbox.trash_workflow(
+            workflow_inbox.workflow_inbox_dir(), name, workflow, sweep=sweep
+        )
+    except Exception as exc:
+        try:
+            os.replace(aside, disk)
+        except OSError as put_back:
+            logger.error(
+                "Workflow %s was not trashed (%s) and could not be put back "
+                "from %s to %s: %s",
+                name,
+                exc,
+                aside,
+                disk,
+                put_back,
+            )
+        raise
+    try:
+        os.remove(aside)
+    except OSError as exc:
+        logger.warning(
+            "Workflow %s is in the trash but its file %s could not be removed: %s",
+            name,
+            aside,
+            exc,
+        )
 
 
 def user_workflow_exists(workflow_name: str) -> bool:
