@@ -3149,6 +3149,8 @@ a key bound to an address (`UserToken.bound_address`, the ComfyUI link key,
 stored as `comfyui` whatever `source` it sends, so that key cannot
 count its saves among the owner's or pass the Workflow tab's line by.
 
+**A save from ComfyUI keeps the pack's model loaders, and every read that names models reads them as the stock ones.** A graph opened with ComfyUI-PixlStash nodes comes back holding `PixlStashCheckpointLoader` (a shelf row) and the VAE, CLIP, ControlNet and upscale loaders (a digest), and is stored as it came. The run, Save, the default recipe's rows and *Use a set…* read a workflow's own graph (a manual document, a saved-over one) through `workflow_card_service.with_stock_loaders` (`comfyui_recipe_service.as_stock_loaders`): each as the stock loader of the file its row or digest names, the checkpoint loader as `CheckpointLoaderSimple` where anything reads its CLIP or VAE and `UNETLoader` otherwise. Decided by the graph alone, so the rows and the run name a loader by the same address. A row is trusted only with this shelf's `shelf` beside it, a digest only where one file has it; anything else stays as it is. A run swaps the pack's loader back in wherever ComfyUI lacks the file (`_swap_in_shelf_loaders`), so the stock reading runs the same. LoRA loaders are read by the chain, by digest, and are not touched.
+
 **The saves of one opening are one version** (`opening` on the request and on
 `workflow_version`). ComfyUI-PixlStash makes an id when it opens a workflow
 and sends it with every save of that opening. A save whose predecessor, the

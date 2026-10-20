@@ -35,6 +35,7 @@ import requests
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
+    SHELF_ID_FIELD,
     is_link,
     normalized_filename,
     reduce_api_graph,
@@ -2163,6 +2164,105 @@ _DIGEST_LOADERS = {
         "UPSCALE_MODEL",
     ),
 }
+
+
+# The pack's model loaders that name their file by digest, as the stock loader
+# each stands in for: pack class -> ((pack widget, stock field), ...) per
+# stock class, by how many of the widgets hold a digest.
+_STOCK_OF_DIGEST_LOADERS = {
+    "PixlStashVAELoader": {1: ("VAELoader", ("vae_name",))},
+    "PixlStashCLIPLoader": {
+        1: ("CLIPLoader", ("clip_name",)),
+        2: ("DualCLIPLoader", ("clip_name1", "clip_name2")),
+    },
+    PIXLSTASH_CONTROLNET_LOADER: {1: ("ControlNetLoader", ("control_net_name",))},
+    PIXLSTASH_UPSCALE_MODEL_LOADER: {1: ("UpscaleModelLoader", ("model_name",))},
+}
+_DIGEST_WIDGETS_OF = {
+    "PixlStashVAELoader": ("vae_sha256",),
+    "PixlStashCLIPLoader": ("clip_sha256", "clip_sha256_2"),
+    PIXLSTASH_CONTROLNET_LOADER: (CONTROLNET_LOADER_DIGEST,),
+    PIXLSTASH_UPSCALE_MODEL_LOADER: (UPSCALE_MODEL_LOADER_DIGEST,),
+}
+# Every model loader `as_stock_loaders` reads back.
+STOCK_READ_CLASSES = frozenset({PIXLSTASH_CHECKPOINT_LOADER, *_DIGEST_WIDGETS_OF})
+
+
+def as_stock_loaders(
+    prompt_graph: dict,
+    file_of_row: Callable[[str, Any], str | None],
+    file_of_digest: Callable[[str], str | None],
+) -> tuple[dict, list[dict]]:
+    """*prompt_graph* with the pack's model loaders read as the stock ones.
+
+    The reverse of the swaps Open in ComfyUI and a run make
+    (:func:`swap_in_pack_nodes`, ``run_service.apply_pixlstash_swap``): a
+    graph saved from ComfyUI holds them, and the screens that change a
+    workflow's models (its model rows, *Use a set…*, a pick) name a loader
+    by the file it loads. A run swaps the pack's loader in again wherever
+    ComfyUI lacks the file, so the stock reading runs the same.
+
+    ``PixlStashCheckpointLoader`` reads as ``CheckpointLoaderSimple`` where
+    anything reads its CLIP or VAE, else as ``UNETLoader``: decided by the
+    graph alone, so every read of one graph names the loader alike and an
+    address written off one read is found in the next. The VAE, CLIP,
+    ControlNet and upscale loaders read as the stock loader of their file (a
+    CLIP loader holding two as ``DualCLIPLoader``). A node keeps its id and
+    its wires. One whose row or digest names no single file stays as it is.
+    LoRA loaders are not model loaders here: the chain reads them by digest.
+
+    Args:
+        file_of_row: A checkpoint loader's ``(checkpoint_id, shelf)`` -> the
+            file that row of this hub's shelf names, or ``None``.
+        file_of_digest: A SHA-256 -> the one file of that digest, or ``None``.
+
+    Returns:
+        ``(graph, [{node_id, was, now}])``: a new graph, *prompt_graph*
+        untouched, and each node read back.
+    """
+    graph = dict(prompt_graph)
+    done = []
+    for node_id, node in prompt_graph.items():
+        if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
+            continue
+        was = node.get("class_type")
+        inputs = node["inputs"]
+        if was == PIXLSTASH_CHECKPOINT_LOADER:
+            row = inputs.get(SHELF_ID_FIELD)
+            file = file_of_row(str(row), inputs.get("shelf")) if row else None
+            if not file:
+                continue
+            whole = any(
+                is_link(value) and str(value[0]) == str(node_id) and value[1] != 0
+                for other in prompt_graph.values()
+                if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+                for value in other["inputs"].values()
+            )
+            now, fields = (
+                ("CheckpointLoaderSimple", {"ckpt_name": file})
+                if whole
+                else ("UNETLoader", {"unet_name": file, "weight_dtype": "default"})
+            )
+        elif was in _DIGEST_WIDGETS_OF:
+            digests = [
+                value
+                for value in (inputs.get(w) for w in _DIGEST_WIDGETS_OF[was])
+                if isinstance(value, str) and value
+            ]
+            stock = _STOCK_OF_DIGEST_LOADERS[was].get(len(digests))
+            files = [file_of_digest(digest.lower()) for digest in digests]
+            if stock is None or not all(files):
+                continue
+            now, names = stock
+            fields = dict(zip(names, files))
+            if "type" in inputs:
+                fields["type"] = inputs["type"]
+        else:
+            continue
+        links = {name: value for name, value in inputs.items() if is_link(value)}
+        graph[node_id] = {**node, "class_type": now, "inputs": {**fields, **links}}
+        done.append({"node_id": str(node_id), "was": was, "now": now})
+    return graph, done
 
 
 def _stands_in(spec: Any, outputs: tuple[str, ...], inputs: dict) -> bool:

@@ -22263,6 +22263,43 @@ def test_a_graph_opened_on_pixlstashs_own_ids_and_saved_untouched_stores_nothing
     assert stored["1"] == graph["1"] and stored["7"] == graph["7"]
 
 
+def test_a_graph_saved_with_pixlstashs_own_checkpoint_loader_still_names_it(
+    id_loaders,
+):
+    """A change saved from ComfyUI keeps the pack's checkpoint loader, which
+    names a shelf row and no file. The screens that change a workflow's
+    models read it as the stock loader of that file.
+
+    Wrong if the default recipe's row is the shelf id (`…/checkpoint_id`,
+    which no pick can set) or *Use a set…* says the workflow loads no
+    checkpoint.
+    """
+    env = id_loaders
+    graph = _opened(env, env.manual, pixlstash_nodes="true")["workflow"]
+    assert graph["1"]["class_type"] == "PixlStashCheckpointLoader"
+    graph["2"]["inputs"]["strength_model"] = 0.3
+    r = _put_graph(env, env.manual, graph, read_version=1)
+    assert r.status_code == 200 and r.json()["unchanged"] is False, r.text
+    stored = _versions_of(env, env.manual)[-1][2]
+    assert stored["1"]["class_type"] == "PixlStashCheckpointLoader"
+
+    models = _detail(env.owner, env.manual)["card"]["default_recipe"]["models"]
+    checkpoint = [m for m in models if m["kind"] == "checkpoint"]
+    # Its CLIP is read, so it is the whole checkpoint's loader.
+    assert [m["address"].rsplit("/", 1)[1] for m in checkpoint] == ["ckpt_name"]
+    assert checkpoint[0]["filename"] == _SHELF_FILENAME
+
+    r = env.owner.post(
+        f"{API}/workflows/{env.manual}/set-clone-plans",
+        json={
+            "sets": [{"key": "it", "checkpoint_ids": [env.checkpoint], "model_ids": []}]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["base_filename"] == _SHELF_FILENAME
+    assert r.json()["plans"][0]["reason"] != "This workflow loads no checkpoint"
+
+
 def test_a_layout_is_kept_across_the_nodes_open_puts_in(with_pack):
     """A layout is of a graph whichever of a pair each node is: the stock
     node, or the one Open in ComfyUI puts in its place. Which it is follows
