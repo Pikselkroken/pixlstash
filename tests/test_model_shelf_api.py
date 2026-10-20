@@ -3008,7 +3008,9 @@ def test_the_filesystem_root_is_refused(shelf_env):
     assert_real_route(shelf_env.server.api, "POST", f"{API}/model-folders")
     r = shelf_env.owner.post(f"{API}/model-folders", json={"path": "/"})
     assert r.status_code == 409, r.text
-    assert "PixlStash data folder" in r.json()["detail"], r.text
+    detail = r.json()["detail"]
+    assert shelf_env.server.vault.image_root in detail, r.text
+    assert "is inside this folder" in detail, r.text
 
 
 class _FolderPaths:
@@ -3169,11 +3171,41 @@ def test_the_home_folder_from_comfyui_is_never_put_on_the_shelf(
 
 
 def test_the_vault_data_folder_is_refused(shelf_env):
-    r = shelf_env.owner.post(
-        f"{API}/model-folders", json={"path": shelf_env.server.vault.image_root}
-    )
+    image_root = shelf_env.server.vault.image_root
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": image_root})
     assert r.status_code == 409, r.text
-    assert "PixlStash data folder" in r.json()["detail"], r.text
+    assert r.json()["detail"] == f"This is the PixlStash data folder ({image_root}).", (
+        r.text
+    )
+
+
+def test_a_folder_containing_the_vault_data_folder_names_it(shelf_env):
+    """The reported case (#1986): the library kept inside Downloads, and
+    Downloads offered as a model folder."""
+    image_root = shelf_env.server.vault.image_root
+    downloads = os.path.dirname(os.path.normpath(image_root))
+    r = shelf_env.owner.post(f"{API}/model-folders", json={"path": downloads})
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        f"The PixlStash data folder ({image_root}) is inside this folder. "
+        "Pick a folder that does not contain your library."
+    ), r.text
+
+
+def test_a_folder_inside_the_vault_data_folder_names_it(shelf_env):
+    """The refusal says which folder and which way round (#1986): a library
+    kept inside Downloads used to answer a bare "overlaps"."""
+    image_root = shelf_env.server.vault.image_root
+    inner = os.path.join(image_root, "issue-1986-models")
+    os.makedirs(inner, exist_ok=True)
+    try:
+        r = shelf_env.owner.post(f"{API}/model-folders", json={"path": inner})
+    finally:
+        os.rmdir(inner)
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        f"This folder is inside the PixlStash data folder ({image_root})."
+    ), r.text
 
 
 def test_a_folder_overlapping_a_registered_one_is_refused_in_both_directions(

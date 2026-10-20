@@ -3068,7 +3068,7 @@ no reference folder to name.
 reference-folder one. Routing this case through `mode: "reference"` instead
 would collide with the rule `POST /reference-folders` already enforces the
 other direction — a reference folder may never equal or contain `image_root`
-(`409 "Path conflicts with the PixlStash data folder."`) — so the two stay two
+(a 409 naming the data folder and which way round the overlap is) — so the two stay two
 modes, never one. Import is **idempotent by `file_path`**: a file already
 indexed under this path (an overlapping earlier `local_import`, or an ordinary
 import that reached it independently) is reused by id, never re-imported as a

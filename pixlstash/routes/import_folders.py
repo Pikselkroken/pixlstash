@@ -17,7 +17,10 @@ from pixlstash.utils.library_roots import (
     holding_folder_overlap_lock,
     refuse_overlapping_folder,
 )
-from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
+from pixlstash.utils.reference_folder_validator import (
+    data_folder_conflict_detail,
+    validate_reference_folder_path,
+)
 
 logger = get_logger(__name__)
 
@@ -186,15 +189,15 @@ def create_router(server) -> APIRouter:
                 )
             image_root = os.path.normpath(getattr(server.vault, "image_root", "") or "")
             if image_root:
-                if (
-                    folder == image_root
-                    or folder.startswith(image_root + os.sep)
-                    or image_root.startswith(folder + os.sep)
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Path conflicts with the PixlStash data folder.",
-                    )
+                detail = data_folder_conflict_detail(
+                    image_root,
+                    inside=folder == image_root
+                    or folder.startswith(image_root + os.sep),
+                    contains=folder == image_root
+                    or image_root.startswith(folder + os.sep),
+                )
+                if detail:
+                    raise HTTPException(status_code=409, detail=detail)
 
             import_folder = ImportFolder(
                 folder=folder,
