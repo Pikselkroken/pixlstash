@@ -967,6 +967,32 @@
   cursor: ew-resize;
 }
 
+.paint-compare-done {
+  position: absolute;
+  bottom: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--scrim-photo-strong);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.paint-compare-done:hover {
+  background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
+}
+
+.paint-compare-done:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
+
 .paint-compare:has(.paint-compare-range:focus-visible) .paint-compare-split {
   outline: var(--focus-width) solid var(--focus-stroke);
   outline-offset: var(--focus-offset);

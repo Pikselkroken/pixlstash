@@ -525,6 +525,24 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.comparePosition).toBe(25);
     pointer("pointermove", 460);
     expect(wrapper.vm.comparePosition).toBe(90);
+    // Out again without leaving the lightbox: Escape on the slider...
+    await range.trigger("keydown", { key: "Escape" });
+    expect(wrapper.find(".paint-compare").exists()).toBe(false);
+    expect(wrapper.emitted("close")).toBeUndefined();
+    // ...Escape anywhere else, or the Done button.
+    const reopen = async () => {
+      wrapper.vm.compare = { resultId: "8", beforeSrc: "http://test/pictures/7.png" };
+      await flush();
+    };
+    await reopen();
+    expect(wrapper.find(".paint-compare").exists()).toBe(true);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flush();
+    expect(wrapper.find(".paint-compare").exists()).toBe(false);
+    expect(wrapper.emitted("close")).toBeUndefined();
+    await reopen();
+    await wrapper.find(".paint-compare-done").trigger("click");
+    expect(wrapper.find(".paint-compare").exists()).toBe(false);
   });
 
   it("sets no compare when the reader was not on the original", async () => {

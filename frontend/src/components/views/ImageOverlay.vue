@@ -675,7 +675,18 @@
                   @touchstart.stop
                   @touchmove.stop
                   @touchend.stop
+                  @keydown.esc.stop.prevent="closeCompare"
                 />
+                <button
+                  type="button"
+                  class="paint-compare-done"
+                  @click.stop="closeCompare"
+                  @pointerdown.stop
+                  @dblclick.stop
+                >
+                  <v-icon size="16">mdi-check</v-icon>
+                  Done comparing
+                </button>
               </div>
             </div>
           </div>
@@ -2767,6 +2778,11 @@ function handleKeydown(e) {
       overlayCanvasRef.value?.focus?.();
       return;
     }
+    if (compareShown.value) {
+      // The comparison, not the lightbox.
+      closeCompare();
+      return;
+    }
     if (paintActive.value && (paint.draft.value || paint.cropBox.value)) {
       // The gesture or the crop frame, not the lightbox.
       paint.cancel();
@@ -3714,6 +3730,12 @@ function onCompareMove(event) {
 
 function onCompareEnd(event) {
   releasePaintPointer(event);
+}
+
+// Back to the result alone; the keyboard goes back to the picture.
+function closeCompare() {
+  compare.value = null;
+  overlayCanvasRef.value?.focus?.();
 }
 
 let overlayResizeObserver = null;
