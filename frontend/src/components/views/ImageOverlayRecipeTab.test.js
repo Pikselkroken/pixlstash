@@ -669,6 +669,34 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.image.id).toBe(7);
   });
 
+  it("leaves the Paint keys alone under a comparison", async () => {
+    const wrapper = await openOn(
+      7,
+      [{ id: 7, tags: [], format: "png" }],
+      configured,
+    );
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    const img = wrapper.find(".overlay-img");
+    for (const [property, value] of [
+      ["complete", true],
+      ["naturalWidth", 800],
+      ["naturalHeight", 600],
+      ["clientWidth", 400],
+      ["clientHeight", 300],
+    ]) {
+      Object.defineProperty(img.element, property, { configurable: true, value });
+    }
+    await img.trigger("load");
+    wrapper.vm.compare = { resultId: "7", beforeSrc: "http://test/pictures/5.png" };
+    await flush();
+    const press = (key) =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    press("b");
+    press("i");
+    expect(wrapper.vm.paint.tool.value).toBe("hand");
+    expect(wrapper.vm.paint.steps.value).toEqual([]);
+  });
+
   it("lays the grid's first picked picture over the second", async () => {
     const wrapper = await openOn(5, [
       { id: 7, tags: [], format: "png" },

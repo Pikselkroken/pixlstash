@@ -2829,6 +2829,8 @@ function handleKeydown(e) {
 
   if (
     paintActive.value &&
+    // Under a comparison the selection is out of sight: keys must not change it.
+    !compareShown.value &&
     !e.ctrlKey &&
     !e.metaKey &&
     !e.altKey &&

@@ -2238,6 +2238,12 @@ async function editSelection() {
       `Could not file the ${EDIT_WORKFLOW} workflow for the Edit tab; it lists the owner's own edit workflows only:`,
       err,
     );
+    // The tab still opens, on the owner's own edit workflows: say why the
+    // built-in is not among them.
+    noticeStore.warning(
+      `Could not add the built-in image edit workflow. ${errorDetail(err)}`,
+      { key: "edit-pictures" },
+    );
   }
   overlayEditRequest.value = { pictureIds: ids };
   openOverlay({ id: ids[0] });

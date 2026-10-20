@@ -22253,6 +22253,34 @@ def test_a_held_run_opens_on_the_picture_it_put_in_not_on_the_pin(id_loaders):
     assert loader()["inputs"]["picture_ids"] == str(env.picture)
 
 
+def test_a_masked_upload_stays_a_load_image_whatever_its_content_name():
+    """A picture not hashed yet is named by its file's mtime and size, not a
+    digest: its masked upload must still be kept from the pack's loader."""
+    graph = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {
+                "image": "pixlstash-ab12cd34-7-"
+                + "e" * 64
+                + "-mask-0123456789abcdef.png"
+            },
+        },
+        "2": {
+            "class_type": "LoadImage",
+            "inputs": {
+                "image": "pixlstash-ab12cd34-7-"
+                "18b2c3d4e5f60718-1f400-mask-0123456789abcdef.png"
+            },
+        },
+        "3": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "pixlstash-ab12cd34-7-" + "e" * 64 + ".png"},
+        },
+        "4": {"class_type": "LoadImage", "inputs": {"image": ["9", 0]}},
+    }
+    assert workflows_routes._masked_loaders(graph) == {"1", "2"}
+
+
 def test_a_held_run_with_a_selection_opens_on_the_masked_upload(id_loaders):
     """Open swaps a Load Image of a picture PixlStash holds for the pack's
     loader, which fetches by id and would lose the mask. Wrong if the picture

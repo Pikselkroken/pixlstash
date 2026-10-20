@@ -1067,6 +1067,24 @@ _UPLOAD_NAME_RE = re.compile(
     r"pixlstash-[0-9a-zA-Z]+-\d+-([0-9a-f]{64})(?:-mask-[0-9a-f]{16})?"
     r"(?:\.[a-z0-9]{1,8})?"
 )
+# Any upload carrying a selection's mask, whichever content stands in its name
+# (a digest, or a not-yet-hashed file's mtime and size).
+_MASKED_UPLOAD_RE = re.compile(
+    r"pixlstash-[0-9a-zA-Z]+-\d+-[0-9a-f-]+-mask-[0-9a-f]{16}(?:\.[a-z0-9]{1,8})?"
+)
+
+
+def _masked_loaders(graph: dict) -> frozenset[str]:
+    """The ``LoadImage`` nodes of *graph* holding a masked upload: the pack's
+    loader, fetching the picture by id, would lose the mask."""
+    return frozenset(
+        str(node_id)
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+        and node.get("class_type") == "LoadImage"
+        and isinstance((node.get("inputs") or {}).get("image"), str)
+        and _MASKED_UPLOAD_RE.fullmatch(node["inputs"]["image"])
+    )
 
 
 class WorkflowCardEdit(BaseModel):
@@ -8775,17 +8793,7 @@ def create_router(server) -> APIRouter:
             and _holds_class(graph, "LoadImage")
             else None,
             library_uuid=_library_uuid(),
-            # A selection's mask rides in its upload, which the pack's loader,
-            # fetching the picture by id, would lose: those stay Load Image.
-            keep_loaders=frozenset(
-                str(node_id)
-                for node_id, node in graph.items()
-                if isinstance(node, dict)
-                and node.get("class_type") == "LoadImage"
-                and isinstance((node.get("inputs") or {}).get("image"), str)
-                and (named := _UPLOAD_NAME_RE.fullmatch(node["inputs"]["image"]))
-                and "-mask-" in named.group(0)
-            ),
+            keep_loaders=_masked_loaders(graph),
             checkpoint_id=_shelf_checkpoint(hub) if by_row else None,
             shelf_uuid=("trial" if trial else shelf_uuid(hub)) if by_row else None,
             controlnet_digest=_shelf_digest(hub, FILE_CONTROLNET),
