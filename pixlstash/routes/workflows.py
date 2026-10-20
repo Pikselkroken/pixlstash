@@ -34,12 +34,14 @@ notes and hidden flag, its default-recipe parameters, pins and picture inputs
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import math
 import sqlite3
 import os
 import re
 import secrets
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -172,6 +174,11 @@ from pixlstash.services.comfyui_service import (
     unfed_picture_loaders,
 )
 from pixlstash.services import workflow_bindings, workflow_inbox
+from pixlstash.services.edit_selection import (
+    UNREADABLE_PICTURE,
+    Selection,
+    write_masked_picture,
+)
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
@@ -1053,9 +1060,12 @@ _KIND_NAME_MARKERS = {
 # file ComfyUI lacks (`_digest_swap_kind`).
 _PACK_MODEL_LOADERS = {"VAELoader": FILE_VAE, "CLIPLoader": FILE_TEXT_ENCODER}
 # The name `_upload_files` gives a hashed picture, read back for its content:
-# a loader still holding one says what its run loaded (`_made_from`).
+# a loader still holding one says what its run loaded (`_made_from`). A run
+# with a selection names its upload for the selection too (`-mask-<digest>`),
+# and that loader still read the picture.
 _UPLOAD_NAME_RE = re.compile(
-    r"pixlstash-[0-9a-zA-Z]+-\d+-([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?"
+    r"pixlstash-[0-9a-zA-Z]+-\d+-([0-9a-f]{64})(?:-mask-[0-9a-f]{16})?"
+    r"(?:\.[a-z0-9]{1,8})?"
 )
 
 
@@ -1691,6 +1701,12 @@ class RunRequest(BaseModel):
     # keeps anything, so it is ignored with pictures or a saved recipe, as
     # `replay` is where it does not apply, and by the pre-flight.
     waited: WorkflowChanges | None = None
+    # Where on the picture the run changes (the Edit tab's Paint tools): the
+    # selection as steps, rendered server-side into the picture's alpha
+    # channel, which is the MASK its loader hands on. One picture only: a hand
+    # selection belongs to the picture it was drawn on. A workflow whose
+    # loader's MASK nothing reads is refused with `mask_not_read`.
+    selection: Selection | None = None
 
     @field_validator("inputs")
     @classmethod
@@ -1749,6 +1765,8 @@ class RunRequest(BaseModel):
                 f"Stage {', '.join(twice)} is both skipped and kept; name it in "
                 "skip_stages or in keep_stages, not both."
             )
+        if self.selection is not None and len(self.picture_ids) != 1:
+            raise ValueError("A selection runs on exactly one picture.")
         return self
 
     stack: bool = False
@@ -3104,6 +3122,42 @@ class Feed:
     targets: list[dict]
     picture_id: int | None
     by_id: bool = False
+
+
+def _masked(body: "RunRequest") -> tuple[int, str] | None:
+    """``(picture_id, digest)`` of the picture a run's selection is drawn on.
+
+    The digest names the upload, so two selections of one picture queued
+    back to back never load each other's mask.
+    """
+    if body.selection is None:
+        return None
+    digest = hashlib.sha256(body.selection.model_dump_json().encode()).hexdigest()
+    return body.picture_ids[0], digest[:16]
+
+
+def _reads_mask(graph: dict, feeds: list[Feed], picture_id: int) -> bool:
+    """Whether anything in *graph* reads the MASK of a loader fed *picture_id*,
+    the picture the selection is drawn on: by the selection, or pinned to it.
+
+    ``LoadImage`` and the ComfyUI-PixlStash picture loader both hand on
+    ``IMAGE`` then ``MASK``, so a link to output 1 of either is a mask read.
+    """
+    loaders = {
+        str(workflow_bindings.target_node(graph, target.get("path")))
+        for feed in feeds
+        if feed.picture_id in (None, picture_id)
+        for target in feed.targets
+    }
+    return any(
+        isinstance(value, list)
+        and len(value) == 2
+        and str(value[0]) in loaders
+        and value[1] == 1
+        for node in graph.values()
+        if isinstance(node, dict)
+        for value in (node.get("inputs") or {}).values()
+    )
 
 
 @dataclass
@@ -6318,7 +6372,9 @@ def create_router(server) -> APIRouter:
             return True
         return isinstance(value, str) and bool(value) and node_id not in missing
 
-    def _upload_files(submittable) -> dict[int, tuple[str, str]]:
+    def _upload_files(
+        submittable, masked: tuple[int, str] | None = None
+    ) -> dict[int, tuple[str, str]]:
         """``{picture_id: (path, upload name)}`` for every picture a run feeds.
 
         Resolved in ``_plan`` and not at upload time, so a picture that has
@@ -6333,6 +6389,11 @@ def create_router(server) -> APIRouter:
 
         A picture only a PixlStash picture loader reads (``Feed.by_id``) is
         checked the same way and not uploaded: that loader fetches it itself.
+        The picture a selection is drawn on (*masked*, ``(picture_id,
+        digest)``, :func:`_masked`) is uploaded whoever reads it, as a PNG
+        with the selection in its alpha channel and named for the selection
+        too: that loader would fetch the picture without it, and two
+        selections of one picture must not overwrite each other's upload.
         """
         fed = [
             (picture_id, feed.by_id)
@@ -6344,6 +6405,8 @@ def create_router(server) -> APIRouter:
         ]
         wanted = sorted({picture_id for picture_id, _by_id in fed})
         uploads = {picture_id for picture_id, by_id in fed if not by_id}
+        if masked and masked[0] in wanted:
+            uploads.add(masked[0])
         if not wanted:
             return {}
         kept = read_kept_picture_files(server.vault, wanted)
@@ -6387,7 +6450,12 @@ def create_router(server) -> APIRouter:
             else:
                 stat = os.stat(path)
                 content = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
-            if picture_id in uploads:
+            if masked and picture_id == masked[0]:
+                files[picture_id] = (
+                    path,
+                    f"pixlstash-{library}-{picture_id}-{content}-mask-{masked[1]}.png",
+                )
+            elif picture_id in uploads:
                 files[picture_id] = (
                     path,
                     f"pixlstash-{library}-{picture_id}-{content}{extension}",
@@ -7370,6 +7438,21 @@ def create_router(server) -> APIRouter:
             )
             if unfed:
                 found = run_service.with_pixlstash_refusals(found, unfed)
+            if body.selection is not None and not _reads_mask(
+                graph, feeds, body.picture_ids[0]
+            ):
+                found.append(
+                    run_service.Reason(
+                        run_service.MASK_NOT_READ,
+                        {
+                            "message": (
+                                "This workflow does not use a mask, so it "
+                                "would change the whole picture. Choose an "
+                                "inpaint workflow, or clear the selection."
+                            )
+                        },
+                    )
+                )
             group.reasons = [r.as_dict() for r in found]
             # A replacement this ComfyUI does not have left its loader naming
             # the original, which is missing too. The file to name is the one
@@ -7489,7 +7572,7 @@ def create_router(server) -> APIRouter:
             comfyui_url=comfyui_url,
             object_info=object_info,
             object_info_error=object_info_error,
-            files=_upload_files(submittable),
+            files=_upload_files(submittable, _masked(body)),
             loader_swaps=loader_swaps,
             built=built,
         )
@@ -7668,6 +7751,36 @@ def create_router(server) -> APIRouter:
             )
         return outcome
 
+    def _upload_planned(plan: Plan, picture_id: int) -> str:
+        """Upload one of ``plan.files`` to ComfyUI, answering the name it loads by.
+
+        The picture a selection is drawn on goes up with the selection's mask
+        in its alpha channel (``write_masked_picture``), never as its file.
+        """
+        path, upload_name = plan.files[picture_id]
+        masked = _masked(plan.body)
+        if not masked or picture_id != masked[0]:
+            return _upload_image_to_comfyui(plan.comfyui_url, path, upload_name)
+        with tempfile.TemporaryDirectory() as scratch:
+            with_mask = os.path.join(scratch, upload_name)
+            try:
+                write_masked_picture(plan.body.selection, path, with_mask)
+            except UNREADABLE_PICTURE as exc:
+                logger.warning(
+                    "Picture %s (%s) cannot carry a selection's mask: %s",
+                    picture_id,
+                    path,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=415,
+                    detail=(
+                        f"Picture {picture_id} cannot be read as an image, so "
+                        "a selection cannot be drawn on it."
+                    ),
+                ) from exc
+            return _upload_image_to_comfyui(plan.comfyui_url, with_mask, upload_name)
+
     def _submit_every(
         request: Request,
         plan: Plan,
@@ -7688,9 +7801,14 @@ def create_router(server) -> APIRouter:
         distinct picture once per request however many runs read it, so an
         upload that fails has queued nothing.
         """
+        masked = _masked(body)
+        # The masked picture first: it is the one upload that can be refused
+        # (a file that is not a picture), and nothing should be up before it.
+        order = sorted(
+            plan.files, key=lambda picture_id: picture_id != (masked or [None])[0]
+        )
         uploaded = {
-            picture_id: _upload_image_to_comfyui(comfyui_url, path, upload_name)
-            for picture_id, (path, upload_name) in plan.files.items()
+            picture_id: _upload_planned(plan, picture_id) for picture_id in order
         }
         # Here, not in `_plan`: a preflight submits nothing, and the graphs
         # are final.
@@ -7770,7 +7888,23 @@ def create_router(server) -> APIRouter:
                     picture_id = (
                         feed.picture_id if feed.picture_id is not None else selected
                     )
-                    value = str(picture_id) if feed.by_id else uploaded[picture_id]
+                    # The picture a selection is drawn on loads as an upload
+                    # even where a PixlStash loader would fetch it by id.
+                    by_id = feed.by_id and not (masked and picture_id == masked[0])
+                    if feed.by_id and not by_id:
+                        for target in feed.targets:
+                            loader = workflow_bindings.target_node(
+                                filled, target.get("path")
+                            )
+                            if loader in filled:
+                                # Same outputs in the same order: IMAGE, MASK.
+                                filled[loader] = {
+                                    **filled[loader],
+                                    "class_type": "LoadImage",
+                                    "inputs": {"image": uploaded[picture_id]},
+                                }
+                        continue
+                    value = str(picture_id) if by_id else uploaded[picture_id]
                     for target in feed.targets:
                         workflow_bindings.fill(
                             filled,
@@ -7780,7 +7914,7 @@ def create_router(server) -> APIRouter:
                         loader = workflow_bindings.target_node(
                             filled, target.get("path")
                         )
-                        if feed.by_id and loader in filled:
+                        if by_id and loader in filled:
                             # With the id and never apart from it: whose it
                             # is, for whoever reads this graph back out of
                             # the picture (`own_picture_ids`).
@@ -8919,12 +9053,24 @@ def create_router(server) -> APIRouter:
             picture_id = feed.picture_id if feed.picture_id is not None else first
             if picture_id is None:
                 continue
-            if not feed.by_id and picture_id not in uploaded:
-                path, upload_name = plan.files[picture_id]
-                uploaded[picture_id] = _upload_image_to_comfyui(
-                    plan.comfyui_url, path, upload_name
-                )
-            value = str(picture_id) if feed.by_id else uploaded[picture_id]
+            # The picture a selection is drawn on is never fetched by id: the
+            # mask rides in the upload (`_upload_files`), as on a run.
+            masked = _masked(plan.body)
+            by_id = feed.by_id and not (masked and picture_id == masked[0])
+            if not by_id and picture_id not in uploaded:
+                uploaded[picture_id] = _upload_planned(plan, picture_id)
+            if feed.by_id and not by_id:
+                for target in feed.targets:
+                    node_id = workflow_bindings.target_node(graph, target.get("path"))
+                    if node_id in graph:
+                        graph[node_id] = {
+                            **graph[node_id],
+                            "class_type": "LoadImage",
+                            "inputs": {"image": uploaded[picture_id]},
+                        }
+                        filled[str(node_id)] = picture_id
+                continue
+            value = str(picture_id) if by_id else uploaded[picture_id]
             for target in feed.targets:
                 workflow_bindings.fill(
                     graph,

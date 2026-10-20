@@ -48,6 +48,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from PIL import Image
 import requests
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -11724,6 +11725,139 @@ def test_a_picture_not_yet_hashed_uploads_under_its_file_not_its_id(i2i):
     assert upload["name"] == _upload_name(
         i2i.server, picture, f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
     )
+
+
+# --- a selection: where on the picture the run changes ------------------------
+
+LEFT_HALF = {"steps": [{"tool": "rect", "mode": "new", "box": [0, 0, 0.5, 1]}]}
+
+
+def _real_picture(server, tmp_path, name: str) -> int:
+    """A kept picture whose file is a real 20x10 PNG, which a mask is drawn on."""
+    picture = _add_picture(server, tmp_path, name)
+    Image.new("RGB", (20, 10), (200, 40, 40)).save(tmp_path / name)
+    return picture
+
+
+def _uploads_with_pixels(i2i) -> list[dict]:
+    """Record each upload's pixels too: a masked upload's file is temporary."""
+    seen: list[dict] = []
+
+    def upload(base_url, path, upload_name=None):
+        with Image.open(path) as image:
+            seen.append({"name": upload_name, "pixels": np.array(image)})
+        return upload_name
+
+    i2i.monkeypatch.setattr(workflows_routes, "_upload_image_to_comfyui", upload)
+    return seen
+
+
+def test_a_selection_rides_in_the_uploads_alpha_as_its_mask(i2i):
+    """MASK is ``1 - alpha`` to LoadImage, so the selected half is transparent.
+
+    Wrong if the upload is the plain file, if the mask lands on the other half,
+    or if the name is the plain upload name (ComfyUI overwrites by name, so a
+    masked and a plain run of one picture would load each other's file).
+    """
+    i2i.graph["3"]["inputs"]["noise_mask"] = ["5", 1]
+    picture = _real_picture(i2i.server, i2i.tmp_path, "masked.png")
+    seen = _uploads_with_pixels(i2i)
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    [upload] = seen
+    alpha = upload["pixels"][..., 3]
+    assert (alpha[:, :10] == 0).all() and (alpha[:, 10:] == 255).all()
+    assert (upload["pixels"][..., :3] == (200, 40, 40)).all()
+    assert "-mask-" in upload["name"] and upload["name"].endswith(".png")
+    assert i2i.submitted[0]["graph"]["5"]["inputs"]["image"] == upload["name"]
+
+
+def test_a_selection_is_refused_where_nothing_reads_the_mask(i2i):
+    """A workflow that ignores MASK would change the whole picture: refused,
+    and nothing uploaded. Wrong if it runs, or if a run WITHOUT a selection on
+    the same workflow is refused too."""
+    picture = _real_picture(i2i.server, i2i.tmp_path, "unread.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "refused", r.json()
+    codes = [reason["code"] for reason in r.json()["groups"][0]["reasons"]]
+    assert codes == ["mask_not_read"], codes
+    assert i2i.uploads == [] and i2i.submitted == []
+    plain = _preflight(i2i.owner, picture_ids=[picture], target=RUN_WF)
+    assert plain["ok"] is True, plain
+
+
+def test_a_selection_runs_on_exactly_one_picture(i2i):
+    pictures = [_real_picture(i2i.server, i2i.tmp_path, f"m{n}.png") for n in (1, 2)]
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": pictures, "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_selection_on_a_file_that_is_not_a_picture_is_refused_first(i2i):
+    """The masked upload goes first and refuses cleanly: nothing reaches
+    ComfyUI's input folder, and nothing is queued."""
+    i2i.graph["3"]["inputs"]["noise_mask"] = ["5", 1]
+    picture = _add_picture(i2i.server, i2i.tmp_path, "not-a-picture.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 415, r.text
+    assert i2i.uploads == [] and i2i.submitted == []
+
+
+def test_a_masked_upload_still_names_the_picture_it_was_made_from():
+    """A replay reads what a run loaded off the upload name (`_made_from`); the
+    selection's digest on it must not hide the picture's content."""
+    content = "a" * 64
+    named = workflows_routes._UPLOAD_NAME_RE.fullmatch(
+        f"pixlstash-lib1-5-{content}-mask-{'0' * 16}.png"
+    )
+    assert named and named.group(1) == content
+
+
+def test_a_loader_pinned_to_the_selected_picture_reads_its_mask():
+    """A pin to the picture the selection is drawn on is that picture too;
+    a pin to another picture is not."""
+    graph = _i2i_graph()
+    graph["3"]["inputs"]["noise_mask"] = ["5", 1]
+    target = workflow_bindings.picture_target(graph, "5", "LoadImage")
+    assert workflows_routes._reads_mask(graph, [workflows_routes.Feed([target], 9)], 9)
+    assert not workflows_routes._reads_mask(
+        graph, [workflows_routes.Feed([target], 4)], 9
+    )
+    assert workflows_routes._reads_mask(
+        graph, [workflows_routes.Feed([target], None)], 9
+    )
+
+
+def test_a_selection_turns_a_pack_picture_loader_into_an_upload(pack):
+    """The pack's loader would fetch the picture by id, without the mask, so
+    the selected picture loads through LoadImage instead, wired the same."""
+    pack.graph = _pack_graph()
+    pack.graph["3"]["inputs"]["noise_mask"] = ["5", 1]
+    picture = _real_picture(pack.server, pack.tmp_path, "pack-masked.png")
+    seen = _uploads_with_pixels(pack)
+    r = pack.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    [upload] = seen
+    loader = pack.submitted[0]["graph"]["5"]
+    assert loader == {"class_type": "LoadImage", "inputs": {"image": upload["name"]}}
+    assert pack.submitted[0]["graph"]["3"]["inputs"]["noise_mask"] == ["5", 1]
 
 
 def test_each_save_node_keeps_its_own_prefix_under_the_stack_tag(i2i):
