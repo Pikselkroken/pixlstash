@@ -725,6 +725,51 @@ describe("the lightbox Edit tab", () => {
     await flush();
     await flush();
     expect(wrapper.vm.compare).toBeNull();
+    // Still picked, so the video can be swapped out rather than both re-picked.
+    expect(wrapper.vm.filmstripPicks).toEqual(["7", "99"]);
+  });
+
+  it("offers Compare on a filmstrip right-click, greyed until there are two", async () => {
+    const wrapper = await openOn(7, [
+      { id: 7, tags: [], format: "png" },
+      { id: 5, tags: [], format: "png" },
+    ]);
+    const filmstrip = wrapper.findComponent({ name: "OverlayFilmstrip" });
+    const thumb = document.body.appendChild(document.createElement("button"));
+    const rightClick = async (item) => {
+      filmstrip.vm.$emit("context-menu", item, {
+        clientX: 40,
+        clientY: 80,
+        currentTarget: thumb,
+      });
+      await flush();
+    };
+    const menu = () => document.body.querySelector(".filmstrip-ctx-menu");
+    const compareItem = () => menu().querySelector(".ctx-item");
+    await rightClick({ id: 7, index: 0 });
+    expect(compareItem().disabled).toBe(true);
+    expect(compareItem().textContent).toContain("Ctrl-click another");
+    // Escape closes the menu, not the lightbox, and hands focus back.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flush();
+    expect(menu()).toBeNull();
+    expect(wrapper.emitted("close")).toBeUndefined();
+    expect(document.activeElement).toBe(thumb);
+    // A press anywhere else closes it too.
+    await rightClick({ id: 7, index: 0 });
+    window.dispatchEvent(new MouseEvent("pointerdown"));
+    await flush();
+    expect(menu()).toBeNull();
+    // A right-click on another picture pairs it with the one on screen.
+    await rightClick({ id: 5, index: 1 });
+    expect(wrapper.vm.filmstripPicks).toEqual(["7", "5"]);
+    expect(compareItem().disabled).toBe(false);
+    compareItem().click();
+    await flush();
+    await flush();
+    expect(wrapper.vm.compare).toMatchObject({ resultId: "5", beforeLabel: "A" });
+    expect(menu()).toBeNull();
+    thumb.remove();
   });
 
   it("brings a selection step back with Ctrl+Y before any library redo", async () => {

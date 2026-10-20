@@ -864,11 +864,45 @@
           :picked-ids="filmstripPicks"
           @select="selectImageByIndex"
           @pick="onFilmstripPick"
+          @context-menu="onFilmstripContextMenu"
           @toggle-expand="toggleFilmstripStackExpand"
           @prefetch="prefetchFilmstripStackMembers"
           @navigate="onFilmstripNavigate"
           @stack-move="(item, where) => moveStackMember(item.id, where)"
         />
+        <!-- Right-click on a filmstrip thumb: Compare, greyed with its reason
+             until two are picked. -->
+        <Teleport to="body">
+          <div
+            v-if="filmstripMenu"
+            ref="filmstripMenuRef"
+            class="filmstrip-ctx-menu ctx-menu ctx-menu--on-dark"
+            :style="{ left: `${filmstripMenu.x}px`, top: `${filmstripMenu.y}px` }"
+            role="menu"
+            tabindex="-1"
+          >
+            <button
+              class="ctx-item"
+              role="menuitem"
+              type="button"
+              :disabled="!!filmstripCompareReason"
+              @click="compareFromFilmstripMenu"
+            >
+              <Tooltip
+                :text="
+                  filmstripCompareReason ||
+                  'Lay one picture over the other, cut at a slider'
+                "
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-compare-horizontal</v-icon>
+              Compare
+              <span v-if="filmstripCompareReason" class="ctx-meta">{{
+                COMPARE_NOTES[filmstripCompareReason] || "Ctrl-click another"
+              }}</span>
+            </button>
+          </div>
+        </Teleport>
 
         <!-- The shared inspector (shell contract rule 8), in its lightbox
              variant: dark in both themes, laid over the canvas. -->
@@ -1148,7 +1182,7 @@ import {
   toggleScore,
 } from "../../utils/utils.js";
 import { isEditableElement, isTypingTarget } from "../../utils/dom.js";
-import { compareBlockReason } from "../../utils/compare";
+import { COMPARE_NOTES, compareBlockReason } from "../../utils/compare";
 import {
   getPictureStackId,
   getStackPositionValue,
@@ -2678,6 +2712,10 @@ function handleKeydown(e) {
   // The Run popup the Edit tab opened sits over the lightbox: its keys are its
   // own, and an arrow or Escape must not step or close the lightbox below.
   if (runDialogStore.source || runDialogStore.makeMore) return;
+  if (filmstripMenu.value) {
+    if (e.key === "Escape") closeFilmstripMenu();
+    return;
+  }
 
   // Keyboard access to the media context menu (Shift+F10 / ContextMenu key),
   // available regardless of chrome visibility. Suppressed while typing so the
@@ -3078,15 +3116,19 @@ function handleWheelActivity() {
   handleUserActivity();
 }
 
-function handleOverlayPointerDown() {
+function handleOverlayPointerDown(event) {
   menuWasOpenOnPointerDown = !!(
     document.querySelector(".v-overlay--active") ||
     document.querySelector(".add-to-set.open") ||
     document.querySelector(".add-to-project.open") ||
     // Our own right-click context menu (teleported to <body>). It closes itself
     // on this pointerdown, so it must be detected now, not at click time.
-    document.querySelector(".image-ctx-menu")
+    document.querySelector(".image-ctx-menu") ||
+    filmstripMenu.value
   );
+  if (filmstripMenu.value && !event?.target?.closest?.(".filmstrip-ctx-menu")) {
+    filmstripMenu.value = null;
+  }
 }
 
 function handleOverlayClick(event) {
@@ -3875,14 +3917,14 @@ async function startCompare(beforeId, afterId) {
   const refusal = before && after ? compareBlockReason([before, after]) : null;
   if (refusal) {
     noticeStore.error(refusal, { key: "compare-start" });
-    return;
+    return false;
   }
   const beforeSrc = before ? buildFullImageSrc(before) : "";
   if (!beforeSrc) {
     noticeStore.error("Couldn't open the first picture to compare.", {
       key: "compare-start",
     });
-    return;
+    return false;
   }
   compare.value = {
     resultId: String(afterId),
@@ -3896,6 +3938,7 @@ async function startCompare(beforeId, afterId) {
   if (open.value && String(image.value?.id) !== String(afterId)) {
     setOverlayImageById(afterId);
   }
+  return true;
 }
 
 watch(
@@ -3938,11 +3981,41 @@ const filmstripCompareReason = computed(() => {
   return compareBlockReason(rows);
 });
 
-function compareFilmstripPicks() {
+async function compareFilmstripPicks() {
   if (filmstripCompareReason.value) return;
   const [beforeId, afterId] = filmstripPicks.value;
-  filmstripPicks.value = [];
-  startCompare(beforeId, afterId);
+  // Kept on a refusal (a video among them), so a pick can be swapped out.
+  if (await startCompare(beforeId, afterId)) filmstripPicks.value = [];
+}
+
+// The filmstrip's right-click menu: `{x, y, invoker}` while open.
+const filmstripMenu = ref(null);
+const filmstripMenuRef = ref(null);
+// Room for the one row, so a thumb at the bottom keeps its menu on screen.
+const FILMSTRIP_MENU_ROOM_PX = 56;
+
+function onFilmstripContextMenu(item, event) {
+  if (item?.id == null) return;
+  // Right-click picks the thumb, as a Ctrl-click does: one right-click on
+  // another picture makes a pair with the one on screen.
+  if (!filmstripPicks.value.includes(String(item.id))) onFilmstripPick(item);
+  filmstripMenu.value = {
+    x: event.clientX,
+    y: Math.min(event.clientY, window.innerHeight - FILMSTRIP_MENU_ROOM_PX),
+    invoker: event.currentTarget,
+  };
+  nextTick(() => filmstripMenuRef.value?.focus());
+}
+
+function closeFilmstripMenu() {
+  const invoker = filmstripMenu.value?.invoker;
+  filmstripMenu.value = null;
+  invoker?.focus?.();
+}
+
+function compareFromFilmstripMenu() {
+  filmstripMenu.value = null;
+  compareFilmstripPicks();
 }
 
 let overlayResizeObserver = null;

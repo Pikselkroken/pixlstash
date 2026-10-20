@@ -984,6 +984,15 @@
 
 /* The way out of a comparison, at the bottom of the screen: one pill, its
    halves in the two sides' colours (as the corner tags), glowing them. */
+/* The filmstrip's right-click menu; its surface is styles/context-menu.css. */
+.filmstrip-ctx-menu {
+  position: fixed;
+  z-index: var(--z-overlay);
+  min-width: 185px;
+  user-select: none;
+  outline: none;
+}
+
 .compare-exit {
   position: absolute;
   bottom: var(--space-7);

@@ -7830,8 +7830,9 @@ def create_router(server) -> APIRouter:
         masked = _masked(body)
         # The masked picture first: it is the one upload that can be refused
         # (a file that is not a picture), and nothing should be up before it.
+        masked_picture_id = masked[0] if masked else None
         order = sorted(
-            plan.files, key=lambda picture_id: picture_id != (masked or [None])[0]
+            plan.files, key=lambda picture_id: picture_id != masked_picture_id
         )
         uploaded = {
             picture_id: _upload_planned(plan, picture_id) for picture_id in order

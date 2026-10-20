@@ -146,7 +146,10 @@ const WASH_ALPHA = 0.34;
 function washColour(canvas) {
   const value = getComputedStyle(canvas).getPropertyValue("--active-bar");
   const match = value.match(/(\d+)\D+(\d+)\D+(\d+)/);
-  return match ? match.slice(1, 4).map(Number) : [142, 166, 4];
+  if (match) return match.slice(1, 4).map(Number);
+  // Both themes define it (style.css); unread, the wash takes the ants' white.
+  console.warn(`Selection wash: could not read --active-bar (${value})`);
+  return [255, 255, 255];
 }
 
 function paintFrame() {

@@ -42,6 +42,12 @@ describe("OverlayFilmstrip picks", () => {
     expect(strip.emitted("select")).toEqual([[0]]);
   });
 
+  it("hands a right-click on a thumb to the lightbox's menu", async () => {
+    const strip = mountStrip();
+    await strip.findAll(".filmstrip-thumb")[1].trigger("contextmenu");
+    expect(strip.emitted("context-menu")[0][0].id).toBe(5);
+  });
+
   it("marks each pick with the side it lands on, A then B", () => {
     const strip = mountStrip(["5", "7"]);
     const thumbs = strip.findAll(".filmstrip-thumb");

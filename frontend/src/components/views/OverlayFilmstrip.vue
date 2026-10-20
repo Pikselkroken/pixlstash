@@ -19,6 +19,7 @@
           ]"
           :aria-pressed="pickedIds.length ? String(isPicked(item)) : undefined"
           @click.stop="onThumbClick(item, $event)"
+          @contextmenu.prevent.stop="emit('context-menu', item, $event)"
         >
           <Tooltip
             :text="item.description || 'Image'"
@@ -191,6 +192,7 @@ const emit = defineEmits([
   "navigate",
   "stack-move",
   "pick",
+  "context-menu",
 ]);
 
 const railRef = ref(null);
