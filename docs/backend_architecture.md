@@ -2869,7 +2869,7 @@ single-purpose routes still answer, and since #1850 the app calls fewer of
 them: `…/fixed-copy` and `…/clone-with-models` have no caller left in the
 app (the Run popup's *Save fixed workflow* and the clone dialogs are gone);
 they keep answering until a backend change takes them out, with their tests; `…/model-fix` is written only by the Models shelf's *Replace
-missing*; `…/set-clone-plans` is read by the Workflow tab's *Use a set…*,
+missing*; `…/set-clone-plans` is read by the Workflow tab's *Change model set…*,
 which turns a plan into unsaved model changes, and is planned against the
 graph a run submits ("A model pick at a loader that holds a model fix",
 below); `PUT …/lora-chain` is called

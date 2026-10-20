@@ -1314,7 +1314,7 @@ function landOn(workflowId) {
 }
 
 /**
- * *Use a set…* from the grid's menu. The menu itself is the Workflow tab's, in
+ * *Change model set…* from the grid's menu. The menu itself is the Workflow tab's, in
  * the rail: it is asked for through the store, and the rail is opened (not
  * persisted, as a deep link's "show me" is) so there is somewhere for it to
  * open.

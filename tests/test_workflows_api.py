@@ -12276,7 +12276,7 @@ _KREA_UNET = "test-krea2.safetensors"
 
 
 def test_a_picked_model_of_another_family_retypes_its_text_encoder(runnable):
-    """Use a set, then Run: the CLIP loader's `type` follows the model picked,
+    """Change model set, then Run: the CLIP loader's `type` follows the model picked,
     or the sampler refuses the prompt it encoded for the old one."""
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info["UNETLoader"] = {
