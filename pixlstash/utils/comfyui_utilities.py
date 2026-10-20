@@ -846,8 +846,12 @@ def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
             if named:
                 # A node declaring no outputs says nothing, and is read.
                 outputs = node.get("outputs")
-                read = not isinstance(outputs, list) or any(
-                    isinstance(out, dict) and out.get("links") for out in outputs
+                read = (
+                    not isinstance(outputs, list)
+                    or not outputs
+                    or any(
+                        isinstance(out, dict) and out.get("links") for out in outputs
+                    )
                 )
                 by_node.append((read, named))
     return _wired_loaders(by_node)

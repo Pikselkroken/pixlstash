@@ -233,6 +233,9 @@ def test_loaded_model_widgets_leaves_out_a_loader_wired_into_nothing() -> None:
         "links": [[5, 1, 0, 3, 0, "MODEL"]],
     }
     assert loaded_model_widgets(editor) == [("unet_name", "live.safetensors")]
+    # An empty `outputs` declares nothing either, and is read.
+    editor["nodes"][1]["outputs"] = []
+    assert len(loaded_model_widgets(editor)) == 2
 
 
 def test_loaded_model_widgets_reads_a_numeric_shelf_id() -> None:
