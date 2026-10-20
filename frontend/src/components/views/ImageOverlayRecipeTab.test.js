@@ -485,6 +485,48 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.compare.beforeSrc).toContain("/7");
   });
 
+  it("drags the compare cut anywhere on the picture, whatever tool is in hand", async () => {
+    gridRows = [{ id: 8, stack_id: "s1", tags: [], format: "png" }];
+    const wrapper = await openOn(
+      7,
+      [{ id: 7, stack_id: "s1", tags: [], format: "png" }],
+      configured,
+    );
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    wrapper.vm.paint.setTool("rect");
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await flush();
+    await flush();
+    // A measured picture, as the lightbox has once the result has loaded.
+    const img = wrapper.find(".overlay-img");
+    for (const [property, value] of [
+      ["complete", true],
+      ["naturalWidth", 800],
+      ["naturalHeight", 600],
+      ["clientWidth", 400],
+      ["clientHeight", 300],
+    ]) {
+      Object.defineProperty(img.element, property, { configurable: true, value });
+    }
+    await img.trigger("load");
+    await flush();
+    // The rectangle tool's input layer would sit over the slider.
+    expect(wrapper.find(".paint-input-layer").exists()).toBe(false);
+    const range = wrapper.find(".paint-compare-range");
+    range.element.getBoundingClientRect = () => ({ left: 100, width: 400 });
+    range.element.setPointerCapture = () => {};
+    range.element.hasPointerCapture = () => true;
+    // jsdom has no PointerEvent; a MouseEvent of the same name carries clientX.
+    const pointer = (type, clientX) =>
+      range.element.dispatchEvent(
+        new MouseEvent(type, { clientX, bubbles: true, cancelable: true }),
+      );
+    pointer("pointerdown", 200);
+    expect(wrapper.vm.comparePosition).toBe(25);
+    pointer("pointermove", 460);
+    expect(wrapper.vm.comparePosition).toBe(90);
+  });
+
   it("sets no compare when the reader was not on the original", async () => {
     gridRows = [{ id: 8, tags: [] }];
     const wrapper = await openOn(5, [{ id: 5, tags: [] }], configured);

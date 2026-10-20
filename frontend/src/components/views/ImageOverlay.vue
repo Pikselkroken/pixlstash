@@ -667,8 +667,14 @@
                   max="100"
                   step="1"
                   aria-label="Compare with the original: how much of the original shows"
-                  @pointerdown.stop
+                  @pointerdown.stop.prevent="onCompareStart"
+                  @pointermove="onCompareMove"
+                  @pointerup="onCompareEnd"
+                  @pointercancel="onCompareEnd"
                   @dblclick.stop
+                  @touchstart.stop
+                  @touchmove.stop
+                  @touchend.stop
                 />
               </div>
             </div>
@@ -679,7 +685,12 @@
                touches stop here: on the canvas they hide the chrome (the
                toolbox with it) or read as a swipe to the next picture. -->
           <div
-            v-if="paintActive && overlayReady && paint.tool.value !== 'hand'"
+            v-if="
+              paintActive &&
+              overlayReady &&
+              !compareShown &&
+              paint.tool.value !== 'hand'
+            "
             class="paint-input-layer"
             :class="`paint-input-layer--${paint.tool.value}`"
             @pointerdown.prevent="onPaintStart"
@@ -3679,6 +3690,31 @@ const compareShown = computed(
     overlayReady.value &&
     String(image.value?.id) === String(compare.value.resultId),
 );
+
+// The cut follows the pointer anywhere on the picture. A native range spread
+// over the whole picture only answers a press on its thumb in some browsers;
+// it stays underneath for the keyboard.
+function compareAt(event) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  if (!rect.width) return;
+  const at = ((event.clientX - rect.left) / rect.width) * 100;
+  comparePosition.value = Math.round(Math.min(100, Math.max(0, at)));
+}
+
+function onCompareStart(event) {
+  if (event.button !== 0) return;
+  event.currentTarget.focus?.();
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  compareAt(event);
+}
+
+function onCompareMove(event) {
+  if (event.currentTarget.hasPointerCapture?.(event.pointerId)) compareAt(event);
+}
+
+function onCompareEnd(event) {
+  releasePaintPointer(event);
+}
 
 let overlayResizeObserver = null;
 let mediaResizeObserver = null;
