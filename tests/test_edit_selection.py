@@ -95,6 +95,15 @@ def test_a_step_without_its_geometry_is_refused():
         Selection(steps=[{"tool": "lasso", "points": [[0, 0], [1, 1]]}])
 
 
+def test_a_coordinate_far_off_the_picture_is_refused():
+    for far in (1e30, float("inf"), float("nan")):
+        with pytest.raises(ValidationError):
+            Selection(steps=[{"tool": "rect", "box": [0, 0, far, 0.5]}])
+        with pytest.raises(ValidationError):
+            Selection(steps=[{"tool": "wand", "point": [far, 0.5]}])
+    Selection(steps=[{"tool": "lasso", "points": [[-0.1, 0], [1.1, 0], [1, 1]]}])
+
+
 def test_the_crop_plugin_cuts_the_box_given_as_fractions():
     plugin = get_image_plugin_manager().get_plugin("crop")
     assert plugin is not None

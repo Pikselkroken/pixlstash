@@ -31,7 +31,7 @@ from __future__ import annotations
 import io
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 import cv2
 import numpy as np
@@ -43,6 +43,11 @@ MAX_POINTS = 20000
 MAX_GROW = 100
 MAX_FEATHER = 100
 MAX_FILL_HOLES = 200
+
+# A coordinate, as a fraction of the picture. A gesture may run a little past
+# the edge; anything further, or not a number, is refused rather than handed
+# to OpenCV.
+Fraction = Annotated[float, Field(ge=-1, le=2, allow_inf_nan=False)]
 
 
 class SelectionStep(BaseModel):
@@ -56,10 +61,10 @@ class SelectionStep(BaseModel):
 
     tool: Literal["rect", "ellipse", "lasso", "brush", "wand", "invert"]
     mode: Literal["new", "add", "subtract", "intersect"] = "add"
-    box: list[float] | None = Field(None, min_length=4, max_length=4)
-    points: list[tuple[float, float]] | None = Field(None, max_length=MAX_POINTS)
+    box: list[Fraction] | None = Field(None, min_length=4, max_length=4)
+    points: list[tuple[Fraction, Fraction]] | None = Field(None, max_length=MAX_POINTS)
     radius: float | None = Field(None, gt=0, le=1)
-    point: tuple[float, float] | None = None
+    point: tuple[Fraction, Fraction] | None = None
     tolerance: int = Field(32, ge=0, le=255)
 
     @model_validator(mode="after")
