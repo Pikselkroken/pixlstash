@@ -2738,9 +2738,16 @@ function handleKeydown(e) {
     }
     if (commandKey === "y" || (commandKey === "z" && e.shiftKey)) {
       e.preventDefault();
-      // A selection step taken back comes back before any library change.
-      if (paintActive.value && paint.canRedo.value) paint.redo();
-      else operationStore.redo();
+      // As undo: while there is a selection, or a step of one to bring back,
+      // redo is the selection's, never a library change out of sight.
+      if (
+        paintActive.value &&
+        (paint.hasSelection.value || paint.canRedo.value)
+      ) {
+        paint.redo();
+      } else {
+        operationStore.redo();
+      }
       return;
     }
   }
@@ -3901,8 +3908,9 @@ watch(
 );
 
 // ── Filmstrip picks: Ctrl/Cmd-click, for Compare ─────────────────────────
-// Ids, in the order picked. The first Ctrl-click picks the picture on screen
-// too, so one Ctrl-click on another thumb makes a pair.
+// Ids, in the order picked, two at most: a third pick drops the oldest. The
+// first Ctrl-click picks the picture on screen too, so one Ctrl-click on
+// another thumb makes a pair.
 const filmstripPicks = ref([]);
 
 function onFilmstripPick(item) {
@@ -3913,7 +3921,7 @@ function onFilmstripPick(item) {
   if (!picks.length && current && current !== id) picks = [current];
   filmstripPicks.value = picks.includes(id)
     ? picks.filter((pick) => pick !== id)
-    : [...picks, id];
+    : [...picks, id].slice(-2);
 }
 
 const filmstripCompareReason = computed(() => {

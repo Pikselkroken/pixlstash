@@ -739,6 +739,19 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.paint.hasSelection.value).toBe(false);
     key({ key: "y", ctrlKey: true });
     expect(wrapper.vm.paint.hasSelection.value).toBe(true);
+    // With a selection and nothing of it to redo, still never a library redo.
+    const redo = vi.spyOn(wrapper.vm.operationStore, "redo");
+    key({ key: "y", ctrlKey: true });
+    expect(redo).not.toHaveBeenCalled();
+  });
+
+  it("keeps two filmstrip picks, a third dropping the oldest", async () => {
+    const wrapper = await openOn(7, [{ id: 7, tags: [], format: "png" }]);
+    const filmstrip = wrapper.findComponent({ name: "OverlayFilmstrip" });
+    filmstrip.vm.$emit("pick", { id: 5, index: 1 });
+    filmstrip.vm.$emit("pick", { id: 3, index: 2 });
+    await flush();
+    expect(wrapper.vm.filmstripPicks).toEqual(["5", "3"]);
   });
 
   it("lays the grid's first picked picture over the second", async () => {

@@ -245,6 +245,16 @@ watch(
   () => void rebuild(),
 );
 
+// The ants stop while the black-and-white view hides them, and come back
+// with it off.
+watch(
+  () => props.paint.showMask.value,
+  (bw) => {
+    if (bw) stopAnts();
+    else void rebuild();
+  },
+);
+
 onBeforeUnmount(() => {
   loadToken += 1;
   stopAnts();
