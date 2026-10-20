@@ -139,6 +139,10 @@ let antsTimer = null;
 let loadToken = 0;
 
 const ANTS_INTERVAL_MS = 150;
+// A resize (a window dragged, the inspector sliding) changes the display size
+// every frame; the canvas stretches meanwhile and is rebuilt once it settles.
+const RESIZE_SETTLE_MS = 150;
+let resizeTimer = null;
 const ANT_LENGTH = 4;
 // The design's wash: the selected colour at a third, so the picture still reads.
 const WASH_ALPHA = 0.34;
@@ -176,6 +180,7 @@ function stopAnts() {
 }
 
 async function rebuild() {
+  clearTimeout(resizeTimer);
   const canvas = canvasRef.value;
   const url = props.paint.maskUrl.value;
   const token = ++loadToken;
@@ -244,9 +249,14 @@ async function rebuild() {
 }
 
 watch(
-  () => [props.paint.maskUrl.value, props.dims.width, props.dims.height],
+  () => props.paint.maskUrl.value,
   () => void rebuild(),
 );
+
+watch([() => Math.round(props.dims.width), () => Math.round(props.dims.height)], () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => void rebuild(), RESIZE_SETTLE_MS);
+});
 
 // The ants stop while the black-and-white view hides them, and come back
 // with it off.
@@ -259,6 +269,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  clearTimeout(resizeTimer);
   loadToken += 1;
   stopAnts();
 });
