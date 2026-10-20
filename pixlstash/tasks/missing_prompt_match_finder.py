@@ -6,16 +6,13 @@ from sqlalchemy.orm import load_only
 from sqlmodel import Session, select
 
 from pixlstash.db_models.picture import Picture
-from pixlstash.pixl_logging import get_logger
 from pixlstash.task_runner import TaskCancelledError
 
-from .base_task_finder import SimpleMissingFinder
+from .base_task_finder import BaseDeferringFinder, SimpleMissingFinder
 from .prompt_match_task import PromptMatchTask
 
-logger = get_logger(__name__)
 
-
-class MissingPromptMatchFinder(SimpleMissingFinder):
+class MissingPromptMatchFinder(SimpleMissingFinder, BaseDeferringFinder):
     """Hand pictures with a prompt and an image embedding to PromptMatchTask.
 
     A picture without a prompt is never a candidate, so its score stays NULL;
@@ -25,10 +22,13 @@ class MissingPromptMatchFinder(SimpleMissingFinder):
     handed the same batch every planner cycle; a restart retries them.
     """
 
+    _IDS_PARAM = "picture_ids"
+    _TRANSIENT = (TaskCancelledError,)
+    _WHAT = "Scoring the prompt match of pictures"
+
     def __init__(self, database, engine_getter: Callable):
         super().__init__(database)
         self._engine_getter = engine_getter
-        self._deferred: set[int] = set()
 
     def finder_name(self) -> str:
         return "MissingPromptMatchFinder"
@@ -42,23 +42,6 @@ class MissingPromptMatchFinder(SimpleMissingFinder):
     def _fetch_candidates(self, session: Session, limit: int) -> list:
         pictures = session.exec(self.candidate_query(limit + len(self._deferred))).all()
         return [pic for pic in pictures if pic.id not in self._deferred]
-
-    def on_task_complete(self, task, error) -> None:
-        """Release the batch's claims, and defer its pictures if it failed.
-
-        A cancelled task never ran, so its pictures stay eligible.
-        """
-        super().on_task_complete(task, error)
-        if error is None or isinstance(error, TaskCancelledError):
-            return
-        ids = (getattr(task, "params", None) or {}).get("picture_ids") or []
-        logger.warning(
-            "Scoring the prompt match of pictures %s failed: %s. Deferring them "
-            "for the rest of this session.",
-            ids,
-            error,
-        )
-        self._deferred.update(ids)
 
     @staticmethod
     def candidate_filter() -> tuple:
