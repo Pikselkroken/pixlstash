@@ -179,6 +179,23 @@ describe("the Templates tab's list", () => {
     expect(store.templates.map((t) => t.key)).toEqual(["default/new"]);
   });
 
+  it("lets a new session add while an Add from the old one is still out", async () => {
+    const store = await loaded();
+    let land;
+    addTemplates.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    const stale = store.add([{ module: "default", name: "ready" }]);
+    expect(store.adding).toBe(true);
+    store.reset();
+    expect(store.adding).toBe(false);
+    addTemplates.mockResolvedValue({ added: [{ workflow_id: "manual:new" }], failed: [] });
+    const fresh = store.add([{ module: "default", name: "ready" }]);
+    land({ added: [{ workflow_id: "manual:old" }], failed: [] });
+    // The old answer goes nowhere; the new one is the view's to land on.
+    expect(await stale).toBe(null);
+    expect((await fresh).added[0].workflow_id).toBe("manual:new");
+    expect(store.adding).toBe(false);
+  });
+
   it("keeps what ComfyUI's silence says rather than an empty list", async () => {
     listTemplates.mockResolvedValue({
       comfyui_url: "http://127.0.0.1:8188",

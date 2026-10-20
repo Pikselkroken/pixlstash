@@ -334,18 +334,27 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
    * Store the given templates (the selection by default) as workflows.
    * Answers the server's `{added, failed}`, or null with `error` set.
    */
+  /**
+   * Store `list` as workflows. An Add that a session reset outlived answers
+   * null and leaves the new session's state alone: it neither holds that
+   * session's Add back nor hands the view a result to land on.
+   */
   async function add(list = selectedTemplates.value) {
     if (adding.value || !list.length) return null;
     adding.value = true;
     error.value = "";
+    const mine = generation;
     try {
-      return await addTemplates(list);
+      const body = await addTemplates(list);
+      return mine === generation ? body : null;
     } catch (err) {
       console.warn("[templates] could not add templates", err);
-      error.value = errorMessage(err, "Could not add those templates.");
+      if (mine === generation) {
+        error.value = errorMessage(err, "Could not add those templates.");
+      }
       return null;
     } finally {
-      adding.value = false;
+      if (mine === generation) adding.value = false;
     }
   }
 
@@ -358,6 +367,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     inflight = null;
     inflightRefresh = false;
     loading.value = false;
+    adding.value = false;
     shown.value = false;
     templates.value = [];
     loaded.value = false;
