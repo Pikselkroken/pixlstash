@@ -10844,23 +10844,29 @@ def create_router(server) -> APIRouter:
             for node_id, _cls, widget, value in iter_model_fields_api(graph)
             if value in unlisted
         ]
-        missed = set()
+        missed, written = set(), set()
         for node_id, widget, value in held:
             if not _loads_off_the_shelf(
                 request, graph, node_id, widget, unlisted[value], object_info
             ):
                 missed.add(value)
                 continue
-            swapped += apply_filename_swap(
+            rows = apply_filename_swap(
                 {node_id: graph[node_id]},
                 {value: unlisted[value]},
                 None,
                 fields=lambda _cls, field, widget=widget: field == widget,
             )[0]
+            swapped += rows
+            written.update(row["was"] for row in rows)
+        # A miss is dropped only where its file was written on every loader
+        # naming it; anything else is still reported, and refuses the clone.
         unswapped = [
             miss
             for miss in unswapped
-            if miss["reason"] != "not_on_comfyui" or miss["was"] in missed
+            if miss["reason"] != "not_on_comfyui"
+            or miss["was"] in missed
+            or miss["was"] not in written
         ]
         return loaders, swapped, unswapped
 
