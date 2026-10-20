@@ -10237,7 +10237,9 @@ def create_router(server) -> APIRouter:
         return [(slots[i], models[paired[i]]) for i in sorted(paired)]
 
     def _pair_bases(
-        found: list[tuple[str, str, SwapSlot]], checkpoints: list[SwapModel]
+        found: list[tuple[str, str, SwapSlot]],
+        checkpoints: list[SwapModel],
+        live_files: set[str] | None = None,
     ) -> list[tuple[SwapSlot, SwapModel]]:
         """Each base slot of *found* with the set checkpoint it takes, in graph order.
 
@@ -10246,9 +10248,21 @@ def create_router(server) -> APIRouter:
         the low-noise expert replaces the low-noise file, and a graph loading
         one expert takes the set's matching one. A slot left over keeps its
         file.
+
+        The slots some output reads (*live_files*, the files a live loader
+        names; ``None`` when nothing says) are paired first: a leftover
+        loader wired into nothing never runs, so a set's one checkpoint whose
+        name reads closer to it would change nothing the run makes.
         """
         bases = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
-        return _closest_pairs(bases, checkpoints)
+        live = [s for s in bases if live_files is None or s.filename in live_files]
+        pairs = _closest_pairs(live, checkpoints)
+        taken = {model.id for _slot, model in pairs}
+        pairs += _closest_pairs(
+            [s for s in bases if s not in live],
+            [m for m in checkpoints if m.id not in taken],
+        )
+        return sorted(pairs, key=lambda pair: bases.index(pair[0]))
 
     def _clip_type(node: dict) -> str | None:
         """A CLIP loader node's ``type``, or None for any other node."""
@@ -10451,8 +10465,24 @@ def create_router(server) -> APIRouter:
         models = _swap_models(hub)
         index = recipe_asset_index(hub)
         found = _swap_slots(graph, models, index)
+        # The files a loader some output reads names, or None when ComfyUI
+        # did not say which nodes are outputs: a leftover base loader wired
+        # into nothing is neither the workflow's base model nor the slot a
+        # set's checkpoint goes to.
+        live = live_node_ids(graph, object_info) if object_info else None
+        live_files = (
+            None
+            if live is None
+            else {
+                value
+                for node_id, _c, _w, value in iter_model_fields_api(graph)
+                if str(node_id) in live
+            }
+        )
+        bases_found = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
         base = next(
-            (slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS), None
+            (s for s in bases_found if live_files is None or s.filename in live_files),
+            bases_found[0] if bases_found else None,
         )
         old_base = (
             _replaced_base_model(
@@ -10513,7 +10543,7 @@ def create_router(server) -> APIRouter:
                 if i in models
                 and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
             ]
-            bases = _pair_bases(found, set_checkpoints)
+            bases = _pair_bases(found, set_checkpoints, live_files)
             # The one the graph's first base slot takes, which `old_base` is
             # read from; else whichever slot was paired.
             checkpoint = next(

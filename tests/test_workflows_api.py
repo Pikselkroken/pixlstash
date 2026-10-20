@@ -124,7 +124,7 @@ from pixlstash.services.workflow_run_service import (
     replace_missing_text_nodes,
     skip_requested_loras,
 )
-from pixlstash.utils.known_base_models import family_of, fold
+from pixlstash.utils.known_base_models import family_of, fold, identify
 import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
@@ -15425,6 +15425,61 @@ def test_a_set_of_another_family_fits_only_when_its_encoder_is_retyped(cloneable
     mystery = plans["mystery"]
     assert mystery["fit"] == "other"
     assert mystery["maps_cleanly"] is False
+
+
+def test_a_sets_checkpoint_goes_to_the_loader_the_run_reads(cloneable):
+    """A set's one checkpoint replaces the base loader some output reads, never
+    a leftover one wired into nothing whose name happens to read closer, and
+    its encoder loads as MOSS-Image.
+
+    Wrong if `swaps` names the leftover loader's file: the tab has no row for
+    it, so the set fills no checkpoint and the run samples the old model.
+    """
+    moss = "moss_image_sft_int8.safetensors"
+    leftover = "moody_mix_int8.safetensors"
+    graph = _embedded_export_graph()
+    graph["8"] = {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "qwen3vl_4b_bf16.safetensors", "type": "krea2"},
+    }
+    graph["5"]["inputs"]["clip"] = ["8", 0]
+    graph["6"]["inputs"]["clip"] = ["8", 0]
+    graph["9"] = {"class_type": "CheckpointLoaderSimple", "inputs": {}}
+    graph["9"]["inputs"]["ckpt_name"] = leftover
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["SaveImage"]["output_node"] = True
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0] += [
+        leftover,
+        moss,
+    ]
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        # As a scan stores it: identified from its filename.
+        checkpoint = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance, "
+            "base_model_canonical, base_model_source) "
+            "VALUES ('checkpoint', ?, 'scanned', ?, ?)",
+            (moss, *identify([], [moss])),
+        ).lastrowid
+    try:
+        body, plans = _plans(cloneable, moss=[checkpoint])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (checkpoint,))
+    plan = plans["moss"]
+    assert body["base_filename"] == _SHELF_FILENAME
+    assert plan["swaps"] == {_SHELF_FILENAME: moss}, plan
+    assert plan["unpaired_bases"] == [leftover]
+    clip = next(row for row in plan["loaders"] if row["node_id"] == "8")
+    assert (clip["was_type"], clip["now_type"]) == ("krea2", "moss_image")
 
 
 def test_a_set_with_two_builds_of_its_encoder_fills_the_one_loader(cloneable):
