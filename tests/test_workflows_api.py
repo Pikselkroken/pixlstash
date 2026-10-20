@@ -14999,6 +14999,53 @@ def test_a_set_plan_says_which_sets_will_not_load_and_why(cloneable):
     assert plans["unlisted"]["reason"] == "ComfyUI does not list unlisted.safetensors"
 
 
+def test_a_set_whose_checkpoint_only_the_shelf_has_clones_to_load_it_there(
+    cloneable,
+):
+    """#2009: a set checkpoint ComfyUI does not list is still cloned onto when
+    a run would load it off the shelf, through the pack's checkpoint loader.
+
+    Wrong if the plan says "ComfyUI does not list" with that loader in
+    ComfyUI and ComfyUI on this computer, or the clone is refused.
+    """
+    unlisted, digest = "test-moss-unlisted.safetensors", _h("moss-unlisted")
+    with cloneable.server.hub.transaction() as conn:
+        _shelve_with_copy(conn, "checkpoint", unlisted, digest)
+        row_id = conn.execute(
+            "SELECT id FROM model WHERE sha256 = ?", (digest,)
+        ).fetchone()[0]
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (info, None)
+    )
+    try:
+        # Without the pack's loader nothing can load it.
+        assert _plans(cloneable, moss=[row_id])[1]["moss"]["reason"] == (
+            f"ComfyUI does not list {unlisted}"
+        )
+        info["PixlStashCheckpointLoader"] = ID_LOADER_OBJECT_INFO[
+            "PixlStashCheckpointLoader"
+        ]
+        # A ComfyUI elsewhere cannot read the shelf's copy.
+        with cloneable.monkeypatch.context() as m:
+            m.setattr(workflows_routes, "locate", lambda url: (None, None))
+            assert _plans(cloneable, moss=[row_id])[1]["moss"]["fit"] == "wont_load"
+        plan = _plans(cloneable, moss=[row_id])[1]["moss"]
+        assert plan["fit"] != "wont_load", plan
+        assert plan["reason"] is None, plan
+        assert plan["swaps"] == {_SHELF_FILENAME: unlisted}, plan
+
+        r = _clone(cloneable, plan["swaps"])
+        assert r.status_code == 201, r.text
+        assert r.json()["unswapped"] == []
+        assert r.json()["verified"] is False
+        # Written unchecked: the run swaps the pack's loader in for it.
+        assert _written(cloneable, r.json())["1"]["inputs"]["ckpt_name"] == unlisted
+    finally:
+        with cloneable.server.hub.transaction() as conn:
+            _unshelve(conn, [digest])
+
+
 def test_a_gguf_set_on_a_whole_checkpoint_loader_names_the_loader_it_needs(
     cloneable,
 ):

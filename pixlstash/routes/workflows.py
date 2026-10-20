@@ -10531,7 +10531,9 @@ def create_router(server) -> APIRouter:
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
-            loaders, _swapped, unswapped = _swap_files(pending, swaps, object_info)
+            loaders, _swapped, unswapped = _swap_files(
+                request, pending, swaps, object_info
+            )
             # The clone's own retype, so the diff shows the type it writes.
             retype_text_encoders(
                 pending, _swapped_in_families(models, index, graph, swaps), object_info
@@ -10677,7 +10679,8 @@ def create_router(server) -> APIRouter:
             "replaced, named as asked, beside the original. Every loader "
             "naming a replaced file is rewritten. When ComfyUI answers, each "
             "new name is written as ComfyUI lists it and a name it does not "
-            "list is left out; when it does not, the names are written "
+            "list is left out, unless a run loads it off the shelf through "
+            "the PixlStash loader; when it does not, the names are written "
             "unchecked. The original file is not changed; the clone is a file "
             "of its own, in the same workflow."
         ),
@@ -10733,7 +10736,9 @@ def create_router(server) -> APIRouter:
         families = _swapped_in_families(
             _swap_models(hub), recipe_asset_index(hub), graph, body.swaps
         )
-        loaders, swapped, unswapped = _swap_files(graph, body.swaps, object_info)
+        loaders, swapped, unswapped = _swap_files(
+            request, graph, body.swaps, object_info
+        )
         if not swapped and not unswapped and not chain_changed:
             raise HTTPException(
                 status_code=409,
@@ -10807,13 +10812,16 @@ def create_router(server) -> APIRouter:
         return families
 
     def _swap_files(
-        graph: dict, swaps: dict[str, str], object_info: dict | None
+        request: Request, graph: dict, swaps: dict[str, str], object_info: dict | None
     ) -> tuple[list[dict], list[dict], list[dict]]:
         """The clone's rewrite of *graph*, in place: loader classes, then files.
 
         The class goes first so each file is checked against the loader that
         will read it. A loader whose pack ComfyUI lacks lists nothing, so its
-        file goes in unchecked: a missing pack warns and does not refuse.
+        file goes in unchecked: a missing pack warns and does not refuse. A
+        file ComfyUI does not list is written unchecked too where a run loads
+        it off the shelf (:func:`_loads_off_the_shelf`), as a model fix's is
+        (#2009).
 
         Returns:
             ``(loaders, swapped, unswapped)``: :func:`plan_loader_rewrites`'s
@@ -10822,6 +10830,38 @@ def create_router(server) -> APIRouter:
         loaders = plan_loader_rewrites(graph, swaps, object_info)
         apply_loader_rewrites(graph, loaders)
         swapped, unswapped = apply_filename_swap(graph, swaps, object_info)
+        unlisted = {
+            miss["was"]: miss["now"]
+            for miss in unswapped
+            if miss["reason"] == "not_on_comfyui"
+        }
+        if not unlisted:
+            return loaders, swapped, unswapped
+        # Per loader: a twin naming the same file that the pack's loader
+        # cannot stand in for (an fp8 cast) keeps it, and refuses the clone.
+        held = [
+            (node_id, widget, value)
+            for node_id, _cls, widget, value in iter_model_fields_api(graph)
+            if value in unlisted
+        ]
+        missed = set()
+        for node_id, widget, value in held:
+            if not _loads_off_the_shelf(
+                request, graph, node_id, widget, unlisted[value], object_info
+            ):
+                missed.add(value)
+                continue
+            swapped += apply_filename_swap(
+                {node_id: graph[node_id]},
+                {value: unlisted[value]},
+                None,
+                fields=lambda _cls, field, widget=widget: field == widget,
+            )[0]
+        unswapped = [
+            miss
+            for miss in unswapped
+            if miss["reason"] != "not_on_comfyui" or miss["was"] in missed
+        ]
         return loaders, swapped, unswapped
 
     def _store_copy(
