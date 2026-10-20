@@ -565,6 +565,9 @@ describe("Open in ComfyUI", () => {
     expect(row.find(".tip").attributes("data-text")).toContain(
       "ComfyUI-PixlStash node",
     );
+    expect(row.find(".tip").attributes("data-text")).toContain(
+      "leave Workflows and come back",
+    );
     await row.trigger("click");
     expect(wrapper.find(".ctx-submenu").exists()).toBe(false);
     wrapper.unmount();
