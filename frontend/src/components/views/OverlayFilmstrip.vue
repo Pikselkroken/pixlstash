@@ -371,9 +371,15 @@ function onFilmstripWheel(event) {
 
 /* Picked for Compare: the comparison's teal, so it never reads as the olive
    of the picture on screen. */
-.filmstrip-thumb--picked .filmstrip-thumb-tile {
-  outline: 3px solid rgb(var(--v-theme-dark-surface-tertiary));
-  outline-offset: 2px;
+.filmstrip-thumb--picked .filmstrip-thumb-image,
+.filmstrip-thumb--picked .filmstrip-thumb-placeholder {
+  box-shadow: 0 0 0 3px rgb(var(--v-theme-dark-surface-tertiary));
+}
+
+.filmstrip-thumb--picked .filmstrip-thumb-image-active {
+  box-shadow:
+    0 0 0 4px rgb(var(--v-theme-dark-surface-primary)),
+    0 0 0 7px rgb(var(--v-theme-dark-surface-tertiary));
 }
 
 .filmstrip-badge--pick {
