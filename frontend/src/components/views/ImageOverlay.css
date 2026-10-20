@@ -908,27 +908,42 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: fill;
+  /* Any two pictures: a different shape keeps its own, centred. */
+  object-fit: contain;
   pointer-events: none;
 }
 
+/* Each side's name, coloured as its half of the exit pill below, and the way
+   out onto that side. */
 .paint-compare-tag {
   position: absolute;
   top: var(--space-3);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo-strong);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-2xs);
-  pointer-events: none;
+  z-index: var(--z-raised);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.paint-compare-tag:hover {
+  background-image: var(--hover-shade);
 }
 
 .paint-compare-tag--before {
   left: var(--space-3);
+  background-color: rgb(var(--v-theme-secondary));
+  color: rgb(var(--v-theme-on-secondary));
 }
 
 .paint-compare-tag--after {
   right: var(--space-3);
+  background-color: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
 }
 
 .paint-compare-split {
@@ -967,30 +982,59 @@
   cursor: ew-resize;
 }
 
-.paint-compare-done {
+/* The way out of a comparison, at the bottom of the screen: one pill, its
+   halves in the two sides' colours (as the corner tags), glowing them. */
+.compare-exit {
   position: absolute;
-  bottom: var(--space-3);
+  bottom: var(--space-7);
   left: 50%;
   transform: translateX(-50%);
+  z-index: var(--z-raised);
+  display: inline-flex;
+  align-items: stretch;
+  height: var(--control-h);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  box-shadow:
+    calc(-1 * var(--space-4)) 0 var(--space-6) rgba(var(--v-theme-secondary), 0.7),
+    var(--space-4) 0 var(--space-6) rgba(var(--v-theme-tertiary), 0.7);
+}
+
+.compare-exit > button {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  height: var(--control-h-sm);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--scrim-photo-strong);
-  color: rgb(var(--v-theme-on-dark-surface));
-  font-size: var(--text-xs);
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
   cursor: pointer;
 }
 
-.paint-compare-done:hover {
-  background-image: linear-gradient(var(--hover-wash), var(--hover-wash));
+.compare-exit > button:hover {
+  background-image: var(--hover-shade);
 }
 
-.paint-compare-done:focus-visible {
-  outline: var(--focus-width) solid var(--focus-stroke);
-  outline-offset: var(--focus-offset);
+.compare-exit-side--before {
+  background-color: rgb(var(--v-theme-secondary));
+  color: rgb(var(--v-theme-on-secondary));
+}
+
+.compare-exit-side--after {
+  background-color: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
+}
+
+.compare-exit-main {
+  background-color: rgb(var(--v-theme-dark-surface));
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.compare-exit-key {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
 }
 
 .paint-compare:has(.paint-compare-range:focus-visible) .paint-compare-split {

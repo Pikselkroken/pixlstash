@@ -29,6 +29,7 @@
     :comfyuiConfigured="filterStore.comfyuiConfigured"
     :guestScore="overlayGuestScore"
     :editRequest="overlayEditRequest"
+    :compareRequest="overlayCompareRequest"
     @close="closeOverlay()"
     @apply-score="applyScore"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
@@ -124,6 +125,7 @@
       :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
       :grouping-lock-reason="partialStackGroupingReason"
       :rotate-block-reason="selectionRotateBlockReason"
+      :compare-block-reason="selectionCompareBlockReason"
       :lock-reason="selectionLockReason"
       :locked-set-ids="lockedSetsStore.lockedSetIds"
       :available-plugins="availablePlugins"
@@ -155,6 +157,7 @@
       @make-more="makeMoreLikeSelection"
       @run-workflow="runWorkflowOnSelection"
       @edit-pictures="editSelection"
+      @compare-pictures="compareSelection"
       @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
@@ -1173,6 +1176,7 @@
           :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
           :grouping-lock-reason="partialStackGroupingReason"
           :rotate-block-reason="selectionRotateBlockReason"
+          :compare-block-reason="selectionCompareBlockReason"
           :available-plugins="availablePlugins"
           :tagger-plugins="taggerPlugins"
           :captioner-plugins="captionerPlugins"
@@ -1208,6 +1212,7 @@
           @make-more="makeMoreLikeSelection"
           @run-workflow="runWorkflowOnSelection"
           @edit-pictures="editSelection"
+          @compare-pictures="compareSelection"
         />
       </template>
     </GridActionPill>
@@ -1370,6 +1375,7 @@ import {
   rotateBlockReason as buildRotateBlockReason,
   rotateSkipNote,
 } from "../../utils/rotate";
+import { compareBlockReason } from "../../utils/compare";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
 import {
   getCharacter,
@@ -4954,6 +4960,26 @@ function selectedPictureRecords() {
 const selectionRotateBlockReason = computed(() =>
   buildRotateBlockReason(selectedPictureRecords()),
 );
+
+// Why Compare is greyed in both menus, or null for exactly two pictures.
+const selectionCompareBlockReason = computed(() =>
+  compareBlockReason(selectedPictureRecords()),
+);
+
+/** The grid's *Compare*, as the lightbox reads it: `{beforeId, afterId}`. */
+const overlayCompareRequest = ref(null);
+
+/**
+ * "Compare", from either grid menu: the lightbox on the second picture with
+ * the first laid over it, cut at the slider.
+ */
+function compareSelection() {
+  const pictures = selectedPictureRecords();
+  if (compareBlockReason(pictures)) return;
+  const [before, after] = pictures;
+  overlayCompareRequest.value = { beforeId: before.id, afterId: after.id };
+  openOverlay({ id: after.id });
+}
 
 const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {

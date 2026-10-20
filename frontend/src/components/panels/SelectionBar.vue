@@ -134,6 +134,7 @@
             :keep-cover-only-stack-count="props.keepCoverOnlyStackCount"
             :keep-cover-only-lock-reason="props.keepCoverOnlyLockReason"
             :rotate-block-reason="props.rotateBlockReason"
+            :compare-block-reason="props.compareBlockReason"
             @close="selectionMenuOpen = false"
             @set-project="$emit('set-project', $event)"
             @add-to-character="$emit('add-to-character', $event)"
@@ -152,6 +153,7 @@
             @make-more="$emit('make-more')"
             @run-workflow="$emit('run-workflow')"
             @edit-pictures="$emit('edit-pictures')"
+            @compare-pictures="$emit('compare-pictures')"
             @reverse-image-search="$emit('reverse-image-search')"
             @segment="$emit('segment')"
             @rotate-left="$emit('rotate-left')"
@@ -274,6 +276,7 @@ const props = defineProps({
   // Forwarded straight to SelectionMenu, like the two above: the rotate pair
   // lives in the overflow only, never as a top-level pill button.
   rotateBlockReason: { type: String, default: null },
+  compareBlockReason: { type: String, default: null },
   groupingLockReason: { type: String, default: null },
   availablePlugins: { type: Array, default: () => [] },
   taggerPlugins: { type: Array, default: () => [] },
@@ -313,6 +316,7 @@ const emit = defineEmits([
   "make-more",
   "run-workflow",
   "edit-pictures",
+  "compare-pictures",
 ]);
 
 const isScrapheapView = computed(() => {

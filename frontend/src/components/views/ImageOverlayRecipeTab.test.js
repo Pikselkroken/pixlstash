@@ -541,7 +541,7 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.find(".paint-compare").exists()).toBe(false);
     expect(wrapper.emitted("close")).toBeUndefined();
     await reopen();
-    await wrapper.find(".paint-compare-done").trigger("click");
+    await wrapper.find(".compare-exit-main").trigger("click");
     expect(wrapper.find(".paint-compare").exists()).toBe(false);
   });
 
@@ -599,6 +599,85 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.emitted("close")).toBeUndefined();
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(wrapper.emitted("close")).toHaveLength(1);
+  });
+
+  it("compares two pictures Ctrl-clicked in the filmstrip, ComfyUI or not", async () => {
+    const wrapper = await openOn(7, [
+      { id: 7, tags: [], format: "png" },
+      { id: 5, tags: [], format: "png" },
+    ]);
+    const compareButton = () =>
+      wrapper
+        .findAll(".overlay-icon-btn")
+        .find((b) => b.find("v-icon").text() === "mdi-compare-horizontal");
+    // Shown, and greyed with how to pick, before there are two.
+    expect(compareButton().attributes("aria-disabled")).toBe("true");
+    expect(compareButton().attributes("aria-label")).toContain("Ctrl-click");
+    await compareButton().trigger("click");
+    expect(wrapper.vm.compare).toBeNull();
+    // One Ctrl-click on another thumb picks it and the picture on screen.
+    wrapper
+      .findComponent({ name: "OverlayFilmstrip" })
+      .vm.$emit("pick", { id: 5, index: 1 });
+    await flush();
+    expect(wrapper.vm.filmstripPicks).toEqual(["7", "5"]);
+    expect(compareButton().attributes("aria-disabled")).toBeUndefined();
+    await compareButton().trigger("click");
+    await flush();
+    expect(wrapper.vm.compare).toMatchObject({
+      resultId: "5",
+      beforeLabel: "A",
+      afterLabel: "B",
+    });
+    expect(wrapper.vm.compare.beforeSrc).toContain("/7");
+    expect(wrapper.vm.image.id).toBe(5);
+    expect(wrapper.vm.filmstripPicks).toEqual([]);
+  });
+
+  it("leaves the comparison onto either side, from the pill or the tags", async () => {
+    const wrapper = await openOn(5, [
+      { id: 7, tags: [], format: "png" },
+      { id: 5, tags: [], format: "png" },
+    ]);
+    const start = async () => {
+      await wrapper.setProps({ compareRequest: { beforeId: 7, afterId: 5 } });
+      await flush();
+    };
+    // Measured, so the comparison draws over the picture.
+    const img = wrapper.find(".overlay-img");
+    for (const [property, value] of [
+      ["complete", true],
+      ["naturalWidth", 800],
+      ["naturalHeight", 600],
+      ["clientWidth", 400],
+      ["clientHeight", 300],
+    ]) {
+      Object.defineProperty(img.element, property, { configurable: true, value });
+    }
+    await img.trigger("load");
+    await start();
+    // The pill's After side stays on the picture under the cut.
+    await wrapper.find(".compare-exit-side--after").trigger("click");
+    expect(wrapper.vm.compare).toBeNull();
+    expect(wrapper.vm.image.id).toBe(5);
+    // The tag's Before side goes to the picture laid over it.
+    await start();
+    expect(wrapper.find(".paint-compare-tag--before").text()).toContain("A");
+    await wrapper.find(".paint-compare-tag--before").trigger("click");
+    await flush();
+    expect(wrapper.vm.compare).toBeNull();
+    expect(wrapper.vm.image.id).toBe(7);
+  });
+
+  it("lays the grid's first picked picture over the second", async () => {
+    const wrapper = await openOn(5, [
+      { id: 7, tags: [], format: "png" },
+      { id: 5, tags: [], format: "png" },
+    ]);
+    await wrapper.setProps({ compareRequest: { beforeId: 7, afterId: 5 } });
+    await flush();
+    expect(wrapper.vm.compare).toMatchObject({ resultId: "5", beforeLabel: "A" });
+    expect(wrapper.vm.compare.beforeSrc).toContain("/7");
   });
 
   it("keeps the chrome up when a control's own click re-renders the part clicked", async () => {

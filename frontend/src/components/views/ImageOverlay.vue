@@ -392,6 +392,26 @@
             </Tooltip>
           </template>
 
+          <!-- Compare two pictures Ctrl-clicked in the filmstrip. Shown greyed
+               until there are two: the tip says how to pick them. -->
+          <button
+            v-if="image"
+            class="overlay-icon-btn"
+            type="button"
+            :aria-label="filmstripCompareReason || 'Compare the two pictures picked'"
+            :aria-disabled="filmstripCompareReason ? 'true' : undefined"
+            @click.stop="compareFilmstripPicks"
+            :class="{ hidden: chromeHidden }"
+          >
+            <Tooltip
+              location="bottom"
+              :text="filmstripCompareReason || 'Compare the two pictures picked'"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="24">mdi-compare-horizontal</v-icon>
+          </button>
+
           <!-- The zoom readout lives ON the control (owner ruling): a live
                whole-percent of natural size beside the retained icon. The
                label width is reserved once (5ch, tabular numerals) so the
@@ -633,8 +653,8 @@
                 :paint="paint"
                 :dims="overlayDims"
               />
-              <!-- After an edit, the original over the result, cut at the
-                   slider: drag to compare. -->
+              <!-- One picture over another, cut at the slider: the original
+                   over an edit's result, or any two pictures picked. -->
               <div
                 v-if="compareShown"
                 class="paint-compare"
@@ -646,12 +666,6 @@
                   alt=""
                   :style="{ clipPath: `inset(0 ${100 - comparePosition}% 0 0)` }"
                 />
-                <span class="paint-compare-tag paint-compare-tag--before"
-                  >Before</span
-                >
-                <span class="paint-compare-tag paint-compare-tag--after"
-                  >After</span
-                >
                 <span
                   class="paint-compare-split"
                   :style="{ left: `${comparePosition}%` }"
@@ -666,7 +680,7 @@
                   min="0"
                   max="100"
                   step="1"
-                  aria-label="Compare with the original: how much of the original shows"
+                  :aria-label="`Compare: how much of ${compare.beforeLabel || 'the original'} shows`"
                   @pointerdown.stop.prevent="onCompareStart"
                   @pointermove="onCompareMove"
                   @pointerup="onCompareEnd"
@@ -677,18 +691,65 @@
                   @touchend.stop
                   @keydown.esc.stop.prevent="closeCompare"
                 />
+                <!-- Each side's name is also the way out onto that side. -->
                 <button
+                  v-for="side in COMPARE_SIDES"
+                  :key="side"
                   type="button"
-                  class="paint-compare-done"
-                  @click.stop="closeCompare"
+                  class="paint-compare-tag"
+                  :class="`paint-compare-tag--${side}`"
+                  @click.stop="leaveCompare(side)"
                   @pointerdown.stop
                   @dblclick.stop
                 >
-                  <v-icon size="16">mdi-check</v-icon>
-                  Done comparing
+                  <Tooltip
+                    :text="`Leave the comparison on ${compareLabel(side)}`"
+                    activator="parent"
+                    :describe="false"
+                  />
+                  <v-icon v-if="side === 'before'" size="14">mdi-chevron-left</v-icon>
+                  {{ compareLabel(side) }}
+                  <v-icon v-if="side === 'after'" size="14">mdi-chevron-right</v-icon>
                 </button>
               </div>
             </div>
+          </div>
+
+          <!-- The way out of a comparison, where it cannot be zoomed or
+               panned away: the bottom of the screen, glowing its own teal. -->
+          <div
+            v-if="compareShown"
+            class="compare-exit"
+            role="group"
+            aria-label="Leave the comparison"
+            @pointerdown.stop
+            @dblclick.stop
+          >
+            <button
+              type="button"
+              class="compare-exit-side compare-exit-side--before"
+              @click.stop="leaveCompare('before')"
+            >
+              <v-icon size="18">mdi-chevron-left</v-icon>
+              {{ compareLabel("before") }}
+            </button>
+            <button
+              type="button"
+              class="compare-exit-main"
+              aria-keyshortcuts="Escape"
+              @click.stop="leaveCompare('after')"
+            >
+              Exit comparison
+              <kbd class="compare-exit-key" aria-hidden="true">Esc</kbd>
+            </button>
+            <button
+              type="button"
+              class="compare-exit-side compare-exit-side--after"
+              @click.stop="leaveCompare('after')"
+            >
+              {{ compareLabel("after") }}
+              <v-icon size="18">mdi-chevron-right</v-icon>
+            </button>
           </div>
 
           <!-- Takes the pointer while a Paint tool is in hand; the Hand tool
@@ -800,7 +861,9 @@
           :canvas-style="filmstripCanvasStyle"
           :hidden="chromeHidden"
           :read-only="isReadOnly"
+          :picked-ids="filmstripPicks"
           @select="selectImageByIndex"
+          @pick="onFilmstripPick"
           @toggle-expand="toggleFilmstripStackExpand"
           @prefetch="prefetchFilmstripStackMembers"
           @navigate="onFilmstripNavigate"
@@ -1085,6 +1148,7 @@ import {
   toggleScore,
 } from "../../utils/utils.js";
 import { isEditableElement, isTypingTarget } from "../../utils/dom.js";
+import { compareBlockReason } from "../../utils/compare";
 import {
   getPictureStackId,
   getStackPositionValue,
@@ -1180,6 +1244,9 @@ const props = defineProps({
   // The grid's *Edit…* (`{pictureIds}`, a new object per gesture): open on
   // the Edit tab, with *Apply to* offering every picture named.
   editRequest: { type: Object, default: null },
+  // The grid's *Compare* (`{beforeId, afterId}`, a new object per gesture):
+  // the first picture laid over the second, which the lightbox opens on.
+  compareRequest: { type: Object, default: null },
 });
 
 const {
@@ -1206,6 +1273,7 @@ const {
   comfyuiConfigured,
   guestScore,
   editRequest,
+  compareRequest,
 } = toRefs(props);
 
 const image = ref(null);
@@ -1603,7 +1671,7 @@ async function showEditResult(id, sourceId) {
   setOverlayImageById(idKey);
   void ensureOverlayFilmstripForImage();
   if (beforeSrc) {
-    compare.value = { resultId: idKey, beforeSrc };
+    compare.value = { resultId: idKey, beforeSrc, beforeId: String(sourceId) };
     comparePosition.value = 50;
   }
   emit("show-picture", id);
@@ -2794,6 +2862,8 @@ function handleKeydown(e) {
     } else if (paintActive.value && paint.hasSelection.value) {
       // The selection goes first; the next Escape closes the lightbox.
       paint.clear();
+    } else if (filmstripPicks.value.length) {
+      filmstripPicks.value = [];
     } else if (drawMode.value) {
       clearDrawMode();
     } else if (pluginMenuOpen.value) {
@@ -3623,6 +3693,7 @@ watch(open, (isOpen) => {
   if (isOpen) return;
   applyToIds.value = [];
   compare.value = null;
+  filmstripPicks.value = [];
 });
 
 // The largest stored face, which Square on face frames.
@@ -3746,6 +3817,110 @@ function onCompareEnd(event) {
 function closeCompare() {
   compare.value = null;
   overlayCanvasRef.value?.focus?.();
+}
+
+const COMPARE_SIDES = ["before", "after"];
+
+function compareLabel(side) {
+  const current = compare.value || {};
+  return side === "before"
+    ? current.beforeLabel || "Before"
+    : current.afterLabel || "After";
+}
+
+// Out of the comparison onto one side: the picture under it (after) or the
+// one laid over it (before).
+function leaveCompare(side) {
+  const beforeId = compare.value?.beforeId;
+  closeCompare();
+  if (side === "before" && beforeId) setOverlayImageById(beforeId);
+}
+
+/** A picture's row, from the lightbox's lists or else read by id. */
+async function pictureRowById(id) {
+  const key = String(id);
+  const known = allImageById.value.get(key) || filmstripImageById.value.get(key);
+  if (known) return known;
+  try {
+    const rows = await listPicturesByIds([key], { fields: "grid" });
+    return Array.isArray(rows) ? rows[0] || null : null;
+  } catch (err) {
+    console.warn(`Could not read picture ${key} to compare it:`, err);
+    return null;
+  }
+}
+
+/**
+ * Lay *beforeId* over *afterId*, cut at the slider, and show *afterId*. Any
+ * two pictures: picked in the grid or the filmstrip. They are A and B, the
+ * first picked on the left.
+ */
+async function startCompare(beforeId, afterId) {
+  const before = await pictureRowById(beforeId);
+  const beforeSrc = before ? buildFullImageSrc(before) : "";
+  if (!beforeSrc) {
+    noticeStore.error("Couldn't open the first picture to compare.", {
+      key: "compare-start",
+    });
+    return;
+  }
+  compare.value = {
+    resultId: String(afterId),
+    beforeId: String(beforeId),
+    beforeSrc,
+    beforeLabel: "A",
+    afterLabel: "B",
+  };
+  comparePosition.value = 50;
+  // From the filmstrip; the grid opens the lightbox on it itself.
+  if (open.value && String(image.value?.id) !== String(afterId)) {
+    setOverlayImageById(afterId);
+  }
+}
+
+watch(
+  compareRequest,
+  (request) => {
+    if (request?.beforeId == null || request?.afterId == null) return;
+    startCompare(request.beforeId, request.afterId);
+  },
+  { immediate: true },
+);
+
+// ── Filmstrip picks: Ctrl/Cmd-click, for Compare ─────────────────────────
+// Ids, in the order picked. The first Ctrl-click picks the picture on screen
+// too, so one Ctrl-click on another thumb makes a pair.
+const filmstripPicks = ref([]);
+
+function onFilmstripPick(item) {
+  const id = item?.id == null ? "" : String(item.id);
+  if (!id) return;
+  let picks = filmstripPicks.value;
+  const current = image.value?.id == null ? "" : String(image.value.id);
+  if (!picks.length && current && current !== id) picks = [current];
+  filmstripPicks.value = picks.includes(id)
+    ? picks.filter((pick) => pick !== id)
+    : [...picks, id];
+}
+
+const filmstripPickRows = computed(() =>
+  filmstripPicks.value.map(
+    (id) => filmstripImageById.value.get(id) || allImageById.value.get(id),
+  ),
+);
+
+const filmstripCompareReason = computed(() => {
+  if (filmstripPicks.value.length !== 2) {
+    return "Ctrl-click a picture in the filmstrip to compare it with this one";
+  }
+  return compareBlockReason(filmstripPickRows.value);
+});
+
+function compareFilmstripPicks() {
+  if (filmstripCompareReason.value) return;
+  const [beforeId, afterId] = filmstripPicks.value;
+  filmstripPicks.value = [];
+  startCompare(beforeId, afterId);
 }
 
 let overlayResizeObserver = null;

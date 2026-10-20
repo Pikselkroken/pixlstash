@@ -10,3 +10,7 @@
 - "Edit with ComfyUI…" in the grid's menus is now "Edit…". It opens the
   lightbox on the Edit tab, and with several pictures selected the edit can be
   applied to all of them.
+- Compare any two pictures: select two in the grid and choose Compare, or
+  Ctrl-click a second picture in the lightbox filmstrip and press Compare. One
+  is laid over the other with a slider; the pill at the bottom, or the
+  Before and After tags, leave onto either picture.
