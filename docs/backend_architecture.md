@@ -10709,10 +10709,14 @@ answer:
   text encoder is told by its top-level token table (`has_text_encoder_markers`):
   CLIP-L/H/G or XXL T5/UMT5, by the rule `family_from_header` names it by, or
   a language model's `model.embed_tokens.weight` (Qwen 2.5-VL, Gemma, Llama,
-  Mistral), which names no family. So a T5 or Qwen downloaded into a flat
-  folder is a text encoder rather than a `checkpoint` by parameter count; hub
-  data version 21 re-files the `checkpoint` and `unknown` rows whose present
-  copy carries one. A T5 of another width has no such rule and still needs a
+  Mistral), which names no family, or the same table under
+  `model.language_model.` in a vision-language model saved whole (Qwen 3.5).
+  The older `language_model.model.` layout is not read, because Bagel, a whole
+  image model, saves its language model that way. So a T5 or Qwen downloaded
+  into a flat folder is a text encoder rather than a `checkpoint` by parameter
+  count; hub data version 21 re-files the `checkpoint` and `unknown` rows whose
+  present copy carries one, and data version 23 does it again for the nested
+  layout. A T5 of another width has no such rule and still needs a
   role folder. A GGUF or a
   `.pth` outside a role folder is `unknown`, which the
   shelf shows and the owner can correct; it is never guessed into `checkpoint`.
