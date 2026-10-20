@@ -1198,7 +1198,7 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
     :func:`~pixlstash.services.comfyui_recipe_service.as_stock_loaders` on
     this hub's shelf: a checkpoint loader's row only where its ``shelf`` is
     this one (an id without it is not trusted, #1521), and a digest only
-    where the shelf holds one file of it. For a workflow's own graph, which
+    where the shelf holds one file of it; either only with a copy present. For a workflow's own graph, which
     a save from ComfyUI leaves holding them: every read of it that names
     models (the run, Save, the default recipe's rows, *Use a set…*) goes
     through here, so they name a loader alike. Anything that is not an
@@ -1210,16 +1210,25 @@ def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict
     ):
         return graph
 
+    # Only a model with a copy present, the rule a run swaps the pack's loader
+    # back in by (`_shelf_digest`, `_shelf_checkpoint`): read as a file with
+    # no copy, a loader ComfyUI lacks the file for would stay stock and fail.
     def file_of_row(row: str, shelf) -> Optional[str]:
         if not row.isdigit() or not shelf or shelf != shelf_uuid(hub):
             return None
-        found = hub.fetchone("SELECT filename FROM model WHERE id = ?", (int(row),))
+        found = hub.fetchone(
+            "SELECT m.filename FROM model m WHERE m.id = ? AND EXISTS ("
+            "SELECT 1 FROM model_file f WHERE f.model_id = m.id "
+            "AND f.state = 'present')",
+            (int(row),),
+        )
         return found["filename"] if found else None
 
     def file_of_digest(digest: str) -> Optional[str]:
         rows = hub.fetchall(
-            "SELECT DISTINCT filename FROM model "
-            "WHERE sha256 = ? AND filename IS NOT NULL",
+            "SELECT DISTINCT m.filename FROM model m "
+            "JOIN model_file f ON f.model_id = m.id AND f.state = 'present' "
+            "WHERE m.sha256 = ? AND m.filename IS NOT NULL",
             (digest,),
         )
         return rows[0][0] if len(rows) == 1 else None

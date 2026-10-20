@@ -138,6 +138,7 @@ from pixlstash.services.workflow_card_service import (
     SlotModel,
     WorkflowFigures,
     model_marks,
+    with_stock_loaders,
 )
 from pixlstash.services.workflow_identity import (
     CORE_ADDRESS_PREFIX,
@@ -22298,6 +22299,28 @@ def test_a_graph_saved_with_pixlstashs_own_checkpoint_loader_still_names_it(
     assert r.status_code == 200, r.text
     assert r.json()["base_filename"] == _SHELF_FILENAME
     assert r.json()["plans"][0]["reason"] != "This workflow loads no checkpoint"
+
+    # Read as a file only on this shelf's word, and with a copy to load:
+    # anything else stays the pack's loader, which a run sends as it is.
+    hub = env.server.hub
+    with_shelf = {"1": stored["1"]}
+    assert with_stock_loaders(hub, with_shelf)["1"]["class_type"] == "UNETLoader"
+    other = {"1": {**stored["1"], "inputs": {**stored["1"]["inputs"]}}}
+    other["1"]["inputs"]["shelf"] = "another-shelf"
+    assert with_stock_loaders(hub, other) == other
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_id = ?",
+            (env.checkpoint,),
+        )
+    try:
+        assert with_stock_loaders(hub, with_shelf) == with_shelf
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = 'present' WHERE model_id = ?",
+                (env.checkpoint,),
+            )
 
 
 def test_a_layout_is_kept_across_the_nodes_open_puts_in(with_pack):
