@@ -55,6 +55,9 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
   autofocus: { type: Boolean, default: false },
+  // With autofocus, also select the value, so typing replaces it: a rename
+  // field that opens on the current name.
+  autoselect: { type: Boolean, default: false },
   // A path, hash, port or id is read character by character, so it takes the
   // mono face. The height never changes with the kind of value.
   mono: { type: Boolean, default: false },
@@ -76,6 +79,7 @@ const inputRef = ref(null);
 // The native attribute only fires on page load, not when a dialog mounts.
 onMounted(() => {
   if (props.autofocus) inputRef.value?.focus();
+  if (props.autofocus && props.autoselect) inputRef.value?.select();
 });
 
 defineExpose({

@@ -577,14 +577,39 @@ describe("renaming a row in place", () => {
     await wrapper.find(".shelf-row").trigger("keydown", { key: "F2" });
     const field = wrapper.find(".shelf-row-rename");
     expect(field.exists()).toBe(true);
-    // Seeded EMPTY on a derived row: the derived string is a guess, and
-    // pre-filling it would turn one Enter into somebody having chosen it.
-    expect(field.element.value).toBe("");
 
     await field.setValue("Cyanwood");
     await field.trigger("keydown", { key: "Enter" });
     expect(edit).toHaveBeenCalledWith([7], { display_name: "Cyanwood" });
     expect(wrapper.find(".shelf-row-rename").exists()).toBe(false);
+  });
+
+  it("seeds the field with the shown name and writes nothing untouched", async () => {
+    // Seeded with what the row shows, selected so typing replaces it. That
+    // name is derived here - a guess - so Enter on it as-is must not adopt it.
+    const wrapper = await mountShelf(
+      [adapter({ id: 7, display_name: null })],
+      [],
+      [],
+      { attachTo: document.body },
+    );
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+    const shown = wrapper.find(".shelf-row-name").text();
+    expect(shown).toBeTruthy();
+
+    await wrapper.find(".shelf-row").trigger("keydown", { key: "F2" });
+    await wrapper.vm.$nextTick();
+    const field = wrapper.find(".shelf-row-rename");
+    expect(field.element.value).toBe(shown);
+    expect([
+      field.element.selectionStart,
+      field.element.selectionEnd,
+    ]).toEqual([0, shown.length]);
+
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
 
   it("writes nothing on Escape", async () => {

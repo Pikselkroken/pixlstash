@@ -126,6 +126,47 @@ describe("what the dialog sends", () => {
     expect(store.editSelected).toHaveBeenCalledWith({ display_name: null });
   });
 
+  it("opens Rename on the shown name, selected, and writes nothing untouched", async () => {
+    // A derived row: the field shows what the shelf calls it, so typing
+    // replaces it, but submitting the guess as-is must not adopt it.
+    const store = select([
+      row(1, { display_name: null, filename: "cyanwood_v2.safetensors" }),
+    ]);
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      attachTo: document.body,
+      props: { verb: "rename" },
+    });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    const field = wrapper.find("input[type=text]").element;
+    const shown = store.selectedRows[0].name.text;
+    expect(shown).toBeTruthy();
+    expect(field.value).toBe(shown);
+    expect([field.selectionStart, field.selectionEnd]).toEqual([
+      0,
+      shown.length,
+    ]);
+
+    await submitButton(wrapper).trigger("click");
+    expect(store.editSelected).not.toHaveBeenCalled();
+    expect(wrapper.emitted("close")).toBeTruthy();
+    wrapper.unmount();
+  });
+
+  it("clears several names at once from an empty field", async () => {
+    // Several rows open empty, and empty is an answer there, not "untouched".
+    const store = select([row(1), row(2)]);
+    const wrapper = mount(ShelfEditDialog, {
+      ...globalOpts,
+      props: { verb: "rename" },
+    });
+    await wrapper.vm.$nextTick();
+    await submitButton(wrapper).trigger("click");
+    expect(store.editSelected).toHaveBeenCalledWith({ display_name: null });
+  });
+
   it("seeds the algorithm from two rows the shelf calls one algorithm", async () => {
     // `model.kind` is free text, and the shelf now folds it: `lora` and `LoRA`
     // draw one group header, one Show checkbox, and two Kind cells both
