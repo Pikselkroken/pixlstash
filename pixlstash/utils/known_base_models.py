@@ -392,6 +392,13 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
         "maker": "MiniMax",
         "aliases": [],
     },
+    # --- OpenMOSS -------------------------------------------------------------
+    "MOSS-Image": {
+        "family": "moss_image",
+        "modality": "image",
+        "mark": ["MOSS"],
+        "aliases": [],
+    },
     # --- SDXL-architecture community bases ------------------------------------
     # family='sdxl' is the load-compatibility fact; the canonical name is the
     # works-properly fact. Both are needed and neither implies the other.
@@ -607,6 +614,7 @@ FAMILY_LABELS: dict[str, str] = {
     "ideogram": "Ideogram 4",
     "seedvr2": "SeedVR2",
     "minimax_h3": "MiniMax H3",
+    "moss_image": "MOSS-Image",
     "closed": "Closed models",
 }
 

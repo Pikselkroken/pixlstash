@@ -1042,6 +1042,7 @@ CLIP_TYPE_BY_FAMILY = {
     "krea2": "krea2",
     "ltxv": "ltxv",
     "lumina": "lumina2",
+    "moss_image": "moss_image",
     "pixart": "pixart",
     "qwen": "qwen_image",
     "sd35": "sd3",
