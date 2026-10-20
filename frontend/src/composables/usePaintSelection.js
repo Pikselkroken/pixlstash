@@ -65,6 +65,8 @@ export function usePaintSelection({ pictureId, dims }) {
   const brushSize = ref(24);
   const tolerance = ref(32);
   const steps = ref([]);
+  // Steps taken back, latest last, for redo; a new step forgets them.
+  const undone = ref([]);
   const refine = reactive({ grow: 0, feather: 0, fill_holes: 0 });
   // The gesture in progress, in fractions: `{tool, start, end}` or `{tool, points}`.
   const draft = ref(null);
@@ -77,6 +79,7 @@ export function usePaintSelection({ pictureId, dims }) {
   const maskError = ref("");
 
   const hasSelection = computed(() => steps.value.length > 0);
+  const canRedo = computed(() => undone.value.length > 0);
   const selection = computed(() => ({
     version: 1,
     steps: steps.value,
@@ -98,6 +101,7 @@ export function usePaintSelection({ pictureId, dims }) {
   // black-and-white view; the eye is a look, not a mode.
   function commit(step) {
     steps.value = [...steps.value, step];
+    undone.value = [];
     showMask.value = false;
   }
 
@@ -220,11 +224,20 @@ export function usePaintSelection({ pictureId, dims }) {
   }
 
   function undo() {
+    if (!steps.value.length) return;
+    undone.value = [...undone.value, steps.value[steps.value.length - 1]];
     steps.value = steps.value.slice(0, -1);
+  }
+
+  function redo() {
+    if (!undone.value.length) return;
+    steps.value = [...steps.value, undone.value[undone.value.length - 1]];
+    undone.value = undone.value.slice(0, -1);
   }
 
   function clear() {
     steps.value = [];
+    undone.value = [];
     draft.value = null;
     showMask.value = false;
   }
@@ -298,6 +311,7 @@ export function usePaintSelection({ pictureId, dims }) {
     maskUrl,
     maskError,
     hasSelection,
+    canRedo,
     selection,
     begin,
     move,
@@ -312,6 +326,7 @@ export function usePaintSelection({ pictureId, dims }) {
     toggleMask,
     invert,
     undo,
+    redo,
     clear,
   };
 }

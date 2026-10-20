@@ -124,6 +124,25 @@ describe("usePaintSelection", () => {
     expect(paint.showMask.value).toBe(false);
   });
 
+  it("redoes a step taken back until a new step is drawn", () => {
+    const paint = make();
+    paint.setTool("wand");
+    paint.begin({ x: 0.5, y: 0.5 });
+    paint.end();
+    paint.begin({ x: 0.1, y: 0.1 });
+    paint.end();
+    const [, second] = paint.steps.value;
+    paint.undo();
+    expect(paint.canRedo.value).toBe(true);
+    paint.redo();
+    expect(paint.steps.value.at(-1)).toEqual(second);
+    expect(paint.canRedo.value).toBe(false);
+    paint.undo();
+    paint.begin({ x: 0.9, y: 0.9 });
+    paint.end();
+    expect(paint.canRedo.value).toBe(false);
+  });
+
   it("undoes, inverts, and starts afresh on another picture", async () => {
     const paint = make();
     paint.setTool("wand");

@@ -714,6 +714,33 @@ describe("the lightbox Edit tab", () => {
     );
   });
 
+  it("refuses to compare a video it could only guess was a picture", async () => {
+    gridRows = [{ id: 99, tags: [], format: "mp4" }];
+    const wrapper = await openOn(7, [{ id: 7, tags: [], format: "png" }]);
+    const filmstrip = wrapper.findComponent({ name: "OverlayFilmstrip" });
+    filmstrip.vm.$emit("pick", { id: 99, index: 5 });
+    await flush();
+    expect(wrapper.vm.filmstripCompareReason).toBeNull();
+    wrapper.vm.compareFilmstripPicks();
+    await flush();
+    await flush();
+    expect(wrapper.vm.compare).toBeNull();
+  });
+
+  it("brings a selection step back with Ctrl+Y before any library redo", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    wrapper.vm.paint.setTool("wand");
+    wrapper.vm.paint.begin({ x: 0.5, y: 0.5 });
+    wrapper.vm.paint.end();
+    const key = (init) =>
+      window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, ...init }));
+    key({ key: "z", ctrlKey: true });
+    expect(wrapper.vm.paint.hasSelection.value).toBe(false);
+    key({ key: "y", ctrlKey: true });
+    expect(wrapper.vm.paint.hasSelection.value).toBe(true);
+  });
+
   it("lays the grid's first picked picture over the second", async () => {
     const wrapper = await openOn(5, [
       { id: 7, tags: [], format: "png" },

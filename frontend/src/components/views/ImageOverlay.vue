@@ -2738,7 +2738,9 @@ function handleKeydown(e) {
     }
     if (commandKey === "y" || (commandKey === "z" && e.shiftKey)) {
       e.preventDefault();
-      operationStore.redo();
+      // A selection step taken back comes back before any library change.
+      if (paintActive.value && paint.canRedo.value) paint.redo();
+      else operationStore.redo();
       return;
     }
   }
@@ -3858,7 +3860,16 @@ async function pictureRowById(id) {
  * first picked on the left.
  */
 async function startCompare(beforeId, afterId) {
-  const before = await pictureRowById(beforeId);
+  const [before, after] = await Promise.all([
+    pictureRowById(beforeId),
+    pictureRowById(afterId),
+  ]);
+  // Both read now: a pick the button could only guess at may be a video.
+  const refusal = before && after ? compareBlockReason([before, after]) : null;
+  if (refusal) {
+    noticeStore.error(refusal, { key: "compare-start" });
+    return;
+  }
   const beforeSrc = before ? buildFullImageSrc(before) : "";
   if (!beforeSrc) {
     noticeStore.error("Couldn't open the first picture to compare.", {
@@ -3909,8 +3920,8 @@ const filmstripCompareReason = computed(() => {
   if (filmstripPicks.value.length !== 2) {
     return "Ctrl-click a picture in the filmstrip to compare it with this one";
   }
-  // A pick whose row is not in the lightbox's lists is still a picture
-  // (`startCompare` reads it by id): only a known video blocks.
+  // A pick whose row is not in the lightbox's lists is taken for a picture
+  // here; `startCompare` reads both by id and refuses a video there.
   const rows = filmstripPicks.value.map(
     (id) =>
       filmstripImageById.value.get(id) ||
