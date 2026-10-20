@@ -48,6 +48,7 @@ import { useEntityListsStore } from "./useEntityListsStore";
 import { useProjectStore } from "./useProjectStore";
 import { useSelectionStore } from "./useSelectionStore";
 import { useSnapshotsStore } from "./useSnapshotsStore";
+import { useTrainingStore } from "./useTrainingStore";
 import { useDedupStore } from "./useDedupStore";
 import { useReviewSessionsStore } from "./useReviewSessionsStore";
 import { useOperationStore } from "./useOperationStore";
@@ -305,6 +306,21 @@ const STORES = [
       s.activeJob = { kind: "RESTORE" };
     },
     isEmpty: (s) => s.snapshots.length === 0 && s.activeJob === null,
+  },
+  {
+    name: "useTrainingStore",
+    use: useTrainingStore,
+    seed: (s) => {
+      s.jobs = [{ id: 1, name: "Ada", status: "completed" }];
+      s.loras = [{ id: 2, name: "Ada v1" }];
+      s.aiToolkitRepoPath = "/srv/ai-toolkit";
+      s.configLoaded = true;
+    },
+    isEmpty: (s) =>
+      s.jobs.length === 0 &&
+      s.loras.length === 0 &&
+      s.aiToolkitRepoPath === "" &&
+      s.configLoaded === false,
   },
   {
     name: "useDedupStore",

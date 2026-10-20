@@ -10,6 +10,7 @@ import BehaviourSection from "./BehaviourSection.vue";
 import ComfyuiHostSection from "./ComfyuiHostSection.vue";
 import ComputeSection from "./ComputeSection.vue";
 import ModelFoldersSection from "./ModelFoldersSection.vue";
+import TrainingSection from "./TrainingSection.vue";
 import PrivacySection from "./PrivacySection.vue";
 import ScrapheapSection from "./ScrapheapSection.vue";
 import SnapshotsSection from "./SnapshotsSection.vue";
@@ -74,6 +75,15 @@ const navItems = computed(() =>
       id: "models",
       icon: "folder-multiple-outline",
       label: "Models",
+      show: !isReadOnly.value,
+    },
+    {
+      // The LoRA training feature: the ai-toolkit checkout, and the jobs and
+      // trained LoRAs it has made. It sits beside Models because it writes
+      // models; the ai-toolkit output folder itself is set under Models.
+      id: "training",
+      icon: "school-outline",
+      label: "Training",
       show: !isReadOnly.value,
     },
     {
@@ -245,6 +255,16 @@ watch(
         aria-labelledby="settings-nav-models"
       >
         <ModelFoldersSection :open="dialogOpen && settingsTab === 'models'" />
+      </div>
+      <div
+        v-if="!isReadOnly"
+        v-show="settingsTab === 'training'"
+        id="settings-pane-training"
+        class="settings-pane"
+        role="region"
+        aria-labelledby="settings-nav-training"
+      >
+        <TrainingSection :open="dialogOpen && settingsTab === 'training'" />
       </div>
       <div
         v-if="!isReadOnly"

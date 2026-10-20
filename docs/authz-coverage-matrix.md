@@ -844,6 +844,18 @@ and the declarations themselves are pinned by
 | Method | Effective path | Policy | id_param / body_ids | Rationale (current enforcement) |
 |---|---|---|---|---|
 | GET | `/api/v1/sort_mechanisms` | any_token |  |  |
+| GET | `/api/v1/training/jobs` | owner_only |  | Lists the owner's LoRA training jobs. Reads job rows only. |
+| POST | `/api/v1/training/jobs` | **local_owner_only** |  | §16.3 starts an ai-toolkit trainer process on the host and writes the job's dataset and output under the image root. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true`. |
+| GET | `/api/v1/training/jobs/{job_id}` | owner_only |  | One job's record, reads rows only. |
+| GET | `/api/v1/training/jobs/{job_id}/status` | owner_only |  | Progress snapshot for one job (step, loss, sample paths). Reads rows only. |
+| POST | `/api/v1/training/jobs/{job_id}/cancel` | **local_owner_only** |  | §16.3 signals the host process group of a running trainer. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true`. |
+| DELETE | `/api/v1/training/jobs/{job_id}` | **local_owner_only** |  | §16.3 removes a job's host training folder and its rows. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true`. |
+| GET | `/api/v1/training/templates` | owner_only |  | Lists job-config templates by name. Reads no picture data. |
+| GET | `/api/v1/loras` | owner_only |  | Lists the owner's trained LoRAs. Reads rows only. |
+| GET | `/api/v1/loras/{lora_id}` | owner_only |  | One trained LoRA's record, reads rows only. |
+| GET | `/api/v1/loras/{lora_id}/download` | owner_only |  | Streams the LoRA file bytes to the owner. Bytes served from the image root, resolved and contained. |
+| GET | `/api/v1/loras/{lora_id}/file-path` | **local_owner_only** |  | §16.3 discloses the absolute host path of a trained LoRA for same-machine ComfyUI loader nodes. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true`. |
+| DELETE | `/api/v1/loras/{lora_id}` | **local_owner_only** |  | §16.3 unlinks a trained LoRA file from the host image root. Owner + loopback/LAN/Tailscale, or remote owner iff `allow_remote_host_ops=true`. |
 
 ---
 

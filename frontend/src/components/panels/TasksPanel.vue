@@ -1399,6 +1399,7 @@ const tmLabelMap = {
   text_score: "Text score",
   text_read: "Text in pictures",
   object_detection: "Object detection",
+  lora_training: "LoRA training",
 };
 
 const tmWorkerLabelMap = {

@@ -31,6 +31,7 @@ vi.mock("./ModelFoldersSection.vue", () => ({ default: sectionStub }));
 vi.mock("./PrivacySection.vue", () => ({ default: sectionStub }));
 vi.mock("./ScrapheapSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SnapshotsSection.vue", () => ({ default: sectionStub }));
+vi.mock("./TrainingSection.vue", () => ({ default: sectionStub }));
 vi.mock("./SmartScoreSection.vue", () => ({ default: sectionStub }));
 vi.mock("./ComfyuiHostSection.vue", () => ({ default: sectionStub }));
 

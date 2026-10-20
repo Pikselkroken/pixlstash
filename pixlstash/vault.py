@@ -67,6 +67,8 @@ from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.scrapheap_service import DEFAULT_RETENTION_DAYS
 from pixlstash.services.workflow_ghost_service import DEFAULT_GHOST_RETENTION
 from pixlstash.services.snapshot_service import SnapshotService
+from pixlstash.utils.service.export_utils import ExportUtils
+from pixlstash.services.training_service import TrainingService
 from pixlstash.services.restore import RestoreService
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
@@ -192,6 +194,7 @@ class Vault:
 
         self.snapshot_service = SnapshotService(self)
         self.restore_service = RestoreService(self)
+        self.training_service = self._build_training_service(disable_background_workers)
         # The server's AuthService, attached by ``Server.__init__`` once it has
         # been constructed (it takes ``self.db``, so it cannot exist yet here).
         # The restore path needs it: a full restore replaces the database file,
@@ -207,6 +210,12 @@ class Vault:
         self._insightface_model_pack = insightface_model_pack
         self._last_aggressive_unload_at = 0.0
         self._keep_models_in_memory = True
+        # GPU training lease state.  ``acquire_training_gpu_lease`` pauses the GPU
+        # queue and unloads models so an external training run owns the GPU; the
+        # lock + count make nested/concurrent acquire/release reentrant-safe.
+        self._gpu_lease_lock = threading.Lock()
+        self._gpu_lease_count = 0
+        self._gpu_lease_prev_keep_models: bool | None = None
         self._max_vram_gb = None
         self._wd14_tagger_enabled = False
         self._pixlstash_tagger_enabled = True
@@ -446,6 +455,12 @@ class Vault:
         self._arbiter.add_listener(self._on_resource_lease)
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
+        # Start the training worker after the task runner so the GPU lease it
+        # acquires can pause an already-running GPU queue.  reconcile_on_startup
+        # re-attaches any trainer that survived a restart (or finalizes a dead
+        # one) before new queued jobs are picked up.
+        self.training_service.start()
+        self.training_service.reconcile_on_startup()
         self._started = True
 
     def _create_engine(self) -> InferenceEngine:
@@ -784,6 +799,11 @@ class Vault:
         if timer is not None:
             timer.cancel()
         if self._started:
+            # Stop the training poll thread first.  This does NOT kill a running
+            # external trainer (by policy): it survives the restart and is
+            # re-attached by reconcile_on_startup on the next start().
+            if self.training_service is not None:
+                self.training_service.stop()
             if self._ref_folder_watcher is not None:
                 self._ref_folder_watcher.stop()
             if self._task_runner is not None:
@@ -905,6 +925,197 @@ class Vault:
             self._last_aggressive_unload_at = 0.0
             progress = self._build_worker_progress_snapshot()
             self._maybe_aggressive_unload(progress)
+
+    # -------------------------------------------------------------------------
+    # Training service
+    # -------------------------------------------------------------------------
+
+    def _build_training_service(
+        self, disable_background_workers: bool
+    ) -> TrainingService:
+        """Construct the TrainingService with vault-bound dependencies injected.
+
+        The service is decoupled from the Vault: it takes callables, not the
+        Vault itself.  Here we bind those callables to this vault: the GPU
+        lease, the event emitter, the owner-config reader, and the dataset
+        builder (``ExportUtils.build_training_dataset``, which needs an object
+        exposing ``.vault``; a tiny shim provides that).
+
+        Args:
+            disable_background_workers: Forwarded so the service's worker is a
+                no-op for read-only deployments.
+
+        Returns:
+            A configured :class:`TrainingService` (not yet started).
+        """
+        vault = self
+
+        class _DatasetServerShim:
+            """Minimal ``server`` stand-in exposing only ``.vault``.
+
+            ``ExportUtils.build_training_dataset`` reads only ``server.vault.*``
+            (db + image_root); the training dataset path never touches the
+            request/query branches, so this is sufficient and keeps the service
+            free of any HTTP-server coupling.
+            """
+
+            vault = None
+
+        shim = _DatasetServerShim()
+        shim.vault = vault
+
+        def dataset_builder(**kwargs):
+            return ExportUtils.build_training_dataset(shim, **kwargs)
+
+        return TrainingService(
+            self.db,
+            self.image_root,
+            gpu_acquire=self.acquire_training_gpu_lease,
+            gpu_release=self.release_training_gpu_lease,
+            notify=self.notify,
+            config_provider=self._training_config_provider,
+            dataset_builder=dataset_builder,
+            disable_background_workers=disable_background_workers,
+        )
+
+    def _training_config_provider(self) -> dict:
+        """Read the owner's ai-toolkit config from the hub-backed owner row.
+
+        The ai-toolkit paths and pinned commit are owner-level machine settings,
+        so they live on the hub's ``user`` row (the AuthService reads it), not
+        on this vault's legacy ``user`` table.
+
+        Returns:
+            ``{"repo_path", "python", "commit"}`` (empty values if unset, or
+            ``{}`` when no owner row or AuthService is attached yet).
+        """
+        auth = self.auth_service
+        if auth is None:
+            return {}
+        try:
+            user = auth.get_user()
+        except Exception as exc:
+            logger.warning("Could not read ai-toolkit owner config: %s", exc)
+            return {}
+        if user is None:
+            return {}
+        return {
+            "repo_path": user.ai_toolkit_repo_path,
+            "python": user.ai_toolkit_python,
+            "commit": user.ai_toolkit_commit,
+        }
+
+    # -------------------------------------------------------------------------
+    # GPU training lease
+    # -------------------------------------------------------------------------
+
+    GPU_LEASE_DRAIN_TIMEOUT_S = 120.0
+
+    def acquire_training_gpu_lease(self, drain_timeout_s: float | None = None) -> bool:
+        """Quiesce the GPU so an external training run can own it.
+
+        Pauses the GPU task queue (waiting for any in-flight GPU task to drain),
+        records the current ``keep_models_in_memory`` setting, then forces a
+        model unload so VRAM is freed for the training process.  Pair every call
+        with :meth:`release_training_gpu_lease`, ideally in a ``finally`` block.
+
+        Reentrant: nested acquires increment a lease count and only the first
+        actually pauses + unloads; the matching number of releases restores the
+        prior state.  Thread-safe via an internal lock.
+
+        When the vault was created with ``disable_background_workers=True`` there
+        is no TaskRunner or engine to manage, so this is a logged no-op.
+
+        Args:
+            drain_timeout_s: Seconds to wait for an in-flight GPU task to finish
+                before giving up.  Defaults to ``GPU_LEASE_DRAIN_TIMEOUT_S``.
+
+        Returns:
+            True if the GPU is leased (queue paused, models unloaded), or if a
+            lease was already held.  False only if the in-flight GPU task did not
+            drain within ``drain_timeout_s`` (the queue stays paused so the
+            caller can retry or release).
+        """
+        if drain_timeout_s is None:
+            drain_timeout_s = self.GPU_LEASE_DRAIN_TIMEOUT_S
+        with self._gpu_lease_lock:
+            if self._task_runner is None:
+                logger.info(
+                    "acquire_training_gpu_lease: background workers disabled; "
+                    "no GPU queue or engine to lease (no-op)."
+                )
+                return True
+            if self._gpu_lease_count > 0:
+                self._gpu_lease_count += 1
+                logger.debug(
+                    "GPU training lease re-entered (count=%d).",
+                    self._gpu_lease_count,
+                )
+                return True
+
+            drained = self._task_runner.pause_gpu_queue(
+                wait=True, timeout=drain_timeout_s
+            )
+            if not drained:
+                logger.warning(
+                    "GPU training lease: in-flight GPU task did not drain within "
+                    "%.1fs; leaving GPU queue paused, models NOT unloaded.",
+                    drain_timeout_s,
+                )
+                return False
+
+            self._gpu_lease_prev_keep_models = self._keep_models_in_memory
+            # Force an unload to free VRAM for training.  set_keep_models_in_memory
+            # propagates to the engine and triggers _maybe_aggressive_unload, which
+            # calls engine.aggressive_unload() once all workers are idle (the GPU
+            # queue is now drained, so nothing reloads behind us).
+            self.set_keep_models_in_memory(False)
+            self._gpu_lease_count = 1
+            logger.info(
+                "GPU leased for training: queue paused, models unloaded "
+                "(prior keep_models_in_memory=%s).",
+                self._gpu_lease_prev_keep_models,
+            )
+            return True
+
+    def release_training_gpu_lease(self) -> None:
+        """Release a GPU training lease: restore models + resume the GPU queue.
+
+        Restores the ``keep_models_in_memory`` value captured at acquire time and
+        resumes the GPU task queue.  Idempotent and safe to call from a
+        ``finally`` block: releasing when no lease is held logs a note and does
+        nothing.  Reentrant: only the final matching release actually restores
+        state.
+        """
+        with self._gpu_lease_lock:
+            if self._task_runner is None:
+                logger.debug(
+                    "release_training_gpu_lease: background workers disabled (no-op)."
+                )
+                return
+            if self._gpu_lease_count == 0:
+                logger.info(
+                    "release_training_gpu_lease called with no active lease (no-op)."
+                )
+                return
+            self._gpu_lease_count -= 1
+            if self._gpu_lease_count > 0:
+                logger.debug(
+                    "GPU training lease still held (count=%d); not yet released.",
+                    self._gpu_lease_count,
+                )
+                return
+
+            prev_keep = self._gpu_lease_prev_keep_models
+            if prev_keep is not None:
+                self.set_keep_models_in_memory(prev_keep)
+            self._gpu_lease_prev_keep_models = None
+            self._task_runner.resume_gpu_queue()
+            logger.info(
+                "GPU lease released: queue resumed (restored "
+                "keep_models_in_memory=%s).",
+                prev_keep,
+            )
 
     def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
         """The most PixlStash's own GPU work may hold, and its batch sizing.
@@ -1916,6 +2127,20 @@ class Vault:
                 "running": worker_active,
                 "active": worker_active,
             }
+        # Surface an active LoRA-training run as a worker row so the StatsSidebar
+        # "Tasks" tab renders its live progress alongside the background workers.
+        training_service = getattr(self, "training_service", None)
+        if training_service is not None:
+            try:
+                training_snapshot = training_service.current_worker_snapshot()
+            except Exception:
+                logger.warning(
+                    "Failed to read training worker snapshot for /workers/progress",
+                    exc_info=True,
+                )
+                training_snapshot = None
+            if training_snapshot is not None:
+                progress["lora_training"] = training_snapshot
         return progress
 
     @staticmethod
