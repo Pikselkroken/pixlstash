@@ -1439,7 +1439,7 @@ describe("the verbs the bar fires", () => {
   });
 });
 
-describe("Use a set… from the grid's menu", () => {
+describe("Change model set… from the grid's menu", () => {
   const useSetRow = (wrapper) =>
     wrapper
       .findAll(".wf-menu .ctx-item")
@@ -1455,7 +1455,7 @@ describe("Use a set… from the grid's menu", () => {
       .find('.wfv-row[data-key="b"]')
       .trigger("contextmenu", { clientX: 10, clientY: 20 });
     await flush();
-    expect(useSetRow(wrapper).find(".ctx-label-text").text()).toBe("Use a set…");
+    expect(useSetRow(wrapper).find(".ctx-label-text").text()).toBe("Change model set…");
 
     await useSetRow(wrapper).trigger("click");
     await flush();

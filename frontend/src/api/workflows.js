@@ -351,7 +351,7 @@ export async function readModelSwap(
 
 /**
  * What taking each workflow set's models would change in this workflow: the
- * read behind the Workflow tab's *Use a set…* (`WorkflowUseSetMenu.vue`),
+ * read behind the Workflow tab's *Change model set…* (`WorkflowUseSetMenu.vue`),
  * which turns a plan's `swaps` into unsaved model picks. Nothing is written.
  *
  * One plan per set asked: the files it takes from the set (`swaps`), each model

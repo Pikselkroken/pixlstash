@@ -556,13 +556,13 @@ const duplicateTitle = computed(() =>
 );
 
 /**
- * *Use a set…* is the Workflow tab's: it fills that tab's model rows, and
+ * *Change model set…* is the Workflow tab's: it fills that tab's model rows, and
  * nothing is written until the tab's bar saves them (#1850).
  */
 const useSetTitle = computed(() =>
   single.value
     ? "Fill its model rows from one of your sets, as unsaved changes"
-    : "Select one workflow to use a set on it",
+    : "Select one workflow to change its model set",
 );
 
 /** Fire a verb and shut whichever surface it was pressed on. */
@@ -818,7 +818,7 @@ const VerbMenu = () => {
       ),
       // With the rows that change the card, not the ones that make a new one:
       // it fills the Workflow tab's model rows and writes nothing.
-      item("mdi-swap-horizontal", "Use a set…", {
+      item("mdi-swap-horizontal", "Change model set…", {
         verb: "use-set",
         disabled: !single.value,
         title: useSetTitle.value,
