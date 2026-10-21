@@ -16,6 +16,7 @@
   keeps it automatic. A recipe's rename field selects its name too.
 - Fixed: reordering a stack failed with "Couldn't save the stack order" once
   any of its pictures had been moved to the Scrapheap.
+- Fixed: jumpiness of menus when adding text encoders and VAEs in the model shelf
 
 # [1.12.0] [Security:Low]
 
