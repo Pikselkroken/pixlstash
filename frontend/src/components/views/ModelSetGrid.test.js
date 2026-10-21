@@ -2022,14 +2022,27 @@ describe("hand-made sets (#1520)", () => {
   });
 
   it("adds a model to a slot with ONE click, and stays open for the next", async () => {
-    // `added` is the digests the server stored, as the route returns it.
+    // `added` is the digests the server stored, as the route returns it, and
+    // the set comes back holding them, as it does from the real route.
     const shaOf = (modelId) => String(modelId).repeat(64).slice(0, 64);
-    addWorkflowSetMembers.mockReset().mockImplementation((id, members) =>
-      Promise.resolve({
-        set: handSet(10, [SET_CKPT]),
+    const names = { 3: "filmgrain_xl", 5: "Soft_Light" };
+    let held = [SET_CKPT];
+    addWorkflowSetMembers.mockReset().mockImplementation((id, members) => {
+      held = [
+        ...held,
+        ...members.map((m) => slotMember(m.model_id, names[m.model_id], "lora")),
+      ];
+      // The store re-reads the sets after a write: serve the grown one.
+      fetchWorkflowSets.mockResolvedValue({
+        combinations: [],
+        no_set: [],
+        hand_made: [handSet(10, held)],
+      });
+      return Promise.resolve({
+        set: handSet(10, held),
         added: members.map((m) => shaOf(m.model_id)),
-      }),
-    );
+      });
+    });
     const { wrapper, store } = await mountGrid({
       rows: [
         row(1, "realvisXL_v5", "checkpoint"),
@@ -2052,18 +2065,30 @@ describe("hand-made sets (#1520)", () => {
 
     const option = (name) =>
       chooser.findAll('[role="option"]').find((o) => o.text().includes(name));
+    const order = () =>
+      chooser.findAll('[role="option"]').map((o) => o.find(".wsc__fn").text());
+    const before = order();
+    expect(chooser.findAll(".wsc__tick")).toHaveLength(before.length);
+    expect(chooser.findAll(".wsc__tick > *")).toHaveLength(0);
     await option("filmgrain_xl").trigger("click");
     await option("Soft_Light").trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    // Added rows stay where they were, ticked, rather than leaving the list
+    // and moving the rest under the pointer; no visible "Added" line.
+    expect(order()).toEqual(before);
+    expect(option("filmgrain_xl").attributes("aria-selected")).toBe("true");
+    expect(option("Soft_Light").attributes("aria-selected")).toBe("true");
+    expect(chooser.findAll(".wsc__tick > *")).toHaveLength(2);
+    expect(chooser.find(".tbm-footer").exists()).toBe(false);
     // Still open for the next pick.
     expect(wrapper.findComponent(WorkflowSetChooser).props("open")).toBe(true);
     expect(addWorkflowSetMembers.mock.calls).toEqual([
       [10, [{ model_id: 3, slot: "lora" }]],
       [10, [{ model_id: 5, slot: "lora" }]],
     ]);
-    // Narrated in the popup's own status line, in the shelf's names, and no
-    // pill yet: the adds are one receipt once the popup closes (#1574).
+    // Narrated to a screen reader in the shelf's names, and no pill yet: the
+    // adds are one receipt once the popup closes (#1574).
     const operations = useOperationStore();
     expect(operations.receipt).toBe(null);
     expect(chooser.find('[role="status"]').text()).toContain(
@@ -2080,7 +2105,7 @@ describe("hand-made sets (#1520)", () => {
     ]);
   });
 
-  it("takes back the last pick from the popup's own Undo, without a pill", async () => {
+  it("takes a pick back out with a click on its ticked row, without a pill", async () => {
     const shaOf = (modelId) => String(modelId).repeat(64).slice(0, 64);
     addWorkflowSetMembers.mockReset().mockImplementation((id, members) =>
       Promise.resolve({
@@ -2114,20 +2139,40 @@ describe("hand-made sets (#1520)", () => {
       { model_id: 3, slot: "lora" },
     ]);
 
-    const undo = chooser
-      .find('[role="status"]')
-      .findAll("button")
-      .find((b) => b.text() === "Undo");
-    await undo.trigger("click");
+    const filmgrain = () =>
+      chooser
+        .findAll('[role="option"]')
+        .find((o) => o.text().includes("filmgrain_xl"));
+    expect(filmgrain().attributes("aria-selected")).toBe("true");
+    // The next Enter adds the next row down, not the ticked one back out.
+    await field.trigger("keydown", { key: "Enter" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).toHaveBeenLastCalledWith(10, [
+      { model_id: 5, slot: "lora" },
+    ]);
+    expect(removeWorkflowSetMembers).not.toHaveBeenCalled();
+
+    await filmgrain().trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [shaOf(3)]);
+    expect(filmgrain().attributes("aria-selected")).toBe("false");
     expect(chooser.find('[role="status"]').text()).toContain(
       "Took out filmgrain xl",
     );
-    // Nothing left to announce once it closes.
+    // Only what this popup added can be taken back: unticked, it adds again.
+    await filmgrain().trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).toHaveBeenLastCalledWith(10, [
+      { model_id: 3, slot: "lora" },
+    ]);
+    await filmgrain().trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // One left to announce once it closes: Soft_Light.
     await chooser.trigger("keydown", { key: "Escape" });
-    expect(useOperationStore().receipt).toBe(null);
+    expect(useOperationStore().receipt.summary).toBe(
+      'Added "Soft Light" to "realvisXL v5"',
+    );
   });
 
   it("closes the Checkpoint popup on its one pick and lands on the new checkpoint", async () => {
@@ -2446,7 +2491,10 @@ describe("hand-made sets (#1520)", () => {
 
     const status = chooser.find('[role="status"]');
     expect(status.text()).toContain("Already in this set, nothing added");
-    expect(status.findAll("button")).toHaveLength(0);
+    // Not credited, so not ticked: a click on it would add, not take out.
+    expect(
+      chooser.find('[role="option"]').attributes("aria-selected"),
+    ).toBe("false");
     await chooser.trigger("keydown", { key: "Escape" });
     expect(useOperationStore().receipt).toBe(null);
   });

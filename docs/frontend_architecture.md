@@ -1912,8 +1912,8 @@ the shelf's workflow sets section) and served as `hand_made` on
   next row), Enter on ＋ opens the chooser, Backspace removes a member, Delete
   stays the file delete. A crossing into a slots tray lands at its edge, as it does for a List
   tray (`verticalTarget`, whose `trayBounds` covers `slot` entries too).
-- **One chooser for three jobs, in two modes.** `WorkflowSetChooser` only adds,
-  and every row is the shelf's row in miniature (#1574): `ModelMark`, the
+- **One chooser for three jobs, in two modes.** `WorkflowSetChooser` adds (and
+  takes back only what it added while open), and every row is the shelf's row in miniature (#1574): `ModelMark`, the
   `modelName` text in the shelf's weight for its state, the mono filename on a
   second line, then the quant chip and a fixed right column (size in `pick`,
   recipe count or source sets in a checklist), so every row lines up. Focus
@@ -1929,14 +1929,19 @@ the shelf's workflow sets section) and served as `hand_made` on
   a group label's count sits in its own column as `.fm-n`. `slotSuggestions`
   sorts and filters by `modelName`, still matching the filename, and under a
   filter returns the set's own matches as a `held` section the popup names
-  instead of offering. ONE click or Enter adds: Enter takes the arrow cursor
-  (the inset ring), or the top match (marked ⏎) while no arrow has been used;
-  the pointer only washes a row. The Checkpoint popup closes on its pick and
-  the cursor lands on the new checkpoint. Any other slot takes any number: the
-  popup stays open, the added row drops out, a second click on a row still
-  being added is ignored, and the adds go in `quiet` (no pill). The popup's own
-  status line narrates them with an Undo that takes back the last one, and on
-  close `store.announceAdded` raises ONE receipt for all of them. **Fill from
+  instead of offering. Every `pick` row reserves a leading `--gutter-glyph`
+  slot for an olive check. ONE click or Enter adds: Enter takes the arrow
+  cursor (the inset ring), or the top match not yet added (marked ⏎) while no
+  arrow has been used; the pointer only washes a row. The Checkpoint popup
+  closes on its pick and the cursor lands on the new checkpoint. Any other slot
+  takes any number: the popup stays open and is ranked by the set **as it stood
+  when the popup opened** (`chooser.held`), so an added row stays where it was
+  and takes the check instead of dropping out and moving the menu; a click (or
+  Enter) on a checked row takes that add back out. A second click on a row
+  still being added or taken out is ignored, and the adds go in `quiet` (no
+  pill). There is no visible status line, since one appearing would grow the
+  popup; a visually hidden live region narrates the adds, and on close
+  `store.announceAdded` raises ONE receipt for all of them. **Fill from
   pictures** (`fillFromPictures`) and **Fill from a set** (`fillFromSets`) are
   pre-ticked checklists with a title, grouped by slot, with Cancel and one Add
   that adds the ticked rows the filter still shows (Enter too, never an

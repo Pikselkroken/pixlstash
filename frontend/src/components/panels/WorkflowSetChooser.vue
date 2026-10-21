@@ -64,7 +64,7 @@
         class="wsc__list"
         role="listbox"
         :aria-label="label"
-        :aria-multiselectable="pick ? 'false' : 'true'"
+        aria-multiselectable="true"
       >
         <template v-for="section in shownSections" :key="section.id">
           <!-- What the filter found that the set already holds: not a choice,
@@ -94,11 +94,17 @@
                 'wsc__r--enter': pick && item.id === targetKey,
               }"
               role="option"
-              :aria-selected="pick ? undefined : String(checked.has(item.id))"
+              :aria-selected="String(isChecked(item))"
               @mousedown.prevent
-              @click="choose(item.id)"
+              @click="choose(item)"
             >
-              <v-icon v-if="!pick" class="wsc__box" aria-hidden="true">{{
+              <!-- Pick mode's check, in a slot every row keeps, so a model just
+                   added stays where it was with a tick rather than leaving the
+                   list and pulling the rows below it up under the pointer. -->
+              <span v-if="pick" class="wsc__tick" aria-hidden="true">
+                <v-icon v-if="item.checked" size="16">mdi-check</v-icon>
+              </span>
+              <v-icon v-else class="wsc__box" aria-hidden="true">{{
                 checked.has(item.id)
                   ? "mdi-checkbox-marked-outline"
                   : "mdi-checkbox-blank-outline"
@@ -148,30 +154,10 @@
           {{ query.trim() ? `Nothing matches "${query.trim()}".` : emptyText }}
         </p>
       </div>
-      <!-- Pick mode's confirmation: one status line, replaced on each add and
-           never stacked, that appears only once something was added. The live
-           region is always there so the first add is announced. -->
-      <div v-if="pick" role="status" class="wsc__status">
-        <div v-if="status" class="tbm-footer wsc__foot">
-          <v-icon
-            v-if="status.undo"
-            size="16"
-            class="wsc__ok"
-            aria-hidden="true"
-            >mdi-check</v-icon
-          >
-          <span class="wsc__foot-text">{{ status.text }}</span>
-          <span class="tbm-spacer"></span>
-          <AppButton
-            v-if="status.undo"
-            variant="ghost"
-            size="sm"
-            icon-left="undo"
-            @click="emit('undo')"
-            >Undo</AppButton
-          >
-        </div>
-      </div>
+      <!-- Pick mode's adds are told by the ticks; the live region only says
+           them aloud. No visible line: one that appears on the first add grows
+           the popup and moves it under the pointer. -->
+      <p v-if="pick" role="status" class="visually-hidden">{{ status }}</p>
       <div v-else class="tbm-footer wsc__foot">
         <span class="tbm-spacer"></span>
         <AppButton variant="ghost" size="sm" @click="emit('close')"
@@ -195,10 +181,12 @@
  *
  * Three callers, two modes, one row. A slot's ＋ tile is `pick`: ranked groups,
  * type to filter, and ONE click (or Enter) adds the model under it. The caller
- * decides whether the popup stays open for the next one, and narrates each add
- * through `status`. **Fill from pictures** and **Fill from a set** are
- * checklists that arrive pre-ticked, so their one click is Add. All of it only
- * ADDS - nothing here takes a model out of a set.
+ * decides whether the popup stays open for the next one, ticks what it added
+ * (`checked` on the item) and keeps it in place, and narrates each add to a
+ * screen reader through `status`. A click on a ticked row takes that add back
+ * out (`remove`): the only removal here, and only of what this popup added.
+ * **Fill from pictures** and **Fill from a set** are checklists that arrive
+ * pre-ticked, so their one click is Add.
  *
  * Every row is the shelf's row in miniature: `ModelMark`, the resolved name in
  * the shelf's weight for its state, the filename on a second line, then the
@@ -235,8 +223,10 @@ const props = defineProps({
   note: { type: String, default: "" },
   /**
    * `[{id, label, total?, items: [{id, row, detail?, checked?}], collapsed?,
-   * held?}]`. `row` is the shelf row. `collapsed` is the text a section starts
-   * folded behind; `held` sections list matches the set already holds.
+   * held?}]`. `row` is the shelf row. `checked` is a checklist's pre-tick, or
+   * in `pick` mode a model this popup has added. `collapsed` is the text a
+   * section starts folded behind; `held` sections list matches the set
+   * already holds.
    */
   sections: { type: Array, default: () => [] },
   query: { type: String, default: "" },
@@ -244,13 +234,19 @@ const props = defineProps({
   /** One click adds the model under it; no ticks, no Add button. */
   pick: { type: Boolean, default: false },
   emptyText: { type: String, default: "Nothing to add." },
-  /** Pick mode's status line: `{text, undo}`, or null before the first add. */
-  status: { type: Object, default: null },
+  /** Pick mode's announcement of the last add or take-out, for a reader. */
+  status: { type: String, default: "" },
   /** Pick mode's order, a `PICK_ORDERS` id; the caller sorts `sections`. */
   order: { type: String, default: "name" },
 });
 
-const emit = defineEmits(["close", "add", "update:query", "update:order", "undo"]);
+const emit = defineEmits([
+  "close",
+  "add",
+  "remove",
+  "update:query",
+  "update:order",
+]);
 
 const listId = `wsc-${useId()}`;
 const fieldRef = ref(null);
@@ -324,12 +320,15 @@ const heldOnly = computed(() => shownSections.value.some((s) => s.held));
 const collapsedLeft = computed(() => shownSections.value.some((s) => s.cut));
 
 /**
- * The row Enter acts on in `pick` mode: the cursor, else the top match. A
- * checklist's Enter adds what is ticked, so there it is only the cursor.
+ * The row Enter acts on in `pick` mode: the cursor, else the top match not yet
+ * added, so Enter after Enter adds down the list. A checklist's Enter adds what
+ * is ticked, so there it is only the cursor.
  */
 const targetKey = computed(() =>
   props.pick
-    ? (activeKey.value ?? items.value[0]?.id ?? null)
+    ? (activeKey.value ??
+      items.value.find((item) => !item.checked)?.id ??
+      null)
     : activeKey.value,
 );
 
@@ -397,8 +396,8 @@ watch(
   { immediate: true },
 );
 
-// An add takes the cursor's row out of the list: the cursor stays at the same
-// place, on the row that moved up into it, so the next Enter adds the next one.
+// A row the cursor is on can leave the list (the caller re-ranked it): the
+// cursor stays at the same place, on the row that moved up into it.
 watch(items, (list, before) => {
   if (activeKey.value == null) return;
   if (list.some((item) => item.id === activeKey.value)) return;
@@ -424,10 +423,17 @@ function expand(id) {
   expanded.value = new Set([...expanded.value, id]);
 }
 
-/** A click on an option: add it outright in `pick` mode, else tick it. */
-function choose(id) {
-  if (props.pick) emit("add", [id]);
-  else toggle(id);
+function isChecked(item) {
+  return props.pick ? Boolean(item.checked) : checked.value.has(item.id);
+}
+
+/**
+ * A click on an option. In `pick` mode it adds the model, or takes back a
+ * model this popup added; in a checklist it ticks.
+ */
+function choose(item) {
+  if (props.pick) emit(item.checked ? "remove" : "add", [item.id]);
+  else toggle(item.id);
 }
 
 function toggle(id) {
@@ -466,10 +472,12 @@ function move(step) {
 function submit() {
   // A checklist adds what is ticked and nothing else: its cursor row is only
   // where Space ticks.
-  let ids = props.pick ? [] : [...checkedShown.value];
-  if (!ids.length && props.pick && targetKey.value != null) {
-    ids = [targetKey.value];
+  if (props.pick) {
+    const item = items.value.find((entry) => entry.id === targetKey.value);
+    if (item) choose(item);
+    return;
   }
+  const ids = [...checkedShown.value];
   if (ids.length) emit("add", ids);
 }
 
@@ -591,6 +599,18 @@ function onKeydown(event) {
   font-size: var(--text-sm);
   cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
+}
+
+/* Pick mode leads with the check's glyph slot, reserved on every row. */
+.wsc:not(.wsc--check) .wsc__r {
+  grid-template-columns:
+    var(--gutter-glyph) var(--entity-thumb) minmax(0, 1fr) auto
+    var(--wsc-right);
+}
+
+.wsc__tick {
+  display: flex;
+  color: var(--selected-ink);
 }
 
 .wsc--check .wsc__r {
@@ -729,16 +749,4 @@ function onKeydown(event) {
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
-.wsc__foot-text {
-  min-width: 0;
-  overflow: hidden;
-  color: rgb(var(--v-theme-on-panel));
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wsc__ok {
-  flex: none;
-  color: rgb(var(--v-theme-success));
-}
 </style>
