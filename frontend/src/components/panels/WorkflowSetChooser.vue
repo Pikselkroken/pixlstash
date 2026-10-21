@@ -320,9 +320,11 @@ const heldOnly = computed(() => shownSections.value.some((s) => s.held));
 const collapsedLeft = computed(() => shownSections.value.some((s) => s.cut));
 
 /**
- * The row Enter acts on in `pick` mode: the cursor, else the top match not yet
- * added, so Enter after Enter adds down the list. A checklist's Enter adds what
- * is ticked, so there it is only the cursor.
+ * The row Enter acts on in `pick` mode: the cursor (which an add moves on, see
+ * `submit`), else the top match not yet added, so Enter after Enter adds down
+ * the list. Enter on a ticked row the arrows were put on takes it back, as a
+ * click does. A checklist's Enter adds what is ticked, so there it is only the
+ * cursor.
  */
 const targetKey = computed(() =>
   props.pick
@@ -473,8 +475,18 @@ function submit() {
   // A checklist adds what is ticked and nothing else: its cursor row is only
   // where Space ticks.
   if (props.pick) {
-    const item = items.value.find((entry) => entry.id === targetKey.value);
-    if (item) choose(item);
+    const list = items.value;
+    const at = list.findIndex((entry) => entry.id === targetKey.value);
+    if (at < 0) return;
+    const item = list[at];
+    choose(item);
+    // An add from the arrow cursor moves it on to the next row not yet added,
+    // so Enter after Enter adds down the list here too, rather than the next
+    // Enter taking back the row just added.
+    if (activeKey.value != null && !item.checked) {
+      const next = list.slice(at + 1).find((entry) => !entry.checked);
+      if (next) activeKey.value = next.id;
+    }
     return;
   }
   const ids = [...checkedShown.value];

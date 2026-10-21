@@ -1180,9 +1180,10 @@ const chooserSections = computed(() => {
   }
   const added = new Set(picked.value.map((entry) => entry.model_id));
   return slotSuggestions({
-    // Ranked as the set stood when the popup opened, so an add neither drops
-    // its row out of the list nor reshuffles the rows around it (#1574's
-    // follow-up): the menu stays still and the row takes a tick instead.
+    // Ranked by the set's members as they stood when the popup opened, so an
+    // add neither drops its row out of the list nor reshuffles the rows around
+    // it: the menu stays still and the row takes a tick instead. Other sets and
+    // the recipe evidence are still read live; an add here changes neither.
     set: chooser.value.held ?? set,
     slotId: chooser.value.slotId,
     rows: store.offeredRows,
@@ -1699,7 +1700,12 @@ async function unpick([modelId]) {
   const still =
     chooser.value?.setId === setId && chooser.value?.slotId === slotId;
   if (done) {
-    if (still) pickNote.value = `Took out ${entry.name}`;
+    // Nothing removed means it had already left the set some other way.
+    if (still) {
+      pickNote.value = done.removed?.length
+        ? `Took out ${entry.name}`
+        : `${entry.name} was no longer in this set`;
+    }
   } else if (still) {
     // Still in the set: its tick comes back, and the line goes back to the
     // adds, not an earlier take-back.

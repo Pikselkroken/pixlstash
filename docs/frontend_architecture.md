@@ -1913,7 +1913,8 @@ the shelf's workflow sets section) and served as `hand_made` on
   stays the file delete. A crossing into a slots tray lands at its edge, as it does for a List
   tray (`verticalTarget`, whose `trayBounds` covers `slot` entries too).
 - **One chooser for three jobs, in two modes.** `WorkflowSetChooser` adds (and
-  takes back only what it added while open), and every row is the shelf's row in miniature (#1574): `ModelMark`, the
+  takes back only what it added while open), and every row is the shelf's row
+  in miniature (#1574): `ModelMark`, the
   `modelName` text in the shelf's weight for its state, the mono filename on a
   second line, then the quant chip and a fixed right column (size in `pick`,
   recipe count or source sets in a checklist), so every row lines up. Focus
@@ -1932,10 +1933,12 @@ the shelf's workflow sets section) and served as `hand_made` on
   instead of offering. Every `pick` row reserves a leading `--gutter-glyph`
   slot for an olive check. ONE click or Enter adds: Enter takes the arrow
   cursor (the inset ring), or the top match not yet added (marked ⏎) while no
-  arrow has been used; the pointer only washes a row. The Checkpoint popup
+  arrow has been used, and an add from the arrow cursor moves it on to the next
+  row not yet added; the pointer only washes a row. The Checkpoint popup
   closes on its pick and the cursor lands on the new checkpoint. Any other slot
-  takes any number: the popup stays open and is ranked by the set **as it stood
-  when the popup opened** (`chooser.held`), so an added row stays where it was
+  takes any number: the popup stays open and is ranked by the set's members
+  **as they stood when it opened** (`chooser.held`; other sets and the recipe
+  evidence are still read live), so an added row stays where it was
   and takes the check instead of dropping out and moving the menu; a click (or
   Enter) on a checked row takes that add back out. A second click on a row
   still being added or taken out is ignored, and the adds go in `quiet` (no

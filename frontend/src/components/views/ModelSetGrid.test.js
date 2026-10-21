@@ -2175,6 +2175,46 @@ describe("hand-made sets (#1520)", () => {
     );
   });
 
+  it("moves the arrow cursor on after an Enter add, so the next Enter adds the next row", async () => {
+    const shaOf = (modelId) => String(modelId).repeat(64).slice(0, 64);
+    addWorkflowSetMembers.mockReset().mockImplementation((id, members) =>
+      Promise.resolve({
+        set: handSet(10, [SET_CKPT]),
+        added: members.map((m) => shaOf(m.model_id)),
+      }),
+    );
+    removeWorkflowSetMembers.mockReset();
+    const { wrapper, store } = await mountGrid({
+      rows: [
+        row(1, "realvisXL_v5", "checkpoint"),
+        row(3, "filmgrain_xl"),
+        row(5, "Soft_Light"),
+      ],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    const field = chooser.find("input");
+    await field.trigger("keydown", { key: "ArrowDown" });
+    expect(chooser.find(".wsc__r--cur").text()).toContain("filmgrain_xl");
+    await field.trigger("keydown", { key: "Enter" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chooser.find(".wsc__r--cur").text()).toContain("Soft_Light");
+    await field.trigger("keydown", { key: "Enter" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(addWorkflowSetMembers.mock.calls).toEqual([
+      [10, [{ model_id: 3, slot: "lora" }]],
+      [10, [{ model_id: 5, slot: "lora" }]],
+    ]);
+    expect(removeWorkflowSetMembers).not.toHaveBeenCalled();
+  });
+
   it("closes the Checkpoint popup on its one pick and lands on the new checkpoint", async () => {
     const CKPT_ROW = row(1, "realvisXL_v5", "checkpoint");
     addWorkflowSetMembers.mockReset().mockResolvedValue({
