@@ -42,7 +42,7 @@ dependencies = [
     # ComfyUI progress listener needs the sync client, added in 11.0.
     "websockets>=11.0",
     "numpy>=2.4.3",
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
     "opencv-python>=4.13.0.92",
     "scipy>=1.17.1",
     "platformdirs>=4.9.4",
