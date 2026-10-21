@@ -64,6 +64,8 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services import workflow_bindings
 from pixlstash.services.comfyui_recipe_service import (
     LORA_DIGEST_FIELD_RE,
+    STOCK_READ_CLASSES,
+    as_stock_loaders,
     sanitize_prompt_graph,
 )
 from pixlstash.services.model_shelf_service import (
@@ -72,6 +74,7 @@ from pixlstash.services.model_shelf_service import (
     models_for_digest,
     recipe_asset_index,
     base_model_family,
+    shelf_uuid,
 )
 from pixlstash.services.workflow_hash import (
     SHA256_FIELD_RE,
@@ -1189,6 +1192,53 @@ def _slot_filename(
     return mark.filename if mark else None
 
 
+def with_stock_loaders(hub: HubDatabase, graph: Optional[dict]) -> Optional[dict]:
+    """*graph* with ComfyUI-PixlStash's model loaders read as the stock ones.
+
+    :func:`~pixlstash.services.comfyui_recipe_service.as_stock_loaders` on
+    this hub's shelf: a checkpoint loader's row only where its ``shelf`` is
+    this one (an id without it is not trusted, #1521), and a digest only
+    where the shelf holds one file of it; either only with a copy present. For a workflow's own graph, which
+    a save from ComfyUI leaves holding them: every read of it that names
+    models (the run, Save, the default recipe's rows, *Use a set…*) goes
+    through here, so they name a loader alike. Anything that is not an
+    API-format graph is handed back as it is.
+    """
+    if not isinstance(graph, dict) or not any(
+        isinstance(node, dict) and node.get("class_type") in STOCK_READ_CLASSES
+        for node in graph.values()
+    ):
+        return graph
+
+    # Only a model with a copy present, the rule a run swaps the pack's loader
+    # back in by (`_shelf_digest`, `_shelf_checkpoint`): read as a file with
+    # no copy, a loader ComfyUI lacks the file for would stay stock and fail.
+    def file_of_row(row: str, shelf) -> Optional[str]:
+        if not row.isdigit() or not shelf or shelf != shelf_uuid(hub):
+            return None
+        found = hub.fetchone(
+            "SELECT m.filename FROM model m WHERE m.id = ? AND EXISTS ("
+            "SELECT 1 FROM model_file f WHERE f.model_id = m.id "
+            "AND f.state = 'present')",
+            (int(row),),
+        )
+        return found["filename"] if found else None
+
+    def file_of_digest(digest: str) -> Optional[str]:
+        rows = hub.fetchall(
+            "SELECT DISTINCT m.filename FROM model m "
+            "JOIN model_file f ON f.model_id = m.id AND f.state = 'present' "
+            "WHERE m.sha256 = ? AND m.filename IS NOT NULL",
+            (digest,),
+        )
+        return rows[0][0] if len(rows) == 1 else None
+
+    stock, done = as_stock_loaders(graph, file_of_row, file_of_digest)
+    if done:
+        logger.debug("Read ComfyUI-PixlStash loaders as stock ones: %s", done)
+    return stock
+
+
 def shelf_filenames(hub: HubDatabase, ids: list[str]) -> dict[str, Optional[str]]:
     """``{shelf id: the file it names}`` for a shelf loader's values.
 
@@ -1587,10 +1637,13 @@ def workflow_defaults(
         )
         documents, reads, manual_names, graph_stages = _graph_sample(
             workflow_id,
-            api_graph(
-                earlier
-                or converted_manual_document(hub, workflow_id, object_info)[0]
-                or {}
+            with_stock_loaders(
+                hub,
+                api_graph(
+                    earlier
+                    or converted_manual_document(hub, workflow_id, object_info)[0]
+                    or {}
+                ),
             ),
             core=False,
         )
@@ -1600,7 +1653,7 @@ def workflow_defaults(
         # parameters and pins the owner set before the save still name it.
         provenance = FROM_ALL
         documents, reads, manual_names, graph_stages = _graph_sample(
-            workflow_id, saved, core=True
+            workflow_id, with_stock_loaders(hub, saved), core=True
         )
     else:
         if library_uuid:

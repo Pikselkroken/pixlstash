@@ -138,6 +138,7 @@ from pixlstash.services.workflow_card_service import (
     SlotModel,
     WorkflowFigures,
     model_marks,
+    with_stock_loaders,
 )
 from pixlstash.services.workflow_identity import (
     CORE_ADDRESS_PREFIX,
@@ -22261,6 +22262,65 @@ def test_a_graph_opened_on_pixlstashs_own_ids_and_saved_untouched_stores_nothing
     assert (r.json()["unchanged"], r.json()["new_workflow"]) == (False, False), r.text
     stored = _versions_of(env, env.manual)[-1][2]
     assert stored["1"] == graph["1"] and stored["7"] == graph["7"]
+
+
+def test_a_graph_saved_with_pixlstashs_own_checkpoint_loader_still_names_it(
+    id_loaders,
+):
+    """A change saved from ComfyUI keeps the pack's checkpoint loader, which
+    names a shelf row and no file. The screens that change a workflow's
+    models read it as the stock loader of that file.
+
+    Wrong if the default recipe's row is the shelf id (`…/checkpoint_id`,
+    which no pick can set) or *Use a set…* says the workflow loads no
+    checkpoint.
+    """
+    env = id_loaders
+    graph = _opened(env, env.manual, pixlstash_nodes="true")["workflow"]
+    assert graph["1"]["class_type"] == "PixlStashCheckpointLoader"
+    graph["2"]["inputs"]["strength_model"] = 0.3
+    r = _put_graph(env, env.manual, graph, read_version=1)
+    assert r.status_code == 200 and r.json()["unchanged"] is False, r.text
+    stored = _versions_of(env, env.manual)[-1][2]
+    assert stored["1"]["class_type"] == "PixlStashCheckpointLoader"
+
+    models = _detail(env.owner, env.manual)["card"]["default_recipe"]["models"]
+    checkpoint = [m for m in models if m["kind"] == "checkpoint"]
+    # Its CLIP is read, so it is the whole checkpoint's loader.
+    assert [m["address"].rsplit("/", 1)[1] for m in checkpoint] == ["ckpt_name"]
+    assert checkpoint[0]["filename"] == _SHELF_FILENAME
+
+    r = env.owner.post(
+        f"{API}/workflows/{env.manual}/set-clone-plans",
+        json={
+            "sets": [{"key": "it", "checkpoint_ids": [env.checkpoint], "model_ids": []}]
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["base_filename"] == _SHELF_FILENAME
+    assert r.json()["plans"][0]["reason"] != "This workflow loads no checkpoint"
+
+    # Read as a file only on this shelf's word, and with a copy to load:
+    # anything else stays the pack's loader, which a run sends as it is.
+    hub = env.server.hub
+    with_shelf = {"1": stored["1"]}
+    assert with_stock_loaders(hub, with_shelf)["1"]["class_type"] == "UNETLoader"
+    other = {"1": {**stored["1"], "inputs": {**stored["1"]["inputs"]}}}
+    other["1"]["inputs"]["shelf"] = "another-shelf"
+    assert with_stock_loaders(hub, other) == other
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_id = ?",
+            (env.checkpoint,),
+        )
+    try:
+        assert with_stock_loaders(hub, with_shelf) == with_shelf
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model_file SET state = 'present' WHERE model_id = ?",
+                (env.checkpoint,),
+            )
 
 
 def test_a_layout_is_kept_across_the_nodes_open_puts_in(with_pack):
