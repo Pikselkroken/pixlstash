@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+from pixlstash.services.comfyui_recipe_service import CLIP_TYPE_BY_FAMILY
 from pixlstash.services.workflow_card_service import _mark_fields
 from pixlstash.utils.known_base_models import (
     COMPANION_LAYOUTS,
@@ -24,6 +25,7 @@ from pixlstash.utils.known_base_models import (
     family_named,
     family_of,
     fold,
+    identify,
     modality_of,
     model_tile,
     suggest,
@@ -130,6 +132,17 @@ def test_minimax_h3_has_a_family():
     named it."""
     assert family_of("MiniMax H3") == family_of("minimax_h3") == "minimax_h3"
     assert modality_of("MiniMax H3") == "video"
+
+
+def test_moss_image_is_named_by_its_file_and_loads_its_encoder_as_itself():
+    """A set onto MOSS-Image kept the old model's CLIP type: no family, no
+    retype, and the sampler refused the prompt."""
+    assert identify([], ["moss_image_sft_int8_convrot.safetensors"]) == (
+        "MOSS-Image",
+        "filename",
+    )
+    assert family_of("MOSS-Image") == "moss_image"
+    assert CLIP_TYPE_BY_FAMILY["moss_image"] == "moss_image"
 
 
 def test_companion_layouts_join_the_two_family_vocabularies():

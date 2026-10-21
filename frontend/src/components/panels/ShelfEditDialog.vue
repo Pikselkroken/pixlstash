@@ -212,6 +212,10 @@ const CAPABILITIES = [
 const TRIGGER_COUNT_FROM = 12;
 
 const name = ref("");
+// What the name field opened with on ONE row: the name it shows, which may only
+// be derived, so submitting it untouched must write nothing. Null on several
+// rows, where an empty field is a real answer (clear every name).
+let nameSeed = null;
 const baseModel = ref("");
 const kind = ref("");
 const fileKind = ref("adapter");
@@ -358,7 +362,11 @@ watch(
   async (verb) => {
     if (!verb) return;
     const rows = store.selectedRows;
-    name.value = rows.length === 1 ? rows[0].display_name || "" : "";
+    nameSeed =
+      rows.length === 1
+        ? rows[0].name?.text || rows[0].display_name || ""
+        : null;
+    name.value = nameSeed ?? "";
     const shared = rows.every((row) => row.base_model === rows[0]?.base_model);
     baseModel.value = shared ? rows[0]?.base_model || "" : "";
     fileKind.value = rows[0]?.file_kind || "adapter";
@@ -398,6 +406,8 @@ watch(
     working.value = false;
     await nextTick();
     firstFieldEl.value?.focus();
+    // Selected, so typing replaces the seeded name rather than appending to it.
+    if (verb === "rename") firstFieldEl.value?.select();
     // A seeded tag table is taller than the field, and focus leaves it scrolled
     // to the caret at its end - past the first word, which is the trigger.
     if (verb === "trigger-words" && firstFieldEl.value) {
@@ -440,7 +450,12 @@ async function submit() {
   if (!canSubmit.value) return;
   // Nothing was changed, so there is nothing to write - and writing the seed
   // back would store a person's name that was only standing in.
-  if (props.verb === "trigger-words" && !triggerTouched.value) {
+  if (
+    (props.verb === "trigger-words" && !triggerTouched.value) ||
+    (props.verb === "rename" &&
+      nameSeed !== null &&
+      name.value.trim() === nameSeed.trim())
+  ) {
     emit("close");
     return;
   }

@@ -1,4 +1,4 @@
-// *Use a set…* in the Workflow tab's Models head (#1850, part 3).
+// *Change model set…* in the Workflow tab's Models head (#1850, part 3).
 //
 // What can silently go wrong here: the whole shelf read for every card that is
 // merely selected, a row filled with the file it already loads (an unsaved
@@ -178,7 +178,7 @@ function held() {
 describe("the button", () => {
   it("says what it is and that it opens a menu, and reads nothing yet", () => {
     const wrapper = mountMenu();
-    expect(button(wrapper).text()).toBe("Use a set…");
+    expect(button(wrapper).text()).toBe("Change model set…");
     expect(button(wrapper).attributes("aria-haspopup")).toBe("menu");
     expect(button(wrapper).attributes("aria-expanded")).toBe("false");
     // A row acts at once: the button says what choosing one does.

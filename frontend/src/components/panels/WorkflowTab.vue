@@ -2062,7 +2062,7 @@ function pickModel(row, file) {
 }
 
 /**
- * *Use a set…*: every row the set answers for, as unsaved changes. A row the
+ * *Change model set…*: every row the set answers for, as unsaved changes. A row the
  * set puts back to its saved file arrives under that file, and `withModel`
  * takes its earlier pick out of the set.
  */
@@ -3639,7 +3639,7 @@ function onOverwritten(key) {
   });
 }
 
-// *Use a set…* asked for from outside the rail (the selection bar): the
+// *Change model set…* asked for from outside the rail (the selection bar): the
 // workflow is selected, the rail opened on this tab, and the menu opened once
 // the model rows it fills are in and can be edited.
 //

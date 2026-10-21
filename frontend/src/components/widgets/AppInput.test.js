@@ -70,4 +70,14 @@ describe("AppInput", () => {
     expect(document.activeElement).toBe(w.find("input").element);
     w.unmount();
   });
+
+  it("selects its value on mount with autoselect, so typing replaces it", () => {
+    const w = mount(AppInput, {
+      props: { modelValue: "Portrait", autofocus: true, autoselect: true },
+      attachTo: document.body,
+    });
+    const field = w.find("input").element;
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, 8]);
+    w.unmount();
+  });
 });

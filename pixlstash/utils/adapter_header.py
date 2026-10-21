@@ -207,10 +207,16 @@ _T5_VOCABS = {32128: "t5", 256384: "umt5"}
 _T5_XXL_WIDTH = 4096
 
 # The token table of a decoder-only language model in the Hugging Face layout:
-# the Qwen 2.5-VL, Gemma, Llama and Mistral encoders newer image models load.
-# No diffusion model keeps a tensor by this name at the top level, and a
-# checkpoint bundling one keeps it under a prefix.
-_LM_TOKEN_TABLE = "model.embed_tokens.weight"
+# the Qwen 2.5-VL, Gemma, Llama and Mistral encoders newer image models load,
+# and a vision-language model saved whole in the current transformers layout
+# (Qwen 3.5, as MOSS Image loads it), which nests it under `language_model.`.
+# A checkpoint bundling one keeps it under a prefix, which never matches. The
+# older `language_model.model.` layout is left out on purpose: it is also how
+# Bagel, a whole image model, saves its language model.
+_LM_TOKEN_TABLES = (
+    "model.embed_tokens.weight",
+    "model.language_model.embed_tokens.weight",
+)
 
 
 @dataclass(frozen=True)
@@ -550,14 +556,15 @@ def has_text_encoder_markers(header: dict) -> bool:
     """Return whether *header* holds a text encoder's token table.
 
     A CLIP, T5 or UMT5 one as :func:`family_from_header` reads it, or a
-    language model's (:data:`_LM_TOKEN_TABLE`), which names no family. At the
+    language model's (:data:`_LM_TOKEN_TABLES`), which names no family. At the
     top level only: a checkpoint keeps its encoders under a prefix, which never
     matches.
     """
     if _text_encoder_family(header) is not None:
         return True
-    table = _valid_shape(header.get(_LM_TOKEN_TABLE))
-    return table is not None and len(table) == 2
+    return any(
+        len(_valid_shape(header.get(name)) or ()) == 2 for name in _LM_TOKEN_TABLES
+    )
 
 
 def _text_encoder_family(header: dict) -> Optional[str]:

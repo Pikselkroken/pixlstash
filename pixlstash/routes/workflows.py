@@ -187,6 +187,7 @@ from pixlstash.services.workflow_card_service import (
     slot_kind,
     lora_modal_strength,
     shelf_filenames,
+    with_stock_loaders,
     workflow_defaults,
     workflow_lora_summary,
 )
@@ -5323,8 +5324,12 @@ def create_router(server) -> APIRouter:
                 converted, version, problems = converted_manual_document(
                     _hub(), card.workflow_key, read_object_info
                 )
+            # A save from ComfyUI leaves the pack's loaders in it: read as
+            # the stock ones, as the default recipe's rows read it.
             source, reason = run_service.resolve_source(
-                card, file_document=converted, file_problems=problems
+                card,
+                file_document=with_stock_loaders(_hub(), converted),
+                file_problems=problems,
             )
             if source is not None:
                 # The version read with the document, so the number the run
@@ -5335,7 +5340,9 @@ def create_router(server) -> APIRouter:
         if edited is not None:
             # What the owner saved over this workflow's graph: no file,
             # picture or instance is read, since none of them is its graph now.
-            source, reason = run_service.resolve_source(card, edited_document=edited)
+            source, reason = run_service.resolve_source(
+                card, edited_document=with_stock_loaders(_hub(), edited)
+            )
             if source is not None:
                 source.workflow_version = edited_version
             return source, reason
@@ -10237,7 +10244,9 @@ def create_router(server) -> APIRouter:
         return [(slots[i], models[paired[i]]) for i in sorted(paired)]
 
     def _pair_bases(
-        found: list[tuple[str, str, SwapSlot]], checkpoints: list[SwapModel]
+        found: list[tuple[str, str, SwapSlot]],
+        checkpoints: list[SwapModel],
+        live_files: set[str] | None = None,
     ) -> list[tuple[SwapSlot, SwapModel]]:
         """Each base slot of *found* with the set checkpoint it takes, in graph order.
 
@@ -10246,9 +10255,21 @@ def create_router(server) -> APIRouter:
         the low-noise expert replaces the low-noise file, and a graph loading
         one expert takes the set's matching one. A slot left over keeps its
         file.
+
+        The slots some output reads (*live_files*, the files a live loader
+        names; ``None`` when nothing says) are paired first: a leftover
+        loader wired into nothing never runs, so a set's one checkpoint whose
+        name reads closer to it would change nothing the run makes.
         """
         bases = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
-        return _closest_pairs(bases, checkpoints)
+        live = [s for s in bases if live_files is None or s.filename in live_files]
+        pairs = _closest_pairs(live, checkpoints)
+        taken = {model.id for _slot, model in pairs}
+        pairs += _closest_pairs(
+            [s for s in bases if s not in live],
+            [m for m in checkpoints if m.id not in taken],
+        )
+        return sorted(pairs, key=lambda pair: bases.index(pair[0]))
 
     def _clip_type(node: dict) -> str | None:
         """A CLIP loader node's ``type``, or None for any other node."""
@@ -10373,20 +10394,15 @@ def create_router(server) -> APIRouter:
         ran = " and ".join(sorted(_MATCH_TYPE_LABELS.get(k, k) for k in kinds))
         return f"Used for {ran}, not {_MATCH_TYPE_LABELS.get(wants, wants)}"
 
-    def _wont_load(
-        found, unswapped: list[dict], object_info: dict | None
-    ) -> str | None:
+    def _wont_load(base, unswapped: list[dict], object_info: dict | None) -> str | None:
         """Why a set's clone would be refused, in words, or None.
 
-        The base loader's refusal names the loader that would read the file,
-        as far as ComfyUI says one does.
+        The refusal of *base*, the plan's base slot, names the loader that
+        would read the file, as far as ComfyUI says one does.
         """
         if not unswapped:
             return None
         first = unswapped[0]
-        base = next(
-            (slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS), None
-        )
         if base is not None and first["was"] == base.filename and object_info:
             for cls, widget in (
                 ("CheckpointLoaderSimple", "ckpt_name"),
@@ -10451,8 +10467,24 @@ def create_router(server) -> APIRouter:
         models = _swap_models(hub)
         index = recipe_asset_index(hub)
         found = _swap_slots(graph, models, index)
+        # The files a loader some output reads names, or None when ComfyUI
+        # did not say which nodes are outputs: a leftover base loader wired
+        # into nothing is neither the workflow's base model nor the slot a
+        # set's checkpoint goes to.
+        live = live_node_ids(graph, object_info) if object_info else None
+        live_files = (
+            None
+            if live is None
+            else {
+                value
+                for node_id, _c, _w, value in iter_model_fields_api(graph)
+                if str(node_id) in live
+            }
+        )
+        bases_found = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
         base = next(
-            (slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS), None
+            (s for s in bases_found if live_files is None or s.filename in live_files),
+            bases_found[0] if bases_found else None,
         )
         old_base = (
             _replaced_base_model(
@@ -10513,7 +10545,7 @@ def create_router(server) -> APIRouter:
                 if i in models
                 and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
             ]
-            bases = _pair_bases(found, set_checkpoints)
+            bases = _pair_bases(found, set_checkpoints, live_files)
             # The one the graph's first base slot takes, which `old_base` is
             # read from; else whichever slot was paired.
             checkpoint = next(
@@ -10531,7 +10563,9 @@ def create_router(server) -> APIRouter:
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
-            loaders, _swapped, unswapped = _swap_files(pending, swaps, object_info)
+            loaders, _swapped, unswapped = _swap_files(
+                request, pending, swaps, object_info
+            )
             # The clone's own retype, so the diff shows the type it writes.
             retype_text_encoders(
                 pending, _swapped_in_families(models, index, graph, swaps), object_info
@@ -10548,7 +10582,7 @@ def create_router(server) -> APIRouter:
                 if checkpoint is None
                 else _other_type(kinds, wants)
                 if kinds and wants not in kinds
-                else _wont_load(found, unswapped, object_info)
+                else _wont_load(base, unswapped, object_info)
             )
             if reason:
                 fit = "wont_load"
@@ -10600,10 +10634,12 @@ def create_router(server) -> APIRouter:
                         now_type=_clip_type(now_node),
                     )
                 )
+            # A loader wired into nothing is no loader the set has to fill.
             essentials = [
                 slot
                 for _c, _w, slot in found
                 if slot.kind in (*BASE_MODEL_KINDS, "vae", "clip")
+                and (live_files is None or slot.filename in live_files)
             ]
             set_ids = {
                 m.id
@@ -10625,7 +10661,7 @@ def create_router(server) -> APIRouter:
             typed = fit != "other" or all(
                 diff.now_type == wanted_type
                 for diff in diffs
-                if diff.now_type is not None
+                if diff.now_type is not None and (live is None or diff.node_id in live)
             )
             maps_cleanly = (
                 fit != "wont_load"
@@ -10677,7 +10713,8 @@ def create_router(server) -> APIRouter:
             "replaced, named as asked, beside the original. Every loader "
             "naming a replaced file is rewritten. When ComfyUI answers, each "
             "new name is written as ComfyUI lists it and a name it does not "
-            "list is left out; when it does not, the names are written "
+            "list is left out, unless a run loads it off the shelf through "
+            "the PixlStash loader; when it does not, the names are written "
             "unchecked. The original file is not changed; the clone is a file "
             "of its own, in the same workflow."
         ),
@@ -10733,7 +10770,9 @@ def create_router(server) -> APIRouter:
         families = _swapped_in_families(
             _swap_models(hub), recipe_asset_index(hub), graph, body.swaps
         )
-        loaders, swapped, unswapped = _swap_files(graph, body.swaps, object_info)
+        loaders, swapped, unswapped = _swap_files(
+            request, graph, body.swaps, object_info
+        )
         if not swapped and not unswapped and not chain_changed:
             raise HTTPException(
                 status_code=409,
@@ -10807,13 +10846,16 @@ def create_router(server) -> APIRouter:
         return families
 
     def _swap_files(
-        graph: dict, swaps: dict[str, str], object_info: dict | None
+        request: Request, graph: dict, swaps: dict[str, str], object_info: dict | None
     ) -> tuple[list[dict], list[dict], list[dict]]:
         """The clone's rewrite of *graph*, in place: loader classes, then files.
 
         The class goes first so each file is checked against the loader that
         will read it. A loader whose pack ComfyUI lacks lists nothing, so its
-        file goes in unchecked: a missing pack warns and does not refuse.
+        file goes in unchecked: a missing pack warns and does not refuse. A
+        file ComfyUI does not list is written unchecked too where a run loads
+        it off the shelf (:func:`_loads_off_the_shelf`), as a model fix's is
+        (#2009).
 
         Returns:
             ``(loaders, swapped, unswapped)``: :func:`plan_loader_rewrites`'s
@@ -10822,6 +10864,44 @@ def create_router(server) -> APIRouter:
         loaders = plan_loader_rewrites(graph, swaps, object_info)
         apply_loader_rewrites(graph, loaders)
         swapped, unswapped = apply_filename_swap(graph, swaps, object_info)
+        unlisted = {
+            miss["was"]: miss["now"]
+            for miss in unswapped
+            if miss["reason"] == "not_on_comfyui"
+        }
+        if not unlisted:
+            return loaders, swapped, unswapped
+        # Per loader: a twin naming the same file that the pack's loader
+        # cannot stand in for (an fp8 cast) keeps it, and refuses the clone.
+        held = [
+            (node_id, widget, value)
+            for node_id, _cls, widget, value in iter_model_fields_api(graph)
+            if value in unlisted
+        ]
+        missed, written = set(), set()
+        for node_id, widget, value in held:
+            if not _loads_off_the_shelf(
+                request, graph, node_id, widget, unlisted[value], object_info
+            ):
+                missed.add(value)
+                continue
+            rows = apply_filename_swap(
+                {node_id: graph[node_id]},
+                {value: unlisted[value]},
+                None,
+                fields=lambda _cls, field, widget=widget: field == widget,
+            )[0]
+            swapped += rows
+            written.update(row["was"] for row in rows)
+        # A miss is dropped only where its file was written on every loader
+        # naming it; anything else is still reported, and refuses the clone.
+        unswapped = [
+            miss
+            for miss in unswapped
+            if miss["reason"] != "not_on_comfyui"
+            or miss["was"] in missed
+            or miss["was"] not in written
+        ]
         return loaders, swapped, unswapped
 
     def _store_copy(

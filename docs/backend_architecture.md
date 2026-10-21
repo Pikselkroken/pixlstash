@@ -2714,7 +2714,7 @@ whether a conversion is stored, since one lands on a version after it is first
 read). The conversion names every widget; an editor file's bare
 `widgets_values` name a loader's model only where it is the first widget
 (`comfyui_utilities._NAME_FIRST_CLASSES`: the checkpoint, UNET and LoRA
-families and the one-widget ControlNet, upscale and style loaders, #1939). A saved recipe on a manual workflow stores the id as both
+families and the one-widget ControlNet, upscale and style loaders, #1939). A loader no node reads is left out where some loader is read (`loaded_model_widgets`), so a leftover second checkpoint loader wired into nothing is not the model the card names; a graph wiring none of its loaders keeps them all, since nothing says which are used. A saved recipe on a manual workflow stores the id as both
 `workflow_id` and `workflow_key`.
 
 **Its pictures** (vault migration 0126). `picture.run_workflow_id` names the
@@ -2869,7 +2869,7 @@ single-purpose routes still answer, and since #1850 the app calls fewer of
 them: `…/fixed-copy` and `…/clone-with-models` have no caller left in the
 app (the Run popup's *Save fixed workflow* and the clone dialogs are gone);
 they keep answering until a backend change takes them out, with their tests; `…/model-fix` is written only by the Models shelf's *Replace
-missing*; `…/set-clone-plans` is read by the Workflow tab's *Use a set…*,
+missing*; `…/set-clone-plans` is read by the Workflow tab's *Change model set…*,
 which turns a plan into unsaved model changes, and is planned against the
 graph a run submits ("A model pick at a loader that holds a model fix",
 below); `PUT …/lora-chain` is called
@@ -3148,6 +3148,8 @@ a key bound to an address (`UserToken.bound_address`, the ComfyUI link key,
 #1810), or any `COMFYUI`-scope key even when minted without a binding, is
 stored as `comfyui` whatever `source` it sends, so that key cannot
 count its saves among the owner's or pass the Workflow tab's line by.
+
+**A save from ComfyUI keeps the pack's model loaders, and every read that names models reads them as the stock ones.** A graph opened with ComfyUI-PixlStash nodes comes back holding `PixlStashCheckpointLoader` (a shelf row) and the VAE, CLIP, ControlNet and upscale loaders (a digest), and is stored as it came. The run, Save, the default recipe's rows and *Use a set…* read a workflow's own graph (a manual document, a saved-over one) through `workflow_card_service.with_stock_loaders` (`comfyui_recipe_service.as_stock_loaders`): each as the stock loader of the file its row or digest names, the checkpoint loader as `CheckpointLoaderSimple` where anything reads its CLIP or VAE and `UNETLoader` otherwise. Decided by the graph alone, so the rows and the run name a loader by the same address. A row is trusted only with this shelf's `shelf` beside it, a digest only where one file has it; anything else stays as it is. A run swaps the pack's loader back in wherever ComfyUI lacks the file (`_swap_in_shelf_loaders`), so the stock reading runs the same. LoRA loaders are read by the chain, by digest, and are not touched.
 
 **The saves of one opening are one version** (`opening` on the request and on
 `workflow_version`). ComfyUI-PixlStash makes an id when it opens a workflow
@@ -10548,7 +10550,7 @@ does and the card calls both Video. A set whose kinds do not include the
 workflow's is `wont_load` with `Used for <types>, not <type>`; a checkpoint no
 recipe names, and a workflow whose type is unknown, are refused nothing, since
 nothing is known. `_set_swaps`
-maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file. The VAE and the text-encoder slots are each
+maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file. The slots a loader some output reads names (`live_node_ids`) are paired first and the base slot the plan reads its base model from is the first of them, so a leftover base loader wired into nothing never takes a set's one checkpoint because its name reads closer: the run would sample the old model, and the tab, which has no row for that loader, would fill no checkpoint. With ComfyUI unreachable nothing says what is live and every slot is paired alike. The VAE and the text-encoder slots are each
 paired with the set's files of that kind in four passes, a file taken once
 (#1831): the owner's own pairing (`picks`, graph filename -> a model of
 `model_ids`; one naming another model, or one model twice, is a 422); then a
@@ -10709,10 +10711,14 @@ answer:
   text encoder is told by its top-level token table (`has_text_encoder_markers`):
   CLIP-L/H/G or XXL T5/UMT5, by the rule `family_from_header` names it by, or
   a language model's `model.embed_tokens.weight` (Qwen 2.5-VL, Gemma, Llama,
-  Mistral), which names no family. So a T5 or Qwen downloaded into a flat
-  folder is a text encoder rather than a `checkpoint` by parameter count; hub
-  data version 21 re-files the `checkpoint` and `unknown` rows whose present
-  copy carries one. A T5 of another width has no such rule and still needs a
+  Mistral), which names no family, or the same table under
+  `model.language_model.` in a vision-language model saved whole (Qwen 3.5).
+  The older `language_model.model.` layout is not read, because Bagel, a whole
+  image model, saves its language model that way. So a T5 or Qwen downloaded
+  into a flat folder is a text encoder rather than a `checkpoint` by parameter
+  count; hub data version 21 re-files the `checkpoint` and `unknown` rows whose
+  present copy carries one, and data version 23 does it again for the nested
+  layout. A T5 of another width has no such rule and still needs a
   role folder. A GGUF or a
   `.pth` outside a role folder is `unknown`, which the
   shelf shows and the owner can correct; it is never guessed into `checkpoint`.

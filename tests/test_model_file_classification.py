@@ -195,6 +195,8 @@ class TestFileClassification:
             {"text_model.embeddings.token_embedding.weight": _tensor([49408, 768])},
             # Qwen 2.5-VL 7B, as Qwen-Image loads it
             {"model.embed_tokens.weight": _tensor([152064, 3584])},
+            # Qwen 3.5 9B saved whole, vision tower and all (#2008)
+            {"model.language_model.embed_tokens.weight": _tensor([248320, 4096])},
         ],
     )
     def test_a_token_table_makes_a_text_encoder_at_checkpoint_scale(

@@ -1,5 +1,5 @@
 <template>
-  <!-- *Use a set…* (#1850, part 3): one of the owner's model sets fills the
+  <!-- *Change model set…* (#1850, part 3): one of the owner's model sets fills the
        Workflow tab's model rows, as unsaved changes. It replaces *Clone onto a
        set…*: nothing is written here and no workflow is made, the menu only
        works out which rows a set fills and hands that to the tab. -->
@@ -27,7 +27,7 @@
       >
         <!-- A row acts at once, so what the menu does is said before it is
              opened (the tooltip). -->
-        Use a set…
+        Change model set…
       </AppButton>
     </template>
     <div
@@ -323,7 +323,7 @@ function focus() {
 }
 
 /**
- * Open the menu from somewhere else (the grid's own *Use a set…* row). The
+ * Open the menu from somewhere else (the grid's own *Change model set…* row). The
  * button may be scrolled out of the rail, and the menu hangs off it.
  */
 function openMenu() {

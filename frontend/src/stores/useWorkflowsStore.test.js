@@ -456,7 +456,7 @@ describe("onWorkflowsChanged across a burst", () => {
 });
 
 describe("requestUseSet", () => {
-  it("names the workflow the Workflow tab's Use a set… is asked for, and takes it back", () => {
+  it("names the workflow the Workflow tab's Change model set… is asked for, and takes it back", () => {
     const store = useWorkflowsStore();
     expect(store.useSetKey).toBe("");
     store.requestUseSet("workhorse");

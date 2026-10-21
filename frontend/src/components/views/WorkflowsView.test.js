@@ -22,8 +22,16 @@ vi.mock("vuetify/components", async () => {
     props: ["modelValue"],
     template: `<div><slot name="activator" :props="{}" /><slot v-if="modelValue" /></div>`,
   };
+  // Lazy like the real one: its content mounts when it opens, which is when a
+  // rename field selects the name it was seeded with.
+  const VDialog = {
+    name: "VDialog",
+    props: ["modelValue"],
+    template: `<div><slot v-if="modelValue" /></div>`,
+  };
+  const own = { VMenu, VDialog };
   return new Proxy(stubs, {
-    get: (target, prop) => (prop === "VMenu" ? VMenu : target[prop]),
+    get: (target, prop) => own[prop] ?? target[prop],
   });
 });
 
@@ -1393,29 +1401,37 @@ describe("the verbs the bar fires", () => {
     expect(useNoticeStore().notices.at(-1).text).toBe("Duplicated as a (2).");
   });
 
-  it("Rename with an empty field clears the stored name rather than setting one", async () => {
+  it("Rename opens on the current name and writes only a changed one", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
     store.selectRange(["a"]);
     patchWorkflowCard.mockResolvedValue({});
+    const rename = () =>
+      wrapper.find(".app-dialog__footer button:last-child").trigger("click");
 
     await bar(wrapper).vm.$emit("rename");
     await flush();
-    // The field opens EMPTY on a card whose name is always resolved, so
-    // pressing Rename without typing must not freeze the generated name into
-    // a stored one — it has to clear the stored name instead.
-    await wrapper
-      .find(".app-dialog__footer button:last-child")
-      .trigger("click");
+    // Seeded with the card's name, which may be generated: pressing Rename
+    // untouched must not freeze it into a stored one, so nothing is sent.
+    const field = wrapper.find(".app-dialog input").element;
+    expect(field.value).toBe("a");
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, 1]);
+    await rename();
+    await flush();
+    expect(patchWorkflowCard).not.toHaveBeenCalled();
+
+    // Emptying the field is what clears the stored name.
+    await bar(wrapper).vm.$emit("rename");
+    await flush();
+    await wrapper.find(".app-dialog input").setValue("");
+    await rename();
     await flush();
     expect(patchWorkflowCard).toHaveBeenCalledWith("a", { name: null });
 
     await bar(wrapper).vm.$emit("rename");
     await flush();
     await wrapper.find(".app-dialog input").setValue("  Portrait pass  ");
-    await wrapper
-      .find(".app-dialog__footer button:last-child")
-      .trigger("click");
+    await rename();
     await flush();
     expect(patchWorkflowCard).toHaveBeenLastCalledWith("a", {
       name: "Portrait pass",
@@ -1423,7 +1439,7 @@ describe("the verbs the bar fires", () => {
   });
 });
 
-describe("Use a set… from the grid's menu", () => {
+describe("Change model set… from the grid's menu", () => {
   const useSetRow = (wrapper) =>
     wrapper
       .findAll(".wf-menu .ctx-item")
@@ -1439,7 +1455,7 @@ describe("Use a set… from the grid's menu", () => {
       .find('.wfv-row[data-key="b"]')
       .trigger("contextmenu", { clientX: 10, clientY: 20 });
     await flush();
-    expect(useSetRow(wrapper).find(".ctx-label-text").text()).toBe("Use a set…");
+    expect(useSetRow(wrapper).find(".ctx-label-text").text()).toBe("Change model set…");
 
     await useSetRow(wrapper).trigger("click");
     await flush();

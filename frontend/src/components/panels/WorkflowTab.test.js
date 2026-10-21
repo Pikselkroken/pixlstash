@@ -88,7 +88,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 
-/** Called with the workflow id when *Use a set…* is opened from outside. */
+/** Called with the workflow id when *Change model set…* is opened from outside. */
 const useSetOpened = vi.fn();
 /** What waits on the server: the changes routes below are one small fake. */
 let waitingOnServer = null;
@@ -116,7 +116,7 @@ const globalOpts = {
           },
         },
         template:
-          '<button data-testid="wftab-use-set" :disabled="disabled">Use a set…</button>',
+          '<button data-testid="wftab-use-set" :disabled="disabled">Change model set…</button>',
       },
     },
   },
@@ -2026,7 +2026,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
       "Parameters",
     ]);
     expect(heads[0].find("[data-testid='wftab-use-set']").text()).toBe(
-      "Use a set…",
+      "Change model set…",
     );
     expect(heads[1].find("[data-testid='wftab-edit-loras']").exists()).toBe(true);
     expect(textOf(wrapper)).not.toContain("In every picture");
@@ -4401,7 +4401,7 @@ describe("the tab as the editor (#1850)", () => {
     });
   });
 
-  describe("Use a set…", () => {
+  describe("Change model set…", () => {
     it("is handed the rows a set may fill, and fills them as unsaved changes", async () => {
       const { wrapper } = await mountEditor();
       await settle(wrapper);

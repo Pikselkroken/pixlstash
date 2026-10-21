@@ -671,17 +671,17 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
-   * The workflow *Use a set…* is asked for from outside the Workflow tab, or "".
+   * The workflow *Change model set…* is asked for from outside the Workflow tab, or "".
    *
    * The same shape as `pictureToOpen`, the other way round: the menu lives in
-   * the Workflow tab's Models head, and the grid's own *Use a set…* row is in
+   * the Workflow tab's Models head, and the grid's own *Change model set…* row is in
    * `WorkflowsView`. The tab watches this, opens its menu on that workflow
    * and puts it back to "", so asking for the same workflow twice is two
    * requests.
    */
   const useSetKey = ref("");
 
-  /** Ask the Workflow tab to open *Use a set…* on one workflow. "" takes it back. */
+  /** Ask the Workflow tab to open *Change model set…* on one workflow. "" takes it back. */
   function requestUseSet(key) {
     useSetKey.value = key || "";
   }
