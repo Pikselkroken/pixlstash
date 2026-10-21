@@ -1,3 +1,22 @@
+# [1.12.1] [Security:Low]
+
+- Fixed: folder import was too quick to read a folder as pictures of one
+  person. It now needs a closer face match, four in five sampled pictures to
+  agree, and the matching faces to resemble each other rather than one
+  average-looking face, so mixed folders of look-alikes are labelled less often.
+- Updated the web UI's HTTP library to pick up an upstream security fix.
+- Updated the build tools behind the web UI and the desktop installers (Vite,
+  electron-builder) for upstream advisories. Neither ships inside the app.
+- Added: MOSS-Image is a known base model, so its checkpoints are identified on
+  the model shelf and a workflow moved onto one loads its text encoder as
+  MOSS-Image.
+- Renaming a model, a workflow set or a workflow now opens on its current name
+  with the text selected, so typing replaces it and a small fix is one edit
+  rather than a retype. Saving a name PixlStash made up without changing it
+  keeps it automatic. A recipe's rename field selects its name too.
+- Fixed: reordering a stack failed with "Couldn't save the stack order" once
+  any of its pictures had been moved to the Scrapheap.
+
 # [1.12.0] [Security:Low]
 
 ## Workflows and recipes
