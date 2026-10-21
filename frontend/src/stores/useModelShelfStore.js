@@ -3149,9 +3149,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * One receipt for the models a set picker added while it was open (#1574).
    *
-   * The picker adds quietly and narrates each add in its own status line, so
-   * five LoRAs picked one by one are one pill when it closes, not five that
-   * replace each other. Undo takes all of them back out.
+   * The picker adds quietly and ticks each add in place, so five LoRAs picked
+   * one by one are one pill when it closes, not five that replace each other.
+   * Undo takes all of them back out.
    *
    * @param {Object} set
    * @param {Array<{model_id: number, slot: string, sha256: string, name: string}>}
