@@ -1,3 +1,11 @@
+# [1.12.2] [Security:High]
+
+- Updated Pillow, the library PixlStash reads pictures with, to 13.0.0 for
+  upstream security fixes in its JPEG, TIFF and GIF readers: a crafted picture
+  could crash PixlStash or corrupt its memory when imported. Please update.
+  The Dependabot alert for these arrived just after 1.12.1 was released, hence
+  a second release the same day.
+
 # [1.12.1] [Security:Low]
 
 - Fixed: folder import was too quick to read a folder as pictures of one
