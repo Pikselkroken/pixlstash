@@ -12,6 +12,7 @@ import zipfile
 
 from PIL import Image, PngImagePlugin
 
+from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture, PictureSet
 from pixlstash.db_models.picture_set import PictureSetMember
 from pixlstash.utils.host_open import open_in_file_manager
@@ -438,6 +439,36 @@ class ExportUtils:
         return result
 
     @staticmethod
+    def _fetch_character_picture_ids(server, character_id: int, only_deleted: bool):
+        """Resolve a character id to its picture ids via the Face table.
+
+        Every Face row whose ``character_id`` matches contributes its
+        ``picture_id``; the distinct set is then filtered to the requested
+        lifecycle (deleted vs. live).  Used by the training dataset builder,
+        which selects by character; the ZIP/folder routes never pass a
+        ``character_id`` here (they filter by it through the list path).
+        """
+
+        def _query(session, char_id):
+            face_pic_ids = {
+                int(r) if not isinstance(r, tuple) else int(r[0])
+                for r in session.exec(
+                    select(Face.picture_id).where(Face.character_id == char_id)
+                ).all()
+            }
+            if not face_pic_ids:
+                return []
+            rows = session.exec(
+                select(Picture.id).where(
+                    Picture.id.in_(face_pic_ids),
+                    Picture.deleted.is_(bool(only_deleted)),
+                )
+            ).all()
+            return [int(r) if not isinstance(r, tuple) else int(r[0]) for r in rows]
+
+        return server.vault.db.run_task(_query, int(character_id))
+
+    @staticmethod
     def _gather_export_pictures(server, request, task_id, background_data, params):
         """Resolve the pictures an export task should package.
 
@@ -484,6 +515,19 @@ class ExportUtils:
                 )
 
             pics = server.vault.db.run_task(fetch_members, set_id)
+        elif background_data.get("character_id") is not None:
+            character_id = background_data["character_id"]
+            logger.debug("Exporting pictures for character %s", character_id)
+            char_pic_ids = ExportUtils._fetch_character_picture_ids(
+                server, character_id, only_deleted
+            )
+            if char_pic_ids:
+                pics = server.vault.db.run_task(
+                    Picture.find,
+                    id=char_pic_ids,
+                    select_fields=select_fields,
+                    include_deleted=only_deleted,
+                )
         elif query:
             logger.debug("Exporting pictures using search query: {}".format(query))
 
@@ -550,9 +594,12 @@ class ExportUtils:
 
         # Enforce token scope: remove any pictures the token is not
         # authorised to access before packaging the export.
-        scope_allowed = fetch_scope_allowed_picture_ids(server, request)
-        if scope_allowed is not None and pics:
-            pics = [p for p in pics if getattr(p, "id", None) in scope_allowed]
+        # Trusted server-side callers (the training dataset builder) pass
+        # request=None and carry no token, so there is no scope to apply.
+        if request is not None:
+            scope_allowed = fetch_scope_allowed_picture_ids(server, request)
+            if scope_allowed is not None and pics:
+                pics = [p for p in pics if getattr(p, "id", None) in scope_allowed]
 
         logger.debug(
             f"Export task {task_id}: {len(pics)} pictures matched before stack "
@@ -780,6 +827,14 @@ class ExportUtils:
                                     else character_names
                                 )
 
+                    # Training datasets lead every caption with the LoRA trigger
+                    # word; exports never set it.
+                    trigger = params.get("trigger_word")
+                    if trigger and caption_mode_d != "none":
+                        caption_text = (
+                            f"{trigger}, {caption_text}" if caption_text else trigger
+                        )
+
                     if caption_mode_d != "none" and caption_text is not None:
                         sink.writestr(
                             f"{name_stem}.txt",
@@ -835,6 +890,139 @@ class ExportUtils:
                             full_path,
                             exc,
                         )
+
+    @staticmethod
+    def build_training_dataset(
+        server,
+        *,
+        dest_dir,
+        set_id=None,
+        character_id=None,
+        trigger_word=None,
+        caption_mode="tags",
+        resolution="original",
+        tag_format="spaces",
+    ):
+        """Build an ai-toolkit training dataset snapshot into ``dest_dir``.
+
+        Runs the same selection, scope-free source resolution and member
+        writer as the folder export (:meth:`generate_folder_export`), so the
+        files match a FULL export made with the same settings: one
+        ``image_NNNNN.<ext>`` plus ``image_NNNNN.txt`` caption per picture.
+        Videos and pictures whose source file is missing are skipped.
+
+        Captions default to the picture's tags.  When ``trigger_word`` is
+        given it leads every caption as its first comma-separated token.
+
+        The caller owns ``dest_dir``'s lifecycle (cleanup); this creates it if
+        absent and returns a manifest whose ``picture_ids`` feed the
+        TrainingJob reproducibility record.
+
+        Args:
+            server: The server instance (provides ``vault.db`` / ``image_root``).
+            dest_dir: Target directory for the image + caption pairs.
+            set_id: Picture-set id to build the dataset from.
+            character_id: Character id to build the dataset from (resolved via
+                the Face table).  One of ``set_id`` / ``character_id`` is required.
+            trigger_word: Optional LoRA trigger word, prepended to each caption.
+            caption_mode: ``"tags"`` (default), ``"description"``, or ``"none"``.
+            resolution: ``"original"`` (default), ``"half"``, or ``"quarter"``.
+            tag_format: ``"spaces"`` (default) or ``"underscores"``.
+
+        Returns:
+            Manifest dict: ``{"dest_dir", "image_count", "picture_ids",
+            "caption_mode", "trigger_word"}``.
+        """
+        if set_id is None and character_id is None:
+            raise ValueError("build_training_dataset needs a set_id or a character_id")
+
+        caption_mode_d = (caption_mode or "tags").lower()
+        if caption_mode_d not in {"none", "description", "tags"}:
+            caption_mode_d = "tags"
+
+        tag_format_d = (
+            tag_format if tag_format in {"spaces", "underscores"} else "spaces"
+        )
+
+        resolution_d = (resolution or "original").lower()
+        scale_map = {"original": 1.0, "half": 0.5, "quarter": 0.25}
+        scale_factor = scale_map.get(resolution_d, 1.0)
+
+        trigger = trigger_word.strip() if trigger_word else None
+
+        select_fields = Picture.metadata_fields()
+        if caption_mode_d != "none":
+            select_fields = select_fields | {"tags"}
+
+        params = {
+            "export_type_d": Picture.ExportType.FULL,
+            "caption_mode_d": caption_mode_d,
+            "include_character_name_enabled": False,
+            "scale_factor": scale_factor,
+            "only_deleted": False,
+            "picture_ids": [],
+            "select_fields": select_fields,
+            "use_original_file_names": False,
+            "tag_format_d": tag_format_d,
+            "bbox_mode_d": "none",
+            "trigger_word": trigger,
+        }
+
+        pics = ExportUtils._gather_export_pictures(
+            server,
+            None,
+            None,
+            {"set_id": set_id, "character_id": character_id},
+            params,
+        )
+        # Same skips the writer applies, done here so the manifest's ids and
+        # count describe exactly what gets written.
+        pics = [
+            pic
+            for pic in pics
+            if getattr(pic, "file_path", None)
+            and os.path.exists(
+                ImageUtils.resolve_picture_path(server.vault.image_root, pic.file_path)
+            )
+            and not VideoUtils.is_video_file(
+                ImageUtils.resolve_picture_path(server.vault.image_root, pic.file_path)
+            )
+        ]
+
+        feature_faces_by_pic, face_tags_by_face, detections_by_pic, _ = (
+            ExportUtils._prepare_feature_maps_and_total(server, pics, params)
+        )
+
+        os.makedirs(dest_dir, exist_ok=True)
+        progress = {None: {"processed": 0}}
+        with _FolderSink(dest_dir) as sink:
+            ExportUtils._write_export_pictures(
+                sink,
+                server,
+                None,
+                progress,
+                pics,
+                params,
+                feature_faces_by_pic,
+                face_tags_by_face,
+                detections_by_pic,
+            )
+
+        manifest = {
+            "dest_dir": dest_dir,
+            "image_count": len(pics),
+            "picture_ids": [pic.id for pic in pics],
+            "caption_mode": caption_mode_d,
+            "trigger_word": trigger,
+        }
+        logger.info(
+            "Built training dataset in %s: %d images, caption_mode=%s, trigger=%r",
+            dest_dir,
+            len(pics),
+            caption_mode_d,
+            trigger,
+        )
+        return manifest
 
     @staticmethod
     def generate_zip(server, request, task_id, export_tasks, background_data):

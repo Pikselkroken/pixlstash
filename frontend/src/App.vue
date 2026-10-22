@@ -20,6 +20,7 @@ import { useSelectionStore } from "./stores/useSelectionStore";
 import { useFilterStore } from "./stores/useFilterStore";
 import { useGridStore } from "./stores/useGridStore";
 import { useSidebarStore } from "./stores/useSidebarStore";
+import { useTrainingStore } from "./stores/useTrainingStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useRunDialogStore } from "./stores/useRunDialogStore";
 import { useFolderMappingStore } from "./stores/useFolderMappingStore";
@@ -117,6 +118,7 @@ const selectionStore = useSelectionStore();
 const filterStore = useFilterStore();
 const gridStore = useGridStore();
 const sidebarStore = useSidebarStore();
+const trainingStore = useTrainingStore();
 const userPrefsStore = useUserPrefsStore();
 const runDialogStore = useRunDialogStore();
 const projectStore = useProjectStore();
@@ -500,6 +502,35 @@ function openSettingsDialog(tab = "") {
   sidebarRef.value?.openSettingsDialog?.(typeof tab === "string" ? tab : "");
 }
 
+// SideBar context-menu "Train LoRA": navigate to the set/character so the view
+// scope matches, then open the train panel pre-scoped to it.
+async function handleTrainLora(scope) {
+  if (!scope || scope.id == null) return;
+  if (scope.type === "character") {
+    await handleSelectCharacter({ id: scope.id, label: scope.name });
+  } else if (scope.type === "set") {
+    await handleSelectSet({ id: scope.id, label: scope.name });
+  } else {
+    return;
+  }
+  trainingStore.openForScope({
+    type: scope.type,
+    id: scope.id,
+    name: scope.name,
+  });
+  // The grid refetches after navigation; refresh the header count shortly after.
+  await nextTick();
+  refreshTrainCount();
+}
+
+// The train panel's header shows the picture count of the current view. Reuse
+// the grid's export count (totalCount = loaded grid images) for the header hint.
+function refreshTrainCount() {
+  const counts = gridContainer.value?.getExportCount?.();
+  if (!counts) return;
+  trainingStore.scopePictureCount = Number(counts.totalCount) || 0;
+}
+
 /** The empty library's "Choose a folder…" / "Import them…".
  *
  * The sidebar picks the route: the local_import wizard over the library's own
@@ -621,6 +652,15 @@ watch(
     rememberTheme(value === "dark" ? "dark" : "light");
   },
   { immediate: true },
+);
+
+// Deep-link from the train panel's "Set up ai-toolkit first" link: open the
+// settings dialog on its Training entry.
+watch(
+  () => trainingStore.settingsTabRequest,
+  (val) => {
+    if (val) openSettingsDialog("training");
+  },
 );
 
 // --- Lifecycle ---
@@ -800,6 +840,7 @@ defineExpose({
             @select-workflows="handleSelectWorkflows"
             @select-set="handleSelectSet"
             @select-folder="handleSelectFolder"
+            @train-lora="handleTrainLora"
             @images-assigned-to-character="handleImagesAssignedToCharacter"
             @images-moved="handleImagesMoved"
             @faces-assigned-to-character="handleFacesAssignedToCharacter"
@@ -928,6 +969,7 @@ defineExpose({
                 @library-empty="offerLoosePictures"
                 @library-loaded="onLibraryLoaded"
                 @confirm-export-zip="confirmExportZip"
+                @train-menu-open="refreshTrainCount"
                 @confirm-export-folder="confirmExportFolder"
               />
             </div>

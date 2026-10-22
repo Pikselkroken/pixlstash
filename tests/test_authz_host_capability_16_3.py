@@ -472,6 +472,12 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     that library's host folder, which ``GET /libraries`` redacts for a remote
     owner. It takes a registry uuid and no path.
 
+    66 = 58 + 8 with in-app LoRA training: ``POST /training/jobs`` starts the
+    owner's configured trainer on this machine, ``POST
+    /training/jobs/{job_id}/cancel`` and ``DELETE /training/jobs/{job_id}`` stop
+    it and remove its host folders, ``DELETE /loras/{lora_id}`` removes a file,
+    and ``GET /loras/{lora_id}/file-path`` discloses a host path.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -485,7 +491,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 8, sorted(loopback)
-    assert len(local) == 53, sorted(local)
+    assert len(local) == 58, sorted(local)
 
 
 # ===========================================================================

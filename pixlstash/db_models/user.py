@@ -51,6 +51,10 @@ class User(SQLModel, table=True):
     # column default never rewrites a stored value.
     theme_mode: Optional[str] = Field(default="dark")
     comfyui_url: Optional[str] = Field(default=None)
+    # ai-toolkit training config (non-secret paths; HF_TOKEN is operator-env-provided).
+    ai_toolkit_repo_path: Optional[str] = Field(default=None)
+    ai_toolkit_python: Optional[str] = Field(default=None)
+    ai_toolkit_commit: Optional[str] = Field(default=None)
     public_url: Optional[str] = Field(default=None)
     similarity_character: Optional[int] = Field(default=None)
     stack_strictness: Optional[float] = Field(default=0.92)

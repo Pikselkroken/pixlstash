@@ -2082,6 +2082,34 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "remains as defence in depth."
         ),
     ),
+    # ── routes/training.py (ai-toolkit LoRA training; owner-only, see the router docstring)
+    ("GET", "/api/v1/training/jobs"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/jobs/{job_id}/status"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/loras"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/loras/{lora_id}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/loras/{lora_id}/download"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/training/templates"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/training/jobs"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 starts an ai-toolkit trainer process on the host and writes the job's dataset and output under the image root; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("POST", "/api/v1/training/jobs/{job_id}/cancel"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 signals the host process group of a running trainer; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/training/jobs/{job_id}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 removes a job's host training folder and its rows; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("GET", "/api/v1/loras/{lora_id}/file-path"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 discloses the absolute host path of a trained LoRA for same-machine ComfyUI loader nodes; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    ("DELETE", "/api/v1/loras/{lora_id}"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 unlinks a trained LoRA file from the host image root; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
 }
 
 # Routes that exist only when a server-config flag is set. They are declared in

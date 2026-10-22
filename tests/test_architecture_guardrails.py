@@ -107,6 +107,7 @@ _DIRECT_DB_CALL_ALLOWLIST = {
     "pixlstash/routes/reference_folders.py",
     "pixlstash/routes/stacks.py",
     "pixlstash/routes/tags.py",
+    "pixlstash/routes/training.py",
 }
 
 

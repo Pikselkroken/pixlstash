@@ -65,6 +65,8 @@ from .review import Review  # noqa: F401
 from .saved_recipe import SavedRecipe  # noqa: F401
 from .tag_health import TagHealth  # noqa: F401
 from .tag_prediction import TagPrediction  # noqa: F401
+from .training_job import TrainingJob  # noqa: F401
+from .trained_lora import TrainedLora  # noqa: F401
 from .tag_suggestion import TagSuggestion  # noqa: F401
 from .tagger_run import TaggerRun  # noqa: F401
 from .import_folder import ImportFolder  # noqa: F401

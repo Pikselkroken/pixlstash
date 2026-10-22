@@ -1,0 +1,41 @@
+{
+  "job": "extension",
+  "config": {
+    "name": "{{JOB_NAME}}",
+    "process": [
+      {
+        "type": "diffusion_trainer",
+        "training_folder": "{{TRAINING_FOLDER}}",
+        "sqlite_db_path": "{{SQLITE_DB_PATH}}",
+        "device": "cuda",
+        "trigger_word": "{{TRIGGER_WORD}}",
+        "network": { "type": "lora", "linear": 32, "linear_alpha": 32 },
+        "save": {
+          "dtype": "bf16",
+          "save_every": 4,
+          "max_step_saves_to_keep": 4,
+          "save_format": "diffusers",
+          "push_to_hub": false
+        },
+        "datasets": [
+          {
+            "folder_path": "{{DATASET_FOLDER}}",
+            "caption_ext": "txt",
+            "resolution": [512, 768, 1024]
+          }
+        ],
+        "train": { "batch_size": 1, "steps": 12, "optimizer": "adamw8bit", "lr": 0.0001 },
+        "logging": { "log_every": 1, "use_ui_logger": true },
+        "model": { "name_or_path": "Tongyi-MAI/Z-Image-Turbo", "arch": "zimage:turbo" },
+        "sample": {
+          "sampler": "flowmatch",
+          "sample_every": 250,
+          "samples": [
+            { "prompt": "{{TRIGGER_WORD}}, portrait, studio lighting, white background" }
+          ]
+        }
+      }
+    ]
+  },
+  "meta": { "name": "{{JOB_NAME}}", "version": "1.0" }
+}

@@ -64,6 +64,9 @@ def serialize_user_config(user) -> dict:
         "date_format",
         "theme_mode",
         "comfyui_url",
+        "ai_toolkit_repo_path",
+        "ai_toolkit_python",
+        "ai_toolkit_commit",
         "public_url",
         "similarity_character",
         "stack_strictness",
@@ -84,6 +87,9 @@ def serialize_user_config(user) -> dict:
     # predates a newly-added setting simply falls back to the default rather
     # than raising - keeps serialisation resilient to schema growth.
     config = {
+        # Fall back to the default when the source lacks the attribute or it is
+        # None. A source missing a newly-added field (e.g. a fake user in tests
+        # or an ORM row read before its column migration ran) must not raise.
         key: (
             getattr(source, key, None)
             if getattr(source, key, None) is not None
@@ -183,6 +189,9 @@ def apply_user_config_patch(user, patch_data) -> bool:
         "date_format",
         "theme_mode",
         "comfyui_url",
+        "ai_toolkit_repo_path",
+        "ai_toolkit_python",
+        "ai_toolkit_commit",
         "public_url",
         "similarity_character",
         "stack_strictness",
@@ -254,6 +263,21 @@ def apply_user_config_patch(user, patch_data) -> bool:
                 new_value = str(value).strip()
             if user.comfyui_url != new_value:
                 user.comfyui_url = new_value
+                updated = True
+            continue
+        if key in {
+            "ai_toolkit_repo_path",
+            "ai_toolkit_python",
+            "ai_toolkit_commit",
+        }:
+            # Plain string path/commit settings: coerce empty/null to None and
+            # trim whitespace, exactly like comfyui_url.
+            if value in ("", None, "null"):
+                new_value = None
+            else:
+                new_value = str(value).strip()
+            if getattr(user, key) != new_value:
+                setattr(user, key, new_value)
                 updated = True
             continue
         if key == "public_url":
