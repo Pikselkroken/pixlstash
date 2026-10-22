@@ -26,9 +26,9 @@ and nothing joins a set until the owner adds the models.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
+from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import HASH_PENDING_SQL
 from pixlstash.services.model_shelf_service import SET_COVER_DEPTH, known_base_model
@@ -70,10 +70,6 @@ class WorkflowSetNotFoundError(LookupError):
 
 class WorkflowSetRefusedError(ValueError):
     """The request would break a set rule. Mapped to 409."""
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def clean_name(name: Optional[str]) -> Optional[str]:
@@ -501,7 +497,7 @@ def create_set(
     here reads it: the client keeps such a set while it matches that set, where
     a set built by hand into the same models gives way to it.
     """
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         set_id = int(
             conn.execute(
@@ -520,7 +516,7 @@ def rename_set(hub, set_id: int, name: Optional[str]) -> None:
         _require_set(conn, set_id)
         conn.execute(
             "UPDATE model_workflow_set SET name = ?, updated_at = ? WHERE id = ?",
-            (clean_name(name), _now(), set_id),
+            (clean_name(name), now_iso(), set_id),
         )
 
 
@@ -558,7 +554,7 @@ def delete_set(hub, set_id: int) -> dict:
 
 def add_members(hub, set_id: int, members: list[dict]) -> list[str]:
     """Add *members*; one already in the set is a no-op. Returns what was added."""
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         _require_set(conn, set_id)
         added = _insert_members(conn, set_id, members, now)
@@ -595,7 +591,7 @@ def remove_members(hub, set_id: int, sha256s: list[str]) -> list[dict]:
             )
             conn.execute(
                 "UPDATE model_workflow_set SET updated_at = ? WHERE id = ?",
-                (_now(), set_id),
+                (now_iso(), set_id),
             )
     return removed
 
@@ -607,7 +603,7 @@ def set_declines(hub, set_id: int, sha256s: list[str]) -> list[str]:
     the same call. Returns the list as it was, sorted: that is the undo.
     """
     wanted = sorted({sha.lower() for sha in sha256s})
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         _require_set(conn, set_id)
         previous = [

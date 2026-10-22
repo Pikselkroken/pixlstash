@@ -164,9 +164,10 @@
  * Emits and runs nothing itself, like `ShelfSelectionBar`: the view owns the
  * rename dialog and the store owns the writes and their receipts.
  */
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { useContextMenuAt } from "../../composables/useContextMenuAt";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { hideSetsVerb } from "../../utils/workflowSets";
@@ -193,8 +194,7 @@ const store = useModelShelfStore();
 /** Hide over the selected cards, as the pill's button and the menu's row. */
 const hide = computed(() => hideSetsVerb(props.sets));
 
-const contextOpen = ref(false);
-const contextAt = ref([0, 0]);
+const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
 
 const countLabel = computed(() => {
   const n = store.selectedSets.length;
@@ -214,30 +214,6 @@ function verb(name) {
   contextOpen.value = false;
   emit(name);
 }
-
-/**
- * Open the set menu at a point, for the grid's right-click and Menu key.
- *
- * Opened from code at a point, so v-menu has no activator to hand focus back
- * to and drops it on <body>. The card that asked is remembered and refocused
- * on close, unless a verb moved focus somewhere on purpose (the rename dialog).
- */
-let menuTrigger = null;
-function openContextMenu(x, y, trigger = document.activeElement) {
-  menuTrigger = trigger;
-  contextAt.value = [x, y];
-  contextOpen.value = true;
-}
-
-watch(contextOpen, (open) => {
-  if (open || !menuTrigger) return;
-  const trigger = menuTrigger;
-  menuTrigger = null;
-  setTimeout(() => {
-    const active = document.activeElement;
-    if (!active || active === document.body) trigger.focus?.();
-  }, 0);
-});
 
 defineExpose({ openContextMenu });
 </script>

@@ -197,6 +197,10 @@ class BaseDeferringFinder(BaseTaskFinder):
     ``_TRANSIENT`` (errors that teach nothing about the rows, such as
     ``TaskCancelledError``: the batch stays eligible) and ``_WHAT`` (the work,
     for the log).
+
+    A picture finder mixes this in behind :class:`SimpleMissingFinder`, whose
+    claims stand in for ``_handed_out``; its ``_fetch_candidates`` must skip
+    ``_deferred`` itself, and the claims are released after the deferral too.
     """
 
     _IDS_PARAM: str
@@ -223,26 +227,31 @@ class BaseDeferringFinder(BaseTaskFinder):
     def on_task_complete(self, task, error) -> None:
         """Release the batch, and defer what must not be handed out again."""
         ids = (getattr(task, "params", None) or {}).get(self._IDS_PARAM) or []
-        if isinstance(error, self._TRANSIENT):
-            logger.info(
-                "%s did not run for %d item(s): %s. They stay eligible.",
-                self._WHAT,
-                len(ids),
-                error,
-            )
-        elif error is not None:
-            logger.warning(
-                "%s failed for %s: %s. Deferring them for the rest of this session.",
-                self._WHAT,
-                ids,
-                error,
-            )
-            self._deferred.update(ids)
-        else:
-            self._deferred.update(
-                (getattr(task, "result", None) or {}).get("deferred", [])
-            )
-        # Released last: the planner may run `find_task` the moment the batch
-        # is let go, and one released before its deferral is recorded is
-        # handed straight back out.
-        self._handed_out.difference_update(ids)
+        try:
+            if isinstance(error, self._TRANSIENT):
+                logger.info(
+                    "%s did not run for %d item(s): %s. They stay eligible.",
+                    self._WHAT,
+                    len(ids),
+                    error,
+                )
+            elif error is not None:
+                logger.warning(
+                    "%s failed for %s: %s. Deferring them for the rest of this "
+                    "session.",
+                    self._WHAT,
+                    ids,
+                    error,
+                )
+                self._deferred.update(ids)
+            else:
+                self._deferred.update(
+                    (getattr(task, "result", None) or {}).get("deferred", [])
+                )
+        finally:
+            # Released last: the planner may run `find_task` the moment the
+            # batch is let go, and one released before its deferral is
+            # recorded is handed straight back out. In a `finally`, so a
+            # malformed result cannot strand the batch for the session.
+            self._handed_out.difference_update(ids)
+            super().on_task_complete(task, error)

@@ -1042,15 +1042,6 @@ WORKFLOW_WIPE_ORDER = (
 )
 
 
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    try:
-        yield database
-    finally:
-        database.close()
-
-
 def test_the_workflow_tables_land_in_the_hub(hub):
     """The irreversible decision, asserted where it is made.
 

@@ -52,13 +52,6 @@ class Crash(BaseException):
     """
 
 
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
-
-
 def register_folder(hub, path, kind="user"):
     with hub.transaction() as conn:
         cursor = conn.execute(
@@ -1360,7 +1353,6 @@ def test_a_root_only_folder_refuses_a_per_item_move(tmp_path):
     the refusal is keyed on it and covers PixlStash's own engines and the
     InsightFace packs by the same stroke.
     """
-    from pixlstash.hub.db import HubDatabase
     from pixlstash.services.model_mover import ModelMover, MoveRefused
 
     source = tmp_path / "hf-cache"

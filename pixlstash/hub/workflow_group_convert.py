@@ -605,19 +605,19 @@ def _core_strip_v1(document: dict) -> dict[str, ReducedNode]:
     return _strip(_reduce(document), _core_strip(STRIP_LORAS_FOR_STACKS))
 
 
-def _core_strip_v2(document: dict) -> dict[str, ReducedNode]:
-    """Core rule v2's graph, for data step 10's label maps. Not the live rule."""
-    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=2)[0]
+def _retired_core_strip(rule: int):
+    """Core rule *rule*'s graph, for the label maps of the data step that
+    re-derives from it (10, 13 and 15 for v2-v4). Not the live rule."""
+
+    def strip(document: dict) -> dict[str, ReducedNode]:
+        return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=rule)[0]
+
+    return strip
 
 
-def _core_strip_v3(document: dict) -> dict[str, ReducedNode]:
-    """Core rule v3's graph, for data step 13's label maps. Not the live rule."""
-    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=3)[0]
-
-
-def _core_strip_v4(document: dict) -> dict[str, ReducedNode]:
-    """Core rule v4's graph, for data step 15's label maps. Not the live rule."""
-    return _core_pass(document, STRIP_LORAS_FOR_STACKS, rule=4)[0]
+_core_strip_v2 = _retired_core_strip(2)
+_core_strip_v3 = _retired_core_strip(3)
+_core_strip_v4 = _retired_core_strip(4)
 
 
 # What data steps 10, 13 and 15 re-derive from, by the rule's name: its stamp,

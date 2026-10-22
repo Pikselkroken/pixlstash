@@ -155,7 +155,6 @@
 <script setup>
 import { computed, nextTick, ref, useId, watch } from "vue";
 import { listProjects } from "../../api/projects";
-import { API_BASE_URL } from "../../utils/apiClient";
 import {
   extractSupportedImportFilesFromDataTransfer,
   isSupportedImportFile,
@@ -164,7 +163,6 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
-  backendUrl: { type: String, default: () => API_BASE_URL },
   open: { type: Boolean, default: false },
   defaultProjectId: { type: [Number, String, null], default: null },
 });

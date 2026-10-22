@@ -145,7 +145,7 @@
  * to the second row. The parent owns what adding, flipping and removing mean.
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { percent } from "../../utils/filterChips";
+import { formatCount, percent } from "../../utils/filterChips";
 
 const MAX_SUGGESTIONS = 4;
 
@@ -244,10 +244,6 @@ function thresholdsFor(row, chip) {
   return list.includes(chip.threshold)
     ? list
     : [...list, chip.threshold].sort((a, b) => b - a);
-}
-
-function formatCount(n) {
-  return n == null ? "" : Number(n).toLocaleString();
 }
 
 onMounted(() => nextTick(() => fieldRef.value?.focus()));

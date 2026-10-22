@@ -8,7 +8,6 @@ import struct
 import pytest
 
 from pixlstash.event_types import EventType
-from pixlstash.hub.db import HubDatabase
 from pixlstash.services import downloads_intake
 from pixlstash.services.downloads_intake import (
     OUTCOME_RETRY,
@@ -46,13 +45,6 @@ def write_adapter(path):
         },
     }
     return _write_safetensors(path, tensors, payload=b"\x00" * 16)
-
-
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
 
 
 def _register(hub, path, kind, is_default=0):

@@ -12,7 +12,6 @@ import copy
 import json
 import sqlite3
 import tempfile
-import time
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
@@ -93,6 +92,7 @@ from tests.test_workflow_identity import (
     _second_pass,
     _split_loaders,
 )
+from tests.utils import quiesce_background_work
 
 API = "/api/v1"
 LIB = "test-library"
@@ -1908,23 +1908,6 @@ def test_a_carry_contained_in_longer_notes_is_still_written(tmp_path):
 # ── the vault half: a saved recipe keeps its checkpoint ────────────────────
 
 
-def _quiesce(server) -> None:
-    """Take every work finder out of the planner and let the pipeline settle."""
-    task_types = list(server.vault._planner_work_finders)
-    for task_type in task_types:
-        server.vault._planner_work_finders.pop(task_type)
-    server.vault._work_planner.detach_finders(task_types)
-    runner = server.vault._task_runner
-    runner.cancel_pending_tasks()
-    deadline = time.monotonic() + 60.0
-    while time.monotonic() < deadline:
-        with runner._active_task_lock:
-            if not runner._active_tasks:
-                return
-        time.sleep(0.05)
-    raise AssertionError("background work did not settle within 60s")
-
-
 @pytest.fixture(scope="module")
 def run_env():
     tmp = tempfile.TemporaryDirectory()
@@ -1940,7 +1923,7 @@ def run_env():
             json={"username": "owner", "password": "example-ownerpass1"},
         )
         assert r.status_code == 200, r.text
-        _quiesce(server)
+        quiesce_background_work(server)
         yield SimpleNamespace(server=server, owner=owner)
     finally:
         server.__exit__(None, None, None)

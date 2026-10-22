@@ -783,18 +783,6 @@ function writeStored(key, value) {
   }
 }
 
-/**
- * Drop a key this build no longer reads. Hides moved to the server (#1869), so
- * a browser's old per-browser copy is dead weight; it is not carried over.
- */
-function forgetStored(key) {
-  try {
-    window.localStorage?.removeItem(key);
-  } catch (err) {
-    console.warn(`[shelf] could not clear ${key}`, err);
-  }
-}
-
 /** Read the remembered selection, or null when there is none to trust. */
 function storedFilters() {
   const parsed = readStored(FILTERS_KEY);
@@ -1076,7 +1064,12 @@ function blockOf(row) {
 
 export const useModelShelfStore = defineStore("modelShelf", () => {
   // The per-browser hide list, retired with #1869; removed once it is seen.
-  forgetStored("pixlstash:modelShelfHiddenSets");
+  // Hides moved to the server, so the old copy is dead weight, not carried over.
+  try {
+    window.localStorage?.removeItem("pixlstash:modelShelfHiddenSets");
+  } catch (err) {
+    console.warn("[shelf] could not clear pixlstash:modelShelfHiddenSets", err);
+  }
   const filters = reactive(storedFilters() || defaultFilters());
   /** Whether the Models rail is mounted; see `fetchedBlocks`. */
   const railMounted = ref(false);

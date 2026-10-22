@@ -84,9 +84,10 @@
  * The verb surface for selected missing-base cards. Emits only, like
  * `WorkflowSetSelectionBar`: the view owns the Replace dialog.
  */
-import { computed, ref, watch } from "vue";
+import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { useContextMenuAt } from "../../composables/useContextMenuAt";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
@@ -153,8 +154,7 @@ const menu = computed(() =>
     : MENU,
 );
 
-const contextOpen = ref(false);
-const contextAt = ref([0, 0]);
+const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
 
 const countLabel = computed(() => {
   // Files, not cards: one set can be missing two.
@@ -186,30 +186,6 @@ async function copyFilenames() {
     });
   }
 }
-
-/**
- * Open the card menu at a point, for the grid's right-click and Menu key.
- *
- * Opened from code, so v-menu has no activator to hand focus back to and
- * drops it on <body>. The card that asked is refocused on close, unless a
- * verb moved focus on purpose (the Replace dialog).
- */
-let menuTrigger = null;
-function openContextMenu(x, y, trigger = document.activeElement) {
-  menuTrigger = trigger;
-  contextAt.value = [x, y];
-  contextOpen.value = true;
-}
-
-watch(contextOpen, (open) => {
-  if (open || !menuTrigger) return;
-  const trigger = menuTrigger;
-  menuTrigger = null;
-  setTimeout(() => {
-    const active = document.activeElement;
-    if (!active || active === document.body) trigger.focus?.();
-  }, 0);
-});
 
 defineExpose({ openContextMenu });
 </script>

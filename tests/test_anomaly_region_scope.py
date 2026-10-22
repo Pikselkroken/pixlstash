@@ -16,7 +16,6 @@ import json
 import os
 import tempfile
 import threading
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -25,7 +24,7 @@ from sqlmodel import func, select
 import pixlstash.routes.pictures._anomaly as anomaly_module
 from pixlstash.server import Server
 from tests.authz_guard import no_spa_fallback  # noqa: F401
-from tests.utils import upload_pictures_and_wait
+from tests.utils import quiesce_background_work, upload_pictures_and_wait
 
 API = "/api/v1"
 
@@ -92,35 +91,6 @@ def _good_picture_files():
     return results
 
 
-def _quiesce_background_work(server):
-    """Detach every finder and wait for the GPU worker to go idle.
-
-    The route waits on the single GPU worker, so background work the upload
-    started (embedding, faces, tagging, loading their models cold) would sit in
-    front of every request and can outlast the route's timeout on a slow runner.
-    Nothing here needs derived data, so every finder goes. Same shape as
-    ``tests/test_picture_mutation_scope.py``.
-    """
-    task_types = list(server.vault._planner_work_finders)
-    for task_type in task_types:
-        server.vault._planner_work_finders.pop(task_type)
-    server.vault._work_planner.detach_finders(task_types)
-
-    runner = server.vault._task_runner
-    runner.cancel_pending_tasks()
-    deadline = time.monotonic() + 120.0
-    active = []
-    while time.monotonic() < deadline:
-        with runner._active_task_lock:
-            active = list(runner._active_tasks.values())
-        if not active:
-            return
-        time.sleep(0.05)
-    raise AssertionError(
-        f"background work did not settle within 120s; still running: {active}"
-    )
-
-
 def _setup_server_with_pictures():
     temp_dir = tempfile.TemporaryDirectory()
     config_path = os.path.join(temp_dir.name, "server-config.json")
@@ -145,7 +115,7 @@ def _setup_server_with_pictures():
     picture_ids = [p["id"] for p in r.json()]
     assert len(picture_ids) >= 2, "Need at least two pictures for the scope test"
 
-    _quiesce_background_work(server)
+    quiesce_background_work(server, timeout_s=120.0)
 
     # Inject the fake tagger service so the route resolves a "loaded" model.
     server.vault._engine = _FakeEngine()

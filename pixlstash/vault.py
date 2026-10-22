@@ -40,6 +40,7 @@ from .utils.image_processing.image_utils import ImageUtils
 from .tasks.face_extraction_task import FaceExtractionTask
 from .tasks.image_embedding_task import ImageEmbeddingTask
 from .tasks.likeness_task import LikenessTask
+from .tasks.ocr_task import OcrTask
 from .tasks.quality_task import QualityTask
 from .tasks.smart_score_task import SmartScoreTask
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
@@ -1782,7 +1783,7 @@ class Vault:
                 # Counted over the pictures that qualify for reading, not the
                 # library: most pictures are never read at all.
                 total, missing = self.db.run_immediate_read_task(
-                    self._count_ocr_progress
+                    OcrTask.count_progress
                 ) or (0, 0)
                 label = "text_read"
             elif worker_type == TaskType.DETECTION:
@@ -2087,12 +2088,6 @@ class Vault:
         from pixlstash.tasks.text_score_task import TextScoreTask
 
         return TextScoreTask.count_missing_text_score(session)
-
-    @staticmethod
-    def _count_ocr_progress(session: Session) -> tuple[int, int]:
-        from pixlstash.tasks.ocr_task import OcrTask
-
-        return OcrTask.count_progress(session)
 
     @staticmethod
     def _count_pending_likeness_queue(session: Session) -> int:

@@ -18,7 +18,6 @@ import os
 
 import pytest
 
-from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import model_ghost_names
 from pixlstash.services.model_shelf_service import fetch_models, resolve_recipe_models
 from pixlstash.services.model_workflow_sets import (
@@ -29,13 +28,6 @@ from pixlstash.task_runner import TaskRunner
 from pixlstash.tasks.checkpoint_hash_task import CheckpointHashTask
 from pixlstash.tasks.missing_checkpoint_hash_finder import MissingCheckpointHashFinder
 from pixlstash.work_planner import WorkPlanner
-
-
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
 
 
 def register(

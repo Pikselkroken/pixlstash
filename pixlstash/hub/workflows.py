@@ -19,11 +19,10 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from pixlstash.hub import workflow_cards
-from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.db import HubDatabase, now_iso
 from pixlstash.services.builtin_models import HASH_PENDING_SQL
 from pixlstash.services.model_folder_scanner import SHELF_MODEL_SUFFIXES
 from pixlstash.pixl_logging import get_logger
@@ -80,10 +79,6 @@ class WorkflowKeys:
     structural_hash: str
     instance_hash: str
     node_count: int
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _canonical_document(document: dict) -> str:
@@ -144,7 +139,7 @@ def record_reduction(
         node_count=len(nodes),
     )
 
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         # INSERT OR IGNORE rather than check-then-write: the row is keyed by
         # its own content, so a concurrent writer racing us is writing the
@@ -263,7 +258,7 @@ def record_ui_graph(hub: HubDatabase, workflow: dict) -> str:
             "INSERT OR IGNORE INTO workflow_topology "
             "(topology_hash, hash_version, node_count, first_seen_at) "
             "VALUES (?, ?, ?, ?)",
-            (topology, HASH_VERSION, len(nodes), _now()),
+            (topology, HASH_VERSION, len(nodes), now_iso()),
         )
     return topology
 
@@ -739,7 +734,7 @@ def record_picture_ghosts(hub: HubDatabase, ghosts: list[PictureGhost]) -> int:
     unique = {(ghost.library_uuid, ghost.pixel_sha): ghost for ghost in ghosts}
     rows = list(unique.values())
     for batch in chunked(rows, _GHOST_WRITE_CHUNK):
-        now = _now()
+        now = now_iso()
         with hub.transaction() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO workflow_picture_ghost "

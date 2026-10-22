@@ -151,7 +151,6 @@ from pixlstash.services.model_workflow_sets import (
     set_sets_hidden,
 )
 from pixlstash.services.workflow_set_verdicts import (
-    VerdictTargetError,
     fetch_model_marks,
     fetch_set_checks,
     write_member_verdict,
@@ -2688,7 +2687,7 @@ def create_router(server) -> APIRouter:
         except ValueError as exc:
             logger.info("Workflow set verdict refused (422): %s", exc)
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except VerdictTargetError as exc:
+        except WorkflowSetNotFoundError as exc:
             logger.info("Workflow set verdict answered 404: %s", exc)
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

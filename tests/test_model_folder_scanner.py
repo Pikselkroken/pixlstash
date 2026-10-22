@@ -23,7 +23,6 @@ import struct
 
 import pytest
 
-from pixlstash.hub.db import HubDatabase
 from pixlstash.services import model_folder_scanner as scanner_module
 from pixlstash.services.model_folder_scanner import (
     STATE_MISSING,
@@ -78,13 +77,6 @@ def write_checkpoint(path):
 def write_unknown(path):
     """Marker-free and far under it: the band the shelf must show as unknown."""
     return _write_safetensors(path, {"vae.weight": _tensor([64, 64])})
-
-
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
 
 
 @pytest.fixture

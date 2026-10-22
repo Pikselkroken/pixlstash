@@ -770,7 +770,7 @@ export const PICK_ORDERS = [
 ];
 
 /** How far apart two files' dates can be and still read as one download. */
-export const DOWNLOAD_GAP_MS = 2 * 60 * 60 * 1000;
+const DOWNLOAD_GAP_MS = 2 * 60 * 60 * 1000;
 
 /**
  * Rows in a `PICK_ORDERS` order. By the name the shelf shows, or by file date

@@ -28,7 +28,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
-from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.db import HubDatabase, now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_inbox import content_hash as document_content_hash
 from pixlstash.services.workflow_io import with_converted_graph
@@ -53,10 +53,6 @@ MAX_COMFYUI_VERSIONS = MAX_VERSIONS - 1
 # ``source`` of an automatic workflow's version 1: the graph its pictures held
 # when the owner first saved over it.
 FROM_PICTURES = "pictures"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _hash_of(workflow_id: str, document: str) -> Optional[str]:
@@ -106,7 +102,7 @@ def insert_version(
             topology_hash,
             remote_modified,
             source,
-            created_at or _now(),
+            created_at or now_iso(),
         ),
     )
 
@@ -582,7 +578,7 @@ def write_layout(
         "VALUES (?, ?, ?, ?) ON CONFLICT(workflow_id) DO UPDATE SET "
         "document = excluded.document, structure = excluded.structure, "
         "saved_at = excluded.saved_at",
-        (workflow_id, json.dumps(document), structure, _now()),
+        (workflow_id, json.dumps(document), structure, now_iso()),
     )
 
 

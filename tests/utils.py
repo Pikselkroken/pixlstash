@@ -1,8 +1,11 @@
 import time
+import types
 
+from fastapi.testclient import TestClient
 from sqlalchemy import func, update
 from sqlmodel import delete, select, text
 
+from pixlstash.db_models import User, UserToken
 from pixlstash.db_models.character import Character
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
@@ -304,3 +307,115 @@ def seed_likeness_stable(server, seed_fn):
         return seed_fn(session)
 
     return server.vault.db.run_task(_wrapped)
+
+
+def quiesce_background_work(server, timeout_s=60.0):
+    """Take every work finder out of the planner and let the pipeline settle.
+
+    A shared server is warm, so its sweeps land inside the tests and rewrite
+    the rows the fixtures hand-place (``MissingComfyUIExtractionFinder``
+    re-reads nonexistent files and blanks the ``comfyui_*`` / workflow hash
+    columns, ``TagTask`` deletes ``Tag`` rows before writing its own,
+    ``FaceExtractionTask`` adds ``Face`` rows, the dedup sweep stacks
+    pictures). Every finder goes, not a curated subset: callers need no
+    derived data.
+
+    The planner thread and the task runner keep running, so a route that wakes
+    the planner or submits work directly is unaffected. ``detach_finders``
+    edits the planner's finder structures under its own lock. Work already
+    queued is cancelled and work already running is waited out, since it would
+    otherwise write into the first test's freshly seeded library. Waiting the
+    pipeline out per test instead measured slower than per-test servers
+    (PR #814), which is why it is switched off once per module.
+
+    Args:
+        server: The shared ``Server``.
+        timeout_s: How long to wait for running tasks to finish.
+
+    Returns:
+        The names of the finders removed, so a per-test fixture can re-check
+        that they are still gone.
+
+    Raises:
+        AssertionError: If running tasks do not finish within ``timeout_s``.
+    """
+    task_types = list(server.vault._planner_work_finders)
+    for task_type in task_types:
+        server.vault._planner_work_finders.pop(task_type)
+    removed = server.vault._work_planner.detach_finders(task_types)
+
+    runner = server.vault._task_runner
+    runner.cancel_pending_tasks()
+    deadline = time.monotonic() + timeout_s
+    active = []
+    while time.monotonic() < deadline:
+        with runner._active_task_lock:
+            active = list(runner._active_tasks.values())
+        if not active:
+            return removed
+        time.sleep(0.05)
+    raise AssertionError(
+        f"background work did not settle within {timeout_s:.0f}s; "
+        f"still running: {active}"
+    )
+
+
+def mint_read_token(owner_client, description: str, **restriction) -> str:
+    """Mint a READ token as the owner and return its secret value.
+
+    ``restriction`` is passed through to the token body, e.g.
+    ``resource_type="character", resource_id=...`` for a scoped share token.
+    """
+    r = owner_client.post(
+        f"{API_PREFIX}/users/me/token",
+        json={"description": description, "scope": "READ", **restriction},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["token"]
+
+
+def bearer_client(server, token: str) -> TestClient:
+    """A ``TestClient`` with no owner cookie that authenticates by ``token``."""
+    client = TestClient(server.api)
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    return client
+
+
+def reset_owner_auth(server):
+    """Put auth back to first start-up: no password, no users, no tokens.
+
+    For a module-scoped server shared by tests that each claim the owner
+    afresh, so it stands in for the per-test ``with Server(...)`` that gave
+    every test a fresh database.
+    """
+
+    def _wipe(session):
+        session.exec(delete(UserToken))
+        session.exec(delete(User))
+        session.commit()
+
+    server.hub_engine.run_task(_wipe)
+
+    # Reset in-memory auth caches that mirror the on-disk state.
+    server.auth.password_hash = None
+    server.auth.username = None
+    server.auth.user = None
+    # _clear_all_sessions also drops the session->token maps, which a bare
+    # active_session_ids = {} would leave behind.
+    server.auth._clear_all_sessions()
+    # Go through the flush helper so the revocation epoch is bumped too - a
+    # bare _token_cache.clear() skips it (see AuthService._flush_token_cache).
+    server.auth._flush_token_cache()
+    # The login lockout counter is process-wide, so a test that exercises
+    # rejected logins would otherwise lock out the tests that follow it.
+    server.auth._failed_login_attempts = 0
+    server.auth._login_lockout_until = 0.0
+
+    # Re-create the User row so the rest of the server behaves as on first
+    # startup (no password set yet).
+    server.auth.ensure_user()
+
+
+def fake_ort(providers):
+    """A stand-in ``onnxruntime`` module offering ``providers``."""
+    return types.SimpleNamespace(get_available_providers=lambda: list(providers))

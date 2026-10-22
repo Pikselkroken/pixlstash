@@ -95,15 +95,6 @@ CHARACTER_LORA = "test-character.safetensors"
 OTHER_CHARACTER_LORA = "test-other-character.safetensors"
 
 
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    try:
-        yield database
-    finally:
-        database.close()
-
-
 def _drained(finder) -> bool:
     """Nothing handed out, past the one start-up family pass (which moves nothing)."""
     task = finder.find_task()

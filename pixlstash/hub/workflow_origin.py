@@ -27,10 +27,9 @@ decides.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
-from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.db import HubDatabase, now_iso
 
 # The origin a watched-inbox file is recorded under, keyed by its content hash
 # (``remote_path`` is the hash too): one row per content, so a restart that
@@ -46,10 +45,6 @@ FILE_ORIGIN = "file"
 BUILTIN_ORIGIN = "builtin"
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def upsert(
     conn,
     origin: str,
@@ -62,7 +57,7 @@ def upsert(
 
     Inside the caller's transaction. An upsert that keeps ``first_pulled_at``.
     """
-    now = _now()
+    now = now_iso()
     conn.execute(
         "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
         "remote_modified, first_pulled_at, last_seen_at, content_hash) "

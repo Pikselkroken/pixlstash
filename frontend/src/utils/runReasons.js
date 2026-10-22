@@ -75,7 +75,7 @@ export const LORAS_SKIPPED = "loras_skipped";
  * the warning hue with Edit LoRAs… as its fix: adding a loader is a workflow
  * edit, and that dialog is where it is made.
  */
-export const LORAS_UNPLACED = "loras_unplaced";
+const LORAS_UNPLACED = "loras_unplaced";
 
 /**
  * A picture input nothing answered (#1457; it replaced `fixed_input_deleted`).
@@ -93,14 +93,14 @@ export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
  * `Text Multiline`, `CR Text`, `Textbox`, `PrimitiveStringMultiline`) this ComfyUI lacks: its link becomes
  * a literal, so the run goes ahead without the pack. `RunGroup.replaced_nodes` carries it.
  */
-export const NODES_REPLACED = "nodes_replaced";
+const NODES_REPLACED = "nodes_replaced";
 
 /**
  * Not a refusal either: a LoRA this ComfyUI lacks, loaded through the
  * ComfyUI-PixlStash loader by its hash (`RunGroup.swapped_loaders`). The run
  * gets the LoRA; the graph that runs is not the one the card names.
  */
-export const LORAS_FETCHED = "loras_fetched";
+const LORAS_FETCHED = "loras_fetched";
 
 /**
  * Where the ComfyUI-PixlStash node pack lives, and how to get it.
@@ -469,40 +469,23 @@ export function unplacedNotice(group) {
 }
 
 /**
- * The replaced nodes of one pre-flight group, in the reason shape.
- *
- * Kept out of `reasons` for the reason `bypassNotice` is.
- *
- * @param {{replaced_nodes?: Array<Object>}} group
- * @returns {Array<Object>} zero or one entry, so a caller can spread it.
- */
-export function replacedNotice(group) {
-  const nodes = (group?.replaced_nodes || []).filter(Boolean);
-  return nodes.length ? [{ code: NODES_REPLACED, nodes }] : [];
-}
-
-/**
  * Every repair the server made to one group's graph, as notices (#1463).
  *
  * The server's repair registry is one mechanism with one report per repair;
- * this is its one reading, so a popup spreads this and not each notice.
+ * this is its one reading, so a popup spreads this and not each notice. Like
+ * `bypassNotice`, the replaced nodes and the LoRA loaders swapped to the
+ * ComfyUI-PixlStash loader are kept out of `reasons`: the run goes ahead.
  *
  * @param {Object} group - one pre-flight group.
  * @returns {Array<Object>}
  */
 export function repairNotices(group) {
-  return [...bypassNotice(group), ...replacedNotice(group), ...swappedNotice(group)];
-}
-
-/**
- * The LoRA loaders one pre-flight group swapped to the ComfyUI-PixlStash
- * loader, in the reason shape.
- *
- * @param {{swapped_loaders?: Array<Object>}} group
- * @returns {Array<Object>} zero or one entry, so a caller can spread it.
- */
-export function swappedNotice(group) {
+  const nodes = (group?.replaced_nodes || []).filter(Boolean);
   const loaders = (group?.swapped_loaders || []).filter(Boolean);
-  return loaders.length ? [{ code: LORAS_FETCHED, loaders }] : [];
+  return [
+    ...bypassNotice(group),
+    ...(nodes.length ? [{ code: NODES_REPLACED, nodes }] : []),
+    ...(loaders.length ? [{ code: LORAS_FETCHED, loaders }] : []),
+  ];
 }
 

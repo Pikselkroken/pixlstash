@@ -75,6 +75,7 @@ from pixlstash.services import workflow_set_verdicts as verdicts
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 from tests.network_vectors import LAN_IPV4
 from tests.test_model_folder_scanner import write_adapter, write_checkpoint
+from tests.utils import bearer_client, mint_read_token, quiesce_background_work
 
 API = "/api/v1"
 
@@ -346,8 +347,8 @@ def shelf_env():
         assert r.status_code in {200, 201}, r.text
         set_id = r.json()["picture_set"]["id"]
 
-        # Before any test writes a picture: see `_quiesce_background_work`.
-        _quiesce_background_work(server)
+        # Before any test writes a picture: see `quiesce_background_work`.
+        quiesce_background_work(server)
 
         yield SimpleNamespace(
             server=server, owner=owner, character_id=character_id, set_id=set_id
@@ -381,21 +382,6 @@ def fresh_shelf(shelf_env):
         f"{r.text}) - every refusal below would prove nothing"
     )
     yield shelf_env
-
-
-def _mint(owner_client, description: str, **restriction) -> str:
-    r = owner_client.post(
-        f"{API}/users/me/token",
-        json={"description": description, "scope": "READ", **restriction},
-    )
-    assert r.status_code == 200, r.text
-    return r.json()["token"]
-
-
-def _bearer(server, token: str) -> TestClient:
-    client = TestClient(server.api)
-    client.headers.update({"Authorization": f"Bearer {token}"})
-    return client
 
 
 def _names(payload: list[dict]) -> set[str]:
@@ -701,13 +687,13 @@ def test_resource_scoped_share_token_is_refused_on_every_shelf_route(shelf_env):
     """The negative direction, with a live-credential control in front of it: the
     same token performs an in-scope read first, so a 403 below is a scope
     refusal and not a dead token."""
-    token = _mint(
+    token = mint_read_token(
         shelf_env.owner,
         "shelf character token",
         resource_type="character",
         resource_id=shelf_env.character_id,
     )
-    client = _bearer(shelf_env.server, token)
+    client = bearer_client(shelf_env.server, token)
 
     control = client.get(f"{API}/pictures")
     assert control.status_code == 200, (
@@ -727,8 +713,8 @@ def test_unscoped_read_token_is_refused_on_every_shelf_route(shelf_env):
     """``OWNER_ONLY`` rejects an unscoped READ token too, not only a
     resource-scoped one - this is the sibling vector that the scope-filter
     policies (``SCOPED_LIST``) would let through."""
-    token = _mint(shelf_env.owner, "shelf global read token")
-    client = _bearer(shelf_env.server, token)
+    token = mint_read_token(shelf_env.owner, "shelf global read token")
+    client = bearer_client(shelf_env.server, token)
 
     control = client.get(f"{API}/pictures")
     assert control.status_code == 200, (
@@ -798,13 +784,13 @@ def test_companions_answers_the_owner_and_refuses_a_share_token(shelf_env):
         "no_evidence": [alice],
     }
 
-    token = _mint(
+    token = mint_read_token(
         shelf_env.owner,
         "companions character token",
         resource_type="character",
         resource_id=shelf_env.character_id,
     )
-    client = _bearer(shelf_env.server, token)
+    client = bearer_client(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200
     r = client.post(f"{API}/models/companions", json=body)
     assert r.status_code == 403, r.text
@@ -825,39 +811,6 @@ def test_companions_answers_the_owner_and_refuses_a_share_token(shelf_env):
 # hash to reach the same three rows. The grouping itself is exercised against
 # real graphs in `tests/test_workflow_library.py`.
 # ---------------------------------------------------------------------------
-
-
-def _quiesce_background_work(server):
-    """Take every work finder out of the planner and let the pipeline settle.
-
-    A shared server is warm, and ``MissingComfyUIExtractionFinder`` looks for
-    exactly the rows the workflow-set tests below hand-write: it re-reads the
-    (nonexistent) files and blanks ``workflow_structural_hash``, which is what a
-    set's picture count is grouped by - so a card came back with one picture
-    instead of two, intermittently, depending on whether the sweep had landed. The
-    planner thread and the task runner keep running.
-
-    Lifted from ``tests/test_saved_recipes.py``, which needs it for the same rows
-    and the same reason.
-    """
-    planner = server.vault._work_planner
-    task_types = list(server.vault._planner_work_finders)
-    for task_type in task_types:
-        server.vault._planner_work_finders.pop(task_type)
-    removed = planner.detach_finders(task_types)
-
-    runner = server.vault._task_runner
-    runner.cancel_pending_tasks()
-    deadline = time.monotonic() + 60.0
-    while time.monotonic() < deadline:
-        with runner._active_task_lock:
-            active = list(runner._active_tasks.values())
-        if not active:
-            return removed
-        time.sleep(0.05)
-    raise AssertionError(
-        f"background work did not settle within 60s; still running: {active}"
-    )
 
 
 def _seed_recipe(server, structural_hash: str, assets: list[tuple[str, str]]) -> None:
@@ -938,13 +891,13 @@ def test_workflow_sets_answers_the_owner_and_refuses_a_share_token(shelf_env):
     assert answer["combinations"] == []
     assert set(answer["no_set"]) == set(shelf_env.model_ids.values())
 
-    token = _mint(
+    token = mint_read_token(
         shelf_env.owner,
         "workflow sets character token",
         resource_type="character",
         resource_id=shelf_env.character_id,
     )
-    client = _bearer(shelf_env.server, token)
+    client = bearer_client(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200
     # **Which layer refused, named.** A 403 here is the READ-token belt's
     # (`auth.py`'s `READ_BLOCKED_GET_PATHS`), which runs ahead of routing - so it
@@ -1382,17 +1335,18 @@ def test_hand_made_set_routes_answer_the_owner_and_refuse_tokens(shelf_env):
                 {},
             ),
         )
-        scoped = _bearer(
+        scoped = bearer_client(
             shelf_env.server,
-            _mint(
+            mint_read_token(
                 shelf_env.owner,
                 "hand-made sets character token",
                 resource_type="character",
                 resource_id=shelf_env.character_id,
             ),
         )
-        unscoped = _bearer(
-            shelf_env.server, _mint(shelf_env.owner, "hand-made sets read token")
+        unscoped = bearer_client(
+            shelf_env.server,
+            mint_read_token(shelf_env.owner, "hand-made sets read token"),
         )
         anon = TestClient(shelf_env.server.api)
         for client in (scoped, unscoped):
@@ -2855,16 +2809,18 @@ def test_verdict_routes_answer_the_owner_and_refuse_tokens(shelf_env):
         ("DELETE", member_path, member_template, {}),
         ("DELETE", set_path, set_template, {}),
     )
-    scoped = _bearer(
+    scoped = bearer_client(
         shelf_env.server,
-        _mint(
+        mint_read_token(
             shelf_env.owner,
             "verdicts character token",
             resource_type="character",
             resource_id=shelf_env.character_id,
         ),
     )
-    unscoped = _bearer(shelf_env.server, _mint(shelf_env.owner, "verdicts read token"))
+    unscoped = bearer_client(
+        shelf_env.server, mint_read_token(shelf_env.owner, "verdicts read token")
+    )
     anon = TestClient(shelf_env.server.api)
     for client in (scoped, unscoped):
         assert client.get(f"{API}/pictures").status_code == 200
@@ -3595,8 +3551,8 @@ def _xff(ip: str) -> dict:
 def test_folder_list_is_owner_only_in_both_directions(shelf_env):
     assert shelf_env.owner.get(f"{API}/model-folders").status_code == 200
 
-    token = _mint(shelf_env.owner, "folder list probe")
-    client = _bearer(shelf_env.server, token)
+    token = mint_read_token(shelf_env.owner, "folder list probe")
+    client = bearer_client(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the READ token is dead; the refusal below would prove nothing"
     )
@@ -3690,13 +3646,13 @@ def test_share_tokens_never_reach_a_folder_mutator(shelf_env):
     before routing, so a renamed route would 403 identically and the assertion
     would dissolve into nothing.
     """
-    token = _mint(
+    token = mint_read_token(
         shelf_env.owner,
         "folder mutator probe",
         resource_type="character",
         resource_id=shelf_env.character_id,
     )
-    client = _bearer(shelf_env.server, token)
+    client = bearer_client(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the scoped token is dead; the refusals below would prove nothing"
     )
@@ -4014,8 +3970,8 @@ def test_attachment_write_is_owner_only_in_both_directions(shelf_env):
         ),
         ("attachment unscoped probe", {}),
     ):
-        token = _mint(shelf_env.owner, description, **restriction)
-        client = _bearer(shelf_env.server, token)
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200, (
             f"{description} is dead; the refusal below would prove nothing"
         )
@@ -4517,8 +4473,8 @@ def test_move_routes_refuse_every_share_token(shelf_env):
         ("move scoped probe", {"resource_type": "character", "resource_id": 1}),
         ("move unscoped probe", {}),
     ):
-        token = _mint(shelf_env.owner, description, **restriction)
-        client = _bearer(shelf_env.server, token)
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200, (
             f"{description} is dead; the refusals below would prove nothing"
         )
@@ -5105,8 +5061,8 @@ def test_import_routes_refuse_every_share_token(shelf_env):
         ("import scoped probe", {"resource_type": "character", "resource_id": 1}),
         ("import unscoped probe", {}),
     ):
-        token = _mint(shelf_env.owner, description, **restriction)
-        client = _bearer(shelf_env.server, token)
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200, (
             f"{description} is dead; the refusals below would prove nothing"
         )
@@ -5506,8 +5462,8 @@ def test_relocate_is_owner_only_and_local_only(shelf_env, relocatable_store):
     path = f"{API}/model-folders/{relocatable_store.managed_id}/relocate"
     body = {"json": {"path": str(relocatable_store.target)}}
 
-    token = _mint(shelf_env.owner, "relocate probe")
-    client = _bearer(shelf_env.server, token)
+    token = mint_read_token(shelf_env.owner, "relocate probe")
+    client = bearer_client(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the READ token is dead; the refusal below would prove nothing"
     )
@@ -6511,8 +6467,8 @@ def test_the_verb_routes_are_owner_only_in_both_directions(shelf_env):
         ("POST", f"{API}/models/forget", {"json": {"ids": [alice]}}),
     )
 
-    token = _mint(shelf_env.owner, "verb probe")
-    client = _bearer(shelf_env.server, token)
+    token = mint_read_token(shelf_env.owner, "verb probe")
+    client = bearer_client(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the READ token is dead; the refusals below would prove nothing"
     )
@@ -6622,8 +6578,8 @@ def test_devices_is_owner_only_in_both_directions(shelf_env):
     path = f"{API}/model-folders/devices"
     assert shelf_env.owner.get(path).status_code == 200
 
-    token = _mint(shelf_env.owner, "device list probe")
-    client = _bearer(shelf_env.server, token)
+    token = mint_read_token(shelf_env.owner, "device list probe")
+    client = bearer_client(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the READ token is dead; the refusal below would prove nothing"
     )
@@ -7556,8 +7512,8 @@ def test_the_two_curating_routes_are_owner_only_in_both_directions(shelf_env):
         ("DELETE", f"{API}/model-stacks/{STACK_ID}/members/{alice}", {}),
     )
 
-    token = _mint(shelf_env.owner, "curate probe")
-    client = _bearer(shelf_env.server, token)
+    token = mint_read_token(shelf_env.owner, "curate probe")
+    client = bearer_client(shelf_env.server, token)
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the READ token is dead; the refusals below would prove nothing"
     )
@@ -7991,8 +7947,8 @@ def test_add_file_refuses_every_share_token(shelf_env):
         ("add-file scoped probe", {"resource_type": "character", "resource_id": 1}),
         ("add-file unscoped probe", {}),
     ):
-        token = _mint(shelf_env.owner, description, **restriction)
-        client = _bearer(shelf_env.server, token)
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200, (
             f"{description} is dead; the refusal below would prove nothing"
         )
@@ -8464,15 +8420,15 @@ def test_no_share_token_can_download_a_model_file(shelf_env, tmp_path):
     )
     assert_real_route(shelf_env.server.api, "GET", url)
 
-    scoped = _mint(
+    scoped = mint_read_token(
         shelf_env.owner,
         "adapter download probe",
         resource_type="character",
         resource_id=shelf_env.character_id,
     )
-    unscoped = _mint(shelf_env.owner, "adapter download global read")
+    unscoped = mint_read_token(shelf_env.owner, "adapter download global read")
     for name, token in (("resource-scoped", scoped), ("unscoped READ", unscoped)):
-        client = _bearer(shelf_env.server, token)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200, (
             f"the {name} token is dead; the refusal below would prove nothing"
         )
@@ -9000,8 +8956,8 @@ def test_delete_refuses_every_share_token(shelf_env, real_files, fake_trash):
         ("delete scoped probe", {"resource_type": "character", "resource_id": 1}),
         ("delete unscoped probe", {}),
     ):
-        token = _mint(shelf_env.owner, description, **restriction)
-        client = _bearer(shelf_env.server, token)
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200, (
             f"{description} is dead; the refusal below would prove nothing"
         )
@@ -9239,8 +9195,8 @@ def test_open_location_refuses_every_share_token(shelf_env, real_files, opener):
         ("open scoped probe", {"resource_type": "character", "resource_id": 1}),
         ("open unscoped probe", {}),
     ):
-        token = _mint(shelf_env.owner, description, **restriction)
-        client = _bearer(shelf_env.server, token)
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200, (
             f"{description} is dead; the refusal below would prove nothing"
         )
@@ -10081,8 +10037,8 @@ def test_merge_refuses_every_share_token(shelf_env, two_copies, fake_trash):
         ("merge scoped probe", {"resource_type": "character", "resource_id": 1}),
         ("merge unscoped probe", {}),
     ):
-        token = _mint(shelf_env.owner, description, **restriction)
-        client = _bearer(shelf_env.server, token)
+        token = mint_read_token(shelf_env.owner, description, **restriction)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200, (
             f"{description} is dead; the refusal below would prove nothing"
         )

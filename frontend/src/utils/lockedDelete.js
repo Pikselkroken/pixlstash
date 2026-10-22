@@ -27,7 +27,8 @@ export const LOCKED_DELETE_ALL_LOCKED = "all-locked";
 export const LOCKED_DELETE_HINT =
   "To delete them, unlock the set first: right-click it in the sidebar and choose Unlock, or untick Locked in Edit set.";
 
-function plural(count, singular, pluralForm) {
+/** `singular` when `count` is exactly 1, else `pluralForm`. */
+export function plural(count, singular, pluralForm) {
   return count === 1 ? singular : pluralForm;
 }
 
