@@ -301,6 +301,24 @@ describe("useWindowFileImport", () => {
     ]);
   });
 
+  it("names the default folder while copying, reading the folders first", async () => {
+    // A drop can arrive on a screen that never read the folders, and the
+    // default is not always the managed store.
+    const folders = useModelFoldersStore();
+    folders.refresh.mockImplementation(async () => {
+      folders.folders = [
+        { id: 3, kind: "user", path: "/home/me/ComfyUI/models", is_default: true },
+      ];
+      folders.loaded = true;
+    });
+    addModelFile.mockImplementation(() => new Promise(() => {}));
+    withDesktopShell({ "lora.safetensors": "/home/me/Downloads/lora.safetensors" });
+    await drop("lora.safetensors");
+    expect(notices.notices.map((n) => n.text)).toContain(
+      "Copying lora.safetensors into models…",
+    );
+  });
+
   describe("where a dropped model lands", () => {
     // Folder 1 is the default; 3 is a ComfyUI folder the owner registered; 9
     // is an ai-toolkit output root, which a file is never put into.

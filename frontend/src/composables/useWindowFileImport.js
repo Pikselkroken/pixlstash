@@ -163,12 +163,21 @@ export function useWindowFileImport({ sidebarRef }) {
       );
       return;
     }
+    // Loaded for the NAME only, which the copy notice gives before the server
+    // has answered: a drop can arrive on a screen that never read the folders,
+    // and the default is not always the managed store. `refresh` reports its
+    // own failure and never throws; the copy goes ahead either way.
     const foldersStore = useModelFoldersStore();
+    if (!foldersStore.loaded) await foldersStore.refresh({ quiet: true });
     const folder =
       folderId === null
         ? foldersStore.defaultFolder
         : foldersStore.folders.find((item) => Number(item.id) === folderId);
-    const into = folder ? basename(folder.path) : "the model store";
+    const into = folder
+      ? basename(folder.path)
+      : folderId === null
+        ? "your default folder"
+        : "the folder you chose";
 
     const dropKey = `model-file-drop-${(modelDropSeq += 1)}`;
     /** Sticky, and re-pushed per file: a copy outlasts any countdown, and a
