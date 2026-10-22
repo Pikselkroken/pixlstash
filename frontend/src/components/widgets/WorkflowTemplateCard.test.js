@@ -35,6 +35,9 @@ const mountCard = (template) =>
     global: { stubs: { Tooltip: true } },
   });
 
+const noPreview = (wrapper) =>
+  wrapper.find('[data-testid="template-no-preview"]').text();
+
 const state = (wrapper) =>
   wrapper.find('[data-testid="template-readiness"]').text();
 
@@ -92,11 +95,14 @@ describe("a template card", () => {
     expect(state(wrapper)).toBe("Partner API");
     expect(wrapper.text()).toContain("Runs on Comfy's API");
     expect(wrapper.find("img").exists()).toBe(false);
+    expect(noPreview(wrapper)).toBe("Workflow has no preview");
   });
 
-  it("falls back to the quiet cover when the picture will not load", async () => {
+  it("says it has no preview when the picture will not load", async () => {
     const wrapper = mountCard(BASE);
+    expect(wrapper.find('[data-testid="template-no-preview"]').exists()).toBe(false);
     await wrapper.find("img").trigger("error");
     expect(wrapper.find("img").exists()).toBe(false);
+    expect(noPreview(wrapper)).toBe("Workflow has no preview");
   });
 });

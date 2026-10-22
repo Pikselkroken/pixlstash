@@ -7,8 +7,8 @@
     data-testid="template-card"
   >
     <!-- One cell, the template's own picture. A template with none, or one
-         that will not load, keeps the cover's quiet ground rather than a
-         broken image. -->
+         that will not load, says so on the cover's quiet ground rather than
+         drawing a broken image or a blank. -->
     <div class="wf-card__cover wf-card__cover--1">
       <span class="wf-card__pic">
         <img
@@ -18,6 +18,10 @@
           loading="lazy"
           @error="thumbnailFailed = true"
         />
+        <span v-else class="wtc__no-preview" data-testid="template-no-preview">
+          <ComfyuiIcon :size="48" />
+          <span class="wf-card__empty-line">Workflow has no preview</span>
+        </span>
       </span>
     </div>
 
@@ -193,6 +197,17 @@ const accessibleName = computed(() =>
   height: 100%;
   object-fit: cover;
   object-position: top center;
+}
+
+.wtc__no-preview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wf-card__start {
