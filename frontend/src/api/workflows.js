@@ -304,10 +304,18 @@ export async function exportWorkflow(workflowId) {
  * to run. The answer's `workflow_id` is the new manual workflow.
  *
  * @param {string} workflowId
+ * @param {number} [version] - copy this version of its graph (`… (version
+ *   N)`), not the current one; the workflow stays on the version it has.
  * @returns {Promise<{name: string, workflow_id: string}>}
  */
-export async function duplicateWorkflow(workflowId) {
-  return unwrap(apiClient.post(wf(workflowId, "/duplicate")));
+export async function duplicateWorkflow(workflowId, version) {
+  return unwrap(
+    apiClient.post(
+      wf(workflowId, "/duplicate"),
+      undefined,
+      version != null ? { params: { version } } : undefined,
+    ),
+  );
 }
 
 /**
@@ -413,6 +421,20 @@ export async function getWorkflowVersions(workflowId) {
  */
 export async function restoreWorkflowVersion(workflowId, version) {
   return unwrap(apiClient.post(wf(workflowId, `/versions/${version}/restore`)));
+}
+
+/**
+ * Hold one version of a workflow for ComfyUI to open, without going back to
+ * it (#1792). Answered as `openWorkflowRun` is, and opened the same way:
+ * `?pixlstash_run=<opening>&pixlstash_of=<workflow_id>`, where the
+ * ComfyUI-PixlStash node sends a save back as a new workflow.
+ *
+ * @param {string} workflowId
+ * @param {number} version
+ * @returns {Promise<{opening: string, workflow_id: string}>}
+ */
+export async function openWorkflowVersion(workflowId, version) {
+  return unwrap(apiClient.post(wf(workflowId, `/versions/${version}/opening`)));
 }
 
 /**

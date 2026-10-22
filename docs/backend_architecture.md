@@ -818,6 +818,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/{workflow_id}/save-as-new                                   | workflows       | Save a workflow's changes as a new workflow                 |
 | POST   | /api/v1/workflows/{workflow_id}/set-clone-plans                               | workflows       | What cloning a workflow onto each workflow set would write  |
 | GET    | /api/v1/workflows/{workflow_id}/versions                                      | workflows       | A workflow's versions                                       |
+| POST   | /api/v1/workflows/{workflow_id}/versions/{version}/opening                    | workflows       | Hold an earlier version of a workflow for ComfyUI to open   |
 | POST   | /api/v1/workflows/{workflow_id}/versions/{version}/restore                    | workflows       | Go back to an earlier version of a workflow                 |
 | GET    | /version                                                                      | server          | Read Version                                                |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
@@ -3135,6 +3136,14 @@ kind and a version saved from ComfyUI is counted apart). The route answers the l
 copy, marked `current`, and the row directly under it is the version just
 left, which is what the Workflow tab's Undo goes back to
 (`test_going_back_answers_the_new_copy_first_and_the_version_left_under_it`).
+**A version can be duplicated or opened without going back to it** (#1792):
+`POST …/duplicate?version=n` and `POST …/versions/{n}/opening` read that
+version through `_source_graph_for`'s `version` (Open's plan takes it as
+`_plan(version=)`, the `as_of` a saved recipe uses, so the default recipe is
+the one it had then). That read falls back to the current graph for a version
+no longer kept, which these two must not act on in its place, so
+`_require_version_read` answers 404 when the graph read is not the version
+asked for.
 And
 it is not a checkpoint change under rule 2 since every version was already saved on this
 workflow.

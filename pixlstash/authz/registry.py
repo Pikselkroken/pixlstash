@@ -1957,6 +1957,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Make an earlier version of a workflow's graph its newest; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/workflows/{workflow_id}/versions/{version}/opening"): RoutePolicy(
+        _OWNER,
+        justification="Hold an earlier version of a workflow's graph, resolved out of the whole library as Open in ComfyUI does, for ComfyUI to open; POST blocked for READ tokens; owner only",
+    ),
     ("PUT", "/api/v1/workflows/{workflow_id}/graph"): RoutePolicy(
         _OWNER,
         justification="Store a whole graph over a workflow as its next version, or as a new workflow; PUT blocked for READ tokens; owner only",

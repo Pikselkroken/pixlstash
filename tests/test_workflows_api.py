@@ -208,6 +208,7 @@ _WORKFLOW_ROUTES = (
     ("POST", "/api/v1/workflows/{workflow_id}/save-as-new"),
     ("GET", "/api/v1/workflows/{workflow_id}/versions"),
     ("POST", "/api/v1/workflows/{workflow_id}/versions/{version}/restore"),
+    ("POST", "/api/v1/workflows/{workflow_id}/versions/{version}/opening"),
     ("PUT", "/api/v1/workflows/{workflow_id}/graph"),
     ("GET", "/api/v1/workflows/{workflow_id}/people"),
     ("GET", "/api/v1/workflows/{workflow_id}"),
@@ -6681,6 +6682,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "POST",
         "/workflows/{workflow_id}/versions/{version}/restore",
         f"/workflows/{BUSY_WF}/versions/7/restore",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/versions/{version}/opening",
+        f"/workflows/{BUSY_WF}/versions/7/opening",
         None,
     ),
     (
@@ -19846,6 +19853,52 @@ def test_going_back_answers_the_new_copy_first_and_the_version_left_under_it(sav
     assert rows[1]["source"] == "comfyui"
 
 
+def test_an_earlier_version_duplicates_and_opens_without_going_back(saving):
+    """Duplicate and Open in ComfyUI on one version (#1792): that version's
+    graph, and the workflow left on the version it has.
+
+    Wrong if the copy or the opening holds the current graph (no loader 5),
+    if the workflow gained a version, or if a version it does not keep is
+    answered with the current graph instead of a 404.
+    """
+    _put_changes(saving, saving.manual, **SKIP_FIVE)
+    assert _save(saving, saving.manual).status_code == 200
+    assert _chain_ids(saving.owner, saving.manual) == ["2"]
+
+    def duplicate(**params) -> dict:
+        r = saving.owner.post(
+            f"{API}/workflows/{saving.manual}/duplicate", params=params
+        )
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    earlier = duplicate(version=1)
+    assert earlier["name"].endswith("(version 1)"), earlier
+    assert "5" in manual_document(saving.server.hub, earlier["workflow_id"])
+    current = duplicate()
+    assert "5" not in manual_document(saving.server.hub, current["workflow_id"])
+
+    r = saving.owner.post(f"{API}/workflows/{saving.manual}/versions/1/opening")
+    assert r.status_code == 200, r.text
+    assert r.json()["workflow_id"] == saving.manual
+    held = saving.owner.get(
+        f"{API}/workflows/{saving.manual}/graph",
+        params={"run": r.json()["opening"]},
+    )
+    assert held.status_code == 200, held.text
+    assert "5" in held.json()["workflow"] and held.json()["version"] == 1
+    opened = saving.owner.get(f"{API}/workflows/{saving.manual}/graph").json()
+    assert "5" not in opened["workflow"] and opened["version"] == 2
+
+    assert [row[0] for row in _versions_of(saving, saving.manual)] == [1, 2]
+    r = saving.owner.post(
+        f"{API}/workflows/{saving.manual}/duplicate", params={"version": 9}
+    )
+    assert r.status_code == 404, r.text
+    r = saving.owner.post(f"{API}/workflows/{saving.manual}/versions/9/opening")
+    assert r.status_code == 404, r.text
+
+
 @pytest.mark.parametrize("stored", ["{not json", "[]"])
 def test_a_version_that_will_not_read_cannot_be_gone_back_to(saving, stored):
     """Said as that, and nothing appended: not a 500, and not "no such version"."""
@@ -20026,6 +20079,49 @@ def test_a_recipe_on_an_automatic_workflow_keeps_its_graph_through_a_save(voted)
     assert r.status_code == 200, r.text
     assert "2" not in _run(voted, workflow_id=RUN_WF)
     assert "2" in _run(voted, saved_recipe_id=recipe_id)
+
+
+def test_an_automatic_workflows_earlier_version_duplicates_and_opens(voted):
+    """#1792 where version 1 is the graph read off the pictures.
+
+    And a version whose stored graph will not read is a 404, never the
+    pictures' graph under that version's number: the fallback a run takes
+    there is not that version. Wrong if either verb answers 201/200 then.
+    """
+    r = _save(
+        voted,
+        RUN_WF,
+        changes={"skip_loras": [{"node_id": "2", "field": "lora_name"}]},
+    )
+    assert r.status_code == 200, r.text
+    assert [row[0] for row in _versions_of(voted, RUN_WF)] == [1, 2]
+
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/duplicate", params={"version": 1})
+    assert r.status_code == 201, r.text
+    assert "2" in manual_document(voted.server.hub, r.json()["workflow_id"])
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/versions/1/opening")
+    assert r.status_code == 200, r.text
+    held = voted.owner.get(
+        f"{API}/workflows/{RUN_WF}/graph", params={"run": r.json()["opening"]}
+    ).json()
+    assert "2" in held["workflow"] and held["version"] == 1
+    assert (
+        "2" not in voted.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    )
+
+    with voted.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_version SET document = '{not json' "
+            "WHERE workflow_id = ? AND version = 1",
+            (RUN_WF,),
+        )
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/duplicate", params={"version": 1})
+    assert r.status_code == 404, r.text
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/versions/1/opening")
+    assert r.status_code == 404, r.text
+    # The version it is on still duplicates by number.
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/duplicate", params={"version": 2})
+    assert r.status_code == 201, r.text
 
 
 def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):

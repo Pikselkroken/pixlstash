@@ -1,6 +1,7 @@
 <template>
-  <!-- The version the workflow is on, and the way back to an earlier one
-       (#1850, rule 3 of #1846). A quiet chip on its own line under the picture
+  <!-- The version the workflow is on, and what can be done with an earlier
+       one: go back to it (#1850, rule 3 of #1846), duplicate it or open it in
+       ComfyUI (#1792). A quiet chip on its own line under the picture
        count: the count shares its line with the star chart, and the three do
        not fit the 288px rail together. -->
   <span ref="root" class="wfver">
@@ -20,9 +21,11 @@
           data-testid="wftab-version"
           @keydown="noteArrow"
         >
-          <!-- A row acts at once, so what the menu is for is said before it
-               is opened. -->
-          <Tooltip text="Go back to an earlier version" activator="parent" />
+          <!-- What the menu is for is said before it is opened. -->
+          <Tooltip
+            text="Go back to, duplicate or open an earlier version"
+            activator="parent"
+          />
           <v-icon size="16" aria-hidden="true">mdi-history</v-icon>
           <span>{{ label }}</span>
           <v-icon size="16" aria-hidden="true">mdi-chevron-down</v-icon>
@@ -35,32 +38,102 @@
         aria-label="Versions"
         tabindex="-1"
         data-testid="wftab-version-menu"
-        @keydown="onMenuKeydown"
+        @keydown="onSurfaceKeydown"
       >
         <div class="section-label ctx-label" aria-hidden="true">Versions</div>
         <!-- Newest first, as the server sends them. The current one is a
              checked radio row, so it is said and not only drawn; choosing it
-             just closes the menu. The leading slot is kept on every row so
+             just closes the menu. An earlier one opens a submenu of what can
+             be done with it (#1792): going back is one of three, and none
+             acts on a single click. The leading slot is kept on every row so
              the numbers share a left edge. Named outright: the two spans
              would otherwise be read run together, "Version 32 Oct". -->
-        <button
-          v-for="row in versions ?? []"
-          :key="row.version"
-          class="ctx-item"
-          type="button"
-          role="menuitemradio"
-          :aria-checked="row.current ? 'true' : 'false'"
-          :aria-label="partsOf(row).join(', ')"
-          :data-version="row.version"
-          @click="choose(row)"
-        >
-          <v-icon v-if="row.current" class="ctx-icon" aria-hidden="true"
-            >mdi-check</v-icon
+        <template v-for="row in versions ?? []" :key="row.version">
+          <button
+            v-if="row.current"
+            class="ctx-item"
+            type="button"
+            role="menuitemradio"
+            aria-checked="true"
+            :aria-label="partsOf(row).join(', ')"
+            :data-version="row.version"
+            @click="open = false"
           >
-          <span v-else class="ctx-icon" aria-hidden="true"></span>
-          <span class="ctx-label-text">Version {{ row.version }}</span>
-          <span class="ctx-meta">{{ partsOf(row).slice(1).join(" · ") }}</span>
-        </button>
+            <v-icon class="ctx-icon" aria-hidden="true">mdi-check</v-icon>
+            <span class="ctx-label-text">Version {{ row.version }}</span>
+            <span class="ctx-meta">{{ partsOf(row).slice(1).join(" · ") }}</span>
+          </button>
+          <div
+            v-else
+            class="ctx-submenu-wrap"
+            :class="{ 'ctx-flip-sub': flip }"
+            @mouseenter="openSub(row, $event.currentTarget)"
+            @mouseleave="leaveSub"
+            @focusout="focusOut"
+          >
+            <!-- Opens, never toggles, and stops its click: a `v-menu` closes
+                 on any click in its content. -->
+            <button
+              class="ctx-item"
+              type="button"
+              role="menuitem"
+              aria-haspopup="menu"
+              :aria-expanded="sub === row.version ? 'true' : 'false'"
+              :aria-label="partsOf(row).join(', ')"
+              :data-version="row.version"
+              @click.stop="openSub(row, $event.currentTarget.parentElement)"
+            >
+              <span class="ctx-icon" aria-hidden="true"></span>
+              <span class="ctx-label-text">Version {{ row.version }}</span>
+              <span class="ctx-meta">{{
+                partsOf(row).slice(1).join(" · ")
+              }}</span>
+              <v-icon class="ctx-arrow" aria-hidden="true">mdi-chevron-right</v-icon>
+            </button>
+            <div
+              v-if="sub === row.version"
+              class="ctx-submenu"
+              role="menu"
+              :aria-label="`Version ${row.version}`"
+              data-testid="wftab-version-actions"
+              @keydown="subKeydown"
+            >
+              <button
+                class="ctx-item"
+                type="button"
+                role="menuitem"
+                data-action="go-back"
+                @click="act('go-back', row)"
+              >
+                <v-icon class="ctx-icon" aria-hidden="true">mdi-history</v-icon>
+                <span class="ctx-label-text">Go back to this version</span>
+              </button>
+              <button
+                class="ctx-item"
+                type="button"
+                role="menuitem"
+                data-action="duplicate"
+                @click="act('duplicate', row)"
+              >
+                <v-icon class="ctx-icon" aria-hidden="true"
+                  >mdi-content-copy</v-icon
+                >
+                <span class="ctx-label-text">Duplicate</span>
+              </button>
+              <button
+                v-if="canOpenComfyui"
+                class="ctx-item"
+                type="button"
+                role="menuitem"
+                data-action="open-comfyui"
+                @click="act('open-comfyui', row)"
+              >
+                <ComfyuiIcon class="ctx-icon" />
+                <span class="ctx-label-text">Open in ComfyUI</span>
+              </button>
+            </div>
+          </div>
+        </template>
         <!-- The read is out, or failed: a row that says so, never an empty
              surface. Opening the menu again asks again. -->
         <button
@@ -113,6 +186,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { onMenuKeydown } from "../../utils/menuKeyboard";
+import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
@@ -127,9 +201,12 @@ const props = defineProps({
   versions: { type: Array, default: null },
   /** The read of `versions` failed. */
   failed: { type: Boolean, default: false },
+  /** Whether an earlier version can be opened in ComfyUI from here. */
+  canOpenComfyui: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["open", "go-back"]);
+/** `go-back`, `duplicate` and `open-comfyui` each carry the version's row. */
+const emit = defineEmits(["open", "go-back", "duplicate", "open-comfyui"]);
 
 const open = ref(false);
 const root = ref(null);
@@ -185,9 +262,73 @@ function enterRows() {
   if (!rows.length) surface.value?.focus();
 }
 
-function choose(row) {
+/** Which earlier version's submenu is open, by number, or null. */
+const sub = ref(null);
+// Opened leftward when the menu sits too near the window's right edge for
+// it, as the rail's menu does: the rail is the window's right edge.
+const flip = ref(false);
+
+/** Open *row*'s submenu beside `wrap`, its first row focused when `focus`. */
+async function openSub(row, wrap, focus = false) {
+  flip.value = wrap.getBoundingClientRect().right + 200 > window.innerWidth;
+  sub.value = row.version;
+  if (!focus) return;
+  await nextTick();
+  wrap.querySelector(".ctx-submenu .ctx-item")?.focus();
+}
+
+// Not while a row in it holds focus: a pointer crossing the row after the
+// keyboard opened it would take the focused row away with it.
+function leaveSub(event) {
+  if (!event.currentTarget.contains(document.activeElement)) sub.value = null;
+}
+
+function focusOut(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) sub.value = null;
+}
+
+/**
+ * The surface's keys: the arrows between rows, and → / Enter / Space on an
+ * earlier version's row open its submenu on the first row.
+ *
+ * One handler on the surface rather than one on each row as well: with a
+ * keydown handler on the row, the surface's own never ran for a key pressed
+ * there in the built app (the arrows stopped at the first earlier row), while
+ * jsdom ran both.
+ */
+function onSurfaceKeydown(event) {
+  const target = event.target;
+  const version =
+    target?.matches?.("[aria-haspopup][data-version]") &&
+    ["ArrowRight", "Enter", " "].includes(event.key)
+      ? props.versions?.find((row) => String(row.version) === target.dataset.version)
+      : null;
+  if (!version) {
+    onMenuKeydown(event);
+    return;
+  }
+  event.preventDefault();
+  openSub(version, target.parentElement, true);
+}
+
+/** ← backs out to the version's row; the parent's cursor never moves too. */
+function subKeydown(event) {
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    const wrap = event.currentTarget.parentElement;
+    sub.value = null;
+    wrap.querySelector(".ctx-item")?.focus();
+  } else {
+    onMenuKeydown(event);
+  }
+  if (["ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    event.stopPropagation();
+  }
+}
+
+function act(verb, row) {
   open.value = false;
-  if (!row.current) emit("go-back", row);
+  emit(verb, row);
 }
 
 /** Put the keyboard on the chip. */
@@ -204,6 +345,7 @@ watch(open, async (now) => {
     return;
   }
   opening = "";
+  sub.value = null;
   await nextTick();
   const active = document.activeElement;
   if (!active || active === document.body || active.closest(".wfver-menu")) {

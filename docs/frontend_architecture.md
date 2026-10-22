@@ -2506,10 +2506,16 @@ can no longer see.
     for another workflow is neither kept (`versionsAsk`, `stillOn`) nor drawn
     (`shownVersions` filters on the key).
   - **The menu** is the shared `.ctx-menu`: a *Versions* heading and one
-    `menuitemradio` row per version in the server's order (newest first),
-    with its number, day and `reason` **exactly as sent** (a null reason
-    leaves the number and the day). The current row is checked (medium label,
-    the olive check in the leading slot, no fill) and only closes the menu.
+    row per version in the server's order (newest first), with its number,
+    day and `reason` **exactly as sent** (a null reason leaves the number and
+    the day). The current row is a checked `menuitemradio` (medium label, the
+    olive check in the leading slot, no fill) and only closes the menu. **An
+    earlier row opens a submenu** (#1792; `aria-haspopup`, the trailing
+    chevron, the grid menu's *Open in ComfyUI ›* keyboard: click, →, Enter or
+    Space open it on its first row, ← goes back) of what can be done with that
+    version: *Go back to this version*, *Duplicate*, and *Open in ComfyUI*
+    where ComfyUI is set and its node can open a held graph
+    (`comfyuiOpensNoRuns`). None acts on a single click on the row.
     Each row has an explicit `aria-label`, since its two spans would
     otherwise be read run together. Unread or failed, the menu holds one
     disabled row saying so, and opening it asks again. **An arrow that opens
@@ -2538,6 +2544,14 @@ can no longer see.
     because it was stale; for a workflow the rail has left it is a notice
     instead.
     Focus returns to the chip when the menu closes.
+  - **Duplicate and Open in ComfyUI on an earlier version leave the workflow
+    where it is** (#1792). *Duplicate* is the store's `duplicateCard(key,
+    version)`, `POST …/duplicate?version=n`, a new workflow named `… (version
+    n)` with a notice; *Open in ComfyUI* is `openHeldInComfyui`
+    (`useComfyuiOpen.js`): the tab is opened before
+    `POST …/versions/{n}/opening`, as the Run popup opens it, and sent to
+    `?pixlstash_run=&pixlstash_of=`, where the ComfyUI-PixlStash node sends a
+    save from it back as a new workflow, as it does a run's.
 - **A change to the graph waits, and one bar saves the set** (#1850, rules 1,
   2 and 7 of #1846). A model picked, a stage switched, a loader removed or
   its strength changed is not written when it is made: it joins the ONE set

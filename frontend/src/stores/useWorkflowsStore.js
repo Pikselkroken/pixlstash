@@ -500,13 +500,17 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    *
    * The copy is a card of its own, so the grid is re-read; the answer's
    * `workflow_id` is where it landed and is handed back to select it.
+   * `version` copies that version of its graph instead of the current one.
    */
-  function duplicateCard(key) {
+  function duplicateCard(key, version) {
     return busyCall(
       "duplicate",
       key,
       "Could not duplicate that workflow.",
-      () => duplicateWorkflow(key),
+      () =>
+        version == null
+          ? duplicateWorkflow(key)
+          : duplicateWorkflow(key, version),
     );
   }
 
