@@ -630,6 +630,9 @@
           <!-- Matches `.shelf-row-ident`, which holds the mark and the ring.
                There is nothing to name: the mark IS the row's identity and the
                hidden `Model` columnheader already says so. -->
+          <!-- The favourite column's track (#1578): the same 24px lead the rows
+               draw before the mark, so the headings keep their left edges. -->
+          <span class="shelf-head-fav" aria-hidden="true"></span>
           <span class="shelf-head-ident" aria-hidden="true"></span>
           <span class="shelf-head-col shelf-head-col--label">
             <button
@@ -993,6 +996,15 @@
                   {{ group.drive.label }}
                 </span>
                 <span v-if="group.offline" class="shelf-chip">Offline</span>
+                <!-- Why the rows are not in date order: the favourites lead. -->
+                <span
+                  v-if="group.favourites && store.view.favouritesFirst"
+                  class="shelf-chip"
+                  >{{ group.favourites }} favourite{{
+                    group.favourites === 1 ? "" : "s"
+                  }}
+                  first</span
+                >
                 <span class="shelf-spacer"></span>
                 <span class="shelf-group-count">{{
                   modelCount(group.rows.length)
@@ -1028,6 +1040,7 @@
                    readable from inside the treegrid rather than only from the
                    control group above it. -->
               <li class="visually-hidden" role="row">
+                <span role="columnheader">Favourite</span>
                 <span role="columnheader">Model</span>
                 <span role="columnheader" :aria-sort="columnSortState('name')"
                   >Name</span
@@ -1069,7 +1082,7 @@
                    the same iteration and still see `row`. -->
               <template v-for="row in group.rows" :key="row.rowKey">
                 <li
-                  class="shelf-row"
+                  class="shelf-row fav-host"
                   :class="{
                     'shelf-row--selected': store.isSelected(row.id),
                     'shelf-row--offline': row.locState === 'unreachable',
@@ -1081,7 +1094,7 @@
                     row.memberCount > 1 ? isStackOpen(row.stack_id) : undefined
                   "
                   :aria-selected="store.isSelected(row.id)"
-                  aria-keyshortcuts="F2 Shift+F2 Shift+F10"
+                  aria-keyshortcuts="F2 Shift+F2 Shift+F10 H"
                   :tabindex="row.rowKey === rovingRowKey ? 0 : -1"
                   :data-row-key="row.rowKey"
                   :draggable="
@@ -1096,6 +1109,24 @@
                   @dragstart="onRowDragStart(row, $event)"
                   @dragend="clearDropState()"
                 >
+                  <!-- The favourite column (#1578): a run is favourited whole,
+                       so only its cover carries the heart. Unhashed models have
+                       no key to favourite by, and say why. -->
+                  <span role="gridcell" class="shelf-row-fav">
+                    <FavouriteHeart
+                      :on="store.isFavouriteRow(row)"
+                      :label="row.filename || ''"
+                      :disabled-reason="
+                        row.sha256 ? '' : 'Favourite once its hash is read'
+                      "
+                      @toggle="
+                        store.toggleFavourites({
+                          kind: 'model',
+                          keys: [row.sha256],
+                        })
+                      "
+                    />
+                  </span>
                   <!-- The identity slot, and the assignment (#904). The RING is
                        the assignment: its hue is the entity's own and its style
                        is hashed off the entity, so the pair survives greyscale
@@ -1454,6 +1485,7 @@
                     @keydown="onMemberKeydown(row, member, $event)"
                     @focus="focusedRowKey = memberKey(row, member)"
                   >
+                    <span class="shelf-row-fav" aria-hidden="true"></span>
                     <span role="gridcell" class="shelf-row-ident">
                       <v-icon size="14">mdi-subdirectory-arrow-right</v-icon>
                     </span>
@@ -1535,6 +1567,7 @@
       <ShelfSelectionBar
         ref="selBarRef"
         :sets="hideableSets"
+        :card-keys="gridCardKeys"
         v-on="verbListeners"
       />
       <WorkflowSetSelectionBar
@@ -1729,6 +1762,11 @@ import TrainingRuns from "./TrainingRuns.vue";
 import { SOURCE_KIND } from "../../api/modelFolders";
 import FolderBrowser from "../editors/FolderBrowser.vue";
 import ModelMark from "../widgets/ModelMark.vue";
+import FavouriteHeart from "../widgets/FavouriteHeart.vue";
+import {
+  FAVOURITE_KEY,
+  useFavouritesStore,
+} from "../../stores/useFavouritesStore";
 import VerdictIcon from "../widgets/VerdictIcon.vue";
 import { modelVerdictMark } from "../../utils/setVerdicts";
 import PicturePicker from "../widgets/PicturePicker.vue";
@@ -2658,6 +2696,14 @@ function shelfOwnsTheKey(event) {
  * them, once per repeat.
  */
 function onShelfKeydown(event) {
+  // H toggles a favourite (#1578), before the Escape/Delete gate below, which
+  // would otherwise return first. Claimed only when the shelf owns the key.
+  if (isFavouriteKey(event)) {
+    if (!shelfOwnsTheKey(event)) return;
+    event.preventDefault();
+    if (!event.repeat) toggleFavouriteFromKey();
+    return;
+  }
   const wantsSelectAll =
     (event.ctrlKey || event.metaKey) &&
     !event.altKey &&
@@ -2744,6 +2790,64 @@ function onShelfKeydown(event) {
   confirmDelete(event.shiftKey);
 }
 
+/** H with no modifiers: the favourite key, the same on every surface. */
+function isFavouriteKey(event) {
+  return (
+    String(event.key).toLowerCase() === FAVOURITE_KEY &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  );
+}
+
+/**
+ * H: the selection when there is one, else the focused row or card. On the set
+ * grid the cards picked there count as the selection, as a set always has.
+ */
+/** The evidence cards picked on the set grid, by key: a set, not a model. */
+const gridCardKeys = computed(() =>
+  isSetGrid.value
+    ? (setGridRef.value?.selectedCardGroups ?? []).map((group) => group.key)
+    : [],
+);
+
+function toggleFavouriteFromKey() {
+  const selected =
+    store.selectedRows.length ||
+    store.selectedSets.length ||
+    store.selectedMissingKeys.size ||
+    gridCardKeys.value.length;
+  if (selected) {
+    store.toggleFavourites(store.favouriteTargets(gridCardKeys.value));
+    return;
+  }
+  // Nothing picked: the card the grid's cursor is on, when the grid has one.
+  const cursorCard = isSetGrid.value
+    ? setGridRef.value?.focusedCardKey
+    : "";
+  if (cursorCard) {
+    store.toggleFavourites(store.favouriteTargets([cursorCard]));
+    return;
+  }
+  // A drawn row, or a member of an open run, by the key the cursor holds.
+  const key = focusedRowKey.value;
+  for (const group of shownGroups.value) {
+    for (const row of group.rows) {
+      const member = (row.members ?? []).slice(1).find(
+        (m) => memberKey(row, m) === key,
+      );
+      const hit = row.rowKey === key ? row : member;
+      if (hit) {
+        if (hit.sha256) {
+          store.toggleFavourites({ kind: "model", keys: [hit.sha256] });
+        }
+        return;
+      }
+    }
+  }
+}
+
 /**
  * The rows the shelf's own keys act on. The Models rail's selection is not
  * among them: the rail answers Delete and Escape on its own list, and a press
@@ -2754,6 +2858,8 @@ const ownSelection = computed(() =>
 );
 
 onMounted(() => window.addEventListener("keydown", onShelfKeydown));
+// The favourites are read once for the shelf; the store shares that read.
+onMounted(() => useFavouritesStore().ensureLoaded());
 onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 
 // ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
@@ -4261,7 +4367,7 @@ function ringStyle(row) {
  * `aria-colspan` cannot drift apart. A grid where one row has a different cell
  * count is a grid a reader is lied to about.
  */
-const COLUMN_COUNT = 6;
+const COLUMN_COUNT = 7;
 
 /**
  * The date column, named and sorted by whichever date axis it is drawn in.
@@ -5648,6 +5754,13 @@ watch(
   flex: none;
 }
 
+/* The favourite column (#1578): a heart is 24px, the same track the rows give
+   it, so the heading strip keeps its left edges with the column in it. */
+.shelf-head-fav {
+  width: var(--control-h-sm);
+  flex: none;
+}
+
 /* The wrapper that carries the column's width and anchors its grip. Its own
    width classes rather than the rows' `.shelf-col--*`: those are the DATA
    cells, several selectors reach for them by name, and a heading answering to
@@ -6013,6 +6126,16 @@ button.shelf-head-cell:hover {
 /* The identity slot, sized to hold the ring's widest treatment: the mark is
    24px and a `thick`/`double` ring stands 6px off it on every side. Anything
    narrower clips the ring on the two rows that most need it read. */
+/* The favourite column: the heart's own 24px box, reserved on every row so the
+   column never moves, drawn only on the cover of a run and on a hover. */
+.shelf-row-fav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  flex: none;
+}
+
 .shelf-row-ident {
   position: relative;
   display: flex;

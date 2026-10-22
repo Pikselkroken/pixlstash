@@ -92,6 +92,7 @@
               :class="{
                 'wsc__r--cur': item.id === activeKey,
                 'wsc__r--enter': pick && item.id === targetKey,
+                'wsc__r--pick': pick,
               }"
               role="option"
               :aria-selected="pick ? undefined : String(checked.has(item.id))"
@@ -116,6 +117,11 @@
               </span>
               <span v-if="item.quant" class="wsc__qc">{{ item.quant }}</span>
               <span v-else></span>
+              <!-- A favourite leads its group; the heart says so. The column is
+                   kept on every pick row, so a row without one lines up. -->
+              <span v-if="pick" class="wsc__fav">
+                <FavouriteHeart v-if="item.favourite" passive />
+              </span>
               <span class="wsc__detail">{{ item.detail }}</span>
               <!-- What Enter would add, where the size was: says which row
                    the key acts on without making it look pressed. -->
@@ -214,8 +220,13 @@ import { computed, nextTick, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { modelName, quantBadge } from "../../utils/modelShelf";
-import { PICK_ORDERS } from "../../utils/workflowSets";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import {
+  favouritesLeadSections,
+  PICK_ORDERS,
+} from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
+import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Segmented from "../widgets/Segmented.vue";
 
@@ -252,6 +263,8 @@ const props = defineProps({
 
 const emit = defineEmits(["close", "add", "update:query", "update:order", "undo"]);
 
+const favourites = useFavouritesStore();
+favourites.ensureLoaded();
 const listId = `wsc-${useId()}`;
 const fieldRef = ref(null);
 const checked = ref(new Set());
@@ -271,6 +284,7 @@ function drawn(item) {
     row,
     name: modelName(row),
     quant: quantBadge(row.quant)?.label ?? "",
+    favourite: Boolean(props.pick && favourites.isFavourite("model", row.sha256)),
     file:
       at < 0
         ? [filename, "", ""]
@@ -288,7 +302,14 @@ function drawn(item) {
  * filter showing everything that matches.
  */
 const shownSections = computed(() => {
-  const filled = props.sections.filter((section) => section.items.length);
+  // The slot picker ranks its favourites inside each group; a checklist keeps
+  // the order its caller gave (a favourite set leads there, in fillFromSets).
+  const ranked = props.pick
+    ? favouritesLeadSections(props.sections, (item) =>
+        favourites.isFavourite("model", item.row?.sha256),
+      )
+    : props.sections;
+  const filled = ranked.filter((section) => section.items.length);
   // Folded only below something: a list whose one group is the folded one
   // would open as a single line to click.
   const above = filled.some((s) => !s.collapsed && !s.held);
@@ -591,6 +612,13 @@ function onKeydown(event) {
   font-size: var(--text-sm);
   cursor: pointer;
   transition: background var(--dur-1) var(--ease-standard);
+}
+
+/* A pick row keeps a heart column, filled or not, so the sizes line up. */
+.wsc__r--pick {
+  grid-template-columns:
+    var(--entity-thumb) minmax(0, 1fr) auto var(--gutter-glyph)
+    var(--wsc-right);
 }
 
 .wsc--check .wsc__r {

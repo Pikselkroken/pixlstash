@@ -93,6 +93,8 @@ _SHELF_ROUTES = (
     ("GET", "/api/v1/models/base-models"),
     ("POST", "/api/v1/models/companions"),
     ("PUT", "/api/v1/models/hidden"),
+    ("GET", "/api/v1/favourites"),
+    ("PUT", "/api/v1/favourites"),
     ("GET", "/api/v1/models/workflow-sets"),
     ("POST", "/api/v1/models/workflow-sets"),
     ("PATCH", "/api/v1/models/workflow-sets/{set_id}"),
@@ -249,6 +251,8 @@ def _seed_hub(server) -> dict[str, int]:
         conn.execute("DELETE FROM model_set_member_verdict")
         # A hide is keyed by a model id too, and must not reach the next test.
         conn.execute("DELETE FROM model_hidden")
+        # Favourites are keyed by hash and set key, which every test reuses.
+        conn.execute("DELETE FROM favourite")
         conn.execute("DELETE FROM model")
         conn.execute("DELETE FROM model_folder")
         conn.execute("DELETE FROM adapter_stack")
@@ -673,6 +677,7 @@ def _shelf_paths() -> list[str]:
         f"{API}/adapters",
         f"{API}/adapters/{ADAPTER_WITH_BASE}",
         f"{API}/checkpoints",
+        f"{API}/favourites",
         f"{API}/model-stacks/proposals",
         f"{API}/models/base-models",
     ]
@@ -1558,6 +1563,78 @@ def test_hiding_a_model_is_the_librarys_own_answer(shelf_env, monkeypatch):
     assert not any(_hidden_flags(shelf_env).values())
     sets = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
     assert sets["hidden_models"] == []
+
+
+def test_favourites_are_marked_and_unmarked_per_kind(shelf_env):
+    """A favourite is a hub row keyed by kind and key: marking is idempotent,
+    unmarking one leaves its siblings, the kinds never mix, and a key that
+    names nothing on the shelf is kept so it comes back with its model."""
+    owner = shelf_env.owner
+    empty = {"model": [], "workflow": [], "set": []}
+    assert owner.get(f"{API}/favourites").json() == empty
+
+    gone = _h("forgottenmodel")
+    r = owner.put(
+        f"{API}/favourites",
+        json={"kind": "model", "keys": [ADAPTER_WITH_BASE, gone], "favourite": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["model"] == sorted([ADAPTER_WITH_BASE, gone])
+    # The same key under another kind is another favourite.
+    owner.put(
+        f"{API}/favourites",
+        json={"kind": "set", "keys": ["hand:3", "hand:3"], "favourite": True},
+    )
+    again = owner.put(
+        f"{API}/favourites",
+        json={"kind": "model", "keys": [ADAPTER_WITH_BASE], "favourite": True},
+    ).json()
+    assert again == {
+        "model": sorted([ADAPTER_WITH_BASE, gone]),
+        "workflow": [],
+        "set": ["hand:3"],
+    }
+
+    r = owner.put(
+        f"{API}/favourites",
+        json={"kind": "model", "keys": [ADAPTER_WITH_BASE], "favourite": False},
+    )
+    assert r.json()["model"] == [gone]
+    assert owner.get(f"{API}/favourites").json()["set"] == ["hand:3"]
+
+
+def test_favourites_refuse_an_unknown_kind_and_an_empty_write(shelf_env):
+    owner = shelf_env.owner
+    for body in (
+        {"kind": "picture", "keys": ["1"], "favourite": True},
+        {"kind": "model", "keys": [], "favourite": True},
+        {"kind": "model", "keys": [""], "favourite": True},
+    ):
+        r = owner.put(f"{API}/favourites", json=body)
+        assert r.status_code == 422, (body, r.status_code, r.text)
+    assert owner.get(f"{API}/favourites").json()["model"] == []
+
+
+def test_a_share_token_cannot_write_a_favourite(shelf_env):
+    """The PUT's negative direction, beside the GET's in `_shelf_paths`: both
+    token shapes are refused and nothing is written, with the owner's own write
+    as the positive control."""
+    scoped = _mint(
+        shelf_env.owner,
+        "favourite character token",
+        resource_type="character",
+        resource_id=shelf_env.character_id,
+    )
+    unscoped = _mint(shelf_env.owner, "favourite global token")
+    body = {"kind": "model", "keys": [ADAPTER_NO_BASE], "favourite": True}
+    for token in (scoped, unscoped):
+        client = _bearer(shelf_env.server, token)
+        assert client.get(f"{API}/pictures").status_code == 200
+        r = client.put(f"{API}/favourites", json=body)
+        assert r.status_code == 403, r.text
+    assert shelf_env.owner.get(f"{API}/favourites").json()["model"] == []
+    r = shelf_env.owner.put(f"{API}/favourites", json=body)
+    assert r.json()["model"] == [ADAPTER_NO_BASE]
 
 
 def test_a_model_hide_with_no_library_writes_nothing(shelf_env):

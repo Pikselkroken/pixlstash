@@ -21,6 +21,7 @@ vi.mock("../../api/modelShelf", () => ({
 
 import ShelfShowPanel from "./ShelfShowPanel.vue";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
 
 const mountOpts = {
   props: { open: true },
@@ -124,7 +125,29 @@ describe("ShelfShowPanel", () => {
       "Copies",
       "Hidden models",
     ]);
-    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false);
+    // The one box on the root is Favourites only, above the kinds (#1578).
+    const boxes = wrapper.findAll('input[type="checkbox"]');
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0].element.closest("label").textContent).toContain(
+      "Favourites only",
+    );
+  });
+
+  it("Favourites only counts the shelf's favourites, filters on tick, and is cleared by reset", async () => {
+    useFavouritesStore().keys = { model: ["a".repeat(64)], workflow: [], set: [] };
+    const { wrapper } = await mountPanel([
+      adapter({ id: 1, sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    const store = useModelShelfStore();
+    const box = wrapper.find('[data-testid="shelf-show-favourites"]');
+    expect(box.text()).toContain("Favourites only");
+    expect(box.text()).toContain("1");
+    await box.find("input").setValue(true);
+    expect(store.filters.favouritesOnly).toBe(true);
+    expect(store.activeCount).toBe(1);
+    store.resetFilters();
+    expect(store.filters.favouritesOnly).toBe(false);
   });
 
   it("opens one submenu at a time, and none when the menu reopens", async () => {

@@ -179,6 +179,12 @@
             :verdict="memberVerdict(member)"
             :verdict-label="memberVerdictLabel(member)"
             :possible-problem="possibleProblem(member)"
+            favouritable
+            :favourite="favourites.isFavourite('model', member.sha256)"
+            :favourite-disabled-reason="
+              member.sha256 ? '' : 'Favourite once its hash is read'
+            "
+            @favourite="favourites.toggle('model', [member.sha256])"
             @reopen="reopen(member)"
             @pick="(model) => emit('pick', model)"
           />
@@ -333,6 +339,7 @@ import {
   memberVerdictText,
 } from "../../utils/setVerdicts";
 import { pictureCount } from "../../utils/workflowSets";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
 import AppButton from "../widgets/AppButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import SetVerdictNotes from "./SetVerdictNotes.vue";
@@ -412,6 +419,7 @@ const emit = defineEmits([
 ]);
 
 const { nameOf } = useWorkflowNames();
+const favourites = useFavouritesStore();
 
 const notes = ref(null);
 

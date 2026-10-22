@@ -1,6 +1,6 @@
 <template>
   <article
-    class="msm"
+    class="msm fav-host"
     :class="{
       'msm--head': member.head,
       'msm--unsure': member.ambiguous,
@@ -21,6 +21,16 @@
     />
     <div class="msm__body">
       <div class="msm__top">
+        <!-- The model's own heart (#1578), so a model is favourited from its
+             tray tile as well as its row. Unhashed models say why. -->
+        <FavouriteHeart
+          v-if="favouritable"
+          variant="row"
+          :on="favourite"
+          :label="member.filename || member.name"
+          :disabled-reason="favouriteDisabledReason"
+          @toggle="emit('favourite')"
+        />
         <!-- The name is the way in to what ELSE this file has run with, which is
              the question a tray full of one checkpoint's companions provokes.
              `tabindex="-1"` because the grid's roving cursor owns Tab, exactly as
@@ -104,6 +114,7 @@ import {
   evidenceLine,
   sharingLabel,
 } from "../../utils/workflowSets";
+import FavouriteHeart from "./FavouriteHeart.vue";
 import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
 import VerdictIcon from "./VerdictIcon.vue";
@@ -134,10 +145,15 @@ const props = defineProps({
   verdictLabel: { type: String, default: "" },
   /** A suspect nobody has answered about yet. */
   possibleProblem: { type: Boolean, default: false },
+  /** Draw the model's favourite heart. */
+  favouritable: { type: Boolean, default: false },
+  favourite: { type: Boolean, default: false },
+  /** Why the heart is disabled (an unhashed model), or "". */
+  favouriteDisabledReason: { type: String, default: "" },
 });
 
 /** The name was pressed: the grid answers with this model's companions. */
-const emit = defineEmits(["pick", "reopen"]);
+const emit = defineEmits(["pick", "reopen", "favourite"]);
 
 // The shelf's own identity square, so a model looks the same here as in the row
 // list. A member with no shelf row is spelled into a row's shape, with no ring:

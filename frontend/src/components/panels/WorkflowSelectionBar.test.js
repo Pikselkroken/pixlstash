@@ -26,6 +26,7 @@ vi.mock("../../api/comfyui", () => ({
 import WorkflowSelectionBar from "./WorkflowSelectionBar.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
 
 // `v-menu` is stubbed because Vuetify is not installed in these mounts, and an
 // UNRESOLVED component renders its default slot while silently dropping its
@@ -267,7 +268,9 @@ describe("the two menus cannot diverge", () => {
       "Show the pictures of these 3 workflows",
     );
     const menu = verbMenus(wrapper)[1];
-    expect(rowVerbs(menu).slice(0, 3)).toEqual([
+    // Favourite leads the menu (#1578), then the picture rows.
+    expect(rowVerbs(menu).slice(0, 4)).toEqual([
+      "favourite",
       "open-cover",
       "run",
       "show-pictures",
@@ -617,5 +620,36 @@ describe("a draft's gates", () => {
     store.selectRange(["a"]);
     await flushPromises();
     expect(enabled(wrapper, "run")).toBe(true);
+  });
+});
+
+// #1578: Favourite leads the pill and the menu; the verb follows the selection.
+describe("Favourite (#1578)", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const favouriteRow = (wrapper) =>
+    verbMenus(wrapper)[1]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === "favourite");
+
+  it("reads Favourite over a mixed selection, and Unfavourite over one that is all favourites", () => {
+    useFavouritesStore().keys = { model: [], workflow: ["a"], set: [] };
+    const mixed = bar(["a", "b"]).wrapper;
+    expect(verb(mixed, "favourite").attributes("aria-label")).toBe("Favourite");
+    expect(favouriteRow(mixed).find(".ctx-label-text").text()).toBe("Favourite");
+    expect(favouriteRow(mixed).find(".ctx-shortcut").text()).toBe("H");
+
+    useFavouritesStore().keys = { model: [], workflow: ["a", "b"], set: [] };
+    const all = bar(["a", "b"]).wrapper;
+    expect(verb(all, "favourite").attributes("aria-label")).toBe("Unfavourite");
+    expect(favouriteRow(all).find(".ctx-label-text").text()).toBe("Unfavourite");
+  });
+
+  it("emits favourite from the pill and from its menu row", async () => {
+    const { wrapper } = bar(["a"]);
+    await verb(wrapper, "favourite").trigger("click");
+    expect(wrapper.emitted("favourite")).toHaveLength(1);
+    await favouriteRow(wrapper).trigger("click");
+    expect(wrapper.emitted("favourite")).toHaveLength(2);
   });
 });

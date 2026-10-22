@@ -36,6 +36,7 @@ import {
 import { onSessionReset } from "../utils/apiClient";
 import { useConfirm } from "../composables/useConfirm";
 import { useNoticeStore } from "./useNoticeStore";
+import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
 import { useOperationStore } from "./useOperationStore";
 import { errorDetail } from "../utils/apiError";
 import {
@@ -707,6 +708,9 @@ function defaultView() {
     // rather than per tray, because the switch answers "how do I read a tray"
     // rather than anything about the one in front of you.
     trayView: "grid",
+    // Favourites lead inside each group; the sort orders the rest. A tie-break,
+    // never a place: off, a favourite sits where the sort puts it (#1578).
+    favouritesFirst: true,
     columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
   };
 }
@@ -757,6 +761,10 @@ function defaultFilters() {
     // search is a question, and a shelf that opened still narrowed by
     // yesterday's would read as missing models.
     name: "",
+    // Narrows to the favourites (models on the shelf, sets on the grid). Not
+    // restored on startup, for the same reason as the two above: a filter is a
+    // question, not a preference.
+    favouritesOnly: false,
   };
 }
 
@@ -843,6 +851,9 @@ function storedView() {
     view.folderLayout = parsed.folderLayout;
   }
   if (TRAY_VIEWS.includes(parsed.trayView)) view.trayView = parsed.trayView;
+  if (typeof parsed.favouritesFirst === "boolean") {
+    view.favouritesFirst = parsed.favouritesFirst;
+  }
   if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
@@ -1080,6 +1091,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const railMounted = ref(false);
   /** Grouping and sort. A view preference, not part of the `Show` selection. */
   const view = reactive(storedView());
+  /** The owner's favourites (#1578); read on the shelf's mount, see ModelShelf. */
+  const favouritesStore = useFavouritesStore();
+  /** A model row's favourite, by its hash. A run is its cover's, as drawn. */
+  const isFavouriteRow = (row) =>
+    favouritesStore.isFavourite("model", row.sha256);
+  /** Favourites lead inside a group, when the view asks; a tie-break only. */
+  const leadFavourites = (list, isFav) =>
+    view.favouritesFirst ? favouritesFirst(list, isFav) : list;
   /** Collapsed group keys, per axis. Replaced wholesale so templates react. */
   const collapsed = ref(storedCollapsed());
   /** Every row fetched so far, across blocks. Not the shown set. */
@@ -1527,10 +1546,23 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // a six-step run leaves the cover untouched, and a run that grew is what
     // the badge is for. The fold takes the cover's own fields, so this is the
     // one that has to be recomputed across the members.
-    return collapseStacks(shown).map((row) =>
+    const folded = collapseStacks(shown).map((row) =>
       row.members ? { ...row, isNew: row.members.some((m) => m.isNew) } : row,
     );
+    // Last, on the folded rows: a run is a favourite by its cover, the row the
+    // run is drawn as.
+    return filters.favouritesOnly ? folded.filter(isFavouriteRow) : folded;
   });
+
+  /** Favourite models on the shelf, once per hash: the Show box's count. */
+  const favouriteModelCount = computed(
+    () =>
+      new Set(
+        offeredRows.value
+          .map((row) => row.sha256)
+          .filter((sha) => favouritesStore.isFavourite("model", sha)),
+      ).size,
+  );
 
   /**
    * A stack's members as this folder's draw sees them, one copy each.
@@ -1582,7 +1614,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           key: "",
           label: "",
           labelKind: "name",
-          rows: sorted.map((row) => ({ ...row, rowKey: String(row.id) })),
+          rows: leadFavourites(
+            sorted.map((row) => ({ ...row, rowKey: String(row.id) })),
+            isFavouriteRow,
+          ),
         },
       ];
     }
@@ -1665,7 +1700,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         );
       }
     }
-    return [...byKey.values()].sort(compareGroups);
+    return [...byKey.values()].sort(compareGroups).map((bucket) => ({
+      ...bucket,
+      rows: leadFavourites(bucket.rows, isFavouriteRow),
+      // The header's note: how many this group leads with. Counted off the rows
+      // before the lead moves them, which changes nothing else.
+      favourites: bucket.rows.filter(isFavouriteRow).length,
+    }));
   });
 
   /**
@@ -1955,9 +1996,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** The evidence cards drawn: the hidden ones only while Show hidden is on. */
   const setGroupList = computed(() =>
-    showHiddenSets.value
-      ? evidenceGroups.value
-      : evidenceGroups.value.filter((group) => !group.hidden),
+    arrangeSets(
+      showHiddenSets.value
+        ? evidenceGroups.value
+        : evidenceGroups.value.filter((group) => !group.hidden),
+      isFavouriteSet,
+    ),
   );
 
   /** How many of the sets `Show` leaves on screen are hidden. */
@@ -2312,7 +2356,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * other `Show` filters leave these cards alone, as they always have; the name
    * does not, or typing one would narrow every card on the grid but these.
    */
-  const handMadeGroups = computed(() => {
+  const namedHandMadeGroups = computed(() => {
     const needle = filters.name.trim().toLowerCase();
     if (!needle) return allHandMadeGroups.value;
     const named = new Set(
@@ -2331,6 +2375,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         ),
     );
   });
+
+  /**
+   * Favourite-only narrowing and favourites-first for a list of set cards. The
+   * groups keep their order; only the cards inside one move.
+   */
+  function arrangeSets(groups, isFav) {
+    const kept = filters.favouritesOnly ? groups.filter(isFav) : groups;
+    return leadFavourites(kept, isFav);
+  }
+  const isFavouriteSet = (group) => favouritesStore.isFavourite("set", group.key);
+
+  /** The hand-made cards the set grid draws, arranged for favourites. */
+  const handMadeGroups = computed(() =>
+    arrangeSets(namedHandMadeGroups.value, isFavouriteSet),
+  );
 
   /**
    * The hand-made sets a surface other than the grid offers or names (the
@@ -3484,6 +3543,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (filters.capabilities.length) n += 1;
     if (filters.duplicatesOnly) n += 1;
     if (filters.showHidden) n += 1;
+    if (filters.favouritesOnly) n += 1;
     if (filters.name.trim()) n += 1;
     return n;
   });
@@ -3651,6 +3711,34 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const selectedModels = computed(() =>
     selectedRows.value.flatMap((row) => row.members ?? [row]),
   );
+
+  /**
+   * What a favourite verb or H acts on. Sets when any set is named (a hand-made
+   * or missing-base card selected, or one the caller holds from the grid), else
+   * the selected models by hash - a run by its cover, which is the row the
+   * selection holds. Unhashed models have no key and are left out.
+   *
+   * @param {Array<string>} [cardKeys] - evidence cards the grid says are picked.
+   * @returns {{kind: "set"|"model", keys: Array<string>}}
+   */
+  function favouriteTargets(cardKeys = []) {
+    const sets = [
+      ...new Set([
+        ...selectedSets.value.map((set) => `hand:${set.id}`),
+        ...selectedMissingKeys.value,
+        ...cardKeys,
+      ]),
+    ];
+    if (sets.length) return { kind: "set", keys: sets };
+    const models = selectedRows.value.map((row) => row.sha256).filter(Boolean);
+    return { kind: "model", keys: [...new Set(models)] };
+  }
+
+  /** Favourite the targets, or unfavourite them when every one already is. */
+  function toggleFavourites(targets) {
+    if (!targets.keys.length) return Promise.resolve();
+    return favouritesStore.toggle(targets.kind, targets.keys);
+  }
 
   /**
    * The model a Shift-range measures from: the last one picked deliberately.
@@ -4533,6 +4621,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     adapterKindOptions,
     capabilityOptions,
     baseModelOptions,
+    favouriteModelCount,
+    isFavouriteRow,
+    favouriteTargets,
+    toggleFavourites,
     baseModelCompletions,
     loadBaseModelCompletions,
     visibleRows,
