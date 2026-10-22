@@ -1954,4 +1954,35 @@ describe("Mine | Templates", () => {
       "It is a draft: open it in ComfyUI and save it to finish it.",
     );
   });
+
+  it("keeps what did not go in picked on Templates, to try again", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: TEMPLATES });
+    addTemplates.mockResolvedValue({
+      added: [{ module: "default", name: "ready", workflow_id: "c", draft: false }],
+      failed: [{ module: "default", name: "api_x", detail: "gone" }],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    const { useWorkflowTemplatesStore } = await import(
+      "../../stores/useWorkflowTemplatesStore"
+    );
+    const templates = useWorkflowTemplatesStore();
+    templates.selectRange(["default/ready", "default/api_x"]);
+    await flush();
+    await wrapper.find('[data-testid="wtp-add"]').trigger("click");
+    await flush();
+    await flush();
+    expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+    expect(templates.selectedKeys).toEqual(["default/api_x"]);
+  });
+
+  it("gives Mine no count until its list is read", async () => {
+    const wrapper = mountView();
+    const count = () =>
+      wrapper.find('[data-testid="wfv-tab-mine"] .wfv-viewseg-n').exists();
+    expect(count()).toBe(false);
+    await flush();
+    expect(count()).toBe(true);
+  });
 });

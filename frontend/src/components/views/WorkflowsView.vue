@@ -35,7 +35,9 @@
         >
           <v-icon size="14">mdi-sitemap-outline</v-icon>
           Mine
-          <span class="wfv-viewseg-n num">{{ store.cards.length }}</span>
+          <span v-if="store.loaded" class="wfv-viewseg-n num">{{
+            store.cards.length
+          }}</span>
         </button>
         <button
           id="wfv-tab-templates"
@@ -688,7 +690,8 @@ async function addSelectedTemplates() {
     });
   }
   if (!added.length) return;
-  templates.clearSelection();
+  // What did not go in stays picked on Templates, to try again.
+  templates.selectRange(failed.map((entry) => `${entry.module}/${entry.name}`));
   await store.refetch();
   showSource("mine");
   const ids = added.map((entry) => entry.workflow_id);
