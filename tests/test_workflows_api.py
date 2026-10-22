@@ -21862,6 +21862,8 @@ _SHELF_LOADERS = {
         file_kind="controlnet",
         folder="controlnet",
         filename=_CONTROLNET_FILENAME,
+        # ComfyUI's template list links this file; it does not link the upscaler.
+        downloadable=True,
         digest=_CONTROLNET_DIGEST,
         object_info=CONTROLNET_OBJECT_INFO,
         title="ControlNet",
@@ -21884,6 +21886,7 @@ _SHELF_LOADERS = {
         file_kind="upscaler",
         folder="upscale_models",
         filename=_UPSCALER_FILENAME,
+        downloadable=False,
         digest=_UPSCALER_DIGEST,
         object_info=UPSCALER_OBJECT_INFO,
         title="Upscale",
@@ -22048,7 +22051,10 @@ def test_a_run_loads_a_shelf_model_comfyui_lacks_off_the_shelf(shelf_loaders):
 
     # A ComfyUI without the pack's loader has nothing to load it with.
     pack_loader = env.info.pop(kind.pack)
-    assert missing() == [{"file": kind.filename, "folder": kind.folder}]
+    expected = {"file": kind.filename, "folder": kind.folder}
+    if kind.downloadable:
+        expected["downloadable"] = True
+    assert missing() == [expected]
     env.info[kind.pack] = pack_loader
 
     # A ComfyUI that has the file loads it with its own loader.
