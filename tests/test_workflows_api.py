@@ -24533,10 +24533,12 @@ def test_the_templates_are_the_owners_alone(
     assert_real_route(server.api, "POST", add, add)
     assert ROUTE_POLICIES[("POST", add)].policy is AccessPolicy.OWNER_ONLY
     clients = (
-        _bearer(server, _mint(workflow_env.owner, "template probe unscoped")),
-        _bearer(
+        bearer_client(
+            server, mint_read_token(workflow_env.owner, "template probe unscoped")
+        ),
+        bearer_client(
             server,
-            _mint(
+            mint_read_token(
                 workflow_env.owner,
                 "template probe scoped",
                 resource_type="character",
