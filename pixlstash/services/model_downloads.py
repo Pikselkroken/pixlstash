@@ -1,9 +1,13 @@
-"""Models PixlStash downloads for a workflow, from a link the owner gives it.
+"""Models PixlStash downloads for a workflow, from ComfyUI's own template list.
 
 A workflow that names a model this machine does not have is refused with
-``missing_models`` (``services/workflow_run_service.py``). The owner pastes
-where the file can be fetched from, and :func:`start_download` fetches it into
-the download folder (:func:`~pixlstash.services.managed_model_store.find_download_folder`:
+``missing_models`` (``services/workflow_run_service.py``), and each missing
+file carries ``downloadable`` when :func:`download_source` knows where to get
+it: a file of the same name in the committed template list
+(``data/workflow_templates.json``, #1999), which gives its link and its
+ComfyUI folder. **The link is the server's, never the caller's**: a request
+names a file, so no client can point the server at an address of its choosing.
+:func:`start_download` fetches it into the download folder (:func:`~pixlstash.services.managed_model_store.find_download_folder`:
 the one marked in the Model folders section, else the default folder) and
 registers it on the shelf, so the next run finds it there.
 
@@ -37,6 +41,7 @@ import os
 import threading
 import time
 import uuid
+from functools import lru_cache
 from typing import Callable, Optional
 from urllib.parse import urlparse
 
@@ -49,6 +54,7 @@ from pixlstash.services.model_folder_scanner import (
     SHELF_MODEL_SUFFIXES,
     ModelFolderScanner,
 )
+from pixlstash.services.workflow_templates import load_templates
 from pixlstash.services.model_mover import (
     PARTIAL_SUFFIX,
     SHELF_IO_LOCK,
@@ -89,6 +95,31 @@ class _Cancelled(Exception):
     """The owner cancelled the download."""
 
 
+@lru_cache(maxsize=1)
+def _sources() -> dict[str, dict]:
+    """Every file the template list links, by case-folded name."""
+    found: dict[str, dict] = {}
+    for template in load_templates().get("templates") or []:
+        for entry in template.get("files") or []:
+            name, url = entry.get("name"), entry.get("url")
+            if name and isinstance(url, str) and url.startswith("https://"):
+                found.setdefault(
+                    name.casefold(),
+                    {"url": url, "directory": entry.get("directory")},
+                )
+    return found
+
+
+def download_source(file: str) -> Optional[dict]:
+    """Where *file* can be downloaded from, ``{url, directory}``, or None.
+
+    By the file's own name, case folded and without the subfolder a loader may
+    put in front of it: the list names files the way ComfyUI's loaders do.
+    """
+    name = os.path.basename((file or "").replace("\\", "/"))
+    return _sources().get(name.casefold()) if name else None
+
+
 def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
     """Where *file* goes inside the download folder, relative to it."""
     name = file.replace("\\", "/").strip().strip("/")
@@ -99,26 +130,26 @@ def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
 
 def start_download(
     hub: HubDatabase,
-    url: str,
     file: str,
-    comfyui_folder: Optional[str] = None,
     on_arrived: Optional[Callable[[int], None]] = None,
 ) -> dict:
-    """Start fetching *url* onto the shelf as *file*, and return its entry.
+    """Start fetching *file* onto the shelf, and return its entry.
 
     Args:
         hub: The hub database holding the shelf tables.
-        url: An ``http`` or ``https`` link to the file itself.
         file: The model name the workflow asks for, as its loader spells it.
-        comfyui_folder: The ComfyUI model folder the loader reads, if known.
         on_arrived: Called with the new model id once it is on the shelf.
 
     Raises:
         DownloadRefused: Nothing was fetched; ``status_code`` says why.
     """
-    parsed = urlparse((url or "").strip())
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise DownloadRefused("The link has to be an http or https address.")
+    source = download_source(file)
+    if source is None:
+        raise DownloadRefused(
+            f"PixlStash does not know where to download {file} from.", 404
+        )
+    url = source["url"]
+    parsed = urlparse(url)
     if not file.lower().endswith(SHELF_MODEL_SUFFIXES):
         raise DownloadRefused(
             f"{file} is not a model file the shelf keeps "
@@ -133,7 +164,7 @@ def start_download(
         raise DownloadRefused(
             f"{folder['path']} is not a readable directory right now.", 409
         )
-    relpath = _relpath(folder["path"], file, comfyui_folder)
+    relpath = _relpath(folder["path"], file, source["directory"])
     try:
         target = resolve_path_within(folder["path"], relpath)
     except ValueError as exc:
@@ -170,7 +201,7 @@ def start_download(
         _downloads[entry["id"]] = entry
     thread = threading.Thread(
         target=_run,
-        args=(hub, entry, url.strip(), int(folder["id"]), relpath, on_arrived),
+        args=(hub, entry, url, int(folder["id"]), relpath, on_arrived),
         name=f"model-download-{entry['id'][:8]}",
         daemon=True,
     )
@@ -196,8 +227,7 @@ def live_downloads() -> list[dict]:
         for key in [
             key
             for key, d in _downloads.items()
-            if d["ended_at"] is not None
-            and now - d["ended_at"] > FINISHED_KEEP_SECONDS
+            if d["ended_at"] is not None and now - d["ended_at"] > FINISHED_KEEP_SECONDS
         ]:
             del _downloads[key]
         return [_public(d) for d in _downloads.values()]
@@ -239,9 +269,7 @@ def _run(
         return
     except (OSError, requests.RequestException, MoveRefused, ValueError) as exc:
         discard_partial(partial)
-        logger.warning(
-            "Download of %s from %s failed: %s", target, entry["host"], exc
-        )
+        logger.warning("Download of %s from %s failed: %s", target, entry["host"], exc)
         _end(entry, STATUS_FAILED, str(exc))
         return
     except Exception as exc:
@@ -290,10 +318,8 @@ def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
                 out.write(chunk)
                 sha.update(chunk)
                 entry["received"] += len(chunk)
-    if total and entry["received"] != total:
-        raise ValueError(
-            f"The download stopped at {entry['received']} of {total} bytes."
-        )
+    # A body cut short of its Content-Length is raised by urllib3 itself
+    # (`enforce_content_length`), so it never reaches here as complete.
     return sha.hexdigest()
 
 

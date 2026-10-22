@@ -15,6 +15,7 @@ const createModelFolder = vi.fn();
 const forgetModelFolder = vi.fn();
 const rescanModelFolder = vi.fn();
 const setDefaultModelFolder = vi.fn();
+const setDownloadModelFolder = vi.fn();
 
 vi.mock("../../api/modelFolders", () => ({
   MANAGED_KIND: "managed",
@@ -26,7 +27,12 @@ vi.mock("../../api/modelFolders", () => ({
   forgetModelFolder: (...a) => forgetModelFolder(...a),
   rescanModelFolder: (...a) => rescanModelFolder(...a),
   setDefaultModelFolder: (...a) => setDefaultModelFolder(...a),
+  setDownloadModelFolder: (...a) => setDownloadModelFolder(...a),
 }));
+
+// The two pinned cards share their look, so each is found by its label.
+const DEFAULT_CARD = "[aria-labelledby='mf-default-label']";
+const DOWNLOAD_CARD = "[aria-labelledby='mf-download-label']";
 
 vi.mock("../../stores/useModelShelfStore", () => ({
   useModelShelfStore: () => ({ fetchRows: vi.fn() }),
@@ -172,6 +178,7 @@ beforeEach(() => {
   forgetModelFolder.mockReset().mockResolvedValue({ tombstoned_files: 0 });
   rescanModelFolder.mockReset().mockResolvedValue({ status: "started" });
   setDefaultModelFolder.mockReset().mockResolvedValue({});
+  setDownloadModelFolder.mockReset().mockResolvedValue({});
 });
 
 describe("the list", () => {
@@ -412,7 +419,7 @@ describe("the Downloads folder", () => {
     expect(wrapper.text()).not.toContain("Monitor download folder");
     expect(wrapper.find(".mf-dl").text()).toContain("Downloads");
     expect(wrapper.find(".mf-list").text()).not.toContain("Downloads");
-    expect(wrapper.find(".mf-default").text()).toContain(
+    expect(wrapper.find(DEFAULT_CARD).text()).toContain(
       "New models from Downloads land here",
     );
   });
@@ -494,14 +501,14 @@ describe("the default folder", () => {
 
   it("is pinned above the list and appears nowhere else", async () => {
     const wrapper = await open([CHOSEN, STORE]);
-    expect(wrapper.find(".mf-default").text()).toContain("/home/me/loras");
+    expect(wrapper.find(DEFAULT_CARD).text()).toContain("/home/me/loras");
     expect(wrapper.find(".mf-list").text()).not.toContain("/home/me/loras");
   });
 
   it("offers only the other folders that can be it", async () => {
     const wrapper = await open([CHOSEN, STORE, HF_CACHE]);
     const offered = wrapper
-      .findAll(".mf-default .ctx-item")
+      .findAll(`${DEFAULT_CARD} .ctx-item`)
       .map((b) => b.text());
     expect(offered).toHaveLength(1);
     expect(offered[0]).toContain("/var/pixlstash/models");
@@ -509,13 +516,13 @@ describe("the default folder", () => {
 
   it("asks the server to make the picked folder the default", async () => {
     const wrapper = await open([CHOSEN, STORE]);
-    await wrapper.find(".mf-default .ctx-item").trigger("click");
+    await wrapper.find(`${DEFAULT_CARD} .ctx-item`).trigger("click");
     expect(setDefaultModelFolder).toHaveBeenCalledWith(2, true);
   });
 
   it("offers no menu at all to a remote session", async () => {
     const wrapper = await open([CHOSEN, STORE], { canManage: false });
-    expect(wrapper.find(".mf-default .ctx-item").exists()).toBe(false);
+    expect(wrapper.find(`${DEFAULT_CARD} .ctx-item`).exists()).toBe(false);
     const change = byText(wrapper, "Change");
     expect(change.attributes("aria-disabled")).toBe("true");
     expect(change.attributes("aria-describedby")).toBe("mf-remote-note");
@@ -523,7 +530,41 @@ describe("the default folder", () => {
 
   it("says why it cannot change while no other folder could be the default", async () => {
     const wrapper = await open([CHOSEN, HF_CACHE]);
-    expect(wrapper.find(".mf-default .ctx-item").exists()).toBe(false);
+    expect(wrapper.find(`${DEFAULT_CARD} .ctx-item`).exists()).toBe(false);
     expect(byText(wrapper, "Change").attributes("aria-disabled")).toBe("true");
+  });
+});
+
+describe("the download folder", () => {
+  // As the server reports it: with nothing marked, the default folder.
+  const DEFAULTED = folder({ id: 1, is_default: true, is_download_target: true });
+  const STORE = { ...MANAGED, is_default: false };
+
+  it("is the default folder until another is picked, and says so", async () => {
+    const wrapper = await open([DEFAULTED, STORE]);
+    const card = wrapper.find(DOWNLOAD_CARD);
+    expect(card.text()).toContain("/home/me/loras");
+    expect(card.text()).toContain("Default folder");
+  });
+
+  it("asks the server to send downloads to the picked folder", async () => {
+    const wrapper = await open([DEFAULTED, STORE]);
+    const offered = wrapper.findAll(`${DOWNLOAD_CARD} .ctx-item`);
+    expect(offered.map((b) => b.text())).toEqual([
+      expect.stringContaining("/var/pixlstash/models"),
+    ]);
+    await offered[0].trigger("click");
+    expect(setDownloadModelFolder).toHaveBeenCalledWith(2, true);
+    expect(setDefaultModelFolder).not.toHaveBeenCalled();
+  });
+
+  it("pins a chosen download folder out of the list", async () => {
+    const wrapper = await open([
+      folder({ id: 1, is_default: true }),
+      { ...STORE, is_download_target: true },
+    ]);
+    expect(wrapper.find(DOWNLOAD_CARD).text()).toContain("/var/pixlstash/models");
+    expect(wrapper.find(DOWNLOAD_CARD).text()).not.toContain("Default folder");
+    expect(wrapper.find(".mf-list").exists()).toBe(false);
   });
 });

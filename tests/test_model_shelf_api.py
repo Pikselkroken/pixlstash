@@ -67,6 +67,7 @@ from pixlstash.services.model_kind_suggestions import (
 )
 from pixlstash.server import Server
 from pixlstash.services import builtin_caches, builtin_models, comfyui_service
+from pixlstash.services import model_downloads
 from pixlstash.services import model_shelf_service, model_workflow_sets
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -3765,7 +3766,9 @@ def test_downloads_follow_the_default_until_a_folder_is_marked(shelf_env, tmp_pa
     assert targets() == [ids[0]]
 
 
-def test_a_model_download_lands_on_the_shelf_and_is_reported(shelf_env, tmp_path):
+def test_a_model_download_lands_on_the_shelf_and_is_reported(
+    shelf_env, tmp_path, monkeypatch
+):
     """Started over the API, followed in /workers/progress, registered when done."""
     folder = _new_folder_path(str(tmp_path), "dl")
     folder_id = shelf_env.owner.post(
@@ -3778,9 +3781,13 @@ def test_a_model_download_lands_on_the_shelf_and_is_reported(shelf_env, tmp_path
     source = tmp_path / "source.safetensors"
     write_adapter(source)
     with serve_bytes(source.read_bytes()) as url:
+        monkeypatch.setattr(
+            model_downloads,
+            "download_source",
+            lambda file: {"url": url, "directory": "loras"},
+        )
         r = shelf_env.owner.post(
-            f"{API}/model-downloads",
-            json={"url": url, "file": "Fetched.safetensors", "folder": "loras"},
+            f"{API}/model-downloads", json={"file": "Fetched.safetensors"}
         )
         assert r.status_code == 200, r.text
         download_id = r.json()["id"]
@@ -3800,11 +3807,17 @@ def test_a_model_download_lands_on_the_shelf_and_is_reported(shelf_env, tmp_path
     )
     assert row is not None and row["model_id"] == mine[0]["model_id"]
 
+    monkeypatch.undo()
+    r = shelf_env.owner.post(
+        f"{API}/model-downloads", json={"file": "my_own_merge_v3.safetensors"}
+    )
+    assert r.status_code == 404, r.text
+    # A link is never taken from the caller.
     r = shelf_env.owner.post(
         f"{API}/model-downloads",
-        json={"url": "ftp://example.com/x.safetensors", "file": "x.safetensors"},
+        json={"file": "x.safetensors", "url": "https://example.com/x"},
     )
-    assert r.status_code == 400, r.text
+    assert r.status_code == 422, r.text
 
 
 def test_a_patch_whose_second_write_fails_moves_no_default(shelf_env, tmp_path):

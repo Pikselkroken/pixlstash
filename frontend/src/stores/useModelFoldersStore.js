@@ -10,6 +10,7 @@ import {
   MANAGED_KIND,
   rescanModelFolder,
   setDefaultModelFolder,
+  setDownloadModelFolder,
   SOURCE_KIND,
 } from "../api/modelFolders";
 import { onSessionReset } from "../utils/apiClient";
@@ -104,6 +105,11 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   /** Where a new model goes when nothing else is named. */
   const defaultFolder = computed(() =>
     folders.value.find((folder) => folder.is_default),
+  );
+
+  /** Where a model PixlStash downloads goes; the default folder until chosen. */
+  const downloadFolder = computed(() =>
+    folders.value.find((folder) => folder.is_download_target),
   );
 
   /**
@@ -345,6 +351,32 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
   }
 
   /**
+   * Send the models PixlStash downloads to *folder*. Unlike the default the
+   * mark is always stored, so a later change of default does not move it.
+   *
+   * @param {Object} folder - a row from `defaultCandidates`.
+   * @returns {Promise<boolean>} true when it changed.
+   */
+  async function setDownloadTarget(folder) {
+    const notices = useNoticeStore();
+    try {
+      await setDownloadModelFolder(folder.id, true);
+      await refresh({ quiet: true });
+      notices.push({
+        level: "success",
+        text: `Downloaded models now go to ${basename(folder.path)}.`,
+      });
+      return true;
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || "Could not change the download folder.",
+      });
+      return false;
+    }
+  }
+
+  /**
    * Start a scan and watch for it to land.
    *
    * @param {number} id
@@ -416,6 +448,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     sourceFolder,
     downloadsFolder,
     defaultFolder,
+    downloadFolder,
     defaultCandidates,
     registeredPaths,
     refresh,
@@ -424,6 +457,7 @@ export const useModelFoldersStore = defineStore("modelFolders", () => {
     forget,
     scan,
     setDefault,
+    setDownloadTarget,
     resetForSession,
   };
 });

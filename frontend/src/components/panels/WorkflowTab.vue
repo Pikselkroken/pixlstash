@@ -289,6 +289,10 @@
                     modelLabel(fileName(row.missing))
                   }}</span
                 >{{ missingNote(row.missing) }}
+                <ModelDownloadButton
+                  v-if="downloadableFiles.has(row.missing)"
+                  :file="row.missing"
+                />
               </p>
               <!-- A pick is saved on the workflow, so an offer that is not of
                    the missing one's base model says so before it. -->
@@ -483,6 +487,10 @@
                     modelLabel(fileName(missingCheckpointFile))
                   }}</span
                 >{{ missingNote(missingCheckpointFile) }}
+                <ModelDownloadButton
+                  v-if="downloadableFiles.has(missingCheckpointFile)"
+                  :file="missingCheckpointFile"
+                />
               </p>
               <p v-else class="wftab-note wftab-quiet">
                 No file name was kept for it anywhere.
@@ -1314,6 +1322,7 @@ import BreakableTitle from "../widgets/BreakableTitle.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
 import KindMenu from "../widgets/KindMenu.vue";
+import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import ExposeParameterDialog from "../io/ExposeParameterDialog.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -1658,6 +1667,8 @@ const FORGOTTEN_MODEL = "(forgotten model)";
 const missingByKind = ref({});
 /** The missing files a restart of ComfyUI would load off the shelf (#1923). */
 const staleFiles = ref(new Set());
+/** The missing files the server can download (`downloadable`). */
+const downloadableFiles = ref(new Set());
 const PACK_OUTDATED_TEXT = "Restart ComfyUI";
 /** What follows a missing file's name, once ComfyUI has answered. */
 function missingNote(file) {
@@ -4304,6 +4315,15 @@ watch(
   (key) => checkInstalled(key),
   { immediate: true },
 );
+// A model just downloaded may be one these rows say is missing.
+watch(
+  () => tasksStore.downloadsLanded,
+  () => {
+    if (detail.value && selectedKey.value) {
+      void checkInstalled(selectedKey.value, { quiet: true });
+    }
+  },
+);
 
 /**
  * Pick the shelf's likely match for each missing file (`likely`: the same
@@ -4345,6 +4365,7 @@ async function checkInstalled(key, { quiet = false } = {}) {
   if (!quiet) {
     missingByKind.value = {};
     staleFiles.value = new Set();
+    downloadableFiles.value = new Set();
     preflightAnswered.value = false;
     replacementsByFile.value = {};
   }
@@ -4367,6 +4388,11 @@ async function checkInstalled(key, { quiet = false } = {}) {
     const stale = modelsOf(PACK_OUTDATED);
     staleFiles.value = new Set(stale.map((model) => String(model.file)));
     const missing = [...modelsOf("missing_models"), ...stale];
+    downloadableFiles.value = new Set(
+      modelsOf("missing_models")
+        .filter((model) => model.downloadable)
+        .map((model) => String(model.file)),
+    );
     missingByKind.value = Object.fromEntries(
       Object.entries(MODEL_ROWS).map(([kind, spec]) => [
         kind,

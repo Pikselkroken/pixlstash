@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -593,6 +593,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/login                                                                 | auth            | Check Registration                                          |
 | POST   | /api/v1/login                                                                 | auth            | Login                                                       |
 | POST   | /api/v1/logout                                                                | auth            | Logout                                                      |
+| POST   | /api/v1/model-downloads                                                       | model_shelf     | Download a missing model onto the shelf                     |
+| POST   | /api/v1/model-downloads/{download_id}/cancel                                  | model_shelf     | Cancel a model download                                     |
 | POST   | /api/v1/model-files                                                           | model_shelf     | Add one model file to the shelf                             |
 | POST   | /api/v1/model-files/delete                                                    | model_shelf     | Delete models from disk                                     |
 | POST   | /api/v1/model-files/merge                                                     | model_shelf     | Keep one copy of a model and remove the rest                |
@@ -11023,6 +11025,43 @@ Unclassified. A recorded workflow that loads the file says what it is, and
 - **The Workflow tab gets the same offer**, on `GET /workflows/{id}` as
   `kind_offers`: `loader_offers` hands a default-recipe loader its model's
   suggestion only where the loader takes that kind and nobody has decided.
+
+### 25.12 Downloading a model a workflow is missing
+
+A run pre-flight's `missing_models` entry carries `downloadable: true` (absent
+otherwise) when `services/model_downloads.download_source` finds a file of that
+name, case folded and without the loader's subfolder, in the committed ComfyUI
+template list (`data/workflow_templates.json`, #1999), which gives an https
+link and the ComfyUI folder it belongs in. `POST /model-downloads {file}`
+fetches it; **the request names a file, never a URL**, so no client can point
+the server at an address of its choosing.
+
+- **Where it lands.** The download folder: `model_folder.is_download_target`,
+  at most one by `ux_model_folder_single_download_target`, set through
+  `PATCH /model-folders/{id}` `{"is_download_target": true}` (a `user` folder or
+  the managed store). **No mark means the default folder** (§25.10), and unlike
+  `is_default` the mark is stored on the managed store too, so a later change
+  of default does not move it. The API reports the effective answer, so exactly
+  one row reads `is_download_target: true`. Inside the folder the file keeps the
+  loader's own subfolders, under `<directory>/` when the folder already has a
+  subfolder of that name, so a registered ComfyUI `models` folder is filled the
+  way ComfyUI reads it.
+- **The order.** Refused before a byte when the name is not a shelf suffix,
+  would resolve outside the folder, is already there, or is already being
+  downloaded. Bytes stream to `<name>.pixlstash-partial`, SHA-256'd on the way
+  in; a `text/html` answer (a login page) fails at once, and a body short of
+  its `Content-Length` is raised by urllib3. Then, under `SHELF_IO_LOCK`
+  (waited for, since the bytes are already here), `publish_no_clobber` and
+  `register_file` with that digest; bytes the scanner cannot read as a model
+  are removed again. Cancel, failure and refusal discard the partial file.
+  `models_arrived` (integration §8) announces the new model.
+- **Followed in memory, one thread each**, like the ComfyUI runs in flight:
+  `live_downloads()` is `downloads` on `GET /workers/progress` (owner only),
+  and an ended one stays listed for `FINISHED_KEEP_SECONDS` (30 s) so every
+  polling client sees how it ended. `POST /model-downloads/{id}/cancel` stops
+  one. ponytail: a restart forgets a download in flight and leaves its partial
+  file behind (inert: no row names it and the scanner skips the suffix); no
+  Hugging Face or Civitai token is sent, so a gated file fails as a web page.
 
 ---
 

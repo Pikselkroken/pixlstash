@@ -775,7 +775,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # ── model_downloads.py ────────────────────────────────────────────────
     ("POST", "/api/v1/model-downloads"): RoutePolicy(
         _LOCAL,
-        justification="§16.3 fetches a file from a caller-supplied http(s) link and writes it into the registered download folder, registering it - POST /model-files' file-writing class with the read coming off the network instead of the disk; takes no host path, the name is contained against the folder and must carry a shelf suffix; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+        justification="§16.3 fetches a model file and writes it into the registered download folder, registering it - POST /model-files' file-writing class with the read coming off the network instead of the disk; takes no host path and no URL (the link is looked up server-side in the committed template list by file name), the name is contained against the folder and must carry a shelf suffix; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
     # Stops a download and discards its own partial file; returns nothing but
     # whether one was running.

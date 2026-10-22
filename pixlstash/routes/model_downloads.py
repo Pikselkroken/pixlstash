@@ -31,20 +31,12 @@ class ModelDownloadRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    url: str = Field(description="An http or https link to the file itself.")
     file: str = Field(
         description=(
             "The model name the workflow asks for, as its loader spells it "
-            "(`missing_models[].file`), subfolders included."
+            "(`missing_models[].file`, one marked `downloadable`), subfolders "
+            "included. The link is looked up by the server, never sent."
         )
-    )
-    folder: Optional[str] = Field(
-        default=None,
-        description=(
-            "The ComfyUI model folder the loader reads (`missing_models[]."
-            "folder`). Where the download folder has a subfolder of that name, "
-            "the file goes in it."
-        ),
     )
 
 
@@ -89,13 +81,14 @@ def create_router(server) -> APIRouter:
         "/model-downloads",
         summary="Download a missing model onto the shelf",
         description=(
-            "Starts fetching a model a workflow names and this machine lacks "
+            "Starts fetching a model a workflow names and this machine lacks, "
+            "from the link ComfyUI's template list gives for that file name, "
             "into the download folder (the one marked in Model folders, else "
             "the default folder) and answers at once. When it is complete it "
             "is registered on the shelf and `models_arrived` is announced. "
-            "Refused before any byte is fetched when the link is not http(s), "
-            "the name is not a model file, or the file is already there or "
-            "already being downloaded."
+            "Refused before any byte is fetched when no link is known for the "
+            "name (404), the name is not a model file, or the file is already "
+            "there or already being downloaded (409)."
         ),
         tags=["model_shelf"],
         response_model=ModelDownloadResponse,
@@ -105,13 +98,7 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.ensure_secure_when_required(request)
         try:
-            return start_download(
-                server.hub,
-                payload.url,
-                payload.file,
-                payload.folder,
-                on_arrived=_arrived,
-            )
+            return start_download(server.hub, payload.file, on_arrived=_arrived)
         except DownloadRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 

@@ -76,6 +76,10 @@ vi.mock("../../api/comfyui", () => ({
 const push = vi.fn();
 const replace = vi.fn();
 const route = vi.hoisted(() => ({ name: "workflows", query: {} }));
+vi.mock("../../api/modelDownloads", () => ({
+  startModelDownload: vi.fn(async () => ({ id: "d-1", status: "running" })),
+  cancelModelDownload: vi.fn(async () => ({ cancelled: true })),
+}));
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push, replace }),
   useRoute: () => route,
@@ -1185,14 +1189,14 @@ describe("a checkpoint that will not load", () => {
     ],
   });
 
-  function missingFile(file) {
+  function missingFile(file, extra = {}) {
     return {
       groups: [
         {
           reasons: [
             {
               code: "missing_models",
-              models: [{ file, folder: "checkpoints" }],
+              models: [{ file, folder: "checkpoints", ...extra }],
             },
           ],
         },
@@ -1221,6 +1225,28 @@ describe("a checkpoint that will not load", () => {
     // The name as a person looks for it; the whole recorded value is the tip.
     expect(line.text).toBe("realvisXL_v5 is not installed in ComfyUI.");
     expect(line.tooltip).toBe("SDXL/realvisXL_v5.safetensors");
+  });
+
+  it("offers a download beside the name only where the server can fetch it", async () => {
+    // A row's picker, and the text a card with no loader row shows instead.
+    for (const [shown, extra, offered] of [
+      [named, { downloadable: true }, true],
+      [named, {}, false],
+      [unnamed, { downloadable: true }, true],
+      [unnamed, {}, false],
+    ]) {
+      getWorkflowCard.mockResolvedValue(detail({ card: shown }));
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors", extra),
+      );
+      const { wrapper } = await mountWith([KEY], [shown]);
+      await settle(wrapper);
+      const button = wrapper
+        .find('[data-testid="wftab-missing-file"]')
+        .find('[data-testid="model-download"]');
+      expect(button.exists()).toBe(offered);
+      wrapper.unmount();
+    }
   });
 
   it("says restart ComfyUI for a shelf checkpoint its old pack cannot load", async () => {

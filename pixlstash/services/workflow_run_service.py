@@ -44,6 +44,7 @@ from pixlstash.services.comfyui_recipe_service import (
     unchecked_preflight,
 )
 from pixlstash.services.comfyui_service import pixlstash_node_refusals
+from pixlstash.services.model_downloads import download_source
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
     SECRET_FIELD_RE,
@@ -614,6 +615,11 @@ def judge(
         for item in preflight.get("missing_models") or []
         if item
     ]
+    for model in models:
+        # Only where it is true: `POST /model-downloads` can fetch it, because
+        # the template list links a file of this name.
+        if download_source(model["file"]) is not None:
+            model["downloadable"] = True
     if models:
         reasons.append(Reason(MISSING_MODELS, {"models": models}))
     if object_info is not None:

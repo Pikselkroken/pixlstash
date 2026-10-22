@@ -3,6 +3,8 @@ import { defineStore } from "pinia";
 import { isReadOnly } from "../utils/apiClient";
 import { getWorkerProgress } from "../api/workers";
 import { abortRun } from "../api/comfyui";
+import { cancelModelDownload } from "../api/modelDownloads";
+import { formatModelSize } from "../utils/modelShelf";
 import { useNoticeStore } from "./useNoticeStore";
 
 // Adaptive poll cadence (ms). Fast while the Tasks tab is open or something is
@@ -21,6 +23,15 @@ const RATE_AVERAGE_WINDOW_SECONDS = 60;
 // How much sparkline history to retain per worker.
 const SERIES_WINDOW_SECONDS = 120;
 
+/** "Downloading… 1.2 GB of 6.5 GB", or the bytes alone while the size is unknown. */
+export function downloadMessage(download) {
+  const received = formatModelSize(Number(download?.received) || 0);
+  const total = Number(download?.total) || 0;
+  return total
+    ? `Downloading… ${received} of ${formatModelSize(total)}`
+    : `Downloading… ${received}`;
+}
+
 /**
  * Cross-component "what is the app working on right now" store.
  *
@@ -35,6 +46,7 @@ const SERIES_WINDOW_SECONDS = 120;
  *  - ComfyUI runs in flight, which the backend follows and reports in the same
  *    poll (`runs`), so a run's row is there on every view and in every tab,
  *    whoever started it;
+ *  - model downloads (`downloads`, POST /model-downloads), one row each;
  *  - the async import, which is frontend-driven (ImageImporter).
  */
 export const useTasksStore = defineStore("tasks", () => {
@@ -70,6 +82,93 @@ export const useTasksStore = defineStore("tasks", () => {
     }
     nudge();
   }
+
+  // ── Model downloads (backend-reported) ────────────────────────────────────
+  // As the last poll listed them: [{ id, file, status, received, total,
+  // percent, error }]. A finished one stays listed for a few seconds, which is
+  // how its ending is heard here and told once (`endedDownloads`).
+  const modelDownloads = ref([]);
+  const seenDownloadStatus = new Map();
+  // Bumped when a download lands, so a view showing what is missing asks again.
+  const downloadsLanded = ref(0);
+
+  const runningDownloadFiles = computed(
+    () =>
+      new Set(
+        modelDownloads.value
+          .filter((d) => d.status === "running")
+          .map((d) => d.file),
+      ),
+  );
+
+  function noteDownloads(list) {
+    modelDownloads.value = list;
+    const notices = useNoticeStore();
+    for (const download of list) {
+      const before = seenDownloadStatus.get(download.id);
+      seenDownloadStatus.set(download.id, download.status);
+      // Only an ending this tab saw happen: one that ended before the first
+      // poll is old news.
+      if (before !== "running" || download.status === "running") continue;
+      if (download.status === "done") {
+        downloadsLanded.value += 1;
+        notices.push({
+          level: "success",
+          text: `Downloaded ${download.file}.`,
+          key: `model-download-${download.id}`,
+        });
+      } else if (download.status === "failed") {
+        notices.error(
+          `Could not download ${download.file}: ${download.error || "it failed."}`,
+          { key: `model-download-${download.id}` },
+        );
+      }
+    }
+    for (const id of Array.from(seenDownloadStatus.keys())) {
+      if (!list.some((download) => download.id === id)) {
+        seenDownloadStatus.delete(id);
+      }
+    }
+  }
+
+  /** Record a download this tab just started, so its ending is told here. */
+  function downloadStarted(download) {
+    if (!download?.id) return;
+    seenDownloadStatus.set(download.id, "running");
+    modelDownloads.value = [
+      ...modelDownloads.value.filter((d) => d.id !== download.id),
+      download,
+    ];
+    nudge();
+  }
+
+  async function cancelDownload(id) {
+    try {
+      await cancelModelDownload(id);
+    } catch (e) {
+      console.warn("tasks: the download could not be cancelled", e);
+      useNoticeStore().error("The download could not be cancelled.", {
+        key: "model-download-cancel-failed",
+      });
+    }
+    nudge();
+  }
+
+  const downloadEntries = computed(() =>
+    modelDownloads.value
+      .filter((download) => download.status === "running")
+      .map((download) => ({
+        kind: "download",
+        key: `download-${download.id}`,
+        id: download.id,
+        run: {
+          status: "running",
+          percent: Number(download.percent) || 0,
+          label: download.file,
+          message: downloadMessage(download),
+        },
+      })),
+  );
 
   // ── Import run state (frontend-driven, #459) ──────────────────────────────
   // The async import (ImageImporter) surfaces its server-side Phase B here as a
@@ -200,6 +299,7 @@ export const useTasksStore = defineStore("tasks", () => {
   // backend workers.
   const activeEntries = computed(() => [
     ...comfyuiEntries.value,
+    ...downloadEntries.value,
     ...importEntries.value,
     ...activeWorkerEntries.value,
   ]);
@@ -302,6 +402,9 @@ export const useTasksStore = defineStore("tasks", () => {
       const workers = progress?.workers || {};
       systemUsage.value = progress?.process || progress?.system || null;
       comfyuiRuns.value = Array.isArray(progress?.runs) ? progress.runs : [];
+      noteDownloads(
+        Array.isArray(progress?.downloads) ? progress.downloads : [],
+      );
       const now = Date.now() / 1000;
       nowSeconds.value = now;
       const nextSeries = { ...series.value };
@@ -410,6 +513,12 @@ export const useTasksStore = defineStore("tasks", () => {
     // comfyui runs
     comfyuiRuns,
     abortComfyuiRuns,
+    // model downloads
+    modelDownloads,
+    runningDownloadFiles,
+    downloadsLanded,
+    downloadStarted,
+    cancelDownload,
     // import runs (#459)
     importRuns,
     setImportRun,

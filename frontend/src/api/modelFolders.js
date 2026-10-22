@@ -135,6 +135,22 @@ export async function setDefaultModelFolder(id, isDefault) {
 }
 
 /**
+ * Make a folder the one a model PixlStash downloads goes into, or hand the
+ * role back to the default folder.
+ *
+ * @param {number|string} id - a `user` folder or the managed store.
+ * @param {boolean} isTarget
+ * @returns {Promise<Object>} the updated folder.
+ */
+export async function setDownloadModelFolder(id, isTarget) {
+  return unwrap(
+    apiClient.patch(`${MODEL_FOLDERS_URL}/${id}`, {
+      is_download_target: isTarget,
+    }),
+  );
+}
+
+/**
  * Forget a registered folder.
  *
  * Nothing on disk is touched and no curation is lost, so this needs no
