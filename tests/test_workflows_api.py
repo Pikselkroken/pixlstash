@@ -24461,6 +24461,30 @@ def test_a_template_that_does_not_convert_is_a_draft_until_comfyui_saves_it(
     )
 
 
+def test_a_draft_comfyui_can_now_convert_opens_as_any_workflow(
+    workflow_env, comfyui_templates_served, monkeypatch
+):
+    """A draft whose nodes ComfyUI lists since (a pack installed) is converted
+    on the next read, stores the conversion and is no longer a draft.
+
+    Wrong if the read still answers 409 or hands back the template to open,
+    or if the conversion is made but not kept, leaving the card a draft.
+    """
+    owner = workflow_env.owner
+    (added,) = _add_templates(owner, ("default", "image_example"))["added"]
+    workflow_id = added["workflow_id"]
+    assert added["draft"] is True
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (_EDITOR_OBJECT_INFO, None),
+    )
+    r = owner.get(f"{API}/workflows/{workflow_id}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["draft"] is False and r.json()["workflow"]
+    assert _card(owner, workflow_id)["draft"] is False
+
+
 def test_templates_are_not_added_while_comfyui_does_not_list_its_nodes(
     workflow_env, comfyui_templates_served
 ):
