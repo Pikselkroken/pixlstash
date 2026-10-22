@@ -1,5 +1,16 @@
 <template>
-  <div class="wfv" role="region" aria-label="Workflows">
+  <!-- The whole view is the drop target for workflow files, the same door as
+       *Add…* (`addWorkflowFiles`). -->
+  <div
+    class="wfv"
+    :class="{ 'wfv--drop': dropActive }"
+    role="region"
+    aria-label="Workflows"
+    @dragenter="onFileDragEnter"
+    @dragover="onFileDragOver"
+    @dragleave="onFileDragLeave"
+    @drop="onFileDrop"
+  >
     <p class="visually-hidden" role="status">{{ announcement }}</p>
 
     <div class="wfv-toolbar shelfbar toolbar">
@@ -7,10 +18,10 @@
       <span class="wfv-sub num">{{ subtitle }}</span>
 
       <!-- "Add" is today's workflow import, unchanged: the file lands through
-           `POST /comfyui/workflows/import`, the route the retired shelf's own
-           drop target posted to. The gesture went with the shelf; this screen
-           has no drop handler, so `useWindowFileImport` no longer stands
-           aside for it. -->
+           `POST /comfyui/workflows/import`. A `.json` dropped on the view
+           (not on a dialog or menu over it, which are teleported out of it)
+           takes the same path (`addWorkflowFiles`), and
+           `useWindowFileImport` stands aside for a drop of JSON alone. -->
       <AppBarButton icon="plus" @click="fileInput?.click()">Add…</AppBarButton>
       <input
         ref="fileInput"
@@ -399,6 +410,7 @@ import {
 } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { saveJsonAs } from "../../utils/downloadFile";
+import { isInternalImageDrag, isWorkflowFile } from "../../utils/media";
 import { outputNoun } from "../../utils/workflowCard";
 import FilterStrip from "../panels/FilterStrip.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
@@ -1464,9 +1476,17 @@ function announceSelection() {
 /** Larger than any real workflow; a bigger file is not read into memory. */
 const MAX_WORKFLOW_BYTES = 50 * 1024 * 1024;
 
-async function filesChosen(event) {
+function filesChosen(event) {
   const files = Array.from(event.target?.files ?? []);
   event.target.value = "";
+  return addWorkflowFiles(files);
+}
+
+/**
+ * Add workflow files, from *Add…* or a drop: each one is a new manual
+ * workflow, and the last to land is opened.
+ */
+async function addWorkflowFiles(files) {
   let last = null;
   let added = 0;
   for (const file of files) {
@@ -1495,6 +1515,55 @@ async function filesChosen(event) {
   // Opened on the last, but the live region says how many arrived.
   announcement.value = added > 1 ? `Added ${added} workflows` : `Added ${last.name}`;
 }
+
+// ── Drop a workflow file ──────────────────────────────────────────────────
+//
+// Only a drag carrying files is a drop target, so a card or text drag passes
+// over the view untouched. An in-app picture drag is not one even when the
+// desktop shell fills its `files` (`isInternalImageDrag`, the window
+// importer's guard). `dragenter` and `dragleave` fire for every child crossed,
+// hence a depth count rather than a boolean.
+
+const dropActive = ref(false);
+let dragDepth = 0;
+
+function carriesFiles(event) {
+  if (isInternalImageDrag(event.dataTransfer)) return false;
+  return Array.from(event.dataTransfer?.types || []).includes("Files");
+}
+
+function onFileDragEnter(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth += 1;
+  dropActive.value = true;
+}
+
+function onFileDragOver(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+}
+
+function onFileDragLeave(event) {
+  if (!carriesFiles(event)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropActive.value = false;
+}
+
+/**
+ * Only the `.json` files are this view's. Anything else in the same drop is
+ * the window-wide importer's, which stands aside only for a drop of JSON
+ * alone, so it is left to that and not reported twice.
+ */
+function onFileDrop(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  dropActive.value = false;
+  const files = Array.from(event.dataTransfer.files || []).filter(isWorkflowFile);
+  if (files.length) return addWorkflowFiles(files);
+}
 </script>
 
 <style scoped>
@@ -1508,6 +1577,22 @@ async function filesChosen(event) {
      container knows where its list ends, which is why the shared float rule
      is absolute rather than fixed (`App.css`). */
   position: relative;
+}
+
+/* The drop target is marked the way the design system marks a selection and
+   the model shelf marks its drop bands: the olive wash and ring. On a layer
+   above the toolbar and the cards, which are opaque and would hide the ring
+   along the top; an outline rather than a shadow so it survives forced
+   colours. */
+.wfv--drop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-floating);
+  pointer-events: none;
+  background: var(--active-wash);
+  outline: 2px solid var(--active-bar);
+  outline-offset: -2px;
 }
 
 /* The retired workflow shelf's box recipe, carried over so the screen that
