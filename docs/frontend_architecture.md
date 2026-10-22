@@ -6743,7 +6743,9 @@ from the UI today and are not oversights**:
   tab's *Save as new…* do with theirs. Only the `.json` files of a drop are
   the view's (`isWorkflowFile`, `utils/media.js`): `useWindowFileImport`
   stands aside for a drop of JSON alone onto `.wfv`, and anything else in a
-  mixed drop is still its to import.
+  mixed drop is still its to import. A dropped folder is not walked for
+  workflows, and a drop on a dialog or menu over the view (teleported out of
+  `.wfv`) is the window importer's.
 - ~~**The way out to a workflow's pictures.**~~ **Back.** The shelf
   inspector's second tab was Pictures, and its tiles opened one through
   `?overlay=<id>`; §F2 called that tab "what stops the rail being terminal".

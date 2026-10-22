@@ -18,8 +18,9 @@
       <span class="wfv-sub num">{{ subtitle }}</span>
 
       <!-- "Add" is today's workflow import, unchanged: the file lands through
-           `POST /comfyui/workflows/import`. A `.json` dropped anywhere on the
-           view takes the same path (`addWorkflowFiles`), and
+           `POST /comfyui/workflows/import`. A `.json` dropped on the view
+           (not on a dialog or menu over it, which are teleported out of it)
+           takes the same path (`addWorkflowFiles`), and
            `useWindowFileImport` stands aside for a drop of JSON alone. -->
       <AppBarButton icon="plus" @click="fileInput?.click()">Add…</AppBarButton>
       <input
@@ -409,7 +410,7 @@ import {
 } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { saveJsonAs } from "../../utils/downloadFile";
-import { isWorkflowFile } from "../../utils/media";
+import { isInternalImageDrag, isWorkflowFile } from "../../utils/media";
 import { outputNoun } from "../../utils/workflowCard";
 import FilterStrip from "../panels/FilterStrip.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
@@ -1518,13 +1519,16 @@ async function addWorkflowFiles(files) {
 // ── Drop a workflow file ──────────────────────────────────────────────────
 //
 // Only a drag carrying files is a drop target, so a card or text drag passes
-// over the view untouched. `dragenter` and `dragleave` fire for every child
-// crossed, hence a depth count rather than a boolean.
+// over the view untouched. An in-app picture drag is not one even when the
+// desktop shell fills its `files` (`isInternalImageDrag`, the window
+// importer's guard). `dragenter` and `dragleave` fire for every child crossed,
+// hence a depth count rather than a boolean.
 
 const dropActive = ref(false);
 let dragDepth = 0;
 
 function carriesFiles(event) {
+  if (isInternalImageDrag(event.dataTransfer)) return false;
   return Array.from(event.dataTransfer?.types || []).includes("Files");
 }
 

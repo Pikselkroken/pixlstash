@@ -1756,6 +1756,13 @@ describe("Add…, a dropped file, and Unfiled recipes", () => {
     expect(importWorkflow).not.toHaveBeenCalled();
   });
 
+  it("is not a drop target for an in-app picture drag the desktop fills with files", async () => {
+    const wrapper = await grid();
+    const dataTransfer = { files: [], types: ["Files", "application/json"] };
+    await wrapper.find(".wfv-row").trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+  });
+
   it("is not a drop target for a drag that carries no files", async () => {
     const wrapper = await grid();
     importWorkflow.mockReset();
