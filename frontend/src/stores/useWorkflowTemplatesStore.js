@@ -520,7 +520,9 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     error.value = "";
     selectedKeys.value = [];
     // What this browser remembers, as a fresh start would read it.
-    filters.value = storedView().filters;
+    const view = storedView();
+    sortKey.value = view.sortKey;
+    filters.value = view.filters;
   }
 
   onScopeDispose(onSessionReset(reset));

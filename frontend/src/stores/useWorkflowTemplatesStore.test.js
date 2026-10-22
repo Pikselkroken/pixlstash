@@ -138,6 +138,18 @@ describe("the Templates tab's list", () => {
     });
   });
 
+  it("comes back from a session reset as a fresh start would", async () => {
+    const store = useWorkflowTemplatesStore();
+    store.sortKey = "newest";
+    store.setFilters({ model: ["Wan"], name: "flux" });
+    await nextTick();
+    localStorage.clear();
+    store.reset();
+    expect(store.sortKey).toBe("readiness");
+    expect(store.filters.model).toEqual([]);
+    expect(store.filters.name).toBe("");
+  });
+
   it("starts from the defaults on a blob it cannot trust", () => {
     localStorage.setItem(
       "pixlstash:workflowTemplatesView",
