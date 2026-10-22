@@ -215,10 +215,12 @@ export function useWindowFileImport({ sidebarRef }) {
 
     noticeStore.dismissByKey(dropKey);
     if (added.length) {
+      // The folder the server says it used, else the one the copy notice named.
+      const landedName = landedIn ? basename(landedIn) : into;
       noticeStore.success(
         added.length === 1
-          ? `Added ${added[0]} to ${basename(landedIn)}. The original is still where it was.`
-          : `Added ${added.length} model files to ${basename(landedIn)}. The originals are still where they were.`,
+          ? `Added ${added[0]} to ${landedName}. The original is still where it was.`
+          : `Added ${added.length} model files to ${landedName}. The originals are still where they were.`,
         { key: dropKey },
       );
     }

@@ -354,6 +354,11 @@ describe("useWindowFileImport", () => {
         3,
       );
       expect(modelDropChoice.value).toBeNull();
+      // The answer here names no folder_path, so the receipt names the folder
+      // the drop chose rather than none.
+      expect(notices.notices.at(-1).text).toBe(
+        "Added lora.safetensors to models. The original is still where it was.",
+      );
     });
 
     it("asks where to put it when a card's models are elsewhere", async () => {
