@@ -1577,3 +1577,54 @@ describe("the favourite heart (#1578)", () => {
     expect(mountFav(base).classes()).toContain("fav-host");
   });
 });
+
+// The workflow's GPU need is the fourth corner of the cover: the same pill as
+// the picture count, in the bottom-left, on a cover with pictures and on an
+// empty one (#GPU queue). Nothing is added to the meta block or facts row.
+describe("the GPU need pill", () => {
+  const vram = (over = {}) => ({
+    need_mb: 9800,
+    measured_runs: 12,
+    exclusive: false,
+    exclusive_source: null,
+    exclusive_at: null,
+    trend: "flat",
+    peaks: [],
+    ...over,
+  });
+  const pill = (w) => w.find('[data-testid="wf-card-need"]');
+
+  it("shows the need, as GB, in the bottom-left of a cover with pictures", () => {
+    const w = mountCard({ ...BARE, vram: vram() });
+    expect(pill(w).exists()).toBe(true);
+    expect(pill(w).text()).toContain("9.6 GB");
+    // Inside the cover, so it is positioned against the cover's corner.
+    expect(pill(w).element.parentElement.classList.contains("wf-card__cover")).toBe(true);
+  });
+
+  it("says Not measured while the need is unknown, not zero", () => {
+    const w = mountCard({ ...BARE, vram: vram({ need_mb: null, measured_runs: 0 }) });
+    expect(pill(w).text()).toContain("Not measured");
+    expect(pill(w).text()).not.toContain("0.0 GB");
+  });
+
+  it("adds a lock inside the pill when the workflow runs alone", () => {
+    const alone = mountCard({ ...BARE, vram: vram({ exclusive: true }) });
+    expect(alone.find('[data-testid="wf-card-need-lock"]').exists()).toBe(true);
+    const shared = mountCard({ ...BARE, vram: vram({ exclusive: false }) });
+    expect(shared.find('[data-testid="wf-card-need-lock"]').exists()).toBe(false);
+  });
+
+  it("wears the same pill on an empty cover, in the same corner", () => {
+    const w = mountCard({ ...BARE, picture_count: 0, covers: [], vram: vram() });
+    expect(w.find(".wf-card__cover--empty").exists()).toBe(true);
+    expect(pill(w).exists()).toBe(true);
+    expect(pill(w).element.parentElement.classList.contains("wf-card__cover--empty")).toBe(true);
+  });
+
+  it("draws nothing for a card the server sent with no vram field", () => {
+    const w = mountCard({ ...BARE });
+    expect(pill(w).exists()).toBe(false);
+  });
+});
+

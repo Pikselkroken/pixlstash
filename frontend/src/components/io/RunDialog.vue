@@ -1232,6 +1232,7 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { comfyuiLink } from "../../utils/comfyuiLink";
+import { normalizeRunId } from "../../utils/gpuMemory";
 import { focusLater } from "../../utils/dom";
 import { editLorasRoute, loraBase, loraStem } from "../../utils/loraChain";
 import { fitPeople, fitWorkflows } from "../../utils/loraWorkflows";
@@ -5222,7 +5223,12 @@ async function submit() {
             name: card.value?.name || "",
             count: band.value.count,
             text: band.value.text,
-            promptIds: prompts.map((entry) => String(entry?.prompt_id)),
+            // A run held at submit has no prompt id yet (null), so the record
+            // keeps both ids and matches on either; no "null" string here.
+            runIds: prompts.map((entry) => normalizeRunId(entry?.run_id)).filter(Boolean),
+            promptIds: prompts
+              .map((entry) => normalizeRunId(entry?.prompt_id))
+              .filter(Boolean),
           }
         : null,
     );

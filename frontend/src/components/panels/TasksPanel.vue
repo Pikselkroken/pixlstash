@@ -15,137 +15,356 @@
   >
     No active tasks
   </div>
-  <div v-if="tasksStore.activeEntries.length" class="tm-worker-list">
-    <template v-for="entry in tasksStore.activeEntries" :key="entry.key">
-      <!-- ComfyUI runs in flight, as the backend reports them: a progress
-           bar + abort, which stops them all -->
-      <div v-if="entry.kind === 'comfyui'" class="tm-worker-row">
-        <div class="tm-worker-row-top">
-          <span class="tm-status-dot tm-status-dot--running"></span>
-          <span class="tm-worker-label">{{ entry.run.label }}</span>
-          <button
-            class="tm-comfy-abort"
-            type="button"
-            aria-label="Abort ComfyUI run"
-            @click="tasksStore.abortComfyuiRuns()"
-          >
-            <Tooltip
-              text="Abort ComfyUI run"
-              activator="parent"
-              :describe="false"
-            />
-            ✕
-          </button>
-        </div>
-        <div class="tm-comfy-bar">
-          <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
-        </div>
-        <div class="tm-comfy-message">{{ entry.run.message }}</div>
+  <!-- The GPU, one bar per device (Direction A): what holds each card's memory,
+       with the free part and the spare margin. Drawn only when the backend
+       reports `resources`. -->
+  <div v-if="tasksStore.vramBars.length" class="tm-gpu" data-testid="tm-gpu">
+    <div
+      v-for="bar in tasksStore.vramBars"
+      :key="bar.device.uuid"
+      class="tm-gpu-dev"
+    >
+      <div class="tm-gpu-head">
+        <span class="tm-gpu-name">{{ bar.device.name }}</span>
+        <span class="tm-gpu-figs">
+          {{ formatGb(bar.total) }} VRAM · {{ formatGb(bar.free) }} free
+        </span>
       </div>
-      <!-- A model downloading for a workflow: its bytes as a bar, and a
-           cancel that discards what it had fetched. -->
       <div
-        v-else-if="entry.kind === 'download'"
-        class="tm-worker-row"
-        data-testid="tm-download-row"
+        class="tm-vram"
+        role="img"
+        :aria-label="`${bar.device.name}: ${formatGb(bar.free)} free of ${formatGb(bar.total)}`"
       >
-        <div class="tm-worker-row-top">
-          <span class="tm-status-dot tm-status-dot--running"></span>
-          <span class="tm-worker-label">{{ entry.run.label }}</span>
-          <button
-            v-if="!isReadOnly"
-            class="tm-comfy-abort"
-            type="button"
-            :aria-label="`Cancel downloading ${entry.run.label}`"
-            data-testid="tm-download-cancel"
-            @click="tasksStore.cancelDownload(entry.id)"
-          >
-            <Tooltip
-              text="Cancel download"
-              activator="parent"
-              :describe="false"
-            />
-            ✕
-          </button>
-        </div>
-        <div class="tm-comfy-bar">
-          <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
-        </div>
-        <div class="tm-comfy-message">{{ entry.run.message }}</div>
+        <span
+          v-for="segment in bar.segments"
+          :key="segment.kind"
+          class="tm-vram-seg"
+          :class="`tm-vram-seg--${segment.kind}`"
+          :style="{ width: pctText(segment.pct) }"
+        >
+          <Tooltip
+            :text="segmentTip(segment)"
+            activator="parent"
+            :describe="false"
+          />
+        </span>
       </div>
-      <!-- Async import (#459): the two-phase dialog auto-hides at the safe
+    </div>
+    <ul class="tm-legend" aria-label="What the bars show">
+      <li><span class="tm-swatch tm-vram-seg--pixlstash"></span>PixlStash</li>
+      <li><span class="tm-swatch tm-vram-seg--comfyui"></span>ComfyUI</li>
+      <li><span class="tm-swatch tm-vram-seg--other"></span>Other apps</li>
+      <li><span class="tm-swatch tm-vram-seg--spare"></span>Spare</li>
+    </ul>
+  </div>
+
+  <!-- Running: ComfyUI runs as rows of their own, PixlStash's own GPU work
+       folded behind one row, and the import and ambient workers as before. -->
+  <section
+    v-if="tasksStore.runningEntries.length"
+    class="tm-group"
+    aria-labelledby="tm-running-head"
+  >
+    <div class="tm-group-head">
+      <span id="tm-running-head" class="section-label">Running</span>
+      <span class="tm-group-col">VRAM</span>
+    </div>
+    <div class="tm-worker-list">
+      <template v-for="entry in tasksStore.runningEntries" :key="entry.key">
+        <!-- A ComfyUI run in flight: its own row, named for what it is. The
+             stop button takes the figure's place on hover or focus, and stops
+             every run ComfyUI has, as it always has. -->
+        <div
+          v-if="entry.kind === 'comfyui'"
+          class="tm-row tm-row--run"
+          data-testid="tm-comfy-row"
+        >
+          <span
+            class="tm-mark"
+            :class="entry.run.status === 'running' ? 'tm-mark--running' : ''"
+            aria-hidden="true"
+          ></span>
+          <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
+          <span class="tm-name">{{ entry.run.label }}</span>
+          <span class="tm-figure">
+            <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
+            <span class="tm-acts">
+              <button
+                class="tm-act"
+                type="button"
+                aria-label="Stop ComfyUI"
+                @click="tasksStore.abortComfyuiRuns()"
+              >
+                <Tooltip text="Stop ComfyUI" activator="parent" :describe="false" />
+                <v-icon size="16">mdi-stop</v-icon>
+              </button>
+            </span>
+          </span>
+          <Tooltip
+            :text="`${entry.run.message}, ${Math.round(entry.run.percent)}%`"
+            activator="parent"
+            :describe="false"
+          />
+        </div>
+        <!-- PixlStash's own GPU work: one folded row with its count and the
+             VRAM its leases hold. The caret lists one line per task. -->
+        <div
+          v-else-if="entry.kind === 'pixlstash'"
+          class="tm-fold"
+          data-testid="tm-pixlstash"
+        >
+          <div class="tm-row tm-row--fold">
+            <span
+              class="tm-mark"
+              :class="pixlstashRunning(entry) ? 'tm-mark--running' : ''"
+              aria-hidden="true"
+            ></span>
+            <span class="tm-app-gap" aria-hidden="true"></span>
+            <span class="tm-name">
+              PixlStash processing
+              <span class="tm-count" data-testid="tm-pixl-count">{{ entry.count }}</span>
+            </span>
+            <span class="tm-figure">
+              <span class="tm-fig-text">{{ formatGb(entry.mb) }}</span>
+              <button
+              class="tm-caret"
+              type="button"
+              :aria-expanded="pixlOpen ? 'true' : 'false'"
+              aria-controls="tm-pixl-children"
+              :aria-label="pixlOpen ? 'Hide PixlStash tasks' : 'Show PixlStash tasks'"
+              data-testid="tm-pixl-caret"
+              @click="togglePixl"
+            >
+              <v-icon size="16">{{ pixlOpen ? "mdi-chevron-down" : "mdi-chevron-right" }}</v-icon>
+            </button>
+            </span>
+            <Tooltip :text="foldTip(entry)" activator="parent" :describe="false" />
+          </div>
+          <div v-if="pixlOpen" id="tm-pixl-children" class="tm-children">
+            <div
+              v-for="child in entry.children"
+              :key="child.key"
+              class="tm-row tm-row--child"
+            >
+              <span
+                class="tm-mark"
+                :class="child.stopped || child.onCpu ? '' : 'tm-mark--running'"
+                :data-state="child.stopped ? 'stopped' : undefined"
+                aria-hidden="true"
+              ></span>
+              <span class="tm-app-gap" aria-hidden="true"></span>
+              <span class="tm-name">{{ childLabel(child) }}</span>
+              <span class="tm-figure">
+                <span class="tm-fig-text">{{ childFigure(child) }}</span>
+              </span>
+              <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
+            </div>
+          </div>
+        </div>
+        <!-- A model downloading for a workflow: its bytes as a bar, and a
+             cancel that discards what it had fetched. -->
+        <div
+          v-else-if="entry.kind === 'download'"
+          class="tm-worker-row"
+          data-testid="tm-download-row"
+        >
+          <div class="tm-worker-row-top">
+            <span class="tm-status-dot tm-status-dot--running"></span>
+            <span class="tm-worker-label">{{ entry.run.label }}</span>
+            <button
+              v-if="!isReadOnly"
+              class="tm-comfy-abort"
+              type="button"
+              :aria-label="`Cancel downloading ${entry.run.label}`"
+              data-testid="tm-download-cancel"
+              @click="tasksStore.cancelDownload(entry.id)"
+            >
+              <Tooltip
+                text="Cancel download"
+                activator="parent"
+                :describe="false"
+              />
+              ✕
+            </button>
+          </div>
+          <div class="tm-comfy-bar">
+            <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
+          </div>
+          <div class="tm-comfy-message">{{ entry.run.message }}</div>
+        </div>
+        <!-- Async import (#459): the two-phase dialog auto-hides at the safe
              transition and the import lands here as a determinate task row.
              data-import-task-row is the FLIP flight target the import dialog
              flies its count chip into. -->
-      <div
-        v-else-if="entry.kind === 'import'"
-        class="tm-worker-row tm-import-row"
-        :data-import-task-row="entry.key"
-      >
-        <div class="tm-worker-row-top">
-          <span
-            class="tm-status-dot"
-            :class="{
-              'tm-status-dot--running': entry.run.status === 'running',
-            }"
-          ></span>
-          <span class="tm-worker-label">{{ entry.run.label }}</span>
-          <span v-if="entry.run.total > 0" class="tm-worker-progress">
-            {{ entry.run.current }} / {{ entry.run.total }}
-          </span>
-          <!-- Cancel is offered only while the import is genuinely
+        <div
+          v-else-if="entry.kind === 'import'"
+          class="tm-worker-row tm-import-row"
+          :data-import-task-row="entry.key"
+        >
+          <div class="tm-worker-row-top">
+            <span
+              class="tm-status-dot"
+              :class="{
+                'tm-status-dot--running': entry.run.status === 'running',
+              }"
+            ></span>
+            <span class="tm-worker-label">{{ entry.run.label }}</span>
+            <span v-if="entry.run.total > 0" class="tm-worker-progress">
+              {{ entry.run.current }} / {{ entry.run.total }}
+            </span>
+            <!-- Cancel is offered only while the import is genuinely
                  client-abortable (the pre-commit upload window, run.abortable).
                  A committed server-side import cannot be stopped from the
                  client, so no cancel control is shown for it. -->
-          <button
-            v-if="entry.run.abortable && !isReadOnly"
-            class="tm-comfy-abort"
-            type="button"
-            aria-label="Cancel import"
-            @click="tasksStore.abortImportRun(entry.key)"
-          >
-            <Tooltip
-              text="Cancel import"
-              activator="parent"
-              :describe="false"
-            />
-            ✕
-          </button>
+            <button
+              v-if="entry.run.abortable && !isReadOnly"
+              class="tm-comfy-abort"
+              type="button"
+              aria-label="Cancel import"
+              @click="tasksStore.abortImportRun(entry.key)"
+            >
+              <Tooltip
+                text="Cancel import"
+                activator="parent"
+                :describe="false"
+              />
+              ✕
+            </button>
+          </div>
+          <div class="tm-comfy-bar">
+            <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
+          </div>
+          <div class="tm-comfy-message">{{ entry.run.message }}</div>
         </div>
-        <div class="tm-comfy-bar">
-          <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
+        <!-- Backend worker: throughput sparkline + rate -->
+        <div v-else class="tm-worker-row">
+          <div class="tm-worker-row-top">
+            <span
+              class="tm-status-dot"
+              :class="{
+                'tm-status-dot--running':
+                  entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
+              }"
+            ></span>
+            <span class="tm-worker-label">{{
+              tmFormatLabel(entry.key, entry.snapshot.label)
+            }}</span>
+            <span class="tm-worker-progress">{{
+              tmFormatProgress(entry.snapshot)
+            }}</span>
+          </div>
+          <div class="tm-worker-row-bottom">
+            <canvas
+              :ref="(el) => tmRegisterCanvas(entry.key, el)"
+              class="tm-sparkline"
+            ></canvas>
+            <span class="tm-worker-rate">
+              {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
+            </span>
+          </div>
         </div>
-        <div class="tm-comfy-message">{{ entry.run.message }}</div>
-      </div>
-      <!-- Backend worker: throughput sparkline + rate -->
-      <div v-else class="tm-worker-row">
-        <div class="tm-worker-row-top">
-          <span
-            class="tm-status-dot"
-            :class="{
-              'tm-status-dot--running':
-                entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
-            }"
-          ></span>
-          <span class="tm-worker-label">{{
-            tmFormatLabel(entry.key, entry.snapshot.label)
-          }}</span>
-          <span class="tm-worker-progress">{{
-            tmFormatProgress(entry.snapshot)
-          }}</span>
-        </div>
-        <div class="tm-worker-row-bottom">
-          <canvas
-            :ref="(el) => tmRegisterCanvas(entry.key, el)"
-            class="tm-sparkline"
-          ></canvas>
-          <span class="tm-worker-rate">
-            {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
+      </template>
+    </div>
+  </section>
+
+  <!-- Waiting for the GPU: in the order the arbiter will run them. The
+       backend's sentence is the tooltip; the actions it offers take the
+       figure's place on hover or focus. -->
+  <section
+    v-if="tasksStore.waitingEntries.length"
+    class="tm-group"
+    aria-labelledby="tm-waiting-head"
+  >
+    <div class="tm-group-head">
+      <span id="tm-waiting-head" class="section-label">Waiting for the GPU</span>
+      <span class="tm-group-col">Needs</span>
+    </div>
+    <div class="tm-worker-list">
+      <div
+        v-for="entry in tasksStore.waitingEntries"
+        :key="entry.key"
+        class="tm-row tm-row--waiting"
+        data-testid="tm-waiting-row"
+      >
+        <span class="tm-mark tm-mark--waiting" aria-hidden="true">
+          <v-icon size="16">mdi-hourglass</v-icon>
+        </span>
+        <ComfyuiIcon
+          v-if="entry.tenant === 'comfyui'"
+          :size="18"
+          class="tm-app"
+          aria-hidden="true"
+        />
+        <AiToolkitIcon
+          v-else-if="entry.tenant === 'aitoolkit'"
+          :size="18"
+          class="tm-app"
+          aria-hidden="true"
+        />
+        <span v-else class="tm-app-gap" aria-hidden="true"></span>
+        <span class="tm-name">{{ entry.label }}</span>
+        <span class="tm-figure">
+          <span class="tm-fig-text">{{ needText(entry) }}</span>
+          <span v-if="actionsOf(entry).length" class="tm-acts">
+            <button
+              v-if="actionsOf(entry).includes('run_anyway')"
+              class="tm-act"
+              type="button"
+              data-testid="tm-run-anyway"
+              :aria-label="`Run ${entry.label} anyway`"
+              :disabled="busyLease === entry.lease?.id"
+              @click="askRunAnyway(entry)"
+            >
+              <Tooltip text="Run anyway" activator="parent" :describe="false" />
+              <v-icon size="16">mdi-play</v-icon>
+            </button>
+            <button
+              v-if="actionsOf(entry).includes('free_comfyui')"
+              class="tm-act"
+              type="button"
+              data-testid="tm-free-comfyui"
+              aria-label="Free ComfyUI's cache"
+              @click="freeComfyuiCache()"
+            >
+              <Tooltip text="Free ComfyUI's cache" activator="parent" :describe="false" />
+              <v-icon size="16">mdi-broom</v-icon>
+            </button>
+            <button
+              v-if="actionsOf(entry).includes('cancel')"
+              class="tm-act"
+              type="button"
+              data-testid="tm-cancel-wait"
+              :aria-label="`Cancel ${entry.label}`"
+              :disabled="busyLease === entry.lease?.id"
+              @click="cancelWait(entry)"
+            >
+              <Tooltip text="Cancel" activator="parent" :describe="false" />
+              <v-icon size="16">mdi-close</v-icon>
+            </button>
           </span>
-        </div>
+        </span>
+        <Tooltip
+          :text="entry.text || `${entry.label} is waiting for the GPU`"
+          activator="parent"
+          :describe="false"
+        />
       </div>
-    </template>
-  </div>
+    </div>
+  </section>
+
+  <!-- Mounted only while it is asked: a closed Vuetify dialog still sets up
+       its overlay, which a panel with nothing to ask need not carry. -->
+  <RunAnywayDialog
+    v-if="runAnyway"
+    open
+    :label="runAnyway?.label || ''"
+    :need-mb="runAnyway?.needMb || 0"
+    :device="runAnyway?.device || null"
+    :holders="tasksStore.resources?.holders || []"
+    :busy="busyLease !== ''"
+    @close="runAnyway = null"
+    @confirm="confirmRunAnyway"
+  />
   <!-- What the last run of a workflow changed (#1850): the Run popup's two
        verbs again, once the pictures are back. Rows of the same list, not a
        toast: pictures get rated before this is decided, so the offer stays
@@ -343,11 +562,169 @@ import {
   saveFailure,
   suggestedName,
 } from "../../utils/workflowChanges";
+import { formatGb } from "../../utils/gpuMemory";
+import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
+import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
+import RunAnywayDialog from "./RunAnywayDialog.vue";
 
 const tasksStore = useTasksStore();
+
+// ── The GPU queue (VRAM orchestration) ────────────────────────────────────────
+//
+// What the poll's `resources` says, shown in place: the bars, the Running group
+// with PixlStash's own work folded, and the Waiting group. The backend writes
+// every sentence; this only places figures and wires the row actions.
+
+/** The waiting lease Run anyway is asked about: `{leaseId, label, needMb, device}`. */
+const runAnyway = ref(null);
+/** The lease id a Run anyway or Cancel is out for, or "". */
+const busyLease = ref("");
+
+// The PixlStash fold is remembered per browser, as the inspector sections are.
+// Its own key rather than the sidebar's blob: two instances of that composable
+// would overwrite each other's saved state.
+const PIXL_FOLD_KEY = "pixlstash:tasks:pixlstash-fold";
+
+function readPixlOpen() {
+  try {
+    return globalThis.localStorage?.getItem(PIXL_FOLD_KEY) === "1";
+  } catch (err) {
+    console.warn(
+      `The PixlStash fold could not be read (${PIXL_FOLD_KEY}); it starts closed.`,
+      err,
+    );
+    return false;
+  }
+}
+
+const pixlOpen = ref(readPixlOpen());
+
+function togglePixl() {
+  pixlOpen.value = !pixlOpen.value;
+  try {
+    globalThis.localStorage?.setItem(PIXL_FOLD_KEY, pixlOpen.value ? "1" : "0");
+  } catch (err) {
+    console.warn(
+      `The PixlStash fold could not be remembered (${PIXL_FOLD_KEY}).`,
+      err,
+    );
+  }
+}
+
+/** The fold's mark pulses while any of its tasks is on the GPU, not stopped. */
+function pixlstashRunning(entry) {
+  return entry.children.some((child) => !child.stopped);
+}
+
+const SEGMENT_NAMES = {
+  pixlstash: "PixlStash",
+  comfyui: "ComfyUI",
+  aitoolkit: "AI Toolkit",
+  other: "Other apps",
+  spare: "Spare",
+};
+
+/** A bar segment's tooltip: whose it is, how big, and what holds it. */
+function segmentTip(segment) {
+  const name = SEGMENT_NAMES[segment.kind] ?? segment.kind;
+  if (segment.kind === "spare") {
+    return `Spare · ${formatGb(segment.mb)} kept back from new requests`;
+  }
+  if (segment.kind === "pixlstash") {
+    const count = tasksStore.pixlstashEntry?.count ?? 0;
+    return `${name} · ${formatGb(segment.mb)} · ${count} ${count === 1 ? "task" : "tasks"}`;
+  }
+  const holders = segment.holders.length ? ` · ${segment.holders.join(", ")}` : "";
+  return `${name} · ${formatGb(segment.mb)}${holders}`;
+}
+
+/** A width for a bar segment or a track, clamped to 0-100%. */
+function pctText(value) {
+  return `${Math.min(100, Math.max(0, Number(value) || 0)).toFixed(2)}%`;
+}
+
+function actionsOf(entry) {
+  return entry.actions ?? [];
+}
+
+function needText(entry) {
+  return entry.needMb == null ? "" : formatGb(entry.needMb);
+}
+
+function askRunAnyway(entry) {
+  if (!entry.lease || busyLease.value) return;
+  const devices = tasksStore.resources?.devices ?? [];
+  const device = devices.find((d) => d.uuid === entry.lease.device) ?? devices[0] ?? null;
+  runAnyway.value = {
+    leaseId: entry.lease.id,
+    label: entry.label,
+    needMb: Number(entry.lease.need_mb) || 0,
+    device,
+  };
+}
+
+async function confirmRunAnyway() {
+  const pending = runAnyway.value;
+  if (!pending) return;
+  busyLease.value = pending.leaseId;
+  try {
+    await tasksStore.runWaitingAnyway(pending.leaseId);
+  } finally {
+    busyLease.value = "";
+    runAnyway.value = null;
+  }
+}
+
+async function cancelWait(entry) {
+  if (!entry.lease || busyLease.value) return;
+  busyLease.value = entry.lease.id;
+  try {
+    await tasksStore.cancelWaiting(entry.lease.id);
+  } finally {
+    busyLease.value = "";
+  }
+}
+
+function freeComfyuiCache() {
+  return tasksStore.freeComfyuiCache();
+}
+
+function childLabel(child) {
+  return child.stopped && child.workerKey
+    ? tmFallbackWorkerLabel(child.workerKey)
+    : child.label;
+}
+
+/** What a PixlStash task holds, in the figure column: stopped, CPU, or VRAM. */
+function childFigure(child) {
+  if (child.stopped) return "stopped";
+  if (child.onCpu) return "CPU";
+  return formatGb(child.mb);
+}
+
+function childTip(child) {
+  const parts = [childLabel(child)];
+  if (child.stopped) parts.push(child.text || "Stopped to make room; nothing was lost");
+  else if (child.onCpu) parts.push("Running on the CPU");
+  if (child.progress?.total) {
+    parts.push(`${child.progress.current} / ${child.progress.total}`);
+  }
+  return parts.join(" · ");
+}
+
+/** The fold's tooltip: its size, and anything unusual about its tasks. */
+function foldTip(entry) {
+  const unusual = entry.children
+    .filter((child) => child.stopped || child.onCpu)
+    .map((child) => `${childLabel(child)} ${child.stopped ? "stopped" : "on the CPU"}`);
+  return [
+    `${entry.count} ${entry.count === 1 ? "task" : "tasks"}, ${formatGb(entry.mb)} of VRAM`,
+    ...unusual,
+  ].join(". ");
+}
 
 // ── Save what a run changed (#1850) ────────────────────────────────────────
 //
@@ -1102,5 +1479,288 @@ const tmSystemItems = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* ── The GPU: one bar per device, a legend of four words ───────────────────── */
+.tm-gpu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.tm-gpu-dev {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.tm-gpu-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.tm-gpu-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tm-gpu-figs {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The track is the card's whole memory; the empty part is free memory. */
+.tm-vram {
+  display: flex;
+  height: var(--space-4);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-surface), 0.08);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+}
+
+.tm-vram-seg {
+  display: block;
+  flex: none;
+  height: 100%;
+}
+
+.tm-vram-seg--pixlstash,
+.tm-swatch.tm-vram-seg--pixlstash {
+  background: rgb(var(--tenant-pixlstash));
+}
+.tm-vram-seg--comfyui,
+.tm-swatch.tm-vram-seg--comfyui {
+  background: rgb(var(--tenant-comfyui));
+}
+.tm-vram-seg--aitoolkit,
+.tm-swatch.tm-vram-seg--aitoolkit {
+  background: rgb(var(--tenant-aitoolkit));
+}
+/* One hatch for every memory that is not PixlStash's or ComfyUI's: other
+   apps, and the spare margin. */
+.tm-vram-seg--other,
+.tm-vram-seg--spare,
+.tm-swatch.tm-vram-seg--other,
+.tm-swatch.tm-vram-seg--spare {
+  background: var(--hatch-not-ours);
+}
+
+.tm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.tm-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tm-swatch {
+  width: var(--space-3);
+  height: var(--space-3);
+  flex: none;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Groups: Running and Waiting for the GPU ──────────────────────────────── */
+.tm-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.tm-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.tm-group-col {
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* One line per task, on one grid: state mark, app mark, name, figure. */
+.tm-row {
+  display: grid;
+  grid-template-columns: var(--gutter-glyph) 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+  font-size: var(--text-xs);
+}
+
+.tm-row--child {
+  background: none;
+  border-color: transparent;
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+
+.tm-children {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--indent-step);
+}
+
+.tm-mark {
+  justify-self: center;
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.2);
+}
+
+/* Running: a pulsing olive dot. */
+.tm-mark--running {
+  background: rgb(var(--state-running));
+  box-shadow: 0 0 5px rgba(var(--state-running), 0.55);
+  animation: tm-dot-pulse 1.4s ease-in-out infinite;
+}
+
+/* Waiting: a bare amber hourglass, a different shape as well as a colour. */
+.tm-mark--waiting {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  background: none;
+  color: rgb(var(--state-waiting));
+}
+
+/* Stopped to make room: a dashed grey ring, quiet on purpose. */
+.tm-mark[data-state="stopped"] {
+  background: none;
+  border: 1px dashed rgba(var(--v-theme-on-surface), 0.5);
+}
+
+.tm-app {
+  flex: none;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tm-app-gap {
+  display: block;
+  width: 18px;
+}
+
+.tm-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-medium);
+  color: rgba(var(--v-theme-on-surface), 0.85);
+}
+
+.tm-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--badge-size);
+  height: var(--badge-size);
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--v-theme-on-surface), 0.12);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The figure column. Actions take its place on hover or keyboard focus. */
+.tm-figure {
+  min-width: 56px;
+  text-align: right;
+  white-space: nowrap;
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.tm-acts {
+  display: none;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.tm-row:hover .tm-acts,
+.tm-row:focus-within .tm-acts {
+  display: inline-flex;
+}
+
+.tm-row--run:hover .tm-fig-text,
+.tm-row--run:focus-within .tm-fig-text,
+.tm-row--waiting:hover .tm-fig-text,
+.tm-row--waiting:focus-within .tm-fig-text {
+  display: none;
+}
+
+.tm-act,
+.tm-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  border-radius: var(--radius-sm);
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+
+.tm-act:hover,
+.tm-act:focus-visible,
+.tm-caret:hover,
+.tm-caret:focus-visible {
+  background: var(--hover-wash);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tm-act:disabled {
+  opacity: var(--opacity-disabled);
+}
+
+.tm-fold {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.tm-row--fold .tm-figure {
+  font-weight: var(--weight-semibold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tm-mark--running {
+    animation: none;
+  }
 }
 </style>

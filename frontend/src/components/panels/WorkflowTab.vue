@@ -796,6 +796,76 @@
         </template>
       </section>
 
+      <!-- GPU memory (VRAM orchestration): what this workflow's runs measured
+           on the GPU, the need taken from them, and the run-alone switch. Read
+           from the detail, so it waits for it like the rest of the panel. -->
+      <section
+        v-if="gpu"
+        class="wftab-panel"
+        data-testid="wftab-gpu"
+      >
+        <div class="wftab-sec-head">
+          <span class="section-label" role="heading" aria-level="3">GPU memory</span>
+        </div>
+        <p class="wftab-sublabel" data-testid="wftab-gpu-need">
+          {{ gpu.need_mb == null ? "Not measured yet" : `Needs about ${formatGb(gpu.need_mb)}` }}
+        </p>
+        <p
+          v-if="gpuUsed && gpu.measured_runs"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-gpu-basis"
+        >
+          Based on last {{ gpuUsed }} of {{ gpu.measured_runs }} runs{{
+            gpu.trend ? `, trend ${trendWord(gpu.trend)}` : ""
+          }}
+        </p>
+        <div
+          v-if="gpuBars.length"
+          class="wftab-peaks"
+          role="list"
+          aria-label="Measured peaks, newest first"
+          data-testid="wftab-gpu-peaks"
+        >
+          <div
+            v-for="(bar, index) in gpuBars"
+            :key="index"
+            role="listitem"
+            class="wftab-peak"
+            :class="{
+              'wftab-peak--used': bar.used,
+              'wftab-peak--oom': bar.outcome === 'oom',
+            }"
+            :style="{ height: `${Math.max(bar.pct, 6)}%` }"
+            :aria-label="peakLabel(bar)"
+          ></div>
+        </div>
+        <v-switch
+          :model-value="Boolean(gpu.exclusive)"
+          :disabled="busy === 'exclusive'"
+          color="primary"
+          density="compact"
+          hide-details
+          label="Run alone on the GPU"
+          data-testid="wftab-gpu-exclusive"
+          @update:model-value="setExclusive"
+        />
+        <template v-if="gpu.exclusive">
+          <p
+            v-if="gpu.exclusive_source === 'oom' && gpu.exclusive_at"
+            class="wftab-note wftab-quiet"
+            data-testid="wftab-gpu-oom"
+          >
+            Turned on after it ran out of memory on {{ dayMonth(gpu.exclusive_at) }}.
+            While it runs, PixlStash moves its own work off the GPU. ComfyUI keeps
+            its cache: the run reuses it.
+          </p>
+          <p v-else class="wftab-note wftab-quiet">
+            While it runs, PixlStash moves its own work off the GPU. ComfyUI keeps
+            its cache: the run reuses it.
+          </p>
+        </template>
+      </section>
+
       <!-- Each parameter is set each run (asked for by the Run form) or fixed
            (every run uses the workflow's value; a recipe and an API or MCP
            override still win). Grouped by what it was when the workflow was
@@ -1242,7 +1312,7 @@ import {
   watch,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { VIcon, VMenu } from "vuetify/components";
+import { VIcon, VMenu, VSwitch } from "vuetify/components";
 
 import {
   discardWorkflowChanges,
@@ -1294,6 +1364,7 @@ import {
   STAGE_LABELS,
 } from "../../utils/runReasons";
 import { relativeDate } from "../../utils/snapshots";
+import { formatGb, peakBars } from "../../utils/gpuMemory";
 import {
   checkpointMissing,
   baseModels,
@@ -4198,6 +4269,57 @@ function togglePin(row) {
   });
 }
 
+/** This workflow's GPU memory from the detail read, or null before it lands. */
+const gpu = computed(() => detail.value?.card?.vram ?? null);
+/** The peaks as bars, newest first, scaled to the tallest. */
+const gpuBars = computed(() => peakBars(gpu.value?.peaks));
+/** How many of the peaks the need is taken from (the solid bars). */
+const gpuUsed = computed(
+  () => (gpu.value?.peaks ?? []).filter((peak) => peak.used).length,
+);
+
+const TREND_WORDS = { rising: "rising", falling: "falling", flat: "steady" };
+
+function trendWord(trend) {
+  return TREND_WORDS[trend] ?? trend;
+}
+
+function dayMonth(iso) {
+  return new Date(iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function peakLabel(bar) {
+  const outcome = {
+    completed: "completed",
+    failed: "failed",
+    oom: "ran out of GPU memory",
+    aborted: "stopped",
+  }[bar.outcome] ?? bar.outcome;
+  return `${formatGb(bar.peak_mb)}, ${outcome}${bar.used ? ", used for the need" : ""}`;
+}
+
+/** Run alone on the GPU: the switch in the GPU memory section. */
+function setExclusive(value) {
+  const key = selectedKey.value;
+  if (!key || !detail.value) return;
+  const next = Boolean(value);
+  return queueWrite("exclusive", async () => {
+    try {
+      const body = await patchWorkflowCard(key, { exclusive: next });
+      if (stillOn(key)) detail.value = body;
+      await store.refetch();
+    } catch (err) {
+      fail(
+        err,
+        next ? "Could not turn on running alone." : "Could not turn running alone off.",
+      );
+    }
+  });
+}
+
 function toggleHidden() {
   const key = selectedKey.value;
   if (!key || !detail.value) return;
@@ -4568,6 +4690,32 @@ async function checkInstalled(key, { quiet = false } = {}) {
   height: 1px;
   margin: var(--space-1) 0;
   background: rgb(var(--v-theme-divider));
+}
+
+/* The last measured peaks, newest first. The ones the need is taken from are
+   solid; an out-of-memory run is the error colour. */
+.wftab-peaks {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-1);
+  height: var(--space-8);
+  margin: var(--space-2) 0;
+}
+
+.wftab-peak {
+  flex: 1;
+  max-width: var(--space-5);
+  min-width: var(--space-2);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: rgba(var(--v-theme-on-surface), 0.22);
+}
+
+.wftab-peak--used {
+  background: rgb(var(--v-theme-on-surface));
+}
+
+.wftab-peak--oom {
+  background: rgb(var(--v-theme-error));
 }
 
 .wftab-sublabel {

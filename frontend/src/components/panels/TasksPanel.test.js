@@ -36,8 +36,16 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { abortRun } from "../../api/comfyui";
+import RunAnywayDialog from "./RunAnywayDialog.vue";
 
 vi.mock("../../api/comfyui", () => ({ abortRun: vi.fn(async () => ({})) }));
+const runLeaseAnyway = vi.fn(async () => ({ status: "success" }));
+const cancelLease = vi.fn(async () => ({ status: "success" }));
+vi.mock("../../api/resources", () => ({
+  runLeaseAnyway: (...args) => runLeaseAnyway(...args),
+  cancelLease: (...args) => cancelLease(...args),
+  freeComfyui: vi.fn(async () => ({ status: "success", freed_mb: 0 })),
+}));
 
 const globalOpts = { global: { stubs: { "v-icon": true, Tooltip: true } } };
 
@@ -129,7 +137,7 @@ describe("what the task manager shows", () => {
   // #1862: the runs are what the backend's poll reported and nothing else, so
   // the row is there with no view mounted to follow them - a run another tab
   // or MCP started included.
-  it("draws the runs the backend reports, with progress and an abort", async () => {
+  it("draws each run the backend reports as a row of its own, the running one pulsing", async () => {
     const tasksStore = useTasksStore();
     tasksStore.comfyuiRuns = [
       { prompt_id: "p-1", label: "Night market", status: "queued", percent: 0 },
@@ -144,31 +152,39 @@ describe("what the task manager shows", () => {
     const wrapper = mount(TasksPanel, globalOpts);
     const text = textOf(wrapper);
     expect(text).not.toContain("No active tasks");
-    // One row, named for the run ComfyUI is on, counting the rest.
-    expect(wrapper.findAll(".tm-worker-row")).toHaveLength(1);
-    expect(text).toContain("Cinematic portrait");
-    expect(text).toContain("ComfyUI running… 2 more queued");
-    expect(wrapper.find(".tm-comfy-fill").attributes("style")).toContain(
-      "width: 40%",
-    );
+    // One row per run, not one row for them all.
+    const rows = wrapper.findAll('[data-testid="tm-comfy-row"]');
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.find(".tm-name").text())).toEqual([
+      "Night market",
+      "Cinematic portrait",
+      "Upscale",
+    ]);
+    // Only the run on the GPU pulses; the others are queued, a plain dot.
+    expect(rows.map((row) => row.find(".tm-mark").classes("tm-mark--running"))).toEqual([
+      false,
+      true,
+      false,
+    ]);
 
-    // The abort asks the backend, not a handler some view registered.
-    const abort = wrapper.find('button[aria-label="Abort ComfyUI run"]');
-    expect(abort.exists()).toBe(true);
+    // The stop asks the backend, not a handler some view registered.
+    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]');
+    expect(stop.exists()).toBe(true);
     expect(abortRun).not.toHaveBeenCalled();
-    await abort.trigger("click");
+    await stop.trigger("click");
     expect(abortRun).toHaveBeenCalledTimes(1);
   });
 
-  it("names the first run in line while none has started", () => {
+  it("shows a queued run as a row with no figure, and no pulse", () => {
     const tasksStore = useTasksStore();
     tasksStore.comfyuiRuns = [
       { prompt_id: "p-1", label: "Night market", status: "queued", percent: 0 },
     ];
-    const text = textOf(mount(TasksPanel, globalOpts));
-    expect(text).toContain("Night market");
-    expect(text).toContain("ComfyUI queued…");
-    expect(text).not.toContain("more queued");
+    const wrapper = mount(TasksPanel, globalOpts);
+    const row = wrapper.find('[data-testid="tm-comfy-row"]');
+    expect(row.find(".tm-name").text()).toBe("Night market");
+    expect(row.find(".tm-mark").classes("tm-mark--running")).toBe(false);
+    expect(row.find(".tm-fig-text").text()).toBe("");
   });
 
   it("gives an import row the FLIP target the import dialog flies into", () => {
@@ -864,5 +880,221 @@ describe("the offer to save what a run changed", () => {
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).not.toHaveBeenCalled();
     expect(offer(wrapper).exists()).toBe(false);
+  });
+});
+
+// ── The GPU queue: bars, Running and Waiting groups, Run anyway ──────────────
+
+const GPU_DEVICE = {
+  uuid: "GPU-1",
+  name: "NVIDIA GeForce RTX 4090",
+  total_mb: 24576,
+  used_mb: 13000,
+  free_mb: 11576,
+  reserved_mb: 0,
+  budget_mb: 10000,
+  measurable: true,
+  pixlstash: true,
+};
+
+function gpuLease(over) {
+  return {
+    id: "lease-x",
+    tenant: "pixlstash",
+    label: "Tagging",
+    kind: "light",
+    state: "granted",
+    device: "GPU-1",
+    need_mb: 2000,
+    ram_mb: 0,
+    reserved_mb: 0,
+    held_mb: 0,
+    peak_mb: null,
+    since: "2026-10-22T10:00:00Z",
+    worker_type: null,
+    run_id: null,
+    job_id: null,
+    on_cpu: false,
+    warnings: [],
+    waiting_reason: null,
+    ...over,
+  };
+}
+
+function gpuAnswer(over = {}) {
+  return {
+    enforcing: true,
+    devices: [GPU_DEVICE],
+    ram: { total_mb: 65536, available_mb: 40000 },
+    holders: [
+      { device: "GPU-1", tenant: "comfyui", label: "ComfyUI", used_mb: 9800, measured_by: "nvml", lease_id: null, outside_pixlstash: false },
+      { device: "GPU-1", tenant: "pixlstash", label: "PixlStash", used_mb: 2150, measured_by: "torch_reserved", lease_id: null, outside_pixlstash: false },
+    ],
+    leases: [],
+    preempted: [],
+    summary: { state: "running", headline: "" },
+    ...over,
+  };
+}
+
+/** Put the store in the state a poll would, without the poll. */
+function setGpu(resources, runs = []) {
+  const tasksStore = useTasksStore();
+  tasksStore.resources = resources;
+  tasksStore.comfyuiRuns = runs;
+  return tasksStore;
+}
+
+describe("the GPU queue in the task manager", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    runLeaseAnyway.mockClear();
+    cancelLease.mockClear();
+  });
+
+  it("draws one bar per GPU, its free VRAM, and the four-word legend", () => {
+    setGpu(gpuAnswer());
+    const wrapper = mount(TasksPanel, globalOpts);
+    const bar = wrapper.find('[data-testid="tm-gpu"]');
+    expect(bar.exists()).toBe(true);
+    expect(bar.find(".tm-gpu-name").text()).toBe("NVIDIA GeForce RTX 4090");
+    // 24576 MB card, 11576 MB free: the figures in GB at one decimal.
+    expect(bar.find(".tm-gpu-figs").text()).toContain("24.0 GB VRAM");
+    expect(bar.find(".tm-gpu-figs").text()).toContain("11.3 GB free");
+    expect(bar.findAll(".tm-legend li").map((item) => item.text())).toEqual([
+      "PixlStash",
+      "ComfyUI",
+      "Other apps",
+      "Spare",
+    ]);
+    // ComfyUI's 9.8 GB is its own segment, and a spare margin is drawn.
+    expect(bar.find(".tm-vram-seg--comfyui").exists()).toBe(true);
+    expect(bar.find(".tm-vram-seg--spare").exists()).toBe(true);
+  });
+
+  it("draws no bar and no fold on a server that sends no resources", () => {
+    setGpu(null);
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.find('[data-testid="tm-gpu"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-pixlstash"]').exists()).toBe(false);
+  });
+
+  it("folds PixlStash's own work behind one row, collapsed, and remembers the caret", async () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({ id: "a", label: "Tagging", held_mb: 1200 }),
+          gpuLease({ id: "b", label: "OCR", held_mb: 600, on_cpu: true }),
+        ],
+      }),
+    );
+    const wrapper = mount(TasksPanel, globalOpts);
+    const fold = wrapper.find('[data-testid="tm-pixlstash"]');
+    expect(fold.find('[data-testid="tm-pixl-count"]').text()).toBe("2");
+    expect(fold.find(".tm-fig-text").text()).toBe("1.8 GB");
+    // Collapsed by default: no task lines.
+    expect(wrapper.findAll(".tm-row--child")).toHaveLength(0);
+    expect(fold.find(".tm-caret").attributes("aria-expanded")).toBe("false");
+
+    await fold.find(".tm-caret").trigger("click");
+    const children = wrapper.findAll(".tm-row--child");
+    expect(children).toHaveLength(2);
+    // A task on the CPU says so in its figure column.
+    expect(children[1].find(".tm-fig-text").text()).toBe("CPU");
+    expect(localStorage.getItem("pixlstash:tasks:pixlstash-fold")).toBe("1");
+  });
+
+  it("marks a task the backend stopped as stopped, not as lost", async () => {
+    setGpu(
+      gpuAnswer({
+        leases: [gpuLease({ id: "a", label: "Tagging", held_mb: 1200 })],
+        preempted: [{ worker_type: "FaceTask", caused_by: "lease-z", since: "2026-10-22T10:01:00Z", text: "Stopped to make room" }],
+      }),
+    );
+    localStorage.setItem("pixlstash:tasks:pixlstash-fold", "1");
+    const wrapper = mount(TasksPanel, globalOpts);
+    const children = wrapper.findAll(".tm-row--child");
+    expect(children.map((child) => child.find(".tm-fig-text").text())).toEqual(["1.2 GB", "stopped"]);
+    expect(children[1].find(".tm-mark").attributes("data-state")).toBe("stopped");
+  });
+
+  it("lists the waiting run in the order the queue runs it, with its need and no units", () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-b",
+            tenant: "comfyui",
+            label: "ComfyUI 'Klein inpaint'",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            run_id: "run-b",
+            waiting_reason: {
+              code: "vram",
+              text: "Needs 14.6 GB; 11.5 GB is free.",
+              need_mb: 14600,
+              free_mb: 11500,
+              short_by_mb: 3100,
+              position: 1,
+              blocked_by: [],
+              actions: ["run_anyway", "cancel"],
+            },
+          }),
+        ],
+      }),
+      [{ run_id: "run-b", prompt_id: null, label: "Klein inpaint", status: "waiting", percent: 0 }],
+    );
+    const wrapper = mount(TasksPanel, globalOpts);
+    const rows = wrapper.findAll('[data-testid="tm-waiting-row"]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].find(".tm-name").text()).toBe("ComfyUI 'Klein inpaint'");
+    expect(rows[0].find(".tm-fig-text").text()).toBe("14.3 GB");
+    expect(rows[0].find(".tm-mark--waiting").exists()).toBe(true);
+    // The three actions the backend offered, and none it did not.
+    expect(wrapper.find('[data-testid="tm-run-anyway"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tm-cancel-wait"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="tm-free-comfyui"]').exists()).toBe(false);
+    // The run is not also listed under Running.
+    expect(wrapper.findAll('[data-testid="tm-comfy-row"]')).toHaveLength(0);
+  });
+
+  it("asks before Run anyway, and starts the lease only when the dialog is confirmed", async () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-b",
+            tenant: "comfyui",
+            label: "ComfyUI 'Klein inpaint'",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            run_id: "run-b",
+            waiting_reason: { code: "vram", text: "Needs 14.6 GB", need_mb: 14600, free_mb: 11500, short_by_mb: 3100, position: 1, blocked_by: [], actions: ["run_anyway"] },
+          }),
+        ],
+      }),
+    );
+    // The dialog's own overlay needs Vuetify's defaults; its content is tested
+    // in RunAnywayDialog.test.js, so the overlay itself is stubbed here.
+    const wrapper = mount(TasksPanel, {
+      global: { stubs: { ...globalOpts.global.stubs, AppDialog: true } },
+    });
+    // Nothing is asked of the backend by merely drawing the row.
+    expect(runLeaseAnyway).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(RunAnywayDialog).exists()).toBe(false);
+
+    await wrapper.find('[data-testid="tm-run-anyway"]').trigger("click");
+    const dialog = wrapper.findComponent(RunAnywayDialog);
+    expect(dialog.props("open")).toBe(true);
+    expect(dialog.props("needMb")).toBe(14600);
+    expect(runLeaseAnyway).not.toHaveBeenCalled();
+
+    dialog.vm.$emit("confirm");
+    await flushPromises();
+    expect(runLeaseAnyway).toHaveBeenCalledWith("lease-b");
   });
 });

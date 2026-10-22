@@ -1,9 +1,8 @@
 <script setup>
 import { computed, onUnmounted, ref, watch } from "vue";
 import { getUserConfig, patchUserConfig } from "../../api/config";
-import { getWorkerProgress } from "../../api/workers";
 import { listTaggers, listTaggerPluginDiagnostics } from "../../api/taggers";
-import { VSlider, VSwitch } from "vuetify/components";
+import { VSwitch } from "vuetify/components";
 import PluginSelect from "../widgets/PluginSelect.vue";
 import TaggerPluginSettingsPanel from "../widgets/TaggerPluginSettingsPanel.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -46,105 +45,6 @@ const pixlstashTagger = computed(() =>
     : null,
 );
 
-// ── VRAM budget ───────────────────────────────────────────────────────────────
-const VRAM_BUDGET_MIN_GB = 2;
-const VRAM_BUDGET_STEP_GB = 2;
-const maxVramGbValue = ref(VRAM_BUDGET_MIN_GB);
-const maxVramGbMax = ref(VRAM_BUDGET_MIN_GB);
-const maxVramGbLoading = ref(false);
-const maxVramGbError = ref("");
-const maxVramGbSuccess = ref("");
-const maxVramGbSavedValue = ref(null);
-const maxVramGbHydrating = ref(false);
-const maxVramGbAutoSaveReady = ref(false);
-let maxVramGbSaveTimer = null;
-
-function deriveMaxVramSliderMax(totalVramGb) {
-  const total = Number(totalVramGb);
-  if (!Number.isFinite(total) || total <= 0) return VRAM_BUDGET_MIN_GB;
-  const available = total - 2;
-  const stepped =
-    Math.floor(available / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
-  // No fixed ceiling: the backend validates against the card too, and a 32 GB
-  // card now defaults to 16 GB - a slider capped at 12 could not show it.
-  return Math.max(VRAM_BUDGET_MIN_GB, stepped);
-}
-
-function clampAndSnapVramBudget(value, upperBound = maxVramGbMax.value) {
-  const maxValue = Math.max(
-    VRAM_BUDGET_MIN_GB,
-    Number(upperBound) || VRAM_BUDGET_MIN_GB,
-  );
-  const parsed = Number(value);
-  const base = Number.isFinite(parsed) ? parsed : VRAM_BUDGET_MIN_GB;
-  const clamped = Math.min(maxValue, Math.max(VRAM_BUDGET_MIN_GB, base));
-  const stepped =
-    Math.round(clamped / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
-  return Math.min(maxValue, Math.max(VRAM_BUDGET_MIN_GB, stepped));
-}
-
-async function fetchVramSliderBounds() {
-  try {
-    const progress = await getWorkerProgress();
-    const processData = progress?.process || progress?.system || {};
-    const totalVramGb =
-      processData.vram_total_gb ??
-      processData.vramTotalGb ??
-      processData.total_vram_gb;
-    const derived = deriveMaxVramSliderMax(totalVramGb);
-    // Only ever increase the bound - a transient low reading must not shrink the
-    // slider and cause Vuetify to auto-clamp (and overwrite) the saved budget.
-    if (derived > maxVramGbMax.value) maxVramGbMax.value = derived;
-  } catch {
-    // Leave maxVramGbMax unchanged on failure.
-  }
-}
-
-function scheduleMaxVramGbSave() {
-  if (
-    !props.open ||
-    maxVramGbHydrating.value ||
-    !maxVramGbAutoSaveReady.value
-  ) {
-    return;
-  }
-  maxVramGbSuccess.value = "";
-  if (maxVramGbSaveTimer) clearTimeout(maxVramGbSaveTimer);
-  maxVramGbSaveTimer = setTimeout(() => {
-    maxVramGbSaveTimer = null;
-    saveMaxVramGb();
-  }, 500);
-}
-
-async function saveMaxVramGb() {
-  if (maxVramGbHydrating.value) return;
-  maxVramGbLoading.value = true;
-  maxVramGbError.value = "";
-  const nextValue = clampAndSnapVramBudget(
-    maxVramGbValue.value,
-    Math.max(maxVramGbMax.value, maxVramGbValue.value),
-  );
-  if (maxVramGbSavedValue.value === nextValue) {
-    maxVramGbLoading.value = false;
-    return;
-  }
-  try {
-    await patchUserConfig({ max_vram_gb: nextValue });
-    maxVramGbSavedValue.value = nextValue;
-    maxVramGbValue.value = nextValue;
-    maxVramGbSuccess.value = "Saved.";
-  } catch (e) {
-    maxVramGbError.value = errorDetail(e) || "Failed to update VRAM budget.";
-  } finally {
-    maxVramGbLoading.value = false;
-    if (maxVramGbSuccess.value) {
-      setTimeout(() => {
-        if (maxVramGbSuccess.value === "Saved.") maxVramGbSuccess.value = "";
-      }, 2000);
-    }
-  }
-}
-
 async function fetchBehaviourSettings() {
   keepModelsInMemoryError.value = "";
   try {
@@ -154,24 +54,7 @@ async function fetchBehaviourSettings() {
     } else {
       keepModelsInMemory.value = true;
     }
-    await fetchVramSliderBounds();
-    maxVramGbHydrating.value = true;
-    const parsedMaxVram = Number(cfg?.max_vram_gb);
-    const initialValue =
-      Number.isFinite(parsedMaxVram) && parsedMaxVram > 0
-        ? parsedMaxVram
-        : VRAM_BUDGET_MIN_GB;
-    if (initialValue > maxVramGbMax.value) maxVramGbMax.value = initialValue;
-    const snappedValue = clampAndSnapVramBudget(
-      initialValue,
-      maxVramGbMax.value,
-    );
-    maxVramGbValue.value = snappedValue;
-    maxVramGbSavedValue.value = snappedValue;
-    maxVramGbAutoSaveReady.value = true;
-    maxVramGbHydrating.value = false;
   } catch {
-    maxVramGbAutoSaveReady.value = false;
     keepModelsInMemoryError.value = "Failed to load behaviour settings.";
   }
 }
@@ -256,11 +139,6 @@ function stopTaggerPoll() {
 
 onUnmounted(() => {
   stopTaggerPoll();
-  if (maxVramGbSaveTimer) clearTimeout(maxVramGbSaveTimer);
-});
-
-watch(maxVramGbValue, () => {
-  scheduleMaxVramGbSave();
 });
 
 watch(
@@ -292,34 +170,6 @@ watch(
       />
       <div v-if="keepModelsInMemoryError" class="settings-error">
         {{ keepModelsInMemoryError }}
-      </div>
-    </SettingsSection>
-
-    <SettingsSection title="VRAM Budget (GB)">
-      <div class="vram-row">
-        <span class="vram-value">{{ maxVramGbValue }} GB</span>
-        <div class="vram-track">
-          <v-slider
-            v-model="maxVramGbValue"
-            :min="VRAM_BUDGET_MIN_GB"
-            :max="maxVramGbMax"
-            :step="VRAM_BUDGET_STEP_GB"
-            hide-details
-            density="compact"
-            color="primary"
-            track-color="rgba(var(--v-theme-on-surface), 0.2)"
-            :disabled="maxVramGbLoading || maxVramGbHydrating"
-          />
-        </div>
-        <span class="vram-meta">
-          max {{ maxVramGbMax }} GB
-          <template v-if="maxVramGbError">
-            · <span class="vram-err">{{ maxVramGbError }}</span>
-          </template>
-          <template v-else-if="maxVramGbSuccess">
-            · {{ maxVramGbSuccess }}
-          </template>
-        </span>
       </div>
     </SettingsSection>
 
@@ -568,34 +418,5 @@ watch(
   color: rgb(var(--v-theme-surface-error));
   font-size: var(--text-xs);
   margin-top: var(--space-2);
-}
-
-/* Compact one-line VRAM control: value · slider · inline max/status. */
-.vram-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-}
-
-.vram-value {
-  min-width: 52px;
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.vram-track {
-  flex: 1;
-}
-
-.vram-meta {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
-  white-space: nowrap;
-}
-
-.vram-err {
-  color: rgb(var(--v-theme-surface-error));
 }
 </style>

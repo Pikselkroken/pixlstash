@@ -270,16 +270,18 @@ export async function runWorkflowCard(body) {
 }
 
 /**
- * How one run `runWorkflowCard` queued stands, by its prompt id: `running`,
- * `completed` or `failed`, with the message the app shows. A 404 for a run the
- * backend no longer knows (it restarted, or the run is another library's).
+ * How one run `runWorkflowCard` queued stands: `waiting` (held by PixlStash
+ * for GPU memory), `running`, `completed` or `failed`, with the message the app
+ * shows. Takes the run's `run_id` or its `prompt_id`, which is null while the
+ * run is held. A 404 for a run the backend no longer knows (it restarted, or
+ * the run is another library's).
  *
- * @param {string} promptId
- * @returns {Promise<{prompt_id: string, status: string, message: ?string, stopped: boolean, picture_ids: number[]}>}
+ * @param {string} runId a `run_id` or a `prompt_id`
+ * @returns {Promise<{run_id: string, prompt_id: ?string, status: string, message: ?string, stopped: boolean, picture_ids: number[], code: ?string}>}
  */
-export async function getRunOutcome(promptId) {
+export async function getRunOutcome(runId) {
   return unwrap(
-    apiClient.get(`/workflows/runs/${encodeURIComponent(promptId)}`),
+    apiClient.get(`/workflows/runs/${encodeURIComponent(runId)}`),
   );
 }
 

@@ -7,13 +7,17 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { login } from "../../utils/apiClient";
 import { getAuthState } from "../../api/users";
+import { getComputeGpus, setComputeGpu } from "../../api/compute";
+import { getUserConfig, patchUserConfig } from "../../api/config";
+import { getWorkerProgress } from "../../api/workers";
+import { formatGb } from "../../utils/gpuMemory";
 import AppButton from "../widgets/AppButton.vue";
 import AppStepper from "../widgets/AppStepper.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import SettingsSection from "./SettingsSection.vue";
 import SettingsRow from "./SettingsRow.vue";
 import SettingsTwoCol from "./SettingsTwoCol.vue";
-import { VSwitch, VIcon, VProgressLinear } from "vuetify/components";
+import { VSlider, VSwitch, VIcon, VProgressLinear } from "vuetify/components";
 import { errorDetail } from "../../utils/apiError";
 
 const props = defineProps({
@@ -344,6 +348,216 @@ function subFor(item) {
   return "Downloads torch + GPU libraries (~2.5 GB) from PyPI / PyTorch.";
 }
 
+// ── Which GPU PixlStash uses, and what PixlStash may take of it ──────────────
+// Both are the server's (`/compute/gpu`, `/users/me/config`), so they work on a
+// headless install too. Only the acceleration runtime below is desktop-only.
+
+const gpus = ref(null); // GET /compute/gpus, or null until it is read
+const gpuPick = ref("auto"); // the staged choice; Apply & restart commits it
+const gpuBusy = ref(false);
+const gpuError = ref("");
+const gpuNote = ref("");
+
+const USED_BY_NAMES = { comfyui: "ComfyUI", aitoolkit: "AI Toolkit", pixlstash: "PixlStash" };
+
+/** What a GPU row says in its sub-line: its reason when it cannot be picked. */
+function gpuSub(gpu) {
+  if (!gpu.pickable) return gpu.reason || "Cannot be used";
+  const names = (gpu.used_by ?? []).map((tenant) => USED_BY_NAMES[tenant] ?? tenant);
+  return names.length ? `${formatGb(gpu.total_mb)}, used by ${names.join(" and ")}` : `${formatGb(gpu.total_mb)}, free`;
+}
+
+const gpuDirty = computed(() => Boolean(gpus.value) && gpuPick.value !== gpus.value.selected);
+
+async function refreshGpus() {
+  try {
+    gpus.value = await getComputeGpus();
+    gpuPick.value = gpus.value.selected ?? "auto";
+    gpuError.value = "";
+  } catch (err) {
+    console.warn("Could not read which GPUs PixlStash can use.", err);
+    gpus.value = null;
+    gpuError.value = errorDetail(err) || "Could not read the GPUs.";
+  }
+}
+
+/** The runtime PixlStash runs on now, as the desktop bridge names it (null: built-in). */
+function activeAccelerator() {
+  if (!state.value || state.value.bundled?.active) return null;
+  return state.value.items?.find((item) => item.active)?.accel ?? null;
+}
+
+/**
+ * Commit the staged GPU. Desktop restarts the local server on the runtime it
+ * already uses, which is the restart the server asks for; headless is told to
+ * restart PixlStash itself.
+ */
+async function applyGpu() {
+  if (gpuBusy.value || !gpuDirty.value) return;
+  gpuBusy.value = true;
+  gpuError.value = "";
+  gpuNote.value = "";
+  try {
+    await setComputeGpu(gpuPick.value);
+    if (desktop?.useAccelerator) {
+      await refresh();
+      await desktop.useAccelerator(activeAccelerator());
+    } else {
+      gpuNote.value = "Restart PixlStash to use it.";
+    }
+    await refreshGpus();
+  } catch (err) {
+    console.warn("Could not change the GPU PixlStash uses.", err);
+    gpuError.value = errorDetail(err) || "Could not change the GPU.";
+  } finally {
+    gpuBusy.value = false;
+  }
+}
+
+// ── Sharing the GPU ────────────────────────────────────────────────────────────
+const autoExclusive = ref(true);
+const autoExclusiveError = ref("");
+const sharingError = ref("");
+
+// ── VRAM budget ───────────────────────────────────────────────────────────────
+const VRAM_BUDGET_MIN_GB = 2;
+const VRAM_BUDGET_STEP_GB = 2;
+const maxVramGbValue = ref(VRAM_BUDGET_MIN_GB);
+const maxVramGbMax = ref(VRAM_BUDGET_MIN_GB);
+const maxVramGbLoading = ref(false);
+const maxVramGbError = ref("");
+const maxVramGbSuccess = ref("");
+const maxVramGbSavedValue = ref(null);
+const maxVramGbHydrating = ref(false);
+const maxVramGbAutoSaveReady = ref(false);
+let maxVramGbSaveTimer = null;
+
+function deriveMaxVramSliderMax(totalVramGb) {
+  const total = Number(totalVramGb);
+  if (!Number.isFinite(total) || total <= 0) return VRAM_BUDGET_MIN_GB;
+  const available = total - 2;
+  const stepped =
+    Math.floor(available / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
+  // No fixed ceiling: the backend validates against the card too, and a 32 GB
+  // card now defaults to 16 GB - a slider capped at 12 could not show it.
+  return Math.max(VRAM_BUDGET_MIN_GB, stepped);
+}
+
+function clampAndSnapVramBudget(value, upperBound = maxVramGbMax.value) {
+  const maxValue = Math.max(
+    VRAM_BUDGET_MIN_GB,
+    Number(upperBound) || VRAM_BUDGET_MIN_GB,
+  );
+  const parsed = Number(value);
+  const base = Number.isFinite(parsed) ? parsed : VRAM_BUDGET_MIN_GB;
+  const clamped = Math.min(maxValue, Math.max(VRAM_BUDGET_MIN_GB, base));
+  const stepped =
+    Math.round(clamped / VRAM_BUDGET_STEP_GB) * VRAM_BUDGET_STEP_GB;
+  return Math.min(maxValue, Math.max(VRAM_BUDGET_MIN_GB, stepped));
+}
+
+async function fetchVramSliderBounds() {
+  try {
+    const progress = await getWorkerProgress();
+    const processData = progress?.process || progress?.system || {};
+    const totalVramGb =
+      processData.vram_total_gb ??
+      processData.vramTotalGb ??
+      processData.total_vram_gb;
+    const derived = deriveMaxVramSliderMax(totalVramGb);
+    // Only ever increase the bound - a transient low reading must not shrink the
+    // slider and cause Vuetify to auto-clamp (and overwrite) the saved budget.
+    if (derived > maxVramGbMax.value) maxVramGbMax.value = derived;
+  } catch {
+    // Leave maxVramGbMax unchanged on failure.
+  }
+}
+
+function scheduleMaxVramGbSave() {
+  if (
+    !props.open ||
+    maxVramGbHydrating.value ||
+    !maxVramGbAutoSaveReady.value
+  ) {
+    return;
+  }
+  maxVramGbSuccess.value = "";
+  if (maxVramGbSaveTimer) clearTimeout(maxVramGbSaveTimer);
+  maxVramGbSaveTimer = setTimeout(() => {
+    maxVramGbSaveTimer = null;
+    saveMaxVramGb();
+  }, 500);
+}
+
+async function saveMaxVramGb() {
+  if (maxVramGbHydrating.value) return;
+  maxVramGbLoading.value = true;
+  maxVramGbError.value = "";
+  const nextValue = clampAndSnapVramBudget(
+    maxVramGbValue.value,
+    Math.max(maxVramGbMax.value, maxVramGbValue.value),
+  );
+  if (maxVramGbSavedValue.value === nextValue) {
+    maxVramGbLoading.value = false;
+    return;
+  }
+  try {
+    await patchUserConfig({ max_vram_gb: nextValue });
+    maxVramGbSavedValue.value = nextValue;
+    maxVramGbValue.value = nextValue;
+    maxVramGbSuccess.value = "Saved.";
+  } catch (e) {
+    maxVramGbError.value = errorDetail(e) || "Failed to update VRAM budget.";
+  } finally {
+    maxVramGbLoading.value = false;
+    if (maxVramGbSuccess.value) {
+      setTimeout(() => {
+        if (maxVramGbSuccess.value === "Saved.") maxVramGbSuccess.value = "";
+      }, 2000);
+    }
+  }
+}
+
+async function setAutoExclusive(value) {
+  const next = Boolean(value);
+  autoExclusiveError.value = "";
+  try {
+    await patchUserConfig({ auto_exclusive_after_oom: next });
+    autoExclusive.value = next;
+  } catch (err) {
+    console.warn("Could not change run-alone after an out-of-memory run.", err);
+    autoExclusiveError.value = errorDetail(err) || "Failed to update the setting.";
+  }
+}
+
+async function loadSharing() {
+  sharingError.value = "";
+  try {
+    const cfg = await getUserConfig();
+    autoExclusive.value =
+      typeof cfg?.auto_exclusive_after_oom === "boolean" ? cfg.auto_exclusive_after_oom : true;
+    await fetchVramSliderBounds();
+    maxVramGbHydrating.value = true;
+    const parsedMaxVram = Number(cfg?.max_vram_gb);
+    const initialValue =
+      Number.isFinite(parsedMaxVram) && parsedMaxVram > 0 ? parsedMaxVram : VRAM_BUDGET_MIN_GB;
+    if (initialValue > maxVramGbMax.value) maxVramGbMax.value = initialValue;
+    const snappedValue = clampAndSnapVramBudget(initialValue, maxVramGbMax.value);
+    maxVramGbValue.value = snappedValue;
+    maxVramGbSavedValue.value = snappedValue;
+    maxVramGbAutoSaveReady.value = true;
+    maxVramGbHydrating.value = false;
+  } catch (err) {
+    console.warn("Could not read the GPU sharing settings.", err);
+    maxVramGbAutoSaveReady.value = false;
+    sharingError.value = "Failed to load the sharing settings.";
+  }
+}
+
+watch(maxVramGbValue, () => {
+  scheduleMaxVramGbSave();
+});
+
 function loadForView() {
   if (isBackend.value) {
     refreshServer();
@@ -352,6 +566,8 @@ function loadForView() {
   } else {
     refresh();
     refreshLocation();
+    refreshGpus();
+    loadSharing();
   }
 }
 
@@ -371,6 +587,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (stopProgress) stopProgress();
   if (portCheckTimer) clearTimeout(portCheckTimer);
+  if (maxVramGbSaveTimer) clearTimeout(maxVramGbSaveTimer);
 });
 
 watch(
@@ -601,9 +818,116 @@ watch(
     </div>
   </div>
 
-  <!-- ── Compute tab: acceleration runtime ──────────────────────────────── -->
+  <!-- ── Compute tab: which GPU, what PixlStash may take, and the runtime ─── -->
   <div v-else>
+    <!-- Which GPU PixlStash uses: on every install, headless included. Choosing
+         stages; Apply & restart commits it, and restarts the server to use it. -->
     <SettingsSection
+      title="Which GPU PixlStash uses"
+      desc="PixlStash uses one GPU. Auto picks a spare one that ComfyUI and AI Toolkit are not using, so all three can work at once. Changing it restarts the local server."
+      first
+    >
+      <div v-if="gpus" class="gpu-picker" role="radiogroup" aria-label="Which GPU PixlStash uses">
+        <SettingsRow label="Auto" :sub="gpus.auto_reason">
+          <input
+            v-model="gpuPick"
+            class="gpu-radio"
+            type="radio"
+            name="gpu-pick"
+            value="auto"
+            :disabled="gpuBusy"
+          />
+        </SettingsRow>
+        <SettingsRow
+          v-for="gpu in gpus.gpus"
+          :key="gpu.uuid"
+          :label="gpu.name"
+          :sub="gpuSub(gpu)"
+          :dim="!gpu.pickable"
+        >
+          <input
+            v-model="gpuPick"
+            class="gpu-radio"
+            type="radio"
+            name="gpu-pick"
+            :value="gpu.uuid"
+            :disabled="!gpu.pickable || gpuBusy"
+          />
+        </SettingsRow>
+        <div class="gpu-apply">
+          <AppButton
+            size="sm"
+            :disabled="!gpuDirty || gpuBusy"
+            :loading="gpuBusy"
+            @click="applyGpu"
+          >
+            Apply &amp; restart
+          </AppButton>
+        </div>
+        <div v-if="!gpuDirty && gpus.restart_required" class="compute-note">
+          Restart PixlStash to use it.
+        </div>
+      </div>
+      <div v-else-if="!gpuError" class="compute-loading">Loading…</div>
+      <div v-if="gpuError" class="settings-error">{{ gpuError }}</div>
+      <div v-if="gpuNote" class="compute-note">{{ gpuNote }}</div>
+    </SettingsSection>
+
+    <!-- What PixlStash may take, and what a run that ran out of memory does. -->
+    <SettingsSection
+      title="Sharing the GPU"
+      desc="PixlStash's own work is capped by the limit below. ComfyUI and training are not."
+    >
+      <SettingsRow
+        label="PixlStash's VRAM limit"
+        sub="The most PixlStash's own tagging and search may use. ComfyUI and training are not limited by this."
+      >
+        <div class="vram-row">
+          <span class="vram-value">{{ maxVramGbValue }} GB</span>
+          <div class="vram-track">
+            <v-slider
+              v-model="maxVramGbValue"
+              :min="VRAM_BUDGET_MIN_GB"
+              :max="maxVramGbMax"
+              :step="VRAM_BUDGET_STEP_GB"
+              hide-details
+              density="compact"
+              color="primary"
+              track-color="rgba(var(--v-theme-on-surface), 0.2)"
+              aria-label="PixlStash's VRAM limit"
+              :disabled="maxVramGbLoading || maxVramGbHydrating"
+            />
+          </div>
+          <span class="vram-meta">
+            max {{ maxVramGbMax }} GB
+            <template v-if="maxVramGbError">
+              · <span class="vram-err">{{ maxVramGbError }}</span>
+            </template>
+            <template v-else-if="maxVramGbSuccess">
+              · {{ maxVramGbSuccess }}
+            </template>
+          </span>
+        </div>
+      </SettingsRow>
+      <SettingsRow
+        label="Run a workflow alone after it runs out of memory"
+        sub='Marks it "Runs alone" so it gets the whole GPU next time. You can turn it off per workflow.'
+      >
+        <v-switch
+          :model-value="autoExclusive"
+          color="primary"
+          density="compact"
+          hide-details
+          aria-label="Run a workflow alone after it runs out of memory"
+          @update:model-value="setAutoExclusive"
+        />
+      </SettingsRow>
+      <div v-if="autoExclusiveError" class="settings-error">{{ autoExclusiveError }}</div>
+      <div v-if="sharingError" class="settings-error">{{ sharingError }}</div>
+    </SettingsSection>
+
+    <SettingsSection
+      v-if="desktop"
       title="Compute acceleration"
       desc="PixlStash includes a built-in runtime that works out of the box. If this machine has a discrete GPU, add acceleration for faster tagging and search. Switching the runtime restarts the local server."
       first
@@ -713,7 +1037,7 @@ watch(
 
         <div v-if="error" class="settings-error">{{ error }}</div>
       </template>
-      <div v-else class="compute-loading">Loading…</div>
+      <div v-else-if="desktop" class="compute-loading">Loading…</div>
     </SettingsSection>
   </div>
 </template>
@@ -854,5 +1178,55 @@ watch(
   color: rgb(var(--v-theme-surface-error));
   font-size: var(--text-xs);
   white-space: pre-wrap;
+}
+/* Which GPU: a radio per row, and the one button that commits it. */
+.gpu-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.gpu-radio {
+  flex-shrink: 0;
+  width: var(--space-4);
+  height: var(--space-4);
+  accent-color: rgb(var(--v-theme-accent));
+}
+
+.gpu-apply {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
+/* Compact one-line VRAM control: value · slider · inline max/status. */
+.vram-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 280px;
+}
+
+.vram-value {
+  min-width: 52px;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.vram-track {
+  flex: 1;
+  min-width: 120px;
+}
+
+.vram-meta {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  white-space: nowrap;
+}
+
+.vram-err {
+  color: rgb(var(--v-theme-surface-error));
 }
 </style>
