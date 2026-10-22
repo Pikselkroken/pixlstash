@@ -43,6 +43,8 @@ const tasksStore = useTasksStore();
 const starting = ref(false);
 
 const name = computed(() => props.file.split(/[\\/]/).pop());
+// By basename: a download's `file` is the name it lands under, never the
+// loader's subfolder spelling.
 const busy = computed(
   () => starting.value || tasksStore.runningDownloadFiles.has(name.value),
 );

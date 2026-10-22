@@ -314,6 +314,19 @@ def _run(
             )
 
 
+def _left_https(url: str, response) -> bool:
+    """Whether an https link was redirected onto plain http at any hop.
+
+    The list's links are https. A plain hop in the middle of the chain lets
+    anyone on that network point the rest of it somewhere else, so every hop
+    counts, not only where it ended.
+    """
+    hops = [hop.url for hop in response.history] + [response.url]
+    return url.startswith("https://") and not all(
+        hop.startswith("https://") for hop in hops
+    )
+
+
 def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
     """Stream *url* into *partial* and return the SHA-256 of what was written."""
     os.makedirs(os.path.dirname(partial), exist_ok=True)
@@ -325,8 +338,7 @@ def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
         headers={"User-Agent": "PixlStash"},
     ) as response:
         response.raise_for_status()
-        # The list's links are https; a redirect must not drop to plain http.
-        if url.startswith("https://") and not response.url.startswith("https://"):
+        if _left_https(url, response):
             raise ValueError("The download was redirected away from https.")
         if "text/html" in response.headers.get("Content-Type", ""):
             raise ValueError(

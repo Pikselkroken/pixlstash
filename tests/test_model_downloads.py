@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -415,6 +416,30 @@ def test_a_name_already_under_its_folder_is_not_put_under_it_twice(
         done = _wait(start_download(hub, "loras/style.safetensors")["id"])
     assert done["status"] == STATUS_DONE, done
     assert (chosen / "loras" / "style.safetensors").is_file()
+
+
+@pytest.mark.parametrize(
+    "hops, refused",
+    [
+        (["https://example.com/a"], False),
+        (["https://example.com/a", "https://cdn.example.com/a"], False),
+        (["https://example.com/a", "http://cdn.example.com/a"], True),
+        (
+            [
+                "https://example.com/a",
+                "http://example-hop.test/a",
+                "https://cdn.example.com/a",
+            ],
+            True,
+        ),
+    ],
+)
+def test_no_hop_of_a_redirect_may_be_plain_http(hops, refused):
+    """Wrong if a chain that passes through plain http and back is let in."""
+    response = SimpleNamespace(
+        url=hops[-1], history=[SimpleNamespace(url=hop) for hop in hops[:-1]]
+    )
+    assert model_downloads._left_https(hops[0], response) is refused
 
 
 def test_a_thread_that_will_not_start_leaves_no_entry_behind(
