@@ -83,6 +83,7 @@ PRIVILEGED_WORKFLOW_PATHS = tuple(
         "record-test-durations.yml",
         "release-test-issues.yml",
         "release-version.yml",
+        "template-suggestions.yml",
         "windows-installer.yml",
         "windows-signing-test.yml",
     )
