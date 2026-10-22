@@ -24165,7 +24165,16 @@ _TEMPLATE_INDEX = [
                 ],
             },
         ],
-    }
+    },
+    # The same template filed under a second category, as ComfyUI's own
+    # index does: one template, in both.
+    {
+        "moduleName": "default",
+        "category": "Applied",
+        "title": "Product & Ads",
+        "isEssential": True,
+        "templates": [{"name": "image_example", "title": "Example, text to image"}],
+    },
 ]
 _TEMPLATE_PACKS = {"Example-Pack": ["pack example"]}
 _TEMPLATE_URL = "http://127.0.0.1:8188"
@@ -24308,6 +24317,8 @@ def test_the_template_list_reads_the_owners_comfyui(
     assert listed["default/api_example"]["files"] == []
     assert listed["default/api_example"]["providers"] == ["Example Co", "Other Co"]
     assert listed["default/image_example"]["providers"] == []
+    assert listed["default/image_example"]["categories"] == ["Image", "Product & Ads"]
+    assert listed["default/api_example"]["categories"] == ["Image"]
     assert "/templates/api_example.json" not in comfyui_templates_served.asked
     # ComfyUI lists no node from the pack, so its template is said not to load,
     # and does once a node of it is listed.

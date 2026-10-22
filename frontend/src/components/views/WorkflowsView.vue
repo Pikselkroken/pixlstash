@@ -149,6 +149,7 @@
         </template>
         <WorkflowTemplateFilterMenu
           v-if="onTemplates"
+          :open="filterMenuOpen"
           :focus-name-request="nameFocusRequest"
         />
         <WorkflowFilterMenu

@@ -97,6 +97,9 @@ class Template:
     title: str
     description: Optional[str] = None
     category: Optional[str] = None
+    # Every category ``index.json`` files it under, ``category`` first: what
+    # ComfyUI's own template browser filters by.
+    categories: list[str] = field(default_factory=list)
     media_type: Optional[str] = None
     tags: list[str] = field(default_factory=list)
     model_names: list[str] = field(default_factory=list)
@@ -248,20 +251,26 @@ def _builtin_templates(index) -> list[Template]:
         )
         return []
     templates: list[Template] = []
-    seen: set[str] = set()
+    seen: dict[str, Template] = {}
     for category in index:
         if not isinstance(category, dict):
             continue
         if category.get("moduleName", BUILTIN_MODULE) != BUILTIN_MODULE:
             continue
+        title = (
+            category.get("title") if isinstance(category.get("title"), str) else None
+        )
         for entry in category.get("templates") or []:
             if not isinstance(entry, dict):
                 continue
             name = entry.get("name")
-            # A template listed under two categories is one template.
-            if not isinstance(name, str) or not name or name in seen:
+            if not isinstance(name, str) or not name:
                 continue
-            seen.add(name)
+            # A template listed under two categories is one template, in both.
+            if name in seen:
+                if title and title not in seen[name].categories:
+                    seen[name].categories.append(title)
+                continue
             subtype = entry.get("mediaSubtype")
             usage = entry.get("usage")
             size = entry.get("size")
@@ -274,9 +283,8 @@ def _builtin_templates(index) -> list[Template]:
                     description=entry.get("description")
                     if isinstance(entry.get("description"), str)
                     else None,
-                    category=category.get("title")
-                    if isinstance(category.get("title"), str)
-                    else None,
+                    category=title,
+                    categories=[title] if title else [],
                     media_type=entry.get("mediaType")
                     if isinstance(entry.get("mediaType"), str)
                     else None,
@@ -296,6 +304,7 @@ def _builtin_templates(index) -> list[Template]:
                     providers=_providers(entry.get("logos")),
                 )
             )
+            seen[name] = templates[-1]
     return templates
 
 

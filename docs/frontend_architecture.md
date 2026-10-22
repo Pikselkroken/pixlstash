@@ -6994,16 +6994,25 @@ it is true. A `?workflow=` or `?topology=` link always lands on Mine. Mine is
 unchanged by the tab's existence.
 
 - **The list is read live and lazily**: `GET /comfyui/templates` the first time
-  the tab is shown, again only from the strip's re-read button (`refresh`). The
-  server reads the owner's ComfyUI and keeps the answer ten minutes; nothing
+  the tab is shown, again from the strip's re-read button (`refresh`), and,
+  while ComfyUI did not answer, on every opening and every 10 s while the tab is
+  open (the server keeps no failed read, so ComfyUI started after PixlStash
+  fills the tab by itself). The server reads the owner's ComfyUI and keeps the
+  answer ten minutes; nothing
   here asks ComfyUI itself, and every thumbnail goes through
   `templateThumbnailUrl` (`api/comfyui.js`), never a raw path in `<img src>`.
 - **The tab's controls are the toolbar's own.** Sort, Filters and the name field
-  act on the templates store while the tab is shown (`WorkflowTemplateFilterMenu`
-  is flat: Media, Source, Readiness, Partner API; the name matches title,
-  description, tags, model names and file names). Partner API templates are
-  hidden by a default the strip shows as a chip with its count, so they are
-  never left out silently. The strip leads with "Downloaded from your ComfyUI at
+  act on the templates store while the tab is shown. `WorkflowTemplateFilterMenu`
+  is Mine's cascade with ComfyUI's own template filters (Category, its side
+  list's: the index's categories, then Partner Nodes, then one per node pack;
+  Model; Use case, its tags; Runs on) and PixlStash's Readiness, each a pick-one
+  list as every PixlStash filter is; the name matches title, description, tags,
+  model names and file names. The sort and filters, not the name text, are
+  remembered per browser (`pixlstash:workflowTemplatesView`, versioned, each
+  value checked on reading). Partner API templates are hidden by a default the
+  strip shows as a chip with its count, so they are never left out silently,
+  and shown they wear ComfyUI's own "Partner API" crown badge and "Runs with
+  credits", after their providers. The strip leads with "Downloaded from your ComfyUI at
   <url>", so nothing on the tab reads as the owner's own work.
 - **Readiness is one function** (`templateReadiness`): `partner`, else
   `pack_not_loaded` when the server says the pack's nodes did not load, else

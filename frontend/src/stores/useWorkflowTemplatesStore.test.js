@@ -39,11 +39,22 @@ const LIST = [
   template("also-missing", {
     files: [file("a.safetensors", false), file("b.safetensors", false)],
   }),
-  template("ready", { files: [file("ae.safetensors", true)], usage: 5 }),
-  template("partner", { source: "partner", usage: 99 }),
+  template("ready", {
+    files: [file("ae.safetensors", true)],
+    usage: 5,
+    size: 900,
+    categories: ["Image", "Product & Ads"],
+    model_names: ["Flux"],
+  }),
+  template("partner", { source: "partner", usage: 99, categories: ["Image"] }),
   template("one-missing", {
-    media_type: "video",
+    // `media_type` is the picture's, as ComfyUI's index has it: a video
+    // template is found by its category.
+    media_type: "image",
+    categories: ["Video"],
     tags: ["Image to Video"],
+    model_names: ["Wan"],
+    size: 100,
     files: [file("wan.safetensors", false, "diffusion_models"), file("t5.safetensors", true)],
   }),
   template("pack", {
@@ -100,7 +111,15 @@ describe("the Templates tab's list", () => {
   it("remembers the sort and filters for next time, but not the name text", async () => {
     const store = useWorkflowTemplatesStore();
     store.sortKey = "newest";
-    store.setFilters({ media: "video", readiness: "missing", showPartner: true, name: "flux" });
+    store.setFilters({
+      category: "Video",
+      model: "Wan",
+      useCase: "Image to Video",
+      runsOn: "comfyui",
+      readiness: "missing",
+      showPartner: true,
+      name: "flux",
+    });
     await nextTick();
     expect(
       JSON.parse(localStorage.getItem("pixlstash:workflowTemplatesView")),
@@ -110,8 +129,10 @@ describe("the Templates tab's list", () => {
     expect(next.sortKey).toBe("newest");
     expect(next.filters).toEqual({
       name: "",
-      media: "video",
-      source: null,
+      category: "Video",
+      model: "Wan",
+      useCase: "Image to Video",
+      runsOn: "comfyui",
       readiness: "missing",
       showPartner: true,
     });
@@ -120,11 +141,11 @@ describe("the Templates tab's list", () => {
   it("starts from the defaults on a blob it cannot trust", () => {
     localStorage.setItem(
       "pixlstash:workflowTemplatesView",
-      JSON.stringify({ v: 1, sortKey: "bogus", source: "nowhere", readiness: "missing" }),
+      JSON.stringify({ v: 2, sortKey: "bogus", runsOn: "nowhere", readiness: "missing" }),
     );
     const store = useWorkflowTemplatesStore();
     expect(store.sortKey).toBe("readiness");
-    expect(store.filters.source).toBe(null);
+    expect(store.filters.runsOn).toBe(null);
     expect(store.filters.readiness).toBe("missing");
     localStorage.setItem("pixlstash:workflowTemplatesView", "{not json");
     setActivePinia(createPinia());
@@ -154,11 +175,46 @@ describe("the Templates tab's list", () => {
     expect(store.filterChips.some((chip) => chip.key === "partner")).toBe(false);
   });
 
-  it("filters by media, source, readiness and words in tags and file names", async () => {
+  it("filters as ComfyUI does: category, model, use case, runs on", async () => {
     const store = await loaded();
-    store.setFilters({ media: "video" });
+    store.setFilters({ category: "Video" });
+    expect(keys(store)).toEqual(["one-missing"]);
+    // Filed under two categories, found under either.
+    store.setFilters({ category: "Product & Ads" });
+    expect(keys(store)).toEqual(["ready"]);
+    store.setFilters({ category: "extension-Pack" });
+    expect(keys(store)).toEqual(["pack"]);
+    store.setFilters({ category: "partner-nodes" });
+    expect(keys(store)).toEqual(["partner"]);
+    store.clearFilters();
+    store.setFilters({ model: "Flux" });
+    expect(keys(store)).toEqual(["ready"]);
+    store.clearFilters();
+    store.setFilters({ useCase: "Image to Video" });
     expect(keys(store)).toEqual(["one-missing"]);
     store.clearFilters();
+    store.setFilters({ runsOn: "api" });
+    expect(keys(store)).toEqual(["partner"]);
+    expect(store.filterChips.map((chip) => chip.value)).toEqual([
+      "External or Remote API",
+    ]);
+    // Each list's rows, with what each holds: categories in ComfyUI's order,
+    // then Partner Nodes and the packs.
+    expect(store.filterOptions.category.map((o) => [o.label, o.count])).toEqual([
+      ["Image", 2],
+      ["Product & Ads", 1],
+      ["Video", 1],
+      ["Partner Nodes", 1],
+      ["Pack", 1],
+    ]);
+    expect(store.filterOptions.runsOn.map((o) => [o.label, o.count])).toEqual([
+      ["ComfyUI", 5],
+      ["External or Remote API", 1],
+    ]);
+  });
+
+  it("filters by readiness and words in tags and file names", async () => {
+    const store = await loaded();
     store.setFilters({ readiness: "missing" });
     expect(keys(store)).toEqual(["one-missing", "also-missing"]);
     store.clearFilters();
@@ -167,15 +223,17 @@ describe("the Templates tab's list", () => {
     store.setFilters({ name: "wan.safetensors" });
     expect(keys(store)).toEqual(["one-missing"]);
     store.clearFilters();
-    // Asking for partner templates by source shows them whatever the toggle.
-    store.setFilters({ source: "partner" });
-    expect(keys(store)).toEqual(["partner"]);
-    store.clearFilters();
-    // And by readiness, which would otherwise always come back empty.
+    // Asking for partner templates by readiness, which would otherwise always come back empty.
     store.setFilters({ readiness: "partner" });
     expect(keys(store)).toEqual(["partner"]);
     // Nor does the chip then claim they are hidden.
     expect(store.filterChips.map((chip) => chip.key)).toEqual(["readiness"]);
+  });
+
+  it("sorts by model size, smallest first, a template that gives none last", async () => {
+    const store = await loaded();
+    store.sortKey = "size";
+    expect(keys(store).slice(0, 2)).toEqual(["one-missing", "ready"]);
   });
 
   it("sorts by use", async () => {

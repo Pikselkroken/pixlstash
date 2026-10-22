@@ -1870,6 +1870,13 @@ class ComfyUITemplate(BaseModel):
     title: str
     description: Optional[str] = None
     category: Optional[str] = None
+    categories: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Every category ComfyUI's `index.json` files it under, `category` "
+            "first; empty for a pack's template."
+        ),
+    )
     media_type: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
     model_names: list[str] = Field(
@@ -2511,6 +2518,7 @@ def create_router(server) -> APIRouter:
                     "title": template.title,
                     "description": template.description,
                     "category": template.category,
+                    "categories": template.categories,
                     "media_type": template.media_type,
                     "tags": template.tags,
                     "model_names": template.model_names,

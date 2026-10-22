@@ -17,13 +17,15 @@ import { errorMessage } from "../utils/apiError";
  * mount.
  */
 
-export const TEMPLATE_SORT_KEYS = ["readiness", "popular", "newest", "name"];
+export const TEMPLATE_SORT_KEYS = ["readiness", "popular", "newest", "name", "size"];
 
 export const TEMPLATE_SORT_LABELS = {
   readiness: { label: "Readiness" },
   popular: { label: "Most used" },
   newest: { label: "Newest" },
   name: { label: "Name" },
+  // ComfyUI's "Model size (low to high)"; a template that gives none goes last.
+  size: { label: "Model size" },
 };
 
 /** Which state a template is in, best first: the readiness sort's order. */
@@ -36,11 +38,55 @@ export const READINESS_LABELS = {
   partner: "Partner API",
 };
 
-export const SOURCE_LABELS = {
-  builtin: "Built-in",
-  pack: "Node pack",
-  partner: "Partner API",
+/**
+ * The filters ComfyUI's own template browser has, as pick-one lists: its
+ * category list (its categories, then Partner Nodes, then one per node pack,
+ * with ComfyUI's own ids for the last two), Model, Use case (its tags) and
+ * Runs on.
+ */
+export const PARTNER_CATEGORY = "partner-nodes";
+const PACK_CATEGORY_PREFIX = "extension-";
+
+export const FILTER_KIND_LABELS = {
+  category: "Category",
+  model: "Model",
+  useCase: "Use case",
+  runsOn: "Runs on",
+  readiness: "Readiness",
 };
+
+export const RUNS_ON_LABELS = {
+  comfyui: "ComfyUI",
+  api: "External or Remote API",
+};
+
+function inCategory(template, id) {
+  if (id === PARTNER_CATEGORY) return template.source === "partner";
+  if (id.startsWith(PACK_CATEGORY_PREFIX)) {
+    return template.source === "pack" && template.module === id.slice(PACK_CATEGORY_PREFIX.length);
+  }
+  return (template.categories ?? []).includes(id);
+}
+
+function categoryLabel(id) {
+  if (id === PARTNER_CATEGORY) return "Partner Nodes";
+  return id.startsWith(PACK_CATEGORY_PREFIX) ? id.slice(PACK_CATEGORY_PREFIX.length) : id;
+}
+
+function runsOn(template) {
+  return template.source === "partner" ? "api" : "comfyui";
+}
+
+/** Each value *values* gives over *list*, once, with how many it holds. */
+function counted(list, values, label = (id) => id) {
+  const counts = new Map();
+  for (const template of list) {
+    for (const id of new Set(values(template))) {
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+  }
+  return [...counts].map(([id, count]) => ({ id, label: label(id), count }));
+}
 
 /**
  * Whether a template could run on this machine as it stands.
@@ -90,15 +136,17 @@ export function missingCount(template) {
 
 const DEFAULT_FILTERS = {
   name: "",
-  media: null,
-  source: null,
+  category: null,
+  model: null,
+  useCase: null,
+  runsOn: null,
   readiness: null,
   showPartner: false,
 };
 
 // The sort and filters, remembered per browser as the model shelf's view is.
 const VIEW_KEY = "pixlstash:workflowTemplatesView";
-const VIEW_SCHEMA_VERSION = 1;
+const VIEW_SCHEMA_VERSION = 2;
 
 /**
  * The remembered sort and filters, each one dropped that this build would not
@@ -118,8 +166,12 @@ function storedView() {
     sortKey: pick(parsed?.sortKey, (k) => TEMPLATE_SORT_KEYS.includes(k)) ?? "readiness",
     filters: {
       ...DEFAULT_FILTERS,
-      media: pick(parsed?.media, (m) => typeof m === "string"),
-      source: pick(parsed?.source, (s) => s in SOURCE_LABELS),
+      // Named by ComfyUI: whatever it lists next time decides whether they
+      // still match anything.
+      category: pick(parsed?.category, (c) => typeof c === "string"),
+      model: pick(parsed?.model, (m) => typeof m === "string"),
+      useCase: pick(parsed?.useCase, (u) => typeof u === "string"),
+      runsOn: pick(parsed?.runsOn, (r) => r in RUNS_ON_LABELS),
       readiness: pick(parsed?.readiness, (r) => READINESS.includes(r)),
       showPartner: ok && parsed.showPartner === true,
     },
@@ -140,6 +192,10 @@ const SORTERS = {
   popular: (a, b) => (b.usage ?? 0) - (a.usage ?? 0),
   newest: (a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")),
   name: () => 0,
+  size: (a, b) => {
+    const [x, y] = [a.size ?? Infinity, b.size ?? Infinity];
+    return x === y ? 0 : x - y;
+  },
 };
 
 /** The words the name filter is matched against: title, tags and models. */
@@ -245,22 +301,27 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     () => templates.value.filter((t) => t.source === "partner").length,
   );
 
+  // Asking for them by Category, Runs on or Readiness shows them whatever the
+  // toggle says: each would otherwise always come back empty.
+  const partnersHidden = computed(() => {
+    const f = filters.value;
+    return (
+      !f.showPartner &&
+      f.category !== PARTNER_CATEGORY &&
+      f.runsOn !== "api" &&
+      f.readiness !== "partner"
+    );
+  });
+
   const filtered = computed(() => {
     const f = filters.value;
     const words = f.name.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return templates.value.filter((template) => {
-      // Asking for them by Source or by Readiness shows them whatever the
-      // toggle says: either filter would otherwise always come back empty.
-      if (
-        template.source === "partner" &&
-        !f.showPartner &&
-        f.source !== "partner" &&
-        f.readiness !== "partner"
-      ) {
-        return false;
-      }
-      if (f.media && template.media_type !== f.media) return false;
-      if (f.source && template.source !== f.source) return false;
+      if (template.source === "partner" && partnersHidden.value) return false;
+      if (f.category && !inCategory(template, f.category)) return false;
+      if (f.model && !(template.model_names ?? []).includes(f.model)) return false;
+      if (f.useCase && !(template.tags ?? []).includes(f.useCase)) return false;
+      if (f.runsOn && runsOn(template) !== f.runsOn) return false;
       if (f.readiness && templateReadiness(template) !== f.readiness) {
         return false;
       }
@@ -278,10 +339,34 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     ),
   );
 
-  /** The media types the list holds, for the Media filter's rows. */
-  const mediaTypes = computed(() =>
-    [...new Set(templates.value.map((t) => t.media_type).filter(Boolean))].sort(),
-  );
+  /**
+   * Each filter's rows with how many templates it holds: categories in the
+   * order ComfyUI lists them, then Partner Nodes and the packs by name, as
+   * its own list has them; models and use cases by name.
+   */
+  const filterOptions = computed(() => {
+    const list = templates.value;
+    const byName = (a, b) => a.label.localeCompare(b.label);
+    const packs = counted(
+      list.filter((t) => t.source === "pack"),
+      (t) => [PACK_CATEGORY_PREFIX + t.module],
+      categoryLabel,
+    ).sort(byName);
+    return {
+      category: [
+        ...counted(list, (t) => t.categories ?? []),
+        ...counted(
+          list.filter((t) => t.source === "partner"),
+          () => [PARTNER_CATEGORY],
+          categoryLabel,
+        ),
+        ...packs,
+      ],
+      model: counted(list, (t) => t.model_names ?? []).sort(byName),
+      useCase: counted(list, (t) => t.tags ?? []).sort(byName),
+      runsOn: counted(list, (t) => [runsOn(t)], (id) => RUNS_ON_LABELS[id]),
+    };
+  });
 
   function setFilters(patch) {
     filters.value = { ...filters.value, ...patch };
@@ -307,20 +392,19 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         remove: () => setFilters({ name: "" }),
       });
     }
-    if (f.media) {
+    const values = {
+      category: categoryLabel,
+      model: (id) => id,
+      useCase: (id) => id,
+      runsOn: (id) => RUNS_ON_LABELS[id],
+    };
+    for (const [key, label] of Object.entries(values)) {
+      if (!f[key]) continue;
       chips.push({
-        key: "media",
-        kind: "Media",
-        value: f.media,
-        remove: () => setFilters({ media: null }),
-      });
-    }
-    if (f.source) {
-      chips.push({
-        key: "source",
-        kind: "Source",
-        value: SOURCE_LABELS[f.source] ?? f.source,
-        remove: () => setFilters({ source: null }),
+        key,
+        kind: FILTER_KIND_LABELS[key],
+        value: label(f[key]),
+        remove: () => setFilters({ [key]: null }),
       });
     }
     if (f.readiness) {
@@ -331,12 +415,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         remove: () => setFilters({ readiness: null }),
       });
     }
-    if (
-      !f.showPartner &&
-      f.source !== "partner" &&
-      f.readiness !== "partner" &&
-      partnerCount.value
-    ) {
+    if (partnersHidden.value && partnerCount.value) {
       chips.push({
         key: "partner",
         kind: "Partner API",
@@ -448,7 +527,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     selectedKeys,
     selectedTemplates,
     sortedTemplates,
-    mediaTypes,
+    filterOptions,
     partnerCount,
     filterChips,
     activeFilterCount,
