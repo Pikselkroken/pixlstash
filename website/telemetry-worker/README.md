@@ -167,6 +167,23 @@ column is stored. Two consequences for the consumer:
   is reported as uncountable rather than as a confident undercount. A pre-field
   checkpoint that had scanned nothing yet lost nothing, and still counts.
 
+**Daily active installs** (`daily_active_installs`) is the per-day distinct
+count: an object keyed by UTC date, each `{ total, by_type }`, holding the
+installs whose bitmap has that day's bit set. Unlike `active_installs` the days
+do not overlap, so they can be plotted as a series. Points for the consumer:
+
+- The snapshot date itself is **not** included. The snapshot is taken on the
+  first cron slice of its UTC day, when that day has barely started. Each
+  snapshot reports the `DAILY_LOOKBACK_DAYS` (7) completed days before it.
+- A completed day's count does not change, so consecutive snapshots republish
+  the same value for the dates they share. That overlap means a run of missed
+  crons shorter than seven days loses nothing; the consumer keeps one value per
+  date. A longer outage loses the days that fell out of every snapshot's reach.
+- Like `active_installs`, this counts installs that sent an ID, so it is a
+  floor, and Docker (daily pings) is overrepresented against desktop and pip
+  (pings only when run). Read it by type.
+- `null` under the same legacy-checkpoint rule as `id_bearing_checkins_by_type`.
+
 **Resurrection rate** is the metric that answers pause-versus-churn directly: a
 silence of 14 days or more that a later ping closes. `first_seen`/`last_seen`
 alone give a decay curve and cannot distinguish the two. Once observed, that

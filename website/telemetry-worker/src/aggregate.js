@@ -31,6 +31,17 @@ export const MIN_COHORT = 20;
 /** An install is "active" if it pinged inside this window. */
 export const ACTIVE_WINDOW_DAYS = 28;
 
+/**
+ * Completed UTC days, before the snapshot date, that each snapshot reports a
+ * distinct-install count for.
+ *
+ * More than one because a day's count is only readable while its bit is inside
+ * the bitmap, and each later snapshot republishes the same, unchanged value. A
+ * run of missed crons shorter than this costs nothing; the consumer keeps the
+ * latest value it has seen for each date.
+ */
+export const DAILY_LOOKBACK_DAYS = 7;
+
 /** A silence of at least this many days, later broken, counts as a return. */
 export const RESURRECTION_GAP_DAYS = 14;
 
@@ -96,6 +107,39 @@ export function checkinsInActiveWindow(row, today) {
   const gap = Math.max(0, daysBetween(row.last_seen, today));
   if (gap > ACTIVE_WINDOW_DAYS) return 0;
   return countBitsInRange(decodeActivity(row.activity) & MASK, 0, ACTIVE_WINDOW_DAYS - gap);
+}
+
+/**
+ * Did this install ping on the day `daysAgo` days before `today`?
+ *
+ * The bitmap is relative to last_seen, so the day is re-expressed as days
+ * before last_seen. A last_seen after `today` is not skew here but a scan that
+ * outlived its UTC day: pings keep arriving and rolling the bitmap mid-scan,
+ * and this reading is correct either way, where clamping the gap would not be.
+ *
+ * @param {{last_seen: string, activity: bigint|number|string}} row
+ * @param {number} daysAgo Whole days before `today`; 0 is `today` itself.
+ * @param {string} today UTC aggregation date, YYYY-MM-DD.
+ * @returns {boolean}
+ */
+export function activeOnDay(row, daysAgo, today) {
+  const bit = daysAgo - daysBetween(row.last_seen, today);
+  // Negative: the install's last ping came before that day.
+  if (bit < 0 || bit >= ACTIVITY_BITS) return false;
+  return ((decodeActivity(row.activity) >> BigInt(bit)) & 1n) === 1n;
+}
+
+/**
+ * The UTC date `days` days before `date`.
+ *
+ * @param {string} date `YYYY-MM-DD`.
+ * @param {number} days
+ * @returns {string} `YYYY-MM-DD`.
+ */
+function daysBefore(date, days) {
+  return new Date(Date.parse(`${date}T00:00:00Z`) - days * 86400000)
+    .toISOString()
+    .slice(0, 10);
 }
 
 /**
@@ -168,6 +212,10 @@ function emptyBuckets() {
   return { docker: 0, pip: 0, electron: 0, other: 0 };
 }
 
+function emptyDaily() {
+  return Array.from({ length: DAILY_LOOKBACK_DAYS }, emptyBuckets);
+}
+
 export function createAccumulator() {
   return {
     active: 0,
@@ -175,6 +223,8 @@ export function createAccumulator() {
     // Check-in counts, not distinct installs: this is a numerator for a
     // check-in denominator, and mixing the two units is the bug it fixes.
     checkinsByType: emptyBuckets(),
+    // Index i is the day i + 1 days before the snapshot date.
+    dailyByType: emptyDaily(),
     newLast7d: 0,
     resurrectionEligible: 0,
     resurrected: 0,
@@ -189,6 +239,7 @@ export function serializeAccumulator(state) {
     active: state.active,
     byType: state.byType,
     checkinsByType: state.checkinsByType,
+    dailyByType: state.dailyByType,
     newLast7d: state.newLast7d,
     resurrectionEligible: state.resurrectionEligible,
     resurrected: state.resurrected,
@@ -221,6 +272,8 @@ export function deserializeAccumulator(serialized, pristine = false) {
     // resurrection_rate below -- "cannot say" and "zero" must not look alike.
     // Null is sticky through the rest of the scan.
     checkinsByType: value.checkinsByType ?? (pristine ? emptyBuckets() : null),
+    // Same rule, for a checkpoint written before dailyByType existed.
+    dailyByType: value.dailyByType ?? (pristine ? emptyDaily() : null),
     cohorts: new Map(value.cohorts ?? []),
   };
 }
@@ -247,6 +300,14 @@ export function accumulateRow(state, row, today) {
     if (state.checkinsByType) {
       state.checkinsByType[row.install_type] ??= 0;
       state.checkinsByType[row.install_type] += checkinsInActiveWindow(row, today);
+    }
+  }
+
+  if (state.dailyByType) {
+    for (let i = 0; i < DAILY_LOOKBACK_DAYS; i++) {
+      if (!activeOnDay(row, i + 1, today)) continue;
+      state.dailyByType[i][row.install_type] ??= 0;
+      state.dailyByType[i][row.install_type] += 1;
     }
   }
 
@@ -307,6 +368,17 @@ export function finalizeAggregate(state, today) {
     if (cells.length) retention[cohortWeek] = cells;
   }
 
+  // Keyed by date. The snapshot date itself is left out: the snapshot is taken
+  // early in its UTC day, so that day is still filling up.
+  let daily = null;
+  if (state.dailyByType) {
+    daily = {};
+    state.dailyByType.forEach((byType, i) => {
+      const total = Object.values(byType).reduce((sum, n) => sum + n, 0);
+      daily[daysBefore(today, i + 1)] = { total, by_type: byType };
+    });
+  }
+
   return {
     date: today,
     active_installs: state.active,
@@ -315,6 +387,10 @@ export function finalizeAggregate(state, today) {
     // rather than installs. Aggregate counts only; no identifier leaves here.
     // Null when a legacy checkpoint made the day uncountable.
     id_bearing_checkins_by_type: state.checkinsByType,
+    // Distinct installs that pinged on each of the completed days before the
+    // snapshot date. Unlike active_installs these do not overlap: one date, one
+    // day. Null when a legacy checkpoint made the days uncountable.
+    daily_active_installs: daily,
     new_installs_last_7d: state.newLast7d,
     // Null rather than 0 when there is nothing to divide by: a rate of "0%"
     // and "we cannot say yet" are different claims and must not look alike.
