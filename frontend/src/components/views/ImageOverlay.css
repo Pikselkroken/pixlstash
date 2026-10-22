@@ -544,6 +544,15 @@
   right: calc(16px + var(--sidebar-width));
 }
 
+/* The Paint toolbox floats beside the filmstrip: the arrow steps past it
+   (34px tools, --space-2 padding each side, a 1px border each side). */
+.overlay-canvas--paint .overlay-nav-left {
+  left: calc(
+    16px + var(--filmstrip-rail-width) + 34px + 2 * var(--space-2) + 2px +
+      var(--space-3)
+  );
+}
+
 .overlay-swipe-hint {
   position: absolute;
   bottom: 16px;
@@ -873,6 +882,173 @@
      takes every pointerdown until a box is drawn or cancelled. */
   z-index: var(--z-dropdown);
   cursor: crosshair;
+}
+
+/* The Edit tab's Paint tools take the pointer over the picture. Positioned,
+   no z-index: the nav arrows after it in the DOM stay on top and clickable. */
+.paint-input-layer {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.paint-input-layer--brush,
+.paint-input-layer--eraser {
+  cursor: cell;
+}
+
+/* Before / after: the original laid over the result, cut at the slider. */
+.paint-compare {
+  position: absolute;
+}
+
+.paint-compare-before {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Any two pictures: a different shape keeps its own, centred. */
+  object-fit: contain;
+  pointer-events: none;
+}
+
+/* Each side's name, coloured as its half of the exit pill below, and the way
+   out onto that side. */
+.paint-compare-tag {
+  position: absolute;
+  top: var(--space-3);
+  z-index: var(--z-raised);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.paint-compare-tag:hover {
+  background-image: var(--hover-shade);
+}
+
+.paint-compare-tag--before {
+  left: var(--space-3);
+  background-color: rgb(var(--v-theme-secondary));
+  color: rgb(var(--v-theme-on-secondary));
+}
+
+.paint-compare-tag--after {
+  right: var(--space-3);
+  background-color: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
+}
+
+.paint-compare-split {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: rgb(var(--v-theme-on-dark-surface));
+  box-shadow: var(--elevation-2);
+  pointer-events: none;
+}
+
+.paint-compare-split .v-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 30px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-on-dark-surface));
+  color: rgb(var(--v-theme-dark-surface));
+  box-shadow: var(--elevation-3);
+}
+
+/* The slider itself: the whole picture is its track, so a drag anywhere
+   moves the cut. Invisible; the split above draws it. */
+.paint-compare-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: ew-resize;
+}
+
+/* The way out of a comparison, at the bottom of the screen: one pill, its
+   halves in the two sides' colours (as the corner tags), glowing them. */
+/* The filmstrip's right-click menu; its surface is styles/context-menu.css. */
+.filmstrip-ctx-menu {
+  position: fixed;
+  z-index: var(--z-overlay);
+  min-width: 185px;
+  user-select: none;
+  outline: none;
+}
+
+.compare-exit {
+  position: absolute;
+  bottom: var(--space-7);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-raised);
+  display: inline-flex;
+  align-items: stretch;
+  height: var(--control-h);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  box-shadow:
+    calc(-1 * var(--space-4)) 0 var(--space-6) rgba(var(--v-theme-secondary), 0.7),
+    var(--space-4) 0 var(--space-6) rgba(var(--v-theme-tertiary), 0.7);
+}
+
+.compare-exit > button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4);
+  cursor: pointer;
+}
+
+.compare-exit > button:hover {
+  background-image: var(--hover-shade);
+}
+
+.compare-exit-side--before {
+  background-color: rgb(var(--v-theme-secondary));
+  color: rgb(var(--v-theme-on-secondary));
+}
+
+.compare-exit-side--after {
+  background-color: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
+}
+
+.compare-exit-main {
+  background-color: rgb(var(--v-theme-dark-surface));
+  color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.compare-exit-key {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-2);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+}
+
+.paint-compare:has(.paint-compare-range:focus-visible) .paint-compare-split {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
 }
 
 .overlay-draw-rect {

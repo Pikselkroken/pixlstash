@@ -737,8 +737,26 @@ stacker's `lora_name_1` and `lora_name_2` are two slots), `values:
 `count`, `seed_mode: "new" | "keep" | "fixed"` with `seed`,
 `destination: {set_id?, project_id?, character_id?}`, `character_id`,
 `character_ids`, `inputs:
-[{slot_label, input_name, picture_id}]`, `replay`, `stack` and
+[{slot_label, input_name, picture_id}]`, `replay`, `stack`, `selection` and
 `allow_unchecked`.
+
+**`selection` is where on the picture the run changes** (the lightbox Edit
+tab's Paint tools): `{version: 1, steps: [...], refine: {grow, feather,
+fill_holes}}`, the same JSON `POST /pictures/{id}/mask` renders as the Edit
+tab's preview (`services/edit_selection.py` holds the schema). It runs on
+exactly one picture (422 otherwise: a hand selection belongs to the picture it
+was drawn on). The server renders it and uploads that picture as a PNG with
+the mask in its alpha channel, which `LoadImage` and the ComfyUI-PixlStash
+picture loader both hand on as `MASK` (`1 - alpha`); a PixlStash loader fed
+the picture becomes a `LoadImage` of the upload, since it would fetch the
+picture without the mask. A card where nothing reads the selected loader's
+`MASK` output is refused with `mask_not_read`, never run over the whole
+picture. The upload is named for the selection's digest as well as the
+picture, so two selections of one picture never load each other's file. Crop
+is not a run: it is the built-in `crop` image plugin (`POST
+/pictures/plugins/crop`, `parameters: {left, top, width, height}` as fractions),
+so a crop and an inpaint are each one small JSON request and can be saved and
+repeated as they are.
 
 **`character_ids` is who the run's pictures are of**, and when sent it is the
 whole answer, whatever the LoRAs say (`[]` is nobody): the Run popup's
@@ -813,6 +831,7 @@ Seven rules the client must not re-derive:
    `no_save_node`, `no_runnable_source`,
    `lora_not_skippable: {node_id, field, file, message}`,
    `stage_not_skippable: {stage, message}`,
+   `mask_not_read: {message}` (a `selection` on a card that reads no mask),
    `missing_choices: {choices: [{node_id, class_type, field, value, options,
    replacement}]}` - a `sampler_name` or `scheduler` this ComfyUI does not
    list, `replacement` being `euler` / `simple` when listed, else the first

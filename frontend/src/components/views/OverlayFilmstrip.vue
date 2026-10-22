@@ -14,9 +14,12 @@
             'filmstrip-thumb',
             {
               'filmstrip-thumb-stack-joined': item.isStackJoined,
+              'filmstrip-thumb--picked': isPicked(item),
             },
           ]"
-          @click.stop="emit('select', item.index)"
+          :aria-pressed="pickedIds.length ? String(isPicked(item)) : undefined"
+          @click.stop="onThumbClick(item, $event)"
+          @contextmenu.prevent.stop="emit('context-menu', item, $event)"
         >
           <Tooltip
             :text="item.description || 'Image'"
@@ -53,6 +56,13 @@
                 }}
               </v-icon>
             </div>
+          </div>
+          <div
+            v-if="isPicked(item)"
+            class="filmstrip-badge filmstrip-badge--pick"
+            aria-hidden="true"
+          >
+            {{ pickLetter(item) }}
           </div>
           <div
             v-if="item.stackBadgeVisible && item.thumbSrc && item.isStackLead"
@@ -115,12 +125,30 @@
 import { reactive, ref } from "vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
-defineProps({
+const props = defineProps({
   items: { type: Array, default: () => [] },
   canvasStyle: { type: Object, default: () => ({}) },
   hidden: { type: Boolean, default: false },
   readOnly: { type: Boolean, default: false },
+  // Ids Ctrl/Cmd-clicked for Compare, in the order picked.
+  pickedIds: { type: Array, default: () => [] },
 });
+
+function isPicked(item) {
+  return item.id != null && props.pickedIds.includes(String(item.id));
+}
+
+// A and B: which side of the comparison each pick lands on.
+function pickLetter(item) {
+  const at = props.pickedIds.indexOf(String(item.id));
+  return at === -1 ? "" : String.fromCharCode(65 + at);
+}
+
+// Ctrl or Cmd picks a thumb for Compare; a plain click goes to it.
+function onThumbClick(item, event) {
+  if (event.ctrlKey || event.metaKey) emit("pick", item);
+  else emit("select", item.index);
+}
 
 function stackHandles(place) {
   const last = place.position >= place.count - 1;
@@ -163,6 +191,8 @@ const emit = defineEmits([
   "prefetch",
   "navigate",
   "stack-move",
+  "pick",
+  "context-menu",
 ]);
 
 const railRef = ref(null);
@@ -339,6 +369,32 @@ function onFilmstripWheel(event) {
 .filmstrip-badge--top-left {
   top: 8px;
   left: 8px;
+}
+
+/* Picked for Compare: the comparison's teal, so it never reads as the olive
+   of the picture on screen. */
+.filmstrip-thumb--picked .filmstrip-thumb-image,
+.filmstrip-thumb--picked .filmstrip-thumb-placeholder {
+  box-shadow: 0 0 0 3px rgb(var(--v-theme-dark-surface-tertiary));
+}
+
+.filmstrip-thumb--picked .filmstrip-thumb-image-active {
+  box-shadow:
+    0 0 0 4px rgb(var(--v-theme-dark-surface-primary)),
+    0 0 0 7px rgb(var(--v-theme-dark-surface-tertiary));
+}
+
+.filmstrip-badge--pick {
+  bottom: var(--space-3);
+  right: var(--space-3);
+  min-width: 20px;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-tertiary));
+  color: rgb(var(--v-theme-on-tertiary));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
 }
 
 .filmstrip-badge--top-left-stack {

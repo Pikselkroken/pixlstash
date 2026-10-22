@@ -392,6 +392,26 @@
             </Tooltip>
           </template>
 
+          <!-- Compare two pictures Ctrl-clicked in the filmstrip. Shown greyed
+               until there are two: the tip says how to pick them. -->
+          <button
+            v-if="image"
+            class="overlay-icon-btn"
+            type="button"
+            :aria-label="filmstripCompareReason || 'Compare the two pictures picked'"
+            :aria-disabled="filmstripCompareReason ? 'true' : undefined"
+            @click.stop="compareFilmstripPicks"
+            :class="{ hidden: chromeHidden }"
+          >
+            <Tooltip
+              location="bottom"
+              :text="filmstripCompareReason || 'Compare the two pictures picked'"
+              activator="parent"
+              :describe="false"
+            />
+            <v-icon size="24">mdi-compare-horizontal</v-icon>
+          </button>
+
           <!-- The zoom readout lives ON the control (owner ruling): a live
                whole-percent of natural size beside the retained icon. The
                label width is reserved once (5ch, tabular numerals) so the
@@ -473,6 +493,7 @@
         <div
           ref="overlayCanvasRef"
           class="overlay-canvas"
+          :class="{ 'overlay-canvas--paint': paintActive && !chromeHidden }"
           tabindex="0"
           aria-label="Image - right-click or press the menu key for actions"
           @touchstart="onTouchStart"
@@ -626,8 +647,134 @@
                 class="overlay-draw-rect"
                 :style="drawRectStyle"
               ></div>
+              <!-- The Edit tab's selection and crop frame (Paint tools). -->
+              <PaintLayer
+                v-if="paintActive && overlayReady"
+                :paint="paint"
+                :dims="overlayDims"
+              />
+              <!-- One picture over another, cut at the slider: the original
+                   over an edit's result, or any two pictures picked. -->
+              <div
+                v-if="compareShown"
+                class="paint-compare"
+                :style="wordLayerStyle(overlayDims)"
+              >
+                <img
+                  class="paint-compare-before"
+                  :src="compare.beforeSrc"
+                  alt=""
+                  :style="{ clipPath: `inset(0 ${100 - comparePosition}% 0 0)` }"
+                />
+                <span
+                  class="paint-compare-split"
+                  :style="{ left: `${comparePosition}%` }"
+                  aria-hidden="true"
+                >
+                  <v-icon size="18">mdi-compare-horizontal</v-icon>
+                </span>
+                <input
+                  v-model.number="comparePosition"
+                  class="paint-compare-range"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  :aria-label="`Compare: how much of ${compare.beforeLabel || 'the original'} shows`"
+                  @pointerdown.stop.prevent="onCompareStart"
+                  @pointermove="onCompareMove"
+                  @pointerup="onCompareEnd"
+                  @pointercancel="onCompareEnd"
+                  @dblclick.stop
+                  @touchstart.stop
+                  @touchmove.stop
+                  @touchend.stop
+                  @keydown.esc.stop.prevent="closeCompare"
+                />
+                <!-- Each side's name is also the way out onto that side. -->
+                <button
+                  v-for="side in COMPARE_SIDES"
+                  :key="side"
+                  type="button"
+                  class="paint-compare-tag"
+                  :class="`paint-compare-tag--${side}`"
+                  @click.stop="leaveCompare(side)"
+                  @pointerdown.stop
+                  @dblclick.stop
+                >
+                  <Tooltip
+                    :text="`Leave the comparison on ${compareLabel(side)}`"
+                    activator="parent"
+                    :describe="false"
+                  />
+                  <v-icon v-if="side === 'before'" size="14">mdi-chevron-left</v-icon>
+                  {{ compareLabel(side) }}
+                  <v-icon v-if="side === 'after'" size="14">mdi-chevron-right</v-icon>
+                </button>
+              </div>
             </div>
           </div>
+
+          <!-- The way out of a comparison, where it cannot be zoomed or
+               panned away: the bottom of the screen, glowing its own teal. -->
+          <div
+            v-if="compareShown"
+            class="compare-exit"
+            role="group"
+            aria-label="Leave the comparison"
+            @pointerdown.stop
+            @dblclick.stop
+          >
+            <button
+              type="button"
+              class="compare-exit-side compare-exit-side--before"
+              @click.stop="leaveCompare('before')"
+            >
+              <v-icon size="18">mdi-chevron-left</v-icon>
+              {{ compareLabel("before") }}
+            </button>
+            <button
+              type="button"
+              class="compare-exit-main"
+              aria-keyshortcuts="Escape"
+              @click.stop="leaveCompare('after')"
+            >
+              Exit comparison
+              <kbd class="compare-exit-key" aria-hidden="true">Esc</kbd>
+            </button>
+            <button
+              type="button"
+              class="compare-exit-side compare-exit-side--after"
+              @click.stop="leaveCompare('after')"
+            >
+              {{ compareLabel("after") }}
+              <v-icon size="18">mdi-chevron-right</v-icon>
+            </button>
+          </div>
+
+          <!-- Takes the pointer while a Paint tool is in hand; the Hand tool
+               leaves it to the lightbox's own pan. A stroke's click and
+               touches stop here: on the canvas they hide the chrome (the
+               toolbox with it) or read as a swipe to the next picture. -->
+          <div
+            v-if="
+              paintActive &&
+              overlayReady &&
+              !compareShown &&
+              paint.tool.value !== 'hand'
+            "
+            class="paint-input-layer"
+            :class="`paint-input-layer--${paint.tool.value}`"
+            @pointerdown.prevent="onPaintStart"
+            @pointermove.prevent="onPaintMove"
+            @pointerup.prevent="onPaintEnd"
+            @pointercancel.prevent="onPaintCancel"
+            @click.stop
+            @dblclick.stop
+            @touchstart.stop
+            @touchmove.stop
+            @touchend.stop
+          ></div>
 
           <div
             v-if="drawMode"
@@ -699,18 +846,63 @@
           </div>
         </div>
 
+        <template v-if="paintActive && !chromeHidden">
+          <PaintToolbox :paint="paint" />
+          <PaintOptionsBar
+            :paint="paint"
+            :framings="cropFramingsHere"
+            @apply-crop="applyCrop"
+          />
+        </template>
+
         <OverlayFilmstrip
           ref="filmstripRef"
           :items="filmstripCanvasWindow"
           :canvas-style="filmstripCanvasStyle"
           :hidden="chromeHidden"
           :read-only="isReadOnly"
+          :picked-ids="filmstripPicks"
           @select="selectImageByIndex"
+          @pick="onFilmstripPick"
+          @context-menu="onFilmstripContextMenu"
           @toggle-expand="toggleFilmstripStackExpand"
           @prefetch="prefetchFilmstripStackMembers"
           @navigate="onFilmstripNavigate"
           @stack-move="(item, where) => moveStackMember(item.id, where)"
         />
+        <!-- Right-click on a filmstrip thumb: Compare, greyed with its reason
+             until two are picked. -->
+        <Teleport to="body">
+          <div
+            v-if="filmstripMenu"
+            ref="filmstripMenuRef"
+            class="filmstrip-ctx-menu ctx-menu ctx-menu--on-dark"
+            :style="{ left: `${filmstripMenu.x}px`, top: `${filmstripMenu.y}px` }"
+            role="menu"
+            tabindex="-1"
+          >
+            <button
+              class="ctx-item"
+              role="menuitem"
+              type="button"
+              :disabled="!!filmstripCompareReason"
+              @click="compareFromFilmstripMenu"
+            >
+              <Tooltip
+                :text="
+                  filmstripCompareReason ||
+                  'Lay one picture over the other, cut at a slider'
+                "
+                activator="parent"
+              />
+              <v-icon class="ctx-icon">mdi-compare-horizontal</v-icon>
+              Compare
+              <span v-if="filmstripCompareReason" class="ctx-meta">{{
+                COMPARE_NOTES[filmstripCompareReason] || "Ctrl-click another"
+              }}</span>
+            </button>
+          </div>
+        </Teleport>
 
         <!-- The shared inspector (shell contract rule 8), in its lightbox
              variant: dark in both themes, laid over the canvas. -->
@@ -856,6 +1048,8 @@
             :active="sidebarTab === 'edit'"
             :comfyui-progress="comfyuiProgress"
             :comfyui-progress-percent="comfyuiProgressPercent"
+            :paint="paint"
+            :apply-to-ids="applyToIds"
             @show-picture="showEditResult"
             @running="(on) => (editRunning = on)"
             @more-options="(payload) => emit('edit-more-options', payload)"
@@ -966,6 +1160,14 @@ import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 import OverlayEditPanel from "./OverlayEditPanel.vue";
+import PaintLayer from "./PaintLayer.vue";
+import PaintOptionsBar from "./PaintOptionsBar.vue";
+import PaintToolbox from "./PaintToolbox.vue";
+import {
+  PAINT_TOOLS,
+  usePaintSelection,
+} from "../../composables/usePaintSelection";
+import { cropFramings } from "../../utils/cropFramings";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
@@ -980,6 +1182,7 @@ import {
   toggleScore,
 } from "../../utils/utils.js";
 import { isEditableElement, isTypingTarget } from "../../utils/dom.js";
+import { COMPARE_NOTES, compareBlockReason } from "../../utils/compare";
 import {
   getPictureStackId,
   getStackPositionValue,
@@ -1072,6 +1275,12 @@ const props = defineProps({
   pluginProgressPercent: { type: Number, default: 0 },
   comfyuiConfigured: { type: Boolean, default: false },
   guestScore: { type: Number, default: 0 },
+  // The grid's *Edit…* (`{pictureIds}`, a new object per gesture): open on
+  // the Edit tab, with *Apply to* offering every picture named.
+  editRequest: { type: Object, default: null },
+  // The grid's *Compare* (`{beforeId, afterId}`, a new object per gesture):
+  // the first picture laid over the second, which the lightbox opens on.
+  compareRequest: { type: Object, default: null },
 });
 
 const {
@@ -1097,6 +1306,8 @@ const {
   pluginProgressPercent,
   comfyuiConfigured,
   guestScore,
+  editRequest,
+  compareRequest,
 } = toRefs(props);
 
 const image = ref(null);
@@ -1455,6 +1666,9 @@ async function showEditResult(id, sourceId) {
   const idKey = String(id);
   const fromId = image.value?.id;
   if (!open.value || idKey === "") return;
+  // Stepping from the original: it is the before side of the compare.
+  const beforeSrc =
+    String(fromId) === String(sourceId) ? fullImageSrc.value : "";
   if (!allImageById.value.has(idKey) && !filmstripImageById.value.has(idKey)) {
     let row = null;
     try {
@@ -1490,6 +1704,10 @@ async function showEditResult(id, sourceId) {
   }
   setOverlayImageById(idKey);
   void ensureOverlayFilmstripForImage();
+  if (beforeSrc) {
+    compare.value = { resultId: idKey, beforeSrc, beforeId: String(sourceId) };
+    comparePosition.value = 50;
+  }
   emit("show-picture", id);
 }
 
@@ -2494,6 +2712,10 @@ function handleKeydown(e) {
   // The Run popup the Edit tab opened sits over the lightbox: its keys are its
   // own, and an arrow or Escape must not step or close the lightbox below.
   if (runDialogStore.source || runDialogStore.makeMore) return;
+  if (filmstripMenu.value) {
+    if (e.key === "Escape") closeFilmstripMenu();
+    return;
+  }
 
   // Keyboard access to the media context menu (Shift+F10 / ContextMenu key),
   // available regardless of chrome visibility. Suppressed while typing so the
@@ -2547,12 +2769,23 @@ function handleKeydown(e) {
     if (isReadOnly.value) return;
     if (commandKey === "z" && !e.shiftKey) {
       e.preventDefault();
-      operationStore.undo();
+      // The selection's own steps first, while there are any to take back.
+      if (paintActive.value && paint.hasSelection.value) paint.undo();
+      else operationStore.undo();
       return;
     }
     if (commandKey === "y" || (commandKey === "z" && e.shiftKey)) {
       e.preventDefault();
-      operationStore.redo();
+      // As undo: while there is a selection, or a step of one to bring back,
+      // redo is the selection's, never a library change out of sight.
+      if (
+        paintActive.value &&
+        (paint.hasSelection.value || paint.canRedo.value)
+      ) {
+        paint.redo();
+      } else {
+        operationStore.redo();
+      }
       return;
     }
   }
@@ -2629,12 +2862,29 @@ function handleKeydown(e) {
       } else if (target.tagName === "SELECT") {
         // Close the select dropdown on ESC, since it doesn't do that by default.
         target.blur();
+      } else if (target.type === "range" || target.type === "checkbox") {
+        // Nothing is typed into a slider or a checkbox: a Refine slider
+        // just let go of must not stop Escape clearing the selection.
+        target.blur();
       } else {
         return;
       }
     } else {
       return;
     }
+  }
+
+  if (
+    paintActive.value &&
+    // Under a comparison the selection is out of sight: keys must not change it.
+    !compareShown.value &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    handlePaintKey(e.key)
+  ) {
+    e.preventDefault();
+    return;
   }
 
   if (e.key === "Escape") {
@@ -2649,7 +2899,21 @@ function handleKeydown(e) {
       overlayCanvasRef.value?.focus?.();
       return;
     }
-    if (drawMode.value) {
+    if (compareShown.value) {
+      // The comparison, not the lightbox.
+      closeCompare();
+      return;
+    }
+    if (paintActive.value && (paint.draft.value || paint.cropBox.value)) {
+      // The gesture or the crop frame, not the lightbox.
+      paint.cancel();
+      paint.cropBox.value = null;
+    } else if (paintActive.value && paint.hasSelection.value) {
+      // The selection goes first; the next Escape closes the lightbox.
+      paint.clear();
+    } else if (filmstripPicks.value.length) {
+      filmstripPicks.value = [];
+    } else if (drawMode.value) {
       clearDrawMode();
     } else if (pluginMenuOpen.value) {
       pluginMenuOpen.value = false;
@@ -2852,15 +3116,19 @@ function handleWheelActivity() {
   handleUserActivity();
 }
 
-function handleOverlayPointerDown() {
+function handleOverlayPointerDown(event) {
   menuWasOpenOnPointerDown = !!(
     document.querySelector(".v-overlay--active") ||
     document.querySelector(".add-to-set.open") ||
     document.querySelector(".add-to-project.open") ||
     // Our own right-click context menu (teleported to <body>). It closes itself
     // on this pointerdown, so it must be detected now, not at click time.
-    document.querySelector(".image-ctx-menu")
+    document.querySelector(".image-ctx-menu") ||
+    filmstripMenu.value
   );
+  if (filmstripMenu.value && !event?.target?.closest?.(".filmstrip-ctx-menu")) {
+    filmstripMenu.value = null;
+  }
 }
 
 function handleOverlayClick(event) {
@@ -2870,7 +3138,10 @@ function handleOverlayClick(event) {
     return;
   }
   const target = event?.target;
-  if (!target || !(target instanceof HTMLElement)) {
+  // A control whose own click re-rendered it away (Run edit becoming the
+  // run's progress) is detached by now, so `closest` below finds nothing: it
+  // was a control, not the picture.
+  if (!target || !(target instanceof HTMLElement) || !target.isConnected) {
     handleUserActivity();
     return;
   }
@@ -2888,7 +3159,7 @@ function handleOverlayClick(event) {
   const interactiveSelector =
     "button, a, input, select, textarea, label, summary, details";
   const interactiveContainerSelector =
-    ".overlay-sidebar, .overlay-rail, .overlay-nav";
+    ".overlay-sidebar, .overlay-rail, .overlay-nav, .paint-toolbox, .paint-options";
   if (
     target.closest(interactiveSelector) ||
     target.closest(interactiveContainerSelector)
@@ -3449,6 +3720,304 @@ function onDrawCancel(event) {
   }
   clearDrawMode();
 }
+// ── Paint: the Edit tab's selection and crop ───────────────────────────────
+//
+// Here and not with the Edit block above: it reads `overlayDims`. The tools
+// are out only while the Edit tab is the one on screen, so every other tab
+// keeps the lightbox's own pointer and keys.
+const paint = usePaintSelection({
+  pictureId: computed(() => image.value?.id ?? null),
+  dims: overlayDims,
+});
+const paintActive = computed(
+  () => editTabShown.value && sidebarOpen.value && sidebarTab.value === "edit",
+);
+
+// The pictures *Apply to* offers, from the grid's *Edit…* on a selection.
+const applyToIds = ref([]);
+watch(editRequest, (request) => {
+  const ids = (request?.pictureIds || []).map(Number).filter(Boolean);
+  applyToIds.value = ids.length > 1 ? ids : [];
+  if (!request) return;
+  sidebarOpen.value = true;
+  chosenSidebarTab.value = "edit";
+}, { immediate: true });
+watch(open, (isOpen) => {
+  if (isOpen) return;
+  applyToIds.value = [];
+  compare.value = null;
+  filmstripPicks.value = [];
+});
+
+// The largest stored face, which Square on face frames.
+const cropFramingsHere = computed(() => {
+  const { naturalWidth, naturalHeight } = overlayDims.value;
+  const area = (box) => (box[2] - box[0]) * (box[3] - box[1]);
+  const face = faceBboxes.value
+    .map((row) => row.bbox)
+    .reduce((best, box) => (!best || area(box) > area(best) ? box : best), null);
+  return cropFramings(naturalWidth, naturalHeight, face);
+});
+
+/** Crop runs as the built-in `crop` plugin: a new picture in this stack. */
+function applyCrop(box) {
+  if (!image.value?.id || !box) return;
+  const [left, top, width, height] = box;
+  emit("run-plugin", {
+    pluginName: "crop",
+    pictureIds: [image.value.id],
+    parameters: { left, top, width, height },
+    stack: true,
+  });
+  paint.cropBox.value = null;
+  paint.tool.value = "hand";
+}
+
+function paintPoint(event) {
+  const at = getDrawPoint(event);
+  if (!at) return null;
+  const { naturalWidth, naturalHeight } = overlayDims.value;
+  return { x: at.x / naturalWidth, y: at.y / naturalHeight };
+}
+
+function releasePaintPointer(event) {
+  const target = event?.currentTarget;
+  if (target?.hasPointerCapture?.(event.pointerId)) {
+    target.releasePointerCapture(event.pointerId);
+  }
+}
+
+function onPaintStart(event) {
+  if (event.button !== 0) return;
+  const at = paintPoint(event);
+  if (!at) return;
+  paint.begin(at, { shift: event.shiftKey, alt: event.altKey });
+  event.currentTarget?.setPointerCapture?.(event.pointerId);
+}
+
+function onPaintMove(event) {
+  if (!paint.draft.value) return;
+  const at = paintPoint(event);
+  if (at) paint.move(at);
+}
+
+function onPaintEnd(event) {
+  releasePaintPointer(event);
+  paint.end();
+}
+
+function onPaintCancel(event) {
+  releasePaintPointer(event);
+  paint.cancel();
+}
+
+const PAINT_KEYS = new Map(
+  PAINT_TOOLS.map((tool) => [tool.key.toLowerCase(), tool.id]),
+);
+
+/** A Paint tool's key, or I to invert. True when the key was the toolbox's. */
+function handlePaintKey(key) {
+  const lower = String(key || "").toLowerCase();
+  if (PAINT_KEYS.has(lower)) {
+    paint.tool.value = PAINT_KEYS.get(lower);
+    return true;
+  }
+  if (lower === "i" && paint.hasSelection.value) {
+    paint.invert();
+    return true;
+  }
+  return false;
+}
+
+// ── Before / after: the original over an edit's result ─────────────────────
+// Set by *Show it* (or a run's own result) when the lightbox steps from the
+// original to what was made from it, and shown while that result is on screen.
+const compare = ref(null);
+const comparePosition = ref(50);
+const compareShown = computed(
+  () =>
+    !!compare.value &&
+    overlayReady.value &&
+    String(image.value?.id) === String(compare.value.resultId),
+);
+
+// The cut follows the pointer anywhere on the picture. A native range spread
+// over the whole picture only answers a press on its thumb in some browsers;
+// it stays underneath for the keyboard.
+function compareAt(event) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  if (!rect.width) return;
+  const at = ((event.clientX - rect.left) / rect.width) * 100;
+  comparePosition.value = Math.round(Math.min(100, Math.max(0, at)));
+}
+
+function onCompareStart(event) {
+  if (event.button !== 0) return;
+  event.currentTarget.focus?.();
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  compareAt(event);
+}
+
+function onCompareMove(event) {
+  if (event.currentTarget.hasPointerCapture?.(event.pointerId)) compareAt(event);
+}
+
+function onCompareEnd(event) {
+  releasePaintPointer(event);
+}
+
+// Back to the result alone; the keyboard goes back to the picture.
+function closeCompare() {
+  compare.value = null;
+  overlayCanvasRef.value?.focus?.();
+}
+
+const COMPARE_SIDES = ["before", "after"];
+
+function compareLabel(side) {
+  const current = compare.value || {};
+  return side === "before"
+    ? current.beforeLabel || "Before"
+    : current.afterLabel || "After";
+}
+
+// Out of the comparison onto one side: the picture under it (after) or the
+// one laid over it (before).
+function leaveCompare(side) {
+  const beforeId = compare.value?.beforeId;
+  closeCompare();
+  if (side === "before" && beforeId) setOverlayImageById(beforeId);
+}
+
+/** A picture's row, from the lightbox's lists or else read by id. */
+async function pictureRowById(id) {
+  const key = String(id);
+  const known = allImageById.value.get(key) || filmstripImageById.value.get(key);
+  if (known) return known;
+  try {
+    const rows = await listPicturesByIds([key], { fields: "grid" });
+    return Array.isArray(rows) ? rows[0] || null : null;
+  } catch (err) {
+    console.warn(`Could not read picture ${key} to compare it:`, err);
+    return null;
+  }
+}
+
+/**
+ * Lay *beforeId* over *afterId*, cut at the slider, and show *afterId*. Any
+ * two pictures: picked in the grid or the filmstrip. They are A and B, the
+ * first picked on the left.
+ */
+async function startCompare(beforeId, afterId) {
+  const [before, after] = await Promise.all([
+    pictureRowById(beforeId),
+    pictureRowById(afterId),
+  ]);
+  // Both read now: a pick the button could only guess at may be a video.
+  const refusal = before && after ? compareBlockReason([before, after]) : null;
+  if (refusal) {
+    noticeStore.error(refusal, { key: "compare-start" });
+    return false;
+  }
+  const beforeSrc = before ? buildFullImageSrc(before) : "";
+  if (!beforeSrc) {
+    noticeStore.error("Couldn't open the first picture to compare.", {
+      key: "compare-start",
+    });
+    return false;
+  }
+  compare.value = {
+    resultId: String(afterId),
+    beforeId: String(beforeId),
+    beforeSrc,
+    beforeLabel: "A",
+    afterLabel: "B",
+  };
+  comparePosition.value = 50;
+  // From the filmstrip; the grid opens the lightbox on it itself.
+  if (open.value && String(image.value?.id) !== String(afterId)) {
+    setOverlayImageById(afterId);
+  }
+  return true;
+}
+
+watch(
+  compareRequest,
+  (request) => {
+    if (request?.beforeId == null || request?.afterId == null) return;
+    startCompare(request.beforeId, request.afterId);
+  },
+  { immediate: true },
+);
+
+// ── Filmstrip picks: Ctrl/Cmd-click, for Compare ─────────────────────────
+// Ids, in the order picked, two at most: a third pick drops the oldest. The
+// first Ctrl-click picks the picture on screen too, so one Ctrl-click on
+// another thumb makes a pair.
+const filmstripPicks = ref([]);
+
+function onFilmstripPick(item) {
+  const id = item?.id == null ? "" : String(item.id);
+  if (!id) return;
+  let picks = filmstripPicks.value;
+  const current = image.value?.id == null ? "" : String(image.value.id);
+  if (!picks.length && current && current !== id) picks = [current];
+  filmstripPicks.value = picks.includes(id)
+    ? picks.filter((pick) => pick !== id)
+    : [...picks, id].slice(-2);
+}
+
+const filmstripCompareReason = computed(() => {
+  if (filmstripPicks.value.length !== 2) {
+    return "Ctrl-click a picture in the filmstrip to compare it with this one";
+  }
+  // A pick whose row is not in the lightbox's lists is taken for a picture
+  // here; `startCompare` reads both by id and refuses a video there.
+  const rows = filmstripPicks.value.map(
+    (id) =>
+      filmstripImageById.value.get(id) ||
+      allImageById.value.get(id) || { id, format: "png" },
+  );
+  return compareBlockReason(rows);
+});
+
+async function compareFilmstripPicks() {
+  if (filmstripCompareReason.value) return;
+  const [beforeId, afterId] = filmstripPicks.value;
+  // Kept on a refusal (a video among them), so a pick can be swapped out.
+  if (await startCompare(beforeId, afterId)) filmstripPicks.value = [];
+}
+
+// The filmstrip's right-click menu: `{x, y, invoker}` while open.
+const filmstripMenu = ref(null);
+const filmstripMenuRef = ref(null);
+// Room for the one row, so a thumb at the bottom keeps its menu on screen.
+const FILMSTRIP_MENU_ROOM_PX = 56;
+
+function onFilmstripContextMenu(item, event) {
+  if (item?.id == null) return;
+  // Right-click picks the thumb, as a Ctrl-click does: one right-click on
+  // another picture makes a pair with the one on screen.
+  if (!filmstripPicks.value.includes(String(item.id))) onFilmstripPick(item);
+  filmstripMenu.value = {
+    x: event.clientX,
+    y: Math.min(event.clientY, window.innerHeight - FILMSTRIP_MENU_ROOM_PX),
+    invoker: event.currentTarget,
+  };
+  nextTick(() => filmstripMenuRef.value?.focus());
+}
+
+function closeFilmstripMenu() {
+  const invoker = filmstripMenu.value?.invoker;
+  filmstripMenu.value = null;
+  invoker?.focus?.();
+}
+
+function compareFromFilmstripMenu() {
+  filmstripMenu.value = null;
+  compareFilmstripPicks();
+}
+
 let overlayResizeObserver = null;
 let mediaResizeObserver = null;
 
@@ -3656,7 +4225,7 @@ function onTouchEnd(event) {
     const interactiveSelector =
       "button, a, input, select, textarea, label, summary, details";
     const interactiveContainerSelector =
-      ".overlay-sidebar, .overlay-rail, .overlay-nav";
+      ".overlay-sidebar, .overlay-rail, .overlay-nav, .paint-toolbox, .paint-options";
     if (
       target &&
       (target.closest(interactiveSelector) ||

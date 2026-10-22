@@ -2184,6 +2184,7 @@ def swap_in_pack_nodes(
     lora_digest: Callable[[str], str | None],
     *,
     pictures: dict[str, int] | None = None,
+    keep_loaders: frozenset[str] = frozenset(),
     library_uuid: str | None = None,
     checkpoint_id: Callable[[str], str | None] | None = None,
     shelf_uuid: str | None = None,
@@ -2230,6 +2231,9 @@ def swap_in_pack_nodes(
             picture this library is known to hold; any other opens empty.
             ``None`` swaps no ``LoadImage``.
         library_uuid: The library those ids are of.
+        keep_loaders: ``LoadImage`` node ids left as they are whatever
+            *pictures* says: an upload that carries what the pack's loader,
+            fetching by id, cannot (a selection's mask).
         checkpoint_id: A ``ckpt_name`` -> the shelf row the pack's loader can
             load it by, or ``None``. The caller answers only where that
             loader can read the file: it cannot fetch one.
@@ -2299,6 +2303,8 @@ def swap_in_pack_nodes(
         elif was in _PACK_ID_LOADERS:
             now, outputs = _PACK_ID_LOADERS[was]
             owned = None
+            if was == "LoadImage" and str(node_id) in keep_loaders:
+                continue
             if was == "LoadImage":
                 picture_id = (pictures or {}).get(str(node_id))
                 # Empty where the library holds no picture of the file: the
