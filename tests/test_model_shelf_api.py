@@ -1434,16 +1434,18 @@ def test_workflow_templates_answer_the_owner_and_a_made_set_covers_its_template(
         assert r.json()["deleted"]["template"] == "image_example"
 
         assert_real_route(shelf_env.server.api, "GET", path)
-        scoped = _bearer(
+        scoped = bearer_client(
             shelf_env.server,
-            _mint(
+            mint_read_token(
                 shelf_env.owner,
                 "templates character token",
                 resource_type="character",
                 resource_id=shelf_env.character_id,
             ),
         )
-        unscoped = _bearer(shelf_env.server, _mint(shelf_env.owner, "templates read"))
+        unscoped = bearer_client(
+            shelf_env.server, mint_read_token(shelf_env.owner, "templates read")
+        )
         for client in (scoped, unscoped):
             assert client.get(f"{API}/pictures").status_code == 200
             assert client.get(path).status_code == 403
