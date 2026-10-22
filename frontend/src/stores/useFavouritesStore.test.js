@@ -11,6 +11,7 @@ import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
 import { useNoticeStore } from "./useNoticeStore";
 
 const answer = (over = {}) => ({ model: [], workflow: [], set: [], ...over });
+const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -67,31 +68,56 @@ describe("useFavouritesStore", () => {
     expect(store.allFavourite("model", [null])).toBe(false);
   });
 
-  it("puts the previous marks back and says so when the write is refused", async () => {
+  it("puts the previous marks back, re-reads, and says so when the write is refused", async () => {
     const store = useFavouritesStore();
     store.keys = answer({ model: ["sha-a"] });
     setFavourites.mockRejectedValue(new Error("offline"));
+    listFavourites.mockResolvedValue(answer({ model: ["sha-a"] }));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await store.setFavourite("model", ["sha-b"], true);
+    await flush();
     expect(store.isFavourite("model", "sha-b")).toBe(false);
     expect(store.isFavourite("model", "sha-a")).toBe(true);
+    expect(listFavourites).toHaveBeenCalledTimes(1);
     expect(useNoticeStore().notices.map((n) => n.level)).toContain("error");
     warn.mockRestore();
   });
 
-  it("puts back only what the refused write changed", async () => {
+  it("an older refused write does not undo what a newer write saved", async () => {
     const store = useFavouritesStore();
     let refuse;
     setFavourites.mockImplementationOnce(
       () => new Promise((_, reject) => (refuse = reject)),
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const failing = store.setFavourite("model", ["sha-a"], true);
-    setFavourites.mockResolvedValueOnce(answer({ set: ["hand:1"], model: ["sha-a"] }));
-    await store.setFavourite("set", ["hand:1"], true);
+    const older = store.setFavourite("model", ["sha-a"], true);
+    setFavourites.mockResolvedValueOnce(answer({ model: ["sha-a"] }));
+    await store.setFavourite("model", ["sha-a"], true);
     refuse(new Error("offline"));
-    await failing;
+    await older;
+    expect(store.isFavourite("model", "sha-a")).toBe(true);
+    expect(listFavourites).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("when the newest write is refused too, the server decides both", async () => {
+    const store = useFavouritesStore();
+    const refusals = [];
+    setFavourites.mockImplementation(
+      () => new Promise((_, reject) => refusals.push(reject)),
+    );
+    listFavourites.mockResolvedValue(answer({ set: ["hand:1"] }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first = store.setFavourite("model", ["sha-a"], true);
+    const second = store.setFavourite("set", ["hand:2"], true);
+    refusals[0](new Error("offline"));
+    await first;
+    expect(store.isFavourite("model", "sha-a")).toBe(true);
+    refusals[1](new Error("offline"));
+    await second;
+    await flush();
     expect(store.isFavourite("model", "sha-a")).toBe(false);
+    expect(store.isFavourite("set", "hand:2")).toBe(false);
     expect(store.isFavourite("set", "hand:1")).toBe(true);
     warn.mockRestore();
   });

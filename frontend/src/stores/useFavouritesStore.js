@@ -96,10 +96,12 @@ export const useFavouritesStore = defineStore("favourites", () => {
   function fetch() {
     if (inFlight) return inFlight;
     const started = epoch;
+    const sentWrites = writeSeq;
     inFlight = listFavourites()
       .then((body) => {
         if (started !== epoch) return;
-        apply(body);
+        // A write sent since this read started is newer than its answer.
+        if (sentWrites === writeSeq) apply(body);
         loaded.value = true;
       })
       .catch((err) => {
@@ -122,8 +124,10 @@ export const useFavouritesStore = defineStore("favourites", () => {
   /**
    * Mark or unmark keys. Drawn at once, then replaced by the server's answer
    * when no newer write has been sent since (answers can land out of order).
-   * On a refusal only the keys this call changed go back, and the owner is
-   * told.
+   * On a refusal the owner is told. The newest write puts back the keys it
+   * changed and re-reads the server, which also undoes an older refused write;
+   * an older one leaves the marks to the newer write's answer, which is the
+   * server's truth after both.
    *
    * @param {"model"|"workflow"|"set"} kind
    * @param {Array<string>} list
@@ -144,7 +148,10 @@ export const useFavouritesStore = defineStore("favourites", () => {
     } catch (err) {
       console.warn(`[favourites] could not ${on ? "mark" : "unmark"}`, kind, own, err);
       if (started !== epoch) return;
-      mark(kind, changed, !on);
+      if (seq === writeSeq) {
+        mark(kind, changed, !on);
+        fetch();
+      }
       useNoticeStore().push({
         level: "error",
         text: errorMessage(
