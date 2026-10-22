@@ -1620,16 +1620,16 @@ def test_a_share_token_cannot_write_a_favourite(shelf_env):
     token shapes are refused and nothing is written, with the owner's own write
     as the positive control. Every non-owner token is READ, so this 403 is the
     method belt in `auth.py`; the gate's OWNER_ONLY is the belt behind it."""
-    scoped = _mint(
+    scoped = mint_read_token(
         shelf_env.owner,
         "favourite character token",
         resource_type="character",
         resource_id=shelf_env.character_id,
     )
-    unscoped = _mint(shelf_env.owner, "favourite global token")
+    unscoped = mint_read_token(shelf_env.owner, "favourite global token")
     body = {"kind": "model", "keys": [ADAPTER_NO_BASE], "favourite": True}
     for token in (scoped, unscoped):
-        client = _bearer(shelf_env.server, token)
+        client = bearer_client(shelf_env.server, token)
         assert client.get(f"{API}/pictures").status_code == 200
         r = client.put(f"{API}/favourites", json=body)
         assert r.status_code == 403, r.text
