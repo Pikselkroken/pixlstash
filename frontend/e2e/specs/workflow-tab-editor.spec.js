@@ -427,7 +427,8 @@ async function stubWorkflows(page, world = {}) {
       if (rest === "/duplicate" && method === "POST") {
         const version = url.searchParams.get("version");
         net.duplicates.push(version === null ? null : Number(version));
-        const name = `${now.names[own]} (version ${version})`;
+        // As the server names it: a plain duplicate is a copy.
+        const name = `${now.names[own]} ${version === null ? "(copy)" : `(version ${version})`}`;
         now.names[NEW_WF] = name;
         now.versions[NEW_WF] = [];
         return json(route, { name, workflow_id: NEW_WF }, 201);
