@@ -49,7 +49,7 @@
  * with its count, so they are never left out silently; the last list here is
  * the same switch.
  */
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import {
@@ -69,9 +69,12 @@ const props = defineProps({
 const store = useWorkflowTemplatesStore();
 const nameRef = ref(null);
 
+// Immediate, as Mine's menu is: the search key's first ask is what opens the
+// menu, and the menu renders this panel only then.
 watch(
   () => props.focusNameRequest,
-  () => nameRef.value?.focus(),
+  (n) => n && nextTick(() => nameRef.value?.focus()),
+  { immediate: true },
 );
 
 const ANY = { id: null, label: "Any" };
