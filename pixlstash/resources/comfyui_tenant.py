@@ -90,7 +90,9 @@ class ComfyUIProbe:
         if self._base_url is None:
             return None
         read_at, value = self._stats
-        if value is not None and time.monotonic() - read_at < max_age_s:
+        # A failed read is cached too: a hung ComfyUI must cost one timeout
+        # per TTL, not one per caller.
+        if read_at and time.monotonic() - read_at < max_age_s:
             return value
         try:
             value = self._get("/system_stats")
@@ -106,7 +108,7 @@ class ComfyUIProbe:
         if self._base_url is None:
             return None
         read_at, value = self._queue
-        if value is not None and time.monotonic() - read_at < STATS_TTL_S:
+        if read_at and time.monotonic() - read_at < STATS_TTL_S:
             return value
         try:
             value = self._get("/queue")
@@ -142,6 +144,10 @@ class ComfyUIProbe:
             return None
         checked_at, mapped = self._mapping
         if checked_at and time.monotonic() - checked_at < MAPPING_TTL_S:
+            return mapped
+        if self.stats() is None:
+            # Unreachable is not remote: keep the last answer and ask again,
+            # rather than admit this ComfyUI's runs unchecked for a minute.
             return mapped
         mapped = self._map_device()
         self._mapping = (time.monotonic(), mapped)

@@ -13974,6 +13974,17 @@ def test_cancelling_a_waiting_lease_cancels_its_run_and_only_a_waiting_one(held)
     assert held.runnable.submitted == []
 
 
+def test_a_held_run_is_either_sent_or_cancelled_never_both(held):
+    """Cancel and dispatch race for the same run; exactly one may win."""
+    comfyui_service.hold_run("run-race-1", "http://comfy.invalid")
+    assert comfyui_service.cancel_held_runs("run-race-1") == ["run-race-1"]
+    assert comfyui_service.claim_held_run("run-race-1") is False
+    comfyui_service.hold_run("run-race-2", "http://comfy.invalid")
+    assert comfyui_service.claim_held_run("run-race-2") is True
+    assert comfyui_service.cancel_held_runs("run-race-2") == []
+    assert comfyui_service.run_outcome("run-race-2")["status"] == "waiting"
+
+
 def test_run_anyway_sends_a_waiting_run_past_what_holds_the_card(held):
     blocker = _hold_the_card(held.arbiter)
     r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
@@ -14084,6 +14095,9 @@ def test_a_run_out_of_memory_fails_once_and_runs_alone_after_when_allowed(
             (RUN_WF,),
         )
         assert (row["peak_mb"], row["outcome"]) == (24576, "oom")
+        # Recorded, but not a need: a card's total plus headroom fits nowhere,
+        # and the next run would wait for ever.
+        assert vram_history.need_mb(server.hub, RUN_WF) is None
         policy = vram_history.policy(server.hub, RUN_WF)
         warned = [e for e in events if e.get("code") == "vram_oom_exclusive"]
         if allowed:

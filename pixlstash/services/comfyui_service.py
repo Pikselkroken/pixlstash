@@ -246,6 +246,18 @@ def hold_run(
     return cancel
 
 
+def claim_held_run(run_id: str) -> bool:
+    """Take a held run out of the cancellable set, to submit it.
+
+    False when it was cancelled first. Under the same lock as
+    ``cancel_held_runs``, so exactly one of the two wins: a run is either
+    submitted or cancelled, never cancelled and then submitted.
+    """
+    with _run_outcomes_lock:
+        cancel = _held_cancels.pop(run_id, None)
+    return cancel is not None and not cancel.is_set()
+
+
 def cancel_held_runs(run_id: str | None = None) -> list[str]:
     """Cancel one held run, or every one; the run ids cancelled.
 
@@ -1358,7 +1370,12 @@ def _emit_comfyui_progress(
 ) -> None:
     """Say how a prompt's run ended. *workflow_id* is the workflow that ran,
     so the failure can be shown on it; *stopped* marks a failure that is a
-    run somebody stopped; *notice* is shown for a run that completed."""
+    run somebody stopped; *notice* is shown for a run that completed.
+
+    ``pixlstash_run_id`` is PixlStash's id for the run (``run-<hex>``), which
+    is all a reader knew of a run held for the GPU when ``/workflows/run``
+    answered. ``run_id`` keeps its old ``comfyui-<prompt_id>`` meaning."""
+    recorded = run_outcome(prompt_id) or {}
     try:
         server.vault.notify(
             EventType.PLUGIN_PROGRESS,
@@ -1366,6 +1383,7 @@ def _emit_comfyui_progress(
                 "plugin": "ComfyUI",
                 "status": status,
                 "run_id": f"comfyui-{prompt_id}",
+                "pixlstash_run_id": recorded.get("run_id"),
                 "workflow_id": workflow_id,
                 "stopped": stopped,
                 "message": message,

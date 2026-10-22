@@ -168,12 +168,15 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   /**
    * Whether a run event's prompt id is one of the run on record. Lifecycle
    * events key on the prompt id, and a run held at submit had none then, so
-   * the record also holds its run ids: the poll says which prompt each one
-   * was sent as. With no prompt id known at all, any event of the workflow
-   * is taken to be the run on record.
+   * the record also holds its run ids. The ending names PixlStash's run id
+   * (`pixlstash_run_id`), and the poll says which prompt each was sent as.
+   * Only a record with neither (an older answer) takes any event of the
+   * workflow to be the run on record.
    */
-  function eventIsRecordedRun(ran, promptId) {
-    if (!ran.promptIds?.length || ran.promptIds.includes(promptId)) return true;
+  function eventIsRecordedRun(ran, promptId, pixlstashRunId = null) {
+    if (pixlstashRunId && ran.runIds?.includes(pixlstashRunId)) return true;
+    if (ran.promptIds?.includes(promptId)) return true;
+    if (!ran.promptIds?.length && !ran.runIds?.length) return true;
     return useTasksStore().comfyuiRuns.some(
       (run) =>
         String(run.prompt_id) === promptId &&
@@ -187,7 +190,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     const promptId = normalizeRunId(payload.run_id);
     if (payload.status === "completed" && ran && !ran.finished) {
       // Of the run on record, not of an earlier one still finishing.
-      if (eventIsRecordedRun(ran, promptId)) {
+      if (eventIsRecordedRun(ran, promptId, payload.pixlstash_run_id || null)) {
         ranChanges.value = {
           ...ranChanges.value,
           [payload.workflow_id]: { ...ran, finished: true },

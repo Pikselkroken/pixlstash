@@ -171,6 +171,7 @@ from pixlstash.services.comfyui_service import (
     _upload_image_to_comfyui,
     library_ids_named,
     own_picture_ids,
+    claim_held_run,
     follow_run,
     hold_run,
     new_run_id,
@@ -8236,6 +8237,17 @@ def create_router(server) -> APIRouter:
             )
         if not prompt_id:
             vram_lease.release()
+            logger.warning(
+                "[workflows] ComfyUI accepted run %s but named no prompt: %s",
+                run_id,
+                submitted,
+            )
+            record_run_outcome(
+                run_id,
+                "failed",
+                message="ComfyUI accepted the run but did not say which it was.",
+                run_id=run_id,
+            )
             return None
         # Before the thread, so a read straight after this answer never finds
         # the run unknown.
@@ -8288,10 +8300,11 @@ def create_router(server) -> APIRouter:
         """
         try:
             granted = vram_lease.wait(cancel)
-            if cancel.is_set() or not granted:
+            if not granted or not claim_held_run(run_id):
                 logger.info(
                     "[workflows] Held run %s was cancelled before it started", run_id
                 )
+                vram_lease.release()
                 return
             _dispatch_run(
                 comfyui_url,

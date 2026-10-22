@@ -129,8 +129,12 @@ def create_router(server) -> APIRouter:
     def cancel(request: Request, lease_id: str):
         server.auth.ensure_secure_when_required(request)
         lease = _waiting_lease(lease_id)
-        if lease.run_id:
-            cancel_held_runs(lease.run_id)
+        if lease.run_id and not cancel_held_runs(lease.run_id):
+            # Granted and sent a moment ago: it is a ComfyUI run now, which
+            # Stop on its row interrupts. Its lease is not ours to drop.
+            raise HTTPException(
+                status_code=409, detail="That run has just started on ComfyUI."
+            )
         arbiter().cancel(lease_id)
         logger.info("The owner cancelled waiting lease %s (%s)", lease_id, lease.label)
         return LeaseAnswer()

@@ -355,7 +355,7 @@ class ResourceArbiter:
         lease._arbiter = self
         if not self._pixlstash_on_gpu:
             return self._admit_light(lease, "PixlStash runs on the CPU")
-        self._refresh(cached=True)
+        self._refresh(cached=True, probes=False)
         with self._lock:
             lease.device = self._tenant_device(Tenant.PIXLSTASH)
             if lease.device is None:
@@ -632,8 +632,12 @@ class ResourceArbiter:
             return state.get("device")
         return None
 
-    def _refresh(self, cached: bool = False) -> None:
-        """Read the cards and every tenant, outside the lock."""
+    def _refresh(self, cached: bool = False, probes: bool = True) -> None:
+        """Read the cards and every tenant, outside the lock.
+
+        *probes* False keeps the tenants' last reading: ``try_light`` runs on
+        the single GPU worker, which must not wait on ComfyUI's HTTP API.
+        """
         devices = self._ledger.devices(max_age_s=1.0 if cached else 0.0)
         usage = self._usage()
         try:
@@ -642,9 +646,9 @@ class ResourceArbiter:
             logger.debug("Could not read RAM: %s", exc)
             ram_now = {"total_mb": 0, "available_mb": 0}
         with self._lock:
-            probes = dict(self._probes)
+            tenant_probes = dict(self._probes) if probes else {}
         states = {}
-        for tenant, probe in probes.items():
+        for tenant, probe in tenant_probes.items():
             try:
                 states[tenant] = {
                     "device": probe.device(),
@@ -1127,6 +1131,9 @@ class ResourceArbiter:
     def _run(self) -> None:
         last_used: dict[str, int] = {}
         while True:
+            # Cleared before the pass, not after the wait: a kick that lands
+            # during the pass is then seen by the next wait.
+            self._wake.clear()
             self._refresh()
             with self._lock:
                 changes = self._evaluate_locked()
@@ -1154,7 +1161,6 @@ class ResourceArbiter:
             last_used = devices
             if not moved:
                 self._wake.wait(POLL_S)
-            self._wake.clear()
 
     # ── events ───────────────────────────────────────────────────────────
 

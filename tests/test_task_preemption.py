@@ -133,6 +133,8 @@ def test_interactive_work_is_never_preempted(runner):
     assert urgent.started.wait(5)
     assert runner.runner.preempt_gpu("preempted by Training") == []
     assert not urgent._cancel_event.is_set()
+    # Never stopped, but waited for: models are not unloaded under it.
+    assert runner.runner.wait_for_gpu_idle(0.2) is False
     urgent.on_cancel()
     assert _until(lambda: "FaceDetectionTask" in runner.endings)
 

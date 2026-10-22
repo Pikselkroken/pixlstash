@@ -127,8 +127,13 @@ def _peaks(hub, workflow_ids: list[str]) -> dict[str, list]:
 
 
 def _need_rows(rows: list, model_set: str | None) -> list:
-    """The rows the need is taken from: this model set's, else the workflow's."""
-    usable = [row for row in rows if row["outcome"] != "aborted"]
+    """The rows the need is taken from: this model set's, else the workflow's.
+
+    An aborted run never peaked, and an out-of-memory one is recorded at the
+    card's total, which no budget can ever meet: the "runs alone" flag is what
+    answers an OOM, not a need nothing fits.
+    """
+    usable = [row for row in rows if row["outcome"] not in ("aborted", "oom")]
     if model_set is not None:
         same = [row for row in usable if row["model_set"] == model_set]
         if same:

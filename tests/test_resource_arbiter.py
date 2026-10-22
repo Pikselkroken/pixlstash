@@ -479,3 +479,19 @@ def test_the_gpu_is_chosen_before_anything_loads_torch():
     applied = source.index("gpu_select.apply()")
     assert applied < source.index("from pixlstash.server import")
     assert applied < source.index("from pixlstash.pixl_logging import")
+
+
+def test_an_unreachable_comfyui_is_not_taken_for_a_remote_one():
+    """Remote is granted unchecked; a local ComfyUI that blinked must not be."""
+    import requests
+
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    def unreachable(path):
+        raise requests.ConnectionError("test-unreachable")
+
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid")
+    probe._get = unreachable
+    assert probe.device() is None
+    assert probe._mapping[0] == 0.0, "an unreachable answer was cached as remote"

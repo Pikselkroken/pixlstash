@@ -277,12 +277,17 @@ class TaskRunner:
         return stopped
 
     def wait_for_gpu_idle(self, timeout_s: float = 60.0) -> bool:
-        """Block until no non-interactive GPU task runs; True if it got there."""
+        """Block until no GPU task runs, interactive ones included; True if so.
+
+        Interactive tasks are never stopped, but they are short, and unloading
+        a model under one makes it return nothing: what this waits for is the
+        moment models can be unloaded.
+        """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             with self._active_task_lock:
                 busy = any(
-                    task.queue_type == QueueType.GPU and not self._interactive(task)
+                    task.queue_type == QueueType.GPU
                     for task in self._active_tasks.values()
                 )
             if not busy:

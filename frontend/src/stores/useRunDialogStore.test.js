@@ -153,6 +153,17 @@ describe("useRunDialogStore", () => {
       expect(store.ranChanges["wf-a"].finished).toBe(true);
     });
 
+    it("is ready for a held run by the run id its ending names, and for no other run", () => {
+      const store = useRunDialogStore();
+      // Every run of it was held: run ids only, no prompt id at all.
+      store.ranWith("wf-a", { ...record, runIds: ["run-held"], promptIds: [] });
+      // Another run of the same workflow ending is not this one.
+      store.runEvent({ ...completed("wf-a", "p-other"), pixlstash_run_id: "run-other" });
+      expect(store.ranChanges["wf-a"].finished).toBe(false);
+      store.runEvent({ ...completed("wf-a", "p-held"), pixlstash_run_id: "run-held" });
+      expect(store.ranChanges["wf-a"].finished).toBe(true);
+    });
+
     it("is not made ready by a run that failed", () => {
       const store = useRunDialogStore();
       store.ranWith("wf-a", record);
