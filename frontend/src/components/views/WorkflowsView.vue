@@ -282,13 +282,13 @@
                  workflow's models (useModelDropTarget). -->
             <div
               class="wfv-cell"
-              :class="{ 'wfv-cell--drop': fileDropKey === entry.key }"
+              :class="{ 'wfv-cell--drop': modelDropKey === entry.key }"
               role="gridcell"
               :data-model-drop-models="dropModels(entry.card)"
               @dragover="
-                dropModels(entry.card) && onFileDragOver(entry.key, $event)
+                dropModels(entry.card) && onModelDragOver(entry.key, $event)
               "
-              @dragleave="onFileDragLeave(entry.key, $event)"
+              @dragleave="onModelDragLeave(entry.key, $event)"
             >
               <WorkflowCard
                 :card="entry.card"
@@ -465,9 +465,9 @@ const filterStore = useFilterStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
 const {
-  dropKey: fileDropKey,
-  onDragOver: onFileDragOver,
-  onDragLeave: onFileDragLeave,
+  dropKey: modelDropKey,
+  onDragOver: onModelDragOver,
+  onDragLeave: onModelDragLeave,
 } = useFileDropHighlight();
 
 /** The card's shelf files, by hash, for a model dropped on it. */
@@ -1589,6 +1589,21 @@ function onFileDrop(event) {
   const files = Array.from(event.dataTransfer.files || []).filter(isWorkflowFile);
   if (files.length) return addWorkflowFiles(files);
 }
+
+// A drop of model files alone never reaches `onFileDrop`: the window importer
+// claims it in the capture phase. So the wash is put out at the window too.
+function endFileDrag() {
+  dragDepth = 0;
+  dropActive.value = false;
+}
+onMounted(() => {
+  window.addEventListener("drop", endFileDrag, true);
+  window.addEventListener("dragend", endFileDrag, true);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("drop", endFileDrag, true);
+  window.removeEventListener("dragend", endFileDrag, true);
+});
 </script>
 
 <style scoped>

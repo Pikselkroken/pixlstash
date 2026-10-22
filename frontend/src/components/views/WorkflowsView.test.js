@@ -1742,6 +1742,22 @@ describe("Add…, a dropped file, and Unfiled recipes", () => {
     expect(wrapper.find('[role="status"]').text()).toBe("Added flow");
   });
 
+  it("puts the wash out when the window importer claims the drop", async () => {
+    const wrapper = await grid();
+    const dataTransfer = { files: [], types: ["Files"] };
+    await wrapper.find(".wfv-row").trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).toContain("wfv--drop");
+    // A model-only drop: stopped at the window, the view never sees it.
+    const drop = new Event("drop");
+    window.addEventListener("drop", (e) => e.stopPropagation(), {
+      capture: true,
+      once: true,
+    });
+    window.dispatchEvent(drop);
+    await flush();
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+  });
+
   it("says nothing about a picture dropped on the view", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
