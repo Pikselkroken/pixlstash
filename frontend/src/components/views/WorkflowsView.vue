@@ -631,7 +631,7 @@ const filterCount = computed(() =>
   onTemplates.value ? templates.activeFilterCount : store.filterChips.length,
 );
 
-/** Show one source. The template list is read the first time it is shown. */
+/** Show one source. Templates reads its list, or asks an unanswering ComfyUI again. */
 function showSource(which) {
   templates.shown = which === "templates";
   sortMenuOpen.value = false;
