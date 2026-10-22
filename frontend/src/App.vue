@@ -63,6 +63,7 @@ import StatsSidebar from "./components/panels/StatsSidebar.vue";
 import NoticeHost from "./components/widgets/NoticeHost.vue";
 import ShortcutsDialog from "./components/widgets/ShortcutsDialog.vue";
 import ConfirmDialog from "./components/widgets/ConfirmDialog.vue";
+import ModelDropFolderDialog from "./components/dialogs/ModelDropFolderDialog.vue";
 import LibrarySwitchOverlay from "./components/settings/LibrarySwitchOverlay.vue";
 import Tooltip from "./components/widgets/Tooltip.vue";
 import { useFloatingBottomInset } from "./composables/useBottomAnchor";
@@ -999,6 +1000,7 @@ defineExpose({
     </button>
     <ShortcutsDialog v-model="shortcutsDialogOpen" />
     <ConfirmDialog />
+    <ModelDropFolderDialog />
     <LibrarySwitchOverlay />
   </v-app>
 </template>

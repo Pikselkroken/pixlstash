@@ -1728,3 +1728,23 @@ describe("Add… and Unfiled recipes", () => {
     expect(wrapper.find(".wfv-unfiled .wfrt-name").text()).toBe("Orphan");
   });
 });
+
+it("names a card's shelf files for a model file dropped on it", async () => {
+  // The window's drop handler reads them to put the file beside the
+  // workflow's own models (useModelDropTarget). A slot the shelf does not hold
+  // has no hash and names nothing.
+  listWorkflowCards.mockResolvedValue({
+    cards: [
+      card("a", {
+        models: [{ sha256: "a".repeat(64) }],
+        loras: [{ sha256: "b".repeat(64) }, { sha256: null }],
+      }),
+    ],
+    one_offs: 0,
+    hidden: 0,
+  });
+  const wrapper = await grid(1008);
+  expect(
+    wrapper.find(".wfv-cell").attributes("data-model-drop-models"),
+  ).toBe(`${"a".repeat(64)} ${"b".repeat(64)}`);
+});

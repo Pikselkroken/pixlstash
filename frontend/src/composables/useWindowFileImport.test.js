@@ -20,8 +20,17 @@ import { useNoticeStore } from "../stores/useNoticeStore";
 import { addModelFile } from "../api/modelFiles";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useModelFoldersStore } from "../stores/useModelFoldersStore";
+import { listAdapters, listCheckpoints } from "../api/modelShelf";
+import {
+  modelDropChoice,
+  settleModelDropChoice,
+} from "./useModelDropTarget";
 
 vi.mock("../api/modelFiles", () => ({ addModelFile: vi.fn() }));
+vi.mock("../api/modelShelf", () => ({
+  listAdapters: vi.fn(),
+  listCheckpoints: vi.fn(),
+}));
 
 const startLocalImport = vi.fn();
 
@@ -132,7 +141,7 @@ describe("useWindowFileImport", () => {
   it("adds a dropped model file to the shelf, by path, on the desktop", async () => {
     withDesktopShell({ "lora.safetensors": "/models/lora.safetensors" });
     await drop("lora.safetensors");
-    expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors");
+    expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors", null);
     // Never the picture importer: that is the 242 MB upload this replaces.
     expect(startLocalImport).not.toHaveBeenCalled();
     expect(notices.notices.at(-1).level).toBe("success");
@@ -213,7 +222,7 @@ describe("useWindowFileImport", () => {
     try {
       withDesktopShell({ "lora.safetensors": "/models/lora.safetensors" });
       await dropOn(grid, "lora.safetensors");
-      expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors");
+      expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors", null);
     } finally {
       grid.remove();
     }
@@ -226,7 +235,7 @@ describe("useWindowFileImport", () => {
     try {
       withDesktopShell({ "lora.safetensors": "/models/lora.safetensors" });
       await dropOn(grid, "lora.safetensors", "holiday.jpg");
-      expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors");
+      expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors", null);
       // The grid's own handler imports them, with the selected character
       // threaded in - something this handler cannot do.
       expect(startLocalImport).not.toHaveBeenCalled();
@@ -240,7 +249,7 @@ describe("useWindowFileImport", () => {
     // so this used to import the samples and lose the adapter in silence.
     withDesktopShell({ "lora.safetensors": "/runs/out/lora.safetensors" });
     await dropFolder("out", "lora.safetensors", "sample-01.jpg");
-    expect(addModelFile).toHaveBeenCalledWith("/runs/out/lora.safetensors");
+    expect(addModelFile).toHaveBeenCalledWith("/runs/out/lora.safetensors", null);
     expect(startLocalImport.mock.calls[0][0].map((f) => f.name)).toEqual([
       "sample-01.jpg",
     ]);
@@ -286,9 +295,108 @@ describe("useWindowFileImport", () => {
   it("splits a mixed drop between the shelf and the importer", async () => {
     withDesktopShell({ "lora.safetensors": "/models/lora.safetensors" });
     await drop("lora.safetensors", "holiday.jpg");
-    expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors");
+    expect(addModelFile).toHaveBeenCalledWith("/models/lora.safetensors", null);
     expect(startLocalImport.mock.calls[0][0].map((f) => f.name)).toEqual([
       "holiday.jpg",
     ]);
+  });
+
+  describe("where a dropped model lands", () => {
+    // Folder 1 is the default; 3 is a ComfyUI folder the owner registered; 9
+    // is an ai-toolkit output root, which a file is never put into.
+    const FOLDERS = [
+      { id: 1, kind: "managed", path: "/home/me/models", is_default: true },
+      { id: 3, kind: "user", path: "/home/me/ComfyUI/models", is_default: false },
+      { id: 4, kind: "user", path: "/home/me/more-models", is_default: false },
+      { id: 9, kind: "source", path: "/home/me/ai-toolkit/output", is_default: false },
+    ];
+    const at = (folder_id, state = "present") => ({ folder_id, state });
+
+    let target;
+    beforeEach(() => {
+      const folders = useModelFoldersStore();
+      folders.folders = FOLDERS;
+      folders.loaded = true;
+      listCheckpoints.mockResolvedValue([
+        { id: 5, sha256: null, locations: [at(3)] },
+      ]);
+      listAdapters.mockResolvedValue([
+        { id: 6, sha256: "a".repeat(64), locations: [at(3), at(9)] },
+        { id: 7, sha256: "b".repeat(64), locations: [at(1)] },
+        { id: 8, sha256: "c".repeat(64), locations: [at(3, "missing")] },
+        { id: 10, sha256: "d".repeat(64), locations: [at(4)] },
+      ]);
+      withDesktopShell({ "lora.safetensors": "/home/me/Downloads/lora.safetensors" });
+      target = document.createElement("div");
+      target.appendChild(document.createElement("span"));
+      document.body.appendChild(target);
+    });
+    afterEach(() => {
+      settleModelDropChoice(undefined);
+      target.remove();
+    });
+
+    /** Let the folder lookup's awaits run out. */
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it("copies into the shelf folder it was dropped on", async () => {
+      target.dataset.modelDropFolder = "3";
+      await dropOn(target.firstChild, "lora.safetensors");
+      expect(addModelFile).toHaveBeenCalledWith(
+        "/home/me/Downloads/lora.safetensors",
+        3,
+      );
+      expect(modelDropChoice.value).toBeNull();
+    });
+
+    it("asks where to put it when a card's models are elsewhere", async () => {
+      // A checkpoint by id and a LoRA by hash, both in folder 3, and one more
+      // LoRA in folder 4.
+      target.dataset.modelDropModels = `5 ${"a".repeat(64)} 10`;
+      await dropOn(target.firstChild, "lora.safetensors");
+      await settle();
+      expect(addModelFile).not.toHaveBeenCalled();
+      // The folder holding most of them first, the default last, and never
+      // the source root.
+      expect(modelDropChoice.value.options.map((o) => o.id)).toEqual([3, 4, 1]);
+      settleModelDropChoice(3);
+      await settle();
+      expect(addModelFile).toHaveBeenCalledWith(
+        "/home/me/Downloads/lora.safetensors",
+        3,
+      );
+    });
+
+    it("adds nothing when the question is cancelled", async () => {
+      target.dataset.modelDropModels = "5";
+      await dropOn(target.firstChild, "lora.safetensors");
+      await settle();
+      settleModelDropChoice(undefined);
+      await settle();
+      expect(addModelFile).not.toHaveBeenCalled();
+    });
+
+    it("does not ask when the default folder already holds the card's models", async () => {
+      target.dataset.modelDropModels = `5 ${"b".repeat(64)}`;
+      await dropOn(target.firstChild, "lora.safetensors");
+      await settle();
+      expect(modelDropChoice.value).toBeNull();
+      expect(addModelFile).toHaveBeenCalledWith(
+        "/home/me/Downloads/lora.safetensors",
+        null,
+      );
+    });
+
+    it("does not ask when none of the card's models has a copy", async () => {
+      // Model 8's only copy is missing, and a missing copy is no place.
+      target.dataset.modelDropModels = "c".repeat(64);
+      await dropOn(target.firstChild, "lora.safetensors");
+      await settle();
+      expect(modelDropChoice.value).toBeNull();
+      expect(addModelFile).toHaveBeenCalledWith(
+        "/home/me/Downloads/lora.safetensors",
+        null,
+      );
+    });
   });
 });
