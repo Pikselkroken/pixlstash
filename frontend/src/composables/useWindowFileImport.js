@@ -8,12 +8,19 @@ import {
 } from "../utils/media.js";
 import { addModelFile } from "../api/modelFiles";
 import { errorDetail } from "../utils/apiError";
-import { useModelFoldersStore } from "../stores/useModelFoldersStore";
+import {
+  basename,
+  useModelFoldersStore,
+} from "../stores/useModelFoldersStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useReviewSessionsStore } from "../stores/useReviewSessionsStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { resolveImportTarget } from "../utils/importTarget.js";
+import {
+  modelDropTargetOf,
+  resolveModelDropFolder,
+} from "./useModelDropTarget.js";
 
 /**
  * One notice key per DROP, never one for the verb.
@@ -115,8 +122,12 @@ export function useWindowFileImport({ sidebarRef }) {
    * from (`webUtils.getPathForFile`, via the preload bridge). In a browser tab
    * there is nothing to resolve and nothing to send, so the drop says where the
    * gesture that does work lives instead of failing quietly.
+   *
+   * `dropTarget` is the element the drop named a destination on, if any (see
+   * `useModelDropTarget`): a shelf folder, or a workflow card whose models
+   * may be somewhere other than the default folder.
    */
-  async function addDroppedModelFiles(files) {
+  async function addDroppedModelFiles(files, dropTarget) {
     const desktop =
       typeof window !== "undefined" ? window.pixlstashDesktop : null;
     const resolved = [];
@@ -144,6 +155,45 @@ export function useWindowFileImport({ sidebarRef }) {
       return;
     }
 
+    let folderId;
+    try {
+      folderId = await resolveModelDropFolder(
+        dropTarget,
+        resolved.length === 1 ? resolved[0].name : `${resolved.length} files`,
+      );
+    } catch (err) {
+      console.error("Could not work out where the dropped models go", {
+        files: resolved.map((item) => item.name),
+        err,
+      });
+      noticeStore.error(
+        `Could not read where this workflow's models are, so nothing was added: ${errorDetail(err) || err?.message || err}`,
+      );
+      return;
+    }
+    // Cancelled in the folder question, or put aside by a later drop's.
+    if (folderId === undefined) {
+      noticeStore.info(
+        `${resolved.length === 1 ? resolved[0].name : `${resolved.length} model files`} not added.`,
+      );
+      return;
+    }
+    // Loaded for the NAME only, which the copy notice gives before the server
+    // has answered: a drop can arrive on a screen that never read the folders,
+    // and the default is not always the managed store. `refresh` reports its
+    // own failure and never throws; the copy goes ahead either way.
+    const foldersStore = useModelFoldersStore();
+    if (!foldersStore.loaded) await foldersStore.refresh({ quiet: true });
+    const folder =
+      folderId === null
+        ? foldersStore.defaultFolder
+        : foldersStore.folders.find((item) => Number(item.id) === folderId);
+    const into = folder
+      ? basename(folder.path)
+      : folderId === null
+        ? "your default folder"
+        : "the folder you chose";
+
     const dropKey = `model-file-drop-${(modelDropSeq += 1)}`;
     /** Sticky, and re-pushed per file: a copy outlasts any countdown, and a
      * card that expires mid-copy reads as "it finished". The count is the only
@@ -153,19 +203,21 @@ export function useWindowFileImport({ sidebarRef }) {
         level: "info",
         text:
           resolved.length === 1
-            ? `Copying ${resolved[0].name} into the model store…`
-            : `Copying ${index + 1} of ${resolved.length} into the model store - ${resolved[index].name}…`,
+            ? `Copying ${resolved[0].name} into ${into}…`
+            : `Copying ${index + 1} of ${resolved.length} into ${into} - ${resolved[index].name}…`,
         key: dropKey,
         timeout: 0,
       });
 
     const added = [];
     const failures = [];
+    let landedIn = "";
     for (const [index, item] of resolved.entries()) {
       sayCopying(index);
       try {
-        const result = await addModelFile(item.path);
+        const result = await addModelFile(item.path, folderId);
         added.push(result?.filename || item.name);
+        landedIn = result?.folder_path || landedIn;
       } catch (err) {
         failures.push(
           `${item.name}: ${errorDetail(err) || "could not be added"}`,
@@ -181,16 +233,18 @@ export function useWindowFileImport({ sidebarRef }) {
       // screen, and every session installs this listener.
       await Promise.all([
         useModelShelfStore().fetchRows(),
-        useModelFoldersStore().refresh({ quiet: true }),
+        foldersStore.refresh({ quiet: true }),
       ]);
     }
 
     noticeStore.dismissByKey(dropKey);
     if (added.length) {
+      // The folder the server says it used, else the one the copy notice named.
+      const landedName = landedIn ? basename(landedIn) : into;
       noticeStore.success(
         added.length === 1
-          ? `Added ${added[0]} to the shelf. The original is still where it was.`
-          : `Added ${added.length} model files to the shelf. The originals are still where they were.`,
+          ? `Added ${added[0]} to ${landedName}. The original is still where it was.`
+          : `Added ${added.length} model files to ${landedName}. The originals are still where they were.`,
         { key: dropKey },
       );
     }
@@ -231,6 +285,8 @@ export function useWindowFileImport({ sidebarRef }) {
     const allModels = dropped.length > 0 && dropped.every(isModelFile);
     if (allModels) event.stopPropagation();
     const insideGrid = isInsideImageGrid(event);
+    // Read now: the walk below awaits, and the target is the drop's to name.
+    const modelDropTarget = modelDropTargetOf(event.target);
 
     // One walk, and it takes the pictures AND the model files: the flat list
     // reports a dropped folder as one unreadable entry, so a trainer's output
@@ -249,7 +305,7 @@ export function useWindowFileImport({ sidebarRef }) {
     }
 
     if (modelFiles.length) {
-      await addDroppedModelFiles(modelFiles);
+      await addDroppedModelFiles(modelFiles, modelDropTarget);
       return;
     }
     if (insideGrid || pictureFiles.length) return;

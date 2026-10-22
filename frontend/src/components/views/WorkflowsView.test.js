@@ -1742,6 +1742,22 @@ describe("Add…, a dropped file, and Unfiled recipes", () => {
     expect(wrapper.find('[role="status"]').text()).toBe("Added flow");
   });
 
+  it("puts the wash out when the window importer claims the drop", async () => {
+    const wrapper = await grid();
+    const dataTransfer = { files: [], types: ["Files"] };
+    await wrapper.find(".wfv-row").trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).toContain("wfv--drop");
+    // A model-only drop: stopped at the window, the view never sees it.
+    const drop = new Event("drop");
+    window.addEventListener("drop", (e) => e.stopPropagation(), {
+      capture: true,
+      once: true,
+    });
+    window.dispatchEvent(drop);
+    await flush();
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+  });
+
   it("says nothing about a picture dropped on the view", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
@@ -1787,4 +1803,24 @@ describe("Add…, a dropped file, and Unfiled recipes", () => {
     );
     expect(wrapper.find(".wfv-unfiled .wfrt-name").text()).toBe("Orphan");
   });
+});
+
+it("names a card's shelf files for a model file dropped on it", async () => {
+  // The window's drop handler reads them to put the file beside the
+  // workflow's own models (useModelDropTarget). A slot the shelf does not hold
+  // has no hash and names nothing.
+  listWorkflowCards.mockResolvedValue({
+    cards: [
+      card("a", {
+        models: [{ sha256: "a".repeat(64) }],
+        loras: [{ sha256: "b".repeat(64) }, { sha256: null }],
+      }),
+    ],
+    one_offs: 0,
+    hidden: 0,
+  });
+  const wrapper = await grid(1008);
+  expect(
+    wrapper.find(".wfv-cell").attributes("data-model-drop-models"),
+  ).toBe(`${"a".repeat(64)} ${"b".repeat(64)}`);
 });

@@ -4064,3 +4064,18 @@ describe("ModelSetGrid owner verdicts", () => {
     errorSpy.mockRestore();
   });
 });
+
+it("names a set's models for a model file dropped on its card", async () => {
+  // The window's drop handler reads them to put the file beside the set's own
+  // models (useModelDropTarget).
+  const { wrapper } = await mountGrid({
+    rows: [row(1, "realvisXL_v5")],
+    support: [row(2, "sdxl_vae", "vae")],
+    combinations: [combination("1,2", [CKPT, VAE])],
+  });
+  const cells = wrapper
+    .findAll(".msg__cell")
+    .map((cell) => cell.attributes("data-model-drop-models"))
+    .filter(Boolean);
+  expect(cells).toEqual(["1 2"]);
+});

@@ -278,7 +278,18 @@
             @click="onRowClick(index, $event)"
             @contextmenu.prevent="openRowMenu(index, $event)"
           >
-            <div class="wfv-cell" role="gridcell">
+            <!-- A model file dropped here from outside goes beside this
+                 workflow's models (useModelDropTarget). -->
+            <div
+              class="wfv-cell"
+              :class="{ 'wfv-cell--drop': modelDropKey === entry.key }"
+              role="gridcell"
+              :data-model-drop-models="dropModels(entry.card)"
+              @dragover="
+                dropModels(entry.card) && onModelDragOver(entry.key, $event)
+              "
+              @dragleave="onModelDragLeave(entry.key, $event)"
+            >
               <WorkflowCard
                 :card="entry.card"
                 :selected="cardSelected(entry.key)"
@@ -425,6 +436,7 @@ import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import NameFilterField from "../widgets/NameFilterField.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import WorkflowCard from "../widgets/WorkflowCard.vue";
+import { useFileDropHighlight } from "../../composables/useModelDropTarget";
 
 /**
  * The two numbers the column count is derived from, and the only copy of them.
@@ -452,6 +464,19 @@ const store = useWorkflowsStore();
 const filterStore = useFilterStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
+const {
+  dropKey: modelDropKey,
+  onDragOver: onModelDragOver,
+  onDragLeave: onModelDragLeave,
+} = useFileDropHighlight();
+
+/** The card's shelf files, by hash, for a model dropped on it. */
+function dropModels(card) {
+  return [...(card.models ?? []), ...(card.loras ?? [])]
+    .map((model) => model.sha256)
+    .filter(Boolean)
+    .join(" ");
+}
 const sidebarStore = useSidebarStore();
 const router = useRouter();
 const route = useRoute();
@@ -1564,6 +1589,21 @@ function onFileDrop(event) {
   const files = Array.from(event.dataTransfer.files || []).filter(isWorkflowFile);
   if (files.length) return addWorkflowFiles(files);
 }
+
+// A drop of model files alone never reaches `onFileDrop`: the window importer
+// claims it in the capture phase. So the wash is put out at the window too.
+function endFileDrag() {
+  dragDepth = 0;
+  dropActive.value = false;
+}
+onMounted(() => {
+  window.addEventListener("drop", endFileDrag, true);
+  window.addEventListener("dragend", endFileDrag, true);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("drop", endFileDrag, true);
+  window.removeEventListener("dragend", endFileDrag, true);
+});
 </script>
 
 <style scoped>
@@ -1766,6 +1806,12 @@ function onFileDrop(event) {
 
 .wfv-cell {
   border-radius: var(--radius-md);
+}
+
+/* Outside the card, which paints an opaque surface over its whole cell. */
+.wfv-cell--drop {
+  outline: 2px solid var(--active-bar);
+  outline-offset: 2px;
 }
 
 /* Below the cards, on their columns: `--wf-columns` is set inline from the

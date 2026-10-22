@@ -934,7 +934,8 @@
                   `shelf-group-btn--${group.tier || 'plain'}`,
                   {
                     'shelf-group-btn--drop':
-                      dropTargetKey === group.key && dropFits(group.band),
+                      (dropTargetKey === group.key && dropFits(group.band)) ||
+                      fileDropKey === group.key,
                     'shelf-group-btn--offline': group.offline,
                     'shelf-group-btn--nested': group.nested,
                   },
@@ -943,11 +944,12 @@
                 type="button"
                 :aria-expanded="!store.isCollapsed(group.key)"
                 :aria-label="groupLabel(group)"
+                :data-model-drop-folder="fileDropFolderId(group)"
                 @click="store.toggleGroup(group.key)"
                 @contextmenu="openFolderMenu(group, $event)"
                 @keydown="onFolderHeaderKeydown(group, $event)"
                 @dragover="onGroupDragOver(group, $event)"
-                @dragleave="onGroupDragLeave(group)"
+                @dragleave="onGroupDragLeave(group, $event)"
                 @drop="onGroupDrop(group, $event)"
               >
                 <v-icon
@@ -1013,6 +1015,9 @@
               role="treegrid"
               aria-multiselectable="true"
               :aria-label="grouped ? group.label : 'Models'"
+              :data-model-drop-folder="fileDropFolderId(group)"
+              @dragover="onFolderFileDragOver(group, $event)"
+              @dragleave="onFileDragLeave(group.key, $event)"
             >
               <!-- The column names, on every grid and drawn on none of them.
                    `columnheader`s head the grid they are in and nothing else, so
@@ -1762,6 +1767,7 @@ import { errorDetail } from "../../utils/apiError";
 import { formatUserDate, formatUserDay } from "../../utils/utils";
 import { isTypingTarget } from "../../utils/dom.js";
 import { isModelFileDrag, setInternalDragPayload } from "../../utils/media";
+import { useFileDropHighlight } from "../../composables/useModelDropTarget";
 import {
   adapterKindLabel,
   assignmentRing,
@@ -2159,6 +2165,15 @@ const moveItems = ref([]);
 const moveBytes = ref(0);
 /** The group header the pointer is currently over, for the drop affordance. */
 const dropTargetKey = ref("");
+/**
+ * The folder header lit while model files are dragged in from outside the app.
+ * Apart from `dropTargetKey`, which is a move's and carries its fit check.
+ */
+const {
+  dropKey: fileDropKey,
+  onDragOver: onFileDragOver,
+  onDragLeave: onFileDragLeave,
+} = useFileDropHighlight();
 /** The band the pointer is currently over, for its meter's projection (#894). */
 const dropBandKey = ref("");
 /**
@@ -2413,6 +2428,7 @@ function isDropTarget(group) {
  * grid (#757, one payload kind later).
  */
 function onGroupDragOver(group, event) {
+  onFolderFileDragOver(group, event);
   if (!isModelFileDrag(event.dataTransfer) || !isDropTarget(group)) return;
   // Recorded BEFORE the fit is judged, so a refused header still has something
   // for `dragleave` to clear and the band above it keeps projecting for exactly
@@ -2427,7 +2443,27 @@ function onGroupDragOver(group, event) {
   event.dataTransfer.dropEffect = "move";
 }
 
-function onGroupDragLeave(group) {
+/**
+ * The folder a model file dropped in from outside lands in, read by the window's
+ * drop handler (`useModelDropTarget`): only one the owner may add a file to, and
+ * only while it is plugged in. Undefined leaves the attribute off, and a drop
+ * there goes to the default folder.
+ */
+function fileDropFolderId(group) {
+  if (!Number.isInteger(group?.folderId) || group.offline) return undefined;
+  return foldersStore.defaultCandidates.some(
+    (folder) => Number(folder.id) === group.folderId,
+  )
+    ? group.folderId
+    : undefined;
+}
+
+function onFolderFileDragOver(group, event) {
+  if (fileDropFolderId(group) !== undefined) onFileDragOver(group.key, event);
+}
+
+function onGroupDragLeave(group, event) {
+  onFileDragLeave(group.key, event);
   // Only when the pointer really left: moving header to header inside one band
   // fires this AFTER `dragover` on the new one, so the key has already moved on
   // and clearing here would blink the projection off between two targets.

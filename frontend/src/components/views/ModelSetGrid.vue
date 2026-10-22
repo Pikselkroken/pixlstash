@@ -244,7 +244,18 @@
             :data-rail-refused="railTargets.get(entry.key)?.refused || undefined"
             @rail-drop="onRailDrop(entry)"
           >
-            <div class="msg__cell" role="gridcell">
+            <!-- A model file dropped here from outside goes beside this set's
+                 models (useModelDropTarget). -->
+            <div
+              class="msg__cell"
+              :class="{ 'msg__cell--file-drop': fileDropKey === entry.key }"
+              role="gridcell"
+              :data-model-drop-models="entry.dropModels || undefined"
+              @dragover="
+                entry.dropModels && onFileDragOver(entry.key, $event)
+              "
+              @dragleave="onFileDragLeave(entry.key, $event)"
+            >
               <ModelSetCard
                 :card="entry.card"
                 :expanded="store.openSetKey === entry.key"
@@ -420,6 +431,7 @@ import WorkflowSetChooser from "../panels/WorkflowSetChooser.vue";
 import WorkflowTemplatePicker from "../panels/WorkflowTemplatePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelSetCard from "../widgets/ModelSetCard.vue";
+import { useFileDropHighlight } from "../../composables/useModelDropTarget";
 
 /**
  * The two numbers the column count is derived from, and the only copy of them.
@@ -445,6 +457,19 @@ const emit = defineEmits([
 ]);
 
 const store = useModelShelfStore();
+const {
+  dropKey: fileDropKey,
+  onDragOver: onFileDragOver,
+  onDragLeave: onFileDragLeave,
+} = useFileDropHighlight();
+
+/** A set's shelf models, by id, for a model file dropped on its card. */
+function dropModelIds(group) {
+  return (group.models ?? [])
+    .map((model) => model.id)
+    .filter((id) => id != null)
+    .join(" ");
+}
 
 const gridEl = ref(null);
 const columns = ref(1);
@@ -605,6 +630,7 @@ const flatRows = computed(() => {
       markIcon: iconsById.value.get(group.card.markModel?.id) ?? null,
     },
     headId: null,
+    dropModels: dropModelIds(group),
     cardIndex,
   }));
   const evidence = store.setGroups.map((group, cardIndex) => ({
@@ -617,6 +643,7 @@ const flatRows = computed(() => {
     // Named after a file the shelf does not hold: no row to select, so the
     // card is selected as itself, for Replace (`selectedMissingKeys`).
     missingKey: group.head?.missing ? group.key : null,
+    dropModels: dropModelIds(group),
     cardIndex: hand.length + cardIndex,
   }));
   const cards = [{ kind: "new", id: "new", key: "new" }, ...hand, ...evidence];
@@ -2329,6 +2356,12 @@ function onKeyDown(event) {
 .msg__cell {
   position: relative;
   border-radius: var(--radius-md);
+}
+
+/* Outside the card, which paints an opaque surface over its whole cell. */
+.msg__cell--file-drop {
+  outline: 2px solid var(--active-bar);
+  outline-offset: 2px;
 }
 
 /* A rail drag (design B). Every target wears a dashed rim for the whole drag;

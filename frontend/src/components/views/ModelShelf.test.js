@@ -3085,6 +3085,27 @@ describe("dragging models onto a folder", () => {
     expect(wrapper.find(".shelf-group-btn--drop").exists()).toBe(true);
   });
 
+  it("names the folder a model file dragged in from outside lands in", async () => {
+    // The window's drop handler reads the attribute (useModelDropTarget); a
+    // source folder carries none, so a drop there goes to the default folder.
+    const wrapper = await shelfWithFolders([
+      adapter({ locations: present(1, "/models/loras") }),
+    ]);
+    const header = headerFor(wrapper, "/models/loras");
+    expect(header.attributes("data-model-drop-folder")).toBe("1");
+    expect(
+      headerFor(wrapper, "/runs").attributes("data-model-drop-folder"),
+    ).toBeUndefined();
+
+    header.element.dispatchEvent(
+      Object.assign(new Event("dragover", { cancelable: true }), {
+        dataTransfer: { types: ["Files"], items: [{ kind: "file", type: "" }] },
+      }),
+    );
+    await wrapper.vm.$nextTick();
+    expect(header.classes()).toContain("shelf-group-btn--drop");
+  });
+
   it("refuses a source folder, which is taken from and never written into", async () => {
     // `ModelMover.plan` refuses it too. Checking here as well is what stops the
     // pointer promising a drop the dialog would then have to take back.
