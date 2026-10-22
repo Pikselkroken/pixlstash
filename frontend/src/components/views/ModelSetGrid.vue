@@ -234,7 +234,9 @@
               :class="{ 'msg__cell--file-drop': fileDropKey === entry.key }"
               role="gridcell"
               :data-model-drop-models="entry.dropModels || undefined"
-              @dragover="onFileDragOver(entry.key, $event)"
+              @dragover="
+                entry.dropModels && onFileDragOver(entry.key, $event)
+              "
               @dragleave="onFileDragLeave(entry.key, $event)"
             >
               <ModelSetCard

@@ -6333,14 +6333,17 @@ default), and `data-model-drop-models="<id|sha256> …"` on a card that stands f
 models — a Workflows-screen card (its slots' hashes) or a workflow set card on the
 shelf grid (its members' ids). Anywhere else sends no destination and the server
 uses the default folder. For a card, the shelf rows are read fresh
-(`/adapters` + `/checkpoints`; the shelf store holds only what its filters
-fetched) and the folders holding a *present* copy of the card's models are
-counted. If none do, or the default folder is among them, the file goes to the
+(`/checkpoints` and `/adapters` for every kind a card can name, VAEs and text
+encoders included; the shelf store holds only what its filters fetched) and the
+`user`/`managed` folders holding a *present* copy of the card's models are
+counted. A present copy means the folder was readable at its last scan, so an
+unplugged drive is not offered. If none do, or the default folder is among them, the file goes to the
 default without a question; otherwise `ModelDropFolderDialog` (mounted once in
 `App.vue`) asks, listing those folders most-used first and the default last, and
-Cancel adds nothing. Each surface lights its target through
-`useFileDropHighlight`, which clears on the window's own `drop` because the
-target's never fires.
+Cancel adds nothing, and says so. Each surface lights its target through
+`useFileDropHighlight` (a card with no shelf models is not lit, since a drop on
+it goes to the default), which clears on the window's own `drop` because a
+model-only drop is stopped there and the target's `drop` never fires.
 
 **A folder is walked, and the walk happens once.** A trainer's output directory
 holds the adapter beside its samples, and `dataTransfer.files` reports the whole

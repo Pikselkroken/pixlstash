@@ -156,8 +156,13 @@ export function useWindowFileImport({ sidebarRef }) {
       );
       return;
     }
-    // Cancelled in the folder question.
-    if (folderId === undefined) return;
+    // Cancelled in the folder question, or put aside by a later drop's.
+    if (folderId === undefined) {
+      noticeStore.info(
+        `${resolved.length === 1 ? resolved[0].name : `${resolved.length} model files`} not added.`,
+      );
+      return;
+    }
     const foldersStore = useModelFoldersStore();
     const folder =
       folderId === null

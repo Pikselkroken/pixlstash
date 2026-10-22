@@ -320,12 +320,19 @@ describe("useWindowFileImport", () => {
       listCheckpoints.mockResolvedValue([
         { id: 5, sha256: null, locations: [at(3)] },
       ]);
-      listAdapters.mockResolvedValue([
-        { id: 6, sha256: "a".repeat(64), locations: [at(3), at(9)] },
-        { id: 7, sha256: "b".repeat(64), locations: [at(1)] },
-        { id: 8, sha256: "c".repeat(64), locations: [at(3, "missing")] },
-        { id: 10, sha256: "d".repeat(64), locations: [at(4)] },
-      ]);
+      // One answer per kind, as the route gives: a VAE is only in its own.
+      listAdapters.mockImplementation(async ({ fileKind } = {}) => {
+        if (fileKind === "vae") {
+          return [{ id: 11, sha256: "e".repeat(64), locations: [at(4)] }];
+        }
+        if (fileKind) return [];
+        return [
+          { id: 6, sha256: "a".repeat(64), locations: [at(3), at(9)] },
+          { id: 7, sha256: "b".repeat(64), locations: [at(1)] },
+          { id: 8, sha256: "c".repeat(64), locations: [at(3, "missing")] },
+          { id: 10, sha256: "d".repeat(64), locations: [at(4)] },
+        ];
+      });
       withDesktopShell({ "lora.safetensors": "/home/me/Downloads/lora.safetensors" });
       target = document.createElement("div");
       target.appendChild(document.createElement("span"));
@@ -374,6 +381,15 @@ describe("useWindowFileImport", () => {
       settleModelDropChoice(undefined);
       await settle();
       expect(addModelFile).not.toHaveBeenCalled();
+      // Said, not silent: the file was dropped and nothing happened to it.
+      expect(notices.notices.at(-1).text).toBe("lora.safetensors not added.");
+    });
+
+    it("counts a card's VAE, not only its checkpoint and LoRAs", async () => {
+      target.dataset.modelDropModels = "11";
+      await dropOn(target.firstChild, "lora.safetensors");
+      await settle();
+      expect(modelDropChoice.value.options.map((o) => o.id)).toEqual([4, 1]);
     });
 
     it("does not ask when the default folder already holds the card's models", async () => {

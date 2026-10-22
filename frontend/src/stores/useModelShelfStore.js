@@ -1064,7 +1064,7 @@ const RAIL_BLOCKS = ["adapters", "checkpoints", "unclassified", "support"];
  * one answer to "what does the shelf show", so they are separate `file_kind`s
  * and one checkbox - the alt being boxes nobody wants to tick separately.
  */
-const SUPPORT_KINDS = ["vae", "text_encoder", "controlnet", "upscaler"];
+export const SUPPORT_KINDS = ["vae", "text_encoder", "controlnet", "upscaler"];
 
 function blockOf(row) {
   if (row.file_kind === "checkpoint") return "checkpoints";

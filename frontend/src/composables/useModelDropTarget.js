@@ -17,6 +17,7 @@
 import { onMounted, onUnmounted, readonly, ref } from "vue";
 import { listAdapters, listCheckpoints } from "../api/modelShelf";
 import { basename, useModelFoldersStore } from "../stores/useModelFoldersStore";
+import { SUPPORT_KINDS } from "../stores/useModelShelfStore";
 import { isFileDrag, isInternalImageDrag } from "../utils/media.js";
 
 const DROP_TARGET_SELECTOR =
@@ -108,7 +109,16 @@ export async function resolveModelDropFolder(el, fileLabel) {
   );
   // Read fresh rather than from the shelf store: that one holds only the blocks
   // its filters fetched, and the Workflows screen may never have opened it.
-  const rows = (await Promise.all([listAdapters(), listCheckpoints()])).flat();
+  // Every kind a card can name - the VAE and text encoder as well as the
+  // checkpoint and LoRAs. Engines never sit on a card.
+  // ponytail: the whole list per drop; a by-id lookup if libraries get huge.
+  const rows = (
+    await Promise.all([
+      listCheckpoints(),
+      listAdapters(),
+      ...SUPPORT_KINDS.map((fileKind) => listAdapters({ fileKind })),
+    ])
+  ).flat();
   const counts = foldersHolding(rows, tokens, new Set(eligible.keys()));
   const defaultFolder = foldersStore.defaultFolder;
   const defaultId = defaultFolder ? Number(defaultFolder.id) : null;

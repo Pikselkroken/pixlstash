@@ -274,7 +274,9 @@
               :class="{ 'wfv-cell--drop': fileDropKey === entry.key }"
               role="gridcell"
               :data-model-drop-models="dropModels(entry.card)"
-              @dragover="onFileDragOver(entry.key, $event)"
+              @dragover="
+                dropModels(entry.card) && onFileDragOver(entry.key, $event)
+              "
               @dragleave="onFileDragLeave(entry.key, $event)"
             >
               <WorkflowCard
