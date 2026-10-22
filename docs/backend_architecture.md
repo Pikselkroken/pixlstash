@@ -630,9 +630,11 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/models/workflow-sets/verdicts/{combo_key}/members/{model_id}          | model_shelf     | Clear whether a member is a problem in a workflow set       |
 | PATCH  | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Rename a workflow set                                       |
 | DELETE | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Delete a workflow set                                       |
-| PUT    | /api/v1/models/workflow-sets/{set_id}/declines                                | model_shelf     | Keep models out of a workflow set's merge offer             |
+| PUT    | /api/v1/models/workflow-sets/{set_id}/declines                                | model_shelf     | Set the models removed from a workflow set                  |
 | POST   | /api/v1/models/workflow-sets/{set_id}/members                                 | model_shelf     | Add models to a workflow set                                |
 | POST   | /api/v1/models/workflow-sets/{set_id}/members/remove                          | model_shelf     | Take models out of a workflow set                           |
+| POST   | /api/v1/models/workflow-sets/{set_id}/merge                                   | model_shelf     | Merge workflow sets on the same checkpoint                  |
+| PUT    | /api/v1/models/workflow-sets/{set_id}/seen                                    | model_shelf     | Mark models as seen in a workflow set                       |
 | GET    | /api/v1/models/workflow-templates                                             | model_shelf     | ComfyUI's workflow templates against the shelf              |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
@@ -10138,7 +10140,7 @@ band can only put a row in one place.
   survives the cut with a kept picture here OR a stored run, so a set that has
   only run in ComfyUI is served with no cover. Runs are hub-wide, like
   `recipes`. They never touch `ambiguous`, and they stay out of
-  `hub_combinations`, which feeds only the hand-made sets' merge offer.
+  `hub_combinations`, which feeds only the hand-made sets' base (below).
   ComfyUI is never contacted on this path. The stored models are the names that
   could be pinned to one shelf row when the run was recorded; a name that could
   not is not stored, so a run proves at least its combination ran, not that
@@ -10240,26 +10242,68 @@ like every shelf table), read and written by
   (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
   for a `checkpoint` or an `unknown` file only (a diffusion file is often
   `unknown`). Engines and files still waiting for their hash are refused (409).
-- **`cloned` is the owner's mark, and the server only stores it.**
-  `POST /models/workflow-sets` takes `cloned: true` for a set copied from a set
-  from pictures; it is served on the set and on a delete's snapshot. The client
-  reads it to keep such a set while it still holds exactly that set's models,
-  where a set built by hand into the same models gives way. The column is
-  amended into v2 with a default, so an earlier build's sets read as not cloned.
+- **`cloned` is only stored.** `POST /models/workflow-sets` takes `cloned: true`
+  for a set made from a set from pictures and serves it back; nothing has read
+  it since #1972 removed the swap that kept such a set while it matched. The
+  column is amended into v2 with a default.
 - **Members are sha256s, with no foreign key to `model`.** Forgetting or
   deleting a file drops its `model` row; the member stays, is served
   `on_shelf: false` under the `label` it was added with, and reconnects when a
   row with the same digest returns. The same property makes undo simple: a
   delete returns the set's snapshot, and re-posting its members in the
   `{sha256, slot, label}` form recreates it, off-shelf members included.
-- **Evidence is layered on, not merged.** `attach_hand_made` takes the
-  `fetch_workflow_sets` answer unchanged and adds `covered_by` to each
-  combination (a set covers it when every model of the combination is an
-  on-shelf member; the set may hold more), a `hand_made` list whose counts and
-  covers are pooled from the combinations each set covers, and drops on-shelf
-  members from `no_set`. Covered combinations are still served: the grid hides
+- **A set lives on its checkpoint (#1972).** `attach_hand_made` takes the
+  `fetch_workflow_sets` answer unchanged and works out each set's *base*: every
+  model of every combination headed by one of its checkpoint members (the head
+  as the grid names a card, so a namesake twin of the checkpoint counts as the
+  checkpoint), read over `hub_combinations` plus this library's run-only ones,
+  so a set holds the same models in every library. A namesake group counts
+  once (the row the set stores, else the lowest id), and a file still hashing
+  or an engine is left out. What the set serves as `members` is the base plus
+  its stored rows minus `declined`, each marked `origin` (`pictures` or
+  `added`; the set's own checkpoint rows are what it follows, so never
+  `added`), `stored`, `new` (a base model with no `model_workflow_set_seen`
+  row) and its `recipes` / `picture_count` here; `removed` is the base models
+  on `declined`; `automatic` is true while it has a checkpoint and nothing is
+  added or removed. A namesake group with no stored row keeps its lowest id,
+  since a basename-only recipe recorded no digest to choose by. Because the
+  members move with the pictures, so does the set's `combo_key`: a verdict
+  given on a set is not read once a new model joins it, as for any change of
+  members. Every combination it heads in this library gets
+  the set's id in `covered_by` and counts toward its `picture_count`,
+  `recipes`, `history_runs` and covers, so all sets on one checkpoint carry the
+  same counts and its automatic card leaves the grid. `no_set` loses every
+  on-shelf member. Covered combinations are still served: the grid hides
   them, *Works with* reads them all. The mutators answer with the set re-read
   through that same full evidence pass, which is a per-click cost, not per row.
+- **Removing, adding and restoring are writes to two lists.** A model the
+  pictures brought in is removed by putting it on `declined`
+  (`PUT .../declines`, a whole-list write that returns the old list as its
+  undo), which wins over a member row; one only the owner added is removed by
+  deleting its row. `POST .../members/remove` on a model the base holds also
+  puts it on `declined`, so the route never answers a removal that the next
+  read would undo. `POST .../members` takes a model off `declined` as well as
+  inserting it, and answers `undeclined` for its undo. Reset to automatic is
+  the client's two calls: empty `declined`, delete the added rows. A delete's
+  (and a merge's) snapshot carries `declined` and `seen`, so its undo restores
+  what was removed and what the owner had already seen.
+- **New is per set, and only stored as seen.** `PUT .../seen` inserts
+  `model_workflow_set_seen` rows (CASCADE with the set); the client sends it
+  when the owner leaves a tray that showed a new model. A create with
+  `seen: true` (Edit set, made from the card the owner is looking at) marks
+  its own base seen before answering; one without (an undo) leaves it new. A
+  create also takes `declined`, written in the same transaction, so an undo
+  or a duplicate never holds what the owner had removed, even for a moment.
+- **Merge is one transaction (`merge_sets`).** `POST .../{set_id}/merge` takes
+  `set_ids`; every set's checkpoint-slot digests must equal the survivor's
+  (non-empty), else 409 "These sets use different checkpoints.". The survivor
+  keeps its name and gains every stored member of the others (but a row its
+  own set had declined, which that set did not hold); its `declined`
+  becomes the intersection of all of theirs, so a merge never drops a model
+  one set held; its hide in the active library is dropped unless every set was
+  hidden. The others are deleted through the same `_delete_in` as a delete. The
+  answer carries `added`, `previous_declined`, `was_hidden` and each deleted
+  set's snapshot with its own `hidden`, which is the client's undo.
 - **Hidden is the library's own list, on the server (#1869).** The grid's
   *hide* used to live in the browser, which is per-machine, not per-library.
   `GET /models/workflow-sets` now carries `hidden_sets` and
@@ -10293,29 +10337,15 @@ like every shelf table), read and written by
   their model (`_purge`), carry to the survivor when two unhashed checkpoint
   rows turn out to be one file (`checkpoint_hash_task`), and go with their
   library (`LibraryRegistry.forget`).
-- **The merge offer is derived, and only the declines are stored (#1523).**
-  `_attach_offers` groups the combinations no set covers by their head (the
-  grid's own evidence cards, but over `hub_combinations`: every library's
-  recipes, not only those with a picture here). A set is offered each of its
-  own checkpoints' groups; a set with no checkpoint only a group whose models
-  include all of its own. Only combinations whose missing models can all be
-  added count: hashed, not an engine, and not in `model_workflow_set_decline`
-  for that set. One group goes to one set, the one needing fewest models added.
-  The offer is `{head_id, head_name, picture_count, recipes, covers, models}`,
-  each model with the slot it would take (the head fills an empty Checkpoint,
-  any other file by kind, so a second checkpoint joins the checkpoints). Merging is the ordinary members add;
-  **A namesake is not a missing model** (`_lacks`, used for coverage and the
-  offer alike): a recipe naming a file by basename or short digest reaches
-  every shelf row answering to it, so a set holding one of them holds the file
-  it ran with, and the others are neither offered nor needed for its pictures
-  to join. The groups are the resolver's own (`resolve_recipe_models`'
-  `namesakes`, carried on each combination), never re-derived from filenames,
-  since a row answers to every copy's basename too. A set's checkpoint also
-  matches a pictures' set keyed on its namesake, whichever twin came first.
-  Keep separate is `PUT .../declines`, a whole-list write that returns the old
-  list as its undo. `kept_separate` counts the pictures here the declines hold
-  back. The declines cascade with their set (so a build that predates the
-  table can still delete one); a delete's undo does not restore them.
+- **A namesake is not a second member.** A recipe naming a file by basename
+  or short digest reaches every shelf row answering to it, so its combination
+  holds them all; the base keeps one per group (above). The groups are the
+  resolver's own (`resolve_recipe_models`' `namesakes`, carried on each
+  combination), never re-derived from filenames, since a row answers to every
+  copy's basename too. The pictures' merge offer (#1523) that this rule first
+  served was removed in #1972: a model the pictures use joins the set by
+  itself, and the owner removes what does not belong. The template offer
+  (#1999, below) is what a set is still offered.
 - **Clone with new models reads them first.** `propose_companions` lists, ahead
   of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
   checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,
@@ -10660,9 +10690,10 @@ nothing for it.
   so a Wan 2.2 high/low or a base-plus-refiner template brings both); templates whose heads share a quantless name are variants of one row,
   the default first (covered, then complete, then most files on the shelf, then
   fewest matched only as another quant, then ComfyUI's own usage count). A template with no head is its own row.
-- **Covered is the merge offer's rule.** A hand-made set covers a template when
-  `_lacks` finds nothing of the template's on-shelf files missing from the set's
-  on-shelf members (a namesake counting as the file), or when the set was made
+- **Covered is `_lacks`.** A hand-made set covers a template when `_lacks`
+  finds nothing of the template's on-shelf files missing from the set's on-shelf
+  members (a namesake counting as the file; the members include what its
+  pictures ran with, #1972), or when the set was made
   from it: `model_workflow_set.template`, written by `POST /models/workflow-sets`
   `{template}` and served on the set and its delete snapshot, so an undo puts it
   back. A covered template is never offered as a second set.
@@ -10673,19 +10704,19 @@ nothing for it.
   the picker however old the download.
 - **A set holding a head is offered the rest of its template** (#1999 §3).
   `attach_template_offers`, after `attach_hand_made` in the routes'
-  `_workflow_sets`, fills `offer` on a set that has an on-shelf checkpoint and
-  no pictures' offer: of the templates whose head matches one of its
+  `_workflow_sets`, fills `offer` on a set that has an on-shelf checkpoint: of
+  the templates whose head matches one of its
   checkpoints by name (another quant counting), the closest (the one it was
   made from, then fewest files lacking, then fewest held only as another quant,
   then usage) is offered and the rest named in `others`. Only the head
   triggers it, so a shared VAE suggests nothing. Its files the set lacks come
-  as `models` (on the shelf, hashed, not an engine: added as the merge offer's
-  are) and `downloads` (`{name, url, directory, slot, sha256}`), with
+  as `models` (on the shelf, hashed, not an engine, not already held from its
+  pictures: added with the ordinary members add) and `downloads` (`{name, url, directory, slot, sha256}`), with
   `source: "template"` and empty picture counts. Keep separate is the same
   declines list: a download's `sha256` is `file_decline_key`, the sha256 of
-  its folded name, since it has no bytes. Nothing left to offer, no offer,
-  and no other template is tried. Keeping a pictures' offer separate lets
-  this one show, since it is a different question.
+  its folded name, since it has no bytes. Since #1972 that list is the set's
+  removed list: Reset to automatic clears it, so the template is offered
+  again. Nothing left to offer, no offer, and no other template is tried.
 - **A newer ComfyUI is a flag.** The route asks the owner's configured ComfyUI
   for its version (`probe_comfyui`, one second) and sets `needs_comfyui` on a
   template that wants a newer one. A set is only files, so making one is never

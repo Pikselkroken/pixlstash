@@ -6134,7 +6134,7 @@ describe("the set grid is what the shelf opens on", () => {
     expect(store.visibleRows).toHaveLength(2);
   });
 
-  /** The grid with two hand-made ("Grouped by you") sets beside card 1. */
+  /** The grid with two of the owner's sets beside card 1. */
   async function gridWithHandMade() {
     const { wrapper, store } = await shelfOnTheGrid();
     document.body.appendChild(wrapper.element);

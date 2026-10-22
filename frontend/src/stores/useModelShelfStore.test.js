@@ -37,6 +37,9 @@ const setWorkflowSetDeclines = vi.fn();
 const setWorkflowSetsHidden = vi.fn();
 const setModelsHidden = vi.fn();
 const addWorkflowSetMembers = vi.fn();
+const removeWorkflowSetMembers = vi.fn();
+const mergeWorkflowSets = vi.fn();
+const markWorkflowSetSeen = vi.fn();
 const setModelIcon = vi.fn();
 const clearModelIcons = vi.fn();
 
@@ -63,6 +66,9 @@ vi.mock("../api/modelShelf", () => ({
   setWorkflowSetsHidden: (...args) => setWorkflowSetsHidden(...args),
   setModelsHidden: (...args) => setModelsHidden(...args),
   addWorkflowSetMembers: (...args) => addWorkflowSetMembers(...args),
+  removeWorkflowSetMembers: (...args) => removeWorkflowSetMembers(...args),
+  mergeWorkflowSets: (...args) => mergeWorkflowSets(...args),
+  markWorkflowSetSeen: (...args) => markWorkflowSetSeen(...args),
 }));
 
 const mergeModelCopies = vi.fn();
@@ -3661,23 +3667,6 @@ describe("sets from pictures are hidden, never deleted", () => {
     }
   });
 
-  it("reports a twin check that throws instead of rejecting unhandled", async () => {
-    const store = await openOn([handSet(7)]);
-    // Naming the set reads the shelf rows; one it cannot read throws there,
-    // outside any write's own error handling.
-    const naming = vi
-      .spyOn(store.rows, "map")
-      .mockImplementation(() => {
-        throw new Error("test-naming-failure");
-      });
-    store.toggleSet("hand:7");
-    await flush();
-    naming.mockRestore();
-    await flush();
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
-    expect(useNoticeStore().notices.at(-1)).toMatchObject({ level: "error" });
-  });
-
   it("keeps a hidden set hidden in a new session, from the server's answer", async () => {
     // The key lives on the server (#1869), not in this browser: a fresh store
     // reads it back off the set payload.
@@ -3689,7 +3678,7 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(store.hiddenSetCount).toBe(1);
   });
 
-  it("keeps the precision a member's and an offered model's name has lost", async () => {
+  it("keeps the precision a member's and a removed model's name has lost", async () => {
     listAdapters.mockResolvedValue([
       adapter({ id: 1, sha256: "a".repeat(64), filename: "Qwen3VL_4b_bf16.st", display_name: null, quant: "bf16" }),
       adapter({ id: 2, sha256: "b".repeat(64), filename: "Qwen3VL_4b_fp8_scaled.st", display_name: null, quant: "fp8" }),
@@ -3720,11 +3709,7 @@ describe("sets from pictures are hidden, never deleted", () => {
               label: "RealVis fp16",
             },
           ],
-          offer: {
-            head_id: 1,
-            head_name: "x",
-            models: [{ ...encoder, id: 2, sha256: "b".repeat(64) }],
-          },
+          removed: [{ ...encoder, id: 2, sha256: "b".repeat(64) }],
         },
       ],
     });
@@ -3740,7 +3725,7 @@ describe("sets from pictures are hidden, never deleted", () => {
       // A label that is no filename is kept whole, so it gets no badge too.
       ["RealVis fp16", null],
     ]);
-    expect(set.offer.models.map((m) => [m.name, m.quant])).toEqual([
+    expect(set.removed.map((m) => [m.name, m.quant])).toEqual([
       ["Qwen3VL 4b", "fp8"],
     ]);
   });
@@ -3798,57 +3783,237 @@ describe("sets from pictures are hidden, never deleted", () => {
 
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  it("swaps a hand-made re-creation for the set from pictures when its tray closes", async () => {
-    hiddenOnServer.add("model:1");
+  /** A set living on the checkpoint: `lora` from the pictures, `extra` added. */
+  function livingSet(id, { extra = [], removed = [], newLora = false, ...others } = {}) {
+    return {
+      id,
+      name: null,
+      declined: removed.map((m) => m.sha256),
+      removed,
+      automatic: !extra.length && !removed.length,
+      members: [
+        { ...member(checkpoint, "a".repeat(64)), origin: "pictures", stored: true },
+        {
+          ...member(lora, "b".repeat(64)),
+          slot: "lora",
+          origin: "pictures",
+          stored: false,
+          new: newLora,
+        },
+        ...extra,
+      ],
+      ...others,
+    };
+  }
+
+  const added = {
+    ...member({ id: 3, name: "x.st", kind: "vae" }, "d".repeat(64)),
+    slot: "vae",
+    origin: "added",
+    stored: true,
+    label: "x.st",
+  };
+
+  it("marks what the pictures brought in seen when its tray closes, never before", async () => {
+    const store = await openOn([livingSet(7, { newLora: true })]);
+    markWorkflowSetSeen.mockReset().mockResolvedValue({ seen: [] });
+    // Open: the owner is looking at it, so it is still drawn new.
+    expect(markWorkflowSetSeen).not.toHaveBeenCalled();
+    expect(store.handMadeGroups[0].card.fresh).toBe(1);
+
+    store.toggleSet("hand:7");
+    await flush();
+    expect(markWorkflowSetSeen).toHaveBeenCalledWith(7, ["b".repeat(64)]);
+  });
+
+  it("writes nothing on close when nothing in the set is new", async () => {
+    const store = await openOn([livingSet(7)]);
+    markWorkflowSetSeen.mockReset().mockResolvedValue({ seen: [] });
+    expect(store.handMadeGroups[0].card.fresh).toBe(0);
+    store.toggleSet("hand:7");
+    await flush();
+    expect(markWorkflowSetSeen).not.toHaveBeenCalled();
+  });
+
+  it("removes a model the pictures brought in by keeping it out, and one added by taking it out", async () => {
     useOperationStore().setLocalReceiptHost(true);
-    const store = await openOn([handSet(7, [], { declined: ["c".repeat(64)] })]);
-    // Open, it is being built: nothing gives way yet.
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+    const set = livingSet(7, { extra: [added] });
+    const store = await openOn([set]);
+    setWorkflowSetDeclines.mockReset().mockResolvedValue({
+      set: { declined: ["b".repeat(64)] },
+      previous: [],
+    });
+    removeWorkflowSetMembers.mockReset().mockResolvedValue({
+      removed: [{ sha256: "d".repeat(64), slot: "vae", label: "x.st" }],
+    });
 
+    await store.removeFromHandMadeSet(store.handMadeSets[0], [
+      "b".repeat(64),
+      "d".repeat(64),
+    ]);
+    expect(setWorkflowSetDeclines).toHaveBeenCalledWith(7, ["b".repeat(64)]);
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(7, ["d".repeat(64)]);
+
+    // Undo: the added member back, and the kept-out one off the list.
+    setWorkflowSetDeclines.mockClear().mockResolvedValue({ set: { declined: [] } });
+    addWorkflowSetMembers.mockReset().mockResolvedValue({ added: [], set: set });
+    await useOperationStore().takeLocalReceiptAction();
+    expect(addWorkflowSetMembers).toHaveBeenCalledWith(7, [
+      { sha256: "d".repeat(64), slot: "vae", label: "x.st" },
+    ]);
+    expect(setWorkflowSetDeclines).toHaveBeenCalledWith(7, []);
+  });
+
+  it("decides how to remove from the set as last read, not a stale copy of it", async () => {
+    const store = await openOn([livingSet(7)]);
+    setWorkflowSetDeclines.mockReset().mockResolvedValue({ set: { declined: [] } });
+    removeWorkflowSetMembers.mockReset().mockResolvedValue({ removed: [] });
+    // A caller's copy from before the read: it does not know the LoRA came
+    // from the pictures, so a plain row delete would leave it in the set.
+    await store.removeFromHandMadeSet({ id: 7, members: [] }, ["b".repeat(64)]);
+    expect(setWorkflowSetDeclines).toHaveBeenCalledWith(7, ["b".repeat(64)]);
+    expect(removeWorkflowSetMembers).not.toHaveBeenCalled();
+  });
+
+  it("resets from the set as last read, not a stale copy of it", async () => {
+    const store = await openOn([livingSet(7, { extra: [added] })]);
+    setWorkflowSetDeclines
+      .mockReset()
+      .mockResolvedValue({ set: { declined: [] }, previous: [] });
+    removeWorkflowSetMembers.mockReset().mockResolvedValue({ removed: [] });
+    // A copy from before the add: it does not know the VAE is the owner's.
+    await store.resetHandMadeSet({ id: 7, members: [] });
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(7, ["d".repeat(64)]);
+  });
+
+  it("marks what a write still on the wire brought in, once it lands", async () => {
+    const kept = { ...member(lora, "b".repeat(64)), slot: "lora", name: "style" };
+    const store = await openOn([livingSet(7, { removed: [kept] })]);
+    markWorkflowSetSeen.mockReset().mockResolvedValue({ seen: [] });
+    let land;
+    setWorkflowSetDeclines
+      .mockReset()
+      .mockImplementation(() => new Promise((resolve) => (land = resolve)));
+    const restoring = store.restoreToHandMadeSet(store.handMadeSets[0], [
+      "b".repeat(64),
+    ]);
+    // Closed while the Restore is out: nothing in the set is new yet.
     store.toggleSet("hand:7");
     await flush();
+    expect(markWorkflowSetSeen).not.toHaveBeenCalled();
+    // It lands, and the read after it serves the LoRA back, unseen.
+    fetchWorkflowSets.mockResolvedValue({
+      ...(await fetchWorkflowSets()),
+      hand_made: [livingSet(7, { newLora: true })],
+    });
+    land({ set: { declined: [] }, previous: ["b".repeat(64)] });
+    await restoring;
     await flush();
-
-    expect(deleteWorkflowSet).toHaveBeenCalledWith(7);
-    expect(store.handMadeSets).toHaveLength(0);
-    // Shown, unhidden, and opened, instead of the hand-made one.
-    expect(store.setGroups.map((g) => g.key)).toEqual(["model:1"]);
-    expect(store.hiddenSetCount).toBe(0);
-    expect(store.openSetKey).toBe("model:1");
-
-    // Undo brings the set back with what it kept out, and re-hides the twin.
-    createWorkflowSet.mockReset().mockResolvedValue({ id: 9 });
-    setWorkflowSetDeclines.mockReset().mockResolvedValue({});
-    const operations = useOperationStore();
-    expect(operations.receipt.summary).toContain("so that set is shown instead");
-    await operations.takeLocalReceiptAction();
-    expect(createWorkflowSet).toHaveBeenCalledTimes(1);
-    expect(setWorkflowSetDeclines).toHaveBeenCalledWith(9, ["c".repeat(64)]);
-    expect(store.hiddenSetCount).toBe(1);
+    await flush();
+    expect(markWorkflowSetSeen).toHaveBeenCalledWith(7, ["b".repeat(64)]);
   });
 
-  it("leaves a set holding anything more than the set from pictures", async () => {
-    const extra = member({ id: 3, name: "x.st", kind: "vae" }, "d".repeat(64));
-    const store = await openOn([handSet(8, [extra])]);
-    store.toggleSet("hand:8");
-    await flush();
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  it("takes back the first write of a removal or a reset when the second fails", async () => {
+    const store = await openOn([livingSet(7, { extra: [added] })]);
+    const lists = [];
+    setWorkflowSetDeclines.mockReset().mockImplementation(async (_, list) => {
+      lists.push(list);
+      return { set: { declined: list }, previous: ["e".repeat(64)] };
+    });
+    removeWorkflowSetMembers
+      .mockReset()
+      .mockRejectedValue(new Error("test-remove-failed"));
+    // The LoRA is kept out, then the added VAE's row cannot be deleted.
+    await store.removeFromHandMadeSet(store.handMadeSets[0], [
+      "b".repeat(64),
+      "d".repeat(64),
+    ]);
+    expect(lists).toEqual([["b".repeat(64)], []]);
+
+    lists.length = 0;
+    await store.resetHandMadeSet(store.handMadeSets[0]);
+    // Cleared, then put back as it was.
+    expect(lists).toEqual([[], ["e".repeat(64)]]);
+    expect(useNoticeStore().notices.at(-1)).toMatchObject({ level: "error" });
   });
 
-  it("leaves a set holding anything less than the set from pictures", async () => {
-    const set = handSet(8);
-    set.members = set.members.slice(0, 1);
-    const store = await openOn([set], []);
-    store.toggleSet("hand:8");
-    await flush();
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  it("restores a removed model, and resets a set to automatic with an Undo", async () => {
+    useOperationStore().setLocalReceiptHost(true);
+    const kept = { ...member(lora, "b".repeat(64)), slot: "lora", name: "style" };
+    const set = livingSet(7, { extra: [added], removed: [kept] });
+    const store = await openOn([set]);
+    setWorkflowSetDeclines
+      .mockReset()
+      .mockImplementation(async (_, list) => ({
+        set: { declined: list },
+        previous: ["b".repeat(64)],
+      }));
+
+    await store.restoreToHandMadeSet(store.handMadeSets[0], ["b".repeat(64)]);
+    expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(7, []);
+    expect(useOperationStore().receipt.summary).toMatch(/^Restored ".+" to /);
+
+    removeWorkflowSetMembers.mockReset().mockResolvedValue({
+      removed: [{ sha256: "d".repeat(64), slot: "vae", label: "x.st" }],
+    });
+    setWorkflowSetDeclines.mockClear();
+    await store.resetHandMadeSet(store.handMadeSets[0]);
+    // The checkpoint stays: it is what the set follows.
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(7, ["d".repeat(64)]);
+    expect(setWorkflowSetDeclines).toHaveBeenCalledWith(7, []);
+
+    addWorkflowSetMembers.mockReset().mockResolvedValue({ added: [] });
+    setWorkflowSetDeclines.mockClear();
+    await useOperationStore().takeLocalReceiptAction();
+    expect(addWorkflowSetMembers).toHaveBeenCalledWith(7, [
+      { sha256: "d".repeat(64), slot: "vae", label: "x.st" },
+    ]);
+    expect(setWorkflowSetDeclines).toHaveBeenCalledWith(7, ["b".repeat(64)]);
   });
 
-  it("leaves a set alone until the payload says it covers the twin", async () => {
-    const store = await openOn([handSet(7)], []);
-    store.toggleSet("hand:7");
-    await flush();
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  it("merges sets in one write, and Undo puts every merged set back whole", async () => {
+    useOperationStore().setLocalReceiptHost(true);
+    const into = livingSet(7, { name: "Kit" });
+    const other = livingSet(6, { extra: [added] });
+    const store = await openOn([into, other]);
+    const snapshot = {
+      id: 6,
+      name: "Other",
+      members: [{ sha256: "a".repeat(64), slot: "checkpoint", label: "base" }],
+      declined: ["e".repeat(64)],
+      seen: ["c".repeat(64)],
+      hidden: true,
+    };
+    mergeWorkflowSets.mockReset().mockResolvedValue({
+      set: { ...into, declined: [] },
+      added: ["d".repeat(64)],
+      previous_declined: ["f".repeat(64)],
+      was_hidden: false,
+      merged: [snapshot],
+    });
+
+    await store.mergeHandMadeSets(into, [other]);
+    expect(mergeWorkflowSets).toHaveBeenCalledWith(7, [6]);
+    expect(useOperationStore().receipt.summary).toContain(
+      'Merged "Other" into "Kit". No file was touched',
+    );
+
+    removeWorkflowSetMembers.mockReset().mockResolvedValue({ removed: [] });
+    setWorkflowSetDeclines.mockReset().mockResolvedValue({ set: { declined: [] } });
+    createWorkflowSet.mockReset().mockResolvedValue({ id: 11 });
+    await useOperationStore().takeLocalReceiptAction();
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(7, ["d".repeat(64)]);
+    expect(setWorkflowSetDeclines).toHaveBeenCalledWith(7, ["f".repeat(64)]);
+    // What the owner had removed from it comes back in the same create, so
+    // the set never holds it, even for a moment; and its hide here too.
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      name: "Other",
+      members: snapshot.members,
+      declined: ["e".repeat(64)],
+    });
+    expect(setWorkflowSetDeclines).not.toHaveBeenCalledWith(11, expect.anything());
+    expect(hiddenOnServer.has("hand:11")).toBe(true);
+    expect(markWorkflowSetSeen).toHaveBeenCalledWith(11, ["c".repeat(64)]);
   });
 
   it("hides nothing when the payload carries no hidden sets at all", async () => {
@@ -3861,30 +4026,6 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(store.setGroups.map((g) => g.key)).toEqual(["model:1"]);
   });
 
-  it("decides on the membership after an add still on the wire", async () => {
-    const store = await openOn([handSet(7)]);
-    const extra = member({ id: 3, name: "x.st", kind: "vae" }, "d".repeat(64));
-    let land;
-    addWorkflowSetMembers
-      .mockReset()
-      .mockImplementation(() => new Promise((resolve) => (land = resolve)));
-    const adding = store.addToHandMadeSet(store.handMadeSets[0], [
-      { model_id: 3 },
-    ]);
-    // Closed before the add answers, while the snapshot is still the twin.
-    store.toggleSet("hand:7");
-    await flush();
-    fetchWorkflowSets.mockResolvedValue({
-      ...(await fetchWorkflowSets()),
-      hand_made: [handSet(7, [extra])],
-    });
-    land({ added: ["d".repeat(64)], set: handSet(7, [extra]) });
-    await adding;
-    await flush();
-    await flush();
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
-  });
-
   it("reports a write that throws before it returns a promise", async () => {
     const store = shelfWithASet();
     createWorkflowSet.mockReset().mockImplementation(() => {
@@ -3894,96 +4035,7 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(useNoticeStore().notices.at(-1).level).toBe("error");
   });
 
-  it("waits out a write that starts while it is already waiting", async () => {
-    const store = await openOn([handSet(7)]);
-    const extra = member({ id: 3, name: "x.st", kind: "vae" }, "d".repeat(64));
-    const lands = [];
-    addWorkflowSetMembers
-      .mockReset()
-      .mockImplementation(() => new Promise((resolve) => lands.push(resolve)));
-    const first = store.addToHandMadeSet(store.handMadeSets[0], [
-      { model_id: 2 },
-    ]);
-    store.toggleSet("hand:7");
-    await flush();
-    // A second add starts while the check waits on the first.
-    const second = store.addToHandMadeSet(store.handMadeSets[0], [
-      { model_id: 3 },
-    ]);
-    lands[0]({ added: [], set: handSet(7) });
-    await first;
-    await flush();
-    fetchWorkflowSets.mockResolvedValue({
-      ...(await fetchWorkflowSets()),
-      hand_made: [handSet(7, [extra])],
-    });
-    lands[1]({ added: ["d".repeat(64)], set: handSet(7, [extra]) });
-    await second;
-    await flush();
-    await flush();
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
-  });
-
-  it("never moves the view off a set opened while the swap was deciding", async () => {
-    const store = await openOn([handSet(7), { id: 5, name: "B", members: [] }], [7]);
-    // From A straight to B: A gives way, B stays open and is not swapped.
-    store.toggleSet("hand:5");
-    await flush();
-    await flush();
-    expect(deleteWorkflowSet).toHaveBeenCalledTimes(1);
-    expect(deleteWorkflowSet).toHaveBeenCalledWith(7);
-    expect(store.openSetKey).toBe("hand:5");
-  });
-
-  it("redoes the swap: unhidden and opened again", async () => {
-    hiddenOnServer.add("model:1");
-    useOperationStore().setLocalReceiptHost(true);
-    const store = await openOn([handSet(7)]);
-    store.toggleSet("hand:7");
-    await flush();
-    await flush();
-    const restored = handSet(9);
-    createWorkflowSet.mockReset().mockImplementation(async () => {
-      // An IMPLEMENTATION, not a resolved value: the undo hides the twin AFTER
-      // this answers, and the refetch that follows the undo must read the list
-      // back off the double's server as it stands then, not as it stood here.
-      fetchWorkflowSets.mockImplementation(async () => ({
-        combinations: [
-          {
-            key: "1+2",
-            models: [checkpoint, lora],
-            recipes: 2,
-            covers: [],
-            covered_by: [9],
-          },
-        ],
-        no_set: [],
-        hand_made: [restored],
-        hidden_sets: [...hiddenOnServer],
-      }));
-      return restored;
-    });
-    const operations = useOperationStore();
-    await operations.takeLocalReceiptAction();
-    // Undone: hidden again, as it was before the swap.
-    expect([...hiddenOnServer]).toEqual(["model:1"]);
-
-    await operations.takeLocalReceiptAction();
-    await flush();
-    expect(deleteWorkflowSet).toHaveBeenLastCalledWith(9);
-    expect(store.hiddenSetCount).toBe(0);
-    expect(store.openSetKey).toBe("model:1");
-  });
-
-  it("leaves a set alone when another set also covers the twin", async () => {
-    // Deleting it would not bring the set from pictures back on screen.
-    const store = await openOn([handSet(7), handSet(6)]);
-    store.toggleSet("hand:7");
-    await flush();
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
-  });
-
-  it("clones a set from pictures into a set of the owner's, marked as one", async () => {
+  it("makes a set of the owner's from a set from pictures, marked as one", async () => {
     const store = shelfWithASet();
     await store.fetchRows();
     await store.loadWorkflowSets();
@@ -3991,17 +4043,16 @@ describe("sets from pictures are hidden, never deleted", () => {
 
     await store.cloneSetFromPictures(store.setGroups[0]);
 
+    // The checkpoint alone: the pictures on it bring in the rest (#1972).
     expect(createWorkflowSet).toHaveBeenCalledWith({
       cloned: true,
-      members: [
-        { model_id: 1, slot: "checkpoint" },
-        { model_id: 2, slot: "lora" },
-      ],
+      seen: true,
+      members: [{ model_id: 1, slot: "checkpoint" }],
     });
     expect(store.openSetKey).toBe("hand:9");
   });
 
-  it("clones a diffusion-file head as the checkpoint, and never an engine", async () => {
+  it("makes a diffusion-file head the checkpoint", async () => {
     const store = shelfWithASet();
     createWorkflowSet.mockReset().mockResolvedValue({ id: 9, members: [] });
     await store.cloneSetFromPictures({
@@ -4014,26 +4065,14 @@ describe("sets from pictures are hidden, never deleted", () => {
     });
     expect(createWorkflowSet).toHaveBeenCalledWith({
       cloned: true,
-      members: [
-        { model_id: 1, slot: "checkpoint" },
-        { model_id: 2, slot: "vae" },
-      ],
+      seen: true,
+      members: [{ model_id: 1, slot: "checkpoint" }],
     });
 
     // A set named after a file the shelf does not hold has nothing to clone.
     createWorkflowSet.mockClear();
     await store.cloneSetFromPictures({ head: { missing: true }, models: [] });
     expect(createWorkflowSet).not.toHaveBeenCalled();
-  });
-
-  it("keeps a cloned set that still matches the set from pictures", async () => {
-    // The same set as the swap test above, but for the mark.
-    const store = await openOn([handSet(7, [], { cloned: true })]);
-    store.toggleSet("hand:7");
-    await flush();
-    await flush();
-    expect(deleteWorkflowSet).not.toHaveBeenCalled();
-    expect(store.handMadeSets.map((set) => set.id)).toEqual([7]);
   });
 
   it("makes one clone when the button is pressed twice", async () => {
@@ -4268,45 +4307,13 @@ describe("a model is hidden in this library", () => {
     expect([...store.selectedIds]).toEqual([1]);
   });
 
-  it("copies a set from pictures whole, a hidden member included", async () => {
-    // The copy has to cover the card's pictures, or the card stays on the
-    // grid beside its own copy: a hidden member is left off the tray, never
-    // out of the set.
-    createWorkflowSet.mockResolvedValue({ id: 30, members: [], declined: [] });
-    const store = shelf();
-    await store.fetchRows();
-    await store.loadWorkflowSets();
-    await store.toggleHiddenModels([store.rows.find((r) => r.id === 2)]);
-    const [group] = store.setGroups;
-    expect(group.models.map((m) => m.id)).toEqual([1]);
-
-    await store.cloneSetFromPictures(group);
-
-    expect(createWorkflowSet).toHaveBeenCalledWith(
-      expect.objectContaining({
-        members: [
-          { model_id: 1, slot: "checkpoint" },
-          { model_id: 2, slot: "lora" },
-        ],
-      }),
-    );
-  });
-
-  it("offers a hand-made set no hidden model to merge in", async () => {
-    const offer = (models) => ({
-      head_id: 1,
-      head_name: "base.st",
-      models,
-      covers: [],
-      recipes: 1,
-      picture_count: 1,
-    });
+  it("draws no hidden model among the ones removed from a set", async () => {
     const store = shelf({
       handMade: [
         {
           id: 7,
           name: "seven",
-          declined: [],
+          declined: ["b".repeat(64)],
           members: [
             {
               ...checkpoint,
@@ -4315,17 +4322,16 @@ describe("a model is hidden in this library", () => {
               on_shelf: true,
             },
           ],
-          offer: offer([{ id: 2, name: "style.st", slot: "lora" }]),
+          removed: [{ id: 2, name: "style.st", slot: "lora", sha256: "b".repeat(64) }],
         },
       ],
     });
     await store.fetchRows();
     await store.loadWorkflowSets();
-    expect(store.handMadeSets[0].offer.models.map((m) => m.id)).toEqual([2]);
+    expect(store.handMadeSets[0].removed.map((m) => m.id)).toEqual([2]);
 
     await store.toggleHiddenModels([store.rows.find((r) => r.id === 2)]);
 
-    // An offer of nothing but hidden models is no offer.
-    expect(store.handMadeSets[0].offer).toBe(null);
+    expect(store.handMadeSets[0].removed).toEqual([]);
   });
 });

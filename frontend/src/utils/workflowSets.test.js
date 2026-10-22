@@ -3,18 +3,22 @@ import { describe, expect, it } from "vitest";
 import {
   downloadBatches,
   evidenceLine,
-  fillFromPictures,
   fillFromSets,
   handMadeCard,
   handMadeName,
   headModel,
   hideSetsVerb,
+  identicalSets,
+  mergePartners,
+  mergeVerb,
   rowBaseModel,
   kindCounts,
   offerQuestion,
   orderRows,
   setCard,
   setGroups,
+  setChanges,
+  canReset,
   setName,
   setSlots,
   sharingLabel,
@@ -643,57 +647,7 @@ describe("hand-made sets (#1520)", () => {
     expect(all.collapsed).toBe("1 more for another base model");
   });
 
-  it("fills from pictures with what ran beside the checkpoint, in its own slot", () => {
-    expect(fillFromPictures(mine, combinations, rows)).toMatchObject([
-      { id: 4, slot: "lora" },
-    ]);
-    expect(
-      fillFromPictures({ id: 5, members: [] }, combinations, rows),
-    ).toEqual([]);
-  });
-
-  it("labels a fill item with both witnesses it is ranked by (#1565)", () => {
-    const both = [
-      {
-        key: "1,4",
-        models: [
-          { id: 1, name: "ckpt", kind: "checkpoint" },
-          { id: 4, name: "lora", kind: "adapter" },
-        ],
-        recipes: 1,
-        history_runs: 30,
-        picture_count: 1,
-      },
-    ];
-    expect(fillFromPictures(mine, both, rows)[0].detail).toBe(
-      "LoRA · 1 recipe · 30 ComfyUI runs",
-    );
-  });
-
-  it("offers a second checkpoint from pictures, in the Checkpoint slot (#1690)", () => {
-    const withRefiner = [
-      ...combinations,
-      {
-        key: "1,7",
-        recipes: 1,
-        picture_count: 1,
-        models: [
-          { id: 1, name: "RealVis XL", kind: "checkpoint" },
-          { id: 7, name: "Refiner", kind: "checkpoint" },
-        ],
-      },
-    ];
-    const items = fillFromPictures(mine, withRefiner, [
-      ...rows,
-      shelfRow(7, "Refiner", "checkpoint"),
-    ]).map((item) => [item.id, item.slot]);
-    expect(items).toEqual([
-      [4, "lora"],
-      [7, "checkpoint"],
-    ]);
-  });
-
-  it("reads the evidence of every checkpoint of a two-model set, each model once (#1690)", () => {
+  it("ranks a slot's picker by the evidence of every checkpoint of a two-model set (#1690)", () => {
     const pair = {
       id: 8,
       members: [
@@ -715,9 +669,6 @@ describe("hand-made sets (#1520)", () => {
       },
     ];
     const shelf = [...rows, shelfRow(7, "Wan Low", "checkpoint")];
-    expect(fillFromPictures(pair, runs, shelf).map((item) => item.id)).toEqual(
-      [4, 2],
-    );
     const used = slotSuggestions({
       set: pair,
       slotId: "lora",
@@ -749,71 +700,124 @@ describe("hand-made sets (#1520)", () => {
     ]);
   });
 
-  it("puts the merge offer's ghosts before each slot's ＋ (#1523)", () => {
-    const incomplete = {
+  it("puts the models the owner removed before each slot's ＋ (#1972)", () => {
+    const trimmed = {
       id: 9,
-      members: [{ sha256: "h3", slot: "lora", on_shelf: true, id: 3 }],
-      offer: {
-        picture_count: 0,
-        recipes: 2,
-        models: [
-          { id: 1, sha256: "h1", slot: "checkpoint" },
-          { id: 5, sha256: "h5", slot: "lora" },
-        ],
-      },
+      members: [slotMember(1, "RealVis XL", "checkpoint")],
+      removed: [{ id: 5, sha256: "h5", slot: "lora", name: "Flux LoRA" }],
     };
-    const keys = setSlots(incomplete).map(({ slot, items }) => [
+    const keys = setSlots(trimmed).map(({ slot, items }) => [
       slot.id,
       items.map((i) => i.key),
     ]);
     expect(keys).toEqual([
-      ["checkpoint", ["g:h1", "add:checkpoint"]],
+      ["checkpoint", ["m:h1", "add:checkpoint"]],
       ["text_encoder", ["add:text_encoder"]],
       ["vae", ["add:vae"]],
-      ["lora", ["m:h3", "g:h5", "add:lora"]],
+      ["lora", ["g:h5", "add:lora"]],
       ["other", ["add:other"]],
     ]);
-    // No picture in this library: counted in recipes instead.
-    expect(handMadeCard(incomplete).offer).toEqual({
-      adds: 2,
-      who: "2 recipes",
-      rest: " used this with 2 models the set does not have.",
-      text: "2 recipes used this with 2 models the set does not have.",
-      model: null,
-    });
+    // Restored on its ghost, so the slot's picker does not offer it again.
+    const offered = slotSuggestions({
+      set: trimmed,
+      slotId: "lora",
+      rows,
+      sets: [trimmed],
+      combinations,
+    }).flatMap((section) => section.items.map((row) => row.id));
+    expect(offered).not.toContain(5);
+    expect(offered).toContain(4);
   });
 
-  it("asks about one offered model by kind and name (#1523)", () => {
-    const set = {
-      offer: {
-        picture_count: 0,
-        recipes: 1,
-        models: [{ id: 5, sha256: "h5", slot: "lora", kind: "adapter", name: "detailTweakerXL" }],
-      },
-    };
-    // The set is short a model; the recipe needs nothing.
-    expect(offerQuestion(set)).toEqual({
-      adds: 1,
-      who: "1 recipe",
-      rest: " ran this with a model the set does not have.",
-      text: "1 recipe ran this with a model the set does not have. Add it?",
-      model: { kind: "LoRA", name: "detailTweakerXL" },
-    });
-    expect(offerQuestion({ offer: { ...set.offer, picture_count: 1204 } }).who).toBe(
-      "1204 pictures",
-    );
-    expect(offerQuestion({})).toBeNull();
-  });
-
-  it("says the offered model's precision, which its name has lost", () => {
-    const offer = {
-      picture_count: 50,
-      recipes: 1,
-      models: [
-        { id: 6, sha256: "h6", slot: "text_encoder", kind: "text_encoder", name: "qwen3vl 4b", quant: "fp8_e4m3" },
+  it("badges a set Automatic or Custom from its lists, and counts its changes", () => {
+    const automatic = {
+      id: 1,
+      automatic: true,
+      picture_count: 12,
+      recipes: 3,
+      members: [
+        slotMember(1, "RealVis XL", "checkpoint", { origin: "pictures" }),
+        slotMember(2, "Film Grain", "lora", { origin: "pictures", new: true }),
       ],
     };
-    expect(offerQuestion({ offer }).model.quant).toBe("FP8");
+    expect(handMadeCard(automatic)).toMatchObject({
+      automatic: true,
+      fresh: 1,
+      facts: ["2 models", "3 recipes", "12 pictures"],
+    });
+    expect(setChanges(automatic)).toEqual({ added: 0, removed: 0 });
+    const custom = {
+      ...automatic,
+      automatic: false,
+      members: [
+        ...automatic.members,
+        slotMember(3, "Soft Light", "lora", { origin: "added" }),
+      ],
+      removed: [{ sha256: "h4", slot: "lora" }],
+    };
+    expect(handMadeCard(custom, 1)).toMatchObject({
+      automatic: false,
+      facts: ["3 models", "3 recipes", "12 pictures", "identical to 1 other set"],
+    });
+    expect(setChanges(custom)).toEqual({ added: 1, removed: 1 });
+    expect(canReset(automatic)).toBe(false);
+    expect(canReset(custom)).toBe(true);
+    // A template file kept out by Stop asking is no change to what the set
+    // holds, but Reset is the only way to have it suggested again.
+    expect(canReset({ ...automatic, declined: ["dl"] })).toBe(true);
+  });
+
+  it("marks sets holding the same files as identical, wherever each sits", () => {
+    const a = { id: 1, members: [slotMember(1, "A", "checkpoint"), slotMember(2, "B", "lora")] };
+    const b = { id: 2, members: [slotMember(2, "B", "other"), slotMember(1, "A", "checkpoint")] };
+    const c = { id: 3, members: [slotMember(1, "A", "checkpoint")] };
+    const empty = { id: 4, members: [] };
+    const again = { id: 5, members: [] };
+    expect([...identicalSets([a, b, c, empty, again])]).toEqual([
+      [1, 1],
+      [2, 1],
+      [3, 0],
+      // Two empty sets are not "identical": there is nothing to merge.
+      [4, 0],
+      [5, 0],
+    ]);
+  });
+
+  it("merges only sets on the same checkpoint files, into the one named", () => {
+    const ckpt = (id, sha) => slotMember(id, `C${id}`, "checkpoint", { sha256: sha });
+    const into = { id: 1, name: "Portraits", members: [ckpt(1, "x"), slotMember(2, "B", "lora")] };
+    const twin = { id: 2, members: [ckpt(1, "x"), slotMember(2, "B", "lora")] };
+    const wider = { id: 3, members: [ckpt(1, "x"), slotMember(3, "C", "lora")] };
+    const elsewhere = { id: 4, members: [ckpt(9, "y")] };
+    const none = { id: 5, members: [slotMember(2, "B", "lora")] };
+
+    expect(mergeVerb([into, wider], into)).toMatchObject({
+      label: "Merge 2 sets into “Portraits”",
+      enabled: true,
+      others: [wider],
+    });
+    expect(mergeVerb([twin, into], into)).toMatchObject({
+      label: "Merge 2 identical sets into “Portraits”",
+      enabled: true,
+      reason: "Same models by digest. Only a card goes.",
+    });
+    for (const odd of [elsewhere, none]) {
+      expect(mergeVerb([into, odd], into)).toMatchObject({
+        enabled: false,
+        reason: "These sets use different checkpoints.",
+      });
+    }
+    // A second checkpoint the pictures brought in is not what a set is on,
+    // as the server compares it: only the stored ones count.
+    const brought = { ...ckpt(8, "z"), stored: false };
+    expect(mergeVerb([into, { ...wider, members: [...wider.members, brought] }], into).enabled).toBe(true);
+    // Only the checkpoint decides, never the name.
+    expect(mergeVerb([none, { ...none, id: 6 }], none).enabled).toBe(false);
+    expect(mergeVerb([into], into)).toBeNull();
+
+    const all = [into, twin, wider, elsewhere, none];
+    expect(mergePartners(into, all).map((set) => set.id)).toEqual([2, 3]);
+    expect(mergePartners(none, all)).toEqual([]);
   });
 
   it("compares base models the way the server fills a member's", () => {

@@ -194,9 +194,11 @@ export async function fetchModelCompanions(ids) {
  * the CLIENT's (see `utils/workflowSets.js`): the server groups nothing, so the
  * toolbar can price every fold setting without another request.
  *
- * `hand_made` is the owner's own sets (#1520), newest first; a combination one
- * of them covers carries its id in `covered_by`. A set may carry a merge
- * `offer` and the `declined` models kept out of it (#1523).
+ * `hand_made` is the owner's own sets (#1520), newest first. A set lives on its
+ * checkpoint (#1972): its `members` are what the pictures on it ran with plus
+ * what the owner added, minus the `declined` models they removed (served again
+ * as `removed`), and a combination headed by its checkpoint carries its id in
+ * `covered_by`.
  *
  * @returns {Promise<{combinations: Array<Object>, no_set: Array<number>,
  *   hand_made: Array<Object>, hidden_sets: Array<string>,
@@ -322,10 +324,13 @@ export async function deleteWorkflowSet(id) {
 }
 
 /**
- * Add members to a set. One already in it is skipped, not an error.
+ * Add members to a set. One already in it is skipped, not an error, and one
+ * the owner had removed comes back.
  *
- * @returns {Promise<{set: Object, added: Array<string>}>} `added` is the hashes
- *   actually written, which is what an undo takes back out.
+ * @returns {Promise<{set: Object, added: Array<string>,
+ *   undeclined: Array<string>}>} `added` is the hashes actually written, which
+ *   an undo takes back out; `undeclined` the ones taken off the removed list,
+ *   which an undo puts back on it.
  */
 export async function addWorkflowSetMembers(id, members) {
   return unwrap(
@@ -346,8 +351,9 @@ export async function removeWorkflowSetMembers(id, sha256) {
 }
 
 /**
- * Replace the models kept out of a set's merge offer (#1523): Keep separate
- * adds to the list, Offer again empties it.
+ * Replace the models removed from a set (#1972): a model on the list stays out
+ * however often the pictures on the set's checkpoint use it. Remove adds to
+ * it, Restore takes one off, Reset to automatic empties it.
  *
  * @returns {Promise<{set: Object, previous: Array<string>}>} `previous` is the
  *   list before, which is what an undo puts back.
@@ -356,6 +362,31 @@ export async function setWorkflowSetDeclines(id, sha256) {
   return unwrap(
     apiClient.put(`/models/workflow-sets/${id}/declines`, { sha256 }),
   );
+}
+
+/**
+ * Merge sets on the same checkpoint into one (#1972). Refused (409) unless
+ * every set's checkpoints are the same files. The others are deleted.
+ *
+ * @param {number} id - the set that stays, keeping its name.
+ * @param {Array<number>} setIds - the sets merged into it.
+ * @returns {Promise<{set: Object, added: Array<string>,
+ *   previous_declined: Array<string>, was_hidden: boolean,
+ *   merged: Array<Object>}>} everything an undo needs: what went into `id`,
+ *   its removed list and hide before, and each merged set as it was.
+ */
+export async function mergeWorkflowSets(id, setIds) {
+  return unwrap(
+    apiClient.post(`/models/workflow-sets/${id}/merge`, { set_ids: setIds }),
+  );
+}
+
+/**
+ * Record that the owner has seen these models in a set's tray, so a model the
+ * pictures brought in stops being marked new.
+ */
+export async function markWorkflowSetSeen(id, sha256) {
+  return unwrap(apiClient.put(`/models/workflow-sets/${id}/seen`, { sha256 }));
 }
 
 /**

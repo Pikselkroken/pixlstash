@@ -1249,10 +1249,10 @@ const VerbItems = (props) => {
         })
       : null,
     props.clonable
-      ? item("mdi-content-duplicate", "Clone set to edit", {
+      ? item("mdi-pencil-outline", "Edit set", {
           on: () => props.onVerb("clone-set"),
           title:
-            'A "Grouped by you" copy of this set, which you can edit. No file is touched.',
+            "Makes it a set of your own on this checkpoint. It keeps following the pictures and reads Automatic until you change it. No file is touched.",
         })
       : null,
     item(

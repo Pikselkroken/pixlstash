@@ -947,11 +947,11 @@ describe("Keep one copy", () => {
   });
 });
 
-describe("Clone set to edit", () => {
+describe("Edit set, on a set from pictures", () => {
   const cloneItem = (wrapper) =>
     wrapper
       .findAll(".ctx-item")
-      .find((b) => b.text().includes("Clone set to edit"));
+      .find((b) => b.text().includes("Edit set"));
 
   /** A checkpoint that ran with one LoRA, the checkpoint selected. */
   function selectHead() {

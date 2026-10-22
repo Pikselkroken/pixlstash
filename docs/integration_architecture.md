@@ -574,39 +574,45 @@ Rules neither side may drift from:
    names a picture per cover, so it is on the shelf's owner tier with no
    per-object scope to narrow it to. The client fetches it when something needs
    it and again after a scan, never on a filter tick.
-8. **Hand-made sets ride on the same payload (#1520).** Each combination carries
-   `covered_by` (ids of the owner's sets holding all its models on the shelf),
-   `no_set` omits on-shelf set members, and `hand_made` lists the sets, newest
-   first: `{id, name, created_at, updated_at, cloned, incomplete,
-   checkpoint_ids, picture_count, recipes, covers, members}`, each member `{sha256, slot, label,
-   on_shelf, id, name, filename, kind, base_model, file_size}`. They are written
-   by `POST /models/workflow-sets` (201, the set), `PATCH` and `DELETE
-   /models/workflow-sets/{set_id}` (the set; `{deleted: set}`),
-   `POST .../{set_id}/members` (`{set, added: [sha256]}`) and
-   `POST .../{set_id}/members/remove` (`{set, removed: [{sha256, slot,
-   label}]}`), all owner-only. `cloned` is set by the create (`cloned: true`,
-   a copy of a set from pictures) and never changes; the client never swaps a
-   cloned set for the set from pictures it matches. **Undo is the client re-posting what a write
-   returned**: a deleted set's members as `{sha256, slot, label}`, removed
-   members the same way, added ones through `members/remove`. No server-side
-   undo exists. A refusal is a 409 whose `detail` is the sentence to show.
-   **The merge offer (#1523)** rides on each set too: `offer` (null, or
-   `{head_id, head_name, picture_count, recipes, covers, models: [{id, sha256,
-   name, kind, slot, picture_count, recipes}]}`), `declined` (sha256s kept out)
-   and `kept_separate` (pictures here those hold back). The server decides the
-   offer; the client draws it as ghosts and merges by posting `models` to
-   `members` with their `slot`. `PUT .../{set_id}/declines` (`{sha256: [...]}`,
-   the whole list) answers `{set, previous}`, and putting `previous` back is
-   the undo. `picture_count` counts this library; `recipes` counts every one.
-   The offer reads recipe combinations only: one only ComfyUI ran is covered
-   by a set like any other but never offered, since the offer is worded in
-   pictures and recipes. A set with no such offer whose checkpoint is a
-   ComfyUI template's head is offered the rest of that template instead
-   (#1999): the same `offer` with `source: "template"` (`"pictures"`
-   otherwise), `template: {name, title}`, `others` (the templates sharing the
-   head), zero counts and no covers, `models` for its files on the shelf and
-   `downloads: [{name, url, directory, slot, sha256}]` for the rest. A
-   download's `sha256` is the key Keep separate puts in `declines` for it. **Hidden sets are the ACTIVE library's own (#1869)**:
+8. **Hand-made sets ride on the same payload (#1520), living on their
+   checkpoint (#1972).** Each combination carries `covered_by` (ids of the
+   owner's sets on the checkpoint that heads it), `no_set` omits on-shelf set
+   members, and `hand_made` lists the sets, newest first:
+   `{id, name, created_at, updated_at, cloned, incomplete, checkpoint_ids,
+   picture_count, recipes, history_runs, covers, members, declined, removed,
+   added, automatic}`. `members` is what the set HOLDS: every model the
+   pictures on its checkpoints ran with (every library's recipes) plus what the
+   owner added, minus `declined`, each `{sha256, slot, label, on_shelf, id,
+   name, filename, kind, base_model, file_size, origin: pictures|added, stored,
+   new, recipes, picture_count}`; `removed` is the models on `declined` the
+   pictures would bring in; `automatic` is true while nothing is added or
+   removed. They are written by `POST /models/workflow-sets` (201, the set),
+   `PATCH` and `DELETE /models/workflow-sets/{set_id}` (the set; `{deleted:
+   set}`, its `declined` included), `POST .../{set_id}/members` (`{set, added:
+   [sha256], undeclined: [sha256]}`), `POST .../{set_id}/members/remove`
+   (`{set, removed: [{sha256, slot, label}]}`), `PUT .../{set_id}/declines`
+   (`{sha256: [...]}`, the whole removed list; `{set, previous}`),
+   `POST .../{set_id}/merge` (`{set_ids}`; `{set, added, previous_declined,
+   was_hidden, merged: [set + hidden]}`, 409 unless every set's checkpoint
+   digests match) and `PUT .../{set_id}/seen` (`{sha256: [...]}`; `{seen}`),
+   all owner-only. The create also takes `declined` (written in its
+   transaction) and `seen` (mark the base seen, for Edit set). The client
+   removes a model the pictures brought in through `declines` and one the
+   owner added through `members/remove`; `members/remove` on a picture-held
+   model declines it too. `cloned` is
+   stored and served, never read. **Undo is the client re-posting what a write
+   returned**: a deleted or merged set as a create plus its `declined` (and its
+   hide), removed members as `{sha256, slot, label}`, added ones through
+   `members/remove`, a list through `declines`. No server-side undo exists. A
+   refusal is a 409 whose `detail` is the sentence to show. `picture_count`
+   counts this library; `recipes` counts every one. A set whose checkpoint is
+   a ComfyUI template's head carries the rest of that template as `offer`
+   (#1999; the pictures' offer of #1523 is gone): `source: "template"`,
+   `template: {name, title}`, `others` (the templates sharing the head), zero
+   counts and no covers, `models` for its files on the shelf the set does not
+   already hold and `downloads: [{name, url, directory, slot, sha256}]` for the
+   rest. Keep separate puts them in `declines`, a download by its `sha256`.
+   **Hidden sets are the ACTIVE library's own (#1869)**:
    the payload carries `hidden_sets` (the set keys this library leaves off the
    grid) and `PUT /models/workflow-sets/hidden` (`{keys: [...], hidden}`) sets
    them, answering `{hidden_sets}` - the whole new list, so a hide needs no
