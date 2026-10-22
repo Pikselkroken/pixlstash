@@ -1128,6 +1128,17 @@ describe("favourites (#1578)", () => {
     );
   });
 
+  it("forgets the card a closed context menu was opened on", async () => {
+    selectRows([row(1, "present")]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    wrapper.vm.openContextMenu(1, 2, "model:9");
+    wrapper.vm.contextOpen = false;
+    await wrapper.vm.$nextTick();
+    await wrapper.find('[data-verb="favourite"]').trigger("click");
+    await flushPromises();
+    expect(setFavourites.mock.calls).toEqual([["model", ["1".repeat(64)], true]]);
+  });
+
   it("disables the heart, with its reason, when no selected model has a hash", async () => {
     selectRows([row(1, "present", { sha256: null })]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);

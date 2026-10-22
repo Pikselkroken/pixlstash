@@ -388,9 +388,14 @@ const single = computed(() => store.selectedRows.length === 1);
 
 // ── Favourites (#1578) ─────────────────────────────────────────────────────
 
-/** What the verb acts on: the picked cards and the context card, or the rows. */
+/**
+ * What the verb acts on: the picked cards, the rows, and the card the context
+ * menu is open on - only while it is open, since nothing clears the key after.
+ */
 const favouriteTargets = computed(() =>
-  store.favouriteTargets([...props.cardKeys, contextSetKey.value].filter(Boolean)),
+  store.favouriteTargets(
+    [...props.cardKeys, contextOpen.value ? contextSetKey.value : ""].filter(Boolean),
+  ),
 );
 const favouritable = computed(() => favouriteTargets.value.length > 0);
 /** Unfavourite only when every keyed item already is one. */
@@ -1077,6 +1082,7 @@ const verbHandlers = computed(() => ({
   onVerb: (verb, event) => {
     // Read before the menu closes: it is the open menu's card.
     const cloned = clonableSet.value;
+    const targets = favouriteTargets.value;
     contextOpen.value = false;
     moreMenuOpen.value = false;
     const send = props.rail ? store.requestVerb : emit;
@@ -1092,7 +1098,7 @@ const verbHandlers = computed(() => ({
     // label and nothing else, so a stale one can never turn a trash into an
     // unlink.
     else if (verb === "delete") send("delete", Boolean(event?.shiftKey));
-    else if (verb === "favourite") store.toggleFavourites(favouriteTargets.value);
+    else if (verb === "favourite") store.toggleFavourites(targets);
     else if (verb === "clone-set") send("clone-set", cloned);
     else send(verb);
   },
