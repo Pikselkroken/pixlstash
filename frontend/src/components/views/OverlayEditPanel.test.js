@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { markRaw, reactive, ref } from "vue";
 
 const listWorkflowCards = vi.fn();
 const runWorkflowCard = vi.fn();
@@ -42,9 +43,9 @@ const checkedRow = (wrapper) =>
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-async function mountPanel() {
+async function mountPanel(extra = {}) {
   const wrapper = mount(OverlayEditPanel, {
-    props: { pictureId: 7, active: true },
+    props: { pictureId: 7, active: true, ...extra },
     global: {
       stubs: {
         AppButton: { template: "<button class='run' @click=\"$emit('click')\"><slot /></button>" },
@@ -464,5 +465,95 @@ describe("the Edit tab", () => {
     await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
     expect(wrapper.text()).toContain("Last edit");
     expect(wrapper.text()).toContain("“golden hour”");
+  });
+});
+
+// The lightbox's Paint selection, as `usePaintSelection` hands it over. Raw,
+// as the lightbox's own is: mount() makes its props reactive, which would
+// unwrap the refs inside.
+function fakePaint(steps = []) {
+  const stepsRef = ref(steps);
+  return markRaw({
+    hasSelection: ref(steps.length > 0),
+    selection: ref({ version: 1, steps, refine: { grow: 0, feather: 0, fill_holes: 0 } }),
+    steps: stepsRef,
+    showMask: ref(false),
+    maskError: ref(""),
+    refine: reactive({ grow: 0, feather: 0, fill_holes: 0 }),
+    toggleMask: vi.fn(),
+    setRefine: vi.fn(),
+    clear: vi.fn(),
+  });
+}
+
+const RECT = { tool: "rect", mode: "new", box: [0, 0, 0.5, 1] };
+const INPAINT = { id: "fill", name: "Fill", type: "inpaint", type_label: "Inpaint" };
+
+describe("the Edit tab with the Paint tools", () => {
+  it("sends the selection with the run, on an inpaint workflow", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    // An Image to Image card first, as without a selection.
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    paint.hasSelection.value = true;
+    paint.selection.value = { ...paint.selection.value, steps: [RECT] };
+    await flush();
+    // The first selection moves the tab onto a workflow that reads a mask.
+    expect(checkedRow(wrapper)).toBe("Fill, Inpaint");
+    expect(wrapper.text()).toContain("Refine selection");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        picture_ids: [7],
+        target: "fill",
+        selection: expect.objectContaining({ steps: [RECT] }),
+      }),
+    );
+  });
+
+  it("warns, and does not send a mask, where the workflow has none", async () => {
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("selection");
+    expect(wrapper.text()).not.toContain("do not use a mask");
+    paint.hasSelection.value = true;
+    paint.selection.value = { ...paint.selection.value, steps: [RECT] };
+    await flush();
+    // No inpaint card to move to: it stays, and says what the run would do.
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(wrapper.text()).toContain("do not use a mask");
+  });
+
+  it("runs on every picture Edit… named, unless a hand selection holds it", async () => {
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint, applyToIds: [7, 8, 9] });
+    expect(wrapper.find("button.run").text()).toBe("Run on 3 pictures");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard.mock.calls[0][0].picture_ids).toEqual([7, 8, 9]);
+    runWorkflowCard.mockClear();
+    paint.hasSelection.value = true;
+    paint.selection.value = { ...paint.selection.value, steps: [RECT] };
+    await flush();
+    expect(wrapper.find("button.run").text()).toBe("Run edit");
+    expect(wrapper.text()).toContain("A hand selection stays on the picture");
+    // The track says where the run goes: this picture, not the greyed-out all.
+    expect(wrapper.find("[role=radio][aria-checked=true]").text()).toBe("This picture");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard.mock.calls[0][0].picture_ids).toEqual([7]);
+  });
+
+  it("hands the selection to the Run popup through More options…", async () => {
+    const wrapper = await mountPanel({ paint: fakePaint([RECT]) });
+    const more = wrapper.findAll("button").find((b) => b.text() === "More options…");
+    await more.trigger("click");
+    expect(wrapper.emitted("more-options")[0][0].selection).toMatchObject({
+      steps: [RECT],
+    });
   });
 });

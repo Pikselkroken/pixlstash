@@ -19,6 +19,7 @@ from . import (
     _library_move,
     _likeness_search,
     _listing,
+    _mask,
     _misc,
     _search,
     _serving,
@@ -45,6 +46,7 @@ def create_router(server) -> APIRouter:
     _anomaly.register_routes(router, server)
     _character_likeness.register_routes(router, server)
     _text.register_routes(router, server)
+    _mask.register_routes(router, server)
     # Same reason, and the reason it lives outside this package: the v1.11
     # layout routes are one feature with the library-level settings beside them
     # (routes/library_layout.py), but GET /pictures/{id}/layout is the

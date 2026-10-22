@@ -1597,7 +1597,7 @@ describe("\"Run a workflow on these…\", which opens with no workflow chosen", 
   });
 });
 
-describe("Edit with ComfyUI, the built-in edit card over the selection", () => {
+describe("Edit, a workflow run over the picture being edited", () => {
   it("reads no recipe and sends the pictures to the card with the typed prompt", async () => {
     const wrapper = await mountRun({
       kind: "edit",
@@ -1607,7 +1607,7 @@ describe("Edit with ComfyUI, the built-in edit card over the selection", () => {
     });
     // The picture is what is edited, not a recipe to replay.
     expect(getPictureRecipe).not.toHaveBeenCalled();
-    expect(wrapper.vm.title).toBe("Edit with ComfyUI");
+    expect(wrapper.vm.title).toBe("Edit");
     const box = wrapper
       .findAllComponents({ name: "AppTextarea" })
       .find((c) => c.props("label") === "Prompt");

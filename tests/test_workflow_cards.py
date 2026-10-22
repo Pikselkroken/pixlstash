@@ -2619,3 +2619,27 @@ def test_the_seedvr2_packs_loaders_are_an_upscaler_and_its_vae(hub):
     }
     assert kinds([dit, vae, unet]) == ["upscale", "vae", "unet"]
     assert kinds([dit, vae]) == ["unet", "vae"]
+
+
+def test_a_recovered_lora_the_shelf_does_not_hold_is_drawn_as_an_adapter(hub):
+    """A manual card's LoRA is read off its document by widget; with no shelf
+    row its tile comes from the filename, and wears the LoRA tab (#1990)."""
+    card = SimpleNamespace(slots=[], variants=[], workflow_key="w", topology_hash="w")
+    figure = SimpleNamespace(card=card, models=[], loras=[])
+    recovered = {
+        "w": [
+            ("lora_name", "flux1-dev-test-character.safetensors"),
+            ("ckpt_name", "flux1-dev.safetensors"),
+        ]
+    }
+    workflow_card_service._describe_slots(hub, [figure], {}, recovered)
+
+    (lora,) = figure.loras
+    assert (lora.kind, lora.mark_tab) == ("lora", "LORA")
+    # The control: the checkpoint beside it keeps its own tile, with no tab.
+    (model,) = figure.models
+    assert (model.kind, model.mark, model.mark_tab) == (
+        "checkpoint",
+        ["Dev", "1"],
+        None,
+    )

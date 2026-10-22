@@ -145,6 +145,36 @@ def canonical_path(path: str) -> str:
     return os.path.normcase(os.path.realpath(os.path.normpath(path)))
 
 
+def data_folder_conflict_detail(
+    image_root: str, inside: bool, contains: bool
+) -> str | None:
+    """The refusal for a folder that overlaps the library's own storage.
+
+    Names the data folder and which way round the overlap is, because a bare
+    "overlaps" left the owner guessing which folder was meant - a library kept
+    inside Downloads makes Downloads unusable, and nothing said so (#1986).
+    Shared by every folder kind that refuses the data folder, so they agree.
+
+    Args:
+        image_root: The active library's storage, as it should be shown.
+        inside: The candidate is ``image_root`` or lies within it.
+        contains: The candidate is ``image_root`` or contains it.
+
+    Returns:
+        The message, or ``None`` when neither holds.
+    """
+    if inside and contains:
+        return f"This is the PixlStash data folder ({image_root})."
+    if inside:
+        return f"This folder is inside the PixlStash data folder ({image_root})."
+    if contains:
+        return (
+            f"The PixlStash data folder ({image_root}) is inside this folder. "
+            "Pick a folder that does not contain your library."
+        )
+    return None
+
+
 def validate_reference_folder_conflicts(
     session: "Session",
     folder: str,
@@ -185,13 +215,16 @@ def validate_reference_folder_conflicts(
     """
     folder = canonical_path(folder)
     if image_root:
-        image_root = canonical_path(image_root)
-        if (
-            folder == image_root
-            or folder.startswith(image_root + os.sep)
-            or image_root.startswith(folder + os.sep)
-        ):
-            return "Path conflicts with the PixlStash data folder."
+        # Compared canonical, shown as configured: ``normcase`` lowercases the
+        # whole path on Windows.
+        root = canonical_path(image_root)
+        error = data_folder_conflict_detail(
+            image_root,
+            inside=folder == root or folder.startswith(root + os.sep),
+            contains=folder == root or root.startswith(folder + os.sep),
+        )
+        if error:
+            return error
     for other in session.exec(select(ReferenceFolder)).all():
         if exclude_id is not None and other.id == exclude_id:
             continue

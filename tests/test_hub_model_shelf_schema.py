@@ -1165,6 +1165,38 @@ class TestComponentRoleBackfill:
         ]
         assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
 
+    def test_a_data_v22_hub_refiles_a_nested_language_model(self, hub, tmp_path):
+        # Data version 23: a vision-language encoder saved whole keeps its
+        # token table under `model.language_model.` (#2008), which step 21
+        # did not know, so it stayed a `checkpoint`. A checkpoint bundling a
+        # language model under a prefix is still left as it is.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 22")
+        folder_id = add_folder(hub, str(tmp_path))
+
+        def shelved(name, table):
+            header = {table: {"dtype": "I8", "shape": [248320, 4096]}}
+            blob = json.dumps(header).encode()
+            (tmp_path / name).write_bytes(struct.pack("<Q", len(blob)) + blob)
+            model_id = add_model(hub, file_kind="checkpoint", sha256=name, kind=None)
+            add_file(hub, model_id, folder_id, name)
+            return model_id
+
+        qwen = shelved(
+            "qwen3.5_9b.safetensors", "model.language_model.embed_tokens.weight"
+        )
+        bundled = shelved(
+            "bundled.safetensors",
+            "text_encoders.qwen35.model.language_model.embed_tokens.weight",
+        )
+        hub.commit()
+
+        apply_migrations(hub)
+
+        kinds = dict(hub.execute("SELECT id, file_kind FROM model").fetchall())
+        assert [kinds[qwen], kinds[bundled]] == ["text_encoder", "checkpoint"]
+        assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
+
     def test_a_fresh_hub_records_the_backfill_as_done(self, hub):
         apply_migrations(hub)
 

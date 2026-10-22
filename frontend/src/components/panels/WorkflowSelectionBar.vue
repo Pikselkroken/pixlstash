@@ -365,7 +365,9 @@ const comfyuiTitle = computed(() => {
   if (comfyuiLacksNode.value) {
     return (
       "Opening a workflow needs the ComfyUI-PixlStash node in ComfyUI. " +
-      "Install or update it, then restart ComfyUI"
+      "Install or update it, then restart ComfyUI. Already installed? " +
+      "Restart ComfyUI, then leave Workflows and come back so PixlStash " +
+      "checks again"
     );
   }
   return "";

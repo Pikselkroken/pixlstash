@@ -702,6 +702,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/pictures/{id}/detections                                              | pictures        | Get picture detections                                      |
 | GET    | /api/v1/pictures/{id}/faces                                                   | pictures        | List picture faces                                          |
 | GET    | /api/v1/pictures/{id}/layout                                                  | pictures        | Where this picture is, and where the layout would put it    |
+| POST   | /api/v1/pictures/{id}/mask                                                    | pictures        | Render a selection's mask                                   |
 | GET    | /api/v1/pictures/{id}/metadata                                                | pictures        | Get picture metadata                                        |
 | POST   | /api/v1/pictures/{id}/tags                                                    | tags            | Add tag to picture                                          |
 | GET    | /api/v1/pictures/{id}/tags                                                    | tags            | List picture tags                                           |
@@ -1098,7 +1099,7 @@ Located in [pixlstash/image_plugins/](../pixlstash/image_plugins/).
 - **`registry.PluginRegistry`** — discovers plugins (built-in + user-supplied), exposes lookup by name. **It probes `plugin_schema()` once at load**, so a plugin that raises there — or declares a `models` header that is not a list of dicts — is rejected with a recorded reason instead of taking `GET /pictures/plugins` down for every plugin at request time. `TaggerPluginManager._register_user_plugin` does the same.
 - **`service.apply_plugin_to_pictures`** — batch entry point invoked by `POST /pictures/{id}/plugin/{name}`; emits `PLUGIN_PROGRESS` events.
 
-Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins.
+Built-in plugins: `brightness_contrast`, `blur_sharpen`, `colour_filter`, `crop`, `pixelate`, `rotate`, `scaling`, plus `plugin_template.py` as a starter for custom plugins. `crop` takes its box as fractions of each picture (`left`, `top`, `width`, `height`) and is what the lightbox Edit tab's crop tool runs, so a crop lands in the original's stack like any plugin output.
 
 User-supplied image plugins are loaded from `user_data_dir("pixlstash")/image-plugins/user` (`registry.user_plugin_dir()`). **The tagger plugins use the same discovery mechanism** (§9, "User-supplied plugins") — keep the two in step rather than letting them drift, and note where they already differ: taggers also accept a package folder, built-ins win a name collision instead of losing it, and `TaggerPluginManager.plugin_dirs()` returns a `{source: path}` dict (the JSON `GET /taggers/plugin-diagnostics` emits) where `ImagePluginManager.plugin_dirs()` returns a list of tuples it iterates internally. Neither folder is served on an `ANY_TOKEN` route: the tagger path is behind the `LOCAL_OWNER_ONLY` route named above, and for image plugins both the folders and the load errors — whose `file` field was the *full* path of the failing plugin — are no longer served at all (§16.3, 2026-08-15). A consequence worth knowing before debugging one: **a broken image plugin is now reported only in the server log**, where the tagger equivalent has a local-owner-only route to render it.
 
@@ -1750,6 +1751,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/config_service.py](../pixlstash/services/config_service.py) | Hardware monitoring (CPU, RAM, GPU via `psutil` / `pynvml`) and import-folder path resolution; extracted from `routes/config.py` |
 | [services/picture_service.py](../pixlstash/services/picture_service.py) | DB-layer helpers for single-picture reads from route handlers; accept a `Database` (`vault.db`) and delegate session management to it |
 | [services/search_query_service.py](../pixlstash/services/search_query_service.py) | DB-layer helpers for face-search and likeness-search queries; same `Database`-delegating pattern as `picture_service.py` |
+| [services/edit_selection.py](../pixlstash/services/edit_selection.py) | **A selection on a picture, as JSON, and the one rasteriser for it** (the lightbox Edit tab's Paint tools). `Selection` is `{version: 1, steps, refine}`: steps are `rect` / `ellipse` (`box`), `lasso` (`points`), `brush` (`points`, `radius`; the eraser is a brush with `mode: "subtract"`), `wand` (`point`, `tolerance`, a fixed-range 4-connected colour flood) and `invert`, each combined `new` / `add` / `subtract` / `intersect`. Geometry is fractions of the picture (a brush radius of its shorter side), so the same steps land on a resized copy; refine values are pixels and run in order fill holes (a closing with a disc of the size, which fills every gap and hole the disc cannot fit in), grow or shrink, feather. `render_mask` serves both `POST /pictures/{id}/mask` (the preview) and a run's `selection` (`write_masked_picture`, the mask in the alpha channel), so the preview is the mask the workflow gets. Pictures are read EXIF-rotated, as the browser shows them. A segmenter's named pick is meant to join as one more step kind (`{"tool": "segment", "label": "scarf"}`), and a saved edit is this document plus the request that used it. |
 | [services/plugin_service.py](../pixlstash/services/plugin_service.py) | Plugin listing and async orchestration for `POST /pictures/plugins/{name}`; emits `PLUGIN_PROGRESS` WebSocket events; used by `routes/pictures/_misc.py` |
 | [services/share_service.py](../pixlstash/services/share_service.py) | Validates picture share tokens (`UserToken`), resolves shared pictures, and returns the correct watermark bytes (custom or default) |
 | [services/stack_membership.py](../pixlstash/services/stack_membership.py) | Stack-atomic project & set membership helpers — keeps every member of a stack sharing the same project (`PictureProjectMember` / `Picture.project_id`) and set (`PictureSetMember`) membership |
@@ -2715,7 +2717,7 @@ whether a conversion is stored, since one lands on a version after it is first
 read). The conversion names every widget; an editor file's bare
 `widgets_values` name a loader's model only where it is the first widget
 (`comfyui_utilities._NAME_FIRST_CLASSES`: the checkpoint, UNET and LoRA
-families and the one-widget ControlNet, upscale and style loaders, #1939). A saved recipe on a manual workflow stores the id as both
+families and the one-widget ControlNet, upscale and style loaders, #1939). A loader no node reads is left out where some loader is read (`loaded_model_widgets`), so a leftover second checkpoint loader wired into nothing is not the model the card names; a graph wiring none of its loaders keeps them all, since nothing says which are used. A saved recipe on a manual workflow stores the id as both
 `workflow_id` and `workflow_key`.
 
 **Its pictures** (vault migration 0126). `picture.run_workflow_id` names the
@@ -7429,16 +7431,23 @@ Only `faces` is expensive, and it is the reason the constants are constants.
 hour: a few hundred folders × 20 pictures is a few thousand detections, and the
 folders themselves hold tens of thousands. `MIN_FACE_SAMPLE = 5` keeps the
 signal quiet on folders too small to say anything — *"one face, 2 of 3"* is not
-evidence — and `FACE_MAJORITY = 0.7` is the share of the *sampled* pictures that
-must carry the same identity.
+evidence — and `FACE_MAJORITY_PCT = 80` is the share of the *sampled* pictures
+that must carry the same identity. It was 70 until #1988: over a twenty-picture
+sample, a folder only 60% one person cleared 70% about a quarter of the time,
+and clears 80% about one time in twenty.
 
-`SAME_IDENTITY_COSINE = 0.35` is deliberately strict. ArcFace embeddings arrive
+`SAME_IDENTITY_COSINE = 0.45` is deliberately strict; 0.35 merged look-alike
+generated faces into one person (#1988). ArcFace embeddings arrive
 L2-normalised, so identity comparison is a dot product and the whole folder is
 one `n×n` matrix over at most 20 vectors — 400 products, nothing. The threshold
 is set where a **missed** Person costs the owner one dropdown and a **wrong**
 one costs them trust in every other row on the screen. The identity itself is a
-medoid vote, not a clustering library: for each sampled face, count the faces
-within the threshold of it, and take the largest count. That is the number the
+group vote, not a clustering library: every sampled face proposes the group of
+faces within the threshold of it, a member counts only if it matches at least
+`_GROUP_COHERENCE_PCT = 70` of that group, and the best group wins. Matching
+the proposer alone let one average-looking face near many different people
+read as one person (#1988); matching just over half let one face bridging two
+look-alike groups merge them. That is the number the
 evidence string says out loud (`"one face, 19 of 20"`).
 
 The sample is **evenly spaced through the folder's sorted filenames**, never the
@@ -10542,7 +10551,7 @@ does and the card calls both Video. A set whose kinds do not include the
 workflow's is `wont_load` with `Used for <types>, not <type>`; a checkpoint no
 recipe names, and a workflow whose type is unknown, are refused nothing, since
 nothing is known. `_set_swaps`
-maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file. The VAE and the text-encoder slots are each
+maps a set to the graph: the base slots take the checkpoints the caller names (`checkpoint_ids`, checkpoints or unclassified files, never guessed from the members), paired by `_pair_bases` - one base slot takes the first, and each slot of a two-model graph the untaken one whose filename is closest to its own, so a high-noise expert replaces the high-noise one; a slot left over keeps its file. The slots a loader some output reads names (`live_node_ids`) are paired first and the base slot the plan reads its base model from is the first of them, so a leftover base loader wired into nothing never takes a set's one checkpoint because its name reads closer: the run would sample the old model, and the tab, which has no row for that loader, would fill no checkpoint. With ComfyUI unreachable nothing says what is live and every slot is paired alike. The VAE and the text-encoder slots are each
 paired with the set's files of that kind in four passes, a file taken once
 (#1831): the owner's own pairing (`picks`, graph filename -> a model of
 `model_ids`; one naming another model, or one model twice, is a 422); then a
@@ -10748,10 +10757,14 @@ answer:
   text encoder is told by its top-level token table (`has_text_encoder_markers`):
   CLIP-L/H/G or XXL T5/UMT5, by the rule `family_from_header` names it by, or
   a language model's `model.embed_tokens.weight` (Qwen 2.5-VL, Gemma, Llama,
-  Mistral), which names no family. So a T5 or Qwen downloaded into a flat
-  folder is a text encoder rather than a `checkpoint` by parameter count; hub
-  data version 21 re-files the `checkpoint` and `unknown` rows whose present
-  copy carries one. A T5 of another width has no such rule and still needs a
+  Mistral), which names no family, or the same table under
+  `model.language_model.` in a vision-language model saved whole (Qwen 3.5).
+  The older `language_model.model.` layout is not read, because Bagel, a whole
+  image model, saves its language model that way. So a T5 or Qwen downloaded
+  into a flat folder is a text encoder rather than a `checkpoint` by parameter
+  count; hub data version 21 re-files the `checkpoint` and `unknown` rows whose
+  present copy carries one, and data version 23 does it again for the nested
+  layout. A T5 of another width has no such rule and still needs a
   role folder. A GGUF or a
   `.pth` outside a role folder is `unknown`, which the
   shelf shows and the owner can correct; it is never guessed into `checkpoint`.

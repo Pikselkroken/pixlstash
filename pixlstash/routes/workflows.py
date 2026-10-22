@@ -34,12 +34,14 @@ notes and hidden flag, its default-recipe parameters, pins and picture inputs
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import math
 import sqlite3
 import os
 import re
 import secrets
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -172,6 +174,11 @@ from pixlstash.services.comfyui_service import (
     unfed_picture_loaders,
 )
 from pixlstash.services import workflow_bindings, workflow_inbox
+from pixlstash.services.edit_selection import (
+    UNREADABLE_PICTURE,
+    Selection,
+    write_masked_picture,
+)
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
@@ -1053,10 +1060,31 @@ _KIND_NAME_MARKERS = {
 # file ComfyUI lacks (`_digest_swap_kind`).
 _PACK_MODEL_LOADERS = {"VAELoader": FILE_VAE, "CLIPLoader": FILE_TEXT_ENCODER}
 # The name `_upload_files` gives a hashed picture, read back for its content:
-# a loader still holding one says what its run loaded (`_made_from`).
+# a loader still holding one says what its run loaded (`_made_from`). A run
+# with a selection names its upload for the selection too (`-mask-<digest>`),
+# and that loader still read the picture.
 _UPLOAD_NAME_RE = re.compile(
-    r"pixlstash-[0-9a-zA-Z]+-\d+-([0-9a-f]{64})(?:\.[a-z0-9]{1,8})?"
+    r"pixlstash-[0-9a-zA-Z]+-\d+-([0-9a-f]{64})(?:-mask-[0-9a-f]{16})?"
+    r"(?:\.[a-z0-9]{1,8})?"
 )
+# Any upload carrying a selection's mask, whichever content stands in its name
+# (a digest, or a not-yet-hashed file's mtime and size).
+_MASKED_UPLOAD_RE = re.compile(
+    r"pixlstash-[0-9a-zA-Z]+-\d+-[0-9a-f-]+-mask-[0-9a-f]{16}(?:\.[a-z0-9]{1,8})?"
+)
+
+
+def _masked_loaders(graph: dict) -> frozenset[str]:
+    """The ``LoadImage`` nodes of *graph* holding a masked upload: the pack's
+    loader, fetching the picture by id, would lose the mask."""
+    return frozenset(
+        str(node_id)
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+        and node.get("class_type") == "LoadImage"
+        and isinstance((node.get("inputs") or {}).get("image"), str)
+        and _MASKED_UPLOAD_RE.fullmatch(node["inputs"]["image"])
+    )
 
 
 class WorkflowCardEdit(BaseModel):
@@ -1691,6 +1719,12 @@ class RunRequest(BaseModel):
     # keeps anything, so it is ignored with pictures or a saved recipe, as
     # `replay` is where it does not apply, and by the pre-flight.
     waited: WorkflowChanges | None = None
+    # Where on the picture the run changes (the Edit tab's Paint tools): the
+    # selection as steps, rendered server-side into the picture's alpha
+    # channel, which is the MASK its loader hands on. One picture only: a hand
+    # selection belongs to the picture it was drawn on. A workflow whose
+    # loader's MASK nothing reads is refused with `mask_not_read`.
+    selection: Selection | None = None
 
     @field_validator("inputs")
     @classmethod
@@ -1749,6 +1783,8 @@ class RunRequest(BaseModel):
                 f"Stage {', '.join(twice)} is both skipped and kept; name it in "
                 "skip_stages or in keep_stages, not both."
             )
+        if self.selection is not None and len(self.picture_ids) != 1:
+            raise ValueError("A selection runs on exactly one picture.")
         return self
 
     stack: bool = False
@@ -3104,6 +3140,50 @@ class Feed:
     targets: list[dict]
     picture_id: int | None
     by_id: bool = False
+
+
+def _masked(body: "RunRequest") -> tuple[int, str] | None:
+    """``(picture_id, digest)`` of the picture a run's selection is drawn on.
+
+    The digest names the upload, so two selections of one picture queued
+    back to back never load each other's mask.
+    """
+    if body.selection is None:
+        return None
+    digest = hashlib.sha256(body.selection.model_dump_json().encode()).hexdigest()
+    return body.picture_ids[0], digest[:16]
+
+
+def _reads_mask(graph: dict, feeds: list[Feed], picture_id: int) -> bool:
+    """Whether anything in *graph* reads the MASK of a loader fed *picture_id*,
+    the picture the selection is drawn on: by the selection, or pinned to it.
+
+    ``LoadImage`` and the ComfyUI-PixlStash picture loader both hand on
+    ``IMAGE`` then ``MASK``, so a link to output 1 of either is a mask read.
+    ``LoadImageMask`` hands on only ``MASK``, at output 0, and it is the
+    selection only from the ``alpha`` channel: any other is a colour of the
+    picture.
+    """
+    mask_output: dict[str, int] = {}
+    for feed in feeds:
+        if feed.picture_id not in (None, picture_id):
+            continue
+        for target in feed.targets:
+            node_id = str(workflow_bindings.target_node(graph, target.get("path")))
+            node = graph.get(node_id)
+            if isinstance(node, dict) and node.get("class_type") == "LoadImageMask":
+                if (node.get("inputs") or {}).get("channel") == "alpha":
+                    mask_output[node_id] = 0
+            else:
+                mask_output[node_id] = 1
+    return any(
+        isinstance(value, list)
+        and len(value) == 2
+        and mask_output.get(str(value[0])) == value[1]
+        for node in graph.values()
+        if isinstance(node, dict)
+        for value in (node.get("inputs") or {}).values()
+    )
 
 
 @dataclass
@@ -6318,7 +6398,9 @@ def create_router(server) -> APIRouter:
             return True
         return isinstance(value, str) and bool(value) and node_id not in missing
 
-    def _upload_files(submittable) -> dict[int, tuple[str, str]]:
+    def _upload_files(
+        submittable, masked: tuple[int, str] | None = None
+    ) -> dict[int, tuple[str, str]]:
         """``{picture_id: (path, upload name)}`` for every picture a run feeds.
 
         Resolved in ``_plan`` and not at upload time, so a picture that has
@@ -6333,6 +6415,11 @@ def create_router(server) -> APIRouter:
 
         A picture only a PixlStash picture loader reads (``Feed.by_id``) is
         checked the same way and not uploaded: that loader fetches it itself.
+        The picture a selection is drawn on (*masked*, ``(picture_id,
+        digest)``, :func:`_masked`) is uploaded whoever reads it, as a PNG
+        with the selection in its alpha channel and named for the selection
+        too: that loader would fetch the picture without it, and two
+        selections of one picture must not overwrite each other's upload.
         """
         fed = [
             (picture_id, feed.by_id)
@@ -6344,6 +6431,8 @@ def create_router(server) -> APIRouter:
         ]
         wanted = sorted({picture_id for picture_id, _by_id in fed})
         uploads = {picture_id for picture_id, by_id in fed if not by_id}
+        if masked and masked[0] in wanted:
+            uploads.add(masked[0])
         if not wanted:
             return {}
         kept = read_kept_picture_files(server.vault, wanted)
@@ -6387,7 +6476,12 @@ def create_router(server) -> APIRouter:
             else:
                 stat = os.stat(path)
                 content = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
-            if picture_id in uploads:
+            if masked and picture_id == masked[0]:
+                files[picture_id] = (
+                    path,
+                    f"pixlstash-{library}-{picture_id}-{content}-mask-{masked[1]}.png",
+                )
+            elif picture_id in uploads:
                 files[picture_id] = (
                     path,
                     f"pixlstash-{library}-{picture_id}-{content}{extension}",
@@ -7370,6 +7464,21 @@ def create_router(server) -> APIRouter:
             )
             if unfed:
                 found = run_service.with_pixlstash_refusals(found, unfed)
+            if body.selection is not None and not _reads_mask(
+                graph, feeds, body.picture_ids[0]
+            ):
+                found.append(
+                    run_service.Reason(
+                        run_service.MASK_NOT_READ,
+                        {
+                            "message": (
+                                "This workflow does not use a mask, so it "
+                                "would change the whole picture. Choose an "
+                                "inpaint workflow, or clear the selection."
+                            )
+                        },
+                    )
+                )
             group.reasons = [r.as_dict() for r in found]
             # A replacement this ComfyUI does not have left its loader naming
             # the original, which is missing too. The file to name is the one
@@ -7489,7 +7598,7 @@ def create_router(server) -> APIRouter:
             comfyui_url=comfyui_url,
             object_info=object_info,
             object_info_error=object_info_error,
-            files=_upload_files(submittable),
+            files=_upload_files(submittable, _masked(body)),
             loader_swaps=loader_swaps,
             built=built,
         )
@@ -7668,6 +7777,36 @@ def create_router(server) -> APIRouter:
             )
         return outcome
 
+    def _upload_planned(plan: Plan, picture_id: int) -> str:
+        """Upload one of ``plan.files`` to ComfyUI, answering the name it loads by.
+
+        The picture a selection is drawn on goes up with the selection's mask
+        in its alpha channel (``write_masked_picture``), never as its file.
+        """
+        path, upload_name = plan.files[picture_id]
+        masked = _masked(plan.body)
+        if not masked or picture_id != masked[0]:
+            return _upload_image_to_comfyui(plan.comfyui_url, path, upload_name)
+        with tempfile.TemporaryDirectory() as scratch:
+            with_mask = os.path.join(scratch, upload_name)
+            try:
+                write_masked_picture(plan.body.selection, path, with_mask)
+            except UNREADABLE_PICTURE as exc:
+                logger.warning(
+                    "Picture %s (%s) cannot carry a selection's mask: %s",
+                    picture_id,
+                    path,
+                    exc,
+                )
+                raise HTTPException(
+                    status_code=415,
+                    detail=(
+                        f"Picture {picture_id} cannot be read as an image, so "
+                        "a selection cannot be drawn on it."
+                    ),
+                ) from exc
+            return _upload_image_to_comfyui(plan.comfyui_url, with_mask, upload_name)
+
     def _submit_every(
         request: Request,
         plan: Plan,
@@ -7688,9 +7827,15 @@ def create_router(server) -> APIRouter:
         distinct picture once per request however many runs read it, so an
         upload that fails has queued nothing.
         """
+        masked = _masked(body)
+        # The masked picture first: it is the one upload that can be refused
+        # (a file that is not a picture), and nothing should be up before it.
+        masked_picture_id = masked[0] if masked else None
+        order = sorted(
+            plan.files, key=lambda picture_id: picture_id != masked_picture_id
+        )
         uploaded = {
-            picture_id: _upload_image_to_comfyui(comfyui_url, path, upload_name)
-            for picture_id, (path, upload_name) in plan.files.items()
+            picture_id: _upload_planned(plan, picture_id) for picture_id in order
         }
         # Here, not in `_plan`: a preflight submits nothing, and the graphs
         # are final.
@@ -7770,7 +7915,23 @@ def create_router(server) -> APIRouter:
                     picture_id = (
                         feed.picture_id if feed.picture_id is not None else selected
                     )
-                    value = str(picture_id) if feed.by_id else uploaded[picture_id]
+                    # The picture a selection is drawn on loads as an upload
+                    # even where a PixlStash loader would fetch it by id.
+                    by_id = feed.by_id and not (masked and picture_id == masked[0])
+                    if feed.by_id and not by_id:
+                        for target in feed.targets:
+                            loader = workflow_bindings.target_node(
+                                filled, target.get("path")
+                            )
+                            if loader in filled:
+                                # Same outputs in the same order: IMAGE, MASK.
+                                filled[loader] = {
+                                    **filled[loader],
+                                    "class_type": "LoadImage",
+                                    "inputs": {"image": uploaded[picture_id]},
+                                }
+                        continue
+                    value = str(picture_id) if by_id else uploaded[picture_id]
                     for target in feed.targets:
                         workflow_bindings.fill(
                             filled,
@@ -7780,7 +7941,7 @@ def create_router(server) -> APIRouter:
                         loader = workflow_bindings.target_node(
                             filled, target.get("path")
                         )
-                        if feed.by_id and loader in filled:
+                        if by_id and loader in filled:
                             # With the id and never apart from it: whose it
                             # is, for whoever reads this graph back out of
                             # the picture (`own_picture_ids`).
@@ -8641,6 +8802,7 @@ def create_router(server) -> APIRouter:
             and _holds_class(graph, "LoadImage")
             else None,
             library_uuid=_library_uuid(),
+            keep_loaders=_masked_loaders(graph),
             checkpoint_id=_shelf_checkpoint(hub) if by_row else None,
             shelf_uuid=("trial" if trial else shelf_uuid(hub)) if by_row else None,
             controlnet_digest=_shelf_digest(hub, FILE_CONTROLNET),
@@ -8919,12 +9081,23 @@ def create_router(server) -> APIRouter:
             picture_id = feed.picture_id if feed.picture_id is not None else first
             if picture_id is None:
                 continue
-            if not feed.by_id and picture_id not in uploaded:
-                path, upload_name = plan.files[picture_id]
-                uploaded[picture_id] = _upload_image_to_comfyui(
-                    plan.comfyui_url, path, upload_name
-                )
-            value = str(picture_id) if feed.by_id else uploaded[picture_id]
+            # The picture a selection is drawn on is never fetched by id: the
+            # mask rides in the upload (`_upload_files`), as on a run.
+            masked = _masked(plan.body)
+            by_id = feed.by_id and not (masked and picture_id == masked[0])
+            if not by_id and picture_id not in uploaded:
+                uploaded[picture_id] = _upload_planned(plan, picture_id)
+            if feed.by_id and not by_id:
+                for target in feed.targets:
+                    node_id = workflow_bindings.target_node(graph, target.get("path"))
+                    if node_id in graph:
+                        graph[node_id] = {
+                            **graph[node_id],
+                            "class_type": "LoadImage",
+                            "inputs": {"image": uploaded[picture_id]},
+                        }
+                continue
+            value = str(picture_id) if by_id else uploaded[picture_id]
             for target in feed.targets:
                 workflow_bindings.fill(
                     graph,
@@ -10237,7 +10410,9 @@ def create_router(server) -> APIRouter:
         return [(slots[i], models[paired[i]]) for i in sorted(paired)]
 
     def _pair_bases(
-        found: list[tuple[str, str, SwapSlot]], checkpoints: list[SwapModel]
+        found: list[tuple[str, str, SwapSlot]],
+        checkpoints: list[SwapModel],
+        live_files: set[str] | None = None,
     ) -> list[tuple[SwapSlot, SwapModel]]:
         """Each base slot of *found* with the set checkpoint it takes, in graph order.
 
@@ -10246,9 +10421,21 @@ def create_router(server) -> APIRouter:
         the low-noise expert replaces the low-noise file, and a graph loading
         one expert takes the set's matching one. A slot left over keeps its
         file.
+
+        The slots some output reads (*live_files*, the files a live loader
+        names; ``None`` when nothing says) are paired first: a leftover
+        loader wired into nothing never runs, so a set's one checkpoint whose
+        name reads closer to it would change nothing the run makes.
         """
         bases = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
-        return _closest_pairs(bases, checkpoints)
+        live = [s for s in bases if live_files is None or s.filename in live_files]
+        pairs = _closest_pairs(live, checkpoints)
+        taken = {model.id for _slot, model in pairs}
+        pairs += _closest_pairs(
+            [s for s in bases if s not in live],
+            [m for m in checkpoints if m.id not in taken],
+        )
+        return sorted(pairs, key=lambda pair: bases.index(pair[0]))
 
     def _clip_type(node: dict) -> str | None:
         """A CLIP loader node's ``type``, or None for any other node."""
@@ -10373,20 +10560,15 @@ def create_router(server) -> APIRouter:
         ran = " and ".join(sorted(_MATCH_TYPE_LABELS.get(k, k) for k in kinds))
         return f"Used for {ran}, not {_MATCH_TYPE_LABELS.get(wants, wants)}"
 
-    def _wont_load(
-        found, unswapped: list[dict], object_info: dict | None
-    ) -> str | None:
+    def _wont_load(base, unswapped: list[dict], object_info: dict | None) -> str | None:
         """Why a set's clone would be refused, in words, or None.
 
-        The base loader's refusal names the loader that would read the file,
-        as far as ComfyUI says one does.
+        The refusal of *base*, the plan's base slot, names the loader that
+        would read the file, as far as ComfyUI says one does.
         """
         if not unswapped:
             return None
         first = unswapped[0]
-        base = next(
-            (slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS), None
-        )
         if base is not None and first["was"] == base.filename and object_info:
             for cls, widget in (
                 ("CheckpointLoaderSimple", "ckpt_name"),
@@ -10451,8 +10633,24 @@ def create_router(server) -> APIRouter:
         models = _swap_models(hub)
         index = recipe_asset_index(hub)
         found = _swap_slots(graph, models, index)
+        # The files a loader some output reads names, or None when ComfyUI
+        # did not say which nodes are outputs: a leftover base loader wired
+        # into nothing is neither the workflow's base model nor the slot a
+        # set's checkpoint goes to.
+        live = live_node_ids(graph, object_info) if object_info else None
+        live_files = (
+            None
+            if live is None
+            else {
+                value
+                for node_id, _c, _w, value in iter_model_fields_api(graph)
+                if str(node_id) in live
+            }
+        )
+        bases_found = [slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS]
         base = next(
-            (slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS), None
+            (s for s in bases_found if live_files is None or s.filename in live_files),
+            bases_found[0] if bases_found else None,
         )
         old_base = (
             _replaced_base_model(
@@ -10513,7 +10711,7 @@ def create_router(server) -> APIRouter:
                 if i in models
                 and models[i].file_kind in (FILE_CHECKPOINT, FILE_UNKNOWN)
             ]
-            bases = _pair_bases(found, set_checkpoints)
+            bases = _pair_bases(found, set_checkpoints, live_files)
             # The one the graph's first base slot takes, which `old_base` is
             # read from; else whichever slot was paired.
             checkpoint = next(
@@ -10531,7 +10729,9 @@ def create_router(server) -> APIRouter:
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
-            loaders, _swapped, unswapped = _swap_files(pending, swaps, object_info)
+            loaders, _swapped, unswapped = _swap_files(
+                request, pending, swaps, object_info
+            )
             # The clone's own retype, so the diff shows the type it writes.
             retype_text_encoders(
                 pending, _swapped_in_families(models, index, graph, swaps), object_info
@@ -10548,7 +10748,7 @@ def create_router(server) -> APIRouter:
                 if checkpoint is None
                 else _other_type(kinds, wants)
                 if kinds and wants not in kinds
-                else _wont_load(found, unswapped, object_info)
+                else _wont_load(base, unswapped, object_info)
             )
             if reason:
                 fit = "wont_load"
@@ -10600,10 +10800,12 @@ def create_router(server) -> APIRouter:
                         now_type=_clip_type(now_node),
                     )
                 )
+            # A loader wired into nothing is no loader the set has to fill.
             essentials = [
                 slot
                 for _c, _w, slot in found
                 if slot.kind in (*BASE_MODEL_KINDS, "vae", "clip")
+                and (live_files is None or slot.filename in live_files)
             ]
             set_ids = {
                 m.id
@@ -10625,7 +10827,7 @@ def create_router(server) -> APIRouter:
             typed = fit != "other" or all(
                 diff.now_type == wanted_type
                 for diff in diffs
-                if diff.now_type is not None
+                if diff.now_type is not None and (live is None or diff.node_id in live)
             )
             maps_cleanly = (
                 fit != "wont_load"
@@ -10677,7 +10879,8 @@ def create_router(server) -> APIRouter:
             "replaced, named as asked, beside the original. Every loader "
             "naming a replaced file is rewritten. When ComfyUI answers, each "
             "new name is written as ComfyUI lists it and a name it does not "
-            "list is left out; when it does not, the names are written "
+            "list is left out, unless a run loads it off the shelf through "
+            "the PixlStash loader; when it does not, the names are written "
             "unchecked. The original file is not changed; the clone is a file "
             "of its own, in the same workflow."
         ),
@@ -10733,7 +10936,9 @@ def create_router(server) -> APIRouter:
         families = _swapped_in_families(
             _swap_models(hub), recipe_asset_index(hub), graph, body.swaps
         )
-        loaders, swapped, unswapped = _swap_files(graph, body.swaps, object_info)
+        loaders, swapped, unswapped = _swap_files(
+            request, graph, body.swaps, object_info
+        )
         if not swapped and not unswapped and not chain_changed:
             raise HTTPException(
                 status_code=409,
@@ -10807,13 +11012,16 @@ def create_router(server) -> APIRouter:
         return families
 
     def _swap_files(
-        graph: dict, swaps: dict[str, str], object_info: dict | None
+        request: Request, graph: dict, swaps: dict[str, str], object_info: dict | None
     ) -> tuple[list[dict], list[dict], list[dict]]:
         """The clone's rewrite of *graph*, in place: loader classes, then files.
 
         The class goes first so each file is checked against the loader that
         will read it. A loader whose pack ComfyUI lacks lists nothing, so its
-        file goes in unchecked: a missing pack warns and does not refuse.
+        file goes in unchecked: a missing pack warns and does not refuse. A
+        file ComfyUI does not list is written unchecked too where a run loads
+        it off the shelf (:func:`_loads_off_the_shelf`), as a model fix's is
+        (#2009).
 
         Returns:
             ``(loaders, swapped, unswapped)``: :func:`plan_loader_rewrites`'s
@@ -10822,6 +11030,44 @@ def create_router(server) -> APIRouter:
         loaders = plan_loader_rewrites(graph, swaps, object_info)
         apply_loader_rewrites(graph, loaders)
         swapped, unswapped = apply_filename_swap(graph, swaps, object_info)
+        unlisted = {
+            miss["was"]: miss["now"]
+            for miss in unswapped
+            if miss["reason"] == "not_on_comfyui"
+        }
+        if not unlisted:
+            return loaders, swapped, unswapped
+        # Per loader: a twin naming the same file that the pack's loader
+        # cannot stand in for (an fp8 cast) keeps it, and refuses the clone.
+        held = [
+            (node_id, widget, value)
+            for node_id, _cls, widget, value in iter_model_fields_api(graph)
+            if value in unlisted
+        ]
+        missed, written = set(), set()
+        for node_id, widget, value in held:
+            if not _loads_off_the_shelf(
+                request, graph, node_id, widget, unlisted[value], object_info
+            ):
+                missed.add(value)
+                continue
+            rows = apply_filename_swap(
+                {node_id: graph[node_id]},
+                {value: unlisted[value]},
+                None,
+                fields=lambda _cls, field, widget=widget: field == widget,
+            )[0]
+            swapped += rows
+            written.update(row["was"] for row in rows)
+        # A miss is dropped only where its file was written on every loader
+        # naming it; anything else is still reported, and refuses the clone.
+        unswapped = [
+            miss
+            for miss in unswapped
+            if miss["reason"] != "not_on_comfyui"
+            or miss["was"] in missed
+            or miss["was"] not in written
+        ]
         return loaders, swapped, unswapped
 
     def _store_copy(

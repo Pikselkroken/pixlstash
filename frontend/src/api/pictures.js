@@ -612,6 +612,22 @@ export async function runPicturePlugin(name, body) {
 }
 
 /**
+ * Render a selection's mask on one picture: the Edit tab's preview of the MASK
+ * a run with this selection hands its workflow.
+ * @param {number|string} id
+ * @param {Object} selection - `{version, steps, refine}`, see
+ *   `pixlstash/services/edit_selection.py`.
+ * @param {{signal?: AbortSignal}} [options]
+ * @returns {Promise<Blob>} a greyscale PNG the size of the picture.
+ */
+export async function renderPictureMask(id, selection, { signal } = {}) {
+  return unwrap(apiClient.post(`/pictures/${id}/mask`, selection, {
+    responseType: "blob",
+    signal,
+  }));
+}
+
+/**
  * Re-run tagging on one picture, replacing its generated tags.
  * @param {number|string} id
  * @param {Object} [body] - `{ model }` to pick a tagger, or empty for the

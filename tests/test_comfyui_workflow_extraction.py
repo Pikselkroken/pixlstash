@@ -203,6 +203,41 @@ def test_loaded_model_widgets_says_nothing_rather_than_guessing() -> None:
     assert loaded_model_widgets([]) == []
 
 
+def test_loaded_model_widgets_leaves_out_a_loader_wired_into_nothing() -> None:
+    """A leftover second checkpoint loader never runs, so a card read off the
+    graph named it in place of the model the sampler uses."""
+    api = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "live.safetensors"}},
+        "2": {"class_type": "UNETLoader", "inputs": {"unet_name": "left.safetensors"}},
+        "3": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+    }
+    assert loaded_model_widgets(api) == [("unet_name", "live.safetensors")]
+    # Nothing wired at all says nothing about which is used.
+    del api["3"]
+    assert len(loaded_model_widgets(api)) == 2
+
+    def loader(node_id, name, links):
+        return {
+            "id": node_id,
+            "type": "UNETLoader",
+            "mode": 0,
+            "outputs": [{"name": "MODEL", "type": "MODEL", "links": links}],
+            "widgets_values": [name, "default"],
+        }
+
+    editor = {
+        "nodes": [
+            loader(1, "live.safetensors", [5]),
+            loader(2, "left.safetensors", None),
+        ],
+        "links": [[5, 1, 0, 3, 0, "MODEL"]],
+    }
+    assert loaded_model_widgets(editor) == [("unet_name", "live.safetensors")]
+    # An empty `outputs` declares nothing either, and is read.
+    editor["nodes"][1]["outputs"] = []
+    assert len(loaded_model_widgets(editor)) == 2
+
+
 def test_loaded_model_widgets_reads_a_numeric_shelf_id() -> None:
     """The shelf loader runs `str(checkpoint_id)`, so `77` is the id `"77"`."""
     api = {
