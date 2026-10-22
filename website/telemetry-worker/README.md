@@ -50,9 +50,8 @@ npx wrangler@4.118.0 d1 create pixlstash-telemetry \
 `--jurisdiction=eu` is a binding compliance constraint, not the best-effort
 latency hint provided by `--location`. It is creation-only. The command writes
 the real database UUID into the local `wrangler.jsonc`; never commit that
-environment-specific edit. The deploy script disables automatic provisioning,
-so a missing UUID fails closed instead of silently creating an unconstrained
-database.
+environment-specific edit, and remove it before deploying (the deploy script
+refuses a config that already carries one).
 
 Capture the complete create-command output in the release ticket, then attach
 the D1 dashboard's database details showing the EU jurisdiction and database
@@ -68,6 +67,15 @@ npx wrangler@4.118.0 d1 execute pixlstash-telemetry \
 npm run deploy
 npx wrangler secret put AGGREGATES_TOKEN
 ```
+
+The schema and the secret are one-time steps; a code change needs only
+`npm run deploy`, logged in with `npx wrangler login`. It runs
+`scripts/deploy.mjs`, which looks the database UUID up by name, refuses to
+deploy unless that database reports the `eu` jurisdiction, and deploys from a
+temporary gitignored `wrangler.deploy.jsonc` that it deletes afterwards, so the
+UUID never touches the tracked config. It also disables Wrangler's automatic
+provisioning, so a missing database fails closed instead of silently creating
+an unconstrained one.
 
 ## Endpoints
 
