@@ -270,6 +270,45 @@ def test_the_wire_payload_carries_the_attempt_count():
     ]
 
 
+@pytest.mark.parametrize(
+    ("event_type", "data"),
+    [
+        (
+            EventType.VRAM_OOM,
+            {"task_type": "TagTask", "other_processes": [{"name": "lms"}]},
+        ),
+        (
+            EventType.RESOURCE_LEASE,
+            {"lease_id": "lease-1", "label": "Portrait", "workflow_id": "wf-a"},
+        ),
+    ],
+)
+def test_only_the_owners_socket_hears_who_holds_the_gpu(event_type, data):
+    # Both name other programs or the owner's workflows, so a scoped or READ
+    # token's socket, connected at the same time, must hear neither.
+    class _FakeWs:
+        def __init__(self):
+            self.sent = []
+
+        async def send_json(self, payload):
+            self.sent.append(payload)
+
+    owner, scoped = _FakeWs(), _FakeWs()
+
+    class _Broadcaster(WsBroadcasterMixin):
+        def __init__(self):
+            self._ws_clients = [
+                {"ws": scoped, "owner": False, "filters": {}},
+                {"ws": owner, "owner": True, "filters": {}},
+            ]
+            self._ws_clients_lock = threading.Lock()
+
+    asyncio.run(_Broadcaster()._broadcast_ws_event(event_type, data))
+
+    assert [payload["event"] for payload in owner.sent] == [event_type.name]
+    assert scoped.sent == []
+
+
 def test_the_event_is_not_filtered_out_by_a_clients_grid_filters():
     # It describes the machine, so no grid filter may suppress it - and a
     # non-owner socket must not receive vault-wide activity at all.
