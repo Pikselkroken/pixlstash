@@ -6476,7 +6476,7 @@ it. Top to bottom:
 - **The download folder, pinned** under it the same way (`downloadFolder`,
   `setDownloadTarget`): where a model downloaded for a workflow lands (backend
   §25.12), the default folder until another is picked, when the row wears a
-  `Default folder` chip and no count of its own. Its `Change ▾` lists the same
+  `Same as default` chip and no count of its own. Its `Change ▾` lists the same
   candidates minus the current one, and a chosen folder leaves the list too.
 - **The list**: every other folder, one line each, in the server's order: the
   path, the server's **`tool`** chip (never derived from `kind`: the

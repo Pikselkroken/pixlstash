@@ -225,7 +225,7 @@
             <span
               v-if="store.downloadFolder?.is_default"
               class="mf-chip"
-              >Default folder</span
+              >Same as default</span
             >
           </span>
           <span class="mf-row__meta">{{

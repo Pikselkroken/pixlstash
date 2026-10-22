@@ -544,7 +544,7 @@ describe("the download folder", () => {
     const wrapper = await open([DEFAULTED, STORE]);
     const card = wrapper.find(DOWNLOAD_CARD);
     expect(card.text()).toContain("/home/me/loras");
-    expect(card.text()).toContain("Default folder");
+    expect(card.text()).toContain("Same as default");
   });
 
   it("asks the server to send downloads to the picked folder", async () => {
@@ -564,7 +564,7 @@ describe("the download folder", () => {
       { ...STORE, is_download_target: true },
     ]);
     expect(wrapper.find(DOWNLOAD_CARD).text()).toContain("/var/pixlstash/models");
-    expect(wrapper.find(DOWNLOAD_CARD).text()).not.toContain("Default folder");
+    expect(wrapper.find(DOWNLOAD_CARD).text()).not.toContain("Same as default");
     expect(wrapper.find(".mf-list").exists()).toBe(false);
   });
 });
