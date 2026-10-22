@@ -125,11 +125,13 @@ def download_source(file: str) -> Optional[dict]:
 def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
     """Where *file* goes inside the download folder, relative to it."""
     name = file.replace("\\", "/").strip().strip("/")
-    if (
-        comfyui_folder
-        and not name.startswith(f"{comfyui_folder}/")
-        and os.path.isdir(os.path.join(folder_path, comfyui_folder))
-    ):
+    if not comfyui_folder:
+        return name
+    head, sep, rest = name.partition("/")
+    if sep and head.casefold() == comfyui_folder.casefold():
+        # Already under it, in whatever case: once, spelled as the list does.
+        return f"{comfyui_folder}/{rest}"
+    if os.path.isdir(os.path.join(folder_path, comfyui_folder)):
         name = f"{comfyui_folder}/{name}"
     return name
 
@@ -335,11 +337,17 @@ def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
         url,
         stream=True,
         timeout=_TIMEOUT_SECONDS,
-        headers={"User-Agent": "PixlStash"},
+        # Content-Length counts the bytes sent and requests decodes what it
+        # is sent, so a compressed body would outgrow the space checked for it.
+        headers={"User-Agent": "PixlStash", "Accept-Encoding": "identity"},
     ) as response:
         response.raise_for_status()
         if _left_https(url, response):
             raise ValueError("The download was redirected away from https.")
+        if response.headers.get("Content-Encoding", "identity") != "identity":
+            raise ValueError(
+                "The link sent the file compressed, so its size cannot be checked."
+            )
         if "text/html" in response.headers.get("Content-Type", ""):
             raise ValueError(
                 "The link answered with a web page, not a file. It may need "

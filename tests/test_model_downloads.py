@@ -1,6 +1,7 @@
 """Model downloads: where they land, what is refused, and how they end."""
 
 import contextlib
+import gzip
 import os
 import sqlite3
 import threading
@@ -29,17 +30,29 @@ from tests.test_downloads_intake import _register, write_adapter
 
 
 @contextlib.contextmanager
-def serve_bytes(body, content_type="application/octet-stream", gate=None, length=None):
+def serve_bytes(
+    body,
+    content_type="application/octet-stream",
+    gate=None,
+    length=None,
+    encoding=None,
+    asked=None,
+):
     """Serve *body* at a loopback URL; *gate*, when set, holds the second half.
 
     *length* is the Content-Length claimed, the body's own unless given;
-    ``-1`` sends none.
+    ``-1`` sends none. *encoding* is a Content-Encoding to claim, and *asked*,
+    a list, collects each request's headers.
     """
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if asked is not None:
+                asked.append(dict(self.headers))
             self.send_response(200)
             self.send_header("Content-Type", content_type)
+            if encoding:
+                self.send_header("Content-Encoding", encoding)
             if length != -1:
                 self.send_header(
                     "Content-Length", str(len(body) if length is None else length)
@@ -272,6 +285,24 @@ def test_a_web_page_is_not_saved_as_a_model(hub, target, linked):
     assert os.listdir(chosen) == ["loras"]
 
 
+def test_a_compressed_body_is_asked_against_and_refused(
+    hub, target, adapter_bytes, linked
+):
+    """Content-Length would be the compressed size while the decoded bytes are
+    what lands, so the space check would not hold. Wrong if the request lets
+    the server compress, or if a server that compresses anyway gets saved."""
+    chosen, _ = target
+    asked = []
+    body = gzip.compress(adapter_bytes)
+    with serve_bytes(body, encoding="gzip", asked=asked) as url:
+        linked(url, None)
+        done = _wait(start_download(hub, "packed.safetensors")["id"])
+    assert asked[0]["Accept-Encoding"] == "identity"
+    assert done["status"] == STATUS_FAILED
+    assert "compressed" in done["error"]
+    assert os.listdir(chosen) == ["loras"]
+
+
 def test_bytes_that_are_not_a_model_are_removed_again(hub, target, linked):
     chosen, chosen_id = target
     with serve_bytes(b"not a safetensors header") as url:
@@ -407,13 +438,15 @@ def test_two_spellings_of_one_file_are_one_download(hub, target, adapter_bytes, 
         assert _wait(first["id"])["status"] == STATUS_DONE
 
 
+@pytest.mark.parametrize("file", ["loras/style.safetensors", "Loras/style.safetensors"])
 def test_a_name_already_under_its_folder_is_not_put_under_it_twice(
-    hub, target, adapter_bytes, linked
+    hub, target, adapter_bytes, linked, file
 ):
+    """Wrong if a workflow's own spelling of the folder nests it a second time."""
     chosen, _ = target
     with serve_bytes(adapter_bytes) as url:
         linked(url, "loras")
-        done = _wait(start_download(hub, "loras/style.safetensors")["id"])
+        done = _wait(start_download(hub, file)["id"])
     assert done["status"] == STATUS_DONE, done
     assert (chosen / "loras" / "style.safetensors").is_file()
 
