@@ -468,8 +468,9 @@ async function fetchVramSliderBounds() {
     // Only ever increase the bound - a transient low reading must not shrink the
     // slider and cause Vuetify to auto-clamp (and overwrite) the saved budget.
     if (derived > maxVramGbMax.value) maxVramGbMax.value = derived;
-  } catch {
+  } catch (err) {
     // Leave maxVramGbMax unchanged on failure.
+    console.warn("Could not read the total VRAM for the budget slider's bound.", err);
   }
 }
 

@@ -470,7 +470,8 @@ export function useUpdatesSocket({
         tasksStore.nudge();
         if (
           payload.change === "warning" &&
-          payload.code === "vram_oom_exclusive"
+          payload.code === "vram_oom_exclusive" &&
+          payload.workflow_id
         ) {
           // The backend switched the workflow to run alone after an out-of-
           // memory run; Undo turns that back off.

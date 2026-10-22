@@ -4,6 +4,7 @@ Pure: no server, no GPU. The ledger is a stand-in that answers whatever the
 test says the card holds, so every figure here is chosen, not measured.
 """
 
+import logging
 import os
 import subprocess
 import sys
@@ -137,6 +138,21 @@ def test_outstanding_shrinks_as_the_tenant_grows_into_it():
     # The tenant now really holds 6000 of it, and the card says so.
     comfy.usage = 6000
     fake.used_mb = 6000
+    assert arb.snapshot()["devices"][0]["reserved_mb"] == 2000
+    first.release()
+
+
+def test_a_tenant_unreadable_at_grant_counts_growth_from_its_first_reading():
+    arb, fake, _ = make()
+    tenant = FakeComfy(usage=None)
+    arb.register_probe(Tenant.AITOOLKIT, tenant)
+    first = arb.request(Tenant.AITOOLKIT, "a", device=CARD, need_mb=8000)
+    assert arb.snapshot()["devices"][0]["reserved_mb"] == 8000
+    # Readable now, with 2000 it already held; that is not growth into the lease.
+    tenant.usage = fake.used_mb = 2000
+    assert arb.snapshot()["devices"][0]["reserved_mb"] == 8000
+    # 6000 more is, and is no longer counted twice.
+    tenant.usage = fake.used_mb = 8000
     assert arb.snapshot()["devices"][0]["reserved_mb"] == 2000
     first.release()
 
@@ -457,6 +473,9 @@ def test_apply_sets_the_visible_device_and_an_own_setting_wins(monkeypatch, tmp_
     try:
         assert gpu_select.apply(str(config)) == "GPU-spare"
         assert os.environ["CUDA_VISIBLE_DEVICES"] == "GPU-spare"
+        # Kept for app.main to log again once logging is set up.
+        assert gpu_select.NOTE[0] == logging.INFO
+        assert "GPU-spare" in gpu_select.NOTE[1]
         monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
         assert gpu_select.apply(str(config)) is None
         assert os.environ["CUDA_VISIBLE_DEVICES"] == "1"

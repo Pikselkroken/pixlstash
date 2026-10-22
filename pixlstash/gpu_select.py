@@ -30,6 +30,10 @@ from platformdirs import user_config_dir
 
 logger = logging.getLogger(__name__)
 
+#: What ``apply`` decided, as ``(level, text)``. It runs before logging is set
+#: up, so ``app.main`` logs this again once it is.
+NOTE: tuple[int, str] | None = None
+
 try:
     import pynvml
 except Exception as exc:  # pragma: no cover - optional dependency
@@ -176,21 +180,26 @@ def apply(path: str | None = None, nvml=pynvml) -> str | None:
         return None
     own = os.environ.get("CUDA_VISIBLE_DEVICES")
     if own is not None:
-        logger.warning(
-            "CUDA_VISIBLE_DEVICES is set to %r, so PixlStash uses that rather "
-            "than the GPU chosen in Settings (%s).",
-            own,
-            chosen,
+        _note(
+            logging.WARNING,
+            f"CUDA_VISIBLE_DEVICES is set to {own!r}, so PixlStash uses that "
+            f"rather than the GPU chosen in Settings ({chosen}).",
         )
         return None
     if "torch" in sys.modules:
-        logger.error(
+        _note(
+            logging.ERROR,
             "torch was imported before PixlStash chose its GPU, so the choice "
-            "(%s) cannot take effect this session.",
-            chosen,
+            f"({chosen}) cannot take effect this session.",
         )
         return None
     os.environ["CUDA_VISIBLE_DEVICES"] = chosen
     os.environ[RESOLVED_ENV] = chosen
-    logger.info("PixlStash runs on GPU %s: %s", chosen, reason)
+    _note(logging.INFO, f"PixlStash runs on GPU {chosen}: {reason}")
     return chosen
+
+
+def _note(level: int, text: str) -> None:
+    global NOTE
+    NOTE = (level, text)
+    logger.log(level, text)

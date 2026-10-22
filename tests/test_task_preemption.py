@@ -15,10 +15,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from pixlstash.resources.arbiter import ResourceArbiter
+from pixlstash.resources.arbiter import LeaseState, ResourceArbiter
 from pixlstash.task_runner import TaskCancelledError, TaskRunner
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
+from pixlstash.vault import Vault
 
 
 class _NoCard:
@@ -166,3 +167,62 @@ def test_a_task_refused_gpu_memory_waits_off_the_queue_and_runs_later():
         assert task.status.value == "completed"
     finally:
         runner.stop()
+
+
+def test_a_requeued_task_cancelled_by_stop_leaves_no_attempt_count():
+    class _Refusing(ResourceArbiter):
+        def try_light(self, *args, **kwargs):
+            return None
+
+    runner = TaskRunner(
+        name="refused-stop", resource_arbiter=_Refusing(_NoCard(), usage=lambda: None)
+    )
+    runner.VRAM_REQUEUE_BASE_S = 30
+    runner.start()
+    task = _QuickGpuTask()
+    try:
+        runner.submit(task)
+        assert _until(lambda: task.id in runner._requeued)
+        assert task.id in runner._requeue_counts
+    finally:
+        runner.stop()
+    assert task.id not in runner._requeue_counts
+
+
+@pytest.mark.parametrize(
+    ("meanwhile", "stopped"),
+    [
+        (LeaseState.WAITING, ["preempted by Portrait", "unload"]),
+        # Granted or withdrawn while the hold was taken: nothing needs the room.
+        (LeaseState.GRANTED, []),
+        (LeaseState.RELEASED, []),
+    ],
+)
+def test_pixlstash_yields_only_for_a_lease_that_still_waits(meanwhile, stopped):
+    done = []
+    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+
+    class _Planner:
+        def hold(self, owner, seconds):
+            lease.state = meanwhile
+
+        def release(self, owner):
+            done.append(f"release {owner}")
+
+    vault = SimpleNamespace(
+        _task_runner=SimpleNamespace(
+            preempt_gpu=lambda reason: done.append(reason) or [],
+            wait_for_gpu_idle=lambda: True,
+        ),
+        _closed=False,
+        _work_planner=_Planner(),
+        _yield_holds=set(),
+        unload_models=lambda: done.append("unload"),
+    )
+    vault._release_yield_hold = lambda lease_id: Vault._release_yield_hold(
+        vault, lease_id
+    )
+    Vault._yield_gpu(vault, lease)
+    assert [step for step in done if not step.startswith("release")] == stopped
+    # The hold ends with the yield it was for, or stays for the lease's grant.
+    assert (vault._yield_holds == set()) is (meanwhile is not LeaseState.WAITING)

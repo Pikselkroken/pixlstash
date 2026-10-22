@@ -375,6 +375,7 @@ class TaskRunner:
     def _take_requeued(self, task_id: str) -> Optional[BaseTask]:
         with self._active_task_lock:
             entry = self._requeued.pop(task_id, None)
+        self._requeue_counts.pop(task_id, None)
         if entry is None:
             return None
         entry[0].cancel()
@@ -387,6 +388,7 @@ class TaskRunner:
             return
         task = entry[1]
         if self._stop.is_set():
+            self._requeue_counts.pop(task_id, None)
             self._cancel_queued_task(task, "runner stopped")
             return
         work_queue.put((task.priority, next(self._queue_seq), task))

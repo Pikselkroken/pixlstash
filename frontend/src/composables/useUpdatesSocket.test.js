@@ -794,6 +794,12 @@ describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
     );
   });
 
+  it("does not warn for a run-alone switch that names no workflow", () => {
+    connect();
+    receive({ type: "resource_lease", change: "warning", code: "vram_oom_exclusive", text: "x" });
+    expect(useNoticeStore().notices).toHaveLength(0);
+  });
+
   it("does not warn for a warning with another code", () => {
     connect();
     receive({ type: "resource_lease", change: "warning", code: "something_else", workflow_id: "w", text: "x" });

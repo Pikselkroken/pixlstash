@@ -559,6 +559,8 @@ def main():
         setup_logging(log_file=log_file, log_level=log_level)
     else:
         setup_logging(log_level=log_level)
+    if gpu_select.NOTE is not None:
+        logger.log(*gpu_select.NOTE)
 
     def build_server() -> Server:
         return Server(

@@ -392,11 +392,17 @@ class ResourceArbiter:
             self._grant_locked(lease, why)
         return lease
 
-    def release(self, lease: Lease) -> None:
-        """End a lease, granted or waiting. Idempotent."""
+    def release(self, lease: Lease, *, only_waiting: bool = False) -> bool:
+        """End a lease, granted or waiting. Idempotent.
+
+        With *only_waiting*, a lease granted meanwhile is left alone. Returns
+        whether this call ended the lease.
+        """
         with self._lock:
+            if only_waiting and lease.state is not LeaseState.WAITING:
+                return False
             if self._leases.pop(lease.id, None) is None:
-                return
+                return False
             was = lease.state
             lease.state = LeaseState.RELEASED
             lease.waiting_reason = None
@@ -417,6 +423,7 @@ class ResourceArbiter:
             changes += self._evaluate_locked()
         lease._changed.set()
         self._announce(changes)
+        return True
 
     def shrink(self, lease: Lease, need_mb: int) -> None:
         with self._lock:
@@ -452,9 +459,8 @@ class ResourceArbiter:
     def cancel(self, lease_id: str) -> Lease | None:
         """Withdraw a waiting lease; the caller cancels the work behind it."""
         lease = self.lease(lease_id)
-        if lease is None or lease.state is not LeaseState.WAITING:
+        if lease is None or not self.release(lease, only_waiting=True):
             return None
-        self.release(lease)
         return lease
 
     def leases(self, tenant: Tenant | None = None) -> list[Lease]:
@@ -714,6 +720,10 @@ class ResourceArbiter:
             else:
                 reserved = sum(lease.need_mb for lease in granted)
                 baseline = self._baseline.get((tenant, device))
+                if baseline is None and usage is not None:
+                    # Unreadable when the first lease was granted: growth
+                    # counts from the first reading instead.
+                    baseline = self._baseline[(tenant, device)] = usage
                 grown = (
                     max(0, usage - baseline)
                     if usage is not None and baseline is not None
