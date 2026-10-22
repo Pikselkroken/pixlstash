@@ -1,16 +1,27 @@
 <template>
   <article
-    class="msc"
+    class="msc fav-host"
     :class="{
       'msc--open': expanded,
       'msc--on': selected,
       'msc--hand': card.handMade,
       'msc--hidden': card.hidden,
+      'msc--favouritable': favouritable,
     }"
     role="group"
     :aria-label="accessibleName"
     data-testid="model-set-card"
   >
+    <!-- The favourite heart on the cover's top-left corner (#1578). It leads the
+         corner, and the cover's own badges move in beside it. -->
+    <span v-if="favouritable" class="msc__fav">
+      <FavouriteHeart
+        variant="cover"
+        :on="favourite"
+        :label="card.name"
+        @toggle="emit('favourite')"
+      />
+    </span>
     <div
       v-if="card.covers.length"
       class="msc__cover"
@@ -275,6 +286,7 @@ import { VIcon } from "vuetify/components";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
+import FavouriteHeart from "./FavouriteHeart.vue";
 import ModelMark from "./ModelMark.vue";
 import VerdictIcon from "./VerdictIcon.vue";
 import { setVerdictText } from "../../utils/setVerdicts";
@@ -288,9 +300,14 @@ const props = defineProps({
   panelId: { type: String, default: "" },
   /** This card's base model is in the shelf's selection. */
   selected: { type: Boolean, default: false },
+  /** Draw the favourite heart: the grid's cards carry one, other lists do not. */
+  favouritable: { type: Boolean, default: false },
+  /** Is this set a favourite now? */
+  favourite: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
+  "favourite",
   "toggle",
   "offer",
   "add",
@@ -578,6 +595,18 @@ const accessibleName = computed(() => {
 .msc__badge--start {
   left: var(--space-3);
   z-index: var(--z-raised);
+}
+
+/* The heart leads the cover's top-left corner; the badges step in past it. */
+.msc__fav {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  z-index: var(--z-raised);
+}
+
+.msc--favouritable .msc__badge--start {
+  left: calc(var(--space-3) + var(--control-h) + var(--space-2));
 }
 
 .msc__meta {

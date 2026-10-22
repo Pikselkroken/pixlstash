@@ -61,6 +61,7 @@ import { useWorkflowsStore } from "./useWorkflowsStore";
 import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 import { useRunDialogStore } from "./useRunDialogStore";
 import { useFilterStore } from "./useFilterStore";
+import { useFavouritesStore } from "./useFavouritesStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -191,6 +192,20 @@ const STORES = [
       s.context = { character_id: 3 };
     },
     isEmpty: (s) => !s.source && !s.makeMore && !s.context.character_id,
+  },
+  {
+    // Owner-only hub rows: the next credential may be a share token that
+    // must not learn which models and workflows the owner favours.
+    name: "useFavouritesStore",
+    use: useFavouritesStore,
+    seed: (s) => {
+      s.keys = { model: ["abc"], workflow: ["wf-1"], set: ["hand:2"] };
+      s.loaded = true;
+    },
+    isEmpty: (s) =>
+      !s.isFavourite("model", "abc") &&
+      !s.isFavourite("workflow", "wf-1") &&
+      s.loaded === false,
   },
   {
     name: "useLockedSetsStore",

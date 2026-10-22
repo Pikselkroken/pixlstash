@@ -643,6 +643,23 @@ CREATE TABLE IF NOT EXISTS model_hidden (
 )
 """
 
+# The owner's favourites (#1578): a model, a workflow card or a workflow set
+# they want first wherever they choose from a list. Per HUB, not per library,
+# because all three are hub-level facts and a favourite follows the machine. A
+# row means favourite; no row means not. Keyed by stable identity rather than a
+# row id, with no foreign key: `model` by sha256 so a forget and re-add keeps
+# it, `workflow` by card key, `set` by the grid's set key (`hand:<id>`,
+# `model:<head id>`). A key that names nothing today is kept, not purged, so a
+# favourite comes back when its model does.
+_V2_FAVOURITE = """
+CREATE TABLE IF NOT EXISTS favourite (
+    kind        TEXT NOT NULL CHECK (kind IN ('model', 'workflow', 'set')),
+    key         TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+)
+"""
+
 _V2_MODEL_SHELF_INDEXES = (
     # The scanner's hot path: "which files does this model have, and where".
     "CREATE INDEX IF NOT EXISTS ix_model_file_model ON model_file(model_id)",
@@ -675,6 +692,7 @@ _V2_MODEL_SHELF_TABLES = (
     _V2_MODEL_WORKFLOW_SET_SEEN,
     _V2_WORKFLOW_SET_HIDDEN,
     _V2_MODEL_HIDDEN,
+    _V2_FAVOURITE,
     _V2_MODEL_SET_VERDICT,
     _V2_MODEL_SET_MEMBER_VERDICT,
     *_V2_MODEL_SHELF_INDEXES,

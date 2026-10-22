@@ -123,6 +123,21 @@
               @update:model-value="store.setSortKey"
             />
           </div>
+          <!-- Templates are not favourites; the box is Mine's alone. -->
+          <div v-if="!onTemplates" class="tbm-section">
+            <label class="tbm-check fm-check">
+              <input
+                type="checkbox"
+                :checked="store.favouritesLead"
+                @change="store.setFavouritesLead($event.target.checked)"
+              />
+              <span class="fm-check-label">Favourites first</span>
+            </label>
+            <p class="fm-help">
+              Inside each group, favourites lead and the sort orders the rest.
+              Off, a favourite sits where the sort puts it.
+            </p>
+          </div>
         </div>
       </v-menu>
 
@@ -377,7 +392,9 @@
                   :card="entry.card"
                   :selected="cardSelected(entry.key)"
                   :run-failure="runDialog.failures[entry.card.id] ?? null"
+                  :favourite="favourites.isFavourite('workflow', entry.card.id)"
                   @run="runCard(entry.card)"
+                  @toggle-favourite="toggleFavourites([entry.key])"
                 />
               </div>
             </div>
@@ -426,6 +443,7 @@
         @export="exportSelected"
         @duplicate="duplicateSelected"
         @use-set="useSetOnSelected"
+        @favourite="toggleFavourites([...store.selectedKeys])"
         @delete="confirmDelete"
       />
     </div>
@@ -493,6 +511,10 @@ import { exportWorkflow, workflowCoverUrl } from "../../api/workflows";
 import { openWorkflowInComfyui } from "../../composables/useComfyuiOpen";
 import { useConfirm } from "../../composables/useConfirm";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
+import {
+  FAVOURITE_KEY,
+  useFavouritesStore,
+} from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -553,6 +575,7 @@ const COLUMN_GAP = 8;
 const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowsStore();
+const favourites = useFavouritesStore();
 const filterStore = useFilterStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
@@ -874,6 +897,7 @@ watch(
 
 onMounted(async () => {
   store.fetchCards();
+  favourites.ensureLoaded();
   try {
     const body = await listImportFolders();
     watchedFolder.value = (body?.folders ?? [])[0] ?? null;
@@ -1192,6 +1216,22 @@ function onKeyDown(event) {
     selectAllShown();
     return;
   }
+  // H favourites the focused card, or the selection it is in: a card the
+  // gesture did not select is selected alone first, as a right-click does.
+  if (
+    event.key.toLowerCase() === FAVOURITE_KEY &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  ) {
+    event.preventDefault();
+    if (entry) {
+      if (!store.selectedKeys.includes(entry.key)) store.select(entry.key);
+      toggleFavourites([...store.selectedKeys]);
+    }
+    return;
+  }
   switch (event.key) {
     case "ArrowRight":
       event.preventDefault();
@@ -1270,6 +1310,21 @@ function onBackgroundKeyDown(event) {
   if (selectAll || event.key === "Escape" || event.key === "Delete") {
     onKeyDown(event);
   }
+}
+
+/**
+ * Favourite, or unfavourite, some workflows: a card's heart, H, and the
+ * selection's verb all come here. Under *Favourites only* a card the gesture
+ * unfavourites leaves the grid, so the selection is pruned with it.
+ */
+function toggleFavourites(keys) {
+  const on = !favourites.allFavourite("workflow", keys);
+  favourites.toggle("workflow", keys);
+  store.keepSelectionOnScreen();
+  const n = keys.length;
+  announcement.value = `${on ? "Favourited" : "Unfavourited"} ${
+    n === 1 ? "workflow" : `${n} workflows`
+  }`;
 }
 
 /** One of the cursor card's own `tabindex="-1"` buttons. */

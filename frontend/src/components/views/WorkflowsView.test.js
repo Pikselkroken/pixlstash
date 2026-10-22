@@ -65,6 +65,19 @@ vi.mock("../../api/workflows", () => ({
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: vi.fn(async () => []),
 }));
+// #1578: an in-memory server, so the store's first read sees what a test set.
+const server = { model: [], workflow: [], set: [] };
+const listFavourites = vi.fn(async () => ({ ...server }));
+const setFavourites = vi.fn(async (kind, keys, favourite) => {
+  const next = new Set(server[kind]);
+  for (const key of keys) favourite ? next.add(key) : next.delete(key);
+  server[kind] = [...next];
+  return { ...server };
+});
+vi.mock("../../api/favourites", () => ({
+  listFavourites: (...args) => listFavourites(...args),
+  setFavourites: (...args) => setFavourites(...args),
+}));
 const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
   listImportFolders: (...args) => listImportFolders(...args),
@@ -217,6 +230,9 @@ beforeEach(() => {
   );
   listImportFolders.mockResolvedValue({ folders: [] });
   listUnfiledRecipes.mockResolvedValue([]);
+  listFavourites.mockClear();
+  setFavourites.mockClear();
+  Object.assign(server, { model: [], workflow: [], set: [] });
   patchWorkflowCard.mockReset();
   patchWorkflowCard.mockResolvedValue({ card: card("b") });
   // A FRESH array per call, as a real response is: the store assigns it to
@@ -2003,5 +2019,83 @@ describe("Mine | Templates", () => {
     expect(count()).toBe(false);
     await flush();
     expect(count()).toBe(true);
+  });
+});
+
+describe("favourites (#1578)", () => {
+  it("reads the favourites when the grid mounts", async () => {
+    await grid();
+    expect(listFavourites).toHaveBeenCalled();
+  });
+
+  it("H favourites the focused card, and selects it first when it is not selected", async () => {
+    const wrapper = await grid();
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "h" });
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["a"], true);
+    expect(useWorkflowsStore().selectedKeys).toEqual(["a"]);
+  });
+
+  it("H on a card inside the selection favourites the whole selection", async () => {
+    const wrapper = await grid();
+    await wrapper.find('[data-key="c"]').trigger("click");
+    await wrapper.find('[data-key="d"]').trigger("click", { ctrlKey: true });
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "h" });
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["c", "d"], true);
+  });
+
+  it("a click on the heart favourites its card without selecting it", async () => {
+    const wrapper = await grid();
+    // The vuetify stubs do not draw a Tooltip's activator, so the heart's own
+    // button is not in this DOM; the card emits what the heart would, and the
+    // heart's click is covered in WorkflowCard.test.js.
+    wrapper
+      .findAllComponents({ name: "WorkflowCard" })
+      .find((card) => card.props("card").id === "b")
+      .vm.$emit("toggle-favourite");
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["b"], true);
+    expect(useWorkflowsStore().selectedKeys).toEqual([]);
+  });
+
+  it("offers Favourites first in Sort on Mine only, since templates are not favourites", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    const box = () =>
+      wrapper.findAll(".fm-check-label").filter((el) => el.text() === "Favourites first");
+    wrapper.vm.sortMenuOpen = true;
+    await flush();
+    expect(box()).toHaveLength(1);
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    wrapper.vm.sortMenuOpen = true;
+    await flush();
+    // The menu is open on Templates too: its own sort keys are drawn.
+    expect(wrapper.text()).toContain("Sort by");
+    expect(box()).toHaveLength(0);
+  });
+
+  it("Favourites only narrows the grid to the favourites, in the sort's order", async () => {
+    server.workflow = ["e", "b"];
+    const wrapper = await grid();
+    useWorkflowsStore().setFilters({ favouritesOnly: true });
+    await flush();
+    expect(cardKeys(wrapper)).toEqual(["b", "e"]);
+  });
+
+  it("under Favourites only, H on a selected favourite drops it from the selection", async () => {
+    server.workflow = ["c", "d"];
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.setFilters({ favouritesOnly: true });
+    await flush();
+    await wrapper.find('[data-key="c"]').trigger("click");
+    await wrapper.find('[data-key="d"]').trigger("click", { ctrlKey: true });
+    expect(store.selectedKeys).toEqual(["c", "d"]);
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "h" });
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["c", "d"], false);
+    expect(store.selectedKeys).toEqual([]);
   });
 });

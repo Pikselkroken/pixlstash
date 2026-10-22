@@ -9,15 +9,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { h, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
+import { createPinia } from "pinia";
 
 const fetchWorkflowSets = vi.fn();
 const planSetClones = vi.fn();
+const listFavourites = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
 }));
 vi.mock("../../api/workflows", () => ({
   planSetClones: (...args) => planSetClones(...args),
+}));
+vi.mock("../../api/favourites", () => ({
+  listFavourites: (...args) => listFavourites(...args),
+  setFavourites: vi.fn(),
 }));
 
 import WorkflowUseSetMenu from "./WorkflowUseSetMenu.vue";
@@ -142,13 +148,17 @@ afterEach(() => {
 beforeEach(() => {
   fetchWorkflowSets.mockReset().mockResolvedValue(SHELF);
   planSetClones.mockReset().mockResolvedValue(PLANS);
+  listFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
 });
 
 function mountMenu(props = {}) {
   const wrapper = mount(WorkflowUseSetMenu, {
     props: { workflowId: "a", models: MODELS, ...props },
     attachTo: document.body,
-    global: { stubs: { VMenu: VMenuStub, VIcon: true, Tooltip: true } },
+    global: {
+      plugins: [createPinia()],
+      stubs: { VMenu: VMenuStub, VIcon: true, Tooltip: true },
+    },
   });
   mounted.push(wrapper);
   return wrapper;
@@ -686,5 +696,33 @@ describe("from outside the tab", () => {
     const wrapper = mountMenu();
     wrapper.vm.focus();
     expect(document.activeElement).toBe(button(wrapper).element);
+  });
+});
+
+describe("favourite sets (#1578)", () => {
+  const order = (wrapper) =>
+    wrapper.findAll("[data-set]").map((entry) => entry.attributes("data-set"));
+
+  it("a favourite hand-made set leads inside the hand-made group", async () => {
+    listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["hand:8"] });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    await flushPromises();
+    expect(order(wrapper)).toEqual(["hand:8", "hand:7", "hand:9", "model:31"]);
+  });
+
+  it("a favourite pictures set never climbs over the hand-made group", async () => {
+    listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["model:31"] });
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    await flushPromises();
+    expect(order(wrapper)).toEqual(["hand:7", "hand:8", "hand:9", "model:31"]);
+  });
+
+  it("with no favourites the order is the shelf's own", async () => {
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    await flushPromises();
+    expect(order(wrapper)).toEqual(["hand:7", "hand:8", "hand:9", "model:31"]);
   });
 });

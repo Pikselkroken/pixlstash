@@ -1,6 +1,6 @@
 <template>
   <article
-    class="wf-card"
+    class="wf-card fav-host"
     :class="{ 'wf-card--selected': selected }"
     role="group"
     :aria-label="accessibleName"
@@ -166,10 +166,20 @@
     </div>
 
     <!-- Top-start of the card, the one corner the cover leaves free: the
-         picture count is top-end and the rating bottom-end. Where the
-         workflow came from leads, because that never changes; *Unsaved*
-         follows it, so a badge that comes and goes moves nothing. -->
+         picture count is top-end and the rating bottom-end. The favourite
+         leads, then where the workflow came from, because that never
+         changes; *Unsaved* follows it, so a badge that comes and goes moves
+         nothing. -->
     <div class="wf-card__start">
+      <!-- The favourite leads the row (#1578): filled when it is one, and the
+           outline on the pointer's card. Its own button, so it takes the
+           click here; the row is `pointer-events: none` around it. -->
+      <FavouriteHeart
+        variant="cover"
+        :on="favourite"
+        :label="card.name"
+        @toggle="emit('toggle-favourite')"
+      />
       <!-- Came from ComfyUI (#1440). The mark is decoration for the sighted,
            so the name is on the span itself and in the card's accessible
            name. -->
@@ -246,6 +256,7 @@ import {
 import AppButton from "./AppButton.vue";
 import ComfyuiIcon from "./ComfyuiIcon.vue";
 import ChipRow from "./ChipRow.vue";
+import FavouriteHeart from "./FavouriteHeart.vue";
 import InfoPopover from "./InfoPopover.vue";
 import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
@@ -279,9 +290,11 @@ const props = defineProps({
    * so the card says so where the run was started.
    */
   runFailure: { type: Object, default: null },
+  /** This workflow is a favourite (#1578). */
+  favourite: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["run"]);
+const emit = defineEmits(["run", "toggle-favourite"]);
 
 /**
  * The cover pictures this card can actually draw.
@@ -469,6 +482,7 @@ const facts = computed(() => [
 const accessibleName = computed(() =>
   [
     cardAccessibleName(props.card),
+    props.favourite ? "Favourite" : null,
     props.runFailure
       ? `last run ${props.runFailure.stopped ? "stopped" : "failed"}: ${props.runFailure.message}`
       : null,

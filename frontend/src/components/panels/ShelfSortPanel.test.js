@@ -131,3 +131,25 @@ describe("picking a grouping", () => {
     expect(wrapper.emitted("group-picked")).toBeUndefined();
   });
 });
+
+describe("favourites first (#1578)", () => {
+  it("is on by default, and unticking it writes the view and says why", async () => {
+    const wrapper = mount(ShelfSortPanel, globalOpts);
+    const store = useModelShelfStore();
+    expect(store.view.favouritesFirst).toBe(true);
+    const box = wrapper.find(".shelf-sort-favourites input[type='checkbox']");
+    expect(box.element.checked).toBe(true);
+    await box.setValue(false);
+    expect(store.view.favouritesFirst).toBe(false);
+    expect(wrapper.text()).toContain("Inside each group, favourites lead");
+  });
+
+  it("is remembered in the view across a reload", async () => {
+    const first = mount(ShelfSortPanel, globalOpts);
+    useModelShelfStore().setView({ favouritesFirst: false });
+    first.unmount();
+    setActivePinia(createPinia());
+    expect(useModelShelfStore().view.favouritesFirst).toBe(false);
+  });
+});
+

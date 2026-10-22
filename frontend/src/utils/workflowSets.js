@@ -24,6 +24,7 @@
 // names - or names only beside no base model - get no card; the Models rail
 // lists them under `In no set yet`.
 
+import { favouritesFirst } from "../stores/useFavouritesStore";
 import { fileKindLabel, fileTime, modelName, quantBadge } from "./modelShelf";
 
 /** The kinds a set is named after, as the server's `_SET_BASE_KINDS`. */
@@ -1164,16 +1165,53 @@ export function setFits(set, rows, combinations) {
   return { rows: fits, evidence };
 }
 
+/** A hand-made set's key in the favourites store, `hand:<id>`. */
+export const handMadeKey = (set) => `hand:${set.id}`;
+
+/**
+ * The picker ranking rule for a list of sets (the Use-a-set menu): the
+ * hand-made group stays first, and inside each group a favourite set leads. A
+ * favourite in the lower group never climbs over the hand-made one.
+ *
+ * @param {Array<{key: string}>} sets - hand-made sets have `hand:` keys.
+ * @param {(key: string) => boolean} isFav
+ */
+export function favouriteSetsFirst(sets, isFav) {
+  const isHand = (set) => set.key.startsWith("hand:");
+  const hand = (sets ?? []).filter(isHand);
+  const evidence = (sets ?? []).filter((set) => !isHand(set));
+  const lead = (group) => favouritesFirst(group, (set) => isFav(set.key));
+  return [...lead(hand), ...lead(evidence)];
+}
+
+/**
+ * The slot picker's ranking rule: inside each group a favourite model leads.
+ * No item changes group, and a held section (what the set already holds) is
+ * left as it is.
+ *
+ * @param {Array<Object>} sections - the `slotSuggestions` sections.
+ * @param {(item: Object) => boolean} isFav - true for a favourite row.
+ */
+export function favouritesLeadSections(sections, isFav) {
+  return sections.map((section) =>
+    section.held
+      ? section
+      : { ...section, items: favouritesFirst(section.items, isFav) },
+  );
+}
+
 /**
  * What "Fill from a set" offers: the members of your other sets with the same
  * base model (every other set, while this one has no checkpoint), each once,
  * labelled with the sets it comes from.
  */
-export function fillFromSets(set, sets) {
+export function fillFromSets(set, sets, isFav = () => false) {
   const base = handMadeBase(set);
   const held = new Set((set.members ?? []).map((m) => m.sha256));
   const found = new Map();
-  for (const other of sets ?? []) {
+  // A favourite set's members are found first, so they lead the list.
+  const ranked = favouritesFirst(sets ?? [], (other) => isFav(handMadeKey(other)));
+  for (const other of ranked) {
     if (other.id === set.id) continue;
     if (base && handMadeBase(other) !== base) continue;
     for (const member of other.members ?? []) {

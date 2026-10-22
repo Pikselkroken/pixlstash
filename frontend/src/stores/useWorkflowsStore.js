@@ -15,6 +15,7 @@ import {
 import { baseModels, modelDisplayName } from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
+import { favouritesFirst, useFavouritesStore } from "./useFavouritesStore";
 
 /**
  * The Workflows grid (v1.12 F1a) — the cards, the sort and the selection.
@@ -75,6 +76,9 @@ const byName = (a, b) => nameCollator.compare(a.name ?? "", b.name ?? "");
 export const DEFAULT_FILTERS = Object.freeze({
   hideOneOffs: true,
   showHidden: false,
+  // Only the cards the owner has favourited (#1578). Client-side: it only
+  // removes a card, so it never reads the server again.
+  favouritesOnly: false,
   // "Keeps something deleted": a picture ghost or the name of a model that is
   // not on the shelf. The card counts the two apart; this row asks for either.
   ghosts: false,
@@ -120,7 +124,11 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   const error = ref("");
 
   const sortKey = ref("rating");
+  // Favourites lead inside the grid's group, after the sort (#1578). On by
+  // default; remembered for the session the way the sort is.
+  const favouritesLead = ref(true);
   const filters = ref({ ...DEFAULT_FILTERS });
+  const favourites = useFavouritesStore();
 
   // A stamp, not a boolean: an in-flight fetch that resolves after a session
   // reset must not write its rows, or its cover thumbnail URLs, into the new
@@ -189,6 +197,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       if (needle && !(card.name ?? "").toLowerCase().includes(needle)) {
         return false;
       }
+      if (view.favouritesOnly && !favourites.isFavourite("workflow", card.id)) {
+        return false;
+      }
       if (view.ghosts && !keepsGhost(card)) return false;
       if (view.type != null && card.type !== view.type) return false;
       if (
@@ -215,10 +226,25 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     // A copy: `cards` is the fetch order and a sort in place would make the
     // next resort depend on the last one.
     const copy = [...filteredCards.value];
-    if (sortKey.value === "name") return copy.sort(byName);
-    const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
-    return copy.sort((a, b) => value(b) - value(a));
+    if (sortKey.value === "name") copy.sort(byName);
+    else {
+      const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
+      copy.sort((a, b) => value(b) - value(a));
+    }
+    // The grid is one group, so favourites lead the whole sorted list. The
+    // sort still orders everything else (#1578).
+    if (!favouritesLead.value) return copy;
+    return favouritesFirst(copy, (card) =>
+      favourites.isFavourite("workflow", card.id),
+    );
   });
+
+  /** How many of the cards read are favourites: the Filters row's count. */
+  const favouriteCount = computed(
+    () =>
+      cards.value.filter((card) => favourites.isFavourite("workflow", card.id))
+        .length,
+  );
 
   /**
    * Every filter that is not on its default, as the chips the strip draws.
@@ -230,9 +256,18 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * the module that exists so one filter cannot be spelled two ways; this
    * store owns the state and the refetch decision, and nothing else.
    */
-  const filterChips = computed(() =>
-    workflowFilterChips(filters.value, cards.value, setFilters),
-  );
+  const filterChips = computed(() => {
+    const chips = workflowFilterChips(filters.value, cards.value, setFilters);
+    if (filters.value.favouritesOnly) {
+      chips.unshift({
+        key: "favourites",
+        kind: "Showing",
+        value: "favourites",
+        remove: () => setFilters({ favouritesOnly: false }),
+      });
+    }
+    return chips;
+  });
 
   /**
    * "12 of 40" — what the grid is drawing of what the server sent.
@@ -563,6 +598,21 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     if (SORT_KEYS.includes(key)) sortKey.value = key;
   }
 
+  function setFavouritesLead(on) {
+    favouritesLead.value = Boolean(on);
+  }
+
+  /**
+   * Drop from the selection every card the grid no longer draws. Called by a
+   * filter change, and by a favourite change under *Favourites only*, which
+   * can take a selected card out of the grid.
+   */
+  function keepSelectionOnScreen() {
+    if (!selectedKeys.value.length) return;
+    const onScreen = new Set(filteredCards.value.map((card) => card.id));
+    selectedKeys.value = selectedKeys.value.filter((key) => onScreen.has(key));
+  }
+
   /**
    * Change some of the filters, re-reading the grid when the server's two move.
    *
@@ -577,12 +627,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     // the rail's bulk verbs act on `selectedKeys`, so a filter that takes a
     // card away would otherwise leave "3 workflows selected" over a grid
     // drawing one — and Hide or Delete would act on cards the reader cannot see.
-    if (selectedKeys.value.length) {
-      const onScreen = new Set(filteredCards.value.map((card) => card.id));
-      selectedKeys.value = selectedKeys.value.filter((key) =>
-        onScreen.has(key),
-      );
-    }
+    keepSelectionOnScreen();
     if (
       next.hideOneOffs !== before.hideOneOffs ||
       next.showHidden !== before.showHidden
@@ -705,6 +750,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     loaded,
     error,
     sortKey,
+    favouritesLead,
+    setFavouritesLead,
+    favouriteCount,
+    keepSelectionOnScreen,
     filters,
     selectedKeys,
     filteredCards,

@@ -267,6 +267,9 @@
                       : cardSelected(entry)
                 "
                 :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
+                favouritable
+                :favourite="favourites.isFavourite('set', entry.key)"
+                @favourite="store.toggleFavourites({ kind: 'set', keys: [entry.key] })"
                 @toggle="store.toggleSet(entry.key)"
                 @offer="openOffer(entry.setId)"
                 @add="answerOffer(entry, true)"
@@ -405,6 +408,7 @@ import { VIcon } from "vuetify/components";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
 import {
   assignmentRing,
   formatModelSize,
@@ -468,6 +472,8 @@ function dropModelIds(group) {
     .filter((id) => id != null)
     .join(" ");
 }
+
+const favourites = useFavouritesStore();
 
 const gridEl = ref(null);
 const columns = ref(1);
@@ -741,6 +747,12 @@ const cursorIndex = computed(() => {
   // sets, and the tile is one arrow (or N) away.
   const card = flatRows.value.findIndex((entry) => entry.kind === "card");
   return card >= 0 ? card : (firstStop(0, 1) ?? 0);
+});
+
+/** The card under the cursor, by key, or "" when the cursor is elsewhere. */
+const focusedCardKey = computed(() => {
+  const entry = flatRows.value[cursorIndex.value];
+  return entry?.kind === "card" ? entry.key : "";
 });
 
 /** The cursor's key when it is inside the panel, else "". */
@@ -1226,7 +1238,9 @@ const chooserQuery = ref("");
 
 const fillSetItems = computed(() =>
   openHand.value
-    ? fillFromSets(openHand.value.set, store.shownHandMadeSets).filter(
+    ? fillFromSets(openHand.value.set, store.shownHandMadeSets, (key) =>
+        favourites.isFavourite("set", key),
+      ).filter(
         (item) => !store.hiddenModelIds.has(item.id) || store.filters.showHidden,
       )
     : [],
@@ -1785,7 +1799,7 @@ async function undoLastPick() {
   }
 }
 
-defineExpose({ openOffer, selectedCardGroups });
+defineExpose({ openOffer, selectedCardGroups, focusedCardKey });
 
 /**
  * Right-click a card or a tray row: the shelf's full verb inventory, at the

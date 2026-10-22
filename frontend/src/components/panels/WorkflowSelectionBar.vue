@@ -77,6 +77,18 @@
     <!-- The way out to the pictures (#1797): the picture grid's own
          "pictures" glyph, first because it reads the selection rather than
          changing it. -->
+    <!-- Favourite leads (#1578): it is the one verb every card takes, and the
+         glyph says which way it will go. Filled when every selected card is one
+         already, so the next press unfavourites. -->
+    <AppBarButton
+      shape="round"
+      :icon="favouriteOn ? 'heart' : 'heart-outline'"
+      data-verb="favourite"
+      :aria-label="favouriteLabel"
+      :tooltip="favouriteTitle"
+      @click="emit('favourite')"
+    />
+
     <AppBarButton
       shape="round"
       icon="image-multiple-outline"
@@ -204,12 +216,17 @@ import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import {
+  favouriteVerb,
+  useFavouritesStore,
+} from "../../stores/useFavouritesStore";
 import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import { outputNoun } from "../../utils/workflowCard";
 
 const emit = defineEmits([
   "select-all",
+  "favourite",
   "menu-closed",
   "open-cover",
   "show-pictures",
@@ -224,6 +241,7 @@ const emit = defineEmits([
 ]);
 
 const store = useWorkflowsStore();
+const favourites = useFavouritesStore();
 
 // The keycap beside "Select all shown", so the chord is taught where the
 // button is — the same job the `Esc` cap next to Clear does. Read once at
@@ -484,6 +502,21 @@ const showPicturesTitle = computed(() => {
   return cards.value.length > 1
     ? `Show the ${noun.value}s of these ${cards.value.length.toLocaleString()} workflows`
     : `Show the ${noun.value}s of this workflow`;
+});
+
+/**
+ * *Favourite*, or *Unfavourite* when every selected card already is one. A
+ * mixed selection reads Favourite and makes them all favourites: the store's
+ * `toggle` does the same.
+ */
+const favouriteOn = computed(() =>
+  favourites.allFavourite("workflow", store.selectedKeys),
+);
+const favouriteLabel = computed(() => favouriteVerb(favouriteOn.value));
+const favouriteTitle = computed(() => {
+  const n = store.selectedKeys.length;
+  const what = n === 1 ? "this workflow" : `these ${n.toLocaleString()} workflows`;
+  return `${favouriteLabel.value} ${what} (H)`;
 });
 
 const renameTitle = computed(() =>
@@ -791,6 +824,16 @@ const VerbMenu = () => {
       // action on a shipped surface could be performed by pointer alone
       // (WCAG 2.1.1) — and this menu calls itself the full inventory, which
       // was not true while it left one verb out.
+      // First, as the pill's first verb is (#1578). Its keycap is the shortcut.
+      item(
+        favouriteOn.value ? "mdi-heart" : "mdi-heart-outline",
+        favouriteLabel.value,
+        {
+          verb: "favourite",
+          title: favouriteTitle.value,
+          kbd: "H",
+        },
+      ),
       item("mdi-image-outline", openTarget.value.label, {
         verb: "open-cover",
         disabled: !coverOpenable.value,

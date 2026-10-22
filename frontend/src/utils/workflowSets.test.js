@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   downloadBatches,
   evidenceLine,
+  favouriteSetsFirst,
+  favouritesLeadSections,
   fillFromSets,
   handMadeCard,
   handMadeName,
@@ -994,5 +996,64 @@ describe("offerQuestion from a ComfyUI template (#1999)", () => {
     expect(offerQuestion({ offer: three }).text).toBe(
       "The X template loads 3 files this set does not have.",
     );
+  });
+});
+
+describe("favourites lead inside a picker's groups (#1578)", () => {
+  it("a favourite model leads its own section and never another section", () => {
+    const sections = [
+      {
+        id: "sets",
+        items: [
+          { id: 1, row: { sha256: "plain" } },
+          { id: 2, row: { sha256: "fav" } },
+        ],
+      },
+      { id: "all", items: [{ id: 3, row: { sha256: "fav-low" } }] },
+    ];
+    const isFav = (item) => item.row.sha256.startsWith("fav");
+    const ranked = favouritesLeadSections(sections, isFav);
+    expect(ranked[0].items.map((i) => i.id)).toEqual([2, 1]);
+    expect(ranked[1].items.map((i) => i.id)).toEqual([3]);
+  });
+
+  it("leaves a held section as it is", () => {
+    const held = { id: "held", held: true, items: [{ id: 9, row: { sha256: "fav" } }, { id: 8, row: { sha256: "x" } }] };
+    const ranked = favouritesLeadSections([held], (item) => item.row.sha256 === "fav");
+    expect(ranked[0].items.map((i) => i.id)).toEqual([9, 8]);
+  });
+
+  it("with no favourites every section is in its own order", () => {
+    const sections = [{ id: "a", items: [{ id: 2, row: {} }, { id: 1, row: {} }] }];
+    const ranked = favouritesLeadSections(sections, () => false);
+    expect(ranked[0].items.map((i) => i.id)).toEqual([2, 1]);
+  });
+
+  it("keeps the hand-made group first, and a favourite set leads inside each", () => {
+    const sets = [{ key: "model:5" }, { key: "hand:1" }, { key: "hand:2" }];
+    expect(favouriteSetsFirst(sets, (key) => key === "model:5").map((s) => s.key)).toEqual(
+      ["hand:1", "hand:2", "model:5"],
+    );
+    expect(favouriteSetsFirst(sets, (key) => key === "hand:2").map((s) => s.key)).toEqual(
+      ["hand:2", "hand:1", "model:5"],
+    );
+  });
+
+  it("fill from a set finds a favourite set's members first", () => {
+    const mine = { id: 1, members: [] };
+    const alpha = {
+      id: 2,
+      name: "Alpha",
+      members: [{ id: 10, sha256: "a", on_shelf: true, slot: "lora", name: "LoRA A" }],
+    };
+    const beta = {
+      id: 3,
+      name: "Beta",
+      members: [{ id: 11, sha256: "b", on_shelf: true, slot: "lora", name: "LoRA B" }],
+    };
+    expect(fillFromSets(mine, [alpha, beta]).map((i) => i.id)).toEqual([10, 11]);
+    expect(
+      fillFromSets(mine, [alpha, beta], (key) => key === "hand:3").map((i) => i.id),
+    ).toEqual([11, 10]);
   });
 });

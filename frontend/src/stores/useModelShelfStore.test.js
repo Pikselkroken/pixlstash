@@ -77,6 +77,12 @@ vi.mock("../api/modelFiles", () => ({
   mergeModelCopies: (...args) => mergeModelCopies(...args),
 }));
 
+const setFavourites = vi.fn(async () => ({ model: [], workflow: [], set: [] }));
+vi.mock("../api/favourites", () => ({
+  listFavourites: vi.fn(async () => ({ model: [], workflow: [], set: [] })),
+  setFavourites: (...args) => setFavourites(...args),
+}));
+
 vi.mock("../api/modelIcons", () => ({
   setModelIcon: (...args) => setModelIcon(...args),
   clearModelIcons: (...args) => clearModelIcons(...args),
@@ -3543,6 +3549,37 @@ describe("sets from pictures are hidden, never deleted", () => {
     store.hideSets([store.handMadeGroups[0]]);
     await flush();
     expect([...store.selectedSetIds]).toEqual([]);
+  });
+
+  it("favourites a selection of sets AND models, not only the sets", async () => {
+    const store = shelfWithASet([handSet(7)]);
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    // On the row list, where a model row is drawn; the set stays selected.
+    store.setView({ groupBy: "none" });
+    store.toggleSelected(2);
+    store.selectSet(7, { ctrl: true });
+    const targets = store.favouriteTargets();
+    expect(targets).toEqual([
+      { kind: "set", keys: ["hand:7"] },
+      { kind: "model", keys: ["b".repeat(64)] },
+    ]);
+    setFavourites.mockClear();
+    await store.toggleFavourites(targets);
+    expect(setFavourites.mock.calls).toEqual([
+      ["set", ["hand:7"], true],
+      ["model", ["b".repeat(64)], true],
+    ]);
+  });
+
+  it("favourites a selected missing-base card by its own key", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    store.selectMissing("missing:gone.safetensors");
+    expect(store.favouriteTargets()).toEqual([
+      { kind: "set", keys: ["missing:gone.safetensors"] },
+    ]);
   });
 
   it("hiding an open hand-made tray never deletes that set", async () => {

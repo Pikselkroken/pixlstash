@@ -580,6 +580,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # Which sets the active library hides (#1869): a hub row per library, the
     # grid's tier, the owner's own view of their shelf.
     ("PUT", "/api/v1/models/workflow-sets/hidden"): RoutePolicy(_OWNER),
+    # The owner's favourites (#1578): hub rows keyed by a model's sha256, a
+    # workflow card key or a set key, none of which a share token is ever
+    # scoped to. The owner's own view of their shelf and workflows: that tier.
+    ("GET", "/api/v1/favourites"): RoutePolicy(_OWNER),
+    ("PUT", "/api/v1/favourites"): RoutePolicy(_OWNER),
     # The owner's verdicts on a set and on its members (workflow-set-verdicts
     # spec). Hub rows keyed by a combination of `model.id`s, which no share
     # token is ever scoped to, and the owner's own judgement about the

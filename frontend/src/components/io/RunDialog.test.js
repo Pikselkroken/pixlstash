@@ -77,6 +77,11 @@ vi.mock("../../api/pictureSets", () => ({
   listPictureSets: vi.fn().mockResolvedValue([]),
 }));
 // The person picker and "Pictures are of" read the people the same way.
+const listFavourites = vi.fn();
+vi.mock("../../api/favourites", () => ({
+  listFavourites: (...args) => listFavourites(...args),
+  setFavourites: vi.fn(),
+}));
 const listCharacters = vi.fn();
 vi.mock("../../api/characters", () => ({
   listCharacters: (...args) => listCharacters(...args),
@@ -239,6 +244,7 @@ beforeEach(() => {
       : { card: card() },
   );
   listWorkflowCards.mockResolvedValue({ cards: [] });
+  listFavourites.mockResolvedValue({ model: [], workflow: [], set: [] });
   fetchWorkflowSets.mockResolvedValue({ hand_made: [] });
   listCharacters.mockResolvedValue([]);
   setWorkflowInputs.mockResolvedValue({ inputs: [] });
@@ -6235,5 +6241,51 @@ describe("Open in ComfyUI", () => {
     const [body] = openWorkflowRun.mock.calls[0];
     expect(body.picture_ids).toEqual([42]);
     expect(body.target).toBe(KEY);
+  });
+});
+
+describe("favourites lead the Run popup's pickers (#1578)", () => {
+  const ALPHA = `auto:${"c".repeat(64)}`;
+  const MIRA = "s".repeat(64);
+  const FILM = "t".repeat(64);
+
+  it("the card being run stays first; a favourite workflow leads the rest", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: KEY, name: "Krea 2" },
+        { id: ALPHA, name: "Alpha" },
+        { id: OTHER, name: "Beta" },
+      ],
+    });
+    listFavourites.mockResolvedValue({ model: [], workflow: [OTHER], set: [] });
+    const wrapper = await mountRun({ kind: "selection", pictureIds: [1, 2], pickWorkflow: true });
+    wrapper.vm.workflowId = KEY;
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([KEY, OTHER, ALPHA]);
+  });
+
+  it("with no favourite workflow the list is the cards' own order", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: KEY, name: "Krea 2" },
+        { id: ALPHA, name: "Alpha" },
+        { id: OTHER, name: "Beta" },
+      ],
+    });
+    const wrapper = await mountRun({ kind: "selection", pictureIds: [1, 2], pickWorkflow: true });
+    wrapper.vm.workflowId = KEY;
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([KEY, ALPHA, OTHER]);
+  });
+
+  it("a favourite LoRA leads, and the rest stay alphabetical", async () => {
+    listFavourites.mockResolvedValue({ model: [MIRA], workflow: [], set: [] });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.adapterOptions.map((o) => o.value)).toEqual([MIRA, FILM]);
+  });
+
+  it("with no favourite LoRA the options are alphabetical, as before", async () => {
+    const wrapper = await mountRun();
+    expect(wrapper.vm.adapterOptions.map((o) => o.value)).toEqual([FILM, MIRA]);
   });
 });

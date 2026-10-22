@@ -308,6 +308,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         "/api/v1/dedup/mixed-stacks",
         "/api/v1/dedup/policy",
         "/api/v1/dedup/sweep/policy",
+        "/api/v1/favourites",
         "/api/v1/insights",
         "/api/v1/libraries",
         "/api/v1/model-folders",

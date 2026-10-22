@@ -88,9 +88,15 @@ import { VMenu } from "vuetify/components";
 
 import { fetchWorkflowSets } from "../../api/modelShelf";
 import { planSetClones } from "../../api/workflows";
+import { useFavouritesStore } from "../../stores/useFavouritesStore";
 import { loraBase } from "../../utils/loraChain";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
-import { handMadeName, headName, setGroups } from "../../utils/workflowSets";
+import {
+  favouriteSetsFirst,
+  handMadeName,
+  headName,
+  setGroups,
+} from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 
 // The root is a wrapper round the menu, whose content is teleported: what the
@@ -127,6 +133,8 @@ const props = defineProps({
  */
 const emit = defineEmits(["use"]);
 
+const favourites = useFavouritesStore();
+favourites.ensureLoaded();
 const open = ref(false);
 const root = ref(null);
 /** The button itself, as the page has it. */
@@ -252,10 +260,20 @@ function fillOf(plan) {
   });
 }
 
+/**
+ * The sets in the order they are drawn: hand-made first, a favourite leading
+ * inside each group. Null while the sets are unread.
+ */
+const rankedSets = computed(
+  () =>
+    sets.value &&
+    favouriteSetsFirst(sets.value, (key) => favourites.isFavourite("set", key)),
+);
+
 /** The rows as drawn, or null while the sets are unread. */
 const rows = computed(
   () =>
-    sets.value?.map((set) => {
+    rankedSets.value?.map((set) => {
       const fill = fillOf(set.plan);
       const wontLoad = set.plan.fit === "wont_load";
       const meta = wontLoad

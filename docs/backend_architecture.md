@@ -584,6 +584,8 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/dedup/verdicts/keep-separate                                          | dedup           | Record that a group is not duplicates                       |
 | POST   | /api/v1/dedup/verdicts/reopen                                                 | dedup           | Return a decided group to the queue                         |
 | POST   | /api/v1/dedup/verdicts/stack                                                  | dedup           | Stack a duplicate group                                     |
+| GET    | /api/v1/favourites                                                            | favourites      | The owner's favourites                                      |
+| PUT    | /api/v1/favourites                                                            | favourites      | Mark or unmark favourites                                   |
 | GET    | /api/v1/insights                                                              | insights        | Findings about the library, read-only                       |
 | GET    | /api/v1/libraries                                                             | libraries       | List registered libraries                                   |
 | POST   | /api/v1/libraries                                                             | libraries       | Add a library                                               |
@@ -10352,6 +10354,18 @@ like every shelf table), read and written by
   served was removed in #1972: a model the pictures use joins the set by
   itself, and the owner removes what does not belong. The template offer
   (#1999, below) is what a set is still offered.
+- **Favourites are per hub, keyed by stable identity (#1578).** One hub table,
+  `favourite(kind, key, created_at)`, for three kinds: `model` by sha256 (so a
+  forget and re-add keeps it; an unhashed checkpoint cannot be one until it is
+  hashed), `workflow` by card key, `set` by the grid's set key (`hand:<id>`,
+  `model:<head id>`). Unlike a hide it is not per library: all three are facts
+  about the machine. `GET /favourites` answers every key per kind and
+  `PUT /favourites` (`{kind, keys, favourite}`) marks or unmarks, answering
+  the same; both `owner_only` (`routes/favourites.py`). Nothing resolves or
+  purges a key: one that names nothing today is kept, so a favourite comes
+  back with its model. The server stores the choice only; the ranking
+  (favourites lead inside each group, never across one) is the client's
+  (`favouritesFirst`, exported beside `useFavouritesStore` in `stores/useFavouritesStore.js`, frontend §4).
 - **Clone with new models reads them first.** `propose_companions` lists, ahead
   of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
   checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,

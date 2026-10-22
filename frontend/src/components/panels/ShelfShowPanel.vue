@@ -36,6 +36,24 @@
         />
       </div>
 
+      <!-- Above the kinds, with the name: a narrowing, never a re-sort, and not
+           restored on startup like the other one-off questions below. The count
+           is the favourites the shelf holds, so the box says whether it does
+           anything before it is ticked. -->
+      <div class="tbm-section">
+        <label class="tbm-check fm-check" data-testid="shelf-show-favourites">
+          <input
+            type="checkbox"
+            :checked="filters.favouritesOnly"
+            @change="
+              store.setFilters({ favouritesOnly: $event.target.checked })
+            "
+          />
+          <span class="fm-check-label">Favourites only</span>
+          <span class="fm-n">{{ store.favouriteModelCount }}</span>
+        </label>
+      </div>
+
       <div
         v-for="section in sections"
         :key="section.kinds[0]"

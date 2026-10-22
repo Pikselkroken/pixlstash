@@ -1226,6 +1226,7 @@ import {
   workflowCoverUrl,
 } from "../../api/workflows";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
+import { useFavouritesStore, favouritesFirst } from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
@@ -1341,6 +1342,8 @@ let readAsk = 0;
 const runDialog = useRunDialogStore();
 const entityLists = useEntityListsStore();
 const workflows = useWorkflowsStore();
+const favourites = useFavouritesStore();
+favourites.ensureLoaded();
 
 const loading = ref(false);
 const loadFailed = ref("");
@@ -2683,31 +2686,43 @@ function followLora(key) {
   if (free) row.sha256 = free.sha256;
 }
 
+/** A workflow option leads when its card is a favourite (`workflow` key). */
+const favouriteWorkflow = (option) =>
+  favourites.isFavourite("workflow", option.value);
+
 const workflowOptions = computed(() => {
   const fits = loraFits.value;
   if (fits) {
     // Matches first, then the workflows whose base model nobody has read,
     // said so: they may fit, and hiding them would hide every workflow on a
-    // model the shelf has not identified.
+    // model the shelf has not identified. A favourite leads inside each.
     const known = fits.loras.some((lora) => lora.base_model_family);
     return [
-      ...fits.match.map((entry) => ({ value: entry.card.id, label: entry.card.name })),
-      ...fits.unknown.map((entry) => ({
-        value: entry.card.id,
-        label:
-          known && !entry.checkpoint?.base_model_family
-            ? `${entry.card.name} (base model not known)`
-            : entry.card.name,
-      })),
+      ...favouritesFirst(
+        fits.match.map((entry) => ({ value: entry.card.id, label: entry.card.name })),
+        favouriteWorkflow,
+      ),
+      ...favouritesFirst(
+        fits.unknown.map((entry) => ({
+          value: entry.card.id,
+          label:
+            known && !entry.checkpoint?.base_model_family
+              ? `${entry.card.name} (base model not known)`
+              : entry.card.name,
+        })),
+        favouriteWorkflow,
+      ),
     ];
   }
-  const rows = card.value ? [{ value: card.value.id, label: card.value.name }] : [];
+  // The card being run stays first; the rest lead with their favourites.
+  const first = card.value ? [{ value: card.value.id, label: card.value.name }] : [];
+  const rest = [];
   for (const row of props.source?.pickWorkflow ? cards.value : []) {
-    if (!rows.some((option) => option.value === row.id)) {
-      rows.push({ value: row.id, label: row.name });
+    if (![...first, ...rest].some((option) => option.value === row.id)) {
+      rest.push({ value: row.id, label: row.name });
     }
   }
-  return rows;
+  return [...first, ...favouritesFirst(rest, favouriteWorkflow)];
 });
 
 /**
@@ -2716,18 +2731,27 @@ const workflowOptions = computed(() => {
  * (`optionsFor`).
  */
 const adapterOptions = computed(() =>
-  [
-    ...adapters.value,
-    // An attached LoRA the shelf classes `unknown` is not in `adapters`,
-    // which reads `file_kind=adapter` only.
-    ...attachedLoras.value.filter(
-      (row) => !adapters.value.some((adapter) => adapter.sha256 === row.sha256),
-    ),
-  ]
-    .filter((adapter) => adapter?.sha256 && !adapter.hidden)
-    .map(adapterOption)
-    .sort((a, b) => a.label.localeCompare(b.label)),
+  favouriteModelsFirst(
+    [
+      ...adapters.value,
+      // An attached LoRA the shelf classes `unknown` is not in `adapters`,
+      // which reads `file_kind=adapter` only.
+      ...attachedLoras.value.filter(
+        (row) => !adapters.value.some((adapter) => adapter.sha256 === row.sha256),
+      ),
+    ]
+      .filter((adapter) => adapter?.sha256 && !adapter.hidden)
+      .map(adapterOption)
+      .sort((a, b) => a.label.localeCompare(b.label)),
+  ),
 );
+
+/** A LoRA option leads when it is a favourite model; the rest keep their order. */
+function favouriteModelsFirst(options) {
+  return favouritesFirst(options, (option) =>
+    favourites.isFavourite("model", option.value),
+  );
+}
 
 function adapterOption(adapter) {
   return {
@@ -2859,7 +2883,9 @@ function personLoraOptions(row) {
       .filter((other) => other.person != null && other.key !== row.key)
       .map((other) => other.sha256),
   );
-  return own.filter((lora) => !taken.has(lora.sha256)).map(adapterOption);
+  return favouriteModelsFirst(
+    own.filter((lora) => !taken.has(lora.sha256)).map(adapterOption),
+  );
 }
 
 /**

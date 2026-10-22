@@ -1412,8 +1412,9 @@ describe("the Unsaved badge", () => {
       origin_category: "comfyui",
       unsaved_changes: 2,
     }).find(".wf-card__start");
+    // The favourite heart leads the row (#1578); the two badges follow it.
     expect(
-      [...start.element.children].map((el) => el.dataset.testid),
+      [...start.element.children].slice(1).map((el) => el.dataset.testid),
     ).toEqual(["wf-card-comfyui", "wf-card-unsaved"]);
   });
 
@@ -1521,5 +1522,58 @@ describe("a draft", () => {
     const wrapper = mountCard({ ...draft, draft: false });
     expect(wrapper.find('[data-testid="wf-card-draft"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("Run it…");
+  });
+});
+
+// #1578: the heart, shown with its activator rendered (the stub above drops it).
+const ActivatorTooltip = {
+  template: '<span><slot name="activator" :props="{}" /></span>',
+};
+const mountFav = (card, props = {}) =>
+  mount(WorkflowCard, {
+    props: { card, ...props },
+    global: { stubs: { Tooltip: ActivatorTooltip } },
+  });
+const heart = (w) => w.find('[data-testid="favourite-heart"]');
+
+describe("the favourite heart (#1578)", () => {
+  const base = { id: "w", name: "Flux", picture_count: 2, covers: [] };
+
+  it("is filled when the workflow is a favourite, and outlined when not", () => {
+    const on = mountFav(base, { favourite: true });
+    expect(heart(on).attributes("aria-pressed")).toBe("true");
+    expect(heart(on).text()).toBe("mdi-heart");
+    expect(heart(on).classes()).not.toContain("fav-heart--off");
+
+    const off = mountFav(base);
+    expect(heart(off).attributes("aria-pressed")).toBe("false");
+    expect(heart(off).text()).toBe("mdi-heart-outline");
+    expect(heart(off).classes()).toContain("fav-heart--off");
+  });
+
+  it("leads the top-start row, on a card with no pictures too", () => {
+    const empty = mountFav({ ...base, picture_count: 0 });
+    const start = empty.find(".wf-card__start").element;
+    expect(start.firstElementChild.contains(heart(empty).element)).toBe(true);
+    expect(empty.find(".wf-card__cover--empty").exists()).toBe(true);
+    expect(heart(empty).exists()).toBe(true);
+  });
+
+  it("is named in the card's accessible name only while it is one", () => {
+    expect(mountFav(base, { favourite: true }).attributes("aria-label")).toContain(
+      "Favourite",
+    );
+    expect(mountFav(base).attributes("aria-label")).not.toContain("Favourite");
+  });
+
+  it("asks the view to toggle the card, and does not bubble a click", async () => {
+    const wrapper = mountFav(base);
+    await heart(wrapper).trigger("click");
+    expect(wrapper.emitted("toggle-favourite")).toHaveLength(1);
+    expect(wrapper.emitted("run")).toBeUndefined();
+  });
+
+  it("the card carries the fav-host class the outline reveals on", () => {
+    expect(mountFav(base).classes()).toContain("fav-host");
   });
 });
