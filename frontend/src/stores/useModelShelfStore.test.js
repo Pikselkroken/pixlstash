@@ -3572,6 +3572,16 @@ describe("sets from pictures are hidden, never deleted", () => {
     ]);
   });
 
+  it("favourites a selected missing-base card by its own key", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    store.selectMissing("missing:gone.safetensors");
+    expect(store.favouriteTargets()).toEqual([
+      { kind: "set", keys: ["missing:gone.safetensors"] },
+    ]);
+  });
+
   it("hiding an open hand-made tray never deletes that set", async () => {
     useOperationStore().setLocalReceiptHost(true);
     const store = await openOn([handSet(7)]);

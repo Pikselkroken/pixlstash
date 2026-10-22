@@ -2066,4 +2066,19 @@ describe("favourites (#1578)", () => {
     await flush();
     expect(cardKeys(wrapper)).toEqual(["b", "e"]);
   });
+
+  it("under Favourites only, H on a selected favourite drops it from the selection", async () => {
+    server.workflow = ["c", "d"];
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.setFilters({ favouritesOnly: true });
+    await flush();
+    await wrapper.find('[data-key="c"]').trigger("click");
+    await wrapper.find('[data-key="d"]').trigger("click", { ctrlKey: true });
+    expect(store.selectedKeys).toEqual(["c", "d"]);
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "h" });
+    await flush();
+    expect(setFavourites).toHaveBeenCalledWith("workflow", ["c", "d"], false);
+    expect(store.selectedKeys).toEqual([]);
+  });
 });
