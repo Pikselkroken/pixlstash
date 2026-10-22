@@ -123,7 +123,8 @@
               @update:model-value="store.setSortKey"
             />
           </div>
-          <div class="tbm-section">
+          <!-- Templates are not favourites; the box is Mine's alone. -->
+          <div v-if="!onTemplates" class="tbm-section">
             <label class="tbm-check fm-check">
               <input
                 type="checkbox"

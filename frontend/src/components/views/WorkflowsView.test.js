@@ -2059,6 +2059,23 @@ describe("favourites (#1578)", () => {
     expect(useWorkflowsStore().selectedKeys).toEqual([]);
   });
 
+  it("offers Favourites first in Sort on Mine only, since templates are not favourites", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    const wrapper = await grid();
+    const box = () =>
+      wrapper.findAll(".fm-check-label").filter((el) => el.text() === "Favourites first");
+    wrapper.vm.sortMenuOpen = true;
+    await flush();
+    expect(box()).toHaveLength(1);
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    wrapper.vm.sortMenuOpen = true;
+    await flush();
+    // The menu is open on Templates too: its own sort keys are drawn.
+    expect(wrapper.text()).toContain("Sort by");
+    expect(box()).toHaveLength(0);
+  });
+
   it("Favourites only narrows the grid to the favourites, in the sort's order", async () => {
     server.workflow = ["e", "b"];
     const wrapper = await grid();
