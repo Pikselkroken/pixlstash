@@ -2372,9 +2372,10 @@ class RunResult(BaseModel):
         default_factory=list,
         description=(
             "One entry per submission: workflow_id, run_id, prompt_id and "
-            "status. status is queued (sent to ComfyUI) or waiting (held by "
+            "status. status is queued (sent to ComfyUI), waiting (held by "
             "PixlStash until the GPU has room; prompt_id is then null, and "
-            "the run is followed by its run_id)."
+            "the run is followed by its run_id) or failed (ComfyUI took it "
+            "but named no prompt)."
         ),
     )
     error: str | None = Field(
@@ -8131,7 +8132,9 @@ def create_router(server) -> APIRouter:
                         except BaseException:
                             vram_lease.release()
                             raise
-                        status = "queued"
+                        # None: ComfyUI took it but named no prompt, which
+                        # `_dispatch_run` has recorded as the run's failure.
+                        status = "queued" if prompt_id else "failed"
                     else:
                         # No room: held here, not in ComfyUI's queue, and sent
                         # once the arbiter grants it (`_dispatch_held_run`).

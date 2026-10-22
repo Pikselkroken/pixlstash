@@ -13925,6 +13925,21 @@ def test_a_held_run_comfyui_refuses_on_grant_fails_with_comfyuis_words(held):
     assert not held.arbiter.leases(Tenant.COMFYUI), "the failed run kept its lease"
 
 
+def test_a_run_comfyui_takes_without_naming_a_prompt_answers_failed(held):
+    held.runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_submit_comfyui_prompt",
+        lambda base_url, workflow_instance, client_id=None: {"node_errors": {}},
+    )
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    (prompt,) = r.json()["prompts"]
+    assert (prompt["status"], prompt["prompt_id"]) == ("failed", None)
+    outcome = held.owner.get(f"{API}/workflows/runs/{prompt['run_id']}").json()
+    assert outcome["status"] == "failed"
+    assert not held.arbiter.leases(Tenant.COMFYUI), "the failed run kept its lease"
+
+
 def test_abort_cancels_the_runs_waiting_for_the_gpu(held):
     blocker = _hold_the_card(held.arbiter)
     r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})

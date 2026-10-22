@@ -614,7 +614,7 @@ function togglePixl() {
   }
 }
 
-/** The fold's mark pulses while any of its tasks is on the GPU, not stopped. */
+/** The fold's mark pulses while any of its tasks runs, on the GPU or the CPU: not stopped. */
 function pixlstashRunning(entry) {
   return entry.children.some((child) => !child.stopped);
 }

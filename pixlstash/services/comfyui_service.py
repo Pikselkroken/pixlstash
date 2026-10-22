@@ -2066,9 +2066,10 @@ def _process_comfyui_outputs(
         if settled:
             return
         settled = True
-        peak = sampler.stop() if sampler is not None else None
+        # First, so nothing below can keep the card from the other tenants.
         if vram_lease is not None:
             vram_lease.release()
+        peak = sampler.stop() if sampler is not None else None
         if sampler is None or not workflow_id:
             return
         card = ledger().device(vram_lease.device)

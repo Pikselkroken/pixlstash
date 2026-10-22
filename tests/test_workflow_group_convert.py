@@ -1899,18 +1899,28 @@ def test_a_split_gives_every_heir_the_gpu_peaks_and_the_run_alone_flag(tmp_path)
                 "INSERT INTO workflow_vram_policy (workflow_id, exclusive, source, at) "
                 "VALUES ('auto:old', 1, 'oom', '2026-10-02T00:00:00')"
             )
+            # The last heir's own run, alike but for the card: not a copy.
+            conn.execute(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES ('auto:b', 'm', 'Other GPU', 24576, 9000, 'torch_reserved', "
+                "'completed', '2026-10-01T00:00:00')"
+            )
             # A split: a copy for the first heir (twice, as a re-run would),
             # then the move to the last.
             _carry_group_state(conn, "auto:old", "auto:a", keep=True)
             _carry_group_state(conn, "auto:old", "auto:a", keep=True)
             _carry_group_state(conn, "auto:old", "auto:b")
-        for heir in ("auto:a", "auto:b"):
+        for heir, expected in (
+            ("auto:a", [9000, 9500]),
+            ("auto:b", [9000, 9000, 9500]),
+        ):
             peaks = hub.fetchall(
                 "SELECT peak_mb FROM workflow_vram_peak WHERE workflow_id = ? "
                 "ORDER BY peak_mb",
                 (heir,),
             )
-            assert [row[0] for row in peaks] == [9000, 9500], heir
+            assert [row[0] for row in peaks] == expected, heir
             policy = hub.fetchone(
                 "SELECT source FROM workflow_vram_policy WHERE workflow_id = ?",
                 (heir,),

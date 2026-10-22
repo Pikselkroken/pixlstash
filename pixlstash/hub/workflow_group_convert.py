@@ -1777,7 +1777,9 @@ def _carry_group_state(
         "measured_by, outcome, at FROM workflow_vram_peak AS p WHERE "
         "workflow_id = ? AND NOT EXISTS (SELECT 1 FROM workflow_vram_peak AS h "
         "WHERE h.workflow_id = ? AND h.at = p.at AND h.peak_mb = p.peak_mb "
-        "AND h.model_set = p.model_set)",
+        "AND h.model_set = p.model_set AND h.device_name = p.device_name "
+        "AND h.device_total_mb = p.device_total_mb "
+        "AND h.measured_by = p.measured_by AND h.outcome = p.outcome)",
         (heir, group, heir),
     )
     if not keep:
