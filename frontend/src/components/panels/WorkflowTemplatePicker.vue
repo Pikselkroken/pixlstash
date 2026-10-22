@@ -357,11 +357,13 @@ watch(
     partialDepth.value = PARTIAL_DEPTH;
     // The field mounts with the menu, and takes focus only once the menu's
     // entry transition lets it: a focus() before that is silently dropped,
-    // so it is checked rather than assumed.
+    // so it is checked rather than assumed. Against the field's own document,
+    // never the global: the tries can outlive a test's environment.
     for (let tries = 0; tries < 30 && props.open && !unmounted; tries += 1) {
       await nextTick();
-      fieldRef.value?.focus();
-      if (fieldRef.value && document.activeElement === fieldRef.value) return;
+      const field = fieldRef.value;
+      field?.focus();
+      if (field && field.ownerDocument.activeElement === field) return;
       await new Promise((resolve) => setTimeout(resolve, 16));
     }
   },
