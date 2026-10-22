@@ -75,6 +75,7 @@ from pixlstash.services import workflow_set_verdicts as verdicts
 from pixlstash.services import workflow_templates
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 from tests.network_vectors import LAN_IPV4
+from tests.test_model_downloads import serve_bytes
 from tests.test_model_folder_scanner import write_adapter, write_checkpoint
 from tests.utils import bearer_client, mint_read_token, quiesce_background_work
 
@@ -3718,6 +3719,92 @@ def test_exactly_one_folder_is_the_default_and_it_moves(shelf_env, tmp_path):
     )
     assert r.status_code == 200, r.text
     assert defaults() == []
+
+
+def test_downloads_follow_the_default_until_a_folder_is_marked(shelf_env, tmp_path):
+    """The download folder is the default folder until the owner marks one;
+    unmarking hands it back, and a folder taken from cannot be it."""
+    ids = [
+        shelf_env.owner.post(
+            f"{API}/model-folders",
+            json={"path": _new_folder_path(str(tmp_path), name)},
+        ).json()["id"]
+        for name in ("default", "downloads-here")
+    ]
+
+    def targets():
+        rows = shelf_env.owner.get(f"{API}/model-folders").json()["folders"]
+        return [row["id"] for row in rows if row["is_download_target"]]
+
+    shelf_env.owner.patch(f"{API}/model-folders/{ids[0]}", json={"is_default": True})
+    assert targets() == [ids[0]]
+    r = shelf_env.owner.patch(
+        f"{API}/model-folders/{ids[1]}", json={"is_download_target": True}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["is_download_target"] is True
+    assert targets() == [ids[1]]
+    # Unmarking another folder leaves the mark where it is.
+    shelf_env.owner.patch(
+        f"{API}/model-folders/{ids[0]}", json={"is_download_target": False}
+    )
+    assert targets() == [ids[1]]
+    shelf_env.owner.patch(
+        f"{API}/model-folders/{ids[1]}", json={"is_download_target": False}
+    )
+    assert targets() == [ids[0]]
+
+    source_id = shelf_env.owner.post(
+        f"{API}/model-folders",
+        json={"path": _new_folder_path(str(tmp_path), "src"), "kind": "source"},
+    ).json()["id"]
+    r = shelf_env.owner.patch(
+        f"{API}/model-folders/{source_id}", json={"is_download_target": True}
+    )
+    assert r.status_code == 400, r.text
+    assert targets() == [ids[0]]
+
+
+def test_a_model_download_lands_on_the_shelf_and_is_reported(shelf_env, tmp_path):
+    """Started over the API, followed in /workers/progress, registered when done."""
+    folder = _new_folder_path(str(tmp_path), "dl")
+    folder_id = shelf_env.owner.post(
+        f"{API}/model-folders", json={"path": folder}
+    ).json()["id"]
+    shelf_env.owner.patch(
+        f"{API}/model-folders/{folder_id}", json={"is_download_target": True}
+    )
+    os.makedirs(os.path.join(folder, "loras"))
+    source = tmp_path / "source.safetensors"
+    write_adapter(source)
+    with serve_bytes(source.read_bytes()) as url:
+        r = shelf_env.owner.post(
+            f"{API}/model-downloads",
+            json={"url": url, "file": "Fetched.safetensors", "folder": "loras"},
+        )
+        assert r.status_code == 200, r.text
+        download_id = r.json()["id"]
+        deadline = time.monotonic() + 20
+        while True:
+            progress = shelf_env.owner.get(f"{API}/workers/progress").json()
+            mine = [d for d in progress["downloads"] if d["id"] == download_id]
+            assert mine, progress["downloads"]
+            if mine[0]["status"] != "running" or time.monotonic() > deadline:
+                break
+            time.sleep(0.1)
+    assert mine[0]["status"] == "done", mine
+    assert os.path.isfile(os.path.join(folder, "loras", "Fetched.safetensors"))
+    row = shelf_env.server.hub.fetchone(
+        "SELECT model_id FROM model_file WHERE model_folder_id = ? AND relpath = ?",
+        (folder_id, "loras/Fetched.safetensors"),
+    )
+    assert row is not None and row["model_id"] == mine[0]["model_id"]
+
+    r = shelf_env.owner.post(
+        f"{API}/model-downloads",
+        json={"url": "ftp://example.com/x.safetensors", "file": "x.safetensors"},
+    )
+    assert r.status_code == 400, r.text
 
 
 def test_a_patch_whose_second_write_fails_moves_no_default(shelf_env, tmp_path):

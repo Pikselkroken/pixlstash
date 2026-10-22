@@ -342,7 +342,8 @@ CREATE TABLE IF NOT EXISTS model_folder (
     delete_after_import  INTEGER,
     last_checked         TEXT,
     created_at           TEXT,
-    is_default           INTEGER NOT NULL DEFAULT 0
+    is_default           INTEGER NOT NULL DEFAULT 0,
+    is_download_target   INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -2066,6 +2067,18 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_model_folder_single_default "
         "ON model_folder(is_default) WHERE is_default = 1"
+    )
+    # Where a model PixlStash downloads goes, the same way again. 0 everywhere
+    # means "the default folder", so a hub from before the column sends
+    # downloads where Add file sends a file.
+    if "is_download_target" not in folder_columns:
+        conn.execute(
+            "ALTER TABLE model_folder ADD COLUMN "
+            "is_download_target INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_model_folder_single_download_target "
+        "ON model_folder(is_download_target) WHERE is_download_target = 1"
     )
     # At most one Downloads folder, held by the database for the same reason:
     # two registrations racing past the route's own check must not both land.

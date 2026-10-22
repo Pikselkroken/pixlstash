@@ -772,6 +772,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # owner's files, which is the unlink of POST /model-moves without the copy
     # that justifies it, so it sits on the same tier as every other shelf route
     # that writes the host filesystem.
+    # ── model_downloads.py ────────────────────────────────────────────────
+    ("POST", "/api/v1/model-downloads"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 fetches a file from a caller-supplied http(s) link and writes it into the registered download folder, registering it - POST /model-files' file-writing class with the read coming off the network instead of the disk; takes no host path, the name is contained against the folder and must carry a shelf suffix; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
+    # Stops a download and discards its own partial file; returns nothing but
+    # whether one was running.
+    ("POST", "/api/v1/model-downloads/{download_id}/cancel"): RoutePolicy(_OWNER),
     ("POST", "/api/v1/model-files/delete"): RoutePolicy(
         _LOCAL,
         justification="§16.3 unlinks the owner's model files (OS trash by default, permanent on request) out of registered host folders - the unlink half of POST /model-moves standing alone, and the shelf's only destructive verb. Takes no host path: the ids address rows the scanner wrote, every path is contained against its registered folder - lexically for the file so a symlinked model loses its link and not the bytes it points at, and by realpath for the directory holding it so no symlinked component can redirect the unlink (`_contained_path`) - and only `user` and `managed` folders are eligible, so PixlStash's own engine roots, the InsightFace packs and the shared HuggingFace cache are refused whole; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
