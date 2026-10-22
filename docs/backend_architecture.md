@@ -10625,9 +10625,21 @@ nothing for it.
   (the catalogue category's type; `edit` for an image template tagged as one),
   tags, minimum ComfyUI version, size, usage, and `files`, every
   `properties.models` entry on its nodes, subgraphs included. Templates that
-  download nothing (the paid API ones) are left out, and so are the graphs
-  (#2000 will want them). Refreshing it is rerunning the script; no scheduled
-  job does it yet.
+  download nothing (the paid API ones) are left out. It also keeps
+  `description`, `open_source` and `requires_custom_nodes` (a node whose
+  `cnr_id` is a pack other than `comfy-core`: a flag the picker shows, never a
+  filter), and each kept template's graph, minified, as
+  `pixlstash/data/workflow_templates/<name>.json` for #2000 to make workflows
+  from; nothing reads those yet. A template name that is not a plain file name
+  is skipped, since the package is not ours.
+- **Refreshed weekly by a bot PR** (#1999):
+  `.github/workflows/template-suggestions.yml` (Monday cron plus
+  `workflow_dispatch`) reruns the script against the latest release on
+  `develop` and opens or updates one PR on the fixed branch
+  `bot/workflow-templates` through `peter-evans/create-pull-request`, with the
+  release bot's token so the gate runs. No change, no PR. The body is
+  `--summary`'s Markdown (templates added, removed, whose files changed, whose
+  graph changed), written to a file, so no package text reaches a shell.
 - **A file is on the shelf by name.** A model with a `present` copy whose
   filename or copy basename matches, case folded; failing that, one whose name
   matches once the quant postfix is gone (`model_utils.quantless_name`, the
@@ -10650,6 +10662,19 @@ nothing for it.
   `GET /models/workflow-sets` carries the count as `templates_new_ready` for the
   New tile's line; nothing else expires, and a complete template stays first in
   the picker however old the download.
+- **A set holding a head is offered the rest of its template** (#1999 §3).
+  `attach_template_offers`, after `attach_hand_made` in the routes'
+  `_workflow_sets`, fills `offer` on a set that has an on-shelf checkpoint and
+  no pictures' offer: of the templates whose head matches one of its
+  checkpoints by name (another quant counting), the closest (the one it was
+  made from, then fewest files lacking, then fewest held only as another quant,
+  then usage) is offered and the rest named in `others`. Only the head
+  triggers it, so a shared VAE suggests nothing. Its files the set lacks come
+  as `models` (on the shelf, hashed, not an engine: added as the merge offer's
+  are) and `downloads` (`{name, url, directory, slot, sha256}`), with
+  `source: "template"` and empty picture counts. Keep separate is the same
+  declines list: a download's `sha256` is `file_decline_key`, the sha256 of
+  its folded name, since it has no bytes. Nothing left to offer, no offer.
 - **A newer ComfyUI is a flag.** The route asks the owner's configured ComfyUI
   for its version (`probe_comfyui`, one second) and sets `needs_comfyui` on a
   template that wants a newer one. A set is only files, so making one is never

@@ -20,6 +20,13 @@ once. A template with no head is a row of its own.
 file of the template, a namesake counting as the file. A set made from the
 template covers it whatever it holds since.
 
+**A set with a head is offered the rest of its template** (#1999 §3), on the
+merge offer's own surface (:func:`attach_template_offers`): the files of the
+closest template whose head the set holds, the ones on the shelf to add and the
+rest with their download page. A pictures' offer goes first; Keep separate is
+the same ``declines`` list, a file off the shelf kept out by
+:func:`file_decline_key`.
+
 **Nothing is stored for the offer.** The only state is ``model.arrived_at``,
 written by the Downloads intake, and ``model_workflow_set.template``. A template
 is *new* while its head arrived in the last :data:`NEW_WINDOW`; that only drives
@@ -28,6 +35,7 @@ the New tile's line, and a complete template stays offered however old it is.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -35,9 +43,9 @@ from pathlib import Path
 from typing import Optional
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.model_workflow_sets import SLOT_CHECKPOINT, _lacks
+from pixlstash.services.model_workflow_sets import SLOT_CHECKPOINT, SLOTS, _lacks
 from pixlstash.services.workflow_hash import normalized_filename
-from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_UNKNOWN
+from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_ENGINE, FILE_UNKNOWN
 from pixlstash.utils.model_utils import quantless_name as _quantless_name
 
 logger = get_logger(__name__)
@@ -85,7 +93,7 @@ def _shelf(hub) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
     by_name: dict[str, list[dict]] = {}
     for row in hub.fetchall(
         "SELECT m.id, m.filename, m.display_name, m.file_kind, m.file_size, "
-        "m.arrived_at, f.relpath FROM model m "
+        "m.arrived_at, m.sha256, f.relpath FROM model m "
         "JOIN model_file f ON f.model_id = m.id AND f.state = 'present'"
     ):
         model = by_id.setdefault(
@@ -93,6 +101,8 @@ def _shelf(hub) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
             {
                 "id": row["id"],
                 "filename": row["filename"] or normalized_filename(row["relpath"]),
+                "display_name": row["display_name"],
+                "sha256": row["sha256"],
                 "kind": row["file_kind"],
                 "file_size": row["file_size"],
                 "arrived_at": row["arrived_at"],
@@ -147,6 +157,7 @@ def _file(entry: dict, by_name, by_quantless) -> dict:
         "file_size": model["file_size"] if model else None,
         "_ids": [m["id"] for m in models],
         "_arrived_at": model["arrived_at"] if model else None,
+        "_model": model,
     }
 
 
@@ -201,7 +212,7 @@ def _variant(template: dict, by_name, by_quantless, sets, now) -> dict:
     complete = on_shelf == len(files)
     arrived_at = head["_arrived_at"] if head else None
     for f in files:
-        del f["_ids"], f["_arrived_at"]
+        del f["_ids"], f["_arrived_at"], f["_model"]
     return {
         "name": template["name"],
         "title": template["title"],
@@ -209,6 +220,7 @@ def _variant(template: dict, by_name, by_quantless, sets, now) -> dict:
         "tags": template["tags"],
         "models": template["models"],
         "min_comfyui_version": template.get("min_comfyui_version"),
+        "requires_custom_nodes": bool(template.get("requires_custom_nodes")),
         "size": template.get("size") or 0,
         "usage": template.get("usage") or 0,
         "files": files,
@@ -274,4 +286,125 @@ def template_rows(hub, sets: list[dict], now: Optional[datetime] = None) -> dict
         "version": listing.get("version"),
         "rows": out,
         "new_ready": sum(row["variants"][0]["new"] for row in out),
+    }
+
+
+def file_decline_key(name: str) -> str:
+    """What Keep separate records for a template file not on the shelf.
+
+    The ``declines`` list holds sha256s, and such a file has no bytes to hash,
+    so it is the sha256 of its name instead: the same 64 hex characters, never
+    a real file's digest, and one name answers to it however it is cased.
+    """
+    return hashlib.sha256(
+        f"template-file:{normalized_filename(name)}".encode()
+    ).hexdigest()
+
+
+def attach_template_offers(hub, hand_made: list[dict]) -> None:
+    """Offer each set the rest of its template, where it has no other offer.
+
+    A set holding a template's head (on the shelf; another quant counts) is
+    offered that template's other files: on the shelf as ``models``, to add as
+    the merge offer's are, off it as ``downloads``. Of several templates
+    sharing the head (text to image, edit, an int8 cut) the closest is offered
+    and the rest named in ``others``: the one the set was made from, then the
+    fewest files lacking, then the fewest matched as another quant, then the
+    most used. A file the set holds, kept out (``declined``), still hashing or
+    an engine is not offered; nothing left, no offer.
+
+    Args:
+        hub: the hub holding the shelf.
+        hand_made: :func:`attach_hand_made`'s sets, mutated in place.
+    """
+    waiting = [e for e in hand_made if e["offer"] is None and e["checkpoint_ids"]]
+    if not waiting:
+        return
+    by_name, by_quantless = _shelf(hub)
+    matched = []
+    for template in load_templates()["templates"]:
+        files = [_file(entry, by_name, by_quantless) for entry in template["files"]]
+        head = _head(files)
+        if head and head["on_shelf"]:
+            matched.append((template, files, set(head["_ids"])))
+    for entry in waiting:
+        held = {m["id"] for m in entry["members"] if m["on_shelf"]}
+        heads = set(entry["checkpoint_ids"])
+        candidates = [
+            (_closeness(entry, template, files, held), template, files)
+            for template, files, head_ids in matched
+            if head_ids & heads
+        ]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        (_, template, files), others = candidates[0], candidates[1:]
+        offer = _template_offer(entry, template, files, held)
+        if offer is None:
+            continue
+        offer["others"] = [
+            {"name": t["name"], "title": t["title"]} for _, t, _ in others
+        ]
+        entry["offer"] = offer
+
+
+def _closeness(entry: dict, template: dict, files: list[dict], held: set[int]):
+    lacking = [f for f in files if not set(f["_ids"]) & held]
+    return (
+        entry.get("template") == template["name"],
+        -len(lacking),
+        -sum(bool(f["other_quant"]) for f in files if f not in lacking),
+        template.get("usage") or 0,
+    )
+
+
+def _template_offer(entry, template, files, held) -> Optional[dict]:
+    declined = set(entry["declined"])
+    models, downloads = [], []
+    for f in files:
+        model = f["_model"]
+        if set(f["_ids"]) & held:
+            continue
+        if model is None:
+            key = file_decline_key(f["name"])
+            if key not in declined:
+                downloads.append(
+                    {
+                        "name": f["name"],
+                        "url": f["url"],
+                        "directory": f["directory"],
+                        "slot": f["slot"],
+                        "sha256": key,
+                    }
+                )
+        elif (
+            all(m["id"] != model["id"] for m in models)
+            and model["sha256"]
+            and model["sha256"] not in declined
+            and model["kind"] != FILE_ENGINE
+        ):
+            models.append(
+                {
+                    "id": model["id"],
+                    "sha256": model["sha256"],
+                    "name": model["display_name"] or model["filename"],
+                    "kind": model["kind"],
+                    "slot": f["slot"],
+                    "picture_count": 0,
+                    "recipes": 0,
+                }
+            )
+    if not models and not downloads:
+        return None
+    head = _head(files)
+    return {
+        "source": "template",
+        "template": {"name": template["name"], "title": template["title"]},
+        "head_id": next(i for i in head["_ids"] if i in entry["checkpoint_ids"]),
+        "head_name": head["name"],
+        "picture_count": 0,
+        "recipes": 0,
+        "covers": [],
+        "models": sorted(models, key=lambda m: (SLOTS.index(m["slot"]), m["name"])),
+        "downloads": downloads,
     }

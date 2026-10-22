@@ -139,6 +139,16 @@
                     Needs ComfyUI {{ entry.variant.needs_comfyui }}<Tooltip
                       text="A set is only files, so you can make it now. Running the template's workflow needs this ComfyUI."
                       activator="parent"
+                  /></span
+                  ><span
+                    v-if="entry.variant.requires_custom_nodes"
+                    class="wtp__flag"
+                    ><v-icon size="11" aria-hidden="true"
+                      >mdi-puzzle-outline</v-icon
+                    >
+                    Needs custom nodes<Tooltip
+                      text="A node in this template comes from a pack ComfyUI does not ship. Running it needs that pack installed."
+                      activator="parent"
                   /></span>
                 </div>
               </div>

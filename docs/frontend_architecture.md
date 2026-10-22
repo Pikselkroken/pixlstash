@@ -2007,6 +2007,15 @@ the shelf's workflow sets section) and served as `hand_made` on
 
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.
+- **A template offer is the same surface (#1999).** An `offer` with
+  `source: "template"` asks "The RealVis template loads 3 files this set does
+  not have." (`offerQuestion` → `templateQuestion`); the card answers in place
+  only a single file already on the shelf. The strip lists its `downloads` as
+  links (`https` only, as the picker does), names the `others`, and has no Add
+  when every file is a download. Stop asking keeps the downloads out with the
+  models (`keepOutOfHandMadeSet`); `withShelfNames` keeps an offer of
+  downloads only. The template picker flags `requires_custom_nodes` beside
+  *Needs ComfyUI*.
 - **The merge offer is ghosts in the tray (#1523).** A set the server gives an
   `offer` wears it on the card as a lasting question panel across the cover's
   foot (`offerQuestion`: "1 recipe ran this with a model the set does not

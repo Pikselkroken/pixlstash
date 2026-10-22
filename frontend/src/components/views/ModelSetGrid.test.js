@@ -3211,6 +3211,80 @@ describe("hand-made sets (#1520)", () => {
       ]);
     });
 
+    describe("from a ComfyUI template (#1999)", () => {
+      const VAE = {
+        name: "ae.safetensors",
+        url: "https://example.com/ae.safetensors",
+        directory: "vae",
+        slot: "vae",
+        sha256: "a".repeat(64),
+      };
+      const TEMPLATE_OFFER = {
+        ...OFFER,
+        source: "template",
+        template: { name: "image_realvis", title: "RealVis" },
+        others: [{ name: "image_realvis_edit", title: "RealVis Edit" }],
+        picture_count: 0,
+        recipes: 0,
+        covers: [],
+        models: [{ ...GHOST_LORA, picture_count: 0, recipes: 0 }],
+        downloads: [VAE, { ...VAE, name: "te.bin", url: "", sha256: "b".repeat(64) }],
+      };
+
+      it("names the template, links what to download and lists its siblings", async () => {
+        const { wrapper, store } = await mountOffer({ offer: TEMPLATE_OFFER });
+        const ask = wrapper.find('[data-testid="set-offer"]');
+        expect(ask.text()).toContain(
+          "The RealVis template loads 3 files this set does not have.",
+        );
+        expect(ask.find('[data-testid="set-offer-add"]').exists()).toBe(false);
+        store.toggleSet("hand:10");
+        await wrapper.vm.$nextTick();
+        const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+        expect(strip.text()).toContain("The one on your shelf is dashed below.");
+        expect(strip.text()).toContain("Other templates built around it: RealVis Edit.");
+        const downloads = strip.find('[data-testid="offer-downloads"]');
+        const links = downloads.findAll("a");
+        // Only an https page is a link; a file with none is named, not linked.
+        expect(links.map((a) => a.attributes("href"))).toEqual([VAE.url]);
+        expect(downloads.text()).toContain("te.bin");
+        expect(strip.text()).toContain("Add to set");
+        expect(wrapper.find(".mss__tile--ghost").text()).toContain("template");
+      });
+
+      it("keeps the downloads out with the models on Stop asking", async () => {
+        setWorkflowSetDeclines.mockResolvedValue({
+          set: handSet(10, [SET_CKPT]),
+          previous: [],
+        });
+        const { wrapper } = await mountOffer({ offer: TEMPLATE_OFFER });
+        await wrapper.find('[data-testid="set-offer-no"]').trigger("click");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+          GHOST_LORA.sha256,
+          VAE.sha256,
+          "b".repeat(64),
+        ]);
+      });
+
+      it("offers no Add when every file is a download", async () => {
+        const { wrapper, store } = await mountOffer({
+          offer: { ...TEMPLATE_OFFER, models: [], downloads: [VAE] },
+        });
+        const ask = wrapper.find('[data-testid="set-offer"]');
+        expect(ask.text()).toContain("The RealVis template loads a file this set does not have.");
+        expect(ask.text()).not.toContain("Add it?");
+        store.toggleSet("hand:10");
+        await wrapper.vm.$nextTick();
+        const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+        const labels = strip
+          .findAllComponents({ name: "AppButton" })
+          .map((button) => button.text());
+        expect(labels).toEqual(["Stop asking"]);
+        expect(strip.attributes("aria-label")).not.toContain("Enter adds");
+      });
+    });
+
     it("merges on Enter at the strip, with a receipt that counts who joined and an Undo", async () => {
       addWorkflowSetMembers.mockResolvedValue({
         set: handSet(10, [SET_CKPT], { picture_count: 1204 }),

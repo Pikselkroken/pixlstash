@@ -966,3 +966,29 @@ describe("model list order", () => {
     expect(batches[1].at).toBe((1.8e18 + HOUR_NS) / 1e6);
   });
 });
+
+describe("offerQuestion from a ComfyUI template (#1999)", () => {
+  const offer = {
+    source: "template",
+    template: { name: "image_x", title: "X" },
+    picture_count: 0,
+    recipes: 0,
+    models: [{ id: 6, sha256: "h6", slot: "vae", kind: "vae", name: "ae" }],
+    downloads: [],
+  };
+
+  it("asks about one file on the shelf on the card", () => {
+    expect(offerQuestion({ offer }).text).toBe(
+      "The X template loads a file this set does not have. Add it?",
+    );
+  });
+
+  it("counts downloads but never answers one on the card", () => {
+    const one = { ...offer, models: [], downloads: [{ name: "te.bin", sha256: "k" }] };
+    expect(offerQuestion({ offer: one }).model).toBeNull();
+    const three = { ...offer, downloads: [{ name: "a" }, { name: "b" }] };
+    expect(offerQuestion({ offer: three }).text).toBe(
+      "The X template loads 3 files this set does not have.",
+    );
+  });
+});
