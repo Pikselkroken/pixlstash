@@ -703,6 +703,7 @@ export function handMadeCard(set) {
 export function offerQuestion(set) {
   const offer = set?.offer;
   if (!offer) return null;
+  if (offer.source === "template") return templateQuestion(offer);
   const adds = offer.models.length;
   const who = offer.picture_count
     ? pictureCount(offer.picture_count)
@@ -721,6 +722,34 @@ export function offerQuestion(set) {
           kind: memberKindLabel(one),
           name: one.name,
           // The name has lost its precision; the set may hold its other quant.
+          quant: quantBadge(one.quant)?.label,
+        }
+      : null,
+  };
+}
+
+/**
+ * A template offer (#1999) as the same question: the template is the subject,
+ * and its files the set lacks are counted, on the shelf or not. Only a single
+ * file already on the shelf is answered on the card; a download never is.
+ */
+function templateQuestion(offer) {
+  const adds = offer.models.length + (offer.downloads?.length ?? 0);
+  const one = adds === 1 && offer.models.length === 1 ? offer.models[0] : null;
+  const who = `The ${offer.template.title} template`;
+  const rest =
+    adds === 1
+      ? " loads a file this set does not have."
+      : ` loads ${adds} files this set does not have.`;
+  return {
+    adds,
+    who,
+    rest,
+    text: `${who}${rest}${one ? " Add it?" : ""}`,
+    model: one
+      ? {
+          kind: memberKindLabel(one),
+          name: one.name,
           quant: quantBadge(one.quant)?.label,
         }
       : null,

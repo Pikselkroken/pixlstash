@@ -600,7 +600,13 @@ Rules neither side may drift from:
    the undo. `picture_count` counts this library; `recipes` counts every one.
    The offer reads recipe combinations only: one only ComfyUI ran is covered
    by a set like any other but never offered, since the offer is worded in
-   pictures and recipes. **Hidden sets are the ACTIVE library's own (#1869)**:
+   pictures and recipes. A set with no such offer whose checkpoint is a
+   ComfyUI template's head is offered the rest of that template instead
+   (#1999): the same `offer` with `source: "template"` (`"pictures"`
+   otherwise), `template: {name, title}`, `others` (the templates sharing the
+   head), zero counts and no covers, `models` for its files on the shelf and
+   `downloads: [{name, url, directory, slot, sha256}]` for the rest. A
+   download's `sha256` is the key Keep separate puts in `declines` for it. **Hidden sets are the ACTIVE library's own (#1869)**:
    the payload carries `hidden_sets` (the set keys this library leaves off the
    grid) and `PUT /models/workflow-sets/hidden` (`{keys: [...], hidden}`) sets
    them, answering `{hidden_sets}` - the whole new list, so a hide needs no

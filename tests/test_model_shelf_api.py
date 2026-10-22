@@ -10138,3 +10138,77 @@ def test_merge_refuses_every_share_token(shelf_env, two_copies, fake_trash):
     assert two_copies.second.exists(), "a refused call still removed a copy"
     # Positive control: the owner is not blocked on the same call.
     assert shelf_env.owner.request(method, path, **kwargs).status_code == 200
+
+
+def test_a_set_with_a_template_head_is_offered_the_rest_and_can_answer_it(
+    shelf_env, monkeypatch
+):
+    """#1999 §3 through the routes: the offer is served, its on-shelf model is
+    added by the members route, and a file off the shelf is kept out by the
+    declines route under the key the offer gave it."""
+    monkeypatch.setattr(
+        workflow_templates,
+        "load_templates",
+        lambda: {
+            "version": "test",
+            "templates": [
+                {
+                    "name": "image_base_xl",
+                    "title": "Base XL",
+                    "kind": "image",
+                    "tags": [],
+                    "models": [],
+                    "files": [
+                        {
+                            "name": "base_xl.safetensors",
+                            "url": "",
+                            "directory": "checkpoints",
+                        },
+                        {
+                            "name": "alice.safetensors",
+                            "url": "",
+                            "directory": "loras",
+                        },
+                        {
+                            "name": "base_xl_vae.safetensors",
+                            "url": "https://example.com/base_xl_vae.safetensors",
+                            "directory": "vae",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    ids = shelf_env.model_ids
+    try:
+        made = _new_set(
+            shelf_env,
+            members=[{"model_id": ids["base_xl.safetensors"], "slot": "checkpoint"}],
+        )
+        offer = _hand_made(shelf_env)[made["id"]]["offer"]
+        assert offer["source"] == "template"
+        assert offer["template"] == {"name": "image_base_xl", "title": "Base XL"}
+        assert [(m["id"], m["slot"]) for m in offer["models"]] == [
+            (ids["alice.safetensors"], "lora")
+        ]
+        (download,) = offer["downloads"]
+        assert download["url"] == "https://example.com/base_xl_vae.safetensors"
+
+        r = shelf_env.owner.post(
+            f"{API}/models/workflow-sets/{made['id']}/members",
+            json={"members": [{"model_id": m["id"]} for m in offer["models"]]},
+        )
+        assert r.status_code == 200, r.text
+        offer = _hand_made(shelf_env)[made["id"]]["offer"]
+        assert offer["models"] == [] and offer["downloads"] == [download]
+
+        r = shelf_env.owner.put(
+            f"{API}/models/workflow-sets/{made['id']}/declines",
+            json={"sha256": [download["sha256"]]},
+        )
+        assert r.status_code == 200, r.text
+        entry = _hand_made(shelf_env)[made["id"]]
+        assert entry["offer"] is None
+        assert entry["declined"] == [download["sha256"]]
+    finally:
+        _wipe_sets(shelf_env.server)

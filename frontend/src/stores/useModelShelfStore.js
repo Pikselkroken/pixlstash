@@ -2218,27 +2218,29 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       return (row && modelName(row).text) || model.name;
     };
     // An offer is a list to pick from, so a model this library hides is not
-    // in it, and an offer of nothing else is no offer.
+    // in it, and an offer of nothing else is no offer. A template offer's
+    // downloads (#1999) are files the shelf lacks, so none of them is hidden.
     const offered = (set.offer?.models ?? []).filter(
       (model) => !isHiddenHere(model.id),
     );
     return {
       ...set,
       // The merge offer's models (#1523) are always on the shelf.
-      offer: offered.length
-        ? {
-            ...set.offer,
-            head_name: shelfName({
-              id: set.offer.head_id,
-              name: set.offer.head_name,
-            }),
-            models: offered.map((model) => ({
-              ...model,
-              name: shelfName(model),
-              quant: byId.get(model.id)?.quant ?? null,
-            })),
-          }
-        : null,
+      offer:
+        offered.length || set.offer?.downloads?.length
+          ? {
+              ...set.offer,
+              head_name: shelfName({
+                id: set.offer.head_id,
+                name: set.offer.head_name,
+              }),
+              models: offered.map((model) => ({
+                ...model,
+                name: shelfName(model),
+                quant: byId.get(model.id)?.quant ?? null,
+              })),
+            }
+          : null,
       members: (set.members ?? []).map((member) => {
         const row = member.id != null ? byId.get(member.id) : null;
         const kept = member.label || member.name || "";
@@ -3214,14 +3216,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   function keepOutOfHandMadeSet(set, models) {
     const offer = set.offer;
-    const out = (models ?? offer?.models ?? []).map((m) => m.sha256);
+    // A template offer's downloads are kept out by the key it gave each one.
+    const out = (
+      models ?? [...(offer?.models ?? []), ...(offer?.downloads ?? [])]
+    ).map((m) => m.sha256);
     if (!out.length) return Promise.resolve(null);
     const receipt = models
       ? `Kept ${models.map((m) => m.name).join(", ")} out of "${setLabel(set)}".`
       : `Kept "${setLabel(set)}" separate from ${
-          offer.picture_count
-            ? pictureCount(offer.picture_count)
-            : "those recipes"
+          offer.source === "template"
+            ? `the ${offer.template.title} template`
+            : offer.picture_count
+              ? pictureCount(offer.picture_count)
+              : "those recipes"
         }.`;
     return setWrite(() => changeDeclines(set.id, { add: out }), {
       receipt,

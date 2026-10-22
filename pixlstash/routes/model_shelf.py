@@ -151,7 +151,10 @@ from pixlstash.services.model_workflow_sets import (
     set_declines,
     set_sets_hidden,
 )
-from pixlstash.services.workflow_templates import template_rows
+from pixlstash.services.workflow_templates import (
+    attach_template_offers,
+    template_rows,
+)
 from pixlstash.services.workflow_set_verdicts import (
     fetch_model_marks,
     fetch_set_checks,
@@ -1120,9 +1123,50 @@ class MergeOfferModel(BaseModel):
     recipes: int = Field(description="Recipes, in any library, that used it.")
 
 
-class MergeOffer(BaseModel):
-    """The pictures' set a hand-made set could take in by adding models (#1523)."""
+class TemplateRef(BaseModel):
+    """A ComfyUI template by name, as `GET /models/workflow-templates` lists it."""
 
+    name: str
+    title: str
+
+
+class TemplateDownload(BaseModel):
+    """A template file the shelf lacks, offered with where to get it (#1999)."""
+
+    name: str = Field(description="The file name the template loads.")
+    url: str = Field(description="Its download page, as the template gives it.")
+    directory: str = Field(description="The ComfyUI folder it goes in.")
+    slot: WorkflowSetSlot = Field(description="The slot it would fill.")
+    sha256: str = Field(
+        description="What Keep separate records: the sha256 of its name, not bytes."
+    )
+
+
+class MergeOffer(BaseModel):
+    """What a hand-made set could take in by adding models.
+
+    Either the pictures' set its checkpoint ran in (#1523), or, when there is
+    none, the rest of the ComfyUI template whose head it holds (#1999).
+    """
+
+    source: Literal["pictures", "template"] = Field(
+        default="pictures",
+        description=(
+            "`pictures`: recipes ran the checkpoint with these models. "
+            "`template`: a ComfyUI template built around it loads them."
+        ),
+    )
+    template: Optional[TemplateRef] = Field(
+        default=None, description="With `template`: the template offered."
+    )
+    others: list[TemplateRef] = Field(
+        default_factory=list,
+        description="With `template`: the other templates sharing its head.",
+    )
+    downloads: list[TemplateDownload] = Field(
+        default_factory=list,
+        description="With `template`: its files the shelf lacks.",
+    )
     head_id: int = Field(description="The file the pictures' set is named after.")
     head_name: str
     picture_count: int = Field(
@@ -1614,6 +1658,10 @@ class WorkflowTemplateVariant(BaseModel):
             "The minimum version, set only when the configured ComfyUI "
             "answered with an older one. A set is files, so it is a flag only."
         ),
+    )
+    requires_custom_nodes: bool = Field(
+        default=False,
+        description="A node of it comes from a pack other than ComfyUI's own. A flag.",
     )
     size: int = 0
     usage: int = 0
@@ -2687,9 +2735,11 @@ def create_router(server) -> APIRouter:
         return WorkflowTemplatesResponse(**found, comfyui_version=comfyui_version)
 
     def _workflow_sets() -> dict:
-        return attach_hand_made(
+        found = attach_hand_made(
             server.hub, fetch_workflow_sets(server.hub, server.vault)
         )
+        attach_template_offers(server.hub, found["hand_made"])
+        return found
 
     def _one_set(set_id: int) -> HandMadeSet:
         # ponytail: the whole evidence read for one set's counts; a mutation is

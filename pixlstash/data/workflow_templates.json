@@ -5,6 +5,7 @@
   {
    "name": "3d_hunyuan3d-v2.1",
    "title": "HY 3D 2.1: Single View to Model",
+   "description": "Reconstruct a 3D model from a single photo using Hunyuan3D 2.1, converting one input image into a raw white-mesh geometry without textures or materials. Ideal for rapid 3D concepting, blockout prototyping, and asset preparation before texturing or retopology.",
    "kind": "3d",
    "tags": [
     "Image to 3D",
@@ -14,7 +15,9 @@
     "Hunyuan3D",
     "Tencent"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.28",
+   "requires_custom_nodes": false,
    "size": 4939212390,
    "usage": 158,
    "files": [
@@ -28,6 +31,7 @@
   {
    "name": "3d_hunyuan3d_image_to_model",
    "title": "HY 3D 2.0",
+   "description": "Generate a textured-ready 3D mesh from a single image using Hunyuan3D 2.0's shape diffusion pipeline, which aligns geometry to the given image and outputs an untextured white mesh. Ideal for 3D asset prototyping, game and AR content prep, and as a base for later texture painting or handcrafted detailing.",
    "kind": "3d",
    "tags": [
     "Image to 3D",
@@ -37,7 +41,9 @@
     "Hunyuan3D",
     "Tencent"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.28",
+   "requires_custom_nodes": false,
    "size": 4939212390,
    "usage": 32,
    "files": [
@@ -51,6 +57,7 @@
   {
    "name": "3d_hunyuan3d_multiview_to_model",
    "title": "HY 3D 2.0 MV",
+   "description": "Generate 3D models from multiple views using Hunyuan3D 2.0 MV.",
    "kind": "3d",
    "tags": [
     "3D",
@@ -60,7 +67,9 @@
     "Hunyuan3D",
     "Tencent"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.28",
+   "requires_custom_nodes": false,
    "size": 4928474972,
    "usage": 104,
    "files": [
@@ -74,6 +83,7 @@
   {
    "name": "3d_hunyuan3d_multiview_to_model_turbo",
    "title": "HY 3D 2.0 MV Turbo",
+   "description": "Generate 3D models from multiple views using Hunyuan3D 2.0 MV Turbo.",
    "kind": "3d",
    "tags": [
     "Image to 3D",
@@ -83,7 +93,9 @@
     "Hunyuan3D",
     "Tencent"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.28",
+   "requires_custom_nodes": false,
    "size": 4928474972,
    "usage": 14,
    "files": [
@@ -97,6 +109,7 @@
   {
    "name": "3d_moge_panorama_to_mesh",
    "title": "MoGe: Panorama to Mesh",
+   "description": "Upload an equirectangular 360° panorama image and generate a textured GLB mesh with vertex colors.",
    "kind": "3d",
    "tags": [
     "3D",
@@ -105,7 +118,9 @@
    "models": [
     "MoGe"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.22.0",
+   "requires_custom_nodes": false,
    "size": 644245094,
    "usage": 20,
    "files": [
@@ -119,6 +134,7 @@
   {
    "name": "3d_moge_perspective_to_mesh",
    "title": "MoGe: Perspective Geometry Estimation",
+   "description": "Upload an image to estimate its perspective geometry. Generate a 3D depth map and surface normals from the input.",
    "kind": "3d",
    "tags": [
     "3D",
@@ -127,7 +143,9 @@
    "models": [
     "MoGe"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.22.0",
+   "requires_custom_nodes": false,
    "size": 644245094,
    "usage": 54,
    "files": [
@@ -141,6 +159,7 @@
   {
    "name": "3d_pixal3d_multi_views",
    "title": "Pixal3D: Multi Views to 3D",
+   "description": "Upload your own separate view images, or use one mixed multi-view turnaround sheet. The workflow prepares front, back, left and right views, then reconstructs a textured 3D model with Pixal3D Multi-View.",
    "kind": "3d",
    "tags": [
     "3D",
@@ -150,7 +169,9 @@
    "models": [
     "Pixal3D"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.35.0",
+   "requires_custom_nodes": false,
    "size": 9341553869,
    "usage": 294,
    "files": [
@@ -184,6 +205,7 @@
   {
    "name": "3d_pixal3d_trellis2_image_to_model",
    "title": "Pixal3D & TRELLIS.2: Image to Model",
+   "description": "Upload a single image. Generate a high-fidelity 3D model with PBR textures using either Pixal3D or TRELLIS.2, toggled by a single switch. Both pipelines share the same DINOv3 encoder and shape/texture VAEs; Pixal3D adds MoGe camera estimation for pixel-aligned geometry. Includes background removal and a complete mesh post-processing pipeline: remesh, decimate, UV unwrap, and texture baking.",
    "kind": "3d",
    "tags": [
     "3D",
@@ -194,7 +216,9 @@
     "Pixal3D",
     "TRELLIS.2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.34.0",
+   "requires_custom_nodes": false,
    "size": 15354508083,
    "usage": 818,
    "files": [
@@ -238,6 +262,7 @@
   {
    "name": "3d_triposplat_image_to_gaussian_splat",
    "title": "TripoSplat: Image to Gaussian Splat",
+   "description": "Upload a single 2D image. Generate a high-quality 3D Gaussian splat representation with controllable density and budget for rendering.",
    "kind": "3d",
    "tags": [
     "3D",
@@ -246,7 +271,9 @@
    "models": [
     "TripoSplat"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.23.0",
+   "requires_custom_nodes": false,
    "size": 3972844749,
    "usage": 291,
    "files": [
@@ -280,6 +307,7 @@
   {
    "name": "Image_capybara_v0_1_image_edit",
    "title": "Capybara: Image Edit",
+   "description": "Upload an image or video and input a text instruction. Generate an edited output using the Capybara model for tasks like style changes, object replacement, or time-of-day adjustments.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -287,7 +315,9 @@
    "models": [
     "Capybara"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 37044092928,
    "usage": 24,
    "files": [
@@ -321,6 +351,7 @@
   {
    "name": "Image_capybara_v0_1_text_to_image",
    "title": "Capybara: Text to Image",
+   "description": "Input a text prompt to generate an image. This workflow uses the Capybara unified model for text-to-image synthesis.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -329,7 +360,9 @@
    "models": [
     "Capybara"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.71",
+   "requires_custom_nodes": false,
    "size": 36185099469,
    "usage": 14,
    "files": [
@@ -358,6 +391,7 @@
   {
    "name": "audio_ace_step1_5_xl_base",
    "title": "ACE-Step 1.5XL Base: Text to Music",
+   "description": "Generate high-quality audio from text prompts using the 4B parameter ACE-Step 1.5 XL model.",
    "kind": "audio",
    "tags": [
     "Text to Music"
@@ -365,7 +399,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.12.0",
+   "requires_custom_nodes": false,
    "size": 19864223744,
    "usage": 27,
    "files": [
@@ -394,6 +430,7 @@
   {
    "name": "audio_ace_step1_5_xl_sft",
    "title": "ACE-Step 1.5XL SFT: Text to Music",
+   "description": "Generate high-quality music from text prompts using a 4B parameter SFT model. Control output with CFG for precise prompt adherence.",
    "kind": "audio",
    "tags": [
     "Text to Music"
@@ -401,7 +438,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.12.0",
+   "requires_custom_nodes": false,
    "size": 19864223744,
    "usage": 75,
    "files": [
@@ -430,6 +469,7 @@
   {
    "name": "audio_ace_step1_5_xl_turbo",
    "title": "ACE-Step 1.5XL Turbo: Text to Music",
+   "description": "Generate high-quality music from text prompts using the distilled 4B ACE-Step model. Produces commercial-ready audio in just 8 inference steps without CFG.",
    "kind": "audio",
    "tags": [
     "Music",
@@ -438,7 +478,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.12.0",
+   "requires_custom_nodes": false,
    "size": 19864223744,
    "usage": 202,
    "files": [
@@ -467,6 +509,7 @@
   {
    "name": "audio_ace_step_1_5_checkpoint",
    "title": "ACE-Step 1.5 Music Generation AIO",
+   "description": "Input style tags and lyrics to generate a full song. The workflow uses the ACE-Step 1.5 model to produce commercial-grade music in under 10 seconds on consumer hardware.",
    "kind": "audio",
    "tags": [
     "Audio",
@@ -476,7 +519,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.12.0",
+   "requires_custom_nodes": false,
    "size": 10737418240,
    "usage": 90,
    "files": [
@@ -490,6 +535,7 @@
   {
    "name": "audio_ace_step_1_5_split",
    "title": "ACE-Step 1.5 Music Generation Workflow",
+   "description": "Input a text prompt describing the music style and optional lyrics. Generate a full, high-quality audio song in under 10 seconds on consumer hardware.",
    "kind": "audio",
    "tags": [
     "Audio",
@@ -499,7 +545,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 10737418240,
    "usage": 33,
    "files": [
@@ -528,6 +576,7 @@
   {
    "name": "audio_ace_step_1_5_split_4b",
    "title": "ACE-Step 1.5 Music Generation (4B LLM )",
+   "description": "Input a text prompt to generate music. This 4B model version offers stronger audio understanding and composition capabilities compared to smaller variants.",
    "kind": "audio",
    "tags": [
     "Audio",
@@ -537,7 +586,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 14710262989,
    "usage": 37,
    "files": [
@@ -566,6 +617,7 @@
   {
    "name": "audio_ace_step_1_5_split_llm",
    "title": "ACE-Step 1.5 AI Lyric Song Generation",
+   "description": "Input a music style and optional lyrics. Generate a full song with AI-created lyrics and audio.",
    "kind": "audio",
    "tags": [
     "API",
@@ -575,7 +627,9 @@
     "ACE-Step",
     "Google Gemini"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.35.2",
+   "requires_custom_nodes": false,
    "size": 9985798963,
    "usage": 13,
    "files": [
@@ -604,6 +658,7 @@
   {
    "name": "audio_ace_step_1_m2m_editing",
    "title": "ACE Step v1 M2M Editing",
+   "description": "Edit existing songs to change style and lyrics using ACE-Step v1 M2M.",
    "kind": "audio",
    "tags": [
     "Audio Editing",
@@ -612,7 +667,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.35",
+   "requires_custom_nodes": false,
    "size": 7698728878,
    "usage": 19,
    "files": [
@@ -626,6 +683,7 @@
   {
    "name": "audio_ace_step_1_t2a_instrumentals",
    "title": "ACE-Step v1 Text to Instrumentals Music",
+   "description": "Generate instrumental music from text prompts using ACE-Step v1.",
    "kind": "audio",
    "tags": [
     "Text to Audio",
@@ -634,7 +692,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 7698728878,
    "usage": 11,
    "files": [
@@ -648,6 +708,7 @@
   {
    "name": "audio_ace_step_1_t2a_song",
    "title": "ACE Step v1 Text to Song",
+   "description": "Generate songs with vocals from text prompts using ACE-Step v1, supporting multilingual and style customization.",
    "kind": "audio",
    "tags": [
     "Text to Audio",
@@ -656,7 +717,9 @@
    "models": [
     "ACE-Step"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.35",
+   "requires_custom_nodes": false,
    "size": 7698728878,
    "usage": 12,
    "files": [
@@ -670,6 +733,7 @@
   {
    "name": "audio_minimax_music_3",
    "title": "MiniMax Music 3: Text to Music",
+   "description": "Create full-length songs from text prompts with MiniMax Music 3, generating complete 5-minute tracks with stable structure and high-fidelity audio. Input a structured caption describing lyrics, style, mood, and arrangement, and receive a finished song as output. Ideal for music producers prototyping demos, and content creators needing original background tracks.",
    "kind": "audio",
    "tags": [
     "Audio",
@@ -678,7 +742,9 @@
    "models": [
     "MiniMax Music 3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.33.1",
+   "requires_custom_nodes": false,
    "size": 15354508083,
    "usage": 523,
    "files": [
@@ -702,6 +768,7 @@
   {
    "name": "audio_stable_audio_3_medium",
    "title": "Stable Audio 3.0 Medium",
+   "description": "Input a short text idea, optional duration, seed, and category. Generate stereo audio (music, SFX, or instruments) using Stable Audio 3 with optional AI-driven text expansion.",
    "kind": "audio",
    "tags": [
     "Text to Audio"
@@ -709,7 +776,9 @@
    "models": [
     "Stable Audio"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.19.2",
+   "requires_custom_nodes": false,
    "size": 15676630630,
    "usage": 291,
    "files": [
@@ -733,6 +802,7 @@
   {
    "name": "audio_stable_audio_3_medium_base",
    "title": "Stable Audio 3.0 Medium Base",
+   "description": "Input a short text description of a sound, music, or effect. The workflow expands your prompt with Qwen and generates a stereo audio clip from Stable Audio 3.",
    "kind": "audio",
    "tags": [
     "Text to Audio"
@@ -740,7 +810,9 @@
    "models": [
     "Stable Audio"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.19.2",
+   "requires_custom_nodes": false,
    "size": 15891378995,
    "usage": 260,
    "files": [
@@ -764,6 +836,7 @@
   {
    "name": "audio_stable_audio_example",
    "title": "Stable Audio 1.0: Text to Audio",
+   "description": "Generate audio from text prompts using Stable Audio.",
    "kind": "audio",
    "tags": [
     "Audio",
@@ -773,7 +846,9 @@
     "Stability",
     "Stable Audio"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.35",
+   "requires_custom_nodes": false,
    "size": 5690831667,
    "usage": 27,
    "files": [
@@ -792,6 +867,7 @@
   {
    "name": "audio_yue2_music_cover",
    "title": "YuE2: Music Cover",
+   "description": "Create a new version of a song from reference audio with YuE2. Preserve the original melody while changing the musical style, vocals, lyrics, and arrangement.",
    "kind": "audio",
    "tags": [
     "Music Cover",
@@ -800,7 +876,9 @@
    "models": [
     "YuE2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.36.0",
+   "requires_custom_nodes": false,
    "size": 5368709120,
    "usage": 22,
    "files": [
@@ -819,6 +897,7 @@
   {
    "name": "audio_yue2_text2music",
    "title": "YuE2: Text to Music",
+   "description": "Generate complete songs from a music style and lyrics with YuE2. Use symbolic music planning to create structured melodies and harmonies, then turn them into full songs with vocals and instrumental accompaniment.",
    "kind": "audio",
    "tags": [
     "Text to Music",
@@ -827,7 +906,9 @@
    "models": [
     "YuE2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.36.0",
+   "requires_custom_nodes": false,
    "size": 3972844749,
    "usage": 0,
    "files": [
@@ -841,6 +922,7 @@
   {
    "name": "basic_switch_node",
    "title": "Switch Node",
+   "description": "Guide on how Switch Nodes work, simple Text Switch and LoRA Switch",
    "kind": "image",
    "tags": [
     "Node Basics"
@@ -848,7 +930,9 @@
    "models": [
     "Z-Image-Turbo"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 20723217203,
    "usage": 2,
    "files": [
@@ -877,6 +961,7 @@
   {
    "name": "flux1_dev_uso_reference_image_gen",
    "title": "Flux.1 Dev USO Reference Image Generation",
+   "description": "Use reference images to control both style and subject - keep your character's face while changing artistic style, or apply artistic styles to new scenes",
    "kind": "image",
    "tags": [
     "Image",
@@ -886,7 +971,9 @@
     "FLUX",
     "FLUX.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.57",
+   "requires_custom_nodes": false,
    "size": 18575733555,
    "usage": 303,
    "files": [
@@ -915,6 +1002,7 @@
   {
    "name": "flux1_krea_dev",
    "title": "Flux.1 Krea Dev",
+   "description": "A fine-tuned FLUX model pushing photorealism to the max",
    "kind": "image",
    "tags": [
     "Image",
@@ -924,7 +1012,9 @@
     "FLUX",
     "FLUX.1 Krea"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 22226455757,
    "usage": 214,
    "files": [
@@ -953,6 +1043,7 @@
   {
    "name": "flux_canny_model_example",
    "title": "Flux.1 Canny Model",
+   "description": "Generate images guided by edge detection using Flux.1 Canny.",
    "kind": "image",
    "tags": [
     "ControlNet",
@@ -962,7 +1053,9 @@
     "FLUX.1",
     "FLUX"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.0.4",
+   "requires_custom_nodes": false,
    "size": 34177202258,
    "usage": 45,
    "files": [
@@ -991,6 +1084,7 @@
   {
    "name": "flux_depth_lora_example",
    "title": "Flux.1 Depth Lora",
+   "description": "Generate images guided by depth information using Flux.1 LoRA.",
    "kind": "image",
    "tags": [
     "ControlNet",
@@ -1000,7 +1094,9 @@
     "FLUX",
     "FLUX.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 35433480192,
    "usage": 24,
    "files": [
@@ -1044,6 +1140,7 @@
   {
    "name": "flux_dev_checkpoint_example",
    "title": "Flux.1 Dev fp8: Text to Image",
+   "description": "Generate images using Flux.1 Dev fp8 quantized version. Suitable for devices with limited VRAM, requires only one model file, but image quality is slightly lower than the full version.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -1053,7 +1150,9 @@
     "FLUX.1",
     "FLUX"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 34144990003,
    "usage": 196,
    "files": [
@@ -1082,6 +1181,7 @@
   {
    "name": "flux_dev_full_text_to_image",
    "title": "Flux.1 Dev: Text to Image",
+   "description": "Generate high-quality images with Flux Dev full version. Requires larger VRAM and multiple model files, but provides the best prompt following capability and image quality.",
    "kind": "image",
    "tags": [
     "Image",
@@ -1091,7 +1191,9 @@
     "FLUX",
     "FLUX.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 34144990003,
    "usage": 183,
    "files": [
@@ -1120,6 +1222,7 @@
   {
    "name": "flux_fill_inpaint_example",
    "title": "Flux.1 Inpaint",
+   "description": "Fill missing parts of images using Flux.1 Fill Inpainting.",
    "kind": "image",
    "tags": [
     "Image",
@@ -1129,7 +1232,9 @@
     "FLUX",
     "FLUX.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 34144990003,
    "usage": 447,
    "files": [
@@ -1158,6 +1263,7 @@
   {
    "name": "flux_fill_outpaint_example",
    "title": "Flux.1 Outpaint",
+   "description": "Extend images beyond boundaries using Flux.1 outpainting.",
    "kind": "image",
    "tags": [
     "Outpainting",
@@ -1167,7 +1273,9 @@
     "FLUX.1",
     "FLUX"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.0.4",
+   "requires_custom_nodes": false,
    "size": 10372346020,
    "usage": 138,
    "files": [
@@ -1196,6 +1304,7 @@
   {
    "name": "flux_kontext_dev_basic",
    "title": "Flux Kontext Dev Image Edit",
+   "description": "Smart image editing that keeps characters consistent, edits specific parts without affecting others, and preserves original styles.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -1204,7 +1313,9 @@
     "FLUX.1 Kontext",
     "FLUX"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 17609365914,
    "usage": 280,
    "files": [
@@ -1233,6 +1344,7 @@
   {
    "name": "flux_redux_model_example",
    "title": "Flux.1 Redux Model",
+   "description": "Generate images by transferring style from reference images using Flux.1 Redux.",
    "kind": "image",
    "tags": [
     "ControlNet",
@@ -1242,7 +1354,9 @@
     "FLUX.1",
     "FLUX"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.0.4",
+   "requires_custom_nodes": false,
    "size": 35154307318,
    "usage": 18,
    "files": [
@@ -1281,6 +1395,7 @@
   {
    "name": "flux_schnell",
    "title": "Flux.1 Schnell FP8",
+   "description": "Quickly generate images with Flux.1 Schnell fp8 quantized version. Ideal for low-end hardware, requires only 4 steps to generate images.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -1290,7 +1405,9 @@
     "FLUX.1",
     "FLUX"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.0.4",
+   "requires_custom_nodes": false,
    "size": 17233556275,
    "usage": 31,
    "files": [
@@ -1304,6 +1421,7 @@
   {
    "name": "flux_schnell_full_text_to_image",
    "title": "Flux.1 Schnell Full: Text to Image",
+   "description": "Generate images quickly with Flux.1 Schnell full version. Uses Apache2.0 license, requires only 4 steps to generate images while maintaining good image quality.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -1313,7 +1431,9 @@
     "FLUX.1",
     "FLUX"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.0.4",
+   "requires_custom_nodes": false,
    "size": 34144990003,
    "usage": 62,
    "files": [
@@ -1342,6 +1462,7 @@
   {
    "name": "hidream_e1_1",
    "title": "HiDream E1.1 Image Editing",
+   "description": "Edit images with HiDream E1.1—superior image quality and editing accuracy compared to HiDream-E1-Full.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -1350,7 +1471,9 @@
    "models": [
     "HiDream"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.45",
+   "requires_custom_nodes": false,
    "size": 50465865728,
    "usage": 65,
    "files": [
@@ -1389,6 +1512,7 @@
   {
    "name": "hidream_e1_full",
    "title": "HiDream E1 Image Edit",
+   "description": "Edit images with HiDream E1 - Professional natural language image editing model.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -1397,7 +1521,9 @@
    "models": [
     "HiDream"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.29",
+   "requires_custom_nodes": false,
    "size": 34252364186,
    "usage": 18,
    "files": [
@@ -1436,6 +1562,7 @@
   {
    "name": "hidream_i1_dev",
    "title": "HiDream I1 Dev",
+   "description": "Generate images with HiDream I1 Dev - Balanced version with 28 inference steps, suitable for medium-range hardware.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -1444,7 +1571,9 @@
    "models": [
     "HiDream"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.29",
+   "requires_custom_nodes": false,
    "size": 33285996544,
    "usage": 22,
    "files": [
@@ -1483,6 +1612,7 @@
   {
    "name": "hidream_i1_fast",
    "title": "HiDream I1 Fast",
+   "description": "Generate images quickly with HiDream I1 Fast - Lightweight version with 16 inference steps, ideal for rapid previews on lower-end hardware.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -1491,7 +1621,9 @@
    "models": [
     "HiDream"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.29",
+   "requires_custom_nodes": false,
    "size": 24266565222,
    "usage": 8,
    "files": [
@@ -1530,6 +1662,7 @@
   {
    "name": "hidream_i1_full",
    "title": "HiDream I1 Full",
+   "description": "Generate images with HiDream I1 Full - Complete version with 50 inference steps for highest quality output.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -1538,7 +1671,9 @@
    "models": [
     "HiDream"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.29",
+   "requires_custom_nodes": false,
    "size": 24266565222,
    "usage": 13,
    "files": [
@@ -1577,6 +1712,7 @@
   {
    "name": "hunyuan_video_text_to_video",
    "title": "Hunyuan Video Text to Video",
+   "description": "Generate videos from text prompts using Hunyuan model.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -1586,7 +1722,9 @@
     "Hunyuan Video",
     "Tencent"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 35476429865,
    "usage": 10,
    "files": [
@@ -1615,6 +1753,7 @@
   {
    "name": "image-qwen_image_edit_2511_lora_inflation",
    "title": "Image Inflation Effect with INFL8 LoRA",
+   "description": "Upload an image and specify a subject. Generate an inflated version of that subject using the INFL8 LoRA for Qwen Image Edit.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -1623,7 +1762,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.60",
+   "requires_custom_nodes": false,
    "size": 50787988275,
    "usage": 36,
    "files": [
@@ -1652,6 +1793,7 @@
   {
    "name": "image_anima_base_v1",
    "title": "Anima Base v1: Text to Image",
+   "description": "Input a text prompt describing an anime or artistic illustration. Generate a non-photorealistic image focused on anime concepts, characters, or styles.",
    "kind": "image",
    "tags": [
     "Anime",
@@ -1660,7 +1802,9 @@
    "models": [
     "Anima"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.0",
+   "requires_custom_nodes": false,
    "size": 5798205850,
    "usage": 574,
    "files": [
@@ -1689,6 +1833,7 @@
   {
    "name": "image_anima_lllite_any_control_to_image",
    "title": "Anima Lllite: Any Control to Image",
+   "description": "Apply lightweight, LoRA-like conditional control to Anima-Base v1.0 anime-style images using ControlNet-LLLite, accepting one conditioning input and one optional mask for inpainting to produce a single generated output. Ideal for anime inpainting with dynamic masking, style transfer from lineart or grayscale sketches, and controlled character generation in multi-scene compositions.",
    "kind": "image",
    "tags": [
     "Anime",
@@ -1697,7 +1842,9 @@
    "models": [
     "Anima"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.29.0",
+   "requires_custom_nodes": false,
    "size": 5798205850,
    "usage": 10,
    "files": [
@@ -1731,6 +1878,7 @@
   {
    "name": "image_anima_lllite_depth_control_to_image",
    "title": "Anima Lllite: Depth Control to Image",
+   "description": "Generate anime-style illustrations from a depth map using the Anima LLLite model, which applies a lightweight ControlNet correction for precise spatial control. Input 1 image to produce 2 image outputs plus a comparison view. Ideal for 3D scene reconstruction, VFX depth passes, and AR asset preparation.",
    "kind": "image",
    "tags": [
     "Anime"
@@ -1738,7 +1886,9 @@
    "models": [
     "Anima"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.29.0",
+   "requires_custom_nodes": false,
    "size": 7086696038,
    "usage": 0,
    "files": [
@@ -1777,6 +1927,7 @@
   {
    "name": "image_anima_lllite_image_inpainting",
    "title": "Anima Lllite: Image Inpainting",
+   "description": "Inpaint anime images with Anima LLLite, a lightweight ControlNet variant that applies low-rank corrections for precise mask-based editing. Input 1 image and receive 1 inpainted output plus a comparison view. Ideal for fixing character details, removing unwanted objects from anime scenes, and seamless background restoration.",
    "kind": "image",
    "tags": [
     "Anime",
@@ -1785,7 +1936,9 @@
    "models": [
     "Anima"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.29.0",
+   "requires_custom_nodes": false,
    "size": 5798205850,
    "usage": 14,
    "files": [
@@ -1819,6 +1972,7 @@
   {
    "name": "image_anima_preview",
    "title": "Anima Anime Text-to-Image Generation",
+   "description": "Input a text prompt to generate an anime-style image using the Anima model. Configure settings like steps and CFG scale to control the output. The workflow produces a non-photorealistic illustration based on your description.",
    "kind": "image",
    "tags": [
     "Anime",
@@ -1827,7 +1981,9 @@
    "models": [
     "Anima"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.11.0",
+   "requires_custom_nodes": false,
    "size": 5583457485,
    "usage": 201,
    "files": [
@@ -1851,6 +2007,7 @@
   {
    "name": "image_boogu_image_0_1_edit",
    "title": "Boogu image 0.1 Edit",
+   "description": "Edit images using Boogu's instruction-driven model, taking one input image and generating an edited output alongside a side-by-side comparison view.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -1858,7 +2015,9 @@
    "models": [
     "Boogu"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.26.0",
+   "requires_custom_nodes": false,
    "size": 21260088115,
    "usage": 33,
    "files": [
@@ -1882,6 +2041,7 @@
   {
    "name": "image_boogu_image_0_1_edit_int8",
    "title": "Boogu image 0.1 Edit Int8",
+   "description": "Edit images with the Boogu Image Edit model, now optimized with convrot int8 quantization for faster inference and better quality than fp8. This workflow takes 1 input image and produces 1 edited image output. Ideal for quick image edits, batch processing with improved performance, and users wanting to leverage the convrot int8 format's speed and quality advantages.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -1890,7 +2050,9 @@
    "models": [
     "Boogu"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.26.0",
+   "requires_custom_nodes": false,
    "size": 22333829939,
    "usage": 12,
    "files": [
@@ -1914,6 +2076,7 @@
   {
    "name": "image_boogu_image_0_1_turbo_t2i",
    "title": "Boogu Turbo: Text to Image",
+   "description": "Generate high-quality images from text prompts using the Boogu Turbo model, a distilled 10B-parameter text-to-image pipeline that produces photorealistic outputs in just 4 steps. The workflow accepts one text prompt and outputs a single 1024x1024 image. Ideal for rapid prototyping of photorealistic concepts, generating marketing visuals, and creating bilingual text-rendered images with strong prompt adherence.",
    "kind": "image",
    "tags": [
     "Image",
@@ -1922,7 +2085,9 @@
    "models": [
     "Boogu"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.26.0",
+   "requires_custom_nodes": false,
    "size": 21260088115,
    "usage": 32,
    "files": [
@@ -1946,6 +2111,7 @@
   {
    "name": "image_chroma1_radiance_text_to_image",
    "title": "Chroma1 Radiance Text to Image",
+   "description": "Chroma1-Radiance works directly with image pixels instead of compressed latents, delivering higher quality images with reduced artifacts and distortion.",
    "kind": "image",
    "tags": [
     "Image",
@@ -1954,7 +2120,9 @@
    "models": [
     "Chroma"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.60",
+   "requires_custom_nodes": false,
    "size": 24159191040,
    "usage": 14,
    "files": [
@@ -1973,6 +2141,7 @@
   {
    "name": "image_chroma_text_to_image",
    "title": "Chroma: Text to Image",
+   "description": "Chroma - enhanced Flux model with improved image quality and better prompt understanding for stunning text-to-image generation.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -1982,7 +2151,9 @@
     "Chroma",
     "FLUX"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 23300197581,
    "usage": 47,
    "files": [
@@ -2006,6 +2177,7 @@
   {
    "name": "image_chrono_edit_14B",
    "title": "ChronoEdit 14B: Image Edit",
+   "description": "Image editing powered by video models' dynamic understanding, creating physically plausible results while preserving character and style consistency.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -2015,7 +2187,9 @@
     "ChronoEdit",
     "Nvidia"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 41446434406,
    "usage": 19,
    "files": [
@@ -2049,6 +2223,7 @@
   {
    "name": "image_ernie_image",
    "title": "Ernie Image: Text to Image",
+   "description": "Generate images from text prompts using the ERNIE-Image model. Input a text description to produce detailed, structured visuals with a broad stylistic range.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -2056,7 +2231,9 @@
    "models": [
     "ERNIE-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.15.0",
+   "requires_custom_nodes": false,
    "size": 25984552141,
    "usage": 55,
    "files": [
@@ -2085,6 +2262,7 @@
   {
    "name": "image_ernie_image_turbo",
    "title": "Ernie Image Turbo: Text To Image",
+   "description": "Generate images from text prompts using the ERNIE-Image turbo model. Input a text description and receive a high-quality image with precise text rendering and structured layouts.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -2093,7 +2271,9 @@
    "models": [
     "ERNIE-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.15.0",
+   "requires_custom_nodes": false,
    "size": 25984552141,
    "usage": 48,
    "files": [
@@ -2122,6 +2302,7 @@
   {
    "name": "image_firered_image_edit1_1",
    "title": "FireRed Image Edit 1.1: Image Edit",
+   "description": "Upload an image and a text prompt to edit it. Generate a modified image with enhanced identity consistency, multi-element fusion, or professional photo restoration.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -2129,7 +2310,9 @@
    "models": [
     "FireRed Image Edit 1.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 51324859187,
    "usage": 441,
    "files": [
@@ -2158,6 +2341,7 @@
   {
    "name": "image_flux.1_fill_dev_OneReward",
    "title": "Flux.1 Dev OneReward",
+   "description": "Supports various tasks such as image inpainting, outpainting, and object removal by bytedance-research team",
    "kind": "image",
    "tags": [
     "Inpainting",
@@ -2167,7 +2351,9 @@
     "FLUX.1",
     "FLUX"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 22333829939,
    "usage": 49,
    "files": [
@@ -2201,6 +2387,7 @@
   {
    "name": "image_flux2",
    "title": "FLUX.2 Dev",
+   "description": "Generate photorealistic images with multi-reference consistency and professional text rendering.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -2211,7 +2398,9 @@
     "FLUX",
     "FLUX.2 Dev"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 74088185856,
    "usage": 2075,
    "files": [
@@ -2240,6 +2429,7 @@
   {
    "name": "image_flux2_fp8",
    "title": "Product Mockup(FLUX.2 Dev FP8)",
+   "description": "Create product mockups by applying design patterns to packaging, mugs, and other products using multi-reference consistency.",
    "kind": "edit",
    "tags": [
     "Text to Image",
@@ -2250,7 +2440,9 @@
     "FLUX.2 Dev",
     "FLUX"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 56586194125,
    "usage": 37,
    "files": [
@@ -2279,6 +2471,7 @@
   {
    "name": "image_flux2_klein_9b_kv_image_edit",
    "title": "FLUX.2 Klein KV: Image Edit",
+   "description": "Upload reference images and a text prompt. Generate multiple edited images using cached image data for faster processing.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -2287,7 +2480,9 @@
    "models": [
     "FLUX.2 Klein"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.17.0",
+   "requires_custom_nodes": false,
    "size": 18790481920,
    "usage": 16,
    "files": [
@@ -2311,6 +2506,7 @@
   {
    "name": "image_flux2_klein_image_edit_4b_base",
    "title": "FLUX.2 [Klein] 4B: Image Edit",
+   "description": "A smaller foundation model with exceptional quality-to-size ratio. Ideal for local deployment, fine-tuning on limited hardware, and efficient generation and editing workflows.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -2320,7 +2516,9 @@
     "FLUX",
     "FLUX.2 Klein"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.72",
+   "requires_custom_nodes": false,
    "size": 17072495002,
    "usage": 326,
    "files": [
@@ -2344,6 +2542,7 @@
   {
    "name": "image_flux2_klein_image_edit_4b_distilled",
    "title": "FLUX.2 [Klein] 4B Distilled: Image Edit",
+   "description": "The fastest variant in the Klein family. Built for interactive applications, real-time previews, and latency-critical production use cases.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -2353,7 +2552,9 @@
     "FLUX",
     "FLUX.2 Klein"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.72",
+   "requires_custom_nodes": false,
    "size": 12455405158,
    "usage": 395,
    "files": [
@@ -2377,6 +2578,7 @@
   {
    "name": "image_flux2_klein_image_edit_9b_base",
    "title": "FLUX.2 [Klein] 9B: Image Edit",
+   "description": "BFL undistilled foundation model. Maximum flexibility and control. Great for fine-tuning.",
    "kind": "image",
    "tags": [
     "Image",
@@ -2386,7 +2588,9 @@
     "FLUX",
     "FLUX.2 Klein"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.72",
+   "requires_custom_nodes": false,
    "size": 19327352832,
    "usage": 1152,
    "files": [
@@ -2410,6 +2614,7 @@
   {
    "name": "image_flux2_klein_image_edit_9b_distilled",
    "title": "FLUX.2 [Klein] 9B Distilled: Image Edit",
+   "description": "BFL distilled model. Outstanding quality at sub-second speed. Great for real-time generation while retaining quality. Marketing launch will focus on this model.",
    "kind": "image",
    "tags": [
     "Image",
@@ -2419,7 +2624,9 @@
     "FLUX",
     "FLUX.2 Klein"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.72",
+   "requires_custom_nodes": false,
    "size": 19112604467,
    "usage": 69,
    "files": [
@@ -2443,6 +2650,7 @@
   {
    "name": "image_flux2_klein_text_to_image",
    "title": "FLUX.2 [Klein] 4B: Text to Image",
+   "description": "BFL distilled model. Outstanding quality at sub-second speed. Great for real-time generation while retaining quality. Marketing launch will focus on this model.",
    "kind": "image",
    "tags": [
     "Image",
@@ -2452,7 +2660,9 @@
     "FLUX",
     "FLUX.2 Klein"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.72",
+   "requires_custom_nodes": false,
    "size": 17072495002,
    "usage": 198,
    "files": [
@@ -2481,6 +2691,7 @@
   {
    "name": "image_flux2_text_to_image",
    "title": "FLUX.2 Dev Text to Image",
+   "description": "Text-to-image with enhanced lighting, materials, and realistic details.",
    "kind": "image",
    "tags": [
     "Image",
@@ -2490,7 +2701,9 @@
     "FLUX",
     "FLUX.2 Dev"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 71403831296,
    "usage": 412,
    "files": [
@@ -2519,6 +2732,7 @@
   {
    "name": "image_flux2_text_to_image_9b",
    "title": "FLUX.2 [Klein] 9B: Text to Image",
+   "description": "BFL distilled model. Outstanding quality at sub-second speed. Great for real-time generation while retaining quality. Marketing launch will focus on this model.",
    "kind": "image",
    "tags": [
     "Image",
@@ -2528,7 +2742,9 @@
     "FLUX",
     "FLUX.2 Klein"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.72",
+   "requires_custom_nodes": false,
    "size": 19219978650,
    "usage": 367,
    "files": [
@@ -2552,6 +2768,7 @@
   {
    "name": "image_flux3_klein_distilled_image_edit",
    "title": "FLUX 3 Image Klein Distilled: Image Edit",
+   "description": "Edit an existing image with FLUX 3 Image Klein by pairing one input image with one text prompt, producing a single edited result and a side-by-side comparison view. Ideal for targeted retouching, restyling a photo, or swapping details while keeping the rest of the scene intact.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -2559,7 +2776,9 @@
    "models": [
     "FLUX 3 Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.41.0",
+   "requires_custom_nodes": false,
    "size": 21474836480,
    "usage": 654,
    "files": [
@@ -2588,6 +2807,7 @@
   {
    "name": "image_flux3_klein_distilled_t2i",
    "title": "FLUX 3 Image Klein Distilled: Text to Image",
+   "description": "Generate images from text prompts using the distilled FLUX 3 Image Klein model, which runs efficiently in 15 sampling steps with no classifier-free guidance. Just describe what you want and receive one finished image. Ideal for rapid concept art, marketing visuals, and everyday creative ideation where speed matters.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -2595,7 +2815,9 @@
    "models": [
     "FLUX 3 Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.41.0",
+   "requires_custom_nodes": false,
    "size": 22226455757,
    "usage": 302,
    "files": [
@@ -2624,6 +2846,7 @@
   {
    "name": "image_flux3_klein_image_edit",
    "title": "FLUX 3 Image Klein: Image Edit",
+   "description": "Edit an existing image with FLUX 3 Image Klein by supplying one input image and two text prompts, producing one refined output alongside a side-by-side comparison view. Ideal for targeted retouching, style adjustments, and detail corrections that preserve the original composition.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -2631,7 +2854,9 @@
    "models": [
     "FLUX 3 Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.41.0",
+   "requires_custom_nodes": false,
    "size": 21474836480,
    "usage": 916,
    "files": [
@@ -2660,6 +2885,7 @@
   {
    "name": "image_flux3_klein_t2i",
    "title": "FLUX 3 Image Klein: Text to Image",
+   "description": "Generate images from text prompts using FLUX 3 Image Klein, producing a single saved image with no file inputs required. Ideal for concept art, marketing visuals, and rapid prototyping of scene ideas from written descriptions.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -2667,7 +2893,9 @@
    "models": [
     "FLUX 3 Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.41.0",
+   "requires_custom_nodes": false,
    "size": 21474836480,
    "usage": 1211,
    "files": [
@@ -2696,6 +2924,7 @@
   {
    "name": "image_hidream_o1",
    "title": "HiDream O1 Full: Image generation",
+   "description": "Input a text prompt and optionally upload reference images. Generate a high-resolution image up to 2048x2048 with text-to-image, editing, or subject-driven personalization.",
    "kind": "edit",
    "tags": [
     "Text to Image",
@@ -2704,7 +2933,9 @@
    "models": [
     "HiDream"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.21.1",
+   "requires_custom_nodes": false,
    "size": 25447681229,
    "usage": 39,
    "files": [
@@ -2723,6 +2954,7 @@
   {
    "name": "image_hidream_o1_dev",
    "title": "HiDream O1 Dev",
+   "description": "Input a text prompt and optional reference images. Generate a high-resolution image (up to 2048x2048) with support for text-to-image, image editing, and subject-driven personalization.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -2731,7 +2963,9 @@
    "models": [
     "HiDream"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.21.1",
+   "requires_custom_nodes": false,
    "size": 17072495002,
    "usage": 19,
    "files": [
@@ -2750,6 +2984,7 @@
   {
    "name": "image_ideogram4_t2i",
    "title": "Ideogram v4: Text to Image",
+   "description": "Input a text prompt or structured JSON description. Generate an image with precise layout, color, and style control using Ideogram 4.0.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -2757,7 +2992,9 @@
    "models": [
     "Ideogram"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.24.0",
+   "requires_custom_nodes": false,
    "size": 26521423053,
    "usage": 88,
    "files": [
@@ -2786,6 +3023,7 @@
   {
    "name": "image_ideogram4_t2i_int8",
    "title": "Ideogram v4 Int8: Text to Image",
+   "description": "Generate images from text prompts using the Ideogram v4 model, a state-of-the-art open-weight text-to-image system with exceptional text rendering and layout control. No file inputs are required, producing 1 image output. Ideal for creating marketing visuals, generating design mockups with precise typography, and producing high-resolution artwork with controlled compositions.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -2794,7 +3032,9 @@
    "models": [
     "Ideogram"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.24.0",
+   "requires_custom_nodes": false,
    "size": 30064771072,
    "usage": 23,
    "files": [
@@ -2823,6 +3063,7 @@
   {
    "name": "image_joyai_image_edit",
    "title": "JoyAI Image Edit",
+   "description": "Edit images by following natural language instructions with JoyAI-Image-Edit, which leverages multimodal understanding for precise, spatially aware modifications. This workflow takes one reference image and produces one edited image output plus a side-by-side comparison view. Ideal for instruction-guided retouching, region-specific object replacement, and complex scene adjustments requiring relational grounding.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -2832,7 +3073,9 @@
    "models": [
     "JoyAI Image Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.29.0",
+   "requires_custom_nodes": false,
    "size": 26736171418,
    "usage": 10,
    "files": [
@@ -2856,6 +3099,7 @@
   {
    "name": "image_kandinsky5_t2i",
    "title": "Kandinsky 5.0 Image Lite: Text to Image",
+   "description": "A lightweight 2B model that generates images from English and Russian prompts with high visual quality.",
    "kind": "image",
    "tags": [
     "Image",
@@ -2864,7 +3108,9 @@
    "models": [
     "Kandinsky"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 21689584845,
    "usage": 14,
    "files": [
@@ -2893,6 +3139,7 @@
   {
    "name": "image_krea2_turbo_int8_image_style_reference",
    "title": "Krea-2 Int8: Image Style Reference",
+   "description": "Generate images with the Krea-2 Turbo model while referencing the style of 1–2 uploaded images, using the high-performance Int8 Convrot format for faster, higher-quality inference. This workflow accepts up to two reference image inputs and produces a single stylized output, with optional LoRA support for further creative control. Ideal for matching a specific artistic style in concept art, producing consistent brand visuals, and exploring rapid style transfer for iterative design.",
    "kind": "image",
    "tags": [
     "Style Reference",
@@ -2902,7 +3149,9 @@
    "models": [
     "Krea 2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.24.1",
+   "requires_custom_nodes": false,
    "size": 19434727014,
    "usage": 458,
    "files": [
@@ -2931,6 +3180,7 @@
   {
    "name": "image_krea2_turbo_t2i",
    "title": "Krea-2: Text to Image",
+   "description": "Generate images from text prompts using Krea 2, a foundation model built for aesthetic quality and creative control. It focuses on rendering expressive and artistic styles. Ideal for concept art exploration, visual brainstorming, and creating stylized imagery for design projects.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -2938,7 +3188,9 @@
    "models": [
     "Krea 2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.24.1",
+   "requires_custom_nodes": false,
    "size": 19112604467,
    "usage": 9677,
    "files": [
@@ -2967,6 +3219,7 @@
   {
    "name": "image_krea2_turbo_t2i_int8",
    "title": "Krea-2 Int8: Text to Image",
+   "description": "Generate images with the Krea-2 Turbo distilled text-to-image model using the high-performance Int8 Convrot format, which delivers better quality than FP8 while generally running faster across most GPUs. This workflow accepts no file inputs and produces a single image output, with optional style LoRA support for creative customization. Ideal for rapid concept art iteration, batch asset generation for games or marketing, and exploring the speed-quality sweet spot of the Convrot Int8 quantization.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -2975,7 +3228,9 @@
    "models": [
     "Krea 2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.24.1",
+   "requires_custom_nodes": false,
    "size": 19112604467,
    "usage": 718,
    "files": [
@@ -3004,6 +3259,7 @@
   {
    "name": "image_lens_t2i",
    "title": "Lens: Text to Image",
+   "description": "Input a text prompt and select resolution and aspect ratio. Generate a high-quality image using the efficient Lens text-to-image model.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -3011,7 +3267,9 @@
    "models": [
     "Lens"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 21796959027,
    "usage": 37,
    "files": [
@@ -3035,6 +3293,7 @@
   {
    "name": "image_lens_turbo_t2i",
    "title": "Lens Turbo: Text to Image",
+   "description": "Input a text prompt and select resolution, aspect ratio, and inference steps. Generate a high-quality image using the Lens text-to-image model.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -3042,7 +3301,9 @@
    "models": [
     "Lens"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 21796959027,
    "usage": 27,
    "files": [
@@ -3066,6 +3327,7 @@
   {
    "name": "image_longcat_image_edit",
    "title": "LongCat Image Edit",
+   "description": "Edit images using the LongCat-Image-Edit model. Supports bilingual instructions for global, local, text, and reference-guided editing while preserving visual consistency.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -3074,7 +3336,9 @@
    "models": [
     "LongCat Image Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.9.0",
+   "requires_custom_nodes": false,
    "size": 22226455757,
    "usage": 36,
    "files": [
@@ -3098,6 +3362,7 @@
   {
    "name": "image_longcat_text_to_image",
    "title": "LongCat Image: Text to Image",
+   "description": "Generate an image from a text prompt. Input your desired scene description in English or Chinese. Output a photorealistic image with accurate text rendering.",
    "kind": "image",
    "tags": [
     "Image",
@@ -3106,7 +3371,9 @@
    "models": [
     "LongCat"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.0",
+   "requires_custom_nodes": false,
    "size": 22226455757,
    "usage": 10,
    "files": [
@@ -3130,6 +3397,7 @@
   {
    "name": "image_lotus_depth_v1_1",
    "title": "Depth Estimation: Lotus",
+   "description": "Run Lotus Depth in ComfyUI for zero-shot, efficient monocular depth estimation with high detail retention.",
    "kind": "image",
    "tags": [
     "Image",
@@ -3139,7 +3407,9 @@
     "SD1.5",
     "Stability"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 2040109466,
    "usage": 10,
    "files": [
@@ -3158,6 +3428,7 @@
   {
    "name": "image_mage_flow_edit_int8",
    "title": "Mage-Flow-Edit: Image Edit",
+   "description": "Edit images by following natural language instructions with Mage-Flow-Edit, an instruction-based model that handles background replacement, style changes, localized edits, and restoration using up to three reference images. The workflow takes one input image and produces one edited output plus a side-by-side comparison view. Ideal for creative photo retouching, product image styling, and restoring old or damaged photos.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -3166,7 +3437,9 @@
    "models": [
     "Mage-Flow"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.29.0",
+   "requires_custom_nodes": false,
    "size": 13421772800,
    "usage": 40,
    "files": [
@@ -3190,6 +3463,7 @@
   {
    "name": "image_mage_flow_edit_turbo_int8",
    "title": "Mage-Flow-Edit Turbo: Image Edit",
+   "description": "Edit images using a reference photo and text instructions with the Mage-Flow-Edit Turbo model, a distilled 4B-parameter model that produces results in just 4 steps. It takes 1-3 reference images and a text prompt as input, then outputs an edited image matching your instructions. Ideal for quick style transfers, background replacements, and interactive photo editing sessions.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -3198,7 +3472,9 @@
    "models": [
     "Mage-Flow"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.29.0",
+   "requires_custom_nodes": false,
    "size": 13421772800,
    "usage": 95,
    "files": [
@@ -3222,6 +3498,7 @@
   {
    "name": "image_mage_flow_t2i_int8",
    "title": "Mage-Flow: Text to Image",
+   "description": "Generate high-resolution images from text prompts using Mage-Flow, a compact 4B-parameter diffusion model that outputs a single image at native resolutions from 512 to 2048 pixels per side. Ideal for rapid concept visualization, creative asset generation, and research in controlled image synthesis under limited compute budgets.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -3230,7 +3507,9 @@
    "models": [
     "Mage-Flow"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.29.0",
+   "requires_custom_nodes": false,
    "size": 13421772800,
    "usage": 91,
    "files": [
@@ -3254,6 +3533,7 @@
   {
    "name": "image_mage_flow_turbo_t2i_int8",
    "title": "Mage-Flow Turbo: Text to Image",
+   "description": "Generate high-quality images from text prompts using the compact 4B-parameter Mage-Flow Turbo model, producing a single image output without any file inputs. This workflow supports native-resolution generation from 512 to 2048 pixels per side at any aspect ratio, including extreme 4:1 dimensions. Ideal for rapid concept visualization, creative asset generation, and low-latency image prototyping on modest hardware.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -3263,7 +3543,9 @@
    "models": [
     "Mage-Flow"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.29.0",
+   "requires_custom_nodes": false,
    "size": 13421772800,
    "usage": 11,
    "files": [
@@ -3287,6 +3569,7 @@
   {
    "name": "image_marigold_v2_albedo_estimation",
    "title": "Albedo Estimation: Marigold V2",
+   "description": "Estimate albedo from an input image using Marigold V2. The workflow separates surface color from lighting and shading, producing an albedo map useful for relighting, material analysis, and 3D asset creation.",
    "kind": "image",
    "tags": [
     "Albedo Estimation",
@@ -3295,7 +3578,9 @@
    "models": [
     "Marigold v2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.36.0",
+   "requires_custom_nodes": false,
    "size": 22441204122,
    "usage": 32,
    "files": [
@@ -3324,6 +3609,7 @@
   {
    "name": "image_marigold_v2_depth_estimation",
    "title": "Depth Estimation: Marigold V2",
+   "description": "Estimate scene depth from an input image using Marigold V2, generating a depth map with brighter areas representing closer objects and darker areas representing farther objects.",
    "kind": "image",
    "tags": [
     "Depth",
@@ -3332,7 +3618,9 @@
    "models": [
     "Marigold v2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.36.0",
+   "requires_custom_nodes": false,
    "size": 22441204122,
    "usage": 239,
    "files": [
@@ -3361,6 +3649,7 @@
   {
    "name": "image_marigold_v2_surface_normal_estimation",
    "title": "Surface Normal Estimation: Marigold V2",
+   "description": "Estimate surface normals from an input image using Marigold V2. The workflow generates a normal map representing the orientation of surfaces in the scene, useful for 3D reconstruction, relighting, and geometry-aware image processing.",
    "kind": "image",
    "tags": [
     "Normal Estimation",
@@ -3369,7 +3658,9 @@
    "models": [
     "Marigold v2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.36.0",
+   "requires_custom_nodes": false,
    "size": 22441204122,
    "usage": 33,
    "files": [
@@ -3398,6 +3689,7 @@
   {
    "name": "image_ming_image_01_design_image_edit",
    "title": "Ming Image 0.1 Design: Image Edit",
+   "description": "Edit an existing image with Ming Image 0.1 Design, a 6B model tuned for UI, infographics, and posters. It takes one input image plus the boxes you draw on it — position, description, and colour palette — and rebuilds them into a layer-by-layer caption, returning one re-rendered image. Ideal for restaging a layout, poster-style re-renders, and turning a photograph into a designed composition.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -3405,7 +3697,9 @@
    "models": [
     "Ming Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.38.0",
+   "requires_custom_nodes": false,
    "size": 25984552141,
    "usage": 43,
    "files": [
@@ -3429,6 +3723,7 @@
   {
    "name": "image_ming_image_01_design_t2i",
    "title": "Ming Image 0.1 Design: Text to Image",
+   "description": "Generate text-heavy design compositions from text prompts using Ming Image 0.1 Design, a 6B model tuned for UI screens, infographics, and posters. It takes no file inputs and produces one image, supporting transparent backgrounds for easy layering. Ideal for interface mockups, marketing posters, and data-rich infographic drafts.",
    "kind": "image",
    "tags": [
     "Int8",
@@ -3437,7 +3732,9 @@
    "models": [
     "Ming Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.37.3",
+   "requires_custom_nodes": false,
    "size": 43271795507,
    "usage": 206,
    "files": [
@@ -3466,6 +3763,7 @@
   {
    "name": "image_moss_image_base_t2i",
    "title": "MOSS-Image Base: Text to Image",
+   "description": "Generate an image from a text prompt with the MOSS-Image base checkpoint, which reads a full scene caption and returns one finished image. The prompt upsampler expands a short request into that caption first. Use it for fine-tuning experiments and comparisons with the instruction-tuned checkpoint.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -3473,7 +3771,9 @@
    "models": [
     "MOSS-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.41.3",
+   "requires_custom_nodes": false,
    "size": 22226455757,
    "usage": 0,
    "files": [
@@ -3497,6 +3797,7 @@
   {
    "name": "image_moss_image_base_t2i_bboxes",
    "title": "MOSS-Image Base: Layout-Guided Text to Image",
+   "description": "Generate an image from a text prompt plus a layout drawn in Create Bounding Boxes, using the MOSS-Image base checkpoint. Each box carries its own caption and text boxes render their text. Useful for comparing the base and instruction-tuned checkpoints on the same layout.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -3505,7 +3806,9 @@
    "models": [
     "MOSS-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.41.3",
+   "requires_custom_nodes": false,
    "size": 22226455757,
    "usage": 0,
    "files": [
@@ -3529,6 +3832,7 @@
   {
    "name": "image_moss_image_t2i",
    "title": "MOSS-Image: Text to Image",
+   "description": "Generate an image from a text prompt with MOSS-Image, an open-weights model that reads a full scene caption and returns one finished image. A prompt upsampler expands a short request into that caption first, so a one-line description is enough. Ideal for editorial photography, product shots, and concept art.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -3536,7 +3840,9 @@
    "models": [
     "MOSS-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.41.3",
+   "requires_custom_nodes": false,
    "size": 22222122562,
    "usage": 0,
    "files": [
@@ -3560,6 +3866,7 @@
   {
    "name": "image_moss_image_t2i_bboxes",
    "title": "MOSS-Image: Layout-Guided Text to Image",
+   "description": "Generate an image from a text prompt plus a layout drawn in Create Bounding Boxes. Each box carries its own caption, and text boxes also render their text, so MOSS-Image places every element where you put it. Useful for posters, packaging shots, and any composition where placement matters.",
    "kind": "image",
    "tags": [
     "Layout",
@@ -3568,7 +3875,9 @@
    "models": [
     "MOSS-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.41.3",
+   "requires_custom_nodes": false,
    "size": 15461882266,
    "usage": 0,
    "files": [
@@ -3592,6 +3901,7 @@
   {
    "name": "image_netayume_lumina_t2i",
    "title": "NetaYume Lumina Text to Image",
+   "description": "High-quality anime-style image generation with enhanced character understanding and detailed textures. Fine-tuned from Neta Lumina on Danbooru dataset.",
    "kind": "image",
    "tags": [
     "Anime",
@@ -3601,7 +3911,9 @@
    "models": [
     "OmniGen"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 10630044058,
    "usage": 146,
    "files": [
@@ -3615,6 +3927,7 @@
   {
    "name": "image_newbieimage_exp0_1-t2i",
    "title": "NewBie Exp0.1: Anime Generation",
+   "description": "Generate detailed anime-style images with NewBie Exp0.1's Next-DiT architecture. Supports XML structured prompts for better multi-character scenes and attribute control.",
    "kind": "image",
    "tags": [
     "Anime",
@@ -3624,7 +3937,9 @@
    "models": [
     "NewBie"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 16213501542,
    "usage": 59,
    "files": [
@@ -3653,6 +3968,7 @@
   {
    "name": "image_omnigen2_image_edit",
    "title": "OmniGen2 Image Edit",
+   "description": "Edit images with natural language instructions using OmniGen2's advanced image editing capabilities and text rendering support.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -3661,7 +3977,9 @@
    "models": [
     "OmniGen"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 15784004813,
    "usage": 14,
    "files": [
@@ -3685,6 +4003,7 @@
   {
    "name": "image_omnigen2_t2i",
    "title": "OmniGen2: Text to Image",
+   "description": "Generate high-quality images from text prompts using OmniGen2's unified 7B multimodal model with dual-path architecture.",
    "kind": "image",
    "tags": [
     "Image",
@@ -3693,7 +4012,9 @@
    "models": [
     "OmniGen"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 15784004813,
    "usage": 15,
    "files": [
@@ -3717,6 +4038,7 @@
   {
    "name": "image_ovis_text_to_image",
    "title": "Ovis-Image Text to Image",
+   "description": "Ovis-Image is a 7B text-to-image model specifically optimized for high-quality text rendering in generated images. Designed to operate efficiently under computational constraints, it excels at accurately generating images containing text content.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -3725,7 +4047,9 @@
    "models": [
     "Ovis-Image"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 20228222222,
    "usage": 8,
    "files": [
@@ -3749,6 +4073,7 @@
   {
    "name": "image_pixeldit_t2i",
    "title": "PixelDiT: Text to Image",
+   "description": "Input a text prompt and optional negative prompt. Generate a 1024px image using PixelDiT's VAE-free pixel diffusion transformer.",
    "kind": "image",
    "tags": [
     "Text to Image"
@@ -3756,7 +4081,9 @@
    "models": [
     "PixelDiT"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.0",
+   "requires_custom_nodes": false,
    "size": 7838315315,
    "usage": 61,
    "files": [
@@ -3775,6 +4102,7 @@
   {
    "name": "image_qwen_Image_2512",
    "title": "Qwen Image 2512",
+   "description": "Text-to-image model with enhanced human realism, finer natural details for landscapes and animal fur, and improved text rendering with accurate layout and multimodal composition.",
    "kind": "image",
    "tags": [
     "Image",
@@ -3784,7 +4112,9 @@
     "Qwen",
     "Qwen-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 31782757990,
    "usage": 399,
    "files": [
@@ -3813,6 +4143,7 @@
   {
    "name": "image_qwen_Image_2512_controlnet",
    "title": "Qwen-Image 2512: Fun Union ControlNet",
+   "description": "Upload an image and select a control type from Canny, HED, Depth, Pose, MLSD, Scribble, or Grayscale. Generate a new image guided by the chosen structural condition.",
    "kind": "image",
    "tags": [
     "ControlNet",
@@ -3821,7 +4152,9 @@
    "models": [
     "Qwen-Image 2512"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 35326106010,
    "usage": 50,
    "files": [
@@ -3855,6 +4188,7 @@
   {
    "name": "image_qwen_image",
    "title": "Qwen-Image: Text to Image",
+   "description": "Generate images with exceptional multilingual text rendering and editing capabilities using Qwen-Image's 20B MMDiT model.",
    "kind": "image",
    "tags": [
     "Image",
@@ -3863,7 +4197,9 @@
    "models": [
     "Qwen-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 31782757990,
    "usage": 17,
    "files": [
@@ -3892,6 +4228,7 @@
   {
    "name": "image_qwen_image_2512_with_2steps_lora",
    "title": "Qwen-Image 2512 Turbo",
+   "description": "Qwen-Image 2512 Image generation with 2-steps Turbo LoRA. Input your text prompt to quickly produce a result, though some quality is sacrificed for speed.",
    "kind": "image",
    "tags": [
     "Image",
@@ -3901,7 +4238,9 @@
    "models": [
     "Qwen-Image 2512"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.49",
+   "requires_custom_nodes": false,
    "size": 32427003085,
    "usage": 41,
    "files": [
@@ -3930,6 +4269,7 @@
   {
    "name": "image_qwen_image_2_1_background_removal",
    "title": "Remove Background: Qwen Image 2.1",
+   "description": "Remove image backgrounds with Qwen Image 2.1, which natively supports 2K output and RGBA transparency for direct transparent results. It takes 1 input image and returns 1 background-free image plus a comparison view showing the before and after. Ideal for e-commerce product photos, profile pictures, and marketing graphics needing clean cutouts.",
    "kind": "image",
    "tags": [
     "Remove Background",
@@ -3938,7 +4278,9 @@
    "models": [
     "Qwen Image 2.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.37.0",
+   "requires_custom_nodes": false,
    "size": 21367462298,
    "usage": 114,
    "files": [
@@ -3962,6 +4304,7 @@
   {
    "name": "image_qwen_image_2_1_image_edit",
    "title": "Qwen Image 2.1: Image Edit",
+   "description": "Edit images with Qwen-Image-2.1 by feeding two reference images through a single checkpoint that handles both generation and editing, then comparing the result against the original. Ideal for character-consistent edits, product cutout compositing with real transparency, and style-transfer passes at native 2K.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -3970,7 +4313,9 @@
    "models": [
     "Qwen Image 2.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.37.0",
+   "requires_custom_nodes": false,
    "size": 26736171418,
    "usage": 18213,
    "files": [
@@ -3999,6 +4344,7 @@
   {
    "name": "image_qwen_image_2_1_t2i",
    "title": "Qwen Image 2.1: Text to Image",
+   "description": "Generate images from text prompts with Qwen Image 2.1, the latest open-weight Qwen-Image model, producing a single 1024×1024 image over 25 sampling steps. Generation and instruction-based editing share one model with native 2K output, professional typography, and alpha-channel support. Ideal for poster and layout design, transparent asset creation, and rapid concept visualization.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -4007,7 +4353,9 @@
    "models": [
     "Qwen Image 2.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.37.2",
+   "requires_custom_nodes": false,
    "size": 26736171418,
    "usage": 4998,
    "files": [
@@ -4036,6 +4384,7 @@
   {
    "name": "image_qwen_image_2_1_turbo_image_edit",
    "title": "Qwen Image 2.1 Turbo: Image edit",
+   "description": "Edit images with Qwen-Image-2.1 by feeding two reference images through a single checkpoint that handles both generation and editing, then comparing the result against the original. Ideal for character-consistent edits, product cutout compositing with real transparency, and style-transfer passes at native 2K",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -4043,7 +4392,9 @@
    "models": [
     "Qwen Image 2.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.39.0",
+   "requires_custom_nodes": false,
    "size": 41016937677,
    "usage": 1388,
    "files": [
@@ -4072,6 +4423,7 @@
   {
    "name": "image_qwen_image_2_1_turbo_t2i",
    "title": "Qwen Image 2.1 Turbo: Text to Image",
+   "description": "Generate images from text prompts with Qwen Image 2.1 Turbo, the 8-step accelerated checkpoint, producing a single 1024×1024 image in 8 sampling steps. Same model family with native 2K output, professional typography, and alpha-channel support, plus an optional Qwen 3.5 prompt enhancer. Ideal for poster and layout design, transparent asset creation, and rapid concept visualization.",
    "kind": "image",
    "tags": [
     "Int8",
@@ -4081,7 +4433,9 @@
    "models": [
     "Qwen Image 2.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.39.0",
+   "requires_custom_nodes": false,
    "size": 40984448745,
    "usage": 572,
    "files": [
@@ -4110,6 +4464,7 @@
   {
    "name": "image_qwen_image_controlnet_patch",
    "title": "Qwen-Image ControlNet Model Patch",
+   "description": "Control image generation using Qwen-Image ControlNet models. Supports canny, depth, and inpainting controls through model patching.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -4119,7 +4474,9 @@
    "models": [
     "Qwen-Image"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.52",
+   "requires_custom_nodes": false,
    "size": 34037615821,
    "usage": 28,
    "files": [
@@ -4153,6 +4510,7 @@
   {
    "name": "image_qwen_image_edit",
    "title": "Qwen Image Edit",
+   "description": "Edit images with precise bilingual text editing and dual semantic/appearance editing capabilities using Qwen-Image-Edit's 20B MMDiT model.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -4160,7 +4518,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 31782757990,
    "usage": 64,
    "files": [
@@ -4189,6 +4549,7 @@
   {
    "name": "image_qwen_image_edit_2509",
    "title": "Qwen Image Edit 2509",
+   "description": "Advanced image editing with multi-image support, improved consistency, and ControlNet integration.",
    "kind": "edit",
    "tags": [
     "ControlNet",
@@ -4197,7 +4558,9 @@
    "models": [
     "Qwen-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.23.0",
+   "requires_custom_nodes": false,
    "size": 31782757990,
    "usage": 3501,
    "files": [
@@ -4226,6 +4589,7 @@
   {
    "name": "image_qwen_image_edit_2509_relight",
    "title": "Image Relight",
+   "description": "Relight images using Qwen-Image-Edit with LoRA support.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -4234,7 +4598,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.60",
+   "requires_custom_nodes": false,
    "size": 31772020572,
    "usage": 58,
    "files": [
@@ -4268,6 +4634,7 @@
   {
    "name": "image_qwen_image_edit_2511",
    "title": "Qwen Image Edit 2511 - Material Replacement",
+   "description": "Replace materials in objects (e.g., furniture) by combining reference images with Qwen-Image-Edit-2511.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -4275,7 +4642,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 51324859187,
    "usage": 496,
    "files": [
@@ -4304,6 +4673,7 @@
   {
    "name": "image_qwen_image_edit_2511_int8",
    "title": "Qwen Image Edit 2511 Int8: Image Edit",
+   "description": "Edit images with Qwen Image Edit 2511 Int8, using a quantized model for faster inference while maintaining high quality. Input one image and receive one edited output. Ideal for character-consistent portrait editing, multi-person group photo fusion, and industrial design modifications.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -4312,7 +4682,9 @@
    "models": [
     "Qwen Image Edit 2511"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.23.0",
+   "requires_custom_nodes": false,
    "size": 31031138714,
    "usage": 1455,
    "files": [
@@ -4341,6 +4713,7 @@
   {
    "name": "image_qwen_image_instantx_controlnet",
    "title": "Qwen-Image InstantX Union ControlNet",
+   "description": "Generate images with Qwen-Image InstantX ControlNet, supporting canny, soft edge, depth, pose",
    "kind": "image",
    "tags": [
     "Image",
@@ -4349,7 +4722,9 @@
    "models": [
     "Qwen-Image"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 35304631173,
    "usage": 60,
    "files": [
@@ -4393,6 +4768,7 @@
   {
    "name": "image_qwen_image_instantx_inpainting_controlnet",
    "title": "Qwen-Image InstantX Inpainting ControlNet",
+   "description": "Professional inpainting and image editing with Qwen-Image InstantX ControlNet. Supports object replacement, text modification, background changes, and outpainting.",
    "kind": "image",
    "tags": [
     "Image",
@@ -4402,7 +4778,9 @@
    "models": [
     "Qwen-Image"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.57",
+   "requires_custom_nodes": false,
    "size": 36013300777,
    "usage": 172,
    "files": [
@@ -4436,6 +4814,7 @@
   {
    "name": "image_qwen_image_layered",
    "title": "Layer Decomposition: Qwen-Image-Layered",
+   "description": "Decompose an image into editable RGBA layers for high-fidelity recolor, replace, resize, and reposition workflows using Qwen-Image-Layered.",
    "kind": "image",
    "tags": [
     "Layer Decompose"
@@ -4443,7 +4822,9 @@
    "models": [
     "Qwen-Image-Layered"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.6.0",
+   "requires_custom_nodes": false,
    "size": 50465865728,
    "usage": 97,
    "files": [
@@ -4467,6 +4848,7 @@
   {
    "name": "image_qwen_image_layered_control",
    "title": "Layer Decomposition: Qwen-Image-Layered Control",
+   "description": "Describe the elements you want in the image and decompose it precisely from the image.",
    "kind": "image",
    "tags": [
     "Layer Decompose"
@@ -4474,7 +4856,9 @@
    "models": [
     "Qwen-Image-Layered"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.6.0",
+   "requires_custom_nodes": false,
    "size": 0,
    "usage": 28,
    "files": [
@@ -4498,6 +4882,7 @@
   {
    "name": "image_qwen_image_union_control_lora",
    "title": "Qwen-Image Union Control",
+   "description": "Generate images with precise structural control using Qwen-Image's unified ControlNet LoRA. Supports multiple control types including canny, depth, lineart, softedge, normal, and openpose for diverse creative applications.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -4507,7 +4892,9 @@
    "models": [
     "Qwen-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 32749125632,
    "usage": 34,
    "files": [
@@ -4541,6 +4928,7 @@
   {
    "name": "image_sdxl_simple",
    "title": "SDXL1.0: Text to Image (Simple)",
+   "description": "Generate high-quality images from text prompts using the SDXL 1.0 model, offering a straightforward text-to-image generation workflow. Ideal for quick concept visualization, creative brainstorming, and rapid prototyping of visual ideas.",
    "kind": "image",
    "tags": [
     "Image",
@@ -4549,7 +4937,9 @@
    "models": [
     "SDXL"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.0.1",
+   "requires_custom_nodes": false,
    "size": 6979321856,
    "usage": 610,
    "files": [
@@ -4563,6 +4953,7 @@
   {
    "name": "image_to_video_wan",
    "title": "Wan 2.1 Image to Video",
+   "description": "Generate videos from images using Wan 2.1.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -4572,7 +4963,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 41049149932,
    "usage": 131,
    "files": [
@@ -4601,6 +4994,7 @@
   {
    "name": "image_z_image",
    "title": "Z-Image: Text to Image",
+   "description": "Foundation for creative freedom. Diverse aesthetics with exceptional photorealistic quality; ideal for fine-tuning; responsive to negative prompts; high generation diversity.",
    "kind": "image",
    "tags": [
     "Image",
@@ -4609,7 +5003,9 @@
    "models": [
     "Z-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.23.0",
+   "requires_custom_nodes": false,
    "size": 20830591386,
    "usage": 137,
    "files": [
@@ -4633,6 +5029,7 @@
   {
    "name": "image_z_image_int8",
    "title": "Z-Image Int8: Text to Image",
+   "description": "Generate high-quality, diverse images from text prompts using the Z-Image Int8 model, which leverages an undistilled transformer for precise prompt adherence and broad stylistic coverage. The workflow takes no file inputs and produces 1 image output through a standard text-to-image pipeline. Ideal for professional creative projects, LoRA training and model development, and scenarios requiring robust negative control and high compositional diversity.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -4641,7 +5038,9 @@
    "models": [
     "Z-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.23.0",
+   "requires_custom_nodes": false,
    "size": 14602888806,
    "usage": 32,
    "files": [
@@ -4665,6 +5064,7 @@
   {
    "name": "image_z_image_turbo",
    "title": "Z-Image-Turbo: Text to Image",
+   "description": "An Efficient Image Generation Foundation Model with Single-Stream Diffusion Transformer, supports English & Chinese.",
    "kind": "image",
    "tags": [
     "Image",
@@ -4673,7 +5073,9 @@
    "models": [
     "Z-Image-Turbo"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.11.0",
+   "requires_custom_nodes": false,
    "size": 20830591386,
    "usage": 14843,
    "files": [
@@ -4697,6 +5099,7 @@
   {
    "name": "image_z_image_turbo_fun_union_controlnet",
    "title": "Z-Image-Turbo Fun Union ControlNet",
+   "description": "Multi-control ControlNet supporting Canny, HED, Depth, Pose, and MLSD for Z-Image-Turbo.",
    "kind": "image",
    "tags": [
     "Image",
@@ -4705,7 +5108,9 @@
    "models": [
     "Z-Image-Turbo"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.57",
+   "requires_custom_nodes": false,
    "size": 23837068493,
    "usage": 309,
    "files": [
@@ -4734,6 +5139,7 @@
   {
    "name": "image_z_image_turbo_int8",
    "title": "Z-Image-Turbo Int8: Text to Image",
+   "description": "Generate photorealistic images using the Z-Image-Turbo int8 model, a distilled 6B-parameter variant optimized for sub-second inference through efficient 8-step sampling. The workflow takes a text prompt as input and outputs a single high-quality image. Ideal for rapid creative iteration, realistic concept art, and production-ready visual prototyping.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -4742,7 +5148,9 @@
    "models": [
     "Z-Image-Turbo"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.11.0",
+   "requires_custom_nodes": false,
    "size": 12133282611,
    "usage": 216,
    "files": [
@@ -4766,6 +5174,7 @@
   {
    "name": "llm_gemma4_text_gen",
    "title": "Gemma4: Text Generation",
+   "description": "Input your text prompt and optionally an image, audio, or video. Generate text output with configurable reasoning, coding, and multilingual support.",
    "kind": "llm",
    "tags": [
     "Text Generation"
@@ -4773,7 +5182,9 @@
    "models": [
     "Gemma 4"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.15.0",
+   "requires_custom_nodes": false,
    "size": 9019431322,
    "usage": 65,
    "files": [
@@ -4787,6 +5198,7 @@
   {
    "name": "llm_qwen3_5_text_gen",
    "title": "Qwen3.5: Text Generation",
+   "description": "Use the Qwen3.5 model to analyze an input image and generate descriptive text prompts. This workflow performs image captioning and reverse prompt engineering.",
    "kind": "llm",
    "tags": [
     "Text Generation"
@@ -4794,7 +5206,9 @@
    "models": [
     "Qwen3.5"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.15.0",
+   "requires_custom_nodes": false,
    "size": 9341553869,
    "usage": 146,
    "files": [
@@ -4808,6 +5222,7 @@
   {
    "name": "llm_qwen3_text_gen",
    "title": "Qwen3.0: Text Generation",
+   "description": "Input a text prompt to generate detailed, reasoned responses using the Qwen3-4B-Thinking model.",
    "kind": "llm",
    "tags": [
     "Text Generation"
@@ -4815,7 +5230,9 @@
    "models": [
     "Qwen 3.0"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.15.0",
+   "requires_custom_nodes": false,
    "size": 8053063680,
    "usage": 21,
    "files": [
@@ -4829,6 +5246,7 @@
   {
    "name": "llm_qwen3vl_text_gen",
    "title": "Qwen3-VL: Text Generation",
+   "description": "Generate text with visual understanding using Qwen3-VL models, processing one input image to produce contextual text responses. Ideal for image captioning, visual question answering, and multimodal content generation.",
    "kind": "llm",
    "tags": [
     "Text Generation"
@@ -4836,7 +5254,9 @@
    "models": [
     "Qwen 3.0"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.15.0",
+   "requires_custom_nodes": false,
    "size": 5261334938,
    "usage": 204,
    "files": [
@@ -4850,6 +5270,7 @@
   {
    "name": "ltxv_image_to_video",
    "title": "LTXV Image to Video",
+   "description": "Generate videos from still images.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -4858,7 +5279,9 @@
    "models": [
     "LTX-0.9.5"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 19155554140,
    "usage": 27,
    "files": [
@@ -4877,6 +5300,7 @@
   {
    "name": "ltxv_text_to_video",
    "title": "LTXV Text to Video",
+   "description": "Generate videos from text prompts.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -4885,7 +5309,9 @@
    "models": [
     "LTX-0.9.5"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 19155554140,
    "usage": 16,
    "files": [
@@ -4904,6 +5330,7 @@
   {
    "name": "sd3.5_large_blur",
    "title": "SD3.5 Large Blur",
+   "description": "Generate images guided by blurred reference images using SD 3.5.",
    "kind": "edit",
    "tags": [
     "Image",
@@ -4913,7 +5340,9 @@
     "SD3.5",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.5",
+   "requires_custom_nodes": false,
    "size": 23590107873,
    "usage": 9,
    "files": [
@@ -4932,6 +5361,7 @@
   {
    "name": "sd3.5_large_canny_controlnet_example",
    "title": "SD3.5 Large Canny ControlNet",
+   "description": "Generate images guided by edge detection using SD 3.5 Canny ControlNet.",
    "kind": "image",
    "tags": [
     "Image",
@@ -4941,7 +5371,9 @@
     "SD3.5",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.5",
+   "requires_custom_nodes": false,
    "size": 23590107873,
    "usage": 11,
    "files": [
@@ -4960,6 +5392,7 @@
   {
    "name": "sd3.5_large_depth",
    "title": "SD3.5 Large Depth",
+   "description": "Generate images guided by depth information using SD 3.5.",
    "kind": "image",
    "tags": [
     "Image",
@@ -4969,7 +5402,9 @@
     "SD3.5",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 23590107873,
    "usage": 27,
    "files": [
@@ -4998,6 +5433,7 @@
   {
    "name": "sd3.5_simple_example",
    "title": "SD3.5 Simple",
+   "description": "Generate images using SD 3.5.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -5007,7 +5443,9 @@
     "SD3.5",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.5",
+   "requires_custom_nodes": false,
    "size": 14935748772,
    "usage": 202,
    "files": [
@@ -5021,6 +5459,7 @@
   {
    "name": "sdxl_refiner_prompt_example",
    "title": "SDXL Refiner Prompt",
+   "description": "Enhance SDXL images using refiner models.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -5030,7 +5469,9 @@
     "SDXL",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.0.1",
+   "requires_custom_nodes": false,
    "size": 13013750907,
    "usage": 48,
    "files": [
@@ -5049,6 +5490,7 @@
   {
    "name": "sdxl_revision_text_prompts",
    "title": "SDXL Revision Text Prompts",
+   "description": "Generate images by transferring concepts from reference images using SDXL Revision.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -5058,7 +5500,9 @@
     "SDXL",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.0.1",
+   "requires_custom_nodes": false,
    "size": 10630044058,
    "usage": 12,
    "files": [
@@ -5077,6 +5521,7 @@
   {
    "name": "sdxl_simple_example",
    "title": "SDXL Simple",
+   "description": "Generate high-quality images using SDXL.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -5086,7 +5531,9 @@
     "SDXL",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.0.1",
+   "requires_custom_nodes": false,
    "size": 13013750907,
    "usage": 95,
    "files": [
@@ -5105,6 +5552,7 @@
   {
    "name": "sdxlturbo_example",
    "title": "SDXL Turbo",
+   "description": "Generate images in a single step using SDXL Turbo.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -5114,7 +5562,9 @@
     "SDXL",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.0.1",
+   "requires_custom_nodes": false,
    "size": 6936372183,
    "usage": 168,
    "files": [
@@ -5128,6 +5578,7 @@
   {
    "name": "template_image_speech_to_video",
    "title": "Generate UGC Video With Voice Clone",
+   "description": "Upload an image to generate AI prompts and synthesize speech. Create a final video with accurate lip sync using ElevenLabs and LTX Video.",
    "kind": "image",
    "tags": [
     "API",
@@ -5137,7 +5588,9 @@
     "ElevenLabs",
     "LTX-2.3"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.35.2",
+   "requires_custom_nodes": false,
    "size": 48962627174,
    "usage": 10,
    "files": [
@@ -5176,6 +5629,7 @@
   {
    "name": "template_ltx2_3_ic_lora_ingredients",
    "title": "LTX-2.3 IC-LoRA: Reference Sheet Control",
+   "description": "Generate short video clips that stay visually consistent with a reference sheet inventorying characters, props, and locations. Input a composite reference image and a split prompt describing the action, outputting a single video clip. Ideal for character-driven animation, consistent prop visualization, and location-specific scene generation.",
    "kind": "image",
    "tags": [
     "Reference to Video"
@@ -5183,7 +5637,9 @@
    "models": [
     "LTX-2.3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.22.0",
+   "requires_custom_nodes": false,
    "size": 39621073306,
    "usage": 94,
    "files": [
@@ -5212,6 +5668,7 @@
   {
    "name": "template_ltx2_3_style_transition",
    "title": "LTX-2.3 Style Transition",
+   "description": "Apply the ltx2.3-transition LoRA to create smooth style and scene transitions. This workflow uses a specialized model to blend visual elements.",
    "kind": "video",
    "tags": [
     "FLF2V",
@@ -5221,7 +5678,9 @@
    "models": [
     "LTX-2.3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 39406324941,
    "usage": 24,
    "files": [
@@ -5245,6 +5704,7 @@
   {
    "name": "template_qwen_Image_2512_360_lora",
    "title": "Qwen Image 2512: 360 Panorama Image",
+   "description": "Generate 360-degree equirectangular projection images from text descriptions using a rank 128 LoRA on the 20B MMDiT model.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -5253,7 +5713,9 @@
    "models": [
     "Qwen-Image 2512"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 32534377267,
    "usage": 19,
    "files": [
@@ -5287,6 +5749,7 @@
   {
    "name": "template_qwen_image_edit_2511_systms_action",
    "title": "Qwen Image Edit 2511: SYSTMS ACTION LoRA",
+   "description": "Upload your target image and use the trigger phrase \"action the [thing]\" (e.g., \"action the scene\"). Generate a toy or action figure version of your subject with articulated joints, plastic materials, and painted details.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -5295,7 +5758,9 @@
    "models": [
     "Qwen Image Edit 2511"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 51646981734,
    "usage": 0,
    "files": [
@@ -5329,6 +5794,7 @@
   {
    "name": "template_qwen_image_illustration_lora",
    "title": "Qwen Image: Illustration LoRA",
+   "description": "A t2v workflows for a style LoRA built on Qwen-Image. Produces images spanning cute anime character design, European bande dessinee, indie risograph prints, storybook watercolor, retro shoujo manga, and graphic novel illustration.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -5337,7 +5803,9 @@
    "models": [
     "Qwen-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.49",
+   "requires_custom_nodes": false,
    "size": 30816390349,
    "usage": 101,
    "files": [
@@ -5366,6 +5834,7 @@
   {
    "name": "template_qwen_multiangle.app",
    "title": "Generate Multiple Angles with 3D Camera Node",
+   "description": "Generate camera angle variations of your input with an easy to use 3D camera angle node.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -5373,7 +5842,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.40.0",
+   "requires_custom_nodes": false,
    "size": 31245887078,
    "usage": 708,
    "files": [
@@ -5407,6 +5878,7 @@
   {
    "name": "template_rob_realistic_2k_images_quick_variations",
    "title": "Realistic 2k Images - Quick Variations",
+   "description": "Upload an image that you want a variation of. The workflow captions the input image, generates with Grok Image, and upscales with Z-Image to add realistic textures.",
    "kind": "image",
    "tags": [
     "API",
@@ -5417,7 +5889,9 @@
     "Grok",
     "Z-Image-Turbo"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.11.1",
+   "requires_custom_nodes": false,
    "size": 20723217203,
    "usage": 54,
    "files": [
@@ -5446,6 +5920,7 @@
   {
    "name": "template_sugar_coated_gummy_style_qwen",
    "title": "Qwen Image: Gummy Animals LoRA",
+   "description": "Apply a Qwen Image LoRA to transform any subject into a sour gummy candy-style character. Enter an animal name in the prompt to generate a stylized, edible-looking creature.",
    "kind": "image",
    "tags": [
     "Text to Image",
@@ -5455,7 +5930,9 @@
    "models": [
     "Qwen-Image"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.42",
+   "requires_custom_nodes": false,
    "size": 30709016166,
    "usage": 14,
    "files": [
@@ -5484,6 +5961,7 @@
   {
    "name": "templates-1_click_multiple_character_angles-v1.0",
    "title": "1 Click Multiple Character Angles",
+   "description": "Upload an image of your character and get multiple views of that image from different angles",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -5491,7 +5969,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 31245887078,
    "usage": 363,
    "files": [
@@ -5525,6 +6005,7 @@
   {
    "name": "templates-1_click_multiple_scene_angles-v1.0",
    "title": "1 click Multiple Scene Angles",
+   "description": "Upload an image of your scene and generate multiple views of your input scene with 1 click.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -5532,7 +6013,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.60",
+   "requires_custom_nodes": false,
    "size": 31198642438,
    "usage": 123,
    "files": [
@@ -5566,6 +6049,7 @@
   {
    "name": "templates-6-key-frames",
    "title": "Multi-Keyframe Video Stitching",
+   "description": "Creates a smooth video using 6 key frames.It auto fills in the motion between frames and stitches the segments together seamlessly.",
    "kind": "video",
    "tags": [
     "FLF2V",
@@ -5574,7 +6058,9 @@
    "models": [
     "Wan2.2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 0,
    "usage": 63,
    "files": [
@@ -5613,6 +6099,7 @@
   {
    "name": "templates-all_in_one-image_edit_models",
    "title": "1 input and multiple editing model comparison",
+   "description": "upload one input image and select multiple editing models. generate side-by-side outputs to directly compare model effects and quality.",
    "kind": "edit",
    "tags": [
     "API",
@@ -5627,7 +6114,9 @@
     "Qwen-Image-Edit",
     "Seedream"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.33.3",
+   "requires_custom_nodes": false,
    "size": 134002979635,
    "usage": 18,
    "files": [
@@ -5676,6 +6165,7 @@
   {
    "name": "templates-image_to_real",
    "title": "Illustration to Realism",
+   "description": "Input an illustration and generate a hyper realistic version using Qwen Image Edit 2509.",
    "kind": "image",
    "tags": [
     "Style Transfer"
@@ -5683,7 +6173,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.60",
+   "requires_custom_nodes": false,
    "size": 0,
    "usage": 110,
    "files": [
@@ -5717,6 +6209,7 @@
   {
    "name": "templates-portrait_light_migration",
    "title": "Light Migration for Character Portrait",
+   "description": "Upload a portrait of your character and a reference lighting image. Generate an image with reference lighting applied and character consistency.",
    "kind": "image",
    "tags": [
     "Relight",
@@ -5727,7 +6220,9 @@
     "Qwen",
     "Qwen-Image-Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 31138512896,
    "usage": 35,
    "files": [
@@ -5761,6 +6256,7 @@
   {
    "name": "templates_mjm_looped_restyler",
    "title": "Looped Restyler",
+   "description": "Upload a starting image and its prompt to generate a looping video from the first to the last frame.",
    "kind": "video",
    "tags": [
     "API",
@@ -5773,7 +6269,9 @@
     "Nano Banana",
     "Wan2.2"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.53",
+   "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 6,
    "files": [
@@ -5812,6 +6310,7 @@
   {
    "name": "templates_ohneis_i2v",
    "title": "Image to Video",
+   "description": "It shows how to go from a simple prompt to a Wes Anderson-style image using a cinematic image model, then enhance it with Nano Banana to improve textures and details, and finally turn it into a video using the current best video model, Kling 3.0.",
    "kind": "video",
    "tags": [
     "API",
@@ -5824,7 +6323,9 @@
     "Nano Banana Pro",
     "Z-Image-Turbo"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.5.0",
+   "requires_custom_nodes": false,
    "size": 20723217203,
    "usage": 6,
    "files": [
@@ -5848,6 +6349,7 @@
   {
    "name": "templates_rob_portrait_light_migration.app",
    "title": "Portrait Relight",
+   "description": "Upload your target image and a reference lighting image. Relights your target image.",
    "kind": "edit",
    "tags": [
     "Image Edit",
@@ -5857,7 +6359,9 @@
    "models": [
     "Qwen-Image-Edit"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 31138512896,
    "usage": 16,
    "files": [
@@ -5891,6 +6395,7 @@
   {
    "name": "templates_rob_realistic_2k_images_quick_variations.app",
    "title": "Generate Realistic Variations",
+   "description": "Upload a reference image, uses Grok to caption and generate variations with a fast 2x upscale for added details.",
    "kind": "image",
    "tags": [
     "API",
@@ -5901,7 +6406,9 @@
     "Grok",
     "Z-Image-Turbo"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.11.1",
+   "requires_custom_nodes": false,
    "size": 20723217203,
    "usage": 34,
    "files": [
@@ -5930,6 +6437,7 @@
   {
    "name": "text_to_video_wan",
    "title": "Wan 2.1 Text to Video",
+   "description": "Generate videos from text prompts using Wan 2.1.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -5939,7 +6447,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 9824737690,
    "usage": 104,
    "files": [
@@ -5963,6 +6473,7 @@
   {
    "name": "txt_to_image_to_video",
    "title": "SVD Text to Image to Video",
+   "description": "Generate videos by first creating images from text prompts.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -5972,7 +6483,9 @@
     "SVD",
     "Stability"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 16492674417,
    "usage": 9,
    "files": [
@@ -5991,6 +6504,7 @@
   {
    "name": "utility-gan_upscaler",
    "title": "Video Upscale: Real-ESRGAN",
+   "description": "Upload a video to upscale it using a fast GAN model. The output resolution is determined by your chosen model (e.g., 2x or 4x). For best results, upscale first, then resize to your target resolution.",
    "kind": "video",
    "tags": [
     "Video Upscale",
@@ -5999,7 +6513,9 @@
    "models": [
     "Real-ESRGAN"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 0,
    "usage": 88,
    "files": [
@@ -6013,6 +6529,7 @@
   {
    "name": "utility_birefnet_remove_background",
    "title": "Remove Background: BiRefNet",
+   "description": "Upload an image with any background. Generate a version with the background removed and a precision segmentation mask.",
    "kind": "image",
    "tags": [
     "Remove Background"
@@ -6020,7 +6537,9 @@
    "models": [
     "BiRefNet"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.21.0",
+   "requires_custom_nodes": false,
    "size": 429496730,
    "usage": 60,
    "files": [
@@ -6034,6 +6553,7 @@
   {
    "name": "utility_depth_anything3_image_depth_estimation",
    "title": "Depth Estimation: Depth Anything 3",
+   "description": "Upload 1 image. Generate a depth map using Depth Anything 3 and view a side-by-side comparison of the original and depth output. Ideal for 3D scene reconstruction, AR/VR asset preparation, and visual effects depth passes.",
    "kind": "image",
    "tags": [
     "ControlNet"
@@ -6041,7 +6561,9 @@
    "models": [
     "Depth Anything v3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 1288490189,
    "usage": 55,
    "files": [
@@ -6055,6 +6577,7 @@
   {
    "name": "utility_depth_anything3_video_depth_estimation",
    "title": "Depth Map: Depth Anything 3",
+   "description": "Upload 1 image to generate a depth map for video depth estimation. Output a single depth-processed image ready for use in downstream workflows. Ideal for video generation tasks requiring depth control, 3D scene preprocessing, and animation depth mapping.",
    "kind": "video",
    "tags": [
     "ControlNet"
@@ -6062,7 +6585,9 @@
    "models": [
     "Depth Anything v3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 1288490189,
    "usage": 132,
    "files": [
@@ -6076,6 +6601,7 @@
   {
    "name": "utility_image_segment_sam3",
    "title": "Image Segmentation: SAM3",
+   "description": "Use the SAM3 model to segment the main subject or content from a photo or image, isolating specific objects or regions. Input an image and receive a segmented mask output.",
    "kind": "image",
    "tags": [
     "Element Segmentation"
@@ -6083,7 +6609,9 @@
    "models": [
     "SAM3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.20.0",
+   "requires_custom_nodes": false,
    "size": 1717986918,
    "usage": 122,
    "files": [
@@ -6097,6 +6625,7 @@
   {
    "name": "utility_moge3_geometry_estimation",
    "title": "Geometry Estimation: MoGe 3",
+   "description": "Estimate fine-detailed geometry from a single image with MoGe 3, the sparse-volumetric refinement version of MoGe. It lifts a coarse point map onto a sparse voxel shell and refines depth with lightweight sparse 3D convolutions, keeping thin structures and depth discontinuities that image-space decoders blur. Ships with the ViT-L checkpoint; the ViT-G file is selectable in the same Load MoGe Model dropdown for higher fine-detail accuracy. Takes 1 image input and outputs 1 depth map and 1 normal map.",
    "kind": "image",
    "tags": [
     "Depth Estimation",
@@ -6105,7 +6634,9 @@
    "models": [
     "MoGe"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.37.0",
+   "requires_custom_nodes": false,
    "size": 2469606195,
    "usage": 94,
    "files": [
@@ -6119,6 +6650,7 @@
   {
    "name": "utility_moge_depth_estimation",
    "title": "Depth Estimation: MoGe",
+   "description": "Upload a single RGB image and adjust inference resolution and batch size. Generate a colored depth preview and raw depth map,",
    "kind": "image",
    "tags": [
     "ControlNet"
@@ -6126,7 +6658,9 @@
    "models": [
     "MoGe"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.22.0",
+   "requires_custom_nodes": false,
    "size": 644245094,
    "usage": 14,
    "files": [
@@ -6140,6 +6674,7 @@
   {
    "name": "utility_pid_latent_upscale_dit",
    "title": "Image Upscale: PiD Latent Decode",
+   "description": "Input a latent image from a diffusion model and select a PiD checkpoint. Generate a high-resolution decoded image with 4x or 8x upscaling in a single pass.",
    "kind": "image",
    "tags": [
     "Image Upscale"
@@ -6147,7 +6682,9 @@
    "models": [
     "PiD"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.23.0",
+   "requires_custom_nodes": false,
    "size": 25984552141,
    "usage": 2,
    "files": [
@@ -6181,6 +6718,7 @@
   {
    "name": "utility_sam3d_body",
    "title": "SAM 3D Body: 3D Human Mesh Extraction From Video",
+   "description": "Extract a full-body 3D human mesh from a single video frame using SAM 3D Body, guided by a text prompt to refine pose and shape estimation. The workflow loads one video and one text prompt, then outputs a reconstructed video showing the recovered human rig. Ideal for motion capture prototyping, biomechanics analysis, and character animation previsualization.",
    "kind": "3d",
    "tags": [
     "3D"
@@ -6188,7 +6726,9 @@
    "models": [
     "SAM 3D Body"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.34.0",
+   "requires_custom_nodes": false,
    "size": 5476083302,
    "usage": 138,
    "files": [
@@ -6217,6 +6757,7 @@
   {
    "name": "utility_sdpose_multi_person",
    "title": "Pose Detection: SDPose Multi-Person",
+   "description": "Upload an image to detect human poses. Supports detection for both single individuals and multiple people within the same scene.",
    "kind": "image",
    "tags": [
     "Pose Map"
@@ -6224,7 +6765,9 @@
    "models": [
     "SDPose-OOD"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.19.0",
+   "requires_custom_nodes": false,
    "size": 2040109466,
    "usage": 15,
    "files": [
@@ -6243,6 +6786,7 @@
   {
    "name": "utility_sdpose_multi_person_video",
    "title": "Pose Detection: SDPose Multi-Person",
+   "description": "Upload a video to detect human poses. Supports detection for both single individuals and multiple people within the same scene",
    "kind": "video",
    "tags": [
     "Pose Map"
@@ -6250,7 +6794,9 @@
    "models": [
     "SDPose-OOD"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.19.0",
+   "requires_custom_nodes": false,
    "size": 2040109466,
    "usage": 9,
    "files": [
@@ -6269,6 +6815,7 @@
   {
    "name": "utility_sdpose_ood_image_to_pose",
    "title": "Pose Map: SDPose-OOD",
+   "description": "Upload an image to extract pose keypoints and generate a corresponding pose map using the SDPose-OOD model.",
    "kind": "image",
    "tags": [
     "Pose Map"
@@ -6276,7 +6823,9 @@
    "models": [
     "SDPose-OOD"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.0",
+   "requires_custom_nodes": false,
    "size": 1932735283,
    "usage": 32,
    "files": [
@@ -6290,6 +6839,7 @@
   {
    "name": "utility_sdpose_ood_video_to_pose_map",
    "title": "Pose Map: SDPose-OOD",
+   "description": "Upload a video to extract pose keypoints and generate a pose map. The workflow supports multiple person detection and uses an enhanced SDPose model for accurate whole-body feature extraction.",
    "kind": "video",
    "tags": [
     "Pose Map"
@@ -6297,7 +6847,9 @@
    "models": [
     "SDPose-OOD"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.0",
+   "requires_custom_nodes": false,
    "size": 1932735283,
    "usage": 9,
    "files": [
@@ -6311,6 +6863,7 @@
   {
    "name": "utility_seedvr2_3b_int8_upscale_image",
    "title": "Image Upscale: SeedVR2 3B Int8",
+   "description": "Upscale images using SeedVR2 3B Int8, a one-step diffusion-based video restoration model that produces high-quality results with improved temporal consistency. Ideal for restoring degraded footage, upscaling low-resolution videos, and enhancing archival media.",
    "kind": "image",
    "tags": [
     "Image Upscale",
@@ -6319,7 +6872,9 @@
    "models": [
     "SeedVR2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.28.0",
+   "requires_custom_nodes": false,
    "size": 3972844749,
    "usage": 93,
    "files": [
@@ -6338,6 +6893,7 @@
   {
    "name": "utility_seedvr2_3b_int8_upscale_video",
    "title": "Video Upscale: SeedVR2 3B Int8",
+   "description": "Upscale and restore video footage using SeedVR2 3B Int8, a one-step diffusion model that enhances resolution while maintaining temporal consistency across frames. This workflow takes one degraded video as input and outputs a single high-resolution, restored video. Ideal for restoring old or degraded footage, upscaling low-resolution videos, and enhancing archival media.",
    "kind": "video",
    "tags": [
     "Video Upscale",
@@ -6346,7 +6902,9 @@
    "models": [
     "SeedVR2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.28.0",
+   "requires_custom_nodes": false,
    "size": 3972844749,
    "usage": 581,
    "files": [
@@ -6365,6 +6923,7 @@
   {
    "name": "utility_seedvr2_7b_int8_upscale_image",
    "title": "Image Upscale: SeedVR2 7B Int8",
+   "description": "Upscale images using SeedVR2 7B Int8, a one-step diffusion model that enhances resolution through adversarial training and adaptive window attention. Input 1 image and receive 1 upscaled output with improved detail and clarity. Ideal for restoring low-resolution photos, preparing assets for print, or sharpening lightly degraded digital images.",
    "kind": "image",
    "tags": [
     "Image Upscale",
@@ -6373,7 +6932,9 @@
    "models": [
     "SeedVR2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.28.0",
+   "requires_custom_nodes": false,
    "size": 8804682957,
    "usage": 521,
    "files": [
@@ -6392,6 +6953,7 @@
   {
    "name": "utility_video_frame_interpolation",
    "title": "Frame Interpolation: FILM or RIFE",
+   "description": "Upload a video and select either RIFE or FILM frame interpolation model to generate smoother, higher frame rate video output.",
    "kind": "video",
    "tags": [
     "Frame Interpolation"
@@ -6400,7 +6962,9 @@
     "FILM",
     "RIFE"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.20.0",
+   "requires_custom_nodes": false,
    "size": 107374182,
    "usage": 57,
    "files": [
@@ -6414,6 +6978,7 @@
   {
    "name": "utility_video_segment_sam3",
    "title": "Video Segmentation: SAM3",
+   "description": "Use the SAM3 model to segment the main subject or content from a video, isolating specific objects or regions. Input a video and receive a segmented mask output.",
    "kind": "video",
    "tags": [
     "Element Segmentation"
@@ -6421,7 +6986,9 @@
    "models": [
     "SAM3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.20.0",
+   "requires_custom_nodes": false,
    "size": 1717986918,
    "usage": 157,
    "files": [
@@ -6435,6 +7002,7 @@
   {
    "name": "utility_void_video_inpainting",
    "title": "Video Inpainting: VOID",
+   "description": "Upload a video and mask the object you want to remove. Generate a clean video with the object and its physical interactions deleted.",
    "kind": "video",
    "tags": [
     "Video Edit",
@@ -6443,7 +7011,9 @@
    "models": [
     "VOID"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.21.0",
+   "requires_custom_nodes": false,
    "size": 34252364186,
    "usage": 159,
    "files": [
@@ -6482,6 +7052,7 @@
   {
    "name": "utility_z_image_turbo_2k_upscaler.app",
    "title": "Image Upscale: Z-Image-Turbo 2K",
+   "description": "Upload an image to upscale it to 2K resolution using the Z-Image-Turbo model.",
    "kind": "image",
    "tags": [
     "Image Upscale"
@@ -6489,7 +7060,9 @@
    "models": [
     "Z-Image-Turbo"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.9.0",
+   "requires_custom_nodes": false,
    "size": 20723217203,
    "usage": 370,
    "files": [
@@ -6518,6 +7091,7 @@
   {
    "name": "video_bernini_r_image_editing",
    "title": "Bernini-R: Image Edit",
+   "description": "Generate an edited image with matched lighting and view a side-by-side before/after comparison. Ideal for portrait and product relighting, consistent lighting across photo sets, and e-commerce catalog photography.",
    "kind": "edit",
    "tags": [
     "Image Edit"
@@ -6525,7 +7099,9 @@
    "models": [
     "Bernini-R"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 38762079846,
    "usage": 91,
    "files": [
@@ -6559,6 +7135,7 @@
   {
    "name": "video_bernini_r_video_editing",
    "title": "Bernini-R: Video Edit",
+   "description": "Generate an edited video with consistent relighting using Bernini-R. Ideal for portrait and product relighting, e-commerce catalog photography, and creating consistent lighting across photo sets.",
    "kind": "video",
    "tags": [
     "Video Edit"
@@ -6566,7 +7143,9 @@
    "models": [
     "Bernini-R"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 38762079846,
    "usage": 354,
    "files": [
@@ -6600,6 +7179,7 @@
   {
    "name": "video_capybara_v0_1_image_to_video",
    "title": "Capybara: Image to Video",
+   "description": "Upload an image and provide a text instruction. Generate a new video where the input is edited according to your instruction, preserving structure and temporal coherence.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -6608,7 +7188,9 @@
    "models": [
     "Capybara"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.71",
+   "requires_custom_nodes": false,
    "size": 37044092928,
    "usage": 29,
    "files": [
@@ -6642,6 +7224,7 @@
   {
    "name": "video_capybara_v0_1_video_edit",
    "title": "Capybara: Video Edit",
+   "description": "Upload an image or video and a text instruction to perform generation or editing tasks. Generate a new or edited image or video based on the provided instruction.",
    "kind": "video",
    "tags": [
     "Video Edit"
@@ -6649,7 +7232,9 @@
    "models": [
     "Capybara"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 37044092928,
    "usage": 40,
    "files": [
@@ -6683,6 +7268,7 @@
   {
    "name": "video_causal_forcing_i2v",
    "title": "Causal Forcing: Image to Video",
+   "description": "Input a text prompt and select a model checkpoint. Generate a high-quality video using Causal Forcing or Causal Forcing++ with 1 to 4 inference steps.",
    "kind": "video",
    "tags": [
     "Image to Video"
@@ -6690,7 +7276,9 @@
    "models": [
     "Wan2.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.21.0",
+   "requires_custom_nodes": false,
    "size": 12670153523,
    "usage": 34,
    "files": [
@@ -6714,6 +7302,7 @@
   {
    "name": "video_fastvideo_fasth3_i2v",
    "title": "FastVideo FastH3: Image to Video",
+   "description": "Generate video with synchronized native audio from a single still image using MiniMax H3 and the FastH3 8-step checkpoint. One image produces one video output with matching voice, sound effects, and music in a single pass. Ideal for animating portraits, bringing product shots to life, and quick social media clips.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -6722,7 +7311,9 @@
    "models": [
     "MiniMax H3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.36.0",
+   "requires_custom_nodes": false,
    "size": 45097156608,
    "usage": 2516,
    "files": [
@@ -6751,6 +7342,7 @@
   {
    "name": "video_fastvideo_fasth3_t2v",
    "title": "FastVideo FastH3: Text to Video",
+   "description": "Generate synchronized video and audio directly from text using a distilled eight-step model, producing one video output with no file inputs required. Ideal for rapid text-to-video prototyping, audio-visual content creation, and creative storytelling where fast generation matters more than maximum detail.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -6759,7 +7351,9 @@
    "models": [
     "MiniMax H3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.36.0",
+   "requires_custom_nodes": false,
    "size": 42949672960,
    "usage": 816,
    "files": [
@@ -6788,6 +7382,7 @@
   {
    "name": "video_humo",
    "title": "HuMo Video Generation",
+   "description": "Generate videos based on audio, image, and text, keeping the character's lip sync.",
    "kind": "video",
    "tags": [
     "Video",
@@ -6796,7 +7391,9 @@
    "models": [
     "HuMo"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.60",
+   "requires_custom_nodes": false,
    "size": 27895812588,
    "usage": 18,
    "files": [
@@ -6830,6 +7427,7 @@
   {
    "name": "video_hunyuan_video_1.5_720p_i2v",
    "title": "Hunyuan Video 1.5 Image to Video",
+   "description": "Animate still images into dynamic videos with precise motion and camera control. Maintains visual consistency while bringing photos and illustrations to life with smooth, natural movements.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -6838,7 +7436,9 @@
    "models": [
     "Hunyuan Video"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.71",
+   "requires_custom_nodes": false,
    "size": 45384919416,
    "usage": 96,
    "files": [
@@ -6882,6 +7482,7 @@
   {
    "name": "video_hunyuan_video_1.5_720p_t2v",
    "title": "Hunyuan Video 1.5 Text to Video",
+   "description": "Generate high-quality 720p videos from text prompts with cinematic camera control, emotional expressions, and physics simulation. Supports multiple styles including realistic, anime, and 3D with text rendering.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -6890,7 +7491,9 @@
    "models": [
     "Hunyuan Video"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.3.71",
+   "requires_custom_nodes": false,
    "size": 45419279155,
    "usage": 26,
    "files": [
@@ -6929,6 +7532,7 @@
   {
    "name": "video_kandinsky5_i2v",
    "title": "Kandinsky 5.0 Video Lite Image to Video",
+   "description": "A lightweight 2B model that generates videos from English and Russian prompts with high visual quality.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -6937,7 +7541,9 @@
    "models": [
     "Kandinsky"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 14710262989,
    "usage": 24,
    "files": [
@@ -6966,6 +7572,7 @@
   {
    "name": "video_kandinsky5_t2v",
    "title": "Kandinsky 5.0 Video Lite Text to Video",
+   "description": "A lightweight 2B model that generates videos from English and Russian prompts with high visual quality.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -6974,7 +7581,9 @@
    "models": [
     "Kandinsky"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.4.0",
+   "requires_custom_nodes": false,
    "size": 14710262989,
    "usage": 44,
    "files": [
@@ -7003,6 +7612,7 @@
   {
    "name": "video_ltx2_3_flf2v",
    "title": "LTX-2.3: FLF2V",
+   "description": "Upload a starting image to generate a video sequence. The workflow creates a short video with consistent style and motion, beginning with your provided frame.",
    "kind": "video",
    "tags": [
     "FLF2V",
@@ -7011,7 +7621,9 @@
    "models": [
     "LTX-2.3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 38976828211,
    "usage": 120,
    "files": [
@@ -7030,6 +7642,7 @@
   {
    "name": "video_ltx2_3_i2v",
    "title": "LTX-2.3: Image to Video",
+   "description": "Upload an image to generate a video with improved motion consistency and fine details, including enhanced support for portrait formats and audio quality.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -7039,7 +7652,9 @@
     "LTX-2.3",
     "Lightricks"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 47244640256,
    "usage": 18113,
    "files": [
@@ -7073,6 +7688,7 @@
   {
    "name": "video_ltx2_3_ia2v",
    "title": "LTX-2.3: Image Audio to Video",
+   "description": "Upload an image and an audio file to generate a high-quality video with synchronized lip movements using LTX-2.3.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -7082,7 +7698,9 @@
    "models": [
     "LTX-2.3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 42949672960,
    "usage": 1146,
    "files": [
@@ -7116,6 +7734,7 @@
   {
    "name": "video_ltx2_3_ic_lora",
    "title": "LTX 2.3 IC-LoRA Union Control",
+   "description": "Generate LTX 2.3 videos with IC-LoRA using aligned control inputs like depth, pose, or edges.",
    "kind": "video",
    "tags": [
     "ControlNet",
@@ -7124,7 +7743,9 @@
    "models": [
     "LTX-2.3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.22.0",
+   "requires_custom_nodes": false,
    "size": 40909563494,
    "usage": 94,
    "files": [
@@ -7158,6 +7779,7 @@
   {
    "name": "video_ltx2_3_id_lora",
    "title": "LTX-2.3: ID LoRA",
+   "description": "Generate personalized videos with synchronized audio from a text prompt, reference image, and short audio clip. Use ID-LoRA to adapt a person's appearance and voice in a single generative model.",
    "kind": "video",
    "tags": [
     "Lip Sync",
@@ -7167,7 +7789,9 @@
    "models": [
     "LTX-2.3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.19.0",
+   "requires_custom_nodes": false,
    "size": 43486543872,
    "usage": 120,
    "files": [
@@ -7201,6 +7825,7 @@
   {
    "name": "video_ltx2_3_t2v",
    "title": "LTX-2.3: Text to Video",
+   "description": "Generate a video from a text prompt, optionally using an image for reference. Receive a high-quality video with improved motion, audio, and detail, optimized for portrait or landscape formats.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -7210,7 +7835,9 @@
     "LTX-2.3",
     "Lightricks"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 47244640256,
    "usage": 566,
    "files": [
@@ -7244,6 +7871,7 @@
   {
    "name": "video_ltx2_5_flf2v",
    "title": "LTX-2.5: FLF2V",
+   "description": "Generate a video from first and last frame reference images using LTX-2.5, blending both frames into a single animated sequence. Ideal for creating transition shots, morphing between two subjects or scenes, and building multi-shot narratives from still references.",
    "kind": "video",
    "tags": [
     "FLF2V",
@@ -7253,7 +7881,9 @@
    "models": [
     "LTX-2.5"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.32.0",
+   "requires_custom_nodes": false,
    "size": 56908316672,
    "usage": 634,
    "files": [
@@ -7287,6 +7917,7 @@
   {
    "name": "video_ltx2_5_i2v",
    "title": "LTX-2.5: Image to Video",
+   "description": "Generate video from a single image using LTX-2.5, producing a high-fidelity clip with industry-leading pixel quality and native multishot capability that holds character, environment, and lighting across connected scenes. Ideal for cinematic production, VFX shot creation, and content pipelines requiring fast, locally deployable video generation.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -7296,7 +7927,9 @@
    "models": [
     "LTX-2.5"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.32.0",
+   "requires_custom_nodes": false,
    "size": 56908316672,
    "usage": 4416,
    "files": [
@@ -7335,6 +7968,7 @@
   {
    "name": "video_ltx2_5_t2v",
    "title": "LTX-2.5: Text to Video",
+   "description": "Generate cinematic video from a text prompt using LTX-2.5, a production-ready diffusion model that outputs a single video file with optional spatial upscaling for enhanced resolution. Ideal for film previsualization, commercial storyboards, and high-volume content creation pipelines.",
    "kind": "video",
    "tags": [
     "Video",
@@ -7344,7 +7978,9 @@
    "models": [
     "LTX-2.5"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.32.0",
+   "requires_custom_nodes": false,
    "size": 53150220288,
    "usage": 1414,
    "files": [
@@ -7383,6 +8019,7 @@
   {
    "name": "video_ltx2_canny_to_video",
    "title": "LTX-2 Canny to Video",
+   "description": "Generate high-quality videos from edge detection (Canny) guidance with synchronized audio-video generation using LTX-2. Features precise edge control, structural consistency, and efficient performance.",
    "kind": "video",
    "tags": [
     "ControlNet",
@@ -7392,7 +8029,9 @@
     "LTX-2",
     "Lightricks"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 14,
    "files": [
@@ -7431,6 +8070,7 @@
   {
    "name": "video_ltx2_depth_to_video",
    "title": "LTX-2 Depth to Video",
+   "description": "Generate high-quality videos from depth maps with synchronized audio-video generation using LTX-2. Features precise depth control, spatial awareness, and efficient performance.",
    "kind": "video",
    "tags": [
     "ControlNet",
@@ -7440,7 +8080,9 @@
     "LTX-2",
     "Lightricks"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 11,
    "files": [
@@ -7489,6 +8131,7 @@
   {
    "name": "video_ltx2_i2v",
    "title": "LTX-2: Image to Video",
+   "description": "Transform static images into dynamic videos with synchronized audio-video generation using LTX-2. Features expressive lip sync, natural motion, and efficient performance.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -7498,7 +8141,9 @@
     "LTX-2",
     "Lightricks"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 90,
    "files": [
@@ -7532,6 +8177,7 @@
   {
    "name": "video_ltx2_i2v_distilled",
    "title": "LTX-2 Image to Video (Distilled)",
+   "description": "Transform static images into dynamic videos with synchronized audio-video generation using LTX-2 distilled model. Optimized for faster generation while maintaining quality. Features expressive lip sync, natural motion, and improved speed.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -7541,7 +8187,9 @@
     "LTX-2",
     "Lightricks"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 23,
    "files": [
@@ -7570,6 +8218,7 @@
   {
    "name": "video_ltx2_i2v_lora",
    "title": "Squish Anything with LTX-2 I2V and LoRA",
+   "description": "Upload any image to apply the Squish It LoRA effect. Generate a squished animation using the LTX-2 I2V model.",
    "kind": "video",
    "tags": [
     "Image to Video"
@@ -7577,7 +8226,9 @@
    "models": [
     "LTX-2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 103830834381,
    "usage": 11,
    "files": [
@@ -7611,6 +8262,7 @@
   {
    "name": "video_ltx2_t2v",
    "title": "LTX-2 Text to Video",
+   "description": "Generate high-quality videos from text prompts with synchronized audio-video generation using LTX-2. Features expressive lip sync, dynamic motion generation, and efficient performance.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -7620,7 +8272,9 @@
     "LTX-2",
     "Lightricks"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 45526653338,
    "usage": 13,
    "files": [
@@ -7654,6 +8308,7 @@
   {
    "name": "video_ltx2_t2v_distilled",
    "title": "LTX-2 Text to Video (Distilled)",
+   "description": "Generate high-quality videos from text prompts with synchronized audio-video generation using LTX-2 distilled model. Optimized for faster generation while maintaining quality. Features expressive lip sync, dynamic motion generation, and improved speed.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -7663,7 +8318,9 @@
     "LTX-2",
     "Lightricks"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 17,
    "files": [
@@ -7692,6 +8349,7 @@
   {
    "name": "video_minimax_h3_fun_controlnet_union",
    "title": "MiniMax H3 Fun ControlNet Union",
+   "description": "Generate videos from a pose reference video using MiniMax-H3 with a ControlNet-Union checkpoint, preserving the input's motion and structure while applying your prompt. Ideal for character animation, motion transfer, and choreography visualization projects. This workflow is for pose control only",
    "kind": "video",
    "tags": [
     "ControlNet",
@@ -7700,7 +8358,9 @@
    "models": [
     "MiniMax H3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.35.0",
+   "requires_custom_nodes": false,
    "size": 48747878810,
    "usage": 159,
    "files": [
@@ -7749,6 +8409,7 @@
   {
    "name": "video_minimax_h3_i2v",
    "title": "MiniMax H3: Image to Video",
+   "description": "Turn a starting image into a short, high-quality video clip with MiniMax H3, a unified multimodal model that generates visuals and synchronized audio in a single pass. The workflow takes 1 input image and produces 1 video output, with optional text or reference media to steer motion, style, or sound. Ideal for rapid concept visualization, character-driven animation tests, and creating shareable social media clips with built-in sound design.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -7758,7 +8419,9 @@
    "models": [
     "MiniMax H3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.30.0",
+   "requires_custom_nodes": false,
    "size": 44452911514,
    "usage": 21177,
    "files": [
@@ -7792,6 +8455,7 @@
   {
    "name": "video_minimax_h3_i2v_continuation",
    "title": "Image to Video",
+   "description": "Start with an image and an empty prompt, then describe the motion, shots, and audio you want MiniMax H3 to generate. The workflow produces one video with synchronized audio and remains fully editable before execution.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -7801,7 +8465,9 @@
    "models": [
     "MiniMax H3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.30.0",
+   "requires_custom_nodes": false,
    "size": 44452911514,
    "usage": 813,
    "files": [
@@ -7835,6 +8501,7 @@
   {
    "name": "video_minimax_h3_multiframe_reference",
    "title": "MiniMax H3: Multiframe Reference",
+   "description": "Generate video from multiple still images with MiniMax H3, anchoring up to four reference frames anywhere along the timeline to control motion and composition. Ideal for creating video continuations from existing clips, forcing narrative beats at specific moments, and producing footage with synchronized native audio for cinematic or social media content.",
    "kind": "video",
    "tags": [
     "Reference to Video",
@@ -7843,7 +8510,9 @@
    "models": [
     "MiniMax H3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.34.0",
+   "requires_custom_nodes": false,
    "size": 44452911514,
    "usage": 282,
    "files": [
@@ -7877,6 +8546,7 @@
   {
    "name": "video_minimax_h3_r2v",
    "title": "MiniMax H3: Reference to Video",
+   "description": "Generate a new video by feeding MiniMax H3 a reference image, up to nine images, three videos, and three audio clips alongside a text prompt, letting the model match character identity, motion, camera, voice, or style from those sources while producing native stereo audio in a single pass. Output is a single MP4 video at up to 2K resolution and 24fps for roughly 15 seconds. Ideal for character-consistent animation, style-transfer video generation, and audio-synced content creation.",
    "kind": "video",
    "tags": [
     "Reference to Video",
@@ -7886,7 +8556,9 @@
    "models": [
     "MiniMax H3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.30.0",
+   "requires_custom_nodes": false,
    "size": 44452911514,
    "usage": 8556,
    "files": [
@@ -7920,6 +8592,7 @@
   {
    "name": "video_minimax_h3_t2v",
    "title": "MiniMax H3: Text to Video",
+   "description": "Generate video with native stereo audio directly from a text prompt using MiniMax H3, an omni-modal model that synthesizes voice, sound effects, and music in a single pass. Output is up to 2K resolution, 24fps, and roughly 15 seconds long, with no file inputs required — just a prompt to one video output. Ideal for rapid concept visualization, social media content creation, and audio-synced storytelling.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -7929,7 +8602,9 @@
    "models": [
     "MiniMax H3"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.30.0",
+   "requires_custom_nodes": false,
    "size": 56908316672,
    "usage": 4200,
    "files": [
@@ -7963,6 +8638,7 @@
   {
    "name": "video_wan2.1_alpha_t2v_14B",
    "title": "Wan2.1 Alpha T2V",
+   "description": "Generate text-to-video with alpha channel support for transparent backgrounds and semi-transparent objects.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -7972,7 +8648,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.8",
+   "requires_custom_nodes": false,
    "size": 22494891213,
    "usage": 10,
    "files": [
@@ -8011,6 +8689,7 @@
   {
    "name": "video_wan2.1_fun_camera_v1.1_1.3B",
    "title": "Wan 2.1 Fun Camera 1.3B",
+   "description": "Generate dynamic videos with cinematic camera movements using Wan 2.1 Fun Camera 1.3B model.",
    "kind": "video",
    "tags": [
     "Video",
@@ -8020,7 +8699,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.35",
+   "requires_custom_nodes": false,
    "size": 11489037517,
    "usage": 10,
    "files": [
@@ -8049,6 +8730,7 @@
   {
    "name": "video_wan2.1_fun_camera_v1.1_14B",
    "title": "Wan 2.1 Fun Camera 14B",
+   "description": "Generate high-quality videos with advanced camera control using the full 14B model",
    "kind": "video",
    "tags": [
     "Video",
@@ -8058,7 +8740,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.35",
+   "requires_custom_nodes": false,
    "size": 42047729828,
    "usage": 13,
    "files": [
@@ -8087,6 +8771,7 @@
   {
    "name": "video_wan21_scail2_character_replacement",
    "title": "SCAIL-2: Character Replacement",
+   "description": "Upload 1 reference character image and 1 driving video. Generate an animated video of the character matching the driving video's motion. Ideal for character animation, in-video character replacement, and motion transfer projects.",
    "kind": "video",
    "tags": [
     "Character Replacement"
@@ -8094,7 +8779,9 @@
    "models": [
     "SCAIL-2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 44775034061,
    "usage": 957,
    "files": [
@@ -8138,6 +8825,7 @@
   {
    "name": "video_wan21_scail2_character_replacement_int8",
    "title": "SCAIL-2 Int8: Character Replacement",
+   "description": "Animate a reference character using a driving video or replace characters entirely with SCAIL-2 Int8, which delivers higher quality than fp8 while running faster. The workflow accepts one reference image and one driving video, outputting an animated character sequence with replaced identity. Ideal for cross-identity character swaps, animal-driven animation, and multi-character scenes without intermediate pose representations.",
    "kind": "video",
    "tags": [
     "Character Replacement",
@@ -8146,7 +8834,9 @@
    "models": [
     "SCAIL-2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.25.0",
+   "requires_custom_nodes": false,
    "size": 28668906701,
    "usage": 653,
    "files": [
@@ -8190,6 +8880,7 @@
   {
    "name": "video_wan2_1_infinitetalk",
    "title": "InfiniteTalk: Audio-Driven Full-Body Video Dubbing",
+   "description": "Upload a source Image and target audio. Generate a full-body dubbed video with synchronized motion while preserving the original identity, background, and camera movement.",
    "kind": "video",
    "tags": [
     "Audio to Video",
@@ -8199,7 +8890,9 @@
    "models": [
     "Wan2.1 InfiniteTalk"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.17.0",
+   "requires_custom_nodes": false,
    "size": 29635274342,
    "usage": 71,
    "files": [
@@ -8238,6 +8931,7 @@
   {
    "name": "video_wan2_2_14B_flf2v",
    "title": "Wan 2.2 14B First-Last Frame to Video",
+   "description": "Generate smooth video transitions by defining start and end frames.",
    "kind": "video",
    "tags": [
     "FLF2V",
@@ -8247,7 +8941,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 38031935406,
    "usage": 450,
    "files": [
@@ -8286,6 +8982,7 @@
   {
    "name": "video_wan2_2_14B_fun_camera",
    "title": "Wan 2.2 14B Fun Camera Control",
+   "description": "Generate videos with camera motion controls including pan, zoom, and rotation using Wan 2.2 Fun Camera Control.",
    "kind": "video",
    "tags": [
     "Video to Video",
@@ -8295,7 +8992,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.35",
+   "requires_custom_nodes": false,
    "size": 40050570035,
    "usage": 22,
    "files": [
@@ -8334,6 +9033,7 @@
   {
    "name": "video_wan2_2_14B_fun_control",
    "title": "Wan 2.2 14B Fun Control",
+   "description": "Generate videos guided by pose, depth, and edge controls using Wan 2.2 Fun Control.",
    "kind": "video",
    "tags": [
     "Video to Video",
@@ -8344,7 +9044,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.50",
+   "requires_custom_nodes": false,
    "size": 38031935406,
    "usage": 90,
    "files": [
@@ -8383,6 +9085,7 @@
   {
    "name": "video_wan2_2_14B_fun_inpaint",
    "title": "Wan 2.2 14B Fun Inpaint",
+   "description": "Generate videos from start and end frames using Wan 2.2 Fun Inpaint.",
    "kind": "video",
    "tags": [
     "FLF2V",
@@ -8392,7 +9095,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 38031935406,
    "usage": 10,
    "files": [
@@ -8431,6 +9136,7 @@
   {
    "name": "video_wan2_2_14B_i2v",
    "title": "Wan 2.2 14B Image to Video",
+   "description": "Transform static images into dynamic videos with precise motion control and style preservation using Wan 2.2.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -8440,7 +9146,9 @@
     "Wan",
     "Wan2.2"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 38010460570,
    "usage": 10653,
    "files": [
@@ -8479,6 +9187,7 @@
   {
    "name": "video_wan2_2_14B_s2v",
    "title": "Wan2.2-S2V Audio-Driven Video Generation",
+   "description": "Transform static images and audio into dynamic videos with perfect synchronization and minute-level generation.",
    "kind": "video",
    "tags": [
     "Video",
@@ -8488,7 +9197,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.55",
+   "requires_custom_nodes": false,
    "size": 25254407700,
    "usage": 106,
    "files": [
@@ -8522,6 +9233,7 @@
   {
    "name": "video_wan2_2_14B_t2v",
    "title": "Wan 2.2 14B Text to Video",
+   "description": "Generate high-quality videos from text prompts with cinematic aesthetic control and dynamic motion generation using Wan 2.2.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -8531,7 +9243,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 38031935406,
    "usage": 379,
    "files": [
@@ -8570,6 +9284,7 @@
   {
    "name": "video_wan2_2_5B_fun_control",
    "title": "Wan 2.2 5B Fun Control",
+   "description": "Multi-condition video control with pose, depth, and edge guidance. Compact 5B size for experimental development.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -8580,7 +9295,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.50",
+   "requires_custom_nodes": false,
    "size": 18146236826,
    "usage": 29,
    "files": [
@@ -8604,6 +9321,7 @@
   {
    "name": "video_wan2_2_5B_fun_inpaint",
    "title": "Wan 2.2 5B Fun Inpaint",
+   "description": "Efficient video inpainting from start and end frames. 5B model delivers quick iterations for testing workflows.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -8613,7 +9331,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 18146236826,
    "usage": 2,
    "files": [
@@ -8637,6 +9357,7 @@
   {
    "name": "video_wan2_2_5B_ti2v",
    "title": "Wan 2.2 5B Video Generation",
+   "description": "Fast text-to-video and image-to-video generation with 5B parameters. Optimized for rapid prototyping and creative exploration.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -8646,7 +9367,9 @@
     "Wan2.2",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.46",
+   "requires_custom_nodes": false,
    "size": 18146236826,
    "usage": 228,
    "files": [
@@ -8670,6 +9393,7 @@
   {
    "name": "video_wan_animate2",
    "title": "Wan Animate 2: Motion Transfer",
+   "description": "Animate a still character using a driving video with Wan Animate 2, transferring motion directly from video frames without any pose extraction or skeleton preprocessing. The output preserves the reference character's identity while generating a fresh background and camera movement from your text prompt. Ideal for motion transfer, action mimicry, and character animation replacement projects.",
    "kind": "video",
    "tags": [
     "Motion Control",
@@ -8678,7 +9402,9 @@
    "models": [
     "Wan Animate"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.36.0",
+   "requires_custom_nodes": false,
    "size": 25662429594,
    "usage": 1414,
    "files": [
@@ -8712,6 +9438,7 @@
   {
    "name": "video_wan_animate2_distilled",
    "title": "Wan Animate 2 Distilled: Motion Transfer",
+   "description": "Animate a still character using a driving video with Wan Animate 2, transferring motion directly from video frames without any pose extraction or skeleton preprocessing. The output preserves the reference character's identity while generating a fresh background and camera movement from your text prompt. This distilled version delivers efficient, high-fidelity motion generation with strong identity preservation, ideal for motion transfer, action mimicry, and character animation replacement projects.",
    "kind": "video",
    "tags": [
     "Motion Control",
@@ -8720,7 +9447,9 @@
    "models": [
     "Wan Animate"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.31.0",
+   "requires_custom_nodes": false,
    "size": 24910810317,
    "usage": 246,
    "files": [
@@ -8749,6 +9478,7 @@
   {
    "name": "video_wan_ati",
    "title": "Wan2.1 ATI",
+   "description": "Trajectory-controlled Video Generation.",
    "kind": "video",
    "tags": [
     "Video",
@@ -8758,7 +9488,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.46",
+   "requires_custom_nodes": false,
    "size": 25393994138,
    "usage": 9,
    "files": [
@@ -8787,6 +9519,7 @@
   {
    "name": "video_wan_dancer",
    "title": "Wan Dancer: Music to Dance",
+   "description": "Generate minute-scale coherent dance videos from music using a hierarchical Wan Dancer framework. Input a music file and reference image to produce high-resolution dance videos with global structure and temporal continuity.",
    "kind": "video",
    "tags": [
     "Audio to Video"
@@ -8794,7 +9527,9 @@
    "models": [
     "Wan"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.21.0",
+   "requires_custom_nodes": false,
    "size": 52935471923,
    "usage": 32,
    "files": [
@@ -8833,6 +9568,7 @@
   {
    "name": "video_wan_vace_14B_ref2v",
    "title": "Wan2.1 VACE Reference to Video",
+   "description": "Create videos that match the style and content of a reference image. Perfect for style-consistent video generation.",
    "kind": "video",
    "tags": [
     "Video",
@@ -8842,7 +9578,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.8.0",
+   "requires_custom_nodes": false,
    "size": 57756572713,
    "usage": 50,
    "files": [
@@ -8886,6 +9624,7 @@
   {
    "name": "video_wan_vace_14B_t2v",
    "title": "Wan2.1 VACE Text to Video",
+   "description": "Transform text descriptions into high-quality videos. Supports both 480p and 720p with VACE-14B model.",
    "kind": "video",
    "tags": [
     "Text to Video",
@@ -8895,7 +9634,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 57756572713,
    "usage": 10,
    "files": [
@@ -8939,6 +9680,7 @@
   {
    "name": "video_wan_vace_14B_v2v",
    "title": "Wan2.1 VACE Control Video",
+   "description": "Generate videos by controlling input videos and reference images using Wan VACE.",
    "kind": "video",
    "tags": [
     "Video to Video",
@@ -8948,7 +9690,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 57756572713,
    "usage": 188,
    "files": [
@@ -8992,6 +9736,7 @@
   {
    "name": "video_wan_vace_flf2v",
    "title": "Wan2.1 VACE First-Last Frame",
+   "description": "Generate smooth video transitions by defining start and end frames. Supports custom keyframe sequences.",
    "kind": "video",
    "tags": [
     "FLF2V",
@@ -9001,7 +9746,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.16.4",
+   "requires_custom_nodes": false,
    "size": 57767310131,
    "usage": 45,
    "files": [
@@ -9030,6 +9777,7 @@
   {
    "name": "video_wan_vace_inpainting",
    "title": "Wan2.1 VACE Inpainting",
+   "description": "Edit specific regions in videos while preserving surrounding content. Great for object removal or replacement.",
    "kind": "video",
    "tags": [
     "Inpainting",
@@ -9039,7 +9787,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.20.0",
+   "requires_custom_nodes": false,
    "size": 57767310131,
    "usage": 216,
    "files": [
@@ -9073,6 +9823,7 @@
   {
    "name": "video_wan_vace_outpainting",
    "title": "Wan2.1 VACE Outpainting",
+   "description": "Generate extended videos by expanding video size using Wan VACE outpainting.",
    "kind": "video",
    "tags": [
     "Outpainting",
@@ -9082,7 +9833,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 57756572713,
    "usage": 60,
    "files": [
@@ -9126,6 +9879,7 @@
   {
    "name": "video_wanmove_480p",
    "title": "Wan-Move Motion-Control Image to Video",
+   "description": "Generate videos from a single image using Wan-Move, with fine-grained point-level motion control via trajectory guidance.",
    "kind": "video",
    "tags": [
     "Image to Video",
@@ -9136,7 +9890,9 @@
     "Wan",
     "Wan2.1"
    ],
+   "open_source": true,
    "min_comfyui_version": "0.5.0",
+   "requires_custom_nodes": false,
    "size": 25447681229,
    "usage": 8,
    "files": [
@@ -9170,6 +9926,7 @@
   {
    "name": "wan2.1_flf2v_720_f16",
    "title": "Wan 2.1 FLF2V 720p F16",
+   "description": "Generate videos by controlling first and last frames using Wan 2.1 FLF2V.",
    "kind": "video",
    "tags": [
     "FLF2V",
@@ -9179,7 +9936,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 41049149932,
    "usage": 9,
    "files": [
@@ -9208,6 +9967,7 @@
   {
    "name": "wan2.1_fun_control",
    "title": "Wan 2.1 ControlNet",
+   "description": "Generate videos guided by pose, depth, and edge controls using Wan 2.1 ControlNet.",
    "kind": "video",
    "tags": [
     "Video to Video",
@@ -9217,7 +9977,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 11381663334,
    "usage": 27,
    "files": [
@@ -9246,6 +10008,7 @@
   {
    "name": "wan2.1_fun_inp",
    "title": "Wan 2.1 Inpainting",
+   "description": "Generate videos from start and end frames using Wan 2.1 inpainting.",
    "kind": "video",
    "tags": [
     "Inpainting",
@@ -9255,7 +10018,9 @@
     "Wan2.1",
     "Wan"
    ],
+   "open_source": false,
    "min_comfyui_version": "0.3.31",
+   "requires_custom_nodes": false,
    "size": 11381663334,
    "usage": 9,
    "files": [

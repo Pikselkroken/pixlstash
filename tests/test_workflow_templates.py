@@ -229,3 +229,104 @@ def test_the_shipped_list_reads_and_every_template_names_files():
     for template in listing["templates"]:
         assert template["files"], template["name"]
         assert all(f["name"] and f["directory"] for f in template["files"])
+
+
+# ── The rest of a template, offered to a set holding its head (#1999 §3) ──
+
+
+def _hashed(hub, *model_ids):
+    """Give each model a digest: only a hashed file can join a set."""
+    with hub.transaction() as conn:
+        for model_id in model_ids:
+            conn.execute(
+                "UPDATE model SET sha256 = ? WHERE id = ?",
+                (f"{model_id:064x}", model_id),
+            )
+
+
+def _hand(set_id, *model_ids, checkpoints=(), declined=(), template=None):
+    return {
+        "id": set_id,
+        "template": template,
+        "checkpoint_ids": list(checkpoints),
+        "members": [{"id": model_id, "on_shelf": True} for model_id in model_ids],
+        "declined": list(declined),
+        "offer": None,
+    }
+
+
+def _offered(hub, entry):
+    workflow_templates.attach_template_offers(hub, [entry])
+    return entry["offer"]
+
+
+def test_a_set_holding_the_head_is_offered_the_rest_of_its_template(hub):
+    """On the shelf to add, off it to download; the sibling is named, not merged."""
+    head = _model(hub, "z_image_turbo_bf16.safetensors")
+    te = _model(hub, "qwen_3_4b.safetensors", "text_encoder")
+    _hashed(hub, head, te)
+    offer = _offered(hub, _hand(1, head, checkpoints=[head]))
+    assert offer["source"] == "template"
+    assert offer["template"]["name"] == "image_z_image_turbo"
+    assert offer["head_id"] == head
+    assert [(m["id"], m["slot"]) for m in offer["models"]] == [(te, "text_encoder")]
+    (download,) = offer["downloads"]
+    assert (download["name"], download["slot"]) == ("ae.safetensors", "vae")
+    assert download["sha256"] == workflow_templates.file_decline_key("AE.safetensors")
+    assert [o["name"] for o in offer["others"]] == ["image_z_image_turbo_int8"]
+
+
+def test_the_closest_template_is_the_one_whose_head_is_the_exact_file(hub):
+    """bf16 on the shelf: both variants lack the VAE, the int8 one only by quant."""
+    ids = _z_turbo(hub)
+    _hashed(hub, *ids.values())
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model_file SET state = 'missing' WHERE model_id = ?", (ids["vae"],)
+        )
+    offer = _offered(hub, _hand(1, ids["head"], ids["te"], checkpoints=[ids["head"]]))
+    assert offer["template"]["name"] == "image_z_image_turbo"
+    # The made-from template leads even where another is closer.
+    offer = _offered(
+        hub,
+        _hand(
+            2,
+            ids["head"],
+            ids["te"],
+            checkpoints=[ids["head"]],
+            template="image_z_image_turbo_int8",
+        ),
+    )
+    assert offer["template"]["name"] == "image_z_image_turbo_int8"
+
+
+def test_nothing_is_offered_without_a_head_or_once_the_set_has_it_all(hub):
+    ids = _z_turbo(hub)
+    _hashed(hub, *ids.values())
+    # A support file is no trigger: one VAE would suggest fifty sets.
+    other = _model(hub, "sd_xl_base_1.0.safetensors")
+    _hashed(hub, other)
+    assert _offered(hub, _hand(1, other, ids["vae"], checkpoints=[other])) is None
+    whole = _hand(2, *ids.values(), checkpoints=[ids["head"]])
+    assert _offered(hub, whole) is None
+
+
+def test_a_pictures_offer_is_left_alone(hub):
+    ids = _z_turbo(hub)
+    _hashed(hub, *ids.values())
+    entry = _hand(1, ids["head"], checkpoints=[ids["head"]])
+    entry["offer"] = mine = {"source": "pictures"}
+    assert _offered(hub, entry) is mine
+
+
+def test_kept_separate_files_and_unhashed_ones_are_not_offered(hub):
+    head = _model(hub, "z_image_turbo_bf16.safetensors")
+    te = _model(hub, "qwen_3_4b.safetensors", "text_encoder")
+    _hashed(hub, head)
+    # The text encoder is still hashing: nothing to add it by yet.
+    declined = [workflow_templates.file_decline_key("ae.safetensors")]
+    entry = _hand(1, head, checkpoints=[head], declined=declined)
+    assert _offered(hub, entry) is None
+    _hashed(hub, te)
+    entry = _hand(1, head, checkpoints=[head], declined=declined + [f"{te:064x}"])
+    assert _offered(hub, entry) is None
