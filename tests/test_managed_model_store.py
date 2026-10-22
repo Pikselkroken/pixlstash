@@ -22,7 +22,6 @@ import os
 
 import pytest
 
-from pixlstash.hub.db import HubDatabase
 from pixlstash.services.managed_model_store import (
     MANAGED_KIND,
     MANAGED_MOVABLE,
@@ -36,13 +35,6 @@ SKIP_AS_ROOT = pytest.mark.skipif(
     hasattr(os, "getuid") and os.getuid() == 0,
     reason="root ignores the permission bits this test removes",
 )
-
-
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
 
 
 def managed_rows(hub):

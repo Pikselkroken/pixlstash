@@ -26,9 +26,9 @@ and nothing joins a set until the owner adds the models.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
+from pixlstash.hub.db import now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import HASH_PENDING_SQL
 from pixlstash.services.model_shelf_service import SET_COVER_DEPTH, known_base_model
@@ -72,10 +72,6 @@ class WorkflowSetRefusedError(ValueError):
     """The request would break a set rule. Mapped to 409."""
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def clean_name(name: Optional[str]) -> Optional[str]:
     """Trim a set name; blank means no name."""
     if name is None:
@@ -102,7 +98,9 @@ def fetch_sets(hub) -> list[dict]:
 
 # The two reads a set is made of, shared by `fetch_sets` (every set, through
 # the hub) and `delete_set` (one set, on the transaction that deletes it).
-_SETS_SQL = "SELECT id, name, created_at, updated_at, cloned FROM model_workflow_set"
+_SETS_SQL = (
+    "SELECT id, name, created_at, updated_at, cloned, template FROM model_workflow_set"
+)
 # `model.sha256` is UNIQUE, so the LEFT JOIN yields one row per member.
 _MEMBERS_SQL = (
     "SELECT m.set_id, m.sha256, m.slot, m.label, model.id, model.display_name, "
@@ -405,6 +403,7 @@ def _shape(entry: dict) -> dict:
         "created_at": entry["created_at"],
         "updated_at": entry["updated_at"],
         "cloned": bool(entry["cloned"]),
+        "template": entry["template"],
         "incomplete": not checkpoints,
         "checkpoint_ids": [m["id"] for m in checkpoints if m["on_shelf"]],
         "picture_count": 0,
@@ -493,21 +492,28 @@ def _insert_members(conn, set_id: int, members: list[dict], now: str) -> list[st
 
 
 def create_set(
-    hub, name: Optional[str], members: list[dict], cloned: bool = False
+    hub,
+    name: Optional[str],
+    members: list[dict],
+    cloned: bool = False,
+    template: Optional[str] = None,
 ) -> int:
     """Create a set, empty or with *members*, in one transaction; return its id.
 
     *cloned* records that the owner copied it from a set from pictures. Nothing
     here reads it: the client keeps such a set while it matches that set, where
-    a set built by hand into the same models gives way to it.
+    a set built by hand into the same models gives way to it. *template* is the
+    ComfyUI template it was made from (``services.workflow_templates``), which
+    it then covers in the New workflow set picker.
     """
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         set_id = int(
             conn.execute(
                 "INSERT INTO model_workflow_set "
-                "(name, created_at, updated_at, cloned) VALUES (?, ?, ?, ?)",
-                (clean_name(name), now, now, int(cloned)),
+                "(name, created_at, updated_at, cloned, template) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (clean_name(name), now, now, int(cloned), template),
             ).lastrowid
         )
         added = _insert_members(conn, set_id, members, now)
@@ -520,7 +526,7 @@ def rename_set(hub, set_id: int, name: Optional[str]) -> None:
         _require_set(conn, set_id)
         conn.execute(
             "UPDATE model_workflow_set SET name = ?, updated_at = ? WHERE id = ?",
-            (clean_name(name), _now(), set_id),
+            (clean_name(name), now_iso(), set_id),
         )
 
 
@@ -558,7 +564,7 @@ def delete_set(hub, set_id: int) -> dict:
 
 def add_members(hub, set_id: int, members: list[dict]) -> list[str]:
     """Add *members*; one already in the set is a no-op. Returns what was added."""
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         _require_set(conn, set_id)
         added = _insert_members(conn, set_id, members, now)
@@ -595,7 +601,7 @@ def remove_members(hub, set_id: int, sha256s: list[str]) -> list[dict]:
             )
             conn.execute(
                 "UPDATE model_workflow_set SET updated_at = ? WHERE id = ?",
-                (_now(), set_id),
+                (now_iso(), set_id),
             )
     return removed
 
@@ -607,7 +613,7 @@ def set_declines(hub, set_id: int, sha256s: list[str]) -> list[str]:
     the same call. Returns the list as it was, sorted: that is the undo.
     """
     wanted = sorted({sha.lower() for sha in sha256s})
-    now = _now()
+    now = now_iso()
     with hub.transaction() as conn:
         _require_set(conn, set_id)
         previous = [

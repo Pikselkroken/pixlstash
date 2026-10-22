@@ -161,7 +161,7 @@
       :class="{ 'mss__offer--cur': cursorKey === 'offer' }"
       role="row"
       aria-level="2"
-      :aria-label="`${offerLead} ${offerNote} Enter adds ${set.offer.models.length === 1 ? 'it' : 'them'}.`"
+      :aria-label="`${offerLead} ${offerNote}${set.offer.models.length ? ` Enter adds ${set.offer.models.length === 1 ? 'it' : 'them'}.` : ''}`"
       :tabindex="cursorKey === 'offer' ? 0 : -1"
       data-key="offer"
       data-testid="merge-offer-strip"
@@ -182,10 +182,33 @@
             loading="lazy"
           />
         </span>
-        <span class="mss__offertext" aria-hidden="true"
-          ><strong>{{ offerLead }}</strong>
-          <span class="mss__offernote">{{ offerNote }}</span></span
-        >
+        <div class="mss__offertext">
+          <span aria-hidden="true"
+            ><strong>{{ offerLead }}</strong>
+            <span class="mss__offernote">{{ offerNote }}</span></span
+          >
+          <!-- A template's files the shelf lacks (#1999): where to get each,
+               https only, as the template picker links them. -->
+          <span
+            v-if="set.offer.downloads?.length"
+            class="mss__offernote"
+            data-testid="offer-downloads"
+            >Not on your shelf:
+            <template v-for="(file, i) in set.offer.downloads" :key="file.sha256"
+              >{{ i ? ", " : ""
+              }}<a
+                v-if="/^https:\/\//.test(file.url)"
+                class="mss__dl"
+                :href="file.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                :aria-label="`Download ${file.name}`"
+                @click.stop
+                >{{ file.name }}</a
+              ><template v-else>{{ file.name }}</template></template
+            ></span
+          >
+        </div>
         <AppButton
           variant="ghost"
           size="sm"
@@ -195,6 +218,7 @@
           >Stop asking</AppButton
         >
         <AppButton
+          v-if="set.offer.models.length"
           variant="primary"
           size="sm"
           icon-left="plus"
@@ -639,11 +663,26 @@ const offerLead = computed(() => {
 
 /** What the offer is counted in: pictures here, or recipes when none is. */
 const offerThose = computed(() =>
-  props.set.offer?.picture_count ? "those pictures" : "those recipes",
+  props.set.offer?.source === "template"
+    ? `the ${props.set.offer.template.title} template`
+    : props.set.offer?.picture_count
+      ? "those pictures"
+      : "those recipes",
 );
 
 const offerNote = computed(() => {
   const n = props.set.offer?.models.length ?? 0;
+  if (props.set.offer?.source === "template") {
+    const others = props.set.offer.others ?? [];
+    return [
+      n ? (n === 1 ? "The one on your shelf is dashed below." : `The ${n} on your shelf are dashed below.`) : "",
+      others.length
+        ? `Other templates built around it: ${others.map((o) => o.title).join(", ")}.`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
   return n === 1
     ? `It is dashed below. Adding it brings ${offerThose.value} into this set.`
     : `They are dashed below. Adding all ${n} brings ${offerThose.value} into this set.`;
@@ -651,13 +690,18 @@ const offerNote = computed(() => {
 
 /** "812 pictures", or the recipes when none of its pictures is here. */
 function ghostCount(ghost) {
+  if (props.set.offer?.source === "template") return "template";
   return ghost.picture_count
     ? pictureCount(ghost.picture_count)
     : recipeCount(ghost.recipes);
 }
 
 function ghostName(ghost, slot) {
-  return `${withQuant(ghost)}, ${slot.label}, offered: used in ${ghostCount(ghost)}. Enter adds it, Delete keeps it out.`;
+  const why =
+    props.set.offer?.source === "template"
+      ? `offered by ${offerThose.value}`
+      : `offered: used in ${ghostCount(ghost)}`;
+  return `${withQuant(ghost)}, ${slot.label}, ${why}. Enter adds it, Delete keeps it out.`;
 }
 
 /** A name with the precision `modelName` took out of it, for a spoken label. */
@@ -958,6 +1002,12 @@ const notchStyle = computed(() => {
   display: block;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+
+.mss__dl {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* The pictures' set's own covers, the card mosaic in miniature. */

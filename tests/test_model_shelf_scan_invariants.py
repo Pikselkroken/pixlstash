@@ -23,7 +23,6 @@ import threading
 
 import pytest
 
-from pixlstash.hub.db import HubDatabase
 from pixlstash.services import model_folder_scanner as scanner_module
 from pixlstash.services.model_folder_scanner import (
     STATE_MISSING,
@@ -65,13 +64,6 @@ def write_adapter(path, *, name=None, pad=0, filler="A"):
 
 def write_checkpoint(path):
     return _write_safetensors(path, {"model.weight": _tensor([40000, 40000])})
-
-
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
 
 
 @pytest.fixture

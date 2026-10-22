@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlmodel import Session, delete, select
+from sqlmodel import select
 
-from pixlstash.db_models import Picture, User, UserToken
+from pixlstash.db_models import Picture
 from pixlstash.server import Server
 from pixlstash.hub.registry import (
     TEMP_VAULT_FILENAME,
@@ -30,6 +30,7 @@ from pixlstash.utils.media_files import (
     has_media_files,
     is_supported_media_file,
 )
+from tests.utils import reset_owner_auth
 
 API = "/api/v1"
 
@@ -65,20 +66,7 @@ def server():
 
 @pytest.fixture(autouse=True)
 def clean_auth(server):
-    def _wipe(session: Session):
-        session.exec(delete(UserToken))
-        session.exec(delete(User))
-        session.commit()
-
-    server.hub_engine.run_task(_wipe)
-    server.auth.password_hash = None
-    server.auth.username = None
-    server.auth.user = None
-    server.auth._clear_all_sessions()
-    server.auth._flush_token_cache()
-    server.auth._failed_login_attempts = 0
-    server.auth._login_lockout_until = 0.0
-    server.auth.ensure_user()
+    reset_owner_auth(server)
     yield
 
 

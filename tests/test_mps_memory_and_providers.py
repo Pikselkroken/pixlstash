@@ -66,6 +66,7 @@ from pixlstash.utils.vram_utils import (
     is_vram_oom,
     vram_limited_batch_cap,
 )
+from tests.utils import fake_ort
 
 #: Metal's recommended working set on the 8 GB machine every figure in this
 #: change was measured on. Two thirds of physical RAM, which is the ratio the
@@ -124,26 +125,6 @@ def _cuda_torch():
     )
 
 
-def _ort(providers):
-    return types.SimpleNamespace(get_available_providers=lambda: list(providers))
-
-
-@pytest.fixture
-def patch_runtime(monkeypatch):
-    """Seed ``startup_checks``' cached torch/ort handles with fakes.
-
-    Same seam as the ROCm suite: the caches are what stop the accessors ever
-    attempting the real import, so seeding them both substitutes the fake and
-    keeps the test off this machine's actual hardware.
-    """
-
-    def apply(torch_mod, ort_mod):
-        monkeypatch.setattr(sc, "_torch_mod", torch_mod)
-        monkeypatch.setattr(sc, "_ort_mod", ort_mod)
-
-    return apply
-
-
 def _checks(device, config_path="/tmp/server_config.json"):
     return StartupChecks(
         {"default_device": device}, config_path, logging.getLogger("test")
@@ -161,7 +142,7 @@ def test_missing_coreml_is_a_warning_not_a_downgrade(patch_runtime):
     torch keeps the GPU; only the ONNX models lose it. Forcing CPU for the
     whole server over that would throw away the 23.7x on the default tagger.
     """
-    patch_runtime(_apple_torch(), _ort(["CPUExecutionProvider"]))
+    patch_runtime(_apple_torch(), fake_ort(["CPUExecutionProvider"]))
     outcome = StartupCheckOutcome()
     _checks("auto")._check_device_and_vram(outcome)
 
@@ -174,7 +155,7 @@ def test_nvidia_smi_is_not_missing_on_a_mac(patch_runtime, monkeypatch):
 
     It is not a missing dependency there, it is the machine.
     """
-    patch_runtime(_apple_torch(), _ort(["CoreMLExecutionProvider"]))
+    patch_runtime(_apple_torch(), fake_ort(["CoreMLExecutionProvider"]))
     monkeypatch.setattr(accelerator, "_torch", lambda: _apple_torch())
     monkeypatch.setattr(sc.shutil, "which", lambda name: None)
     outcome = StartupCheckOutcome()

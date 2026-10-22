@@ -32,7 +32,6 @@ import struct
 
 import pytest
 
-from pixlstash.hub.db import HubDatabase
 from pixlstash.services import model_mover as mover_module
 from pixlstash.services import run_importer as importer_module
 from pixlstash.services.model_mover import MoveRefused
@@ -48,13 +47,6 @@ from pixlstash.services.run_importer import (
 
 class Crash(BaseException):
     """A process death. See the note in ``tests/test_model_move.py``."""
-
-
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    yield database
-    database.close()
 
 
 def _tensor(shape):

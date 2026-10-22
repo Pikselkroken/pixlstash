@@ -138,6 +138,7 @@ import {
   KEEP_COVER_ONLY_ICON,
   keepCoverOnlyMenuLabel,
 } from "../../utils/keepCoverOnly";
+import { plural } from "../../utils/lockedDelete";
 import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
@@ -188,8 +189,6 @@ const keys = computed(() => {
     later: { hint: `${mod}→`, aria: `${aria}+ArrowRight` },
   };
 });
-
-const plural = (n, one, many) => (n === 1 ? one : many);
 
 const heading = computed(() => {
   const t = props.target;

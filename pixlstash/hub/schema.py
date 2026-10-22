@@ -426,6 +426,11 @@ CREATE TABLE IF NOT EXISTS model (
     -- not to suggest one (#1962). A workflow loading the file as another
     -- kind is offered to the owner only while this is 0.
     file_kind_decided     INTEGER NOT NULL DEFAULT 0,
+    -- When the file last arrived through the Downloads folder intake
+    -- (services.downloads_intake). NULL for a file a scan found, however new:
+    -- a first scan of an old folder registers everything at once, and that is
+    -- not an arrival. The template picker's "new ready to make" reads it.
+    arrived_at            TEXT,
     CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL),
     -- Same shape one column over: every producer already supplies an algorithm
     -- for an adapter ('unknown' is a first-class value, never NULL), so an
@@ -524,7 +529,11 @@ CREATE TABLE IF NOT EXISTS model_workflow_set (
     name        TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
-    cloned      INTEGER NOT NULL DEFAULT 0
+    cloned      INTEGER NOT NULL DEFAULT 0,
+    -- The ComfyUI template (services.workflow_templates) the set was made
+    -- from, by name; NULL for a set made any other way. Covers that template
+    -- in the picker whatever members the set holds since.
+    template    TEXT
 )
 """
 
@@ -2024,6 +2033,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE model ADD COLUMN file_kind_decided INTEGER NOT NULL DEFAULT 0"
         )
+    # The Downloads arrival time (#2001), the same way and for the same reason.
+    if "arrived_at" not in model_columns:
+        conn.execute("ALTER TABLE model ADD COLUMN arrived_at TEXT")
 
     # The owner's chosen default destination for a new model, guarded the same
     # way. 0 everywhere means "the managed store", so an existing hub keeps the
@@ -2059,6 +2071,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             "ALTER TABLE model_workflow_set "
             "ADD COLUMN cloned INTEGER NOT NULL DEFAULT 0"
         )
+    # The template a set was made from (#2001), guarded the same way.
+    if "template" not in set_columns:
+        conn.execute("ALTER TABLE model_workflow_set ADD COLUMN template TEXT")
 
     # The ComfyUI link token's source binding (#1810), guarded the same way.
     # NULL, every existing token, means "from any address".

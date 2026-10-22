@@ -585,7 +585,7 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { API_BASE_URL, isReadOnly } from "../../utils/apiClient";
+import { isReadOnly } from "../../utils/apiClient";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useSortStore } from "../../stores/useSortStore";
 import { useGridStore } from "../../stores/useGridStore";
@@ -617,7 +617,6 @@ const props = defineProps({
   selectedCharacter: String,
   selectedSort: { type: String, default: "" },
   allPicturesId: { type: String, required: true },
-  backendUrl: { type: String, default: () => API_BASE_URL },
   comfyuiConfigured: { type: Boolean, default: false },
   // The grid's view with no filters, for the filter menu's counts.
   filterCountBaseQuery: { type: String, default: null },

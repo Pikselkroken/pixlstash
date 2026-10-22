@@ -15,8 +15,8 @@ import types
 
 import pytest
 
-import pixlstash.startup_checks as sc
 from pixlstash.startup_checks import StartupCheckOutcome, StartupChecks
+from tests.utils import fake_ort
 
 
 def _make_torch(*, hip, available, mem=(8_000 * 1024**2, 16_000 * 1024**2)):
@@ -37,38 +37,16 @@ def _make_torch(*, hip, available, mem=(8_000 * 1024**2, 16_000 * 1024**2)):
     return types.SimpleNamespace(version=version, cuda=cuda)
 
 
-def _make_ort(providers):
-    return types.SimpleNamespace(get_available_providers=lambda: list(providers))
-
-
 def _checks(device="cuda"):
     cfg = {"default_device": device}
     return StartupChecks(cfg, "/tmp/server_config.json", logging.getLogger("test"))
-
-
-@pytest.fixture
-def patch_runtime(monkeypatch):
-    """Inject fake torch / onnxruntime modules into ``startup_checks``.
-
-    The real imports are function-local and cached behind ``sc._torch()`` /
-    ``sc._ort()`` so that importing the server does not drag in the ML stack
-    (backend_architecture §3, "ML import discipline"). Seeding the caches here
-    both substitutes the fakes and stops the accessors ever attempting the real
-    import - which is exactly what these tests want.
-    """
-
-    def apply(torch_mod, ort_mod):
-        monkeypatch.setattr(sc, "_torch_mod", torch_mod)
-        monkeypatch.setattr(sc, "_ort_mod", ort_mod)
-
-    return apply
 
 
 def test_rocm_passes_and_labels_experimental(patch_runtime):
     # ROCm build: torch reports the GPU available; only CPU ONNX Runtime present.
     patch_runtime(
         _make_torch(hip="6.4.43482", available=True),
-        _make_ort(["CPUExecutionProvider"]),
+        fake_ort(["CPUExecutionProvider"]),
     )
     outcome = StartupCheckOutcome()
     _checks("cuda")._check_device_and_vram(outcome)
@@ -87,7 +65,7 @@ def test_rocm_probe_failure_falls_back_to_cpu(patch_runtime):
     boom = RuntimeError("HIP error: no ROCm-capable device is detected")
     patch_runtime(
         _make_torch(hip="6.4.43482", available=boom),
-        _make_ort(["CPUExecutionProvider"]),
+        fake_ort(["CPUExecutionProvider"]),
     )
     outcome = StartupCheckOutcome()
     _checks("auto")._check_device_and_vram(outcome)  # auto => graceful CPU fallback
@@ -101,7 +79,7 @@ def test_cuda_path_unchanged(patch_runtime):
     # Regression: a real CUDA build (no hip) still reports CUDA, not ROCm.
     patch_runtime(
         _make_torch(hip=None, available=True),
-        _make_ort(["CUDAExecutionProvider", "CPUExecutionProvider"]),
+        fake_ort(["CUDAExecutionProvider", "CPUExecutionProvider"]),
     )
     outcome = StartupCheckOutcome()
     _checks("cuda")._check_device_and_vram(outcome)
@@ -131,7 +109,7 @@ def test_an_explicit_gpu_is_never_rewritten_to_cpu(patch_runtime, configured):
     either way rather than being persisted as ``cpu``.
     """
     patch_runtime(
-        _make_torch(hip=None, available=False), _make_ort(["CPUExecutionProvider"])
+        _make_torch(hip=None, available=False), fake_ort(["CPUExecutionProvider"])
     )
     cfg = {"default_device": configured}
     outcome = StartupCheckOutcome()
@@ -153,7 +131,7 @@ def test_the_refusal_says_how_to_boot(patch_runtime, missing):
     torch_mod = (
         None if missing == "no-torch" else _make_torch(hip=None, available=False)
     )
-    patch_runtime(torch_mod, _make_ort(["CPUExecutionProvider"]))
+    patch_runtime(torch_mod, fake_ort(["CPUExecutionProvider"]))
     outcome = StartupCheckOutcome()
     _checks_with_config({"default_device": "cuda"})._check_device_and_vram(outcome)
 
@@ -171,7 +149,7 @@ def test_an_unset_default_still_falls_back_quietly(patch_runtime):
     which would strand every machine that has no GPU.
     """
     patch_runtime(
-        _make_torch(hip=None, available=False), _make_ort(["CPUExecutionProvider"])
+        _make_torch(hip=None, available=False), fake_ort(["CPUExecutionProvider"])
     )
     cfg = {"default_device": "auto"}
     outcome = StartupCheckOutcome()

@@ -37,10 +37,14 @@ const saveWorkflow = vi.fn();
 const saveWorkflowAsNew = vi.fn();
 const getWorkflowVersions = vi.fn();
 const restoreWorkflowVersion = vi.fn();
+const duplicateWorkflow = vi.fn();
+const openWorkflowVersion = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowVersions: (...args) => getWorkflowVersions(...args),
   restoreWorkflowVersion: (...args) => restoreWorkflowVersion(...args),
+  duplicateWorkflow: (...args) => duplicateWorkflow(...args),
+  openWorkflowVersion: (...args) => openWorkflowVersion(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   patchWorkflowCard: (...args) => patchWorkflowCard(...args),
@@ -473,6 +477,16 @@ function held() {
   return { promise, release };
 }
 
+/**
+ * Go back to version `number` the way the head offers it: its row opens what
+ * can be done with it (#1792), and *Go back to this version* is one of those.
+ */
+async function goBackTo(wrapper, number) {
+  const menu = '[data-testid="wftab-version-menu"]';
+  await wrapper.find(`${menu} [data-version="${number}"]`).trigger("click");
+  await wrapper.find(`${menu} [data-action="go-back"]`).trigger("click");
+}
+
 describe("the version menu in the head", () => {
   const chip = (wrapper) => wrapper.find('[data-testid="wftab-version"]');
   const rows = (wrapper) =>
@@ -582,7 +596,8 @@ describe("the version menu in the head", () => {
     expect(row(wrapper, 3).text()).toContain("models changed");
     expect(row(wrapper, 2).text()).toContain("LoRAs edited");
     expect(row(wrapper, 3).attributes("aria-checked")).toBe("true");
-    expect(row(wrapper, 2).attributes("aria-checked")).toBe("false");
+    // An earlier one opens what can be done with it (#1792).
+    expect(row(wrapper, 2).attributes("aria-haspopup")).toBe("menu");
   });
 
   describe("a version saved from ComfyUI (#1852)", () => {
@@ -659,7 +674,7 @@ describe("the version menu in the head", () => {
       hidden: 0,
     });
 
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     await flush(wrapper);
 
@@ -684,7 +699,7 @@ describe("the version menu in the head", () => {
 
   it("says what it did, with an Undo that goes back to the version left", async () => {
     const { wrapper } = await mountVersioned();
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
 
     const notice = useNoticeStore().notices.at(-1);
@@ -701,7 +716,7 @@ describe("the version menu in the head", () => {
 
   it("remembers the version an Undo left for the workflow it undid, whatever the rail shows by then", async () => {
     const { wrapper, store } = await mountTwoRails();
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     const first = useNoticeStore().notices.at(-1);
 
@@ -743,7 +758,7 @@ describe("the version menu in the head", () => {
       versions,
     });
     const { wrapper } = await mountVersioned();
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     const notice = useNoticeStore().notices.at(-1);
     expect(notice.text).toContain("Back on version 2");
@@ -762,13 +777,13 @@ describe("the version menu in the head", () => {
           })
         : Promise.resolve(versionsAt(4)),
     );
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     const undo = useNoticeStore().notices.at(-1).action;
 
     store.selectedKeys = [OTHER];
     await flush(wrapper);
-    await row(wrapper, 1).trigger("click");
+    await goBackTo(wrapper, 1);
     await flush(wrapper);
     expect(refusal(wrapper).text()).toContain("That version cannot be read.");
 
@@ -779,7 +794,7 @@ describe("the version menu in the head", () => {
 
   it("asks nothing first: going back is undone by going back", async () => {
     const { wrapper } = await mountVersioned();
-    await row(wrapper, 1).trigger("click");
+    await goBackTo(wrapper, 1);
     expect(restoreWorkflowVersion).toHaveBeenCalledWith(KEY, 1);
   });
 
@@ -788,6 +803,47 @@ describe("the version menu in the head", () => {
     await row(wrapper, 3).trigger("click");
     await flush(wrapper);
     expect(restoreWorkflowVersion).not.toHaveBeenCalled();
+  });
+
+  it("duplicates and opens an earlier version without going back to it (#1792)", async () => {
+    const tab = { opener: {}, location: { replace: vi.fn() }, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockImplementation(() => tab);
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
+    const filterStore = useFilterStore();
+    filterStore.comfyuiConfigured = true;
+    filterStore.comfyuiUrl = "http://127.0.0.1:8188/";
+    duplicateWorkflow.mockResolvedValue({
+      name: "Chain (version 1)",
+      workflow_id: "manual:copy",
+    });
+    openWorkflowVersion.mockResolvedValue({ opening: "ab12", workflow_id: KEY });
+    try {
+      const { wrapper } = await mountVersioned();
+      const menu = '[data-testid="wftab-version-menu"]';
+      const act = async (number, action) => {
+        await row(wrapper, number).trigger("click");
+        await wrapper.find(`${menu} [data-action="${action}"]`).trigger("click");
+        await flush(wrapper);
+      };
+
+      await act(1, "duplicate");
+      expect(duplicateWorkflow).toHaveBeenCalledWith(KEY, 1);
+      expect(useNoticeStore().notices.at(-1).text).toBe(
+        "Duplicated version 1 as Chain (version 1).",
+      );
+
+      await act(2, "open-comfyui");
+      expect(openWorkflowVersion).toHaveBeenCalledWith(KEY, 2);
+      // The tab first, before the request: a popup blocker refuses one after.
+      expect(open).toHaveBeenCalledWith("", "_blank");
+      expect(tab.location.replace).toHaveBeenCalledWith(
+        `http://127.0.0.1:8188/?pixlstash_run=ab12&pixlstash_of=${encodeURIComponent(KEY)}`,
+      );
+      // Neither went back.
+      expect(restoreWorkflowVersion).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
   });
 
   it("says a refusal under the head in the server's words, and reads the list again", async () => {
@@ -801,7 +857,7 @@ describe("the version menu in the head", () => {
     getWorkflowVersions.mockClear();
     const noticesBefore = useNoticeStore().notices.length;
 
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
 
     expect(refusal(wrapper).attributes("role")).toBe("alert");
@@ -834,7 +890,7 @@ describe("the version menu in the head", () => {
       Promise.resolve(versionsAt(key === OTHER ? 2 : 3, key)),
     );
     const { wrapper, store } = await mountWith([KEY], [shown, other]);
-    await row(wrapper, 2).trigger("click");
+    await goBackTo(wrapper, 2);
     await flush(wrapper);
     expect(refusal(wrapper).exists()).toBe(true);
 
@@ -5253,9 +5309,7 @@ describe("the tab as the editor (#1850)", () => {
             }),
           ),
         );
-        await wrapper
-          .find('[data-testid="wftab-version-menu"] [data-version="2"]')
-          .trigger("click");
+        await goBackTo(wrapper, 2);
         await flush(wrapper);
         await flush(wrapper);
 
@@ -5470,9 +5524,7 @@ describe("the tab as the editor (#1850)", () => {
       await settle(wrapper);
       const back = held();
       restoreWorkflowVersion.mockImplementation(() => back.promise);
-      await wrapper
-        .find('[data-testid="wftab-version-menu"] [data-version="2"]')
-        .trigger("click");
+      await goBackTo(wrapper, 2);
       await flush(wrapper);
       expect(stage(wrapper, "upscale").element.disabled).toBe(true);
       expect(picker(wrapper).element.disabled).toBe(true);

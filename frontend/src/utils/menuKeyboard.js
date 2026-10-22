@@ -19,9 +19,13 @@
 
 const NAV_KEYS = ["ArrowDown", "ArrowUp", "Home", "End"];
 
-/** @param {KeyboardEvent} event keydown on the `.ctx-menu` surface. */
+/**
+ * @param {KeyboardEvent} event keydown on the `.ctx-menu` surface.
+ * @returns {boolean} whether the key moved focus, so a caller with keys of its
+ *   own (Escape, ArrowRight into a submenu) knows to stop.
+ */
 export function onMenuKeydown(event) {
-  if (!NAV_KEYS.includes(event.key)) return;
+  if (!NAV_KEYS.includes(event.key)) return false;
   const menu = event.currentTarget;
   const rows = [...menu.querySelectorAll(".ctx-item")].filter(
     (el) =>
@@ -30,7 +34,7 @@ export function onMenuKeydown(event) {
       !el.disabled &&
       !el.classList.contains("ctx-item--disabled"),
   );
-  if (!rows.length) return;
+  if (!rows.length) return false;
   event.preventDefault();
   const current = rows.indexOf(document.activeElement);
   const last = rows.length - 1;
@@ -41,4 +45,5 @@ export function onMenuKeydown(event) {
     next = current < 0 ? 0 : (current + 1) % rows.length;
   else next = current <= 0 ? last : current - 1;
   rows[next].focus();
+  return true;
 }

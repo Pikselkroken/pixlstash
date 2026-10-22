@@ -741,7 +741,7 @@ Responsibilities:
 - Grid bar: sort selector, filter chips (tags, score, media type, resolution), column slider, stack controls, view mode toggles.
 - Top bar: search toggle, export menu, settings button, import button, sidebar/stats toggles.
 - Export menu: type (full/face), caption mode, resolution, tag format, character name inclusion, bounding-box sidecar (`exportBboxMode`: none / COCO JSON → `bbox_mode` query param).
-- Props: `selectedCount`, `selectedCharacter`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`, `backendUrl`, `comfyuiConfigured`.
+- Props: `selectedCount`, `selectedCharacter`, `selectedSort`, `allPicturesId`, `unassignedPicturesId`, `comfyuiConfigured`.
 - Key emits: `expand-all-stacks`, `collapse-all-stacks`, `confirm-export-zip`, `open-import`, `open-settings`.
 
 #### Toolbar menu panels (`panels/`)
@@ -1083,7 +1083,7 @@ Connects ComfyUI (`comfyui_url` in the user config), on the ComfyUI tab. Props: 
 
 Four states in one card. **Looking**: with no address saved, it probes `http://127.0.0.1:8188/` then `:8000/` (ComfyUI Desktop) through `POST /comfyui/probe`. **Found**: the first that answers, with one key *Connect*. **Address**: scheme, host and port, for when nothing answered or the person picks *Use another address*. **Connected**: the saved address, the node-pack line, *Check again* and *Disconnect*. **Every address is probed before it is saved**, and what is saved is the probe's normalised `url`, never the typed text: an unreachable address shows the probe's `detail` under the fields and writes nothing. A saved address opens on Connected with the status "Checking" while it is probed: "Connected" only once it answers, "Not answering" with the `detail` when it does not, and *Check again* asks again. An answer that lands after the address was disconnected is dropped. A host typed already bracketed (`[::1]`) is wrapped once, not twice.
 
-Connected also shows **Access**, from `GET /comfyui/link`: "PixlStash nodes only · linked <date>", or "Not linked" with the one primary *Link ComfyUI* and a sentence saying what the key lets the nodes do (browse, load models, save, convert workflows) and that it cannot delete, change settings or make tokens (#1811). **`ComfyuiLinkLibraries.vue` is the *Use in every library* switch for the link's key**, shown on the linked card and in the Link dialog once linked, only with more than one library and `can_manage`; it calls `setTokenLibraries` with the status's `token_id`, the same call as the token table's **Every library** switch, which now works on the link key too. **When other computers can reach ComfyUI, `ComfyuiExposureNotice.vue` says so, what it lets them do and what to do about it**: before linking for a ComfyUI not on this computer (`other_computer`) or one here whose probe says `listens_on_network` (`listening`), in the Link dialog under the steps from the reply's `exposure`, and on the linked card from the newest probe (so *Check again* after a restart without `--listen` clears it), falling back to the status's `exposure` until a probe says either way. Linked, the card also says when the key was refused from another address (`refused_from`: ComfyUI's address changed, or someone else has the key) with a primary *Link again*, and offers a secondary *Link again* for a link made before keys were bound (`bound_address` null). *Check again* re-reads the link status as well as probing. *Link ComfyUI* opens `ComfyuiLinkDialog.vue`, which POSTs `/comfyui/link` on open and renders the four steps the reply carries (reach, nodes, link, check) with each fix inline under its step: the pack install sentence for `pack_missing`; for `remote_access_off` / `https_off` on the desktop, *Turn on remote access with HTTPS* through the same `window.pixlstashDesktop.setServerSettings` bridge `ComputeSection.vue` uses, which restarts the backend and reloads the page, so the person links again afterwards. When the nodes are missing and the link reply says `can_install_pack`, the dialog offers *Install and restart ComfyUI* (`POST /comfyui/pack/install`), lists any older copy moved to the trash, then polls `GET /comfyui/pixlstash-node` every 2 s until the nodes load and links again by itself, giving up after 120 s; without the offer it shows the manual install steps. *Disconnect* calls `DELETE /comfyui/link` first when linked; if that fails it still clears the address and says the key "ComfyUI (linked)" is live and listed under Account › API Tokens, where it can be deleted. Closing the dialog returns focus to *Link ComfyUI* (or *Check again* once linked). There is no workflow import or list in Settings: a workflow is added through *Add…* on the Workflows view or into the watched `workflows/` folder. Deleting a workflow is the Workflows grid's *Delete…*, on manual workflows only (§13.2).
+Connected also shows **Access**, from `GET /comfyui/link`: "PixlStash nodes only · linked <date>", or "Not linked" with the one primary *Link ComfyUI* and a sentence saying what the key lets the nodes do (browse, load models, save, convert workflows) and that it cannot delete, change settings or make tokens (#1811). **`ComfyuiLinkLibraries.vue` is the *Use in every library* switch for the link's key**, shown on the linked card and in the Link dialog once linked, only with more than one library and `can_manage`; it calls `setTokenLibraries` with the status's `token_id`, the same call as the token table's **Every library** switch, which now works on the link key too. **When other computers can reach ComfyUI, `ComfyuiExposureNotice.vue` says so, what it lets them do and what to do about it**: before linking for a ComfyUI not on this computer (`other_computer`) or one here whose probe says `listens_on_network` (`listening`), in the Link dialog under the steps from the reply's `exposure`, and on the linked card from the newest probe (so *Check again* after a restart without `--listen` clears it), falling back to the status's `exposure` until a probe says either way. Linked, the card also says when the key was refused from another address (`refused_from`: ComfyUI's address changed, or someone else has the key) with a primary *Link again*, and offers a secondary *Link again* for a link made before keys were bound (`bound_address` null). *Check again* re-reads the link status as well as probing. *Link ComfyUI* opens `ComfyuiLinkDialog.vue`, which POSTs `/comfyui/link` on open and renders the four steps the reply carries (reach, nodes, link, check) with each fix inline under its step: the pack install sentence for `pack_missing`; for `remote_access_off` / `https_off` on the desktop, *Turn on remote access with HTTPS* through the same `window.pixlstashDesktop.setServerSettings` bridge `ComputeSection.vue` uses, which restarts the backend and reloads the page, so the person links again afterwards. When the nodes are missing and the link reply says `can_install_pack`, the dialog offers *Install and restart ComfyUI* (`POST /comfyui/pack/install`), lists any older copy moved to the trash, then polls `GET /comfyui/pixlstash-node` every 2 s until the nodes load and links again by itself, giving up after 120 s; without the offer it shows the manual install steps. *Disconnect* calls `DELETE /comfyui/link` first when linked; if that fails it still clears the address and says the key "ComfyUI (linked)" is live and listed under Account › API Tokens, where it can be deleted. Closing the dialog returns focus to *Link ComfyUI* (or *Check again* once linked). There is no workflow import or list in Settings: a workflow is added through *Add…* on the Workflows view (or dropped on it) or into the watched `workflows/` folder. Deleting a workflow is the Workflows grid's *Delete…*, on manual workflows only (§13.2).
 
 In the Connected state, one line says whether it has the ComfyUI-PixlStash node pack, from `GET /comfyui/pixlstash-node` asked on open and after every save: "installed", or "not found, or too old" with the install sentence (`PIXLSTASH_PACK_INSTALL`) and `ComfyUI-PixlStash` linked to the pack's repo (`PIXLSTASH_PACK_URL`, both in `utils/runReasons.js`). "Too old" because the check looks for the pack's `open_workflow.js`, which older versions lack. `null` or a failed request shows nothing.
 
@@ -1788,6 +1788,30 @@ the shelf's workflow sets section) and served as `hand_made` on
   "Grouped by you" badge, the checkpoint's `ModelMark` as the cover until a
   picture belongs to it, "Incomplete: no checkpoint" in place of its facts when
   it has none, and never a recipe count.
+- **The New tile opens a template picker (#1999, #2001), not an empty set.**
+  Click, Enter or `N` opens `WorkflowTemplatePicker.vue` (`panels/`), a
+  `v-menu` beside the tile that reads `GET /models/workflow-templates` afresh on
+  every open (`store.loadWorkflowTemplates`). Focus goes to its search, and is
+  checked to have landed, since a `focus()` during the menu's entry transition
+  is dropped; Tab goes on to *Make your own* (the empty set, what the tile did
+  before), then the kind track. Three sections: *Ready* (every file on the
+  shelf, no set covering it, newest arrival first), a folded *already in a set*
+  line whose rows open their set (`store.toggleSet`) instead of making a
+  second, and *Templates* (the rest, most files on the shelf first, cut to 30
+  until *Show more* or a search). A row is one head file; its variants are a
+  `<select>` in the open row, beside the file table, where a file not on the
+  shelf links to the template's own download URL (`https` only). The keyboard
+  is the chooser's: arrows move the inset-ring cursor, Right/Left open and close
+  a row, Enter presses its button, Escape closes and puts focus back on the
+  tile. *Make set* is `store.createSetFromTemplate`: the variant's on-shelf
+  files in the slots the server gave them, named after the model, with
+  `template` so the set covers it from then on; focus lands on the new card.
+  The tile carries the attention dot and a line, *N new ready to make*, from
+  `templates_new_ready` on the sets read; the line is the tile's
+  `aria-describedby`, so the dot never speaks alone. On `models_arrived`,
+  `store.onModelsArrived(ids)` reads the templates once more and raises one
+  sticky notice per template row that is `new` and holds an arrived file:
+  *All 3 files for Z-Image-Turbo are here.* with *Make workflow set*.
 - **Evidence is built only from what no hand-made set covers.** The server marks
   a combination `covered_by` when every one of its models is an on-shelf member
   of a set; `visibleCombinations` drops those, so they appear on the set's card
@@ -1983,6 +2007,15 @@ the shelf's workflow sets section) and served as `hand_made` on
 
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.
+- **A template offer is the same surface (#1999).** An `offer` with
+  `source: "template"` asks "The RealVis template loads 3 files this set does
+  not have." (`offerQuestion` → `templateQuestion`); the card answers in place
+  only a single file already on the shelf. The strip lists its `downloads` as
+  links (`https` only, as the picker does), names the `others`, and has no Add
+  when every file is a download. Stop asking keeps the downloads out with the
+  models (`keepOutOfHandMadeSet`); `withShelfNames` keeps an offer of
+  downloads only. The template picker flags `requires_custom_nodes` beside
+  *Needs ComfyUI*.
 - **The merge offer is ghosts in the tray (#1523).** A set the server gives an
   `offer` wears it on the card as a lasting question panel across the cover's
   foot (`offerQuestion`: "1 recipe ran this with a model the set does not
@@ -2482,10 +2515,16 @@ can no longer see.
     for another workflow is neither kept (`versionsAsk`, `stillOn`) nor drawn
     (`shownVersions` filters on the key).
   - **The menu** is the shared `.ctx-menu`: a *Versions* heading and one
-    `menuitemradio` row per version in the server's order (newest first),
-    with its number, day and `reason` **exactly as sent** (a null reason
-    leaves the number and the day). The current row is checked (medium label,
-    the olive check in the leading slot, no fill) and only closes the menu.
+    row per version in the server's order (newest first), with its number,
+    day and `reason` **exactly as sent** (a null reason leaves the number and
+    the day). The current row is a checked `menuitemradio` (medium label, the
+    olive check in the leading slot, no fill) and only closes the menu. **An
+    earlier row opens a submenu** (#1792; `aria-haspopup`, the trailing
+    chevron, the grid menu's *Open in ComfyUI ›* keyboard: click, →, Enter or
+    Space open it on its first row, ← goes back) of what can be done with that
+    version: *Go back to this version*, *Duplicate*, and *Open in ComfyUI*
+    where ComfyUI is set and its node can open a held graph
+    (`comfyuiOpensNoRuns`). None acts on a single click on the row.
     Each row has an explicit `aria-label`, since its two spans would
     otherwise be read run together. Unread or failed, the menu holds one
     disabled row saying so, and opening it asks again. **An arrow that opens
@@ -2514,6 +2553,14 @@ can no longer see.
     because it was stale; for a workflow the rail has left it is a notice
     instead.
     Focus returns to the chip when the menu closes.
+  - **Duplicate and Open in ComfyUI on an earlier version leave the workflow
+    where it is** (#1792). *Duplicate* is the store's `duplicateCard(key,
+    version)`, `POST …/duplicate?version=n`, a new workflow named `… (version
+    n)` with a notice; *Open in ComfyUI* is `openHeldInComfyui`
+    (`useComfyuiOpen.js`): the tab is opened before
+    `POST …/versions/{n}/opening`, as the Run popup opens it, and sent to
+    `?pixlstash_run=&pixlstash_of=`, where the ComfyUI-PixlStash node sends a
+    save from it back as a new workflow, as it does a run's.
 - **A change to the graph waits, and one bar saves the set** (#1850, rules 1,
   2 and 7 of #1846). A model picked, a stage switched, a loader removed or
   its strength changed is not written when it is made: it joins the ONE set
@@ -6755,13 +6802,19 @@ from the UI today and are not oversights**:
   calls it — and `WorkflowRunPanel` still offers a `PicturePicker` per run, so
   running is unaffected; what is missing is changing the stored setup and
   deleting a file. F5 rebuilds both on the key-based routes.
-- **Drag-and-drop of a `.json` onto the view.** *Add…* in the toolbar posts to
-  the same `POST /comfyui/workflows/import`, so the capability is not lost,
-  only the gesture. Every import is a new manual workflow (no overwrite or
-  keep-both choice); the view re-reads the grid and lands on the last one's
-  `workflow_id` (`landOn`: select it, cursor on its card), as Duplicate and
-  the Workflow tab's *Save as new…* do with theirs. `useWindowFileImport` no longer has to stand aside for this
-  screen.
+- ~~**Drag-and-drop of a `.json` onto the view.**~~ **Back.** The whole
+  `.wfv` is the drop target, marked with the olive wash and ring while a file
+  drag is over it, and a drop goes through `addWorkflowFiles`, the same
+  function *Add…* calls, so both post to `POST /comfyui/workflows/import`.
+  Every import is a new manual workflow (no overwrite or keep-both choice);
+  the view re-reads the grid and lands on the last one's `workflow_id`
+  (`landOn`: select it, cursor on its card), as Duplicate and the Workflow
+  tab's *Save as new…* do with theirs. Only the `.json` files of a drop are
+  the view's (`isWorkflowFile`, `utils/media.js`): `useWindowFileImport`
+  stands aside for a drop of JSON alone onto `.wfv`, and anything else in a
+  mixed drop is still its to import. A dropped folder is not walked for
+  workflows, and a drop on a dialog or menu over the view (teleported out of
+  `.wfv`) is the window importer's.
 - ~~**The way out to a workflow's pictures.**~~ **Back.** The shelf
   inspector's second tab was Pictures, and its tiles opened one through
   `?overlay=<id>`; §F2 called that tab "what stops the rail being terminal".
@@ -6845,7 +6898,8 @@ later closes inherit.
 
 **Nothing reads ComfyUI's saved workflows by itself** (#1854). A workflow
 reaches this grid with the pictures it made, or as a file: the toolbar's *Add…*
-(`POST /comfyui/workflows/import`) or the watched workflows folder. The view
+or a `.json` dropped on the view (`POST /comfyui/workflows/import`), or the
+watched workflows folder. The view
 asks ComfyUI nothing on its own and has no status or summary of such a read to
 show; what somebody saves in ComfyUI stays there until it is imported.
 

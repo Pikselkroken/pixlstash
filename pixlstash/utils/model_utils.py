@@ -314,6 +314,22 @@ def quant_from_filename(filename: str) -> str | None:
     return _split_quant(clean_asset_name(filename).split())[1]
 
 
+def quantless_name(filename: str) -> str:
+    """A file's name with its quant postfix and extension gone, case folded.
+
+    Two files with the same answer are one model stored at different
+    precisions, which is how a ComfyUI template's ``bf16`` file is found on a
+    shelf holding the ``fp8`` one (#2001).
+
+    Examples:
+        >>> quantless_name("z_image_turbo_bf16.safetensors")
+        'z image turbo'
+        >>> quantless_name("flux1-dev-Q4_K_M.gguf") == quantless_name("flux1-dev.safetensors")
+        True
+    """
+    return " ".join(_split_quant(clean_asset_name(filename).split())[0]).casefold()
+
+
 # Trailing tokens that record where in a training run a checkpoint was saved.
 # `JimmyVehicle_000002750` and `ohwx_woman-step00004500` are one subject each, not
 # a subject called "JimmyVehicle 000002750".

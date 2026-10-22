@@ -13,6 +13,7 @@ import { computed, ref, watch } from "vue";
 import { getPixlstashNode } from "../api/comfyui";
 import { useFilterStore } from "../stores/useFilterStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
+import { errorMessage } from "../utils/apiError";
 import { comfyuiLink } from "../utils/comfyuiLink";
 
 /**
@@ -65,6 +66,56 @@ export function openWorkflowInComfyui(id, original = false) {
 }
 
 /**
+ * Open ComfyUI on a graph the server holds for it: `hold()` asks for it and
+ * answers `{opening, workflow_id}` (an earlier version, #1792), which ComfyUI
+ * reads at `?pixlstash_run=&pixlstash_of=` as it reads the Run popup's.
+ *
+ * In a browser the tab is opened BEFORE the request and sent on after it, as
+ * the Run popup does: a `window.open` after an await is what popup blockers
+ * refuse. Failures are said as notices.
+ *
+ * @param {() => Promise<{opening: string, workflow_id: string}>} hold
+ * @param {string} failText
+ */
+export async function openHeldInComfyui(hold, failText) {
+  const filterStore = useFilterStore();
+  const notices = useNoticeStore();
+  const address = filterStore.comfyuiUrl;
+  if (!comfyuiLink(address, {})) {
+    notices.push({
+      level: "error",
+      text: "The ComfyUI address in Settings is not a web address.",
+    });
+    return;
+  }
+  const desktop = desktopBridge();
+  const tab = desktop?.openComfyui ? null : window.open("", "_blank");
+  if (!tab && !desktop?.openComfyui) {
+    notices.push({
+      level: "error",
+      text: "The browser blocked the new tab. Allow pop-ups for PixlStash, then try again.",
+    });
+    return;
+  }
+  if (tab) tab.opener = null;
+  try {
+    const held = await hold();
+    const link = comfyuiLink(address, {
+      pixlstash_run: held.opening,
+      pixlstash_of: held.workflow_id,
+    });
+    if (tab) tab.location.replace(link);
+    else if (!(await desktop.openComfyui(link))) {
+      throw new Error("the shell refused the link");
+    }
+  } catch (err) {
+    tab?.close();
+    console.warn("[workflows] could not open a held graph in ComfyUI", err);
+    notices.push({ level: "error", text: errorMessage(err, failText) });
+  }
+}
+
+/**
  * Whether a workflow can be opened in ComfyUI from here, and what opens.
  *
  * Asks ComfyUI for the PixlStash node once per mount and again when the
@@ -91,6 +142,11 @@ export function useComfyuiOpen() {
    * (#1852): what opens is a copy. Only a definite no.
    */
   const comfyuiOpensACopy = ref(false);
+  /**
+   * The nodes ComfyUI has cannot open a held graph (no `open_run.js`), so
+   * `openHeldInComfyui` would open on nothing. Only a definite no.
+   */
+  const comfyuiOpensNoRuns = ref(false);
   let nodeCheck = 0;
   watch(
     () => canOpenComfyui.value && filterStore.comfyuiUrl,
@@ -98,13 +154,18 @@ export function useComfyuiOpen() {
       const check = ++nodeCheck;
       comfyuiLacksNode.value = false;
       comfyuiOpensACopy.value = false;
+      comfyuiOpensNoRuns.value = false;
       if (!url) return;
       try {
-        const { can_open_workflows: canOpen, saves_back: savesBack } =
-          await getPixlstashNode();
+        const {
+          can_open_workflows: canOpen,
+          saves_back: savesBack,
+          opens_runs: opensRuns,
+        } = await getPixlstashNode();
         if (check !== nodeCheck) return;
         comfyuiLacksNode.value = canOpen === false;
         comfyuiOpensACopy.value = canOpen === true && savesBack === false;
+        comfyuiOpensNoRuns.value = opensRuns === false;
       } catch (err) {
         console.warn("[workflows] could not ask ComfyUI for the PixlStash node", err);
       }
@@ -112,5 +173,10 @@ export function useComfyuiOpen() {
     { immediate: true },
   );
 
-  return { canOpenComfyui, comfyuiLacksNode, comfyuiOpensACopy };
+  return {
+    canOpenComfyui,
+    comfyuiLacksNode,
+    comfyuiOpensACopy,
+    comfyuiOpensNoRuns,
+  };
 }

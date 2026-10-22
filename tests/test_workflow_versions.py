@@ -57,15 +57,6 @@ def folders(tmp_path, monkeypatch):
     return user, builtin
 
 
-@pytest.fixture
-def hub(tmp_path):
-    database = HubDatabase(str(tmp_path / "hub.db"))
-    try:
-        yield database
-    finally:
-        database.close()
-
-
 def _versions(hub, workflow_id: str) -> list[tuple[int, str]]:
     return [
         (row["version"], row["source"])

@@ -22,6 +22,8 @@ import pytest
 from _pytest.config.exceptions import UsageError
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+import pixlstash.startup_checks as startup_checks
+from pixlstash.hub.db import HubDatabase
 from pixlstash.server import Server
 from pixlstash.tasks.face_extraction_task import FaceExtractionTask
 from pixlstash.tasks.image_embedding_task import ImageEmbeddingTask
@@ -427,6 +429,38 @@ def pytest_configure(config):
     Server.DEFAULT_FAST_CAPTIONS = config.getoption("--fast-captions")
     Server.DEFAULT_MAX_VRAM_GB = config.getoption("--max-vram-gb")
     Server.DEFAULT_INSIGHTFACE_MODEL_PACK = config.getoption("--insightface-model-pack")
+
+
+@pytest.fixture
+def hub(tmp_path):
+    """An open ``HubDatabase`` in the test's temporary directory.
+
+    A module that needs a different ``hub`` (a raw sqlite connection, a shared
+    server's hub) defines its own, which overrides this one.
+    """
+    with HubDatabase(str(tmp_path / "hub.db")) as database:
+        yield database
+
+
+@pytest.fixture
+def patch_runtime(monkeypatch):
+    """Seed ``startup_checks``' cached torch/ort handles with fakes.
+
+    The real imports are function-local and cached behind ``sc._torch()`` /
+    ``sc._ort()`` so that importing the server does not drag in the ML stack
+    (backend_architecture §3, "ML import discipline"). Seeding the caches both
+    substitutes the fakes and stops the accessors ever attempting the real
+    import, which keeps a test off this machine's actual hardware.
+    ``startup_checks`` passes the handle down to the accelerator probes, which
+    is what lets a CPU-only runner verify a CUDA, ROCm or Metal host. Call the
+    returned function with ``(torch_mod, ort_mod)``.
+    """
+
+    def apply(torch_mod, ort_mod):
+        monkeypatch.setattr(startup_checks, "_torch_mod", torch_mod)
+        monkeypatch.setattr(startup_checks, "_ort_mod", ort_mod)
+
+    return apply
 
 
 @pytest.fixture(autouse=True, scope="session")

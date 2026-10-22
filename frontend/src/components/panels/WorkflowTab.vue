@@ -93,8 +93,13 @@
           :at="headVersion.at"
           :versions="shownVersions?.versions ?? null"
           :failed="versionsFailed"
+          :can-open-comfyui="
+            canOpenComfyui && !comfyuiLacksNode && !comfyuiOpensNoRuns
+          "
           @open="reopenVersions"
           @go-back="goBack"
+          @duplicate="duplicateVersion"
+          @open-comfyui="openVersionInComfyui"
         />
         <!-- The newest version is one ComfyUI saved (#1852): said, with the
              way back beside it, and nothing to answer. An inline button in a
@@ -1228,6 +1233,7 @@ import {
   getWorkflowChanges,
   getWorkflowFormInputs,
   getWorkflowVersions,
+  openWorkflowVersion,
   patchWorkflowCard,
   preflightWorkflowRun,
   readModelSwap,
@@ -1241,6 +1247,7 @@ import {
   workflowCoverUrl,
 } from "../../api/workflows";
 import {
+  openHeldInComfyui,
   openWorkflowInComfyui,
   useComfyuiOpen,
 } from "../../composables/useComfyuiOpen";
@@ -1326,8 +1333,12 @@ const { showPictures, showLoraPictures, showValuePictures } =
   useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
-const { canOpenComfyui, comfyuiLacksNode, comfyuiOpensACopy } =
-  useComfyuiOpen();
+const {
+  canOpenComfyui,
+  comfyuiLacksNode,
+  comfyuiOpensACopy,
+  comfyuiOpensNoRuns,
+} = useComfyuiOpen();
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
@@ -3831,6 +3842,35 @@ function goBack(row, key = selectedKey.value) {
     void loadChanges(key);
     await refreshGraph(key);
   });
+}
+
+/**
+ * Duplicate one earlier version as a workflow of its own (#1792), without
+ * going back to it: the workflow stays on the version it has. A failure is
+ * the store's to say, as the grid's Duplicate is.
+ */
+async function duplicateVersion(row) {
+  const key = selectedKey.value;
+  if (!key) return;
+  const body = await store.duplicateCard(key, row.version);
+  if (!body) return;
+  notices.push({
+    level: "success",
+    text: `Duplicated version ${row.version} as ${body.name}.`,
+  });
+}
+
+/**
+ * Open one earlier version in ComfyUI without going back to it (#1792).
+ * What ComfyUI saves from it comes back as a new workflow.
+ */
+function openVersionInComfyui(row) {
+  const key = selectedKey.value;
+  if (!key) return;
+  void openHeldInComfyui(
+    () => openWorkflowVersion(key, row.version),
+    `Could not open version ${row.version} in ComfyUI.`,
+  );
 }
 
 /** Dismiss takes its own button away, so focus goes back to the version chip. */

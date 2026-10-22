@@ -633,6 +633,7 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/models/workflow-sets/{set_id}/declines                                | model_shelf     | Keep models out of a workflow set's merge offer             |
 | POST   | /api/v1/models/workflow-sets/{set_id}/members                                 | model_shelf     | Add models to a workflow set                                |
 | POST   | /api/v1/models/workflow-sets/{set_id}/members/remove                          | model_shelf     | Take models out of a workflow set                           |
+| GET    | /api/v1/models/workflow-templates                                             | model_shelf     | ComfyUI's workflow templates against the shelf              |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
@@ -817,6 +818,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/{workflow_id}/save-as-new                                   | workflows       | Save a workflow's changes as a new workflow                 |
 | POST   | /api/v1/workflows/{workflow_id}/set-clone-plans                               | workflows       | What cloning a workflow onto each workflow set would write  |
 | GET    | /api/v1/workflows/{workflow_id}/versions                                      | workflows       | A workflow's versions                                       |
+| POST   | /api/v1/workflows/{workflow_id}/versions/{version}/opening                    | workflows       | Hold an earlier version of a workflow for ComfyUI to open   |
 | POST   | /api/v1/workflows/{workflow_id}/versions/{version}/restore                    | workflows       | Go back to an earlier version of a workflow                 |
 | GET    | /version                                                                      | server          | Read Version                                                |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
@@ -3134,6 +3136,14 @@ kind and a version saved from ComfyUI is counted apart). The route answers the l
 copy, marked `current`, and the row directly under it is the version just
 left, which is what the Workflow tab's Undo goes back to
 (`test_going_back_answers_the_new_copy_first_and_the_version_left_under_it`).
+**A version can be duplicated or opened without going back to it** (#1792):
+`POST …/duplicate?version=n` and `POST …/versions/{n}/opening` read that
+version through `_source_graph_for`'s `version` (Open's plan takes it as
+`_plan(version=)`, the `as_of` a saved recipe uses, so the default recipe is
+the one it had then). That read falls back to the current graph for a version
+no longer kept, which these two must not act on in its place, so
+`_require_version_read` answers 404 when the graph read is not the version
+asked for.
 And
 it is not a checkpoint change under rule 2 since every version was already saved on this
 workflow.
@@ -10609,6 +10619,78 @@ max rowids are not enough. The workflow grid (`read_grid`) still builds the
 index twice per request, once per `_shelf_candidates` call; at these sizes that
 is tens of milliseconds, left as is.
 
+#### Starting a set from a ComfyUI template (#1999, #2001)
+
+New workflow set opens a picker of ComfyUI's workflow templates, led by the ones
+whose files are all on the shelf. `GET /models/workflow-templates` serves it;
+`pixlstash/services/workflow_templates.py` computes it per request and stores
+nothing for it.
+
+- **The list is a committed file, never fetched at runtime.**
+  `scripts/build_template_suggestions.py` reads one pinned, hash-checked
+  `comfyui-workflow-templates-json` wheel from PyPI (the package ComfyUI
+  installs to serve `/templates`) and writes
+  `pixlstash/data/workflow_templates.json`: per template its name, title, kind
+  (the catalogue category's type; `edit` for an image template tagged as one),
+  tags, minimum ComfyUI version, size, usage, and `files`, every
+  `properties.models` entry on its nodes, subgraphs included. Templates that
+  download nothing (the paid API ones) are left out. It also keeps
+  `description`, `open_source` and `requires_custom_nodes` (a node whose
+  `cnr_id` is a pack other than `comfy-core`: a flag the picker shows, never a
+  filter), and each kept template's graph, minified, as
+  `pixlstash/data/workflow_templates/<name>.json` for #2000 to make workflows
+  from; nothing reads those yet. A template name that is not a plain file name
+  is skipped, since the package is not ours.
+- **Refreshed weekly by a bot PR** (#1999):
+  `.github/workflows/template-suggestions.yml` (Monday cron plus
+  `workflow_dispatch`) reruns the script against the latest release on
+  `develop` and opens or updates one PR on the fixed branch
+  `bot/workflow-templates` through `peter-evans/create-pull-request`, with the
+  release bot's token so the gate runs. No change, no PR. The body is
+  `--summary`'s Markdown (templates added, removed, whose files changed, whose
+  graph changed), written to a file, so no package text reaches a shell.
+- **A file is on the shelf by name.** A model with a `present` copy whose
+  filename or copy basename matches, case folded; failing that, one whose name
+  matches once the quant postfix is gone (`model_utils.quantless_name`, the
+  shelf's own quant parser), which is served as `other_quant` so the row can say
+  *fp8 for bf16*. Each file carries the slot it would take from its ComfyUI
+  folder, `other` where the shelf's kind would make the create refuse it.
+- **One row per head.** The head is the first `checkpoints`,
+  `diffusion_models` or `unet` file (every such file takes the checkpoint slot,
+  so a Wan 2.2 high/low or a base-plus-refiner template brings both); templates whose heads share a quantless name are variants of one row,
+  the default first (covered, then complete, then most files on the shelf, then
+  fewest matched only as another quant, then ComfyUI's own usage count). A template with no head is its own row.
+- **Covered is the merge offer's rule.** A hand-made set covers a template when
+  `_lacks` finds nothing of the template's on-shelf files missing from the set's
+  on-shelf members (a namesake counting as the file), or when the set was made
+  from it: `model_workflow_set.template`, written by `POST /models/workflow-sets`
+  `{template}` and served on the set and its delete snapshot, so an undo puts it
+  back. A covered template is never offered as a second set.
+- **New is the only clock.** A complete, uncovered template whose head has a
+  `model.arrived_at` (§25.10) in the last 24 hours is `new`.
+  `GET /models/workflow-sets` carries the count as `templates_new_ready` for the
+  New tile's line; nothing else expires, and a complete template stays first in
+  the picker however old the download.
+- **A set holding a head is offered the rest of its template** (#1999 §3).
+  `attach_template_offers`, after `attach_hand_made` in the routes'
+  `_workflow_sets`, fills `offer` on a set that has an on-shelf checkpoint and
+  no pictures' offer: of the templates whose head matches one of its
+  checkpoints by name (another quant counting), the closest (the one it was
+  made from, then fewest files lacking, then fewest held only as another quant,
+  then usage) is offered and the rest named in `others`. Only the head
+  triggers it, so a shared VAE suggests nothing. Its files the set lacks come
+  as `models` (on the shelf, hashed, not an engine: added as the merge offer's
+  are) and `downloads` (`{name, url, directory, slot, sha256}`), with
+  `source: "template"` and empty picture counts. Keep separate is the same
+  declines list: a download's `sha256` is `file_decline_key`, the sha256 of
+  its folded name, since it has no bytes. Nothing left to offer, no offer,
+  and no other template is tried. Keeping a pictures' offer separate lets
+  this one show, since it is a different question.
+- **A newer ComfyUI is a flag.** The route asks the owner's configured ComfyUI
+  for its version (`probe_comfyui`, one second) and sets `needs_comfyui` on a
+  template that wants a newer one. A set is only files, so making one is never
+  refused for it.
+
 #### Workflow sets: PixlStash's check and the owner's verdict
 
 Spec: `docs/ideas/workflow-set-verdicts.md`. Code:
@@ -10855,6 +10937,12 @@ and announces `models_arrived` with the model ids it registered.
   sidebar's Models row until the shelf is opened, and re-reads a shelf already
   read with `markNew`, so the arrivals wear the row `New` badge. An unread shelf
   is not fetched: against no previous fetch every row would be new.
+- **The arrival is recorded** (#2001): a move stamps `model.arrived_at` (UTC
+  ISO) after the row is registered, and a failed stamp is logged and leaves the
+  move standing. It is the only place the column is written, so a file a scan
+  found never has one, however recently: a first scan of an old folder is not an
+  arrival. The New workflow set picker reads it (see "Starting a set from a
+  ComfyUI template" under §25).
 
 
 ### 25.11 The kind a workflow loads a model as (#1962)
@@ -10956,9 +11044,9 @@ CLIP text forward pass (`ClipService.encode_texts`) for the batch's distinct
 cleaned prompts, cached per prompt for the process. `ImageEmbeddingTask` NULLs
 the score whenever it writes a new embedding, and `ComfyUIExtractionTask`
 whenever it writes a prompt, so a stale score re-queues itself. A task whose
-encoder fails raises, and the finder defers that batch for the session (the
-`MissingOcrFinder` pattern), so a broken text tower is not re-run every cycle
-and a restart retries it.
+encoder fails raises, and the finder defers that batch for the session
+(`BaseDeferringFinder`, as `MissingOcrFinder` does), so a broken text tower is
+not re-run every cycle and a restart retries it.
 
 **Served** as `prompt_match` in every payload built from
 `Picture.metadata_fields()`, and with the derived `looks_like_prompt` on

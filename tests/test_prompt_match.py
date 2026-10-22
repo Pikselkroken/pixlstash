@@ -1,6 +1,7 @@
 """Prompt match: the method, the finder, the task, and where the verdict is served."""
 
 import tempfile
+from types import SimpleNamespace
 import zlib
 
 import numpy as np
@@ -278,6 +279,28 @@ def test_an_encoder_failure_stores_nothing_and_defers_the_batch(server, pictures
     assert {pic.id for pic in found} & set(pictures.values()) == {
         pictures["syntax_only"]
     }
+
+
+def test_a_failed_batch_is_deferred_before_its_claims_are_released(server, pictures):
+    # The planner can run find_task the instant a claim is let go, on another
+    # thread, so an id released before its deferral is handed straight back.
+    finder = MissingPromptMatchFinder(server.vault.db, engine_getter=lambda: None)
+    task = SimpleNamespace(params={"picture_ids": [pictures["fox"]]})
+    eligible_at_release = []
+
+    class Claims(set):
+        def discard(self, picture_id):
+            super().discard(picture_id)
+            found = server.vault.db.run_immediate_read_task(
+                finder._fetch_candidates, 1000
+            )
+            eligible_at_release.append(picture_id in {pic.id for pic in found})
+
+    assert pictures["fox"] in _candidates(server, pictures)
+    finder._claimed_picture_ids = Claims({pictures["fox"]})
+    finder.on_task_complete(task, RuntimeError("CLIP could not encode"))
+
+    assert eligible_at_release == [False]
 
 
 def test_cached_prompts_are_not_encoded_again(server, pictures):

@@ -1108,7 +1108,7 @@ export function bandGroups(groups, deviceByFolderId) {
  * per cent of a 256 GB SSD is 25 GB, which IS a problem - but so is 60 GB free
  * on that same disk, and the fraction calls that fine.
  */
-export const LOW_FREE_BYTES = 50 * 1024 ** 3;
+const LOW_FREE_BYTES = 50 * 1024 ** 3;
 
 /**
  * How a drive's space divides into the three things a reader asks about.
@@ -1622,6 +1622,8 @@ export function companionsSentences(companions, count) {
   }
   const said = [];
   const { in_use = [], orphaned = [], shared = [], unknown = [] } = companions;
+  // Not lockedDelete's `plural`: tests/test_comfyui_pack_model_mark.py runs this
+  // file in Node beside setAppearance.js alone, so it imports nothing else.
   const plural = (items, one, many) => (items.length === 1 ? one : many);
   if (in_use.length) {
     said.push(

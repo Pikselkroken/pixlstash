@@ -153,13 +153,18 @@
 
           <!-- The way in to a hand-made set, first because the grid leads with
                the newest sets. A row like any card, so the arrows reach it and
-               Enter presses it; N does the same from anywhere in the grid. -->
+               Enter presses it; N does the same from anywhere in the grid. It
+               opens the template picker, whose Make your own is the empty set
+               (#2001). The dot never speaks alone: its line is the
+               description. -->
           <div
             v-else-if="entry.kind === 'new'"
             class="msg__newrow"
             role="row"
             aria-level="1"
             aria-label="New workflow set"
+            aria-haspopup="dialog"
+            :aria-describedby="store.templatesNewReady ? NEW_READY_ID : undefined"
             aria-keyshortcuts="N"
             :tabindex="index === cursorIndex ? 0 : -1"
             data-key="new"
@@ -169,11 +174,23 @@
           >
             <div class="msg__cell" role="gridcell">
               <div class="msg__new" data-testid="new-workflow-set">
+                <span
+                  v-if="store.templatesNewReady"
+                  class="msg__new-dot"
+                  aria-hidden="true"
+                ></span>
                 <v-icon size="24" aria-hidden="true">mdi-plus</v-icon>
                 <span class="msg__new-label" aria-hidden="true"
                   >New workflow set</span
                 >
                 <kbd class="msg__kbd" aria-hidden="true">N</kbd>
+                <span
+                  v-if="store.templatesNewReady"
+                  :id="NEW_READY_ID"
+                  class="msg__new-ready"
+                  data-testid="new-ready-line"
+                  >{{ store.templatesNewReady }} new ready to make</span
+                >
               </div>
               <span
                 v-if="railTargets.has('new')"
@@ -311,6 +328,19 @@
       @undo="undoLastPick"
       @close="closeChooser"
     />
+
+    <WorkflowTemplatePicker
+      :open="Boolean(templatePicker)"
+      :target="templatePicker?.target"
+      :rows="store.workflowTemplates.rows"
+      :version="store.workflowTemplates.version"
+      :loading="store.templatesLoading"
+      :error="store.templatesError"
+      @close="closeTemplatePicker()"
+      @make="makeFromTemplate"
+      @make-own="makeOwnFromPicker"
+      @open-set="openSetFromPicker"
+    />
   </div>
 </template>
 
@@ -398,6 +428,7 @@ import {
 import ModelSetPanel from "../panels/ModelSetPanel.vue";
 import ModelSetSlotsPanel from "../panels/ModelSetSlotsPanel.vue";
 import WorkflowSetChooser from "../panels/WorkflowSetChooser.vue";
+import WorkflowTemplatePicker from "../panels/WorkflowTemplatePicker.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelSetCard from "../widgets/ModelSetCard.vue";
 import { useFileDropHighlight } from "../../composables/useModelDropTarget";
@@ -1077,12 +1108,67 @@ function openSetMenu(entry, x, y) {
 
 function onNewClick(entry) {
   cursorId.value = entry.id;
-  createSet();
+  openTemplatePicker();
 }
 
-/** Make an empty set and open it. Its tray says what to add first. */
-async function createSet() {
-  await store.createHandMadeSet({});
+// ── The template picker (#1999, #2001) ─────────────────────────────────────
+//
+// The New tile opens it; every way out puts focus somewhere on purpose,
+// because a programmatic overlay drops it to <body>.
+const NEW_READY_ID = "msg-new-ready";
+const templatePicker = ref(null);
+
+function openTemplatePicker() {
+  const tile = flatRows.value.find((entry) => entry.kind === "new");
+  if (!tile) return;
+  cursorId.value = tile.id;
+  // Read afresh on every open: the answer follows every shelf and set change.
+  store.loadWorkflowTemplates();
+  templatePicker.value = { target: rowElement(tile) };
+}
+
+/** Close; Escape and Close hand focus back to the tile. */
+function closeTemplatePicker({ refocus = true } = {}) {
+  templatePicker.value = null;
+  if (!refocus) return;
+  const at = flatRows.value.findIndex((entry) => entry.kind === "new");
+  if (at >= 0) moveCursor(at);
+}
+
+/**
+ * Focus the card of a hand-made set, once the grid draws it. A card the name
+ * filter leaves out is not drawn at all; focus then goes back to the tile,
+ * never to <body>.
+ */
+async function focusSetCard(setId) {
+  await nextTick();
+  const at = flatRows.value.findIndex(
+    (entry) => entry.kind === "card" && entry.key === `hand:${setId}`,
+  );
+  if (at >= 0) moveCursor(at);
+  else closeTemplatePicker();
+}
+
+async function makeFromTemplate(variant) {
+  closeTemplatePicker({ refocus: false });
+  const created = await store.createSetFromTemplate(variant);
+  if (created) focusSetCard(created.id);
+  else closeTemplatePicker();
+}
+
+/** Make your own: the empty set, opened. Its tray says what to add first. */
+async function makeOwnFromPicker() {
+  closeTemplatePicker({ refocus: false });
+  const created = await store.createHandMadeSet({});
+  if (created) focusSetCard(created.id);
+  else closeTemplatePicker();
+}
+
+/** A template a set already covers opens that set, never makes a second. */
+function openSetFromPicker(setId) {
+  closeTemplatePicker({ refocus: false });
+  if (store.openSetKey !== `hand:${setId}`) store.toggleSet(`hand:${setId}`);
+  focusSetCard(setId);
 }
 
 /** Delete the selected sets, or the one under the cursor. No file is touched. */
@@ -2051,12 +2137,12 @@ function onHandKey(event, entry) {
     (event.key === "n" || event.key === "N")
   ) {
     event.preventDefault();
-    createSet();
+    openTemplatePicker();
     return true;
   }
   if (entry?.kind === "new" && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();
-    createSet();
+    openTemplatePicker();
     return true;
   }
   if (entry?.kind === "slot") {
@@ -2389,6 +2475,27 @@ function onKeyDown(event) {
 .msg__new:hover {
   background: var(--hover-wash);
   color: rgb(var(--v-theme-on-surface));
+}
+
+/* The attention dot (visual-language §12): a complete template's head arrived
+   in the last day. Never the only signal: the line under the label says it. */
+.msg__new {
+  position: relative;
+}
+
+.msg__new-dot {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+}
+
+.msg__new-ready {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
 }
 
 .msg__new-label {
