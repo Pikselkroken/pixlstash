@@ -206,6 +206,14 @@ watch(gridEl, (element) => {
 });
 onBeforeUnmount(() => observer?.disconnect());
 
+// While the tab is open and ComfyUI did not answer, ask again every 10 s, so
+// starting ComfyUI after PixlStash fills the tab without a click.
+const UNREACHABLE_POLL_MS = 10_000;
+const poll = setInterval(() => {
+  if (store.loaded && !store.reachable) store.fetchTemplates();
+}, UNREACHABLE_POLL_MS);
+onBeforeUnmount(() => clearInterval(poll));
+
 function onRowClick(index, event) {
   const template = store.sortedTemplates[index];
   if (!template) return;

@@ -154,7 +154,8 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
 
   /**
    * Read the list. Once per session unless `refresh`, which also asks the
-   * server to read ComfyUI again; concurrent calls share one read, except
+   * server to read ComfyUI again, or unless ComfyUI did not answer last time
+   * (the server keeps no failed read); concurrent calls share one read, except
    * that a re-read asked for during a plain read is made once that one lands
    * rather than answered with a list ComfyUI was not asked for again.
    */
@@ -164,7 +165,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
       await inflight;
       return fetchTemplates({ refresh: true });
     }
-    if (loaded.value && !refresh) return undefined;
+    if (loaded.value && reachable.value && !refresh) return undefined;
     loading.value = true;
     error.value = "";
     const mine = generation;

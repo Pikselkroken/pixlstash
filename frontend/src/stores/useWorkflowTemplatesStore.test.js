@@ -157,6 +157,15 @@ describe("the Templates tab's list", () => {
     expect(listTemplates).toHaveBeenLastCalledWith({ refresh: true });
   });
 
+  it("asks again on a plain read while ComfyUI did not answer", async () => {
+    listTemplates.mockResolvedValue({ reachable: false, detail: "refused" });
+    const store = useWorkflowTemplatesStore();
+    await store.fetchTemplates();
+    await store.fetchTemplates();
+    expect(listTemplates).toHaveBeenCalledTimes(2);
+    expect(store.reachable).toBe(false);
+  });
+
   it("makes a re-read asked for during a plain read, once that one lands", async () => {
     let land;
     listTemplates.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
