@@ -483,6 +483,8 @@ export function useUpdatesSocket({
             action: {
               label: "Undo",
               handler: async () => {
+                // The notice can outlive a switch to a read-only session.
+                if (isReadOnly.value) return false;
                 try {
                   await patchWorkflowCard(workflowId, { exclusive: false });
                   noticeStore.push({

@@ -418,6 +418,26 @@ describe("Which GPU PixlStash uses", () => {
     expect(desktop.useAccelerator).toHaveBeenCalledWith("cuda");
   });
 
+  it("reads the stored GPU back when the restart after Apply fails", async () => {
+    const desktop = installDesktop({
+      bundled: { accel: "cpu", label: "Built-in (CPU)", active: false },
+      items: [{ accel: "cuda", label: "NVIDIA GPU (CUDA)", installed: true, active: true, recommended: true }],
+    });
+    desktop.useAccelerator.mockRejectedValue(new Error("restart failed"));
+    compute.getComputeGpus
+      .mockResolvedValueOnce(gpuAnswer())
+      .mockResolvedValue(gpuAnswer({ selected: "GPU-3060" }));
+    const wrapper = mount(ComputeSection, { props: { view: "compute" } });
+    await flushPromises();
+    await wrapper.find('input[value="GPU-3060"]').setValue(true);
+    const apply = () => wrapper.findAll("button").find((b) => b.text() === "Apply & restart");
+    await apply().trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Could not change the GPU.");
+    // Stored already: nothing is left staged to apply twice.
+    expect(apply().attributes("disabled")).toBeDefined();
+  });
+
   it("writes the run-alone switch through the user config", async () => {
     const wrapper = mount(ComputeSection, { props: { view: "compute" } });
     await flushPromises();

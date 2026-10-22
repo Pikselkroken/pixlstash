@@ -8335,9 +8335,6 @@ def create_router(server) -> APIRouter:
                 _emit_comfyui_failure_progress(
                     server, run_id, message, workflow_id=poll_kwargs["workflow_id"]
                 )
-        finally:
-            if cancel.is_set():
-                vram_lease.release()
 
     def _keep_seeds_of(
         graph: dict, targets: list[dict], picture_id: int, object_info: dict | None

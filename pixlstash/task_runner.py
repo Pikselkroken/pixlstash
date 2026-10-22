@@ -79,6 +79,9 @@ class TaskRunner:
         self._lock = threading.Lock()
         self._active_task_lock = threading.Lock()
         self._active_tasks: dict[int, BaseTask] = {}  # thread ident -> running task
+        # Running CPU-queue tasks that were granted GPU memory. Under
+        # ``_active_task_lock``.
+        self._leased_on_gpu: set[str] = set()
         # Tasks refused GPU memory, waiting out their backoff off the queue:
         # task id -> (timer, task). Under ``_active_task_lock``.
         self._requeued: dict[str, tuple[threading.Timer, BaseTask]] = {}
@@ -198,9 +201,7 @@ class TaskRunner:
     def has_active_gpu_tasks(self) -> bool:
         """True while the GPU worker is executing a task."""
         with self._active_task_lock:
-            return any(
-                t.queue_type == QueueType.GPU for t in self._active_tasks.values()
-            )
+            return any(self._on_gpu(t) for t in self._active_tasks.values())
 
     def preempt_gpu(self, reason: str) -> list[str]:
         """Stop PixlStash's GPU work to make room, at a task boundary.
@@ -226,7 +227,7 @@ class TaskRunner:
             running = [
                 task
                 for task in self._active_tasks.values()
-                if task.queue_type == QueueType.GPU and not self._interactive(task)
+                if self._on_gpu(task) and not self._interactive(task)
             ]
             for task in running:
                 self._preempted[task.id] = reason
@@ -286,15 +287,16 @@ class TaskRunner:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             with self._active_task_lock:
-                busy = any(
-                    task.queue_type == QueueType.GPU
-                    for task in self._active_tasks.values()
-                )
+                busy = any(self._on_gpu(t) for t in self._active_tasks.values())
             if not busy:
                 return True
             if self._stop.wait(0.1):
                 return False
         return False
+
+    def _on_gpu(self, task: BaseTask) -> bool:
+        """*task* is running on the card; call under ``_active_task_lock``."""
+        return task.queue_type == QueueType.GPU or task.id in self._leased_on_gpu
 
     @staticmethod
     def _interactive(task: BaseTask) -> bool:
@@ -597,6 +599,8 @@ class TaskRunner:
             thread_ident = threading.current_thread().ident
             with self._active_task_lock:
                 self._active_tasks[thread_ident] = task
+                if lease is not None and not lease.on_cpu:
+                    self._leased_on_gpu.add(task.id)
             try:
                 task.run(on_vram_oom=self._pause_and_report_vram_oom)
                 # ``vram_oom_attempts`` decides whether the user has a card open
@@ -644,6 +648,7 @@ class TaskRunner:
             finally:
                 with self._active_task_lock:
                     self._active_tasks.pop(thread_ident, None)
+                    self._leased_on_gpu.discard(task.id)
                 self._preempted.pop(task.id, None)
                 if lease is not None:
                     lease.release()

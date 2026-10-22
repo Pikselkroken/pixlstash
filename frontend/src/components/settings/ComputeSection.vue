@@ -399,13 +399,15 @@ async function applyGpu() {
   gpuNote.value = "";
   try {
     await setComputeGpu(gpuPick.value);
+    // Before the restart: stored, the choice is no longer staged even if the
+    // restart then fails.
+    await refreshGpus();
     if (desktop?.useAccelerator) {
       await refresh();
       await desktop.useAccelerator(activeAccelerator());
     } else {
       gpuNote.value = "Restart PixlStash to use it.";
     }
-    await refreshGpus();
   } catch (err) {
     console.warn("Could not change the GPU PixlStash uses.", err);
     gpuError.value = errorDetail(err) || "Could not change the GPU.";

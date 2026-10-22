@@ -141,6 +141,29 @@ def test_interactive_work_is_never_preempted(runner):
     assert _until(lambda: "FaceDetectionTask" in runner.endings)
 
 
+def test_a_cpu_queue_task_granted_gpu_memory_counts_as_gpu_work(runner):
+    """``_admit`` leases a CPU-queue task that says it needs VRAM; it then runs
+    on the card, so it is stopped to make room and models wait for it."""
+
+    class _CpuTaskOnTheCard(_GpuTask):
+        @property
+        def queue_type(self):
+            return QueueType.CPU
+
+        def estimated_vram_mb(self):
+            return 512
+
+    task = _CpuTaskOnTheCard("PluginTask")
+    runner.runner.submit(task)
+    assert task.started.wait(5)
+    assert runner.runner.has_active_gpu_tasks()
+    assert runner.runner.wait_for_gpu_idle(0.2) is False
+    assert runner.runner.preempt_gpu("preempted by Training") == ["PluginTask"]
+    assert _until(lambda: "PluginTask" in runner.endings)
+    assert type(runner.endings["PluginTask"]) is TaskCancelledError
+    assert runner.runner.wait_for_gpu_idle(1)
+
+
 def test_a_task_refused_gpu_memory_waits_off_the_queue_and_runs_later():
     """Refused and unable to spill, the task is put back after a backoff; the
     worker is free meanwhile."""

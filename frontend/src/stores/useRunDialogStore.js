@@ -174,7 +174,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    * workflow to be the run on record.
    */
   function eventIsRecordedRun(ran, promptId, pixlstashRunId = null) {
-    if (pixlstashRunId && ran.runIds?.includes(pixlstashRunId)) return true;
+    if (pixlstashRunId && ran.runIds?.includes(normalizeRunId(pixlstashRunId))) return true;
     if (ran.promptIds?.includes(promptId)) return true;
     if (!ran.promptIds?.length && !ran.runIds?.length) return true;
     return useTasksStore().comfyuiRuns.some(
