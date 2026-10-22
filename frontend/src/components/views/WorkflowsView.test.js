@@ -1906,6 +1906,25 @@ describe("Mine | Templates", () => {
     ).toBe("true");
   });
 
+  it("shows Mine with the workflow a file dropped on Templates made", async () => {
+    listTemplates.mockResolvedValue({ reachable: true, templates: [] });
+    importWorkflow.mockReset();
+    importWorkflow.mockResolvedValue({ name: "flow", workflow_id: "d" });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    const files = [new File(['{"nodes": []}'], "flow.json", { type: "application/json" })];
+    await wrapper.find(".wfv").trigger("drop", { dataTransfer: { files, types: ["Files"] } });
+    await flush();
+    await flush();
+
+    expect(
+      wrapper.find('[data-testid="wfv-tab-mine"]').attributes("aria-selected"),
+    ).toBe("true");
+    expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
+    expect(cursorKey(wrapper)).toBe("d");
+  });
+
   it("says where the list comes from when ComfyUI does not answer", async () => {
     listTemplates.mockResolvedValue({
       comfyui_url: "http://127.0.0.1:8188",
