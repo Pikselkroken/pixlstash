@@ -517,11 +517,16 @@ export function setName(combination) {
 //
 // **A hand-made set is a MENU, not a recipe.** The owner lists models that work
 // together, slot by slot, to seed new workflows; there is no order, no strength
-// and no graph. Evidence is kept apart from it on purpose: a hand-made card never
-// shows a recipe count as if it were its own, and an evidence card never changes
-// membership through a gesture. A picture belongs to a hand-made set only when
-// EVERY model it used is in the set - the server works that out and reports it
-// as the set's `picture_count` and the combinations' `covered_by`.
+// and no graph.
+//
+// **It lives on its checkpoint (#1972).** The server serves what a set HOLDS:
+// every model the pictures on its checkpoint ran with, plus what the owner
+// added, minus what they removed. A model new pictures start using joins it by
+// itself (`new` until the owner has seen it), and a removed one stays out. The
+// set reads Automatic while the owner has added and removed nothing, Custom
+// otherwise, and while any set is on a checkpoint its automatic card leaves the
+// grid (`covered_by`). Nothing merges two sets behind the owner's back: sets on
+// one checkpoint merge by hand, and identical ones are only marked.
 
 /**
  * The fixed slots every hand-made set has, in the order the tray draws them.
@@ -647,18 +652,23 @@ export function handMadeBase(set) {
 /**
  * One hand-made set as `ModelSetCard` draws it.
  *
- * The same card shape as an evidence card, so the grid reads as one grid, with
- * the words changed: "Grouped by you", a picture count only when pictures really
- * belong to the set, and the incomplete warning when there is no checkpoint.
+ * The same card shape as an evidence card, so the grid reads as one grid: the
+ * badge says Automatic or Custom, the facts carry the pictures of its
+ * checkpoint, and the incomplete warning stands in when there is no checkpoint.
+ *
+ * @param {Object} set - a `hand_made` entry.
+ * @param {number} [identical] - how many other sets hold exactly its models.
  */
-export function handMadeCard(set) {
+export function handMadeCard(set, identical = 0) {
   const members = set.members ?? [];
   const checkpoint = setCheckpoint(set);
   const pictures = Number(set.picture_count) || 0;
+  const recipes = Number(set.recipes) || 0;
   const offShelf = members.filter((m) => !m.on_shelf).length;
   return {
     key: `hand:${set.id}`,
     handMade: true,
+    automatic: Boolean(set.automatic),
     incomplete: Boolean(set.incomplete ?? !checkpoint),
     name: handMadeName(set),
     kindLabel: checkpoint?.base_model || "",
@@ -669,11 +679,16 @@ export function handMadeCard(set) {
     ),
     facts: [
       members.length === 1 ? "1 model" : `${members.length} models`,
+      recipes ? recipeCount(recipes) : null,
       pictures ? pictureCount(pictures) : "no pictures yet",
       offShelf ? `${offShelf} not on shelf` : null,
+      identical
+        ? `identical to ${identical} other ${identical === 1 ? "set" : "sets"}`
+        : null,
     ].filter(Boolean),
+    identical,
     pictures,
-    recipes: Number(set.recipes) || 0,
+    recipes,
     covers: set.covers ?? [],
     // What the cover draws when no picture belongs to the set yet: the
     // checkpoint's own mark, or nothing (a dashed empty cover).
@@ -681,18 +696,116 @@ export function handMadeCard(set) {
     // A checkpoint kept by hash whose file has left the shelf: the cover says
     // so, and so must the card's accessible name.
     checkpointOffShelf: Boolean(checkpoint && !checkpoint.on_shelf),
+    fresh: members.filter((m) => m.new).length,
     offer: offerQuestion(set),
     size: members.length,
   };
 }
 
 /**
- * The offer (#1523) as the question the card asks: "1 recipe ran this with a
- * model the set does not have. Add it?". The subject is the pictures, and the
- * shortfall is the set's - the recipe needs nothing. Counted in recipes when
- * none of those pictures is in this library, since the offer reads every
- * library's recipes. With one model the card names it, so it can be answered
- * in place; with several it says how many, and the tray reviews them.
+ * How many changes a set carries over what its pictures ran with: the models
+ * only the owner added, and the ones they removed. Zero is Automatic.
+ */
+export function setChanges(set) {
+  return {
+    added: (set?.members ?? []).filter((m) => m.origin === "added").length,
+    removed: (set?.removed ?? []).length,
+  };
+}
+
+/**
+ * The set's own checkpoints as files: the digests a merge compares, sorted.
+ * Only the ones it stores, as the server compares them: a second checkpoint
+ * the pictures brought in is not what the set is on.
+ */
+export function checkpointKey(set) {
+  return setCheckpoints(set)
+    .filter((m) => m.stored !== false)
+    .map((m) => m.sha256)
+    .sort()
+    .join(",");
+}
+
+/** What a set holds as files, sorted: two sets with the same are identical. */
+function holdingKey(set) {
+  return (set?.members ?? [])
+    .map((m) => m.sha256)
+    .sort()
+    .join(",");
+}
+
+/**
+ * Per set id, how many OTHER sets hold exactly the same models, by digest.
+ * Such sets are allowed and nothing removes one; the grid says so instead.
+ *
+ * @param {Array<Object>} sets - `hand_made` entries.
+ * @returns {Map<number, number>}
+ */
+export function identicalSets(sets) {
+  const byKey = new Map();
+  for (const set of sets ?? []) {
+    if (!set.members?.length) continue;
+    const key = holdingKey(set);
+    byKey.set(key, (byKey.get(key) ?? 0) + 1);
+  }
+  return new Map(
+    (sets ?? []).map((set) => [
+      set.id,
+      set.members?.length ? byKey.get(holdingKey(set)) - 1 : 0,
+    ]),
+  );
+}
+
+/**
+ * Merge, as a menu row over selected sets (#1972): enabled if and only if
+ * every one is on the same checkpoint, by digest. `into` keeps its name.
+ *
+ * @param {Array<Object>} sets - the selected sets, two or more.
+ * @param {Object} into - the one that stays, among them.
+ * @returns {{label: string, enabled: boolean, reason: string,
+ *   into: Object, others: Array<Object>}|null} null for fewer than two.
+ */
+export function mergeVerb(sets, into) {
+  if ((sets?.length ?? 0) < 2 || !into) return null;
+  const others = sets.filter((set) => set.id !== into.id);
+  const key = checkpointKey(into);
+  const same = Boolean(key) && others.every((set) => checkpointKey(set) === key);
+  const identical =
+    same && others.every((set) => holdingKey(set) === holdingKey(into));
+  const checkpoint = setCheckpoint(into)?.name || "one checkpoint";
+  return {
+    label: `Merge ${sets.length}${identical ? " identical" : ""} sets into “${handMadeName(into)}”`,
+    enabled: same,
+    reason: same
+      ? identical
+        ? "Same models by digest. Only a card goes."
+        : `All use ${checkpoint}. No file is touched.`
+      : "These sets use different checkpoints.",
+    into,
+    others,
+  };
+}
+
+/**
+ * The other sets one set could merge with: every set on its checkpoint.
+ *
+ * @returns {Array<Object>} the other `hand_made` entries, newest first.
+ */
+export function mergePartners(set, sets) {
+  const key = checkpointKey(set);
+  if (!key) return [];
+  return (sets ?? []).filter(
+    (other) => other.id !== set.id && checkpointKey(other) === key,
+  );
+}
+
+/**
+ * The template offer (#1999) as the question the card asks: "The RealVis
+ * template loads 3 files this set does not have." The template is the
+ * subject and its files the set lacks are counted, on the shelf or not. Only
+ * a single file already on the shelf is answered on the card; a download
+ * never is. What the pictures ran with is in the set already (#1972), so the
+ * template is the only thing a set is still offered.
  *
  * `who` and `rest` are the statement, for the card to embolden its subject and
  * the tray to repeat; `text` is the whole question.
@@ -702,38 +815,7 @@ export function handMadeCard(set) {
  */
 export function offerQuestion(set) {
   const offer = set?.offer;
-  if (!offer) return null;
-  if (offer.source === "template") return templateQuestion(offer);
-  const adds = offer.models.length;
-  const who = offer.picture_count
-    ? pictureCount(offer.picture_count)
-    : recipeCount(offer.recipes);
-  const one = adds === 1 ? offer.models[0] : null;
-  const rest = one
-    ? " ran this with a model the set does not have."
-    : ` used this with ${adds} models the set does not have.`;
-  return {
-    adds,
-    who,
-    rest,
-    text: `${who}${rest}${one ? " Add it?" : ""}`,
-    model: one
-      ? {
-          kind: memberKindLabel(one),
-          name: one.name,
-          // The name has lost its precision; the set may hold its other quant.
-          quant: quantBadge(one.quant)?.label,
-        }
-      : null,
-  };
-}
-
-/**
- * A template offer (#1999) as the same question: the template is the subject,
- * and its files the set lacks are counted, on the shelf or not. Only a single
- * file already on the shelf is answered on the card; a download never is.
- */
-function templateQuestion(offer) {
+  if (!offer?.template) return null;
   const adds = offer.models.length + (offer.downloads?.length ?? 0);
   const one = adds === 1 && offer.models.length === 1 ? offer.models[0] : null;
   const who = `The ${offer.template.title} template`;
@@ -902,6 +984,9 @@ export function slotSuggestions({
   const slot = SET_SLOTS.find((s) => s.id === slotId);
   if (!slot) return [];
   const held = new Set((set?.members ?? []).map((m) => m.sha256));
+  // A model the owner removed is restored where it is drawn, on its ghost,
+  // not added again from here (#1972).
+  const removed = new Set((set?.removed ?? []).map((m) => m.sha256));
   const needle = query.trim().toLowerCase();
   const byId = new Map();
   const heldMatches = [];
@@ -913,6 +998,7 @@ export function slotSuggestions({
       heldTimes.push(fileTime(row));
     }
     if (!fitsSlot(row, slot) || !rowMatches(row, needle)) continue;
+    if (removed.has(row.sha256)) continue;
     if (held.has(row.sha256)) heldMatches.push(row);
     else byId.set(row.id, row);
   }
@@ -1069,35 +1155,6 @@ export function setFits(set, rows, combinations) {
 }
 
 /**
- * What "Fill from pictures" offers: every model recipes or ComfyUI runs have
- * used with this set's checkpoints that the set does not hold, strongest evidence
- * first. Another checkpoint is offered too: a set holds a two-model workflow's
- * pair (Wan 2.2's other expert, a refiner).
- *
- * @returns {Array<{id, name, kindLabel, recipes, historyRuns, slot, sha256}>}
- */
-export function fillFromPictures(set, combinations, rows) {
-  const held = new Set((set.members ?? []).map((m) => m.sha256));
-  const byId = new Map((rows ?? []).map((row) => [row.id, row]));
-  return (
-    checkpointCompanions(set, combinations)
-      .map((c) => ({ ...c, row: byId.get(c.id) }))
-      .filter(
-        (c) => c.row?.sha256 && !held.has(c.row.sha256) && c.kind !== "engine",
-      )
-      .map((c) => ({
-        id: c.id,
-        name: c.name,
-        kindLabel: c.kindLabel,
-        recipes: c.recipes,
-        historyRuns: c.historyRuns,
-        detail: `${c.kindLabel || "Model"} · ${witnessCount(c)}`,
-        slot: defaultSlot(c.kind),
-      }))
-  );
-}
-
-/**
  * What "Fill from a set" offers: the members of your other sets with the same
  * base model (every other set, while this one has no checkpoint), each once,
  * labelled with the sets it comes from.
@@ -1134,17 +1191,22 @@ export function fillFromSets(set, sets) {
 /**
  * A hand-made set's tray, slot by slot, in the order it is drawn and walked.
  *
- * Every member tile, then the merge offer's ghosts for that slot (#1523), then
- * the slot's ＋ tile. The keys are what the tray and
- * the grid's cursor agree on: `m:<sha256>` for a member, `g:<sha256>` for a
- * ghost, `add:<slot>` for a ＋ tile.
+ * Every member tile, then the ghosts for that slot, then the slot's ＋ tile.
+ * A ghost is a model the owner removed (`removed: true`, with Restore, #1972)
+ * or one the template offer would add (with Add, #1999); the two never share
+ * a file, since the offer leaves out what the set holds or removed. The keys
+ * are what the tray and the grid's cursor agree on: `m:<sha256>` for a
+ * member, `g:<sha256>` for a ghost, `add:<slot>` for a ＋ tile.
  *
  * @returns {Array<{slot: Object, items: Array<{key, member: Object|null,
  *   ghost?: Object}>}>}
  */
 export function setSlots(set) {
   const members = set?.members ?? [];
-  const ghosts = set?.offer?.models ?? [];
+  const ghosts = [
+    ...(set?.removed ?? []).map((model) => ({ ...model, removed: true })),
+    ...(set?.offer?.models ?? []),
+  ];
   return SET_SLOTS.map((slot) => {
     const held = members.filter((m) => m.slot === slot.id);
     const items = held.map((member) => ({ key: `m:${member.sha256}`, member }));

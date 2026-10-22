@@ -73,6 +73,68 @@ describe("WorkflowSetSelectionBar", () => {
     expect(wrapper.text()).not.toContain("Duplicate set");
   });
 
+  /** A set on checkpoint `sha`, holding `extra` besides it. */
+  const onCheckpoint = (id, sha, extra = []) => ({
+    id,
+    name: `Set ${id}`,
+    members: [
+      { sha256: sha, slot: "checkpoint", name: `ckpt ${sha}`, on_shelf: true, id: 1 },
+      ...extra,
+    ],
+  });
+
+  it("merges selected sets on one checkpoint into the one last clicked (#1972)", async () => {
+    const store = useModelShelfStore();
+    const sets = [onCheckpoint(10, "x"), onCheckpoint(11, "x"), onCheckpoint(12, "y")];
+    store.workflowSets.handMade = sets;
+    store.selectSet(10);
+    store.selectSet(11, { ctrl: true });
+    const wrapper = mount(WorkflowSetSelectionBar, globalOpts);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".selbar-count").text()).toBe("2 sets · ckpt x");
+    const pill = wrapper.find('.selbar [data-verb="merge-sets"]');
+    expect(pill.attributes("disabled")).toBeUndefined();
+    expect(pill.attributes("aria-label")).toBe("Merge 2 identical sets into “Set 11”");
+    await pill.trigger("click");
+    const [[payload]] = wrapper.emitted("merge");
+    expect(payload.into.id).toBe(11);
+    expect(payload.others.map((set) => set.id)).toEqual([10]);
+
+    // A set on another checkpoint: still there, disabled, saying why.
+    store.selectSet(12, { ctrl: true });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar-count").text()).toBe("3 sets · 2 checkpoints");
+    const row = wrapper.find('.ctx-item[data-verb="merge-sets"]');
+    expect(row.attributes("disabled")).toBeDefined();
+    expect(wrapper.find('.selbar [data-verb="merge-sets"]').attributes("disabled")).toBeDefined();
+  });
+
+  it("offers one set the others on its checkpoint, and Reset when it has changes", async () => {
+    const store = useModelShelfStore();
+    const changed = onCheckpoint(10, "x", [
+      { sha256: "d", slot: "lora", name: "mine", origin: "added", on_shelf: true, id: 4 },
+    ]);
+    store.workflowSets.handMade = [changed, onCheckpoint(11, "x"), onCheckpoint(12, "y")];
+    store.selectSet(10);
+    const wrapper = mount(WorkflowSetSelectionBar, globalOpts);
+    await wrapper.vm.$nextTick();
+
+    const rows = wrapper.findAll('.ctx-item[data-verb="merge-sets"]');
+    expect(rows.map((r) => r.text())).toEqual(["Merge with “Set 11”"]);
+    await rows[0].trigger("click");
+    const [[payload]] = wrapper.emitted("merge");
+    expect([payload.into.id, payload.others.map((set) => set.id)]).toEqual([10, [11]]);
+    await wrapper.find('.ctx-item[data-verb="reset-set"]').trigger("click");
+    expect(wrapper.emitted("reset")).toHaveLength(1);
+
+    store.selectSet(12);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("No other set uses ckpt y");
+    // Nothing changed on it: nothing to reset.
+    expect(wrapper.find('.ctx-item[data-verb="reset-set"]').exists()).toBe(false);
+  });
+
   /** One selected hand-made set, as the grid hands `sets` to the bar. */
   function selectedSetBar(sets) {
     const store = useModelShelfStore();

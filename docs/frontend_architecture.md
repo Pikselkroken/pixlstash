@@ -1633,7 +1633,7 @@ proves ran together, with a model free to appear in more than one.
   Ctrl+A passed the guard and then replaced a live selection with an empty one —
   a silent clear from a key that says *select*, with no undo. The pill's *Select
   all shown* never had the guard at all. One refusal in the store answers both.
-- **Hand-made sets and models can be selected together.** A "Grouped by you"
+- **Hand-made sets and models can be selected together.** An owner's set
   card selects its SET (`selectedSetIds`), a model card or tray row its FILE
   (`selectedIds`), and each kind keeps its own pill, so a set Delete and a file
   Delete are never one button. Ctrl+click adds either kind beside the other and
@@ -1784,10 +1784,15 @@ the shelf's workflow sets section) and served as `hand_made` on
 - **One grid, two kinds of card.** `flatRows` leads with the `New workflow set`
   tile (`kind: "new"`, also the `N` key), then `store.handMadeGroups` newest
   first, then the evidence cards. The initial cursor is the first CARD, not the
-  tile. A hand-made card is `ModelSetCard` with `card.handMade`: a dashed edge, a
-  "Grouped by you" badge, the checkpoint's `ModelMark` as the cover until a
-  picture belongs to it, "Incomplete: no checkpoint" in place of its facts when
-  it has none, and never a recipe count.
+  tile. A hand-made card is `ModelSetCard` with `card.handMade`: a dashed edge,
+  the checkpoint's `ModelMark` as the cover until a picture belongs to it, and
+  "Incomplete: no checkpoint" in place of its facts when it has none. Every
+  card wears one badge (#1972): **Automatic** on an evidence card and on a set
+  the server serves `automatic`, **Custom** (dashed) on one the owner has added
+  to or removed from, with an amber dot (`card.fresh`) while the pictures have
+  brought in a model the owner has not seen. Renaming does not change it. The
+  facts end "identical to N other sets" when `identicalSets` finds sets
+  holding the same digests: marked, never removed for the owner.
 - **The New tile opens a template picker (#1999, #2001), not an empty set.**
   Click, Enter or `N` opens `WorkflowTemplatePicker.vue` (`panels/`), a
   `v-menu` beside the tile that reads `GET /models/workflow-templates` afresh on
@@ -1812,11 +1817,13 @@ the shelf's workflow sets section) and served as `hand_made` on
   `store.onModelsArrived(ids)` reads the templates once more and raises one
   sticky notice per template row that is `new` and holds an arrived file:
   *All 3 files for Z-Image-Turbo are here.* with *Make workflow set*.
-- **Evidence is built only from what no hand-made set covers.** The server marks
-  a combination `covered_by` when every one of its models is an on-shelf member
-  of a set; `visibleCombinations` drops those, so they appear on the set's card
-  (its `picture_count` and covers) and not again as evidence. `worksWith` still
-  reads the whole payload.
+- **A set's checkpoint takes its automatic card off the grid (#1972).** The
+  server marks every combination headed by a set's checkpoint `covered_by` that
+  set; `visibleCombinations` drops those, so the checkpoint's pictures are
+  counted on the set's card (all sets on one checkpoint carry the same counts)
+  and not again as evidence, and deleting the last set brings the card back.
+  `worksWith` still reads the whole payload. A hide on the automatic card is
+  left in place and simply not drawn while a set covers it.
 - **A set from pictures is hidden, never deleted.** It is read off the library,
   so a delete would only come back on the next read. The card's eye button, or
   Delete/Backspace on the card under the cursor (stopped before the shelf's
@@ -1868,16 +1875,13 @@ the shelf's workflow sets section) and served as `hand_made` on
   the answer of `PUT /models/hidden`; the two reads skip the list when a hide
   was sent or answered while they were out. `offeredRows` is `rows` less the
   hidden ones, and everything that lists or offers starts there:
-  `visibleRows`, the rail, the slot chooser, *Fill from pictures* and *Fits*.
+  `visibleRows`, the rail, the slot chooser and *Fits*.
   On the set grid a card named after a hidden model goes with it
   (`visibleCombinations`), a hidden member leaves a card's tray
   (`evidenceGroups`; the set's check is still read off the whole
-  combination), and a hand-made set's merge offer drops it
-  (`withShelfNames`). **A hand-made set keeps its own members**: the owner put
-  them there, and hiding a model edits no set. A copy of a set from pictures
-  is therefore made of the group's `allModels`, hidden members included
-  (`cloneSetFromPictures`), or the copy would not cover the card's pictures
-  and the card would stay beside it. A model that leaves the screen leaves
+  combination), and a set's removed ghosts drop it (`withShelfNames`). **A
+  hand-made set keeps its own members**: hiding a model edits no set. A model
+  that leaves the screen leaves
   `selectedIds` with it. *Show › Hidden models*
   (`filters.showHidden`, not restored on startup, counted by `activeCount`)
   draws them all again, marked *Hidden*, which is where the menu's row turns
@@ -1885,47 +1889,27 @@ the shelf's workflow sets section) and served as `hand_made` on
   of the Run popup's LoRA lists and its people, *Edit LoRAs*' picker, the
   sidebar's *Create with LoRA…* gate and the *Use a set* menu; a row that
   already loads a hidden file still names it.
-- **A hand-made set that re-creates a set from pictures gives way to it.**
-  When the owner closes the set's tray (or opens another card), a watch on
-  `openSetKey` runs `yieldToTwin`, never each add: a set is built one model at
-  a time and passes through groups it is not meant to stop at (a checkpoint
-  that only ever ran alone). It compares the set's members with every
-  `setGroups` group over the WHOLE payload; when the on-shelf model ids are
-  exactly a group's, and no other hand-made set also covers that group, the
-  hand-made set is deleted, the group is unhidden and opened, and the receipt
-  says why. Its Undo recreates the set with its name and kept-out models and
-  hides the group again if it was hidden; Redo runs the swap again, checked
-  again. It waits out any set write still on the wire and refetches before it
-  decides, and it opens the group only over a closed tray (never moving the
-  view off a hand-made tray, which the watch would read as closing that one).
-  Hidden sets count as present for the grid's empty states.
-- **A set from pictures is cloned to be edited, and a clone never gives
-  way.** An evidence card cannot be edited, so `store.cloneSetFromPictures`
-  makes a hand-made set of the models on it (the head in Checkpoint, the rest
-  by kind) with `cloned: true`, and opens it; a second press while the first
-  is on the wire is ignored. The verb is *Clone to edit* on the open tray's
-  bar (`ModelSetPanel` emits `clone`; not on a missing-base set) and *Clone
-  set to edit* on the menu opened on the CARD: the grid's `menu` event names
-  the card (`setKey`, empty for a tray row), `ShelfSelectionBar` lists the
-  item only while that menu is open and emits `clone-set` with the group. It
-  is keyed by the card and never by the selected file, which other trays draw
-  too. The copy covers the card's combinations, so it takes the card's place
-  and deleting it brings the card back; an engine is never a member, so
-  pictures that ran with one stay on the card. `automaticTwin` answers null
-  for a `cloned` set: matching the set from pictures is what it was made for.
-  The mark is the server's (`cloned` on the set), and Duplicate set and a
-  delete's Undo carry it.
+- **New marks clear when the tray closes (#1972).** A watch on `openSetKey`
+  sends `PUT .../seen` with the set's `new` members when the owner leaves its
+  tray, never while it is open, so what joined is seen before it clears.
+- **A set from pictures is edited by making it the owner's.** *Edit set* on the
+  open tray's bar (`ModelSetPanel` emits `clone`; not on a missing-base set)
+  and on the menu opened on the CARD (`ShelfSelectionBar`'s `clone-set`, keyed
+  by the card, never by the selected file) runs
+  `store.cloneSetFromPictures`: a set holding the head as its checkpoint and
+  `cloned: true`, which the pictures fill and which reads Automatic until it is
+  changed; a second press while the first is on the wire is ignored. The new
+  set covers the card, which leaves the grid until the set is deleted.
 - **A hand-made card selects the SET; a tray tile selects a FILE.**
   `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
   either kind clears the other; Ctrl+click and select-all hold both (see the
   set-grid notes above), with both pills up side by side. Sets get
-  `WorkflowSetSelectionBar` (Rename, Duplicate set, Delete set, and the card's
-  context menu; Duplicate re-posts the members by sha256 and slot, so no
-  backend route of its own);
+  `WorkflowSetSelectionBar` (Rename, Duplicate set, Merge, Delete set, and the
+  card's context menu; Duplicate re-posts the stored members by sha256 and
+  slot and then the removed list, so no backend route of its own);
   files keep `ShelfSelectionBar`, which gains **Remove from set** while every
   selected file is a member of the open hand-made tray, and **New workflow set
-  with this checkpoint** for one hashed checkpoint (from an evidence card it
-  opens the new set with Fill from pictures ready). Delete with only sets
+  with this checkpoint** for one hashed checkpoint. Delete with only sets
   selected deletes the sets (grid only: leaving the grid clears the set selection, and
   the set pill is drawn only there). The cursor entering a tray tile clears the
   set selection, so Delete with a selected member is the shelf's file delete,
@@ -1962,8 +1946,7 @@ the shelf's workflow sets section) and served as `hand_made` on
   being added is ignored, and the adds go in `quiet` (no pill). The popup's own
   status line narrates them with an Undo that takes back the last one, and on
   close `store.announceAdded` raises ONE receipt for all of them. **Fill from
-  pictures** (`fillFromPictures`) and **Fill from a set** (`fillFromSets`) are
-  pre-ticked checklists with a title, grouped by slot, with Cancel and one Add
+  a set** (`fillFromSets`) is a pre-ticked checklist with a title, grouped by slot, with Cancel and one Add
   that adds the ticked rows the filter still shows (Enter too, never an
   unticked row); Space ticks once an arrow has put the cursor down. Rows take
   `mousedown.prevent`, so a click never takes focus out of the filter. Focus goes back to the
@@ -2007,42 +1990,55 @@ the shelf's workflow sets section) and served as `hand_made` on
 
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.
-- **A template offer is the same surface (#1999).** An `offer` with
-  `source: "template"` asks "The RealVis template loads 3 files this set does
-  not have." (`offerQuestion` → `templateQuestion`); the card answers in place
-  only a single file already on the shelf. The strip lists its `downloads` as
-  links (`https` only, as the picker does), names the `others`, and has no Add
-  when every file is a download. Stop asking keeps the downloads out with the
-  models (`keepOutOfHandMadeSet`); `withShelfNames` keeps an offer of
-  downloads only. The template picker flags `requires_custom_nodes` beside
-  *Needs ComfyUI*.
-- **The merge offer is ghosts in the tray (#1523).** A set the server gives an
-  `offer` wears it on the card as a lasting question panel across the cover's
-  foot (`offerQuestion`: "1 recipe ran this with a model the set does not
-  have. Add it?") until the owner adds or keeps it separate: nothing is a
-  toast, nothing is one-time. The word "merge" is never shown: the button adds
-  files to the set. With **one** model the panel names it (kind · name · precision) and is
-  answered in place: *Add to set* is `addToHandMadeSet` with `joined`, *Stop
-  asking* is Keep separate (the same label for one model or several, on the
-  card and the strip; its tooltip says the answer keeps out only the models
-  offered, so a picture needing another model still asks), and the cursor lands back on the card. With
-  **several**, *Review N…* opens the tray with the cursor on the **offer
-  strip**, which repeats the card's sentence. The panel's buttons are
-  mouse-only (the grid owns Tab); the card's accessible name carries the
-  question. The strip is a `kind: "slot"` entry keyed `offer`
-  with `slotIndex: -1`, so Up/Down walk through it. `setSlots` adds each offered
-  model as a **ghost** tile (`g:<sha256>`, dashed, faded mark, picture count,
-  Add) in the slot it would land in, before the ＋; a checkpoint ghost takes the
-  ＋'s place. Enter on the strip merges all, Enter on a ghost adds it, Delete or
-  Backspace keeps a ghost out, or on the strip keeps the whole offer separate
-  (stopped either way, so the shelf's file Delete never sees it). A merge is `addToHandMadeSet` with `joined`, whose receipt counts
-  the pictures that joined; Keep separate and Offer again are
-  `keepOutOfHandMadeSet` / `offerMergeAgain`, each with Undo. The server
-  stores the kept-out list whole, so the store queues those writes and applies
-  each as a delta to the latest list: an older Undo never drops a newer one. With models kept
-  out and no offer left, the tray shows "Kept separate from N pictures ·
-  Suggest again". The set's menu carries Review models to add… (the grid's
-  exposed `openOffer`), Keep separate and Suggest the models again.
+- **A template offer is what a set is still offered (#1999).** The pictures'
+  offer (#1523) is gone since #1972, since what the pictures ran with joins the
+  set by itself; an `offer` now only ever has `source: "template"`. It asks
+  "The RealVis template loads 3 files this set does not have." (`offerQuestion`)
+  as a lasting question panel across the card's cover foot; the card answers in
+  place only a single file already on the shelf (*Add to set*, or *Stop
+  asking*, and the cursor lands back on the card), and *Review N…* opens the
+  tray with the cursor on the **offer strip**, a `kind: "slot"` entry keyed
+  `offer` with `slotIndex: -1`, so Up/Down walk through it. The strip repeats
+  the sentence, lists its `downloads` as links (`https` only, as the picker
+  does), names the `others`, and has no Add when every file is a download.
+  `setSlots` draws each offered model as a ghost (`Add`, "template") beside the
+  removed ones (`removed: true`, Restore): Enter on an offered ghost adds it,
+  Delete or Backspace keeps it out, Enter on the strip adds all, Delete on it
+  stops asking. Stop asking (`keepOutOfHandMadeSet`) puts the files on the
+  set's removed list, a download by its key; Reset to automatic clears that
+  list, so it suggests them again. `withShelfNames` keeps an offer of downloads
+  only. The set's menu carries Review models to add… (the grid's exposed
+  `openOffer`) and Keep separate. The template picker flags
+  `requires_custom_nodes` beside *Needs ComfyUI*.
+- **What the owner changed is drawn against the pictures (#1972).** The tray's
+  bar reads Automatic or Custom, its facts end "N changes from automatic"
+  (`setChanges`: members with `origin: "added"` plus `removed`), and a note row
+  says what the set follows: "Follows the pictures made with X: a model they
+  start using joins this set. Your changes stay on top of it: 2 added, 1
+  removed." A member tile is marked *New* (amber) or *Added by you*. Each
+  removed model is a **ghost** tile (`g:<sha256>`, dashed, faded mark,
+  "Removed by you · N recipes", Restore) in its slot before the ＋; Enter on it
+  restores, Delete or Backspace is stopped there so the shelf's file Delete
+  never sees it, and the slot picker does not offer it. Removing a member is
+  `removeFromHandMadeSet`, which reads the set as last fetched: a model with
+  `origin: "pictures"` goes on the removed list through `changeDeclines`, any
+  other is a member row deleted. *Reset to automatic* (on the bar while there
+  are changes, and on the set's menu) is `resetHandMadeSet`: clear the list,
+  delete the added rows, one receipt with Undo. The server stores the removed
+  list whole, so `changeDeclines` queues its writes and applies each as a
+  delta to the latest list: an older Undo never drops a newer one.
+- **Merge is by hand, and only on one checkpoint (#1972).** `mergeVerb` words
+  the row over several selected sets, "Merge 2 sets into “X”" ("identical"
+  when every set holds the same digests), enabled iff every set's checkpoint
+  digests match the one kept; otherwise it stays, disabled, with "These sets
+  use different checkpoints." The set kept is `store.mergeTarget`, the one
+  last clicked. With one set selected the menu lists "Merge with “Y”" for each
+  other set on its checkpoint (`mergePartners`), or a disabled "No other set
+  uses X". The pill's count reads "2 sets · <checkpoint>" when Merge is live
+  and "2 sets · 2 checkpoints" when it is not. `mergeHandMadeSets` is one
+  server write and no confirm; its Undo takes back what went in, restores the
+  kept set's removed list and hide, and recreates each merged set with its
+  removed list and hide (`recreateSet`, new ids, so Redo merges those).
 
 #### `WorkflowsView.vue` (`views/`), v1.12 F1a
 

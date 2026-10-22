@@ -1540,9 +1540,10 @@
         @rename="startRenameSet"
         @duplicate="store.duplicateHandMadeSet(store.selectedSets[0])"
         @delete="store.deleteHandMadeSets(store.selectedSets)"
+        @merge="({ into, others }) => store.mergeHandMadeSets(into, others)"
+        @reset="store.resetHandMadeSet(store.selectedSets[0])"
         @merge-offer="setGridRef?.openOffer(store.selectedSets[0]?.id)"
         @keep-separate="store.keepOutOfHandMadeSet(store.selectedSets[0])"
-        @offer-again="store.offerMergeAgain(store.selectedSets[0])"
       />
       <MissingSetSelectionBar
         v-if="isSetGrid"
@@ -2648,7 +2649,7 @@ function onShelfKeydown(event) {
     // pill's *Select all shown* never had the guard at all, so moving it into
     // the store fixed a second caller as well. The press is still claimed either
     // way, or declining would hand it to the native select-all. On the set grid
-    // it takes the hand-made "Grouped by you" sets as well as the models.
+    // it takes the owner's own sets as well as the models.
     store.selectVisible();
     return;
   }
@@ -2799,22 +2800,17 @@ async function saveSetName(name) {
 /**
  * "New workflow set with this checkpoint", from a checkpoint's menu.
  *
- * The set grid is where a set is filled, so the shelf goes there. Asked from an
- * EVIDENCE card, the new set opens with Fill from pictures ready: that card is
- * the pictures, and they are what the owner is most likely to want to keep.
+ * The set grid is where a set is filled, so the shelf goes there. The new set
+ * holds what the pictures made with the checkpoint ran with (#1972), so it
+ * opens reading Automatic, ready to be changed.
  */
 async function newSetWithCheckpoint() {
   const row = store.selectedRows[0];
   if (!row) return;
-  const fromEvidence = isSetGrid.value;
   if (!isSetGrid.value) store.setView({ groupBy: "workflow_set" });
-  const created = await store.createHandMadeSet({
+  await store.createHandMadeSet({
     members: [{ model_id: row.id, slot: "checkpoint" }],
   });
-  if (created && fromEvidence) {
-    await nextTick();
-    setGridRef.value?.openFill("pictures");
-  }
 }
 
 /** Remove from set: the selected members of the open hand-made tray. */

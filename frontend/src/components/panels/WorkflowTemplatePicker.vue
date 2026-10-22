@@ -274,7 +274,7 @@
  * Nothing here makes anything on its own: `make`, `make-own` and `open-set`
  * are the caller's to act on.
  */
-import { computed, nextTick, ref, useId, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { formatModelSize } from "../../utils/modelShelf";
@@ -338,6 +338,12 @@ const chosen = ref({});
 const coveredOpen = ref(false);
 const partialDepth = ref(PARTIAL_DEPTH);
 
+// A picker torn down mid-retry stops retrying: the loop outlived its page.
+let unmounted = false;
+onBeforeUnmount(() => {
+  unmounted = true;
+});
+
 watch(
   () => props.open,
   async (open) => {
@@ -352,7 +358,7 @@ watch(
     // The field mounts with the menu, and takes focus only once the menu's
     // entry transition lets it: a focus() before that is silently dropped,
     // so it is checked rather than assumed.
-    for (let tries = 0; tries < 30 && props.open; tries += 1) {
+    for (let tries = 0; tries < 30 && props.open && !unmounted; tries += 1) {
       await nextTick();
       fieldRef.value?.focus();
       if (fieldRef.value && document.activeElement === fieldRef.value) return;

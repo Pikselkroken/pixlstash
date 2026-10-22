@@ -25,19 +25,18 @@
           <span class="msp__name">{{ name }}</span>
           <span class="msp__count num">{{ countLabel }}</span>
           <span class="msp__spacer"></span>
-          <!-- A set from pictures cannot be edited, and this is where a reader
-               finds that out: its clone is a set of their own, which can. Not
-               for a set whose base model is off the shelf, which no set of
-               theirs can hold. -->
+          <!-- Editing a set from pictures makes it the owner's own set on its
+               checkpoint (#1972), which replaces this card. Not for a set whose
+               base model is off the shelf, which no set of theirs can hold. -->
           <AppButton
             v-if="!missing"
             variant="ghost"
             size="sm"
-            icon-left="content-duplicate"
-            tooltip="A &quot;Grouped by you&quot; copy of this set, which you can edit. No file is touched."
+            icon-left="pencil-outline"
+            tooltip="Makes it a set of your own on this checkpoint. It keeps following the pictures and reads Automatic until you change it. No file is touched."
             data-testid="set-clone"
             @click="emit('clone')"
-            >Clone to edit</AppButton
+            >Edit set</AppButton
           >
           <!-- The Workflows grid's own switch, by name and by behaviour: same two
                options, same icon-label variant, same remembered-for-every-tray

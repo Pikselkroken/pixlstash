@@ -8,8 +8,8 @@
 // set behind it, so no verb the bar carries can reach a file the reader did not
 // aim at.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
 vi.mock("vuetify/components", async () => {
@@ -64,6 +64,8 @@ vi.mock("../../api/modelShelf", () => ({
   deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
   addWorkflowSetMembers: (...args) => addWorkflowSetMembers(...args),
   removeWorkflowSetMembers: (...args) => removeWorkflowSetMembers(...args),
+  mergeWorkflowSets: vi.fn(),
+  markWorkflowSetSeen: vi.fn().mockResolvedValue({ seen: [] }),
   renameWorkflowSet: (...args) => renameWorkflowSet(...args),
   setWorkflowSetDeclines: (...args) => setWorkflowSetDeclines(...args),
   setWorkflowSetsHidden: (...args) => setWorkflowSetsHidden(...args),
@@ -202,6 +204,10 @@ async function makeYourOwn(wrapper) {
   await wrapper.find('[data-testid="make-your-own"]').trigger("click");
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+// Every grid unmounts after its test: a mounted template picker retries its
+// focus for half a second, which otherwise outlives the file's environment.
+enableAutoUnmount(afterEach);
 
 beforeEach(() => {
   createWorkflowSet.mockReset();
@@ -1649,7 +1655,7 @@ describe("hand-made sets (#1520)", () => {
   const SET_CKPT = slotMember(1, "realvisXL_v5", "checkpoint");
   const SET_VAE = slotMember(2, "sdxl_vae", "vae");
 
-  it("draws every hand-made card as grouped by you, and says when it has no checkpoint", async () => {
+  it("badges every set Automatic or Custom, and says when it has no checkpoint", async () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
       handMade: [
@@ -1660,9 +1666,10 @@ describe("hand-made sets (#1520)", () => {
 
     const cards = wrapper.findAll('[data-testid="model-set-card"]');
     expect(cards).toHaveLength(2);
+    // Neither served as automatic: one has no pictures, one no checkpoint.
     for (const card of cards) {
-      expect(card.attributes("aria-label")).toContain("grouped by you");
-      expect(card.text()).toContain("Grouped by you");
+      expect(card.attributes("aria-label")).toContain("custom");
+      expect(card.text()).toContain("Custom");
     }
     // Named after its checkpoint, in the shelf's own name for it, and
     // "Untitled set" without one.
@@ -1673,7 +1680,7 @@ describe("hand-made sets (#1520)", () => {
     // The name says what is drawn: the warning, not the facts it replaces.
     expect(cards[1].attributes("aria-label")).not.toContain("no pictures yet");
     expect(cards[0].text()).toContain("no pictures yet");
-    // Honesty: no recipe count on a hand-made card.
+    // No recipe on its checkpoint, so no recipe count.
     expect(cards[0].text()).not.toMatch(/recipe/);
   });
 
@@ -2502,13 +2509,13 @@ describe("hand-made sets (#1520)", () => {
     );
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint"), ...loras],
-      combinations: [
-        combination("1,20", [
-          CKPT,
-          ...loras.map((r) => member(r.id, r.filename, "adapter")),
+      handMade: [
+        handSet(10, [SET_CKPT]),
+        handSet(11, [
+          slotMember(9, "juggernaut", "checkpoint"),
+          ...loras.map((r) => slotMember(r.id, r.filename, "lora")),
         ]),
       ],
-      handMade: [handSet(10, [SET_CKPT])],
     });
     addWorkflowSetMembers
       .mockReset()
@@ -2517,7 +2524,7 @@ describe("hand-made sets (#1520)", () => {
     await wrapper.vm.$nextTick();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Fill from pictures"))
+      .find((b) => b.text().includes("Fill from a set"))
       .trigger("click");
     const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
     // Eight drawn, ten ticked: Add counts and adds all ten.
@@ -2532,15 +2539,20 @@ describe("hand-made sets (#1520)", () => {
   it("adds nothing from a checklist on Enter once every row is unticked", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
-      combinations: [combination("1,3", [CKPT, LORA])],
-      handMade: [handSet(10, [SET_CKPT])],
+      handMade: [
+        handSet(10, [SET_CKPT]),
+        handSet(11, [
+          slotMember(9, "juggernaut", "checkpoint"),
+          slotMember(3, "filmgrain_xl", "lora"),
+        ]),
+      ],
     });
     addWorkflowSetMembers.mockReset();
     store.toggleSet("hand:10");
     await wrapper.vm.$nextTick();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Fill from pictures"))
+      .find((b) => b.text().includes("Fill from a set"))
       .trigger("click");
     const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
     // A checklist marks no row with ⏎: Enter adds what is ticked.
@@ -2620,15 +2632,20 @@ describe("hand-made sets (#1520)", () => {
   it("gives focus back to the Fill button when its checklist closes", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
-      combinations: [combination("1,3", [CKPT, LORA])],
-      handMade: [handSet(10, [SET_CKPT])],
+      handMade: [
+        handSet(10, [SET_CKPT]),
+        handSet(11, [
+          slotMember(9, "juggernaut", "checkpoint"),
+          slotMember(3, "filmgrain_xl", "lora"),
+        ]),
+      ],
       attach: true,
     });
     store.toggleSet("hand:10");
     await wrapper.vm.$nextTick();
     const fill = wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Fill from pictures"));
+      .find((b) => b.text().includes("Fill from a set"));
     await fill.trigger("click");
     await wrapper
       .find('[data-testid="workflow-set-chooser"]')
@@ -2838,8 +2855,13 @@ describe("hand-made sets (#1520)", () => {
   it("returns focus to a Fill button even when the cursor rested on a ＋ tile", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
-      combinations: [combination("1,3", [CKPT, LORA])],
-      handMade: [handSet(10, [SET_CKPT])],
+      handMade: [
+        handSet(10, [SET_CKPT]),
+        handSet(11, [
+          slotMember(9, "juggernaut", "checkpoint"),
+          slotMember(3, "filmgrain_xl", "lora"),
+        ]),
+      ],
       attach: true,
     });
     store.toggleSet("hand:10");
@@ -2852,7 +2874,7 @@ describe("hand-made sets (#1520)", () => {
 
     const fill = wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Fill from pictures"));
+      .find((b) => b.text().includes("Fill from a set"));
     await fill.trigger("click");
     await wrapper
       .find('[data-testid="workflow-set-chooser"]')
@@ -2989,468 +3011,326 @@ describe("hand-made sets (#1520)", () => {
     expect([...store.selectedIds]).toEqual([]);
   });
 
-  describe("the merge offer (#1523)", () => {
+  describe("a template offer (#1999)", () => {
     const GHOST_LORA = {
       id: 3,
       sha256: "3".repeat(64),
       name: "filmgrain_xl",
       kind: "adapter",
       slot: "lora",
-      picture_count: 812,
-      recipes: 4,
+      picture_count: 0,
+      recipes: 0,
     };
-    const GHOST_OTHER = {
-      id: 5,
-      sha256: "5".repeat(64),
-      name: "ultrasharp",
-      kind: "unknown",
-      slot: "other",
-      picture_count: 1204,
-      recipes: 6,
+    const VAE = {
+      name: "ae.safetensors",
+      url: "https://example.com/ae.safetensors",
+      directory: "vae",
+      slot: "vae",
+      sha256: "a".repeat(64),
     };
-    const OFFER = {
+    const TEMPLATE_OFFER = {
+      source: "template",
+      template: { name: "image_realvis", title: "RealVis" },
+      others: [{ name: "image_realvis_edit", title: "RealVis Edit" }],
       head_id: 1,
       head_name: "realvisXL_v5",
-      picture_count: 1204,
-      recipes: 6,
-      covers: [{ picture_id: 7, version: "v7" }],
-      models: [GHOST_LORA, GHOST_OTHER],
+      picture_count: 0,
+      recipes: 0,
+      covers: [],
+      models: [GHOST_LORA],
+      downloads: [VAE, { ...VAE, name: "te.bin", url: "", sha256: "b".repeat(64) }],
     };
 
-    async function mountOffer(extra = {}, { attach = false } = {}) {
+    async function mountOffer(extra = {}) {
+      return mountGrid({
+        rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+        handMade: [
+          handSet(10, [SET_CKPT], {
+            name: "Portrait kit",
+            offer: TEMPLATE_OFFER,
+            ...extra,
+          }),
+        ],
+      });
+    }
+
+    it("names the template, links what to download and lists its siblings", async () => {
+      const { wrapper, store } = await mountOffer();
+      const ask = wrapper.find('[data-testid="set-offer"]');
+      expect(ask.text()).toContain(
+        "The RealVis template loads 3 files this set does not have.",
+      );
+      expect(ask.find('[data-testid="set-offer-add"]').exists()).toBe(false);
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+      expect(strip.text()).toContain("The one on your shelf is dashed below.");
+      expect(strip.text()).toContain("Other templates built around it: RealVis Edit.");
+      const downloads = strip.find('[data-testid="offer-downloads"]');
+      // Only an https page is a link; a file with none is named, not linked.
+      expect(downloads.findAll("a").map((a) => a.attributes("href"))).toEqual([
+        VAE.url,
+      ]);
+      expect(downloads.text()).toContain("te.bin");
+      expect(strip.text()).toContain("Add to set");
+      const ghost = wrapper.find(".mss__tile--ghost");
+      expect(ghost.text()).toContain("template");
+      // An offered ghost is added, never "restored".
+      expect(ghost.text()).toContain("Add");
+      expect(ghost.text()).not.toContain("Restore");
+    });
+
+    it("keeps the downloads out with the models on Stop asking", async () => {
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        previous: [],
+      });
+      const { wrapper } = await mountOffer();
+      await wrapper.find('[data-testid="set-offer-no"]').trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+        GHOST_LORA.sha256,
+        VAE.sha256,
+        "b".repeat(64),
+      ]);
+    });
+
+    it("adds one offered file from the card, and Enter on its ghost adds it", async () => {
+      addWorkflowSetMembers.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        added: [GHOST_LORA.sha256],
+      });
+      const one = { ...TEMPLATE_OFFER, downloads: [] };
+      const { wrapper, store } = await mountOffer({ offer: one });
+      await wrapper.find('[data-testid="set-offer-add"]').trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
+        { model_id: 3, slot: "lora" },
+      ]);
+
+      addWorkflowSetMembers.mockClear();
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      await wrapper.find(".mss__tile--ghost").trigger("click");
+      await wrapper.find('[role="treegrid"]').trigger("keydown", { key: "Enter" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
+        { model_id: 3, slot: "lora" },
+      ]);
+    });
+
+    it("offers no Add when every file is a download", async () => {
+      const { wrapper, store } = await mountOffer({
+        offer: { ...TEMPLATE_OFFER, models: [], downloads: [VAE] },
+      });
+      const ask = wrapper.find('[data-testid="set-offer"]');
+      expect(ask.text()).toContain(
+        "The RealVis template loads a file this set does not have.",
+      );
+      expect(ask.text()).not.toContain("Add it?");
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+      const labels = strip
+        .findAllComponents({ name: "AppButton" })
+        .map((button) => button.text());
+      expect(labels).toEqual(["Stop asking"]);
+      expect(strip.attributes("aria-label")).not.toContain("Enter adds");
+    });
+  });
+
+  describe("a set living on its checkpoint (#1972)", () => {
+    const FROM_PICTURES = slotMember(3, "filmgrain_xl", "lora", {
+      origin: "pictures",
+      stored: false,
+    });
+    const ADDED = slotMember(4, "soft_light", "lora", {
+      origin: "added",
+      stored: true,
+    });
+    const REMOVED = {
+      id: 5,
+      sha256: "5".repeat(64),
+      name: "bad_hands",
+      kind: "adapter",
+      slot: "lora",
+      picture_count: 0,
+      recipes: 4,
+    };
+
+    async function mountLiving(extra = {}, { attach = false } = {}) {
       return mountGrid({
         attach,
         rows: [
           row(1, "realvisXL_v5", "checkpoint"),
           row(3, "filmgrain_xl"),
-          row(5, "ultrasharp", "unknown"),
+          row(4, "soft_light"),
+          row(5, "bad_hands"),
         ],
         handMade: [
-          handSet(10, [SET_CKPT], { name: "Portrait kit", offer: OFFER, ...extra }),
+          handSet(
+            10,
+            [{ ...SET_CKPT, origin: "pictures", stored: true }, FROM_PICTURES, ADDED],
+            {
+              name: "Portrait kit",
+              recipes: 14,
+              picture_count: 212,
+              declined: [REMOVED.sha256],
+              removed: [REMOVED],
+              ...extra,
+            },
+          ),
         ],
       });
     }
 
-    it("puts a lasting offer on the card that opens the tray on its strip", async () => {
-      const { wrapper, store } = await mountOffer();
+    it("says Custom, what it follows and what the owner changed on top", async () => {
+      const { wrapper, store } = await mountLiving();
       const card = wrapper.find('[data-testid="model-set-card"]');
-      const ask = card.find('[data-testid="set-offer"]');
-      expect(ask.text()).toContain(
-        "1204 pictures used this with 2 models the set does not have.",
-      );
-      expect(ask.text()).not.toMatch(/merge/i);
-      // Several are not answered blind on the card: no Add, a Review.
-      expect(ask.find('[data-testid="set-offer-add"]').exists()).toBe(false);
-      expect(card.attributes("aria-label")).toContain(
-        "1204 pictures used this with 2 models the set does not have. Answer in the set's tray or menu",
-      );
+      expect(card.text()).toContain("Custom");
+      // Nothing new from the pictures: no dot, and no word of it.
+      expect(card.find(".msc__new").exists()).toBe(false);
+      expect(card.attributes("aria-label")).not.toContain("new from pictures");
+      expect(card.text()).toContain("3 models · 14 recipes · 212 pictures");
+      expect(card.attributes("aria-label")).toContain("custom");
 
-      await ask.find('[data-testid="set-offer-review"]').trigger("click");
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      store.toggleSet("hand:10");
       await wrapper.vm.$nextTick();
-      expect(store.openSetKey).toBe("hand:10");
-      const strip = wrapper.find('[data-testid="merge-offer-strip"]');
-      expect(strip.attributes("tabindex")).toBe("0");
-      expect(strip.text()).toContain(
-        "1204 pictures used this with 2 models the set does not have.",
+      const tray = wrapper.find('[data-testid="model-set-slots-panel"]');
+      expect(tray.text()).toContain("2 changes from automatic");
+      expect(tray.find('[data-testid="set-follows"]').text()).toBe(
+        "Follows the pictures made with realvisXL v5: a model they start using joins this set. Your changes stay on top of it: 1 added, 1 removed.",
       );
-      expect(strip.text()).toContain("Add all 2");
-      expect(strip.text()).not.toMatch(/merge/i);
-      // The ghosts stand in the slots they would land in, with their counts.
-      const ghosts = wrapper.findAll(".mss__tile--ghost");
-      expect(ghosts.map((g) => g.attributes("data-key"))).toEqual([
-        `g:${GHOST_LORA.sha256}`,
-        `g:${GHOST_OTHER.sha256}`,
-      ]);
-      expect(ghosts[0].text()).toContain("812 pictures");
+      const tiles = tray.findAll(".msp__member");
+      const added = tiles.find((t) => t.attributes("data-key") === `m:${ADDED.sha256}`);
+      expect(added.text()).toContain("Added by you");
+      expect(added.attributes("aria-label")).toContain("added by you");
+      const picture = tiles.find(
+        (t) => t.attributes("data-key") === `m:${FROM_PICTURES.sha256}`,
+      );
+      expect(picture.text()).not.toContain("Added by you");
+      // The removed model stands where it was, with what it was used in.
+      const ghost = tray.find(".mss__tile--ghost");
+      expect(ghost.attributes("data-key")).toBe(`g:${REMOVED.sha256}`);
+      expect(ghost.text()).toContain("Removed by you · 4 recipes");
     });
 
-    it("says the precision of a held model and of the one it is offered", async () => {
+    it("reads Automatic with nothing changed, and offers no Reset", async () => {
+      const { wrapper, store } = await mountLiving({
+        automatic: true,
+        declined: [],
+        removed: [],
+        members: [
+          { ...SET_CKPT, origin: "pictures", stored: true },
+          { ...FROM_PICTURES, new: true },
+        ],
+      });
+      const card = wrapper.find('[data-testid="model-set-card"]');
+      expect(card.text()).toContain("Automatic");
+      expect(card.find(".msc__new").exists()).toBe(true);
+      expect(card.attributes("aria-label")).toContain("1 new from pictures");
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const tray = wrapper.find('[data-testid="model-set-slots-panel"]');
+      expect(tray.find('[data-testid="set-reset"]').exists()).toBe(false);
+      expect(tray.text()).not.toContain("changes from automatic");
+      expect(tray.find(".mss__origin--new").text()).toBe("New");
+    });
+
+    it("restores a removed model from its ghost, by click or by Enter", async () => {
+      const { wrapper, store } = await mountLiving();
+      setWorkflowSetDeclines.mockResolvedValue({ set: { declined: [] }, previous: [] });
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const ghost = wrapper.find(".mss__tile--ghost");
+      await ghost
+        .findAll("button")
+        .find((b) => b.text() === "Restore")
+        .trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, []);
+
+      setWorkflowSetDeclines.mockClear();
+      const grid = wrapper.find('[role="treegrid"]');
+      await ghost.trigger("click");
+      await grid.trigger("keydown", { key: "Enter" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, []);
+    });
+
+    it("never reaches the file delete from a ghost", async () => {
+      const { wrapper, store } = await mountLiving();
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      await wrapper.find(".mss__tile--ghost").trigger("click");
+      const press = new KeyboardEvent("keydown", {
+        key: "Delete",
+        bubbles: true,
+        cancelable: true,
+      });
+      wrapper.find('[role="treegrid"]').element.dispatchEvent(press);
+      expect(press.defaultPrevented).toBe(true);
+      expect(setWorkflowSetDeclines).not.toHaveBeenCalled();
+      expect(removeWorkflowSetMembers).not.toHaveBeenCalled();
+    });
+
+    it("keeps a model the pictures brought in out, and takes an added one out", async () => {
+      const { wrapper, store } = await mountLiving();
+      setWorkflowSetDeclines.mockResolvedValue({ set: { declined: [] }, previous: [] });
+      removeWorkflowSetMembers.mockResolvedValue({ removed: [] });
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const remove = (sha) =>
+        wrapper
+          .find(`[data-key="m:${sha}"]`)
+          .find(".mss__remove")
+          .trigger("click");
+      await remove(FROM_PICTURES.sha256);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+        REMOVED.sha256,
+        FROM_PICTURES.sha256,
+      ]);
+      expect(removeWorkflowSetMembers).not.toHaveBeenCalled();
+
+      await remove(ADDED.sha256);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [ADDED.sha256]);
+    });
+
+    it("resets to automatic from the tray", async () => {
+      const { wrapper, store } = await mountLiving();
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: { declined: [] },
+        previous: [REMOVED.sha256],
+      });
+      removeWorkflowSetMembers.mockResolvedValue({ removed: [] });
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      await wrapper.find('[data-testid="set-reset"]').trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, []);
+      // The checkpoint stays: it is what the set follows.
+      expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [ADDED.sha256]);
+    });
+
+    it("says the precision of a held model and of a removed one", async () => {
       // Two quants of one encoder: the shelf's name is the same for both.
       const held = slotMember(6, "Qwen3VL_4b_bf16.st", "text_encoder");
-      const ghost = { ...GHOST_LORA, id: 7, sha256: "7".repeat(64), kind: "text_encoder", slot: "text_encoder" };
+      const gone = { ...REMOVED, id: 7, sha256: "7".repeat(64), kind: "text_encoder", slot: "text_encoder" };
       const { wrapper, store } = await mountGrid({
         rows: [
           row(1, "realvisXL_v5", "checkpoint"),
           { ...row(6, "Qwen3VL_4b_bf16.st", "text_encoder"), quant: "bf16" },
           { ...row(7, "Qwen3VL_4b_fp8_scaled.st", "text_encoder"), quant: "fp8" },
         ],
-        handMade: [
-          handSet(10, [SET_CKPT, held], { offer: { ...OFFER, models: [ghost] } }),
-        ],
-      });
-      const card = wrapper.find('[data-testid="model-set-card"]');
-      expect(card.find('[data-testid="set-offer"]').text()).toContain(
-        "Text encoder · Qwen3VL 4b · FP8",
-      );
-      expect(card.attributes("aria-label")).toContain(
-        "Text encoder Qwen3VL 4b FP8. Add it?",
-      );
-
-      store.toggleSet("hand:10");
-      await wrapper.vm.$nextTick();
-      const tile = wrapper.find(`[data-key="m:${held.sha256}"]`);
-      expect(tile.find(".mss__quant").text()).toBe("BF16");
-      expect(tile.attributes("aria-label")).toContain("Qwen3VL 4b BF16, ");
-      const offered = wrapper.find(".mss__tile--ghost");
-      expect(offered.find(".mss__quant").text()).toBe("FP8");
-      expect(offered.attributes("aria-label")).toContain("Qwen3VL 4b FP8, ");
-      // No precision recorded, no badge: never an empty one.
-      expect(
-        wrapper.find(`[data-key="m:${SET_CKPT.sha256}"] .mss__quant`).exists(),
-      ).toBe(false);
-    });
-
-    it("adds one offered model from the card, with a receipt and an Undo", async () => {
-      addWorkflowSetMembers.mockResolvedValue({
-        set: handSet(10, [SET_CKPT], { picture_count: 812 }),
-        added: [GHOST_LORA.sha256],
-      });
-      const { wrapper, store } = await mountOffer(
-        { offer: { ...OFFER, models: [GHOST_LORA] } },
-        { attach: true },
-      );
-      const operations = useOperationStore();
-      const card = wrapper.find('[data-testid="model-set-card"]');
-      const ask = card.find('[data-testid="set-offer"]');
-      expect(ask.text()).toContain(
-        "1204 pictures ran this with a model the set does not have. Add it?",
-      );
-      expect(ask.text()).toContain("LoRA · filmgrain xl");
-      const no = ask.findComponent('[data-testid="set-offer-no"]');
-      expect(no.text()).toBe("Stop asking");
-      // The answer is about this model, not every later offer on the set.
-      expect(no.props("tooltip")).toBe(
-        "Keeps this model out of the set. The set's menu can suggest it again.",
-      );
-      expect(card.attributes("aria-label")).toContain(
-        "the set does not have. LoRA filmgrain xl. Add it?",
-      );
-
-      // A double click is one answer: the second press finds the first in flight.
-      const add = ask.find('[data-testid="set-offer-add"]');
-      await add.trigger("click");
-      await add.trigger("click");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(addWorkflowSetMembers).toHaveBeenCalledTimes(1);
-      await wrapper.vm.$nextTick();
-
-      expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
-        { model_id: 3, slot: "lora" },
-      ]);
-      expect(operations.receipt.summary).toContain("812 pictures joined it");
-      // Answered on the card: no tray opened, and focus back on the card.
-      expect(store.openSetKey).not.toBe("hand:10");
-      expect(document.activeElement?.dataset.key).toBe("hand:10");
-      await operations.takeLocalReceiptAction();
-      expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
-        GHOST_LORA.sha256,
-      ]);
-      wrapper.unmount();
-    });
-
-    it("keeps the set separate from the card with Stop asking", async () => {
-      setWorkflowSetDeclines.mockResolvedValue({
-        set: handSet(10, [SET_CKPT]),
-        previous: [],
-      });
-      const { wrapper, store } = await mountOffer({
-        offer: { ...OFFER, models: [GHOST_LORA] },
-      });
-      // Reading the question is not a click on the card.
-      await wrapper.find(".msc__ask-q").trigger("click");
-      expect([...store.selectedSetIds]).toEqual([]);
-
-      await wrapper.find('[data-testid="set-offer-no"]').trigger("click");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
-        GHOST_LORA.sha256,
-      ]);
-      expect(addWorkflowSetMembers).not.toHaveBeenCalled();
-      expect(useOperationStore().receipt.summary).toContain(
-        'Kept "Portrait kit" separate from 1204 pictures',
-      );
-      expect([...store.selectedSetIds]).toEqual([]);
-    });
-
-    it("counts a recipe-only offer in recipes, on the strip and its Stop asking", async () => {
-      const { wrapper, store } = await mountOffer({
-        offer: { ...OFFER, picture_count: 0 },
+        handMade: [handSet(10, [SET_CKPT, held], { removed: [gone] })],
       });
       store.toggleSet("hand:10");
       await wrapper.vm.$nextTick();
-      const strip = wrapper.find('[data-testid="merge-offer-strip"]');
-      expect(strip.text()).toContain("6 recipes used this");
-      expect(strip.text()).toContain("brings those recipes into this set");
-      const no = strip
-        .findAllComponents({ name: "AppButton" })
-        .find((button) => button.text() === "Stop asking");
-      expect(no.props("tooltip")).toBe(
-        "Keep this set separate from those recipes. The set's menu can suggest them again.",
-      );
-    });
-
-    it("keeps several offered models out at once with Stop asking", async () => {
-      setWorkflowSetDeclines.mockResolvedValue({
-        set: handSet(10, [SET_CKPT]),
-        previous: [],
-      });
-      const { wrapper } = await mountOffer();
-      const no = wrapper.find('[data-testid="set-offer-no"]');
-      expect(no.text()).toBe("Stop asking");
-      expect(
-        wrapper.findComponent('[data-testid="set-offer-no"]').props("tooltip"),
-      ).toBe(
-        "Keeps these models out of the set. The set's menu can suggest them again.",
-      );
-      await no.trigger("click");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
-        GHOST_LORA.sha256,
-        GHOST_OTHER.sha256,
-      ]);
-    });
-
-    describe("from a ComfyUI template (#1999)", () => {
-      const VAE = {
-        name: "ae.safetensors",
-        url: "https://example.com/ae.safetensors",
-        directory: "vae",
-        slot: "vae",
-        sha256: "a".repeat(64),
-      };
-      const TEMPLATE_OFFER = {
-        ...OFFER,
-        source: "template",
-        template: { name: "image_realvis", title: "RealVis" },
-        others: [{ name: "image_realvis_edit", title: "RealVis Edit" }],
-        picture_count: 0,
-        recipes: 0,
-        covers: [],
-        models: [{ ...GHOST_LORA, picture_count: 0, recipes: 0 }],
-        downloads: [VAE, { ...VAE, name: "te.bin", url: "", sha256: "b".repeat(64) }],
-      };
-
-      it("names the template, links what to download and lists its siblings", async () => {
-        const { wrapper, store } = await mountOffer({ offer: TEMPLATE_OFFER });
-        const ask = wrapper.find('[data-testid="set-offer"]');
-        expect(ask.text()).toContain(
-          "The RealVis template loads 3 files this set does not have.",
-        );
-        expect(ask.find('[data-testid="set-offer-add"]').exists()).toBe(false);
-        store.toggleSet("hand:10");
-        await wrapper.vm.$nextTick();
-        const strip = wrapper.find('[data-testid="merge-offer-strip"]');
-        expect(strip.text()).toContain("The one on your shelf is dashed below.");
-        expect(strip.text()).toContain("Other templates built around it: RealVis Edit.");
-        const downloads = strip.find('[data-testid="offer-downloads"]');
-        const links = downloads.findAll("a");
-        // Only an https page is a link; a file with none is named, not linked.
-        expect(links.map((a) => a.attributes("href"))).toEqual([VAE.url]);
-        expect(downloads.text()).toContain("te.bin");
-        expect(strip.text()).toContain("Add to set");
-        expect(wrapper.find(".mss__tile--ghost").text()).toContain("template");
-      });
-
-      it("keeps the downloads out with the models on Stop asking", async () => {
-        setWorkflowSetDeclines.mockResolvedValue({
-          set: handSet(10, [SET_CKPT]),
-          previous: [],
-        });
-        const { wrapper } = await mountOffer({ offer: TEMPLATE_OFFER });
-        await wrapper.find('[data-testid="set-offer-no"]').trigger("click");
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
-          GHOST_LORA.sha256,
-          VAE.sha256,
-          "b".repeat(64),
-        ]);
-      });
-
-      it("offers no Add when every file is a download", async () => {
-        const { wrapper, store } = await mountOffer({
-          offer: { ...TEMPLATE_OFFER, models: [], downloads: [VAE] },
-        });
-        const ask = wrapper.find('[data-testid="set-offer"]');
-        expect(ask.text()).toContain("The RealVis template loads a file this set does not have.");
-        expect(ask.text()).not.toContain("Add it?");
-        store.toggleSet("hand:10");
-        await wrapper.vm.$nextTick();
-        const strip = wrapper.find('[data-testid="merge-offer-strip"]');
-        const labels = strip
-          .findAllComponents({ name: "AppButton" })
-          .map((button) => button.text());
-        expect(labels).toEqual(["Stop asking"]);
-        expect(strip.attributes("aria-label")).not.toContain("Enter adds");
-      });
-    });
-
-    it("merges on Enter at the strip, with a receipt that counts who joined and an Undo", async () => {
-      addWorkflowSetMembers.mockResolvedValue({
-        set: handSet(10, [SET_CKPT], { picture_count: 1204 }),
-        added: [GHOST_LORA.sha256, GHOST_OTHER.sha256],
-      });
-      const { wrapper, store } = await mountOffer();
-      const operations = useOperationStore();
-      store.toggleSet("hand:10");
-      await wrapper.vm.$nextTick();
-
-      const grid = wrapper.find('[role="treegrid"]');
-      await grid.trigger("keydown", { key: "ArrowDown" });
-      await grid.trigger("keydown", { key: "Enter" });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
-        { model_id: 3, slot: "lora" },
-        { model_id: 5, slot: "other" },
-      ]);
-      expect(operations.receipt.summary).toContain(
-        'Added 2 models to "Portrait kit"',
-      );
-      expect(operations.receipt.summary).toContain("1204 pictures joined it");
-      await operations.takeLocalReceiptAction();
-      expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
-        GHOST_LORA.sha256,
-        GHOST_OTHER.sha256,
-      ]);
-    });
-
-    it("keeps one ghost out with Delete, never reaching the file delete", async () => {
-      setWorkflowSetDeclines.mockResolvedValue({
-        set: handSet(10, [SET_CKPT]),
-        previous: ["9".repeat(64)],
-      });
-      // Attached, so a press the grid let through would reach the window.
-      const { wrapper, store } = await mountOffer(
-        { declined: ["9".repeat(64)] },
-        { attach: true },
-      );
-      store.toggleSet("hand:10");
-      await wrapper.vm.$nextTick();
-
-      const grid = wrapper.find('[role="treegrid"]');
-      // Card → strip → checkpoint → text encoders' ＋ → VAE's ＋ → LoRA ghost.
-      for (let i = 0; i < 5; i += 1) {
-        await grid.trigger("keydown", { key: "ArrowDown" });
-      }
-      const onWindowKey = vi.fn();
-      window.addEventListener("keydown", onWindowKey);
-      await grid.trigger("keydown", { key: "Delete" });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      window.removeEventListener("keydown", onWindowKey);
-
-      // Added to what the set already keeps out, never replacing it.
-      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
-        "9".repeat(64),
-        GHOST_LORA.sha256,
-      ]);
-      expect(onWindowKey).not.toHaveBeenCalled();
-      wrapper.unmount();
-      const operations = useOperationStore();
-      // In the shelf's own name for it.
-      expect(operations.receipt.summary).toContain(
-        'Kept filmgrain xl out of "Portrait kit"',
-      );
-      await operations.takeLocalReceiptAction();
-      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
-        "9".repeat(64),
-      ]);
-    });
-
-    it("keeps the whole offer separate with Delete on the strip, never reaching the file delete", async () => {
-      setWorkflowSetDeclines.mockResolvedValue({
-        set: handSet(10, [SET_CKPT]),
-        previous: [],
-      });
-      const { wrapper, store } = await mountOffer({}, { attach: true });
-      store.toggleSet("hand:10");
-      await wrapper.vm.$nextTick();
-      const grid = wrapper.find('[role="treegrid"]');
-      await grid.trigger("keydown", { key: "ArrowDown" });
-      const onWindowKey = vi.fn();
-      window.addEventListener("keydown", onWindowKey);
-      await grid.trigger("keydown", { key: "Delete" });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      window.removeEventListener("keydown", onWindowKey);
-
-      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
-        GHOST_LORA.sha256,
-        GHOST_OTHER.sha256,
-      ]);
-      expect(onWindowKey).not.toHaveBeenCalled();
-      wrapper.unmount();
-    });
-
-    it("undoes the newer Keep separate without dropping an older one", async () => {
-      const { store } = await mountOffer();
-      // A server that remembers the list, so each refetch reads it back.
-      let stored = [];
-      setWorkflowSetDeclines.mockImplementation(async (id, sha256) => {
-        stored = sha256;
-        return { set: handSet(id, [SET_CKPT], { declined: sha256 }) };
-      });
-      fetchWorkflowSets.mockImplementation(async () => ({
-        combinations: [],
-        no_set: [],
-        hand_made: [
-          handSet(10, [SET_CKPT], { offer: OFFER, declined: stored }),
-        ],
-      }));
-      const operations = useOperationStore();
-      const set = () => store.handMadeSets[0];
-
-      // Both fired before either answers, as two quick Deletes would be.
-      await Promise.all([
-        store.keepOutOfHandMadeSet(set(), [GHOST_LORA]),
-        store.keepOutOfHandMadeSet(set(), [GHOST_OTHER]),
-      ]);
-      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
-        GHOST_LORA.sha256,
-        GHOST_OTHER.sha256,
-      ]);
-
-      // One pill: the latest write's, which takes out only its own.
-      await operations.takeLocalReceiptAction();
-      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
-        GHOST_LORA.sha256,
-      ]);
-    });
-
-    it("never builds the next Keep separate from a refetch that is out of date", async () => {
-      const { store } = await mountOffer();
-      setWorkflowSetDeclines.mockImplementation(async (id, sha256) => ({
-        set: handSet(id, [SET_CKPT], { declined: sha256 }),
-      }));
-      // Every refetch answers from before the writes, as one that left
-      // before they landed would.
-      const set = () => store.handMadeSets[0];
-      await store.keepOutOfHandMadeSet(set(), [GHOST_LORA]);
-      await store.keepOutOfHandMadeSet(set(), [GHOST_OTHER]);
-      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
-        GHOST_LORA.sha256,
-        GHOST_OTHER.sha256,
-      ]);
-    });
-
-    it("says what was kept separate and offers the merge again", async () => {
-      setWorkflowSetDeclines.mockResolvedValue({
-        set: handSet(10, [SET_CKPT]),
-        previous: [GHOST_LORA.sha256],
-      });
-      const { wrapper, store } = await mountOffer({
-        offer: null,
-        declined: [GHOST_LORA.sha256],
-        kept_separate: 812,
-      });
-      expect(wrapper.find('[data-testid="set-offer"]').exists()).toBe(false);
-      store.toggleSet("hand:10");
-      await wrapper.vm.$nextTick();
-
-      const kept = wrapper.find(".mss__kept");
-      expect(kept.text()).toContain("Kept separate from 812 pictures.");
-      await kept.find("button").trigger("click");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, []);
+      const tray = wrapper.find('[data-testid="model-set-slots-panel"]');
+      const quants = tray.findAll(".mss__quant").map((q) => q.text());
+      expect(quants).toEqual(["BF16", "FP8"]);
     });
   });
 
@@ -3856,7 +3736,7 @@ describe("hiding a set from pictures", () => {
     expect(store.setGroups).toHaveLength(1);
   });
 
-  it("clones the open set into a set of the owner's from its tray", async () => {
+  it("makes the open set one of the owner's from its tray's Edit set", async () => {
     const { wrapper, store } = await mountOneSet();
     createWorkflowSet.mockResolvedValue({ id: 12, members: [] });
     // Offered in the tray, where the set's models are in front of the reader.
@@ -3864,12 +3744,11 @@ describe("hiding a set from pictures", () => {
     store.toggleSet("model:1");
     await wrapper.vm.$nextTick();
     await wrapper.find('[data-testid="set-clone"]').trigger("click");
+    // Its checkpoint: the pictures on it bring in the rest (#1972).
     expect(createWorkflowSet).toHaveBeenCalledWith({
       cloned: true,
-      members: [
-        { model_id: 1, slot: "checkpoint" },
-        { model_id: 3, slot: "lora" },
-      ],
+      seen: true,
+      members: [{ model_id: 1, slot: "checkpoint" }],
     });
     wrapper.unmount();
   });
