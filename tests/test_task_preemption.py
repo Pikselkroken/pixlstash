@@ -9,6 +9,7 @@ must end as exactly ``TaskCancelledError``, whatever it raised on the way out.
 A real ``TaskRunner`` with plain fake tasks: no ``Server``, nothing to load.
 """
 
+import queue
 import threading
 import time
 from types import SimpleNamespace
@@ -249,3 +250,47 @@ def test_models_are_unloaded_once_a_batch_that_outran_the_wait_ends():
     )
     Vault._yield_gpu(vault, lease)
     assert unloaded.wait(5), "the models were never unloaded"
+
+
+def test_a_task_requeued_as_the_runner_stops_is_cancelled_not_stranded():
+    """stop() can drain the queue between _requeue's check and its put."""
+    runner = TaskRunner(
+        name="requeue-stop",
+        resource_arbiter=ResourceArbiter(_NoCard(), usage=lambda: None),
+    )
+    endings = []
+    runner.add_task_complete_callback(lambda task, error: endings.append(error))
+
+    class _StopsOnPut(queue.PriorityQueue):
+        def put(self, item, *args, **kwargs):
+            runner._stop.set()
+            super().put(item, *args, **kwargs)
+
+    work_queue = _StopsOnPut()
+    task = _QuickGpuTask()
+    runner._requeued[task.id] = (threading.Timer(60, lambda: None), task)
+    runner._requeue(task.id, work_queue)
+    assert work_queue.empty()
+    assert task.status.value == "cancelled"
+    assert len(endings) == 1
+
+
+def test_a_task_nobody_waits_for_any_more_leaves_the_gpu_backoff():
+    class _Refusing(ResourceArbiter):
+        def try_light(self, *args, **kwargs):
+            return None
+
+    runner = TaskRunner(
+        name="refused-timeout",
+        resource_arbiter=_Refusing(_NoCard(), usage=lambda: None),
+    )
+    runner.VRAM_REQUEUE_BASE_S = 30
+    runner.start()
+    task = _QuickGpuTask()
+    try:
+        with pytest.raises(TimeoutError):
+            runner.submit_and_wait(task, timeout_s=0.5)
+        assert task.id not in runner._requeued
+        assert task.status.value == "cancelled"
+    finally:
+        runner.stop()

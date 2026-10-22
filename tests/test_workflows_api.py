@@ -13991,6 +13991,9 @@ def test_cancelling_a_waiting_lease_cancels_its_run_and_only_a_waiting_one(held)
 
 def test_a_held_run_is_either_sent_or_cancelled_never_both(held):
     """Cancel and dispatch race for the same run; exactly one may win."""
+    # The runs registry is module-wide: these two must not outlive the test.
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        held.runnable.monkeypatch.setattr(comfyui_service, name, {})
     comfyui_service.hold_run("run-race-1", "http://comfy.invalid")
     assert comfyui_service.cancel_held_runs("run-race-1") == ["run-race-1"]
     assert comfyui_service.claim_held_run("run-race-1") is False

@@ -339,3 +339,15 @@ def test_a_run_still_going_keeps_its_run_id_past_newer_ended_runs(monkeypatch):
     assert comfyui_service.run_outcome("run-long")["status"] == "running"
     assert comfyui_service.run_outcome("run-3")["status"] == "running"
     assert len(comfyui_service._run_ids) == 2
+
+
+def test_following_a_run_never_drops_its_own_run_id(monkeypatch):
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        monkeypatch.setattr(comfyui_service, name, {})
+    monkeypatch.setattr(comfyui_service, "_listening", {COMFY})
+    comfyui_service.follow_run("p-a", COMFY, run_id="run-a")
+    comfyui_service.follow_run("p-b", COMFY, run_id="run-b")
+    monkeypatch.setattr(comfyui_service, "MAX_RUN_OUTCOMES", 1)
+    # Followed again, so first in the map, with every run still going.
+    comfyui_service.follow_run("p-a2", COMFY, run_id="run-a")
+    assert comfyui_service._run_ids == {"run-a": "p-a2"}

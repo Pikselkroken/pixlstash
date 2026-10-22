@@ -148,7 +148,7 @@
             >
               <span
                 class="tm-mark"
-                :class="child.stopped || child.onCpu ? '' : 'tm-mark--running'"
+                :class="child.stopped ? '' : 'tm-mark--running'"
                 :data-state="child.stopped ? 'stopped' : undefined"
                 aria-hidden="true"
               ></span>
@@ -670,6 +670,8 @@ async function confirmRunAnyway() {
   const pending = runAnyway.value;
   if (!pending) return;
   busyLease.value = pending.leaseId;
+  // Never rejects: the store's `waitingAction` catches a refusal, logs it and
+  // tells the owner in a notice, then re-reads the queue.
   try {
     await tasksStore.runWaitingAnyway(pending.leaseId);
   } finally {
@@ -681,6 +683,7 @@ async function confirmRunAnyway() {
 async function cancelWait(entry) {
   if (!entry.lease || busyLease.value) return;
   busyLease.value = entry.lease.id;
+  // Never rejects either; see `confirmRunAnyway`.
   try {
     await tasksStore.cancelWaiting(entry.lease.id);
   } finally {

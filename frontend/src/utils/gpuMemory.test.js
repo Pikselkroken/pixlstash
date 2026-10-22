@@ -91,6 +91,13 @@ describe("deviceVramBar", () => {
     expect(bar.segments.map((s) => s.kind)).toEqual(["other"]);
   });
 
+  it("has no free memory, and adds up, on a card reporting more used than it has", () => {
+    const bar = deviceVramBar({ uuid: "GPU-1", total_mb: 8192, used_mb: 9000 }, []);
+    expect(bar.free).toBe(0);
+    expect(bar.segments.every((s) => s.mb >= 0)).toBe(true);
+    expect(bar.segments.reduce((sum, s) => sum + s.mb, 0)).toBe(8192);
+  });
+
   it("is empty for a card with no figures", () => {
     expect(deviceVramBar({ uuid: "x" }, [])).toEqual({ total: 0, free: 0, segments: [] });
   });

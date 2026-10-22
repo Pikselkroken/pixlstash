@@ -999,8 +999,9 @@ describe("the GPU queue in the task manager", () => {
     await fold.find(".tm-caret").trigger("click");
     const children = wrapper.findAll(".tm-row--child");
     expect(children).toHaveLength(2);
-    // A task on the CPU says so in its figure column.
+    // A task on the CPU says so in its figure column, and is still running.
     expect(children[1].find(".tm-fig-text").text()).toBe("CPU");
+    expect(children[1].find(".tm-mark").classes("tm-mark--running")).toBe(true);
     expect(localStorage.getItem("pixlstash:tasks:pixlstash-fold")).toBe("1");
   });
 

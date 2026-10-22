@@ -106,7 +106,7 @@ export function deviceVramBar(device, holders = []) {
     total,
     device?.free_mb != null
       ? nonNegative(device.free_mb)
-      : total - nonNegative(device?.used_mb),
+      : nonNegative(total - nonNegative(device?.used_mb)),
   );
   const used = total - free;
   const budget = Math.min(free, nonNegative(device?.budget_mb ?? free));

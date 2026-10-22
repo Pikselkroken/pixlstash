@@ -314,7 +314,12 @@ def follow_run(
                     and (_run_outcomes.get(pid) or {}).get("status")
                     not in ("running", "waiting")
                 )
-                del _run_ids[next(ended, None) or next(iter(_run_ids))]
+                victim = next(ended, None) or next(
+                    (rid for rid in _run_ids if rid != run_id), None
+                )
+                if victim is None:
+                    break
+                del _run_ids[victim]
     record_run_outcome(prompt_id, "running", library_uuid=library_uuid, run_id=run_id)
     with _run_outcomes_lock:
         _live_runs[prompt_id] = {

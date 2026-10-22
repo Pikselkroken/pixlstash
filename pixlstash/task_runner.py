@@ -392,6 +392,19 @@ class TaskRunner:
             self._cancel_queued_task(task, "runner stopped")
             return
         work_queue.put((task.priority, next(self._queue_seq), task))
+        if self._stop.is_set():
+            # stop() may have drained the queue between the check and the put.
+            self._drain(work_queue, "runner stopped")
+
+    def _drain(self, work_queue: queue.PriorityQueue, reason: str) -> None:
+        """Cancel every task still waiting in *work_queue*."""
+        while True:
+            try:
+                _priority, _seq, queued_task = work_queue.get_nowait()
+            except queue.Empty:
+                return
+            if not isinstance(queued_task, _StopTask):
+                self._cancel_queued_task(queued_task, reason)
 
     def _cancel_requeued(self, reason: str) -> int:
         with self._active_task_lock:
@@ -440,14 +453,7 @@ class TaskRunner:
         # Cancel tasks still waiting in both queues so task-specific background
         # resources (such as preload threads) can be released deterministically.
         for q in (self._queue, self._gpu_queue):
-            while True:
-                try:
-                    _priority, _seq, queued_task = q.get_nowait()
-                except queue.Empty:
-                    break
-                if isinstance(queued_task, _StopTask):
-                    continue
-                self._cancel_queued_task(queued_task, "runner stopped")
+            self._drain(q, "runner stopped")
         self._cancel_requeued("runner stopped")
 
         # Cancel tasks that are currently executing so their loops can exit early.
@@ -532,8 +538,12 @@ class TaskRunner:
         self.submit(task)
         if not task._done_event.wait(timeout=timeout_s):
             # Nobody is waiting any more: a task still queued is skipped when the
-            # worker reaches it, rather than running for no one.
+            # worker reaches it, rather than running for no one, and one
+            # waiting out a GPU backoff is not put back at all.
             task.on_cancel()
+            requeued = self._take_requeued(task.id)
+            if requeued is not None:
+                self._cancel_queued_task(requeued, "nobody is waiting for it any more")
             raise TimeoutError(
                 f"Task {task.id} ({task.type}) did not complete within {timeout_s}s"
             )
