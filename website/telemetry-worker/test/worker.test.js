@@ -35,7 +35,9 @@ import {
   serializeAccumulator,
   hasResurrected,
   activeInLifeWeek,
+  activeOnDay,
   ACTIVE_WINDOW_DAYS,
+  DAILY_LOOKBACK_DAYS,
   MIN_COHORT,
 } from "../src/aggregate.js";
 import { D1Stub, allowAll, denyAll, pingRequest } from "./d1-stub.js";
@@ -348,6 +350,52 @@ describe("buildAggregate", () => {
       electron: 0,
       other: 0,
     });
+  });
+
+  it("counts distinct installs per completed day, not check-ins", () => {
+    const rows = [
+      // Pinged today, yesterday and three days ago.
+      ...cohortRows(1, "2026-06-01", "2026-07-20", encodeActivity(0b1011n)),
+      // Last pinged yesterday and the day before.
+      {
+        ...cohortRows(1, "2026-06-01", "2026-07-19", encodeActivity(0b11n))[0],
+        install_type: "docker",
+      },
+    ];
+    const daily = buildAggregate(rows, "2026-07-20").daily_active_installs;
+    assert.deepEqual(Object.keys(daily).sort(), [
+      "2026-07-13",
+      "2026-07-14",
+      "2026-07-15",
+      "2026-07-16",
+      "2026-07-17",
+      "2026-07-18",
+      "2026-07-19",
+    ]);
+    assert.equal(daily["2026-07-20"], undefined, "the unfinished snapshot day is left out");
+    assert.deepEqual(daily["2026-07-19"], {
+      total: 2,
+      by_type: { docker: 1, pip: 1, electron: 0, other: 0 },
+    });
+    assert.equal(daily["2026-07-18"].total, 1);
+    assert.equal(daily["2026-07-18"].by_type.docker, 1);
+    assert.equal(daily["2026-07-17"].total, 1);
+    assert.equal(daily["2026-07-17"].by_type.pip, 1);
+    assert.equal(daily["2026-07-16"].total, 0);
+  });
+
+  it("republishes the same count for a day in later snapshots", () => {
+    // A ping on a later day rolls the bitmap; a past day's count must not move,
+    // or the consumer could not take any snapshot's value for a date.
+    const before = cohortRows(1, "2026-06-01", "2026-07-19", encodeActivity(0b101n));
+    const after = cohortRows(1, "2026-06-01", "2026-07-21", encodeActivity(0b10101n));
+    const first = buildAggregate(before, "2026-07-20").daily_active_installs;
+    const second = buildAggregate(after, "2026-07-22").daily_active_installs;
+    for (const date of ["2026-07-16", "2026-07-17", "2026-07-18", "2026-07-19"]) {
+      assert.equal(second[date].total, first[date].total, date);
+    }
+    assert.equal(second["2026-07-17"].total, 1);
+    assert.equal(second["2026-07-21"].total, 1);
   });
 
   it("publishes no identifiers", () => {
@@ -830,6 +878,37 @@ describe("checkinsInActiveWindow", () => {
   });
 });
 
+describe("activeOnDay", () => {
+  const row = (lastSeen, bits) => ({
+    last_seen: lastSeen,
+    activity: encodeActivity(bits),
+  });
+
+  it("reads the bit for the day, shifted by the gap to last_seen", () => {
+    // last_seen two days before today: bit 0 is two days ago, bit 1 three.
+    const r = row("2026-07-18", 0b10n);
+    assert.equal(activeOnDay(r, 2, "2026-07-20"), false);
+    assert.equal(activeOnDay(r, 3, "2026-07-20"), true);
+  });
+
+  it("is false for days after the last ping", () => {
+    assert.equal(activeOnDay(row("2026-07-18", 0b1n), 1, "2026-07-20"), false);
+  });
+
+  it("reads correctly when pings land after the snapshot date mid-scan", () => {
+    // The scan for 2026-07-20 is still running on 2026-07-21 and this install
+    // pinged that day: bit 0 is the 21st, bit 2 the 19th.
+    const r = row("2026-07-21", 0b101n);
+    assert.equal(activeOnDay(r, 1, "2026-07-20"), true);
+    assert.equal(activeOnDay(r, 0, "2026-07-20"), false);
+  });
+
+  it("stays inside the bitmap at the far edge of the lookback", () => {
+    const r = row("2026-07-20", 1n << BigInt(DAILY_LOOKBACK_DAYS));
+    assert.equal(activeOnDay(r, DAILY_LOOKBACK_DAYS, "2026-07-20"), true);
+  });
+});
+
 describe("the aggregation checkpoint", () => {
   const row = {
     install_id: "checkpointed",
@@ -855,6 +934,16 @@ describe("the aggregation checkpoint", () => {
     assert.equal(resumed.checkinsByType.pip, 6);
   });
 
+  it("carries daily counts across a slice boundary", () => {
+    const state = createAccumulator();
+    accumulateRow(state, row, "2026-07-20");
+    const resumed = deserializeAccumulator(serializeAccumulator(state));
+    accumulateRow(resumed, { ...row, install_id: "second" }, "2026-07-20");
+    const daily = finalizeAggregate(resumed, "2026-07-20").daily_active_installs;
+    assert.equal(daily["2026-07-19"].total, 2);
+    assert.equal(daily["2026-07-17"].total, 2);
+  });
+
   it("still counts a pre-field checkpoint that had scanned nothing", () => {
     // runScheduledSlice persists an initial accumulator before it reads a row,
     // so an old Worker that crashed in that gap leaves a pre-field checkpoint
@@ -869,6 +958,7 @@ describe("the aggregation checkpoint", () => {
     });
     const state = deserializeAccumulator(pristine, true);
     assert.deepEqual(state.checkinsByType, createAccumulator().checkinsByType);
+    assert.deepEqual(state.dailyByType, createAccumulator().dailyByType);
 
     accumulateRow(state, row, "2026-07-20");
     assert.equal(
@@ -903,5 +993,6 @@ describe("the aggregation checkpoint", () => {
       finalizeAggregate(resumed, "2026-07-20").id_bearing_checkins_by_type,
       null,
     );
+    assert.equal(finalizeAggregate(resumed, "2026-07-20").daily_active_installs, null);
   });
 });
