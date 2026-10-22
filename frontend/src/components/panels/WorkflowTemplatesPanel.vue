@@ -5,8 +5,12 @@
     <div v-if="store.reachable && store.loaded" class="wtp-strip">
       <span class="wtp-source" data-testid="wtp-source">
         <ComfyuiIcon :size="14" />
-        Downloaded from your ComfyUI at
-        <span class="wtp-url">{{ store.comfyuiUrl }}</span>
+        <!-- One run of text, so the address sits on the label's baseline: as
+             a flex item of its own the mono face centres on its own box. -->
+        <span
+          >Downloaded from your ComfyUI at
+          <span class="wtp-url">{{ store.comfyuiUrl }}</span></span
+        >
       </span>
       <AppButton
         size="sm"
