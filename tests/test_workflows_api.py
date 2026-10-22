@@ -24158,6 +24158,11 @@ _TEMPLATE_INDEX = [
                 "title": "Partner example",
                 "mediaType": "image",
                 "openSource": False,
+                "logos": [
+                    {"provider": "Example Co"},
+                    {"provider": ["Example Co", "Other Co"]},
+                    "not a logo",
+                ],
             },
         ],
     }
@@ -24301,6 +24306,8 @@ def test_the_template_list_reads_the_owners_comfyui(
     }
     assert listed["default/api_example"]["source"] == "partner"
     assert listed["default/api_example"]["files"] == []
+    assert listed["default/api_example"]["providers"] == ["Example Co", "Other Co"]
+    assert listed["default/image_example"]["providers"] == []
     assert "/templates/api_example.json" not in comfyui_templates_served.asked
     # ComfyUI lists no node from the pack, so its template is said not to load,
     # and does once a node of it is listed.

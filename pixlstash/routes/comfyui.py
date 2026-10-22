@@ -1877,6 +1877,13 @@ class ComfyUITemplate(BaseModel):
     )
     date: Optional[str] = None
     usage: Optional[int] = Field(None, description="ComfyUI's own popularity count.")
+    providers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Who a partner template's API nodes call (Google, Topaz, ...), as "
+            "ComfyUI's template logos name them."
+        ),
+    )
     size: Optional[int] = Field(
         None, description="What all its files download, in bytes, as ComfyUI says."
     )
@@ -2511,6 +2518,7 @@ def create_router(server) -> APIRouter:
                     "usage": template.usage,
                     "size": template.size,
                     "tutorial_url": template.tutorial_url,
+                    "providers": template.providers,
                     "thumbnail": template.module != comfyui_templates.BUILTIN_MODULE
                     or template.thumbnail_ext is not None,
                     "files": [

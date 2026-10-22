@@ -89,11 +89,14 @@ describe("a template card", () => {
     const wrapper = mountCard({
       ...BASE,
       source: "partner",
+      providers: ["Example Co", "Other Co"],
       files: [],
       thumbnail: false,
     });
+    // ComfyUI's own words: a "Partner API" badge, "Runs with credits".
     expect(state(wrapper)).toBe("Partner API");
-    expect(wrapper.text()).toContain("Runs on Comfy's API");
+    expect(wrapper.find('[data-testid="template-source"]').text()).toBe("Partner API");
+    expect(wrapper.text()).toContain("Example Co · Other Co · Runs with credits");
     expect(wrapper.find("img").exists()).toBe(false);
     expect(noPreview(wrapper)).toBe("Workflow has no preview");
   });

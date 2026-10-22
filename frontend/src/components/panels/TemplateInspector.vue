@@ -67,7 +67,7 @@
         <p v-if="!files.length" class="tpli-quiet">
           {{
             template.source === "partner"
-              ? "Runs on Comfy's paid API nodes and downloads nothing. It needs a Comfy account."
+              ? partnerText
               : "It loads no model files."
           }}
         </p>
@@ -183,6 +183,13 @@ const missingFiles = computed(() =>
   chosen.value.reduce((sum, t) => sum + missingCount(t), 0),
 );
 const sizeText = computed(() => formatModelSize(template.value?.size));
+
+// ComfyUI calls it a premium template that runs with credits.
+const partnerText = computed(() => {
+  const providers = template.value?.providers ?? [];
+  const via = providers.length ? ` through ${providers.join(", ")}` : "";
+  return `Runs with credits on Comfy's partner API nodes${via}, and downloads nothing. It needs a Comfy account.`;
+});
 
 const sourceText = computed(() => {
   const source = template.value?.source;

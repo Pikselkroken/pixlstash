@@ -50,7 +50,7 @@
           <li v-if="overflow" class="wf-card__mark-more">+{{ overflow }}</li>
         </ul>
         <span v-else class="wf-card__none" aria-hidden="true">{{
-          template.source === "partner" ? "Runs on Comfy's API" : "Lists no model files"
+          template.source === "partner" ? partnerText : "Lists no model files"
         }}</span>
       </div>
       <div
@@ -69,7 +69,7 @@
       <span class="wf-card__badge">
         <ComfyuiIcon v-if="template.source === 'builtin'" :size="12" />
         <v-icon v-else size="12">{{
-          template.source === "pack" ? "mdi-puzzle-outline" : "mdi-cloud-outline"
+          template.source === "pack" ? "mdi-puzzle-outline" : "mdi-crown"
         }}</v-icon>
         <span data-testid="template-source">{{ sourceText }}</span>
       </span>
@@ -102,7 +102,8 @@ const STATE_ICONS = {
   ready: "mdi-check-circle-outline",
   missing: "mdi-download-outline",
   pack_not_loaded: "mdi-puzzle-remove-outline",
-  partner: "mdi-cloud-outline",
+  // ComfyUI's own mark for a paid template: its "Partner API" badge is a crown.
+  partner: "mdi-crown",
 };
 
 const props = defineProps({
@@ -137,6 +138,11 @@ const stateText = computed(() => {
       return "Partner API";
   }
 });
+
+// ComfyUI's words for a paid template, after who its API nodes call.
+const partnerText = computed(() =>
+  [...(props.template.providers ?? []), "Runs with credits"].join(" · "),
+);
 
 const sourceText = computed(() => {
   if (props.template.source === "builtin") return "ComfyUI";

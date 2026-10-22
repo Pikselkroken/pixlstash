@@ -84,6 +84,18 @@ describe("the template inspector", () => {
     expect(store.addRequest).toBe(1);
   });
 
+  it("says a partner template runs with credits, and through whom", () => {
+    const store = useWorkflowTemplatesStore();
+    store.templates = [
+      { ...TEMPLATE, source: "partner", files: [], providers: ["Example Co"] },
+    ];
+    store.selectRange([TEMPLATE.key]);
+    const wrapper = mount(TemplateInspector, { global: { stubs: { Tooltip: true } } });
+    expect(wrapper.text()).toContain(
+      "Runs with credits on Comfy's partner API nodes through Example Co",
+    );
+  });
+
   it("offers nothing to add with nothing selected", () => {
     const { wrapper } = mounted([]);
     expect(wrapper.find('[data-testid="tpli-add"]').exists()).toBe(false);

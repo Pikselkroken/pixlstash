@@ -105,6 +105,8 @@ class Template:
     size: Optional[int] = None
     tutorial_url: Optional[str] = None
     thumbnail_ext: Optional[str] = None
+    # Who a partner template's API nodes call, as ComfyUI's logos name them.
+    providers: list[str] = field(default_factory=list)
     # Whether the pack's nodes loaded in ComfyUI; None for a built-in.
     pack_loaded: Optional[bool] = None
     files: list[TemplateFile] = field(default_factory=list)
@@ -221,6 +223,21 @@ def _str_list(value) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
+def _providers(logos) -> list[str]:
+    """The provider names ``logos`` carries, once each, in order.
+
+    A logo's ``provider`` is one name or a list of them, as ComfyUI's own
+    template browser reads it.
+    """
+    names: list[str] = []
+    for logo in logos if isinstance(logos, list) else []:
+        provider = logo.get("provider") if isinstance(logo, dict) else None
+        for name in provider if isinstance(provider, list) else [provider]:
+            if isinstance(name, str) and name and name not in names:
+                names.append(name)
+    return names
+
+
 def _builtin_templates(index) -> list[Template]:
     """The built-in templates ``index.json`` lists, in its order."""
     if not isinstance(index, list):
@@ -276,6 +293,7 @@ def _builtin_templates(index) -> list[Template]:
                     thumbnail_ext=subtype
                     if isinstance(subtype, str) and subtype.lower() in THUMBNAIL_TYPES
                     else None,
+                    providers=_providers(entry.get("logos")),
                 )
             )
     return templates
