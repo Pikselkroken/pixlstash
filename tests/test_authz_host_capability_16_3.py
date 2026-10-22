@@ -472,6 +472,11 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     that library's host folder, which ``GET /libraries`` redacts for a remote
     owner. It takes a registry uuid and no path.
 
+    62 = 54 + 8 with ``POST /model-folders/pick-up`` (#1985): it walks every
+    folder a rescan walks and registers the files it finds by the names a
+    workflow reports missing, which is ``rescan``'s authority narrowed to those
+    files. It takes filenames, not a host path.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -485,7 +490,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 8, sorted(loopback)
-    assert len(local) == 53, sorted(local)
+    assert len(local) == 54, sorted(local)
 
 
 # ===========================================================================

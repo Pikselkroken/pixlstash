@@ -906,6 +906,19 @@
           </details>
         </div>
 
+        <p
+          v-if="adding.size"
+          class="rund-f rund-f--4 rund-note rund-adding"
+          role="status"
+          data-testid="rund-adding"
+        >
+          <v-progress-circular indeterminate size="12" width="2" />
+          {{
+            adding.size === 1
+              ? "Found a missing model in your model folders. Adding it to your shelf…"
+              : `Found ${adding.size} missing models in your model folders. Adding them to your shelf…`
+          }}
+        </p>
         <!-- Keyed on the position as well as the code: `reasons` is flat-mapped
              across every group, so two groups refusing for the same reason
              would collide on the code alone. -->
@@ -1225,6 +1238,7 @@ import {
   setWorkflowPins,
   workflowCoverUrl,
 } from "../../api/workflows";
+import { useModelPickUp } from "../../composables/useModelPickUp";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -1371,6 +1385,8 @@ const recipe = ref(null);
 const cards = ref([]);
 const adapters = ref([]);
 const reasons = ref([]);
+/** A missing file downloaded after its folder's last scan is looked for (#1985). */
+const { adding, pickUp } = useModelPickUp();
 /**
  * Replacements for the samplers and schedulers this ComfyUI does not list
  * (`missing_choices`): `{node_id, field, value, options, chosen}`, sent as
@@ -4831,6 +4847,17 @@ async function runPreflight() {
       return;
     }
     reasons.value = all;
+    // Asked again once a file is on the shelf: the swap onto the shelf's
+    // loader is what makes it not missing.
+    pickUp(
+      all.flatMap((reason) =>
+        reason?.code === "missing_models"
+          ? (reason.models || []).map((model) => String(model.file))
+          : [],
+      ),
+    ).then((added) => {
+      if (added && askedFor === activeKey.value) void runPreflight();
+    });
     offerCheckpoints(all, askedFor).catch((err) =>
       console.warn(`[run] could not offer checkpoints for ${askedFor}`, err),
     );
@@ -5674,6 +5701,12 @@ button.rund-in-tile.rund-in-tile--off {
 .rund-note {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
+}
+
+.rund-adding {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .rund-note {

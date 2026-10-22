@@ -65,6 +65,11 @@ vi.mock("../../api/modelShelf", () => ({
   listAdapters: (...args) => listAdapters(...args),
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
 }));
+// A missing model is looked for in the model folders (#1985).
+const pickUpModelFiles = vi.fn().mockResolvedValue([]);
+vi.mock("../../api/modelFolders", () => ({
+  pickUpModelFiles: (...args) => pickUpModelFiles(...args),
+}));
 const listSavedRecipes = vi.fn();
 vi.mock("../../api/recipes", () => ({
   createSavedRecipe: vi.fn(),
@@ -1735,6 +1740,35 @@ describe("the body it sends", () => {
           },
         }),
       });
+    });
+
+    it("picks up the file from a model folder and asks again", async () => {
+      // Downloaded after its folder was last scanned: found, registered, and
+      // the second pre-flight is the one about the shelf that now has it.
+      let added;
+      pickUpModelFiles
+        .mockResolvedValueOnce([{ folder_id: 1, relpath: "realvisXL_v5.safetensors" }])
+        .mockReturnValueOnce(new Promise((resolve) => (added = resolve)));
+      preflightWorkflowRun
+        .mockResolvedValueOnce(missing())
+        .mockResolvedValue({ ok: true, runs: 1, groups: [{ reasons: [] }] });
+      readModelSwap.mockResolvedValue({ replacements: [], replacements_reason: null });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      const asked = preflightWorkflowRun.mock.calls.length;
+
+      expect(pickUpModelFiles).toHaveBeenLastCalledWith(["realvisXL_v5.safetensors"], {
+        add: true,
+      });
+      expect(wrapper.find("[data-testid='rund-adding']").text()).toContain(
+        "Found a missing model in your model folders",
+      );
+
+      added([{ folder_id: 1, relpath: "realvisXL_v5.safetensors", model_id: 3 }]);
+      await flushPromises();
+
+      expect(wrapper.find("[data-testid='rund-adding']").exists()).toBe(false);
+      expect(preflightWorkflowRun.mock.calls.length).toBe(asked + 1);
+      expect(wrapper.vm.reasons).toEqual([]);
     });
 
     it("offers the shelf's of the same base model and runs the one picked", async () => {

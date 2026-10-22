@@ -166,3 +166,24 @@ export async function forgetModelFolder(id) {
 export async function rescanModelFolder(id) {
   return unwrap(apiClient.post(`${MODEL_FOLDERS_URL}/${id}/rescan`, {}));
 }
+
+/**
+ * Look for model files that landed after their folder's last scan (#1985).
+ *
+ * *files* are the names a workflow reports missing; they are matched by
+ * basename in every folder a rescan would walk. Without `add` this only walks,
+ * nothing is opened or hashed, so it is cheap to ask whenever a file is
+ * missing. With `add` each file found is registered as a scan would.
+ *
+ * §16.3 like the rescan: a remote owner gets a 403.
+ *
+ * @param {string[]} files
+ * @param {{add?: boolean}} [options]
+ * @returns {Promise<Array<{folder_id: number, relpath: string, model_id: ?number}>>}
+ */
+export async function pickUpModelFiles(files, { add = false } = {}) {
+  const body = await unwrap(
+    apiClient.post(`${MODEL_FOLDERS_URL}/pick-up`, { files, add }),
+  );
+  return Array.isArray(body?.files) ? body.files : [];
+}

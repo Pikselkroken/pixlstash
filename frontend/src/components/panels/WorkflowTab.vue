@@ -285,6 +285,15 @@
                   }}</span
                 >{{ missingNote(row.missing) }}
               </p>
+              <p
+                v-if="isAdding(row.missing)"
+                class="wftab-note wftab-quiet wftab-adding"
+                role="status"
+                data-testid="wftab-adding"
+              >
+                <v-progress-circular indeterminate size="12" width="2" />
+                Found in your model folders. Adding it to your shelf…
+              </p>
               <!-- A pick is saved on the workflow, so an offer that is not of
                    the missing one's base model says so before it. -->
               <p
@@ -481,6 +490,16 @@
               </p>
               <p v-else class="wftab-note wftab-quiet">
                 No file name was kept for it anywhere.
+              </p>
+              <!-- After the v-else pair: between them it would take the else. -->
+              <p
+                v-if="isAdding(missingCheckpointFile)"
+                class="wftab-note wftab-quiet wftab-adding"
+                role="status"
+                data-testid="wftab-adding"
+              >
+                <v-progress-circular indeterminate size="12" width="2" />
+                Found in your model folders. Adding it to your shelf…
               </p>
             </template>
             <span v-else-if="checkpointLabel" class="wftab-value">{{
@@ -1244,6 +1263,7 @@ import {
   openWorkflowInComfyui,
   useComfyuiOpen,
 } from "../../composables/useComfyuiOpen";
+import { useModelPickUp } from "../../composables/useModelPickUp";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -1658,6 +1678,8 @@ function missingNote(file) {
 const missingBaseFiles = computed(() => missingByKind.value.checkpoint ?? []);
 const preflightAnswered = ref(false);
 let installedCheck = 0;
+/** A missing file downloaded after its folder's last scan is looked for (#1985). */
+const { pickUp, isAdding } = useModelPickUp();
 // A rail that has closed asks nothing more: an ask still out is superseded.
 onBeforeUnmount(() => {
   installedCheck += 1;
@@ -4341,6 +4363,13 @@ async function checkInstalled(key, { quiet = false } = {}) {
         ].filter((file) => kind === "checkpoint" || file !== FORGOTTEN_MODEL),
       ]),
     );
+    // Not awaited: the pickers below are read meanwhile, and a file that was
+    // put on the shelf asks the whole question again.
+    pickUp(modelsOf("missing_models").map((model) => String(model.file))).then(
+      (added) => {
+        if (added && stillOn(key)) void checkInstalled(key, { quiet: true });
+      },
+    );
   } catch (err) {
     // An unreachable ComfyUI leaves the card's own answer on what is
     // missing. The pickers are still read: the shelf answers for them.
@@ -4705,6 +4734,12 @@ async function checkInstalled(key, { quiet = false } = {}) {
 
 /* The hue drawn as text, so the surface variant: the fill is 2.1:1 on the
    light canvas. */
+.wftab-adding {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .wftab-warn {
   display: flex;
   align-items: center;

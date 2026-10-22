@@ -416,6 +416,35 @@ class ModelFolderScanner:
         )
         return int(row["model_id"]) if row is not None else None
 
+    def find_unregistered(
+        self, folders: list[tuple[int, str]], names: set[str]
+    ) -> list[tuple[int, str, str]]:
+        """Files in *folders* named one of *names* that the shelf has no row for.
+
+        The quick half of picking up a model that landed after the last scan
+        (#1985): a walk and a lookup, nothing opened and nothing hashed, so a
+        workflow naming a file the shelf does not know can ask for it on every
+        look. :meth:`register_file` is the slow half, for what this finds.
+
+        Args:
+            folders: ``(model_folder.id, path)`` per folder to look in. The
+                caller has already left out the folders that are not scanned.
+            names: Filenames to look for, already lower-cased basenames.
+
+        Returns:
+            ``(folder_id, abs_path, relpath)`` per file found that has no
+            ``present`` row, in folder order.
+        """
+        found: list[tuple[int, str, str]] = []
+        for folder_id, path in folders:
+            if not self._is_readable(path):
+                continue
+            known = self._known_files(folder_id)
+            for abs_path, relpath in self._walk(path, set()):
+                if os.path.basename(relpath).lower() in names and relpath not in known:
+                    found.append((folder_id, abs_path, relpath))
+        return found
+
     def _folder_exists(self, folder_id: int) -> bool:
         return (
             self._hub.fetchone("SELECT 1 FROM model_folder WHERE id = ?", (folder_id,))

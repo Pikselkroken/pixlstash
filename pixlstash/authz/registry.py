@@ -634,6 +634,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOCAL,
         justification="§16.3 walks a registered host path and reads every model file under it - the same authority as reference-folders/detect-sidecars; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
     ),
+    ("POST", "/api/v1/model-folders/pick-up"): RoutePolicy(
+        _LOCAL,
+        justification="§16.3 walks every registered host path and registers the model files it finds by name - model-folders/{folder_id}/rescan's authority, narrowed to the files named; takes no host path; owner + loopback/LAN/Tailscale, or remote owner iff allow_remote_host_ops=true (§16.3.1)",
+    ),
     # ── model_moves.py (shelf plan B7; §16.3 host-capability) ───────────────
     # The strongest filesystem authority the shelf has: this block writes new
     # files into a registered host folder and unlinks files out of another one.

@@ -1214,6 +1214,39 @@ class TestFilesWithNoReadableHeader:
         assert models(hub) == {}
 
 
+class TestPickingUpALateFile:
+    """A model that landed after its folder's last scan (#1985)."""
+
+    def test_only_an_unregistered_file_of_a_wanted_name_is_found(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "old.safetensors", name="Old")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        (folder / "sub").mkdir()
+        write_adapter(folder / "sub" / "Late.safetensors", name="Late")
+        write_adapter(folder / "other.safetensors", name="Other")
+
+        found = scanner.find_unregistered(
+            [(folder_id, str(folder))], {"late.safetensors", "old.safetensors"}
+        )
+
+        late = os.path.join("sub", "Late.safetensors")
+        assert found == [(folder_id, str(folder / late), late)]
+        # Looking writes nothing.
+        assert set(located(hub)) == {"old.safetensors"}
+
+        scanner.register_file(folder_id, str(folder / late), late)
+
+        assert located(hub)[late]["state"] == STATE_PRESENT
+        assert (
+            scanner.find_unregistered([(folder_id, str(folder))], {"late.safetensors"})
+            == []
+        )
+
+
 class TestBaseModelIdentification:
     """The identified base model: written with its source, upgraded only by a
     stronger source, never over a person's, and nothing when nothing matched."""
