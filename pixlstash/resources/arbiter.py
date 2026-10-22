@@ -452,8 +452,9 @@ class ResourceArbiter:
     def cancel(self, lease_id: str) -> Lease | None:
         """Withdraw a waiting lease; the caller cancels the work behind it."""
         lease = self.lease(lease_id)
-        if lease is not None:
-            self.release(lease)
+        if lease is None or lease.state is not LeaseState.WAITING:
+            return None
+        self.release(lease)
         return lease
 
     def leases(self, tenant: Tenant | None = None) -> list[Lease]:

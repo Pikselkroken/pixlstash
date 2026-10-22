@@ -28,12 +28,13 @@ import sys
 
 from platformdirs import user_config_dir
 
+logger = logging.getLogger(__name__)
+
 try:
     import pynvml
-except Exception:  # pragma: no cover - optional dependency
+except Exception as exc:  # pragma: no cover - optional dependency
+    logger.warning("pynvml is unavailable, so no GPU can be picked: %s", exc)
     pynvml = None
-
-logger = logging.getLogger(__name__)
 
 #: ``server-config.json`` keys. ``compute_gpu`` is ``auto`` or a GPU UUID;
 #: ``comfyui_gpu_uuid`` is the card ComfyUI was last seen on, so Auto can avoid

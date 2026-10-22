@@ -135,7 +135,10 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="That run has just started on ComfyUI."
             )
-        arbiter().cancel(lease_id)
+        if arbiter().cancel(lease_id) is None:
+            raise HTTPException(
+                status_code=409, detail="That work has just been given the GPU."
+            )
         logger.info("The owner cancelled waiting lease %s (%s)", lease_id, lease.label)
         return LeaseAnswer()
 

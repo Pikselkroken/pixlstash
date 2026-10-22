@@ -276,6 +276,18 @@ def test_unmeasured_comfyui_run_keeps_other_tenants_off_but_not_comfyui():
         lease.release()
 
 
+def test_cancel_withdraws_a_waiting_lease_and_leaves_a_granted_one_alone():
+    arb, _fake, _ = make(used_mb=20000)
+    granted = arb.request(Tenant.AITOOLKIT, "running", device=CARD, need_mb=100)
+    waiting = arb.request(Tenant.AITOOLKIT, "waiting", device=CARD, need_mb=20000)
+    # Granted a moment before the owner pressed Cancel: its work is running.
+    assert arb.cancel(granted.id) is None
+    assert granted.state is LeaseState.GRANTED
+    assert arb.cancel(waiting.id) is waiting
+    assert waiting.state is LeaseState.RELEASED
+    granted.release()
+
+
 def test_run_anyway_grants_one_and_keeps_the_others_in_order():
     arb, _fake, _ = make(used_mb=20000)
     first = arb.request(Tenant.AITOOLKIT, "first", device=CARD, need_mb=10000)
