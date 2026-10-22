@@ -41,7 +41,7 @@
             <!-- Only while there is something to undo: an automatic set
                  already holds exactly what its pictures ran with. -->
             <AppButton
-              v-if="changeCount"
+              v-if="canReset(set)"
               variant="ghost"
               size="sm"
               icon-left="backup-restore"
@@ -464,6 +464,7 @@ import {
   recipeCount,
   offerQuestion,
   setChanges,
+  canReset,
   setCheckpoint,
   setSlots,
 } from "../../utils/workflowSets";

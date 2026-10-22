@@ -1509,10 +1509,18 @@ class RemovedWorkflowSetMember(BaseModel):
     label: Optional[str] = None
 
 
+class DeletedWorkflowSet(HandMadeSet):
+    """A deleted set as it was, for an undo to re-post."""
+
+    seen: list[str] = Field(
+        description="Models the owner had seen in its tray (`PUT .../seen`)."
+    )
+
+
 class WorkflowSetDeleteResponse(BaseModel):
     """Body of ``DELETE /models/workflow-sets/{set_id}``."""
 
-    deleted: HandMadeSet = Field(
+    deleted: DeletedWorkflowSet = Field(
         description="The set as it was, members included, for an undo to re-post."
     )
 
@@ -1545,7 +1553,7 @@ class WorkflowSetMergeRequest(BaseModel):
     )
 
 
-class MergedWorkflowSet(HandMadeSet):
+class MergedWorkflowSet(DeletedWorkflowSet):
     """A set a merge deleted, as it was, for an undo to re-post."""
 
     hidden: bool = Field(description="It was hidden in the active library.")
@@ -2973,7 +2981,9 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         with _workflow_set_errors():
             snapshot = delete_set(server.hub, set_id)
-        return WorkflowSetDeleteResponse(deleted=_hand_made_set(snapshot))
+        return WorkflowSetDeleteResponse(
+            deleted=DeletedWorkflowSet(**_hand_made_set(snapshot).model_dump())
+        )
 
     @router.post(
         "/models/workflow-sets/{set_id}/members",

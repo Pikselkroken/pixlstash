@@ -2793,6 +2793,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (snapshot.hidden) {
       await setWorkflowSetsHidden([`hand:${restored.id}`], true);
     }
+    // Or every model the owner had already seen in it reads New again.
+    if (snapshot.seen?.length) {
+      await markWorkflowSetSeen(restored.id, snapshot.seen);
+    }
     return restored;
   }
 

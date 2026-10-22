@@ -18,6 +18,7 @@ import {
   setCard,
   setGroups,
   setChanges,
+  canReset,
   setName,
   setSlots,
   sharingLabel,
@@ -759,6 +760,11 @@ describe("hand-made sets (#1520)", () => {
       facts: ["3 models", "3 recipes", "12 pictures", "identical to 1 other set"],
     });
     expect(setChanges(custom)).toEqual({ added: 1, removed: 1 });
+    expect(canReset(automatic)).toBe(false);
+    expect(canReset(custom)).toBe(true);
+    // A template file kept out by Stop asking is no change to what the set
+    // holds, but Reset is the only way to have it suggested again.
+    expect(canReset({ ...automatic, declined: ["dl"] })).toBe(true);
   });
 
   it("marks sets holding the same files as identical, wherever each sits", () => {

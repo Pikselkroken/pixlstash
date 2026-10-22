@@ -714,6 +714,16 @@ export function setChanges(set) {
 }
 
 /**
+ * Reset to automatic has something to undo: a model the owner added, or one
+ * they kept out. Kept out is wider than removed: a template file the owner
+ * answered Stop asking for is on the list though the pictures never used it,
+ * and Reset is the only way to have it suggested again.
+ */
+export function canReset(set) {
+  return setChanges(set).added > 0 || (set?.declined ?? []).length > 0;
+}
+
+/**
  * The set's own checkpoints as files: the digests a merge compares, sorted.
  * Only the ones it stores, as the server compares them: a second checkpoint
  * the pictures brought in is not what the set is on.

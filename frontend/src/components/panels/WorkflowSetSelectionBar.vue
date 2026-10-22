@@ -236,7 +236,7 @@ import {
   hideSetsVerb,
   mergePartners,
   mergeVerb,
-  setChanges,
+  canReset,
   setCheckpoint,
 } from "../../utils/workflowSets";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -312,11 +312,7 @@ const noPartner = computed(() => {
 const offered = computed(() => Boolean(one.value?.offer));
 
 /** The one selected set carries changes Reset to automatic would undo. */
-const changed = computed(() => {
-  if (!one.value) return false;
-  const { added, removed } = setChanges(one.value);
-  return added + removed > 0;
-});
+const changed = computed(() => Boolean(one.value) && canReset(one.value));
 
 function clear() {
   store.clearSetSelection();

@@ -3981,6 +3981,7 @@ describe("sets from pictures are hidden, never deleted", () => {
       name: "Other",
       members: [{ sha256: "a".repeat(64), slot: "checkpoint", label: "base" }],
       declined: ["e".repeat(64)],
+      seen: ["c".repeat(64)],
       hidden: true,
     };
     mergeWorkflowSets.mockReset().mockResolvedValue({
@@ -4012,6 +4013,7 @@ describe("sets from pictures are hidden, never deleted", () => {
     });
     expect(setWorkflowSetDeclines).not.toHaveBeenCalledWith(11, expect.anything());
     expect(hiddenOnServer.has("hand:11")).toBe(true);
+    expect(markWorkflowSetSeen).toHaveBeenCalledWith(11, ["c".repeat(64)]);
   });
 
   it("hides nothing when the payload carries no hidden sets at all", async () => {

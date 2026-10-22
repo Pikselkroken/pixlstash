@@ -10285,7 +10285,8 @@ like every shelf table), read and written by
   read would undo. `POST .../members` takes a model off `declined` as well as
   inserting it, and answers `undeclined` for its undo. Reset to automatic is
   the client's two calls: empty `declined`, delete the added rows. A delete's
-  snapshot carries `declined`, so its undo restores what was removed.
+  (and a merge's) snapshot carries `declined` and `seen`, so its undo restores
+  what was removed and what the owner had already seen.
 - **New is per set, and only stored as seen.** `PUT .../seen` inserts
   `model_workflow_set_seen` rows (CASCADE with the set); the client sends it
   when the owner leaves a tray that showed a new model. A create with

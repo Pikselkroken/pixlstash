@@ -2224,6 +2224,14 @@ def test_a_model_new_pictures_bring_in_is_new_until_seen(shelf_env):
         assert r.json()["seen"] == [ADAPTER_NO_BASE_2]
         assert _held(_hand_made(shelf_env)[set_id])["Dana"]["new"] is False
 
+        # The delete's snapshot carries what was seen, so an undo can put it
+        # back rather than mark it New again.
+        r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{set_id}")
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"]["seen"] == sorted(
+            [ADAPTER_NO_BASE_2, ADAPTER_WITH_BASE]
+        )
+
         r = shelf_env.owner.put(
             f"{API}/models/workflow-sets/999999/seen",
             json={"sha256": [ADAPTER_NO_BASE_2]},

@@ -559,18 +559,27 @@ def delete_set(hub, set_id: int) -> dict:
     Returns the set as it was, read on the SAME transaction that deletes it:
     that snapshot is the undo, and read beforehand it could miss a member added
     between the read and the delete - which the undo would then lose. It
-    carries ``declined`` too, since what the owner removed is part of the set
-    (#1972). Coverage (pictures, covers) is not computed; an undo needs none.
+    carries ``declined`` and ``seen`` too, since what the owner removed and
+    what they have seen are part of the set (#1972). Coverage (pictures,
+    covers) is not computed; an undo needs none.
     """
     with hub.transaction() as conn:
-        entry = _delete_in(conn, set_id)
+        snapshot = _delete_in(conn, set_id)
     logger.info("Deleted workflow set %d.", set_id)
-    return _shape(entry)
+    return snapshot
 
 
 def _delete_in(conn, set_id: int) -> dict:
-    """Delete one set on *conn*; return its `_collect` entry as it was."""
+    """Delete one set on *conn*; return it as it was, shaped, with ``seen``."""
     _require_set(conn, set_id)
+    seen = [
+        row["sha256"]
+        for row in conn.execute(
+            "SELECT sha256 FROM model_workflow_set_seen WHERE set_id = ? "
+            "ORDER BY sha256",
+            (set_id,),
+        )
+    ]
     (entry,) = _collect(
         conn.execute(_SETS_SQL + " WHERE id = ?", (set_id,)).fetchall(),
         conn.execute(_MEMBERS_SQL + " WHERE m.set_id = ?", (set_id,)).fetchall(),
@@ -592,7 +601,7 @@ def _delete_in(conn, set_id: int) -> dict:
     conn.execute(
         "DELETE FROM workflow_set_hidden WHERE set_key = ?", (f"hand:{set_id}",)
     )
-    return entry
+    return {**_shape(entry), "seen": seen}
 
 
 def add_members(hub, set_id: int, members: list[dict]) -> tuple[list[str], list[str]]:
@@ -773,7 +782,7 @@ def merge_sets(
         )
         merged = []
         for one in others:
-            merged.append({**_shape(_delete_in(conn, one)), "hidden": hidden[one]})
+            merged.append({**_delete_in(conn, one), "hidden": hidden[one]})
         kept_out = set.intersection(*declines.values())
         conn.execute(
             "DELETE FROM model_workflow_set_decline WHERE set_id = ?", (set_id,)
