@@ -158,6 +158,7 @@ from pixlstash.routes.share import create_router as create_share_router
 from pixlstash.routes.taggers import create_router as create_taggers_router
 from pixlstash.routes.snapshots import create_router as create_snapshots_router
 from pixlstash.routes.telemetry import create_router as create_telemetry_router
+from pixlstash.routes.resources import create_router as create_resources_router
 from pixlstash.routes.test_hooks import create_router as create_test_hooks_router
 from pixlstash.routes.workflows import create_router as create_workflows_router
 from pixlstash.server_config_io import DEVICE_ON_DISK_KEY, persist_server_config
@@ -1381,7 +1382,6 @@ class Server(
                 "default_device": "auto",
                 "insightface_model_pack": "buffalo_l",
                 "min_free_disk_gb": 1.0,
-                "min_free_vram_mb": 1024.0,
                 "cors_origins": [],
                 "max_attachment_size_mb": 50,
                 "filesystem_roots": [],
@@ -1416,8 +1416,6 @@ class Server(
                     server_config["insightface_model_pack"] = "buffalo_l"
                 if "min_free_disk_gb" not in server_config:
                     server_config["min_free_disk_gb"] = 1.0
-                if "min_free_vram_mb" not in server_config:
-                    server_config["min_free_vram_mb"] = 1024.0
                 if "cors_origins" not in server_config:
                     server_config["cors_origins"] = []
                 if "max_attachment_size_mb" not in server_config:
@@ -1784,6 +1782,14 @@ class Server(
             create_telemetry_router(self),
             prefix=API_V1_PREFIX,
             tags=["telemetry"],
+            dependencies=gate,
+        )
+        # The VRAM arbiter's controls and the GPU picker. Out of the schema
+        # like the config router it sits beside: app plumbing, not library API.
+        self.api.include_router(
+            create_resources_router(self),
+            prefix=API_V1_PREFIX,
+            include_in_schema=False,
             dependencies=gate,
         )
         self.api.include_router(

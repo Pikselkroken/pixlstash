@@ -17,6 +17,9 @@ from types import SimpleNamespace
 import pytest
 
 from pixlstash.event_types import EventType
+from pixlstash import task_runner as task_runner_module
+from pixlstash.resources import ledger as ledger_module
+from pixlstash.resources.ledger import Ledger
 from pixlstash.task_runner import TaskRunner
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskStatus
 from pixlstash.tasks.description_task import DescriptionTask
@@ -244,6 +247,7 @@ def test_the_wire_payload_carries_the_attempt_count():
                 "max_attempts": 3,
                 "gave_up": False,
                 "recovered": False,
+                "other_processes": [{"name": "lms", "used_mb": 18432}],
             },
         )
     )
@@ -257,6 +261,9 @@ def test_the_wire_payload_carries_the_attempt_count():
             "max_attempts": 3,
             "gave_up": False,
             "recovered": False,
+            # Dropped by the broadcaster until now, so the toast never named
+            # the process holding the card.
+            "other_processes": [{"name": "lms", "used_mb": 18432}],
             "source": "external",
             "origin_client_id": None,
         }
@@ -324,19 +331,38 @@ def test_an_oom_leaves_existing_descriptions_alone():
     assert task.status == TaskStatus.FAILED
 
 
+class _FakeNvml:
+    """NVML with one card and the processes a test puts on it."""
+
+    NVML_VALUE_NOT_AVAILABLE = -1
+
+    def __init__(self, processes, fail=False):
+        self._processes = processes
+        self._fail = fail
+
+    def nvmlInit(self):
+        if self._fail:
+            raise RuntimeError("NVML Shared Library Not Found")
+
+    def nvmlDeviceGetCount(self):
+        return 1
+
+    def nvmlDeviceGetHandleByIndex(self, index):
+        return index
+
+    def nvmlDeviceGetComputeRunningProcesses(self, handle):
+        return [
+            SimpleNamespace(pid=pid, usedGpuMemory=mb * 1024 * 1024)
+            for pid, mb in self._processes
+        ]
+
+
 def test_the_notice_names_the_other_process_on_the_card(monkeypatch):
     """ "Another program is probably holding the card" was a guess; name it."""
-    monkeypatch.setattr(
-        TaskRunner,
-        "_query_compute_apps",
-        classmethod(
-            lambda cls: [
-                (os.getpid(), "/usr/bin/python3", 4338),
-                (566190, "/opt/LM Studio/lms", 18432),
-                (566191, "/usr/lib/xorg/Xorg", 210),
-            ]
-        ),
-    )
+    names = {566190: "lms", 566191: "Xorg"}
+    fake = Ledger(_FakeNvml([(os.getpid(), 4338), (566191, 210), (566190, 18432)]))
+    monkeypatch.setattr(ledger_module, "_process_name", names.__getitem__)
+    monkeypatch.setattr(task_runner_module, "ledger", lambda: fake)
     task = _OomTask(fail_times=1)
 
     events = _run_through_the_worker(task, monkeypatch)
@@ -345,15 +371,13 @@ def test_the_notice_names_the_other_process_on_the_card(monkeypatch):
     assert retry["other_processes"] == [
         {"name": "lms", "used_mb": 18432},
         {"name": "Xorg", "used_mb": 210},
-    ], "largest first, ourselves excluded, basename only"
+    ], "largest first, ourselves excluded"
     assert recovery["other_processes"] == [], "the contention is over"
 
 
-def test_the_notice_names_nobody_without_nvidia_smi(monkeypatch):
-    def missing(cls):
-        raise FileNotFoundError("nvidia-smi")
-
-    monkeypatch.setattr(TaskRunner, "_query_compute_apps", classmethod(missing))
+def test_the_notice_names_nobody_without_nvml(monkeypatch):
+    fake = Ledger(_FakeNvml([(566190, 18432)], fail=True))
+    monkeypatch.setattr(task_runner_module, "ledger", lambda: fake)
     task = _OomTask(fail_times=99)
 
     events = _run_through_the_worker(task, monkeypatch)

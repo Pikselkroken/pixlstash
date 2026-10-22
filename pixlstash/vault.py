@@ -46,9 +46,11 @@ from .tasks.smart_score_task import SmartScoreTask
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
 from .task_runner import TaskRunner
+from .resources.arbiter import arbiter
 from .work_planner import WorkPlanner
 from .tasks import TaskType
 from .utils.reference_folder_watcher import ReferenceFolderWatcher
+from .utils.vram_utils import empty_device_cache
 from . import worker_config
 
 from pixlstash.event_types import EventType
@@ -262,12 +264,19 @@ class Vault:
             self._started = False
             return
 
+        # The machine's one VRAM arbiter. It outlives this vault: a library
+        # switch builds a new vault and the leases ComfyUI holds stay put.
+        self._arbiter = arbiter()
+        self._arbiter.set_pixlstash_on_gpu(not force_cpu)
+        # Lease ids PixlStash made room for, each holding the planner.
+        self._yield_holds: set[str] = set()
         self._task_runner = TaskRunner(
             name="vault-task-runner",
             num_workers=worker_config.NUM_WORKERS,
             # So a GPU out-of-memory retry can raise a toast instead of only a
             # log line. Bound method, like the finders' notifier below.
             notifier=self.notify,
+            resource_arbiter=self._arbiter,
         )
         self._planner_work_finders = WorkPlanner.work_finders(
             database=self.db,
@@ -429,6 +438,8 @@ class Vault:
             return
         self._task_runner.start()
         self._work_planner.start()
+        self._arbiter.add_yielder(self._yield_gpu)
+        self._arbiter.add_listener(self._on_resource_lease)
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
         self._started = True
@@ -512,9 +523,10 @@ class Vault:
         # Waking the planner means "there may be work to pick up". A VRAM_OOM is
         # the opposite statement - the GPU is full - and waking on it would send
         # the planner looking for more GPU work three times per failing task, at
-        # the one moment there is no room for any.
+        # the one moment there is no room for any. A RESOURCE_LEASE is the same
+        # kind of statement, and arrives on every heavy lease's state change.
         if (
-            event_type is not EventType.VRAM_OOM
+            event_type not in (EventType.VRAM_OOM, EventType.RESOURCE_LEASE)
             and self._work_planner
             and self._work_planner.is_running()
         ):
@@ -770,6 +782,9 @@ class Vault:
         if self._started:
             if self._ref_folder_watcher is not None:
                 self._ref_folder_watcher.stop()
+            if self._task_runner is not None:
+                self._arbiter.remove_yielder(self._yield_gpu)
+                self._arbiter.remove_listener(self._on_resource_lease)
             if self._work_planner is not None:
                 self._work_planner.stop()
             if self._task_runner is not None:
@@ -888,9 +903,14 @@ class Vault:
             self._maybe_aggressive_unload(progress)
 
     def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
+        """The most PixlStash's own GPU work may hold, and its batch sizing.
+
+        Caps the PIXLSTASH tenant's granted leases in the arbiter; ComfyUI and
+        training are not limited by it. The engine sizes batches from it too.
+        """
         self._max_vram_gb = max_vram_gb
         if self._task_runner is not None:
-            self._task_runner.set_max_vram_usage_gb(max_vram_gb)
+            self._arbiter.set_pixlstash_cap_gb(max_vram_gb)
         if self._engine:
             self._engine.set_max_vram_usage_gb(max_vram_gb)
 
@@ -2143,6 +2163,19 @@ class Vault:
             return
 
         logger.warning("All workers idle; aggressively unloading models.")
+        self.unload_models()
+        self._last_aggressive_unload_at = now
+
+    def unload_models(self) -> None:
+        """Unload every model PixlStash holds, whatever ``keep_models_in_memory`` says.
+
+        The engine's services, tagger plugins, face detection and the embedding
+        models, then a malloc_trim. Callers make sure no GPU task is running:
+        unloading under a running caption batch makes it return nothing for
+        every picture in it.
+        """
+        if not self._engine:
+            return
         try:
             self._engine.aggressive_unload()
         except Exception as exc:
@@ -2172,7 +2205,51 @@ class Vault:
                 ctypes.CDLL("libc.so.6").malloc_trim(0)
             except Exception as exc:
                 logger.debug("malloc_trim call failed: %s", exc)
-        self._last_aggressive_unload_at = now
+        empty_device_cache()
+
+    def _yield_gpu(self, lease) -> list[str]:
+        """Make room on the GPU for *lease*: the first rung of the reclaim ladder.
+
+        Holds the planner so nothing new is queued, stops the GPU work in
+        flight at a task boundary (``TaskRunner.preempt_gpu``), waits for the
+        GPU worker to finish its batch, and unloads every model. The hold ends
+        once *lease* is granted or released (``_on_resource_lease``), and the
+        finders find the pictures that were not processed again.
+
+        Returns:
+            The worker types stopped, for the snapshot's ``preempted`` entries.
+        """
+        if self._task_runner is None or self._closed:
+            return []
+        if self._work_planner is not None:
+            self._yield_holds.add(lease.id)
+            self._work_planner.hold(lease.id, None)
+            if lease.state.value != "waiting":
+                # Granted or withdrawn while the hold was being taken.
+                self._release_yield_hold(lease.id)
+        stopped = self._task_runner.preempt_gpu(f"preempted by {lease.label}")
+        if not self._task_runner.wait_for_gpu_idle():
+            logger.warning(
+                "The GPU worker did not finish its batch within a minute, so "
+                "the models stay loaded for %s (%s)",
+                lease.id,
+                lease.label,
+            )
+            return stopped
+        self.unload_models()
+        return stopped
+
+    def _release_yield_hold(self, lease_id: str) -> None:
+        if lease_id in self._yield_holds:
+            self._yield_holds.discard(lease_id)
+            if self._work_planner is not None:
+                self._work_planner.release(lease_id)
+
+    def _on_resource_lease(self, payload: dict) -> None:
+        """Forward an arbiter event to the clients; end a make-room hold."""
+        if payload.get("change") in ("granted", "released"):
+            self._release_yield_hold(payload.get("lease_id"))
+        self.notify(EventType.RESOURCE_LEASE, payload)
 
     def import_default_data(self, add_tagger_test_images: bool = False):
         """

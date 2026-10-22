@@ -588,6 +588,66 @@ def no_object_info_map_outlives_its_test():
     comfyui_routes._forget_cached_object_info()
 
 
+class _NoGpusLedger:
+    """A machine with no GPU, for the suite's one VRAM arbiter."""
+
+    def nvml(self):
+        return None
+
+    def devices(self, max_age_s=1.0):
+        return []
+
+    def device(self, uuid):
+        return None
+
+    def pixlstash_device(self):
+        return None
+
+    def other_processes(self, limit=3):
+        return []
+
+
+@pytest.fixture(autouse=True, scope="session")
+def no_test_reads_this_machines_gpus_or_comfyui():
+    """The process's VRAM arbiter sees no GPU, and its ComfyUI probe no ComfyUI.
+
+    A development box has a real card and, usually, a real ComfyUI on the
+    default address every test server uses. Left alone, every task's lease
+    would be fit-checked against whatever the owner has loaded, and every run
+    would read the owner's ComfyUI's queue: results that depend on the desk
+    the suite runs at. A test about admission builds its own arbiter over a
+    fake ledger (``tests/test_resource_arbiter.py``) or swaps this one.
+    """
+    import requests as requests_module
+
+    from pixlstash.resources import arbiter as arbiter_module
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(
+        arbiter_module, "_arbiter", arbiter_module.ResourceArbiter(_NoGpusLedger())
+    )
+
+    def no_comfyui(self, path):
+        raise requests_module.ConnectionError("test-no-comfyui")
+
+    patch.setattr(ComfyUIProbe, "_get", no_comfyui)
+    yield
+    patch.undo()
+
+
+@pytest.fixture(autouse=True)
+def no_lease_outlives_its_test():
+    """A lease a test left behind would hold the next test's GPU work."""
+    yield
+    from pixlstash.resources.arbiter import arbiter
+    from pixlstash.services import comfyui_service
+
+    comfyui_service.cancel_held_runs()
+    for lease in arbiter().leases():
+        lease.release()
+
+
 @pytest.fixture(autouse=True)
 def no_test_opens_a_comfyui_socket(monkeypatch):
     """Keep a queued run from opening a socket to whatever ComfyUI is nearby.
