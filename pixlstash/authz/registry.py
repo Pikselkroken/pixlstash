@@ -554,6 +554,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # narrow it to: a set is a fact about the machine's models, not about a
     # picture a token was granted.
     ("GET", "/api/v1/models/workflow-sets"): RoutePolicy(_OWNER),
+    # The New workflow set picker (#1999, #2001): ComfyUI's public template
+    # list matched against the shelf and the hand-made sets. Same tier as the
+    # set read above: it names the machine's models and sets, and there is no
+    # per-object scope to narrow it to. Reads only.
+    ("GET", "/api/v1/models/workflow-templates"): RoutePolicy(_OWNER),
     # Hand-made workflow sets (#1520): the owner's own groupings of shelf
     # models, stored in the hub. They write hub rows only (never a file or a
     # model row) and every answer carries the same whole-library evidence as

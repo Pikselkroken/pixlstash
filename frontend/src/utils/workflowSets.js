@@ -629,6 +629,16 @@ export function handMadeName(set) {
   return set?.name || setCheckpoint(set)?.name || "Untitled set";
 }
 
+/**
+ * What a set made from a ComfyUI template is called, and what its row and its
+ * buttons name it by: the model ComfyUI's list names it after, else its title.
+ *
+ * @param {Object} variant - one `GET /models/workflow-templates` variant.
+ */
+export function templateName(variant) {
+  return variant?.models?.[0] || variant?.title || variant?.name || "";
+}
+
 /** The base model a set's suggestions follow: its checkpoint's, or null. */
 export function handMadeBase(set) {
   return setCheckpoint(set)?.base_model || null;

@@ -25,6 +25,7 @@ vi.mock("vuetify/components", async () => {
 });
 
 const fetchWorkflowSets = vi.fn();
+const fetchWorkflowTemplates = vi.fn();
 const createWorkflowSet = vi.fn();
 const deleteWorkflowSet = vi.fn();
 const addWorkflowSetMembers = vi.fn();
@@ -58,6 +59,7 @@ vi.mock("../../api/modelShelf", () => ({
   deleteModels: vi.fn(),
   setAdapterAttachments: vi.fn(),
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
+  fetchWorkflowTemplates: (...args) => fetchWorkflowTemplates(...args),
   createWorkflowSet: (...args) => createWorkflowSet(...args),
   deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
   addWorkflowSetMembers: (...args) => addWorkflowSetMembers(...args),
@@ -86,6 +88,7 @@ import WorkflowSetChooser from "../panels/WorkflowSetChooser.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useOperationStore } from "../../stores/useOperationStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 const globalOpts = {
   global: {
@@ -164,6 +167,8 @@ async function mountGrid({
   handMade = [],
   setChecks = [],
   attach = false,
+  templates = [],
+  newReady = 0,
 } = {}) {
   listAdapters.mockResolvedValue(rows);
   listSupport.mockResolvedValue(support);
@@ -173,6 +178,12 @@ async function mountGrid({
     hand_made: handMade,
     set_checks: setChecks,
     hidden_sets: [...hiddenOnServer],
+    templates_new_ready: newReady,
+  });
+  fetchWorkflowTemplates.mockReset().mockResolvedValue({
+    version: "0.1.117",
+    comfyuiVersion: null,
+    rows: templates,
   });
   const store = useModelShelfStore();
   await store.fetchRows();
@@ -183,6 +194,13 @@ async function mountGrid({
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
   return { wrapper, store };
+}
+
+/** The tile opens the picker; its Make your own makes the empty set. */
+async function makeYourOwn(wrapper) {
+  await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
+  await wrapper.find('[data-testid="make-your-own"]').trigger("click");
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 beforeEach(() => {
@@ -1839,7 +1857,7 @@ describe("hand-made sets (#1520)", () => {
     expect(deleteWorkflowSet).not.toHaveBeenCalledWith(10);
   });
 
-  it("makes a set from the keyboard with N and from the tile", async () => {
+  it("opens the template picker with N and from the tile, and Make your own makes the empty set", async () => {
     createWorkflowSet.mockResolvedValue(handSet(12, []));
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint")],
@@ -1848,11 +1866,18 @@ describe("hand-made sets (#1520)", () => {
 
     await wrapper.find('[role="treegrid"]').trigger("keydown", { key: "n" });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(createWorkflowSet).toHaveBeenCalledTimes(1);
+    // N opens the picker; nothing is made until a press inside it.
+    expect(fetchWorkflowTemplates).toHaveBeenCalledTimes(1);
+    expect(createWorkflowSet).not.toHaveBeenCalled();
+
+    await wrapper.find('[data-testid="make-your-own"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(createWorkflowSet).toHaveBeenCalledWith({});
     expect(store.openSetKey).toBe("hand:12");
 
     await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
-    expect(createWorkflowSet).toHaveBeenCalledTimes(2);
+    expect(fetchWorkflowTemplates).toHaveBeenCalledTimes(2);
+    expect(createWorkflowSet).toHaveBeenCalledTimes(1);
   });
 
   it("walks the tray's slots and removes a member with Backspace, keeping the file", async () => {
@@ -1928,8 +1953,7 @@ describe("hand-made sets (#1520)", () => {
     });
     const operations = useOperationStore();
 
-    await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await makeYourOwn(wrapper);
     await operations.takeLocalReceiptAction();
 
     expect(deleteWorkflowSet).toHaveBeenCalledWith(12);
@@ -1946,8 +1970,7 @@ describe("hand-made sets (#1520)", () => {
     });
     const operations = useOperationStore();
 
-    await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await makeYourOwn(wrapper);
     await operations.takeLocalReceiptAction();
 
     // No "Undone" and so no Redo, which would make the set a second time.
@@ -1980,6 +2003,7 @@ describe("hand-made sets (#1520)", () => {
     });
     const grid = wrapper.find('[role="treegrid"]');
     await grid.trigger("keydown", { key: "n", repeat: true });
+    expect(fetchWorkflowTemplates).not.toHaveBeenCalled();
     expect(createWorkflowSet).not.toHaveBeenCalled();
   });
 
@@ -3353,6 +3377,373 @@ describe("hand-made sets (#1520)", () => {
       await kept.find("button").trigger("click");
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, []);
+    });
+  });
+
+  describe("New workflow set from a ComfyUI template (#2001)", () => {
+    const file = (name, slot, onShelf, extra = {}) => ({
+      name,
+      url: `https://example.com/${name}`,
+      directory: slot === "checkpoint" ? "diffusion_models" : "vae",
+      slot,
+      on_shelf: onShelf,
+      model_id: null,
+      other_quant: null,
+      file_size: null,
+      ...extra,
+    });
+    const variant = (name, files, extra = {}) => ({
+      name,
+      title: `${name} title`,
+      kind: "image",
+      tags: [],
+      models: [`${name} model`],
+      files,
+      on_shelf: files.filter((f) => f.on_shelf).length,
+      complete: files.every((f) => f.on_shelf),
+      covered_by: null,
+      head_arrived_at: null,
+      usage: 0,
+      new: false,
+      ...extra,
+    });
+    const READY = variant("zit", [
+      file("zit_bf16.safetensors", "checkpoint", true, { model_id: 1 }),
+      file("ae.safetensors", "vae", true, { model_id: 2 }),
+    ]);
+    const COVERED = variant(
+      "flux",
+      [file("flux.safetensors", "checkpoint", true, { model_id: 3 })],
+      { covered_by: { id: 10, name: "Portrait kit" } },
+    );
+    const PARTIAL = variant("wan", [
+      file("wan_high.safetensors", "checkpoint", true, { model_id: 4 }),
+      file("wan_low.safetensors", "checkpoint", false),
+    ]);
+    const TEMPLATES = [
+      { key: "head:zit", variants: [READY] },
+      { key: "head:flux", variants: [COVERED] },
+      { key: "head:wan", variants: [PARTIAL] },
+    ];
+
+    async function openPicker(options) {
+      const mounted = await mountGrid({
+        rows: [row(1, "realvisXL_v5", "checkpoint")],
+        templates: TEMPLATES,
+        ...options,
+      });
+      await mounted.wrapper
+        .find('[data-testid="new-workflow-set"]')
+        .trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await mounted.wrapper.vm.$nextTick();
+      return mounted;
+    }
+
+    function pressFor(wrapper, key) {
+      return wrapper
+        .find(`[data-testid="template-row"][data-key="${key}"]`)
+        .find('[data-testid="template-press"]');
+    }
+
+    it("draws no ready line while nothing new is ready", async () => {
+      const { wrapper } = await mountGrid({ rows: [row(1, "a", "checkpoint")] });
+      expect(wrapper.find('[data-testid="new-ready-line"]').exists()).toBe(false);
+      expect(wrapper.find(".msg__new-dot").exists()).toBe(false);
+    });
+
+    it("says how many new ones are ready on the tile", async () => {
+      const { wrapper } = await mountGrid({
+        rows: [row(1, "a", "checkpoint")],
+        newReady: 2,
+      });
+      const line = wrapper.find('[data-testid="new-ready-line"]');
+      expect(line.text()).toBe("2 new ready to make");
+      // The dot is never the only signal: the line describes the tile.
+      expect(wrapper.find(".msg__newrow").attributes("aria-describedby")).toBe(
+        line.attributes("id"),
+      );
+    });
+
+    it("leads with the ready template and makes its set from the shelf's files", async () => {
+      createWorkflowSet.mockResolvedValue(handSet(12, []));
+      const { wrapper } = await openPicker();
+
+      const keys = wrapper
+        .findAll('[data-testid="template-row"]')
+        .map((r) => r.attributes("data-key"));
+      // Ready first; the covered one is folded away; the partial one last.
+      expect(keys).toEqual(["head:zit", "head:wan"]);
+      expect(pressFor(wrapper, "head:zit").attributes("aria-label")).toBe(
+        "Make set from zit model",
+      );
+
+      await pressFor(wrapper, "head:zit").trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).toHaveBeenCalledWith({
+        name: "zit model",
+        template: "zit",
+        members: [
+          { model_id: 1, slot: "checkpoint" },
+          { model_id: 2, slot: "vae" },
+        ],
+      });
+    });
+
+    it("makes a partial template's set from what is here and says what is missing", async () => {
+      createWorkflowSet.mockResolvedValue(handSet(12, []));
+      const { wrapper } = await openPicker();
+      const press = pressFor(wrapper, "head:wan");
+      expect(press.text()).toBe("Make set · 1 missing");
+
+      await press.trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          template: "wan",
+          members: [{ model_id: 4, slot: "checkpoint" }],
+        }),
+      );
+    });
+
+    it("opens the set that already covers a template rather than make a second", async () => {
+      const { wrapper, store } = await openPicker({
+        handMade: [handSet(10, [SET_CKPT])],
+      });
+      const fold = wrapper.find('[data-testid="covered-fold"]');
+      expect(fold.text()).toContain("1 already in a set: flux model, in Portrait kit");
+      await fold.trigger("click");
+
+      const press = pressFor(wrapper, "head:flux");
+      expect(press.text()).toBe("In Portrait kit");
+      await press.trigger("click");
+      expect(createWorkflowSet).not.toHaveBeenCalled();
+      expect(store.openSetKey).toBe("hand:10");
+    });
+
+    it("searches file names and filters by kind", async () => {
+      const { wrapper } = await openPicker();
+      const field = wrapper.find('[data-testid="workflow-template-picker"] input');
+      await field.setValue("wan_low");
+      expect(
+        wrapper
+          .findAll('[data-testid="template-row"]')
+          .map((r) => r.attributes("data-key")),
+      ).toEqual(["head:wan"]);
+    });
+
+    it("Enter on the cursor row makes that row's set, from the search field", async () => {
+      createWorkflowSet.mockResolvedValue(handSet(12, []));
+      const { wrapper } = await openPicker();
+      const field = wrapper.find('[data-testid="workflow-template-picker"] input');
+      await field.trigger("keydown", { key: "ArrowDown" });
+      await field.trigger("keydown", { key: "ArrowDown" });
+      await field.trigger("keydown", { key: "Enter" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).toHaveBeenCalledWith(
+        expect.objectContaining({ template: "wan" }),
+      );
+    });
+
+    it("opens the set a later press finds already made, rather than make a second", async () => {
+      const fresh = { ...READY, new: true };
+      const { store } = await mountGrid({
+        rows: [row(1, "a", "checkpoint")],
+        handMade: [handSet(10, [SET_CKPT])],
+        templates: [{ key: "head:zit", variants: [fresh] }],
+      });
+      const notices = useNoticeStore();
+      store.onModelsArrived([2]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Between the notice and the press, a set took the template.
+      fetchWorkflowTemplates.mockResolvedValue({
+        version: "0.1.117",
+        comfyuiVersion: null,
+        rows: [
+          {
+            key: "head:zit",
+            variants: [{ ...fresh, new: false, covered_by: { id: 10, name: "Kit" } }],
+          },
+        ],
+      });
+      await notices.notices[0].action.handler();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).not.toHaveBeenCalled();
+      expect(store.openSetKey).toBe("hand:10");
+    });
+
+    it("makes nothing from the notice when it cannot re-check the sets", async () => {
+      const fresh = { ...READY, new: true };
+      const { store } = await mountGrid({
+        rows: [row(1, "a", "checkpoint")],
+        templates: [{ key: "head:zit", variants: [fresh] }],
+      });
+      const notices = useNoticeStore();
+      store.onModelsArrived([2]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fetchWorkflowTemplates.mockRejectedValue(new Error("offline"));
+
+      await notices.notices[0].action.handler();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).not.toHaveBeenCalled();
+      expect(notices.notices.at(-1).text).toContain(
+        "Could not check whether zit model is already in a set",
+      );
+    });
+
+    it("makes nothing from the notice when the template has left the list", async () => {
+      const fresh = { ...READY, new: true };
+      const { store } = await mountGrid({
+        rows: [row(1, "a", "checkpoint")],
+        templates: [{ key: "head:zit", variants: [fresh] }],
+      });
+      const notices = useNoticeStore();
+      store.onModelsArrived([2]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fetchWorkflowTemplates.mockResolvedValue({
+        version: "0.1.118",
+        comfyuiVersion: null,
+        rows: [],
+      });
+
+      await notices.notices[0].action.handler();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).not.toHaveBeenCalled();
+      expect(notices.notices.at(-1).text).toContain("no longer in the template list");
+    });
+
+    it("makes nothing from the notice when a file has left the shelf", async () => {
+      const fresh = { ...READY, new: true };
+      const { store } = await mountGrid({
+        rows: [row(1, "a", "checkpoint")],
+        templates: [{ key: "head:zit", variants: [fresh] }],
+      });
+      const notices = useNoticeStore();
+      store.onModelsArrived([2]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fetchWorkflowTemplates.mockResolvedValue({
+        version: "0.1.117",
+        comfyuiVersion: null,
+        rows: [{ key: "head:zit", variants: [{ ...READY, complete: false }] }],
+      });
+
+      await notices.notices[0].action.handler();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).not.toHaveBeenCalled();
+      expect(notices.notices.at(-1).text).toContain("Not every file for zit model");
+    });
+
+    it("a failed make shows why and puts focus back on the tile", async () => {
+      createWorkflowSet.mockRejectedValue(new Error("is still being hashed"));
+      const { wrapper } = await openPicker({ attach: true });
+
+      await pressFor(wrapper, "head:zit").trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await wrapper.vm.$nextTick();
+      expect(useNoticeStore().notices.at(-1)).toMatchObject({ level: "error" });
+      expect(document.activeElement?.classList.contains("msg__newrow")).toBe(
+        true,
+      );
+      wrapper.unmount();
+    });
+
+    it("puts a deleted set's template back with it on Undo", async () => {
+      deleteWorkflowSet.mockResolvedValue({
+        deleted: { ...handSet(10, [SET_CKPT]), template: "zit" },
+      });
+      createWorkflowSet.mockResolvedValue(handSet(11, [SET_CKPT]));
+      const { store } = await mountGrid({
+        rows: [row(1, "a", "checkpoint")],
+        handMade: [handSet(10, [SET_CKPT])],
+      });
+      await store.deleteHandMadeSets(store.handMadeSets);
+      await useOperationStore().takeLocalReceiptAction();
+      expect(createWorkflowSet).toHaveBeenCalledWith(
+        expect.objectContaining({ template: "zit" }),
+      );
+    });
+
+    it("puts focus back on the tile when the name filter hides the new set", async () => {
+      createWorkflowSet.mockResolvedValue({ ...handSet(12, []), name: "zit model" });
+      const { wrapper, store } = await openPicker({ attach: true });
+      store.filters.name = "nothing like it";
+      await wrapper.vm.$nextTick();
+
+      await pressFor(wrapper, "head:zit").trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await wrapper.vm.$nextTick();
+      expect(document.activeElement?.classList.contains("msg__newrow")).toBe(
+        true,
+      );
+      wrapper.unmount();
+    });
+
+    it("an arrival while the picker is reading never leaves it loading", async () => {
+      const { store } = await mountGrid({ rows: [row(1, "a", "checkpoint")] });
+      let answerPicker;
+      fetchWorkflowTemplates
+        .mockImplementationOnce(
+          () => new Promise((resolve) => (answerPicker = resolve)),
+        )
+        .mockRejectedValueOnce(new Error("offline"));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const picker = store.loadWorkflowTemplates();
+      store.onModelsArrived([2]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      answerPicker({ version: "v", comfyuiVersion: null, rows: TEMPLATES });
+      await picker;
+
+      expect(store.templatesLoading).toBe(false);
+      expect(store.workflowTemplates.rows).toHaveLength(TEMPLATES.length);
+      warn.mockRestore();
+    });
+
+    it("announces an arrival that completed a template, and its button makes the set", async () => {
+      createWorkflowSet.mockResolvedValue(handSet(12, []));
+      const fresh = { ...READY, new: true };
+      const { store } = await mountGrid({
+        rows: [row(1, "a", "checkpoint")],
+        templates: [
+          { key: "head:zit", variants: [fresh] },
+          // Shares the file that arrived, but its head did not just arrive
+          // (or a set covers it): not new, so no notice either.
+          {
+            key: "head:old",
+            variants: [
+              variant("old", [
+                file("old.safetensors", "checkpoint", true, { model_id: 8 }),
+                file("ae.safetensors", "vae", true, { model_id: 2 }),
+              ]),
+            ],
+          },
+          // New too, but nothing of it arrived now: no notice for it.
+          {
+            key: "head:other",
+            variants: [
+              variant(
+                "other",
+                [file("o.safetensors", "checkpoint", true, { model_id: 9 })],
+                { new: true },
+              ),
+            ],
+          },
+        ],
+      });
+      const notices = useNoticeStore();
+
+      store.onModelsArrived([2]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(notices.notices.map((n) => n.text)).toEqual([
+        "All 2 files for zit model are here.",
+      ]);
+      expect(createWorkflowSet).not.toHaveBeenCalled();
+      await notices.notices[0].action.handler();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(createWorkflowSet).toHaveBeenCalledWith(
+        expect.objectContaining({ template: "zit" }),
+      );
     });
   });
 });

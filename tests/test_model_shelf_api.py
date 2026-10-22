@@ -72,6 +72,7 @@ from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from pixlstash.services import workflow_set_verdicts as verdicts
+from pixlstash.services import workflow_templates
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 from tests.network_vectors import LAN_IPV4
 from tests.test_model_folder_scanner import write_adapter, write_checkpoint
@@ -1362,6 +1363,91 @@ def test_hand_made_set_routes_answer_the_owner_and_refuse_tokens(shelf_env):
             r = shelf_env.owner.request(method, path, **kwargs)
             assert r.status_code in (200, 201), f"{method} {path}: {r.text}"
         assert set_id not in _hand_made(shelf_env)
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_workflow_templates_answer_the_owner_and_a_made_set_covers_its_template(
+    shelf_env, monkeypatch
+):
+    """Both directions on the picker's read, and the set's template round trip:
+    made with it, it covers that template, and its delete snapshot carries it."""
+    monkeypatch.setattr(
+        workflow_templates,
+        "load_templates",
+        lambda: {
+            "version": "test",
+            "templates": [
+                {
+                    "name": "image_example",
+                    "title": "Example",
+                    "min_comfyui_version": "0.11.0",
+                    "kind": "image",
+                    "tags": [],
+                    "models": [],
+                    "files": [
+                        {
+                            "name": "example_bf16.safetensors",
+                            "url": "",
+                            "directory": "diffusion_models",
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    path = "/api/v1/models/workflow-templates"
+    try:
+        r = shelf_env.owner.get(path)
+        assert r.status_code == 200, r.text
+        (variant,) = r.json()["rows"][0]["variants"]
+        assert variant["covered_by"] is None and not variant["complete"]
+        # No ComfyUI answered: nothing to compare with, so no flag.
+        assert variant["needs_comfyui"] is None
+
+        # One that answers older than the template wants flags it; numerically,
+        # so 0.9 is older than 0.11. A newer one does not.
+        # "0.11" is the same release as "0.11.0", not an older one.
+        for answered, flagged in (
+            ("0.9.2", "0.11.0"),
+            ("0.12.0", None),
+            ("0.11", None),
+        ):
+            monkeypatch.setattr(
+                model_shelf_routes, "_comfyui_version", lambda _url, v=answered: v
+            )
+            (variant,) = shelf_env.owner.get(path).json()["rows"][0]["variants"]
+            assert variant["needs_comfyui"] == flagged, answered
+        assert (
+            shelf_env.owner.get(f"{API}/models/workflow-sets").json()[
+                "templates_new_ready"
+            ]
+            == 0
+        )
+
+        made = _new_set(shelf_env, name="Example", template="image_example")
+        assert made["template"] == "image_example"
+        (variant,) = shelf_env.owner.get(path).json()["rows"][0]["variants"]
+        assert variant["covered_by"] == {"id": made["id"], "name": "Example"}
+
+        r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{made['id']}")
+        assert r.json()["deleted"]["template"] == "image_example"
+
+        assert_real_route(shelf_env.server.api, "GET", path)
+        scoped = _bearer(
+            shelf_env.server,
+            _mint(
+                shelf_env.owner,
+                "templates character token",
+                resource_type="character",
+                resource_id=shelf_env.character_id,
+            ),
+        )
+        unscoped = _bearer(shelf_env.server, _mint(shelf_env.owner, "templates read"))
+        for client in (scoped, unscoped):
+            assert client.get(f"{API}/pictures").status_code == 200
+            assert client.get(path).status_code == 403
+        assert TestClient(shelf_env.server.api).get(path).status_code == 401
     finally:
         _wipe_sets(shelf_env.server)
 

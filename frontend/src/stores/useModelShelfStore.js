@@ -17,6 +17,7 @@ import {
   deleteWorkflowSet,
   editModels,
   fetchWorkflowSets,
+  fetchWorkflowTemplates,
   putSetVerdict,
   putMemberVerdict,
   forgetModels,
@@ -70,6 +71,7 @@ import {
   setCard,
   setCheckpoint,
   setGroups,
+  templateName,
   worksWith,
 } from "../utils/workflowSets";
 import { checksByKey, comboKey } from "../utils/setVerdicts";
@@ -1688,6 +1690,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const setsError = ref("");
   const setsLoaded = ref(false);
   let setsEpoch = 0;
+  // ComfyUI's templates against the shelf (#1999, #2001), read each time the
+  // New workflow set picker opens: they follow every shelf and set change, so a
+  // cached answer would offer a set that was just made. Only the count of new
+  // ready ones rides on the sets read, for the New tile's line.
+  const workflowTemplates = ref({ version: null, comfyuiVersion: null, rows: [] });
+  const templatesLoading = ref(false);
+  const templatesError = ref("");
+  const templatesNewReady = ref(0);
+  let templatesEpoch = 0;
   // Hide writes, numbered as they are sent. An answer is applied only when no
   // newer write has been applied, so answers that land out of order cannot put
   // an older list on top. `ponytail:` issue order stands in for the server's
@@ -1790,6 +1801,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             ? (body.hidden_sets ?? [])
             : workflowSets.value.hiddenSets,
       };
+      templatesNewReady.value = body.templates_new_ready ?? 0;
       // The whole list, so it replaces: the same rule as the set hides above.
       // Only a payload that carries one, or the rows' own answer would be
       // wiped by a read that never asked.
@@ -2990,6 +3002,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
                 name: snapshot.name ?? null,
                 members: (snapshot.members ?? []).map(memberBack),
                 ...clonedBack(snapshot),
+                ...(snapshot.template ? { template: snapshot.template } : {}),
               }),
             ),
           );
@@ -4180,10 +4193,154 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *
    * Re-read with `markNew` only when the shelf has been read: the badge is a
    * diff against the last fetch, and against no fetch every row would be new.
+   *
+   * @param {number[]} [modelIds] - the `model.id`s that arrived.
    */
-  function onModelsArrived() {
+  function onModelsArrived(modelIds = []) {
     unseenArrivals.value = true;
     if (loaded.value) fetchRows({ markNew: true });
+    if (modelIds.length) announceReadyTemplates(modelIds);
+  }
+
+  /**
+   * Read the templates, for the picker. A read that a newer one overtook, or
+   * that a session reset outlived, is dropped.
+   */
+  async function loadWorkflowTemplates() {
+    const startedAt = (templatesEpoch += 1);
+    templatesLoading.value = true;
+    templatesError.value = "";
+    try {
+      const body = await fetchWorkflowTemplates();
+      if (startedAt !== templatesEpoch) return;
+      workflowTemplates.value = body;
+    } catch (err) {
+      if (startedAt !== templatesEpoch) return;
+      templatesError.value =
+        errorDetail(err) || "The workflow templates could not be read.";
+    } finally {
+      if (startedAt === templatesEpoch) templatesLoading.value = false;
+    }
+  }
+
+  /**
+   * The notice that an arrival completed a template (#2001): one per template
+   * row whose head just arrived, every file is on the shelf, no set covers it,
+   * and one of its files is among *modelIds*. Its one button makes the set.
+   * Sticky, as any notice with an action is; nothing is made without a press.
+   */
+  async function announceReadyTemplates(modelIds) {
+    const arrived = new Set(modelIds);
+    // Its own read, outside the picker's epoch: taking a number from it would
+    // drop a picker read already on the wire and leave the picker loading.
+    const epochAtStart = templatesEpoch;
+    let body;
+    try {
+      body = await fetchWorkflowTemplates();
+    } catch (err) {
+      console.warn("[ModelShelf] could not check arrivals against templates", {
+        modelIds,
+        err,
+      });
+      return;
+    }
+    // Fresher than what the picker holds, unless a picker read is out (it
+    // brings its own) or a session reset came in between.
+    if (epochAtStart === templatesEpoch && !templatesLoading.value) {
+      workflowTemplates.value = body;
+    }
+    const notices = useNoticeStore();
+    for (const row of body.rows) {
+      const variant = row.variants?.[0];
+      if (!variant?.new) continue;
+      if (!variant.files.some((file) => arrived.has(file.model_id))) continue;
+      const count = variant.files.length;
+      notices.push({
+        level: "info",
+        key: `template-ready:${row.key}`,
+        text: `All ${count} ${count === 1 ? "file" : "files"} for ${templateName(variant)} are here.`,
+        action: {
+          label: "Make workflow set",
+          handler: () => {
+            makeAnnouncedTemplate(variant);
+          },
+        },
+      });
+    }
+  }
+
+  /**
+   * The notice's button, which can be pressed long after the notice was
+   * raised: read the template again first, and open the set a press in the
+   * meantime made rather than make a second one.
+   */
+  async function makeAnnouncedTemplate(variant) {
+    await loadWorkflowTemplates();
+    // Unchecked is not "not covered": making it anyway is the second set the
+    // re-read is here to prevent.
+    if (templatesError.value) {
+      useNoticeStore().push({
+        level: "error",
+        text: `Could not check whether ${templateName(variant)} is already in a set. Try again from New workflow set.`,
+      });
+      return null;
+    }
+    const now = workflowTemplates.value.rows
+      .flatMap((row) => row.variants)
+      .find((candidate) => candidate.name === variant.name);
+    // Gone from the list since the notice: what it saved is no basis for a set.
+    if (!now) {
+      useNoticeStore().push({
+        level: "error",
+        text: `${templateName(variant)} is no longer in the template list. Try again from New workflow set.`,
+      });
+      return null;
+    }
+    const covered = now.covered_by;
+    if (covered) {
+      if (openSetKey.value !== `hand:${covered.id}`) {
+        toggleSet(`hand:${covered.id}`);
+      }
+      useNoticeStore().push({
+        level: "info",
+        text: `${templateName(variant)} is already in ${covered.name || "a set"}.`,
+      });
+      return null;
+    }
+    // A file forgotten since the notice: its "all here" no longer holds.
+    if (!now.complete) {
+      useNoticeStore().push({
+        level: "error",
+        text: `Not every file for ${templateName(variant)} is on the shelf any more. Try again from New workflow set.`,
+      });
+      return null;
+    }
+    return createSetFromTemplate(now);
+  }
+
+  /**
+   * Make a set from a template: its files the shelf has, each in the slot the
+   * server worked out, named after the model and remembering the template so
+   * it covers it from now on. Undo is the create's own (the set delete).
+   *
+   * @param {Object} variant - one `GET /models/workflow-templates` variant.
+   * @returns {Promise<Object|null>} the new set.
+   */
+  function createSetFromTemplate(variant) {
+    const seen = new Set();
+    const members = [];
+    for (const file of variant.files ?? []) {
+      if (!file.on_shelf || file.model_id == null || seen.has(file.model_id)) {
+        continue;
+      }
+      seen.add(file.model_id);
+      members.push({ model_id: file.model_id, slot: file.slot });
+    }
+    return createHandMadeSet({
+      name: templateName(variant),
+      template: variant.name,
+      members,
+    });
   }
 
   function resetForSession() {
@@ -4221,6 +4378,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     };
     setsLoaded.value = false;
     setsLoading.value = false;
+    templatesEpoch += 1;
+    workflowTemplates.value = { version: null, comfyuiVersion: null, rows: [] };
+    templatesLoading.value = false;
+    templatesError.value = "";
+    templatesNewReady.value = 0;
     setsError.value = "";
     openSetKey.value = "";
     railDrag.value = null;
@@ -4290,6 +4452,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     fetchRows,
     unseenArrivals,
     onModelsArrived,
+    workflowTemplates,
+    templatesLoading,
+    templatesError,
+    templatesNewReady,
+    loadWorkflowTemplates,
+    createSetFromTemplate,
     adapterKindOptions,
     capabilityOptions,
     baseModelOptions,

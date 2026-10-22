@@ -633,6 +633,7 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/models/workflow-sets/{set_id}/declines                                | model_shelf     | Keep models out of a workflow set's merge offer             |
 | POST   | /api/v1/models/workflow-sets/{set_id}/members                                 | model_shelf     | Add models to a workflow set                                |
 | POST   | /api/v1/models/workflow-sets/{set_id}/members/remove                          | model_shelf     | Take models out of a workflow set                           |
+| GET    | /api/v1/models/workflow-templates                                             | model_shelf     | ComfyUI's workflow templates against the shelf              |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
@@ -10609,6 +10610,51 @@ max rowids are not enough. The workflow grid (`read_grid`) still builds the
 index twice per request, once per `_shelf_candidates` call; at these sizes that
 is tens of milliseconds, left as is.
 
+#### Starting a set from a ComfyUI template (#1999, #2001)
+
+New workflow set opens a picker of ComfyUI's workflow templates, led by the ones
+whose files are all on the shelf. `GET /models/workflow-templates` serves it;
+`pixlstash/services/workflow_templates.py` computes it per request and stores
+nothing for it.
+
+- **The list is a committed file, never fetched at runtime.**
+  `scripts/build_template_suggestions.py` reads one pinned, hash-checked
+  `comfyui-workflow-templates-json` wheel from PyPI (the package ComfyUI
+  installs to serve `/templates`) and writes
+  `pixlstash/data/workflow_templates.json`: per template its name, title, kind
+  (the catalogue category's type; `edit` for an image template tagged as one),
+  tags, minimum ComfyUI version, size, usage, and `files`, every
+  `properties.models` entry on its nodes, subgraphs included. Templates that
+  download nothing (the paid API ones) are left out, and so are the graphs
+  (#2000 will want them). Refreshing it is rerunning the script; no scheduled
+  job does it yet.
+- **A file is on the shelf by name.** A model with a `present` copy whose
+  filename or copy basename matches, case folded; failing that, one whose name
+  matches once the quant postfix is gone (`model_utils.quantless_name`, the
+  shelf's own quant parser), which is served as `other_quant` so the row can say
+  *fp8 for bf16*. Each file carries the slot it would take from its ComfyUI
+  folder, `other` where the shelf's kind would make the create refuse it.
+- **One row per head.** The head is the first `checkpoints`,
+  `diffusion_models` or `unet` file (every such file takes the checkpoint slot,
+  so a Wan 2.2 high/low or a base-plus-refiner template brings both); templates whose heads share a quantless name are variants of one row,
+  the default first (covered, then complete, then most files on the shelf, then
+  fewest matched only as another quant, then ComfyUI's own usage count). A template with no head is its own row.
+- **Covered is the merge offer's rule.** A hand-made set covers a template when
+  `_lacks` finds nothing of the template's on-shelf files missing from the set's
+  on-shelf members (a namesake counting as the file), or when the set was made
+  from it: `model_workflow_set.template`, written by `POST /models/workflow-sets`
+  `{template}` and served on the set and its delete snapshot, so an undo puts it
+  back. A covered template is never offered as a second set.
+- **New is the only clock.** A complete, uncovered template whose head has a
+  `model.arrived_at` (§25.10) in the last 24 hours is `new`.
+  `GET /models/workflow-sets` carries the count as `templates_new_ready` for the
+  New tile's line; nothing else expires, and a complete template stays first in
+  the picker however old the download.
+- **A newer ComfyUI is a flag.** The route asks the owner's configured ComfyUI
+  for its version (`probe_comfyui`, one second) and sets `needs_comfyui` on a
+  template that wants a newer one. A set is only files, so making one is never
+  refused for it.
+
 #### Workflow sets: PixlStash's check and the owner's verdict
 
 Spec: `docs/ideas/workflow-set-verdicts.md`. Code:
@@ -10855,6 +10901,12 @@ and announces `models_arrived` with the model ids it registered.
   sidebar's Models row until the shelf is opened, and re-reads a shelf already
   read with `markNew`, so the arrivals wear the row `New` badge. An unread shelf
   is not fetched: against no previous fetch every row would be new.
+- **The arrival is recorded** (#2001): a move stamps `model.arrived_at` (UTC
+  ISO) after the row is registered, and a failed stamp is logged and leaves the
+  move standing. It is the only place the column is written, so a file a scan
+  found never has one, however recently: a first scan of an old folder is not an
+  arrival. The New workflow set picker reads it (see "Starting a set from a
+  ComfyUI template" under §25).
 
 
 ### 25.11 The kind a workflow loads a model as (#1962)

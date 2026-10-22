@@ -1788,6 +1788,30 @@ the shelf's workflow sets section) and served as `hand_made` on
   "Grouped by you" badge, the checkpoint's `ModelMark` as the cover until a
   picture belongs to it, "Incomplete: no checkpoint" in place of its facts when
   it has none, and never a recipe count.
+- **The New tile opens a template picker (#1999, #2001), not an empty set.**
+  Click, Enter or `N` opens `WorkflowTemplatePicker.vue` (`panels/`), a
+  `v-menu` beside the tile that reads `GET /models/workflow-templates` afresh on
+  every open (`store.loadWorkflowTemplates`). Focus goes to its search, and is
+  checked to have landed, since a `focus()` during the menu's entry transition
+  is dropped; Tab goes on to *Make your own* (the empty set, what the tile did
+  before), then the kind track. Three sections: *Ready* (every file on the
+  shelf, no set covering it, newest arrival first), a folded *already in a set*
+  line whose rows open their set (`store.toggleSet`) instead of making a
+  second, and *Templates* (the rest, most files on the shelf first, cut to 30
+  until *Show more* or a search). A row is one head file; its variants are a
+  `<select>` in the open row, beside the file table, where a file not on the
+  shelf links to the template's own download URL (`https` only). The keyboard
+  is the chooser's: arrows move the inset-ring cursor, Right/Left open and close
+  a row, Enter presses its button, Escape closes and puts focus back on the
+  tile. *Make set* is `store.createSetFromTemplate`: the variant's on-shelf
+  files in the slots the server gave them, named after the model, with
+  `template` so the set covers it from then on; focus lands on the new card.
+  The tile carries the attention dot and a line, *N new ready to make*, from
+  `templates_new_ready` on the sets read; the line is the tile's
+  `aria-describedby`, so the dot never speaks alone. On `models_arrived`,
+  `store.onModelsArrived(ids)` reads the templates once more and raises one
+  sticky notice per template row that is `new` and holds an arrived file:
+  *All 3 files for Z-Image-Turbo are here.* with *Make workflow set*.
 - **Evidence is built only from what no hand-made set covers.** The server marks
   a combination `covered_by` when every one of its models is an on-shelf member
   of a set; `visibleCombinations` drops those, so they appear on the set's card

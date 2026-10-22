@@ -97,6 +97,27 @@ def test_a_finished_download_is_moved_into_the_default_folder(hub, folders):
     assert _located(hub, default_id) == {"Jimmy.safetensors"}
 
 
+def test_a_moved_download_records_its_arrival_and_a_scan_does_not(hub, folders):
+    """The template picker's "new" reads this; a scan is not an arrival."""
+    downloads, default, default_id = folders
+    _, moved = take_in(hub, write_adapter(downloads / "Arrived.safetensors"))
+    scanned = ModelFolderScanner(hub).register_file(
+        default_id,
+        _write_safetensors(
+            default / "Scanned.safetensors",
+            {"w": {"dtype": "F16", "shape": [2], "data_offsets": [0, 4]}},
+            payload=b"\x01" * 4,
+        ),
+        "Scanned.safetensors",
+    )
+    arrived = {
+        row["id"]: row["arrived_at"]
+        for row in hub.fetchall("SELECT id, arrived_at FROM model")
+    }
+    assert arrived[moved] is not None
+    assert arrived[scanned] is None
+
+
 def test_across_drives_it_is_copied_verified_and_only_then_removed(
     hub, folders, monkeypatch
 ):

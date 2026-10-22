@@ -518,8 +518,11 @@ export function useUpdatesSocket({
       } else if (payload?.type === "models_arrived" && !isReadOnly.value) {
         // Models moved onto the shelf from the Downloads folder. Owner-only,
         // like every /models route; the store re-reads its rows and raises the
-        // sidebar's `new` tag.
-        modelShelfStore.onModelsArrived();
+        // sidebar's `new` tag, and says so when the arrival completed a
+        // ComfyUI template (#2001).
+        modelShelfStore.onModelsArrived(
+          Array.isArray(payload.model_ids) ? payload.model_ids : [],
+        );
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {

@@ -101,6 +101,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.comfyui_service import probe_comfyui
 from pixlstash.services.model_kind_suggestions import (
     REFILEABLE_KINDS,
     KindSuggestion,
@@ -150,6 +151,7 @@ from pixlstash.services.model_workflow_sets import (
     set_declines,
     set_sets_hidden,
 )
+from pixlstash.services.workflow_templates import template_rows
 from pixlstash.services.workflow_set_verdicts import (
     fetch_model_marks,
     fetch_set_checks,
@@ -1146,6 +1148,10 @@ class HandMadeSet(BaseModel):
         default=False,
         description="Copied from a set from pictures on purpose (see the create).",
     )
+    template: Optional[str] = Field(
+        default=None,
+        description="The ComfyUI template it was made from, by name (see the create).",
+    )
     incomplete: bool = Field(description="The set has no checkpoint member.")
     checkpoint_ids: list[int] = Field(
         default_factory=list,
@@ -1239,6 +1245,15 @@ class WorkflowSetCreateRequest(BaseModel):
             "The set is a copy of a set from pictures, made on purpose. Served "
             "back on the set; the client never swaps such a set for the set "
             "from pictures it matches."
+        ),
+    )
+    template: Optional[str] = Field(
+        default=None,
+        max_length=MAX_SET_NAME_LENGTH,
+        description=(
+            "The ComfyUI template (`GET /models/workflow-templates`) the set is "
+            "made from, by name. Stored as given and served back; the set then "
+            "covers that template in the picker whatever it holds."
         ),
     )
 
@@ -1545,6 +1560,100 @@ class WorkflowSetsResponse(BaseModel):
             "without reading the model lists first."
         ),
     )
+    templates_new_ready: int = Field(
+        default=0,
+        description=(
+            "How many template rows of `GET /models/workflow-templates` are "
+            "ready to make and new: every file on the shelf, no set covering "
+            "them, and the head arrived through the Downloads folder in the "
+            "last 24 hours. The New workflow set tile's line."
+        ),
+    )
+
+
+class WorkflowTemplateFile(BaseModel):
+    """One file a ComfyUI template loads, against the shelf."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(description="The file name the template's loader names.")
+    url: str = Field(description="Where the template says to download it.")
+    directory: str = Field(description="Its ComfyUI models folder.")
+    slot: str = Field(description="The set slot it fills.")
+    on_shelf: bool
+    model_id: Optional[int] = Field(
+        default=None, description="The shelf model answering to it, if any."
+    )
+    shelf_filename: Optional[str] = None
+    other_quant: Optional[str] = Field(
+        default=None,
+        description=(
+            "Set when only another quant of the file is on the shelf: that "
+            "file's name. It still counts as on the shelf."
+        ),
+    )
+    file_size: Optional[int] = None
+
+
+class WorkflowTemplateVariant(BaseModel):
+    """One ComfyUI template, against the shelf and the sets."""
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    title: str
+    kind: str = Field(description="`image`, `edit`, `video`, `audio`, `3d`, `llm`.")
+    tags: list[str] = Field(default_factory=list)
+    models: list[str] = Field(
+        default_factory=list, description="The model names ComfyUI's list gives."
+    )
+    min_comfyui_version: Optional[str] = None
+    needs_comfyui: Optional[str] = Field(
+        default=None,
+        description=(
+            "The minimum version, set only when the configured ComfyUI "
+            "answered with an older one. A set is files, so it is a flag only."
+        ),
+    )
+    size: int = 0
+    usage: int = 0
+    files: list[WorkflowTemplateFile]
+    on_shelf: int = Field(description="How many of `files` are on the shelf.")
+    complete: bool
+    covered_by: Optional[dict] = Field(
+        default=None,
+        description=(
+            "`{id, name}` of a hand-made set that covers it: made from it, or "
+            "holding every file of it the shelf has."
+        ),
+    )
+    head_arrived_at: Optional[str] = None
+    new: bool
+
+
+class WorkflowTemplateRow(BaseModel):
+    """The templates sharing one head file; the default first."""
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str
+    variants: list[WorkflowTemplateVariant]
+
+
+class WorkflowTemplatesResponse(BaseModel):
+    """Body of ``GET /models/workflow-templates``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    version: Optional[str] = Field(
+        description="The ComfyUI templates release the list was built from."
+    )
+    comfyui_version: Optional[str] = Field(
+        default=None,
+        description="The configured ComfyUI's version, when it answered.",
+    )
+    rows: list[WorkflowTemplateRow]
+    new_ready: int
 
 
 class ModelOpenLocationResponse(BaseModel):
@@ -1641,6 +1750,29 @@ def _cover_strip(covers) -> list[WorkflowSetCover]:
         )
         for cover in covers
     ]
+
+
+def _comfyui_version(url: Optional[str]) -> Optional[str]:
+    """The configured ComfyUI's version, or None: none set, down, or silent."""
+    if not url:
+        return None
+    try:
+        return probe_comfyui(url, timeout=1.0)["version"]
+    except ValueError as exc:
+        logger.info("Not asking ComfyUI for its version at %r: %s", url, exc)
+        return None
+
+
+def _version(text: str) -> tuple[int, ...]:
+    """``"0.11.0"`` as ``(0, 11)``; a part that is not a number reads 0.
+
+    Trailing zeros go, so ``"0.11"`` and ``"0.11.0"`` compare equal rather
+    than the shorter tuple reading as older.
+    """
+    parts = [int(part) if part.isdigit() else 0 for part in text.split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
 
 
 def _hand_made_set(entry: dict) -> HandMadeSet:
@@ -2516,7 +2648,43 @@ def create_router(server) -> APIRouter:
             set_checks=[WorkflowSetCheck(**check) for check in checks],
             hidden_sets=hidden_set_keys(server.hub, server.vault.library_uuid),
             hidden_models=hidden_model_ids(server.hub, server.vault.library_uuid),
+            templates_new_ready=template_rows(server.hub, found["hand_made"])[
+                "new_ready"
+            ],
         )
+
+    @router.get(
+        "/models/workflow-templates",
+        summary="ComfyUI's workflow templates against the shelf",
+        description=(
+            "Every ComfyUI workflow template that downloads files, from the "
+            "list PixlStash ships (built from ComfyUI's templates package, "
+            "never fetched at runtime), with each file matched to the shelf by "
+            "name, another quant counting. One row per head file (the "
+            "checkpoint or diffusion model a set is built around), its "
+            "templates as variants with the default first. `covered_by` names "
+            "a hand-made set that already covers a template, by the merge "
+            "offer's rule or because it was made from it; `new` is a complete, "
+            "uncovered template whose head arrived through the Downloads "
+            "folder in the last 24 hours. Asks the configured ComfyUI for its "
+            "version (one second at most) to flag templates that need a newer "
+            "one. Changes nothing."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowTemplatesResponse,
+    )
+    def list_workflow_templates(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        found = template_rows(server.hub, _workflow_sets()["hand_made"])
+        user = server.auth.get_user_for_request(request)
+        comfyui_version = _comfyui_version(getattr(user, "comfyui_url", None))
+        if comfyui_version:
+            for row in found["rows"]:
+                for variant in row["variants"]:
+                    wanted = variant["min_comfyui_version"]
+                    if wanted and _version(wanted) > _version(comfyui_version):
+                        variant["needs_comfyui"] = wanted
+        return WorkflowTemplatesResponse(**found, comfyui_version=comfyui_version)
 
     def _workflow_sets() -> dict:
         return attach_hand_made(
@@ -2565,12 +2733,14 @@ def create_router(server) -> APIRouter:
         status_code=201,
         summary="Make a workflow set by hand",
         description=(
-            "A set of shelf models the owner says work together: at most one "
-            "checkpoint, any number of text encoders, VAEs, LoRAs and others, "
-            "no order. May be empty or unnamed. A member named by `sha256` "
-            "need not be on the shelf, which is how an undo of a delete puts "
-            "a set back whole. An engine, a file still being hashed and a "
-            "second checkpoint are refused (409). Touches no file."
+            "A set of shelf models the owner says work together: any number "
+            "of checkpoints (a Wan 2.2 high/low pair loads two), text "
+            "encoders, VAEs, LoRAs and others, no order. May be empty or "
+            "unnamed. A member named by `sha256` need not be on the shelf, "
+            "which is how an undo of a delete puts a set back whole. An "
+            "engine, a file still being hashed, and a checkpoint slot for a "
+            "file of another kind are refused (409). `template` records the "
+            "ComfyUI template it was made from. Touches no file."
         ),
         tags=["model_shelf"],
         response_model=HandMadeSet,
@@ -2585,6 +2755,7 @@ def create_router(server) -> APIRouter:
                 payload.name,
                 [member.model_dump() for member in payload.members],
                 cloned=payload.cloned,
+                template=payload.template,
             )
         return _one_set(set_id)
 

@@ -685,6 +685,8 @@ describe("useUpdatesSocket: models_arrived", () => {
     const arrived = vi.spyOn(useModelShelfStore(), "onModelsArrived");
     receive({ type: "models_arrived", model_ids: [4] });
     expect(arrived).toHaveBeenCalledTimes(1);
+    // The ids go along: they are what says an arrival completed a template.
+    expect(arrived).toHaveBeenCalledWith([4]);
   });
 });
 

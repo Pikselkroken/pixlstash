@@ -211,6 +211,23 @@ export async function fetchWorkflowSets() {
     set_checks: Array.isArray(body?.set_checks) ? body.set_checks : [],
     hidden_sets: Array.isArray(body?.hidden_sets) ? body.hidden_sets : [],
     hidden_models: Array.isArray(body?.hidden_models) ? body.hidden_models : [],
+    templates_new_ready: Number(body?.templates_new_ready) || 0,
+  };
+}
+
+/**
+ * ComfyUI's workflow templates against the shelf (#1999, #2001): one row per
+ * head file, `{key, variants}`, the default variant first. Each variant says
+ * which of its files are on the shelf, whether a set covers it, and `new`.
+ *
+ * @returns {Promise<{version: string|null, comfyuiVersion: string|null, rows: Array}>}
+ */
+export async function fetchWorkflowTemplates() {
+  const body = await unwrap(apiClient.get("/models/workflow-templates"));
+  return {
+    version: body?.version ?? null,
+    comfyuiVersion: body?.comfyui_version ?? null,
+    rows: Array.isArray(body?.rows) ? body.rows : [],
   };
 }
 
