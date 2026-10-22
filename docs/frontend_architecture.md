@@ -7005,15 +7005,19 @@ unchanged by the tab's existence.
   act on the templates store while the tab is shown. `WorkflowTemplateFilterMenu`
   is Mine's cascade with ComfyUI's own template filters (Category, its side
   list's: the index's categories, then Partner Nodes, then one per node pack;
-  Model; Use case, its tags; Runs on) and PixlStash's Readiness, each a pick-one
-  list as every PixlStash filter is; the name matches title, description, tags,
+  Model; Use case, its tags; Runs on) and PixlStash's Readiness. Unlike every
+  other PixlStash filter menu, each takes several values, as ComfyUI's do: a
+  template stays when it matches any ticked value of every filter in use, and
+  the strip has one chip per value. The name matches title, description, tags,
   model names and file names. The sort and filters, not the name text, are
   remembered per browser (`pixlstash:workflowTemplatesView`, versioned, each
   value checked on reading). Partner API templates are hidden by a default the
   strip shows as a chip with its count, so they are never left out silently,
   and shown they wear ComfyUI's own "Partner API" crown badge and "Runs with
-  credits", after their providers. The strip leads with "Downloaded from your ComfyUI at
-  <url>", so nothing on the tab reads as the owner's own work.
+  credits", after their providers. The strip leads with a ComfyUI mark wearing
+  a connected dot, so nothing on the tab reads as the owner's own work while
+  the chips keep the room: its tooltip names the address, and a click opens a
+  small panel with the address and *Read the templates again* (`refresh`).
 - **Readiness is one function** (`templateReadiness`): `partner`, else
   `pack_not_loaded` when the server says the pack's nodes did not load, else
   `ready` when the shelf holds every file the loaders name (by file name, the

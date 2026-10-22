@@ -1887,7 +1887,7 @@ describe("Mine | Templates", () => {
       .map((card) => card.attributes("aria-label"));
     expect(titles).toEqual(["Ready one, ComfyUI template, Ready to run"]);
     expect(wrapper.text()).toContain("hidden (1)");
-    expect(wrapper.find('[data-testid="wtp-source"]').text()).toContain(
+    expect(wrapper.find('[data-testid="wtp-source"]').attributes("aria-label")).toContain(
       "http://127.0.0.1:8188",
     );
 

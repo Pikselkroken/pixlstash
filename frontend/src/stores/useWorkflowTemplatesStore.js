@@ -39,10 +39,11 @@ export const READINESS_LABELS = {
 };
 
 /**
- * The filters ComfyUI's own template browser has, as pick-one lists: its
- * category list (its categories, then Partner Nodes, then one per node pack,
- * with ComfyUI's own ids for the last two), Model, Use case (its tags) and
- * Runs on.
+ * The filters ComfyUI's own template browser has, and as it has them: several
+ * values each, a template kept when it matches any value of every filter in
+ * use. Its category list (its categories, then Partner Nodes, then one per
+ * node pack, with ComfyUI's own ids for the last two), Model, Use case (its
+ * tags) and Runs on; Readiness is PixlStash's own, picked the same way.
  */
 export const PARTNER_CATEGORY = "partner-nodes";
 const PACK_CATEGORY_PREFIX = "extension-";
@@ -134,19 +135,22 @@ export function missingCount(template) {
   return (template.files ?? []).filter((file) => !file.present).length;
 }
 
-const DEFAULT_FILTERS = {
+const DEFAULT_FILTERS = Object.freeze({
   name: "",
-  category: null,
-  model: null,
-  useCase: null,
-  runsOn: null,
-  readiness: null,
+  category: [],
+  model: [],
+  useCase: [],
+  runsOn: [],
+  readiness: [],
   showPartner: false,
-};
+});
+
+/** The filters that pick several values, in the strip's order. */
+export const LIST_FILTERS = ["category", "model", "useCase", "runsOn", "readiness"];
 
 // The sort and filters, remembered per browser as the model shelf's view is.
 const VIEW_KEY = "pixlstash:workflowTemplatesView";
-const VIEW_SCHEMA_VERSION = 2;
+const VIEW_SCHEMA_VERSION = 3;
 
 /**
  * The remembered sort and filters, each one dropped that this build would not
@@ -161,20 +165,23 @@ function storedView() {
     console.warn(`[templates] could not read ${VIEW_KEY}`, err);
   }
   const ok = parsed?.v === VIEW_SCHEMA_VERSION;
-  const pick = (value, allowed) => (ok && allowed(value) ? value : null);
+  // Category, model and use case are named by ComfyUI: whatever it lists next
+  // time decides whether they still match anything.
+  const allowed = {
+    category: (c) => typeof c === "string",
+    model: (m) => typeof m === "string",
+    useCase: (u) => typeof u === "string",
+    runsOn: (r) => r in RUNS_ON_LABELS,
+    readiness: (r) => READINESS.includes(r),
+  };
+  const filters = { ...DEFAULT_FILTERS, showPartner: ok && parsed.showPartner === true };
+  for (const key of LIST_FILTERS) {
+    const value = ok && Array.isArray(parsed[key]) ? parsed[key] : [];
+    filters[key] = [...new Set(value.filter(allowed[key]))];
+  }
   return {
-    sortKey: pick(parsed?.sortKey, (k) => TEMPLATE_SORT_KEYS.includes(k)) ?? "readiness",
-    filters: {
-      ...DEFAULT_FILTERS,
-      // Named by ComfyUI: whatever it lists next time decides whether they
-      // still match anything.
-      category: pick(parsed?.category, (c) => typeof c === "string"),
-      model: pick(parsed?.model, (m) => typeof m === "string"),
-      useCase: pick(parsed?.useCase, (u) => typeof u === "string"),
-      runsOn: pick(parsed?.runsOn, (r) => r in RUNS_ON_LABELS),
-      readiness: pick(parsed?.readiness, (r) => READINESS.includes(r)),
-      showPartner: ok && parsed.showPartner === true,
-    },
+    sortKey: ok && TEMPLATE_SORT_KEYS.includes(parsed.sortKey) ? parsed.sortKey : "readiness",
+    filters,
   };
 }
 
@@ -307,9 +314,9 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     const f = filters.value;
     return (
       !f.showPartner &&
-      f.category !== PARTNER_CATEGORY &&
-      f.runsOn !== "api" &&
-      f.readiness !== "partner"
+      !f.category.includes(PARTNER_CATEGORY) &&
+      !f.runsOn.includes("api") &&
+      !f.readiness.includes("partner")
     );
   });
 
@@ -318,11 +325,14 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     const words = f.name.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return templates.value.filter((template) => {
       if (template.source === "partner" && partnersHidden.value) return false;
-      if (f.category && !inCategory(template, f.category)) return false;
-      if (f.model && !(template.model_names ?? []).includes(f.model)) return false;
-      if (f.useCase && !(template.tags ?? []).includes(f.useCase)) return false;
-      if (f.runsOn && runsOn(template) !== f.runsOn) return false;
-      if (f.readiness && templateReadiness(template) !== f.readiness) {
+      const misses = (key, matches) => f[key].length && !f[key].some(matches);
+      if (misses("category", (id) => inCategory(template, id))) return false;
+      if (misses("model", (id) => (template.model_names ?? []).includes(id))) {
+        return false;
+      }
+      if (misses("useCase", (id) => (template.tags ?? []).includes(id))) return false;
+      if (misses("runsOn", (id) => runsOn(template) === id)) return false;
+      if (misses("readiness", (id) => templateReadiness(template) === id)) {
         return false;
       }
       if (!words.length) return true;
@@ -372,6 +382,14 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     filters.value = { ...filters.value, ...patch };
   }
 
+  /** Add *id* to one of the list filters, or take it out. */
+  function toggleFilter(key, id) {
+    const list = filters.value[key];
+    setFilters({
+      [key]: list.includes(id) ? list.filter((v) => v !== id) : [...list, id],
+    });
+  }
+
   function clearFilters() {
     filters.value = { ...DEFAULT_FILTERS };
   }
@@ -392,28 +410,23 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         remove: () => setFilters({ name: "" }),
       });
     }
-    const values = {
+    // One chip per value, each taking out only its own.
+    const labels = {
       category: categoryLabel,
       model: (id) => id,
       useCase: (id) => id,
       runsOn: (id) => RUNS_ON_LABELS[id],
+      readiness: (id) => READINESS_LABELS[id] ?? id,
     };
-    for (const [key, label] of Object.entries(values)) {
-      if (!f[key]) continue;
-      chips.push({
-        key,
-        kind: FILTER_KIND_LABELS[key],
-        value: label(f[key]),
-        remove: () => setFilters({ [key]: null }),
-      });
-    }
-    if (f.readiness) {
-      chips.push({
-        key: "readiness",
-        kind: "Readiness",
-        value: READINESS_LABELS[f.readiness] ?? f.readiness,
-        remove: () => setFilters({ readiness: null }),
-      });
+    for (const key of LIST_FILTERS) {
+      for (const id of f[key]) {
+        chips.push({
+          key: `${key}:${id}`,
+          kind: FILTER_KIND_LABELS[key],
+          value: labels[key](id),
+          remove: () => toggleFilter(key, id),
+        });
+      }
     }
     if (partnersHidden.value && partnerCount.value) {
       chips.push({
@@ -534,6 +547,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     filterOfLabel,
     fetchTemplates,
     setFilters,
+    toggleFilter,
     clearFilters,
     select,
     selectRange,

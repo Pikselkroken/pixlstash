@@ -23,7 +23,7 @@ describe("WorkflowTemplateFilterMenu", () => {
     wrapper.unmount();
   });
 
-  it("finds a category by search and filters by it, as ComfyUI's list does", async () => {
+  it("finds categories by search and ticks several, as ComfyUI's list does", async () => {
     const store = useWorkflowTemplatesStore();
     store.templates = [
       { key: "default/a", source: "builtin", categories: ["Image"] },
@@ -38,12 +38,20 @@ describe("WorkflowTemplateFilterMenu", () => {
     await wrapper.find('[data-kind="category"]').trigger("click");
     await flushPromises();
     const sub = () => wrapper.find('[data-testid="wtf-sub-category"]');
-    const labels = () => sub().findAll('[role="radio"]').map((row) => row.text());
-    expect(labels()).toEqual(["Any3", "Image1", "Video1", "Video Tools1"]);
+    const rows = () => sub().findAll('[data-testid="wtf-option"]');
+    const labels = () => rows().map((row) => row.text());
+    expect(labels()).toEqual(["Image1", "Video1", "Video Tools1"]);
     await sub().find("input").setValue("video");
-    expect(labels()).toEqual(["Any3", "Video1", "Video Tools1"]);
-    await sub().findAll('[role="radio"]')[1].trigger("click");
-    expect(store.filters.category).toBe("Video");
+    expect(labels()).toEqual(["Video1", "Video Tools1"]);
+    // Several at once, as ComfyUI's own.
+    await rows()[0].find("input").setValue(true);
+    await rows()[1].find("input").setValue(true);
+    expect(store.filters.category).toEqual(["Video", "Video Tools"]);
+    // A ticked row stays whatever is typed.
+    await sub().find("input").setValue("image");
+    expect(labels()).toEqual(["Image1", "Video1", "Video Tools1"]);
+    await rows()[1].find("input").setValue(false);
+    expect(store.filters.category).toEqual(["Video Tools"]);
     wrapper.unmount();
   });
 });

@@ -112,11 +112,11 @@ describe("the Templates tab's list", () => {
     const store = useWorkflowTemplatesStore();
     store.sortKey = "newest";
     store.setFilters({
-      category: "Video",
-      model: "Wan",
-      useCase: "Image to Video",
-      runsOn: "comfyui",
-      readiness: "missing",
+      category: ["Video", "Image"],
+      model: ["Wan"],
+      useCase: ["Image to Video"],
+      runsOn: ["comfyui"],
+      readiness: ["missing"],
       showPartner: true,
       name: "flux",
     });
@@ -129,11 +129,11 @@ describe("the Templates tab's list", () => {
     expect(next.sortKey).toBe("newest");
     expect(next.filters).toEqual({
       name: "",
-      category: "Video",
-      model: "Wan",
-      useCase: "Image to Video",
-      runsOn: "comfyui",
-      readiness: "missing",
+      category: ["Video", "Image"],
+      model: ["Wan"],
+      useCase: ["Image to Video"],
+      runsOn: ["comfyui"],
+      readiness: ["missing"],
       showPartner: true,
     });
   });
@@ -141,15 +141,22 @@ describe("the Templates tab's list", () => {
   it("starts from the defaults on a blob it cannot trust", () => {
     localStorage.setItem(
       "pixlstash:workflowTemplatesView",
-      JSON.stringify({ v: 2, sortKey: "bogus", runsOn: "nowhere", readiness: "missing" }),
+      JSON.stringify({
+        v: 3,
+        sortKey: "bogus",
+        runsOn: ["nowhere", "api"],
+        readiness: ["missing", 7],
+        model: "not a list",
+      }),
     );
     const store = useWorkflowTemplatesStore();
     expect(store.sortKey).toBe("readiness");
-    expect(store.filters.runsOn).toBe(null);
-    expect(store.filters.readiness).toBe("missing");
+    expect(store.filters.runsOn).toEqual(["api"]);
+    expect(store.filters.readiness).toEqual(["missing"]);
+    expect(store.filters.model).toEqual([]);
     localStorage.setItem("pixlstash:workflowTemplatesView", "{not json");
     setActivePinia(createPinia());
-    expect(useWorkflowTemplatesStore().filters.readiness).toBe(null);
+    expect(useWorkflowTemplatesStore().filters.readiness).toEqual([]);
   });
 
   it("sorts by readiness: ready first, one that names its files ahead of one that names none, then fewest missing; partner hidden by default", async () => {
@@ -177,23 +184,23 @@ describe("the Templates tab's list", () => {
 
   it("filters as ComfyUI does: category, model, use case, runs on", async () => {
     const store = await loaded();
-    store.setFilters({ category: "Video" });
+    store.setFilters({ category: ["Video"] });
     expect(keys(store)).toEqual(["one-missing"]);
     // Filed under two categories, found under either.
-    store.setFilters({ category: "Product & Ads" });
+    store.setFilters({ category: ["Product & Ads"] });
     expect(keys(store)).toEqual(["ready"]);
-    store.setFilters({ category: "extension-Pack" });
+    store.setFilters({ category: ["extension-Pack"] });
     expect(keys(store)).toEqual(["pack"]);
-    store.setFilters({ category: "partner-nodes" });
+    store.setFilters({ category: ["partner-nodes"] });
     expect(keys(store)).toEqual(["partner"]);
     store.clearFilters();
-    store.setFilters({ model: "Flux" });
+    store.setFilters({ model: ["Flux"] });
     expect(keys(store)).toEqual(["ready"]);
     store.clearFilters();
-    store.setFilters({ useCase: "Image to Video" });
+    store.setFilters({ useCase: ["Image to Video"] });
     expect(keys(store)).toEqual(["one-missing"]);
     store.clearFilters();
-    store.setFilters({ runsOn: "api" });
+    store.setFilters({ runsOn: ["api"] });
     expect(keys(store)).toEqual(["partner"]);
     expect(store.filterChips.map((chip) => chip.value)).toEqual([
       "External or Remote API",
@@ -213,9 +220,27 @@ describe("the Templates tab's list", () => {
     ]);
   });
 
+  it("keeps a template matching any value of a filter, and every filter at once", async () => {
+    const store = await loaded();
+    store.setFilters({ category: ["Video", "Product & Ads"] });
+    expect(keys(store)).toEqual(["ready", "one-missing"]);
+    store.setFilters({ model: ["Wan"] });
+    expect(keys(store)).toEqual(["one-missing"]);
+    // One chip per value, each taking out only its own.
+    expect(store.filterChips.map((chip) => chip.value)).toEqual([
+      "Video",
+      "Product & Ads",
+      "Wan",
+      "hidden (1)",
+    ]);
+    store.filterChips[0].remove();
+    expect(store.filters.category).toEqual(["Product & Ads"]);
+    expect(keys(store)).toEqual([]);
+  });
+
   it("filters by readiness and words in tags and file names", async () => {
     const store = await loaded();
-    store.setFilters({ readiness: "missing" });
+    store.setFilters({ readiness: ["missing"] });
     expect(keys(store)).toEqual(["one-missing", "also-missing"]);
     store.clearFilters();
     store.setFilters({ name: "image to video" });
@@ -224,10 +249,10 @@ describe("the Templates tab's list", () => {
     expect(keys(store)).toEqual(["one-missing"]);
     store.clearFilters();
     // Asking for partner templates by readiness, which would otherwise always come back empty.
-    store.setFilters({ readiness: "partner" });
+    store.setFilters({ readiness: ["partner"] });
     expect(keys(store)).toEqual(["partner"]);
     // Nor does the chip then claim they are hidden.
-    expect(store.filterChips.map((chip) => chip.key)).toEqual(["readiness"]);
+    expect(store.filterChips.map((chip) => chip.key)).toEqual(["readiness:partner"]);
   });
 
   it("sorts by model size, smallest first, a template that gives none last", async () => {

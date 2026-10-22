@@ -1,27 +1,50 @@
 <template>
   <div class="wtp" role="tabpanel" aria-labelledby="wfv-tab-templates">
-    <!-- Where the list comes from, said before anything else on the tab: none
-         of it is the owner's own work until it is added. -->
+    <!-- Where the list comes from, first on the strip: none of it is the
+         owner's own work until it is added. A ComfyUI mark with a connected
+         dot, so the strip keeps its room for the chips; the address and the
+         re-read are one hover and one click away. -->
     <div v-if="store.reachable && store.loaded" class="wtp-strip">
-      <span class="wtp-source" data-testid="wtp-source">
-        <ComfyuiIcon :size="14" />
-        <!-- One run of text, so the address sits on the label's baseline: as
-             a flex item of its own the mono face centres on its own box. -->
-        <span
-          >Downloaded from your ComfyUI at
-          <span class="wtp-url">{{ store.comfyuiUrl }}</span></span
-        >
-      </span>
-      <AppButton
-        size="sm"
-        variant="ghost"
-        icon-left="refresh"
-        icon-only
-        tooltip="Read the templates from ComfyUI again"
-        :loading="store.loading"
-        data-testid="wtp-reread"
-        @click="store.fetchTemplates({ refresh: true })"
-      />
+      <v-menu location="bottom start" :close-on-content-click="false">
+        <template #activator="{ props: menuProps }">
+          <button
+            v-bind="menuProps"
+            type="button"
+            class="wtp-link"
+            :aria-label="`Templates from your ComfyUI at ${store.comfyuiUrl}`"
+            data-testid="wtp-source"
+          >
+            <ComfyuiIcon :size="16" />
+            <span class="wtp-link-dot" aria-hidden="true"></span>
+            <Tooltip
+              :text="`Templates from your ComfyUI at ${store.comfyuiUrl}`"
+              activator="parent"
+              :describe="false"
+            />
+          </button>
+        </template>
+        <div class="tbm wtp-link-menu" data-testid="wtp-link-menu">
+          <div class="tbm-header">
+            <ComfyuiIcon :size="16" />
+            <span class="tbm-title">Connected to ComfyUI</span>
+          </div>
+          <div class="tbm-section">
+            <p class="wtp-link-text">
+              Templates are read from your ComfyUI at
+              <span class="wtp-url">{{ store.comfyuiUrl }}</span>
+            </p>
+            <AppButton
+              size="sm"
+              variant="outline"
+              icon-left="refresh"
+              :loading="store.loading"
+              data-testid="wtp-reread"
+              @click="store.fetchTemplates({ refresh: true })"
+              >Read the templates again</AppButton
+            >
+          </div>
+        </div>
+      </v-menu>
       <FilterStrip
         inline
         class="wtp-chips"
@@ -147,13 +170,14 @@
  * Add, which the view carries out (`add`), since it lands on the Mine tab.
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { VIcon } from "vuetify/components";
+import { VIcon, VMenu } from "vuetify/components";
 
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import WorkflowTemplateCard from "../widgets/WorkflowTemplateCard.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import FilterStrip from "./FilterStrip.vue";
 
 const props = defineProps({
@@ -294,12 +318,48 @@ function onKeyDown(event) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wtp-source {
+.wtp-link {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  justify-content: center;
   flex: none;
-  white-space: nowrap;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  border-radius: var(--radius-sm);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wtp-link:hover {
+  background: var(--hover-wash);
+}
+
+.wtp-link:focus-visible {
+  box-shadow: var(--focus-ring-inset);
+  outline: none;
+}
+
+/* The connected dot: the attention dot's size, in the success hue, ringed in
+   the strip's ground so it reads apart from the mark. */
+.wtp-link-dot {
+  position: absolute;
+  right: var(--space-1);
+  bottom: var(--space-1);
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-success));
+  box-shadow: 0 0 0 2px rgb(var(--v-theme-background));
+}
+
+.wtp-link-menu {
+  width: var(--filter-menu-w);
+  max-width: 94vw;
+}
+
+.wtp-link-text {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
 }
 
 .wtp-url {

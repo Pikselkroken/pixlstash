@@ -74,6 +74,16 @@
       >
         <div class="tbm-header">
           <span class="tbm-title">{{ KINDS[sub].label }}</span>
+          <span class="tbm-spacer"></span>
+          <button
+            v-if="sub !== 'showPartner'"
+            class="tbm-ghost"
+            type="button"
+            :disabled="!store.filters[sub].length"
+            @click="store.setFilters({ [sub]: [] })"
+          >
+            Clear
+          </button>
         </div>
 
         <div v-if="SEARCHED.includes(sub)" class="tbm-section">
@@ -91,22 +101,44 @@
         </div>
 
         <div class="tbm-section">
-          <div :class="{ 'wtf-scroll': SEARCHED.includes(sub) }">
-            <OptionRows
-              :options="rows(sub)"
-              :model-value="store.filters[sub]"
-              :aria-label="KINDS[sub].label"
-              @update:model-value="(id) => store.setFilters({ [sub]: id })"
+          <OptionRows
+            v-if="sub === 'showPartner'"
+            :options="partnerRows"
+            :model-value="store.filters.showPartner"
+            :aria-label="KINDS.showPartner.label"
+            @update:model-value="(id) => store.setFilters({ showPartner: id })"
+          >
+            <template #meta="{ option }">
+              <span class="fm-n">{{ option.count }}</span>
+            </template>
+          </OptionRows>
+          <!-- Several at once, as ComfyUI's own: a template is kept when it
+               matches any ticked row. -->
+          <div
+            v-else
+            :class="{ 'wtf-scroll': SEARCHED.includes(sub) }"
+            role="group"
+            :aria-label="KINDS[sub].label"
+          >
+            <label
+              v-for="option in rows(sub)"
+              :key="option.id"
+              class="tbm-check fm-check"
+              data-testid="wtf-option"
             >
-              <template #meta="{ option }">
-                <span v-if="option.count != null" class="fm-n">{{
-                  option.count
-                }}</span>
-              </template>
-            </OptionRows>
+              <input
+                type="checkbox"
+                :checked="store.filters[sub].includes(option.id)"
+                @change="store.toggleFilter(sub, option.id)"
+              />
+              <span class="fm-check-label">{{ option.label }}</span>
+              <span v-if="option.count != null" class="fm-n">{{
+                option.count
+              }}</span>
+            </label>
           </div>
           <p
-            v-if="SEARCHED.includes(sub) && query.trim() && rows(sub).length === 1"
+            v-if="SEARCHED.includes(sub) && query.trim() && !rows(sub).length"
             class="fm-help"
           >
             No {{ KINDS[sub].noun }} matches.
@@ -122,7 +154,8 @@
  * The Templates tab's Filters menu (#2000): ComfyUI's own template filters
  * (its category list, Model, Use case, Runs on) and PixlStash's Readiness, on
  * the Mine tab's cascade (`WorkflowFilterMenu`): a root row per filter, each
- * opening a pick-one submenu beside it, the long ones with a search field.
+ * opening a submenu beside it, the long ones with a search field. Unlike
+ * Mine's pick-one lists, each takes several values, as ComfyUI's do.
  *
  * Partner API templates are hidden by a default the strip shows as a chip
  * with its count, so they are never left out silently; the last row here is
@@ -210,52 +243,42 @@ watch(sub, () => {
   query.value = "";
 });
 
-const total = computed(() => store.templates.length);
-
+/** A root row's count of what it has ticked, or Shown for the switch. */
 function rowValue(kind) {
   if (kind === "showPartner") return store.filters.showPartner ? "Shown" : "";
-  return store.filters[kind] == null ? "" : "1";
+  return store.filters[kind].length || "";
 }
 
+const partnerRows = computed(() => [
+  { id: false, label: "Hidden", count: store.partnerCount },
+  { id: true, label: "Shown", count: store.partnerCount },
+]);
+
 /**
- * One submenu's radio rows, led by the row that turns the filter off. The
- * chosen row stays whatever is typed: a radiogroup whose value is not among
- * its rows puts its tab stop on Any, and the next arrow would then clear the
- * filter the reader never touched.
+ * One submenu's rows. A ticked row stays whatever is typed, so a search
+ * never hides what is filtering the grid.
  */
 function rows(kind) {
-  const any = { id: null, label: "Any", count: total.value };
-  if (kind === "readiness") {
-    return [
-      any,
-      ...READINESS.filter((id) => id !== "partner").map((id) => ({
-        id,
-        label: READINESS_LABELS[id],
-      })),
-    ];
-  }
-  if (kind === "showPartner") {
-    return [
-      { id: false, label: "Hidden", count: store.partnerCount },
-      { id: true, label: "Shown", count: store.partnerCount },
-    ];
-  }
-  const options = store.filterOptions[kind] ?? [];
+  const options =
+    kind === "readiness"
+      ? READINESS.filter((id) => id !== "partner").map((id) => ({
+          id,
+          label: READINESS_LABELS[id],
+        }))
+      : (store.filterOptions[kind] ?? []);
   const q = query.value.trim().toLowerCase();
-  const chosen = store.filters[kind];
-  return [
-    any,
-    ...(q
-      ? options.filter(
-          (option) =>
-            option.id === chosen || option.label.toLowerCase().includes(q),
-        )
-      : options),
-  ];
+  if (!q) return options;
+  const ticked = store.filters[kind];
+  return options.filter(
+    (option) =>
+      ticked.includes(option.id) || option.label.toLowerCase().includes(q),
+  );
 }
 
 function focusChosen() {
-  subRef.value?.querySelector('[role="radio"][tabindex="0"]')?.focus();
+  subRef.value
+    ?.querySelector('input[type="checkbox"], [role="radio"][tabindex="0"]')
+    ?.focus();
 }
 
 function stepRow(kind, step) {
