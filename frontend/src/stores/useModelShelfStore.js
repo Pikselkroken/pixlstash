@@ -3713,13 +3713,14 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   );
 
   /**
-   * What a favourite verb or H acts on. Sets when any set is named (a hand-made
-   * or missing-base card selected, or one the caller holds from the grid), else
-   * the selected models by hash - a run by its cover, which is the row the
-   * selection holds. Unhashed models have no key and are left out.
+   * What a favourite verb or H acts on: one group per kind. The named sets (a
+   * hand-made or missing-base card selected, or one the caller holds from the
+   * grid) and the selected models by hash - a run by its cover, which is the
+   * row the selection holds. Unhashed models have no key and are left out, and
+   * a kind with nothing keyed is dropped, so `[]` means nothing to favourite.
    *
    * @param {Array<string>} [cardKeys] - evidence cards the grid says are picked.
-   * @returns {{kind: "set"|"model", keys: Array<string>}}
+   * @returns {Array<{kind: "set"|"model", keys: Array<string>}>}
    */
   function favouriteTargets(cardKeys = []) {
     const sets = [
@@ -3729,15 +3730,37 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         ...cardKeys,
       ]),
     ];
-    if (sets.length) return { kind: "set", keys: sets };
-    const models = selectedRows.value.map((row) => row.sha256).filter(Boolean);
-    return { kind: "model", keys: [...new Set(models)] };
+    const models = [
+      ...new Set(selectedRows.value.map((row) => row.sha256).filter(Boolean)),
+    ];
+    return [
+      { kind: "set", keys: sets },
+      { kind: "model", keys: models },
+    ].filter((group) => group.keys.length);
   }
 
-  /** Favourite the targets, or unfavourite them when every one already is. */
+  /** True when there is something keyed and every one is already a favourite. */
+  function allFavouriteTargets(targets) {
+    const groups = [targets].flat();
+    return (
+      groups.length > 0 &&
+      groups.every((group) => favouritesStore.allFavourite(group.kind, group.keys))
+    );
+  }
+
+  /**
+   * Favourite the targets, or unfavourite them when every one already is. One
+   * group (`{kind, keys}`) or several; a mixed selection is decided as one.
+   */
   function toggleFavourites(targets) {
-    if (!targets.keys.length) return Promise.resolve();
-    return favouritesStore.toggle(targets.kind, targets.keys);
+    const groups = [targets].flat().filter((group) => group.keys.length);
+    if (!groups.length) return Promise.resolve();
+    const on = !allFavouriteTargets(groups);
+    return Promise.all(
+      groups.map((group) =>
+        favouritesStore.setFavourite(group.kind, group.keys, on),
+      ),
+    );
   }
 
   /**
@@ -4624,6 +4647,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     favouriteModelCount,
     isFavouriteRow,
     favouriteTargets,
+    allFavouriteTargets,
     toggleFavourites,
     baseModelCompletions,
     loadBaseModelCompletions,

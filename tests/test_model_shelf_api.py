@@ -1618,7 +1618,8 @@ def test_favourites_refuse_an_unknown_kind_and_an_empty_write(shelf_env):
 def test_a_share_token_cannot_write_a_favourite(shelf_env):
     """The PUT's negative direction, beside the GET's in `_shelf_paths`: both
     token shapes are refused and nothing is written, with the owner's own write
-    as the positive control."""
+    as the positive control. Every non-owner token is READ, so this 403 is the
+    method belt in `auth.py`; the gate's OWNER_ONLY is the belt behind it."""
     scoped = _mint(
         shelf_env.owner,
         "favourite character token",

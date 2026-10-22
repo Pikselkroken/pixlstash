@@ -10365,7 +10365,7 @@ like every shelf table), read and written by
   purges a key: one that names nothing today is kept, so a favourite comes
   back with its model. The server stores the choice only; the ranking
   (favourites lead inside each group, never across one) is the client's
-  (`useFavouritesStore.favouritesFirst`, frontend §4).
+  (`favouritesFirst`, exported beside `useFavouritesStore` in `stores/useFavouritesStore.js`, frontend §4).
 - **Clone with new models reads them first.** `propose_companions` lists, ahead
   of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
   checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,

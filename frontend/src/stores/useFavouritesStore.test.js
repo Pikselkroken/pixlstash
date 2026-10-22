@@ -78,4 +78,35 @@ describe("useFavouritesStore", () => {
     expect(useNoticeStore().notices.map((n) => n.level)).toContain("error");
     warn.mockRestore();
   });
+
+  it("puts back only what the refused write changed", async () => {
+    const store = useFavouritesStore();
+    let refuse;
+    setFavourites.mockImplementationOnce(
+      () => new Promise((_, reject) => (refuse = reject)),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failing = store.setFavourite("model", ["sha-a"], true);
+    setFavourites.mockResolvedValueOnce(answer({ set: ["hand:1"], model: ["sha-a"] }));
+    await store.setFavourite("set", ["hand:1"], true);
+    refuse(new Error("offline"));
+    await failing;
+    expect(store.isFavourite("model", "sha-a")).toBe(false);
+    expect(store.isFavourite("set", "hand:1")).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("does not let an older answer land over a newer write", async () => {
+    const store = useFavouritesStore();
+    let first;
+    setFavourites.mockImplementationOnce(
+      () => new Promise((resolve) => (first = resolve)),
+    );
+    const older = store.setFavourite("workflow", ["w1"], true);
+    setFavourites.mockResolvedValueOnce(answer());
+    await store.setFavourite("workflow", ["w1"], false);
+    first(answer({ workflow: ["w1"] }));
+    await older;
+    expect(store.isFavourite("workflow", "w1")).toBe(false);
+  });
 });

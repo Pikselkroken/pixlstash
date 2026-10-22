@@ -288,7 +288,7 @@ import { computed, h, onMounted, onUnmounted, ref } from "vue";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-import { useFavouritesStore, favouriteVerb } from "../../stores/useFavouritesStore";
+import { favouriteVerb } from "../../stores/useFavouritesStore";
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -388,20 +388,14 @@ const single = computed(() => store.selectedRows.length === 1);
 
 // ── Favourites (#1578) ─────────────────────────────────────────────────────
 
-const favourites = useFavouritesStore();
 /** What the verb acts on: the picked cards and the context card, or the rows. */
 const favouriteTargets = computed(() =>
   store.favouriteTargets([...props.cardKeys, contextSetKey.value].filter(Boolean)),
 );
-const favouritable = computed(() => favouriteTargets.value.keys.length > 0);
+const favouritable = computed(() => favouriteTargets.value.length > 0);
 /** Unfavourite only when every keyed item already is one. */
-const favouriteOn = computed(
-  () =>
-    favouritable.value &&
-    favourites.allFavourite(
-      favouriteTargets.value.kind,
-      favouriteTargets.value.keys,
-    ),
+const favouriteOn = computed(() =>
+  store.allFavouriteTargets(favouriteTargets.value),
 );
 const favouriteLabel = computed(() => favouriteVerb(favouriteOn.value));
 const favouriteTitle = computed(() =>

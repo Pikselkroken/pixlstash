@@ -58,6 +58,8 @@ export const useFavouritesStore = defineStore("favourites", () => {
   const loaded = ref(false);
   let epoch = 0;
   let inFlight = null;
+  // Writes, numbered as they are sent: only the newest answer is applied.
+  let writeSeq = 0;
 
   const byKind = computed(() =>
     Object.fromEntries(
@@ -110,9 +112,18 @@ export const useFavouritesStore = defineStore("favourites", () => {
     return inFlight;
   }
 
+  /** Mark or unmark keys of one kind locally, without asking the server. */
+  function mark(kind, list, on) {
+    const mine = new Set(keys.value[kind]);
+    for (const key of list) on ? mine.add(key) : mine.delete(key);
+    keys.value = { ...keys.value, [kind]: [...mine].sort() };
+  }
+
   /**
-   * Mark or unmark keys. Drawn at once, then replaced by the server's answer;
-   * on a refusal the previous marks come back and the owner is told.
+   * Mark or unmark keys. Drawn at once, then replaced by the server's answer
+   * when no newer write has been sent since (answers can land out of order).
+   * On a refusal only the keys this call changed go back, and the owner is
+   * told.
    *
    * @param {"model"|"workflow"|"set"} kind
    * @param {Array<string>} list
@@ -123,18 +134,17 @@ export const useFavouritesStore = defineStore("favourites", () => {
       ...new Set((list ?? []).filter((k) => k != null && k !== "").map(String)),
     ];
     if (!own.length) return;
-    const before = keys.value;
-    const mine = new Set(before[kind]);
-    for (const key of own) on ? mine.add(key) : mine.delete(key);
-    keys.value = { ...before, [kind]: [...mine].sort() };
+    const changed = own.filter((key) => isFavourite(kind, key) !== on);
+    mark(kind, own, on);
     const started = epoch;
+    const seq = ++writeSeq;
     try {
       const body = await setFavourites(kind, own, on);
-      if (started === epoch) apply(body);
+      if (started === epoch && seq === writeSeq) apply(body);
     } catch (err) {
       console.warn(`[favourites] could not ${on ? "mark" : "unmark"}`, kind, own, err);
       if (started !== epoch) return;
-      keys.value = before;
+      mark(kind, changed, !on);
       useNoticeStore().push({
         level: "error",
         text: errorMessage(

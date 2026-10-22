@@ -627,12 +627,12 @@
           role="group"
           aria-label="Sort and size the columns"
         >
-          <!-- Matches `.shelf-row-ident`, which holds the mark and the ring.
-               There is nothing to name: the mark IS the row's identity and the
-               hidden `Model` columnheader already says so. -->
           <!-- The favourite column's track (#1578): the same 24px lead the rows
                draw before the mark, so the headings keep their left edges. -->
           <span class="shelf-head-fav" aria-hidden="true"></span>
+          <!-- Matches `.shelf-row-ident`, which holds the mark and the ring.
+               There is nothing to name: the mark IS the row's identity and the
+               hidden `Model` columnheader already says so. -->
           <span class="shelf-head-ident" aria-hidden="true"></span>
           <span class="shelf-head-col shelf-head-col--label">
             <button
@@ -2801,10 +2801,6 @@ function isFavouriteKey(event) {
   );
 }
 
-/**
- * H: the selection when there is one, else the focused row or card. On the set
- * grid the cards picked there count as the selection, as a set always has.
- */
 /** The evidence cards picked on the set grid, by key: a set, not a model. */
 const gridCardKeys = computed(() =>
   isSetGrid.value
@@ -2812,6 +2808,10 @@ const gridCardKeys = computed(() =>
     : [],
 );
 
+/**
+ * H: the selection when there is one, else the focused row or card. On the set
+ * grid the cards picked there count as the selection, as a set always has.
+ */
 function toggleFavouriteFromKey() {
   const selected =
     store.selectedRows.length ||
@@ -2837,10 +2837,15 @@ function toggleFavouriteFromKey() {
       const member = (row.members ?? []).slice(1).find(
         (m) => memberKey(row, m) === key,
       );
-      const hit = row.rowKey === key ? row : member;
-      if (hit) {
-        if (hit.sha256) {
-          store.toggleFavourites({ kind: "model", keys: [hit.sha256] });
+      // A member is favourited through its run, which is keyed by the cover.
+      if (row.rowKey === key || member) {
+        if (row.sha256) {
+          store.toggleFavourites({ kind: "model", keys: [row.sha256] });
+        } else {
+          useNoticeStore().push({
+            level: "info",
+            text: "This model can be a favourite once its hash is read.",
+          });
         }
         return;
       }
@@ -6123,9 +6128,6 @@ button.shelf-head-cell:hover {
   color: rgba(var(--v-theme-on-background), 0.7);
 }
 
-/* The identity slot, sized to hold the ring's widest treatment: the mark is
-   24px and a `thick`/`double` ring stands 6px off it on every side. Anything
-   narrower clips the ring on the two rows that most need it read. */
 /* The favourite column: the heart's own 24px box, reserved on every row so the
    column never moves, drawn only on the cover of a run and on a hover. */
 .shelf-row-fav {
@@ -6136,6 +6138,9 @@ button.shelf-head-cell:hover {
   flex: none;
 }
 
+/* The identity slot, sized to hold the ring's widest treatment: the mark is
+   24px and a `thick`/`double` ring stands 6px off it on every side. Anything
+   narrower clips the ring on the two rows that most need it read. */
 .shelf-row-ident {
   position: relative;
   display: flex;
