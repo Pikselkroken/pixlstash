@@ -93,6 +93,7 @@ from pixlstash.services.managed_model_store import (
     MANAGED_KIND,
     deletes_unclaimed_files,
     find_default_folder,
+    find_download_folder,
     relocatable_identity,
 )
 from pixlstash.services.model_folder_scanner import (
@@ -287,6 +288,14 @@ class ModelFolderUpdateRequest(BaseModel):
             "folder or the managed store only."
         ),
     )
+    is_download_target: Optional[bool] = Field(
+        default=None,
+        description=(
+            "`true` makes this the folder a model PixlStash downloads goes into "
+            "(the previous one stops being it); `false` hands the role back to "
+            "the default folder. A `user` folder or the managed store only."
+        ),
+    )
 
 
 class ModelFolderResponse(BaseModel):
@@ -354,6 +363,14 @@ class ModelFolderResponse(BaseModel):
             "file`, and a model moved in from the Downloads folder. Exactly one "
             "row says true while the managed store is registered: the one the "
             "owner marked, else the managed store."
+        ),
+    )
+    is_download_target: bool = Field(
+        default=False,
+        description=(
+            "Whether a model PixlStash downloads for a workflow goes here. "
+            "Exactly one row says true while a default folder exists: the one "
+            "the owner marked, else the default folder."
         ),
     )
     last_checked: Optional[str] = Field(
@@ -824,7 +841,8 @@ def create_router(server) -> APIRouter:
     def _fetch_folder(folder_id: int) -> dict:
         row = server.hub.fetchone(
             "SELECT id, path, kind, owner, movable, host_path, delete_after_import, "
-            "is_default, last_checked, created_at FROM model_folder WHERE id = ?",
+            "is_default, is_download_target, last_checked, created_at FROM model_folder "
+            "WHERE id = ?",
             (folder_id,),
         )
         if row is None:
@@ -843,6 +861,10 @@ def create_router(server) -> APIRouter:
         row = find_default_folder(server.hub)
         return int(row["id"]) if row is not None else None
 
+    def _download_folder_id() -> Optional[int]:
+        row = find_download_folder(server.hub)
+        return int(row["id"]) if row is not None else None
+
     def _to_response(
         row: dict,
         file_count: int = 0,
@@ -850,9 +872,12 @@ def create_router(server) -> APIRouter:
         scan: Optional[tuple[Optional[str], Optional[str]]] = None,
         stability_matrix_roots: Optional[list[str]] = None,
         default_id: Optional[int] = None,
+        download_id: Optional[int] = None,
     ) -> ModelFolderResponse:
         if default_id is None:
             default_id = _default_folder_id()
+        if download_id is None:
+            download_id = _download_folder_id()
         delete_after_import = row["delete_after_import"]
         scan_status, scan_error = (
             scan if scan is not None else _scan_state(int(row["id"]))
@@ -871,6 +896,7 @@ def create_router(server) -> APIRouter:
                 None if delete_after_import is None else bool(delete_after_import)
             ),
             is_default=int(row["id"]) == default_id,
+            is_download_target=int(row["id"]) == download_id,
             last_checked=row["last_checked"],
             created_at=row["created_at"],
             file_count=file_count,
@@ -893,7 +919,8 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         rows = server.hub.fetchall(
             "SELECT id, path, kind, owner, movable, host_path, delete_after_import, "
-            "is_default, last_checked, created_at FROM model_folder ORDER BY id"
+            "is_default, is_download_target, last_checked, created_at FROM model_folder "
+            "ORDER BY id"
         )
         # Scan state before the aggregates, never after. A scan's task flips to
         # completed only once it has written its rows, so reading the counts
@@ -907,6 +934,7 @@ def create_router(server) -> APIRouter:
         # Once per list, not per row: the dialog polls this every few seconds.
         stability_matrix_roots = _stability_matrix_roots()
         default_id = _default_folder_id()
+        download_id = _download_folder_id()
         return ModelFolderListResponse(
             folders=[
                 _to_response(
@@ -916,6 +944,7 @@ def create_router(server) -> APIRouter:
                     scans[int(row["id"])],
                     stability_matrix_roots,
                     default_id,
+                    download_id,
                 )
                 for row in rows
             ]
@@ -1053,14 +1082,31 @@ def create_router(server) -> APIRouter:
         if payload.delete_after_import is not None:
             assignments.append("delete_after_import = ?")
             params.append(int(payload.delete_after_import))
-        if payload.is_default:
+        if payload.is_default or payload.is_download_target:
             _check_default_eligible(folder)
         # One transaction for the whole body, so a write that fails part-way
         # (a locked database) leaves none of it applied.
-        if assignments or payload.is_default is not None:
+        marks = (payload.is_default, payload.is_download_target)
+        if assignments or any(mark is not None for mark in marks):
             with server.hub.transaction() as conn:
                 if payload.is_default is not None:
                     _apply_default(conn, folder, payload.is_default)
+                if payload.is_download_target is not None:
+                    # Cleared first, so the partial unique index never sees
+                    # two. Unlike the default, the mark is stored on the
+                    # managed store too: the fallback is the default folder,
+                    # which the owner may move somewhere else later.
+                    if payload.is_download_target or folder["is_download_target"]:
+                        conn.execute(
+                            "UPDATE model_folder SET is_download_target = 0 "
+                            "WHERE is_download_target = 1"
+                        )
+                    if payload.is_download_target:
+                        conn.execute(
+                            "UPDATE model_folder SET is_download_target = 1 "
+                            "WHERE id = ?",
+                            (folder_id,),
+                        )
                 if assignments:
                     conn.execute(
                         f"UPDATE model_folder SET {', '.join(assignments)} "
@@ -1074,6 +1120,13 @@ def create_router(server) -> APIRouter:
                     folder["path"],
                     folder_id,
                 )
+            if payload.is_download_target is not None:
+                logger.info(
+                    "Model download folder %s: %s (id=%s).",
+                    "set to" if payload.is_download_target else "no longer",
+                    folder["path"],
+                    folder_id,
+                )
         return _to_response(_fetch_folder(folder_id))
 
     def _check_default_eligible(folder: dict) -> None:
@@ -1081,8 +1134,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Only a folder the shelf lists and writes into can be the "
-                    "default: one you added, or the managed store."
+                    "Only a folder the shelf lists and writes into can take "
+                    "new models: one you added, or the managed store."
                 ),
             )
 

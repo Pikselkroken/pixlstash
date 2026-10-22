@@ -21,6 +21,7 @@
           <template v-if="file.folder">
             , expected in <span class="rrn-mono">models/{{ file.folder }}</span>
           </template>
+          <ModelDownloadButton v-if="file.downloadable" :file="file.file" />
         </li>
       </ul>
       <!-- No catch-all "learn more" link. A refusal with no fix has its whole
@@ -94,6 +95,7 @@ import {
   readReason,
 } from "../../utils/runReasons";
 import AppButton from "../widgets/AppButton.vue";
+import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 
 const props = defineProps({
   /**

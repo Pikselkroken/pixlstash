@@ -472,6 +472,13 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     that library's host folder, which ``GET /libraries`` redacts for a remote
     owner. It takes a registry uuid and no path.
 
+    62 = 54 + 8 with ``POST /model-downloads``: it writes a downloaded model
+    into the registered download folder and registers it, ``POST
+    /model-files``' file-writing class with the bytes off the network. It
+    takes no path and no URL (the link is looked up by file name in the
+    committed template list), and nothing spawns. Its cancel writes nothing
+    but its own partial file and is ``owner_only``.
+
     Arithmetic, not judgement."""
     loopback = {
         key
@@ -485,7 +492,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 8, sorted(loopback)
-    assert len(local) == 53, sorted(local)
+    assert len(local) == 54, sorted(local)
 
 
 # ===========================================================================

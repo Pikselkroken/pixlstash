@@ -195,6 +195,20 @@ def find_default_folder(hub: HubDatabase) -> Optional[dict]:
     return dict(row) if row is not None else find_managed_folder(hub)
 
 
+def find_download_folder(hub: HubDatabase) -> Optional[dict]:
+    """Return the folder a model PixlStash downloads goes into.
+
+    The one the owner marked (``is_download_target = 1``, at most one by
+    ``ux_model_folder_single_download_target``), else the default folder, so a
+    hub where nobody chose sends a download where ``Add file`` sends a file.
+    """
+    row = hub.fetchone(
+        "SELECT id, path, kind, owner, movable, created_at FROM model_folder "
+        "WHERE is_download_target = 1"
+    )
+    return dict(row) if row is not None else find_default_folder(hub)
+
+
 def ensure_managed_folder(hub: HubDatabase, config_dir: str) -> Optional[dict]:
     """Create the managed store if it is not there yet, and return its row.
 

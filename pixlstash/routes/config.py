@@ -35,6 +35,7 @@ from pixlstash.services import (
     workflow_ghost_service,
 )
 from pixlstash.services.comfyui_service import live_runs
+from pixlstash.services.model_downloads import live_downloads
 from pixlstash.telemetry import mark_install_established
 from pixlstash.server_config_io import persist_server_config
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
@@ -335,6 +336,7 @@ def create_router(server) -> APIRouter:
         status: str
         workers: dict
         runs: list[dict] = []
+        downloads: list[dict] = []
         process: dict
 
     class WatchFoldersResponse(BaseModel):
@@ -993,7 +995,9 @@ def create_router(server) -> APIRouter:
             "usage metrics. runs lists the ComfyUI runs in flight in this "
             "library, oldest first, each with its prompt_id, label, "
             "workflow_id, status (queued or running) and percent (the running "
-            "node's own progress); empty for any token but the owner's."
+            "node's own progress); empty for any token but the owner's. "
+            "downloads lists the model downloads running or just ended "
+            "(`POST /model-downloads`), likewise for the owner only."
         ),
     )
     def get_workers_progress(request: Request):
@@ -1006,6 +1010,12 @@ def create_router(server) -> APIRouter:
             # or recipes: a narrower token is told of none.
             "runs": (
                 live_runs(request.state.library_lease.library_uuid)
+                if server.auth.is_unscoped_owner_request(request)
+                else []
+            ),
+            # Machine-wide, and they name the owner's folders and files.
+            "downloads": (
+                live_downloads()
                 if server.auth.is_unscoped_owner_request(request)
                 else []
             ),

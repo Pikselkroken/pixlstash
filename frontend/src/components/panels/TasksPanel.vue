@@ -42,6 +42,37 @@
         </div>
         <div class="tm-comfy-message">{{ entry.run.message }}</div>
       </div>
+      <!-- A model downloading for a workflow: its bytes as a bar, and a
+           cancel that discards what it had fetched. -->
+      <div
+        v-else-if="entry.kind === 'download'"
+        class="tm-worker-row"
+        data-testid="tm-download-row"
+      >
+        <div class="tm-worker-row-top">
+          <span class="tm-status-dot tm-status-dot--running"></span>
+          <span class="tm-worker-label">{{ entry.run.label }}</span>
+          <button
+            v-if="!isReadOnly"
+            class="tm-comfy-abort"
+            type="button"
+            :aria-label="`Cancel downloading ${entry.run.label}`"
+            data-testid="tm-download-cancel"
+            @click="tasksStore.cancelDownload(entry.id)"
+          >
+            <Tooltip
+              text="Cancel download"
+              activator="parent"
+              :describe="false"
+            />
+            ✕
+          </button>
+        </div>
+        <div class="tm-comfy-bar">
+          <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
+        </div>
+        <div class="tm-comfy-message">{{ entry.run.message }}</div>
+      </div>
       <!-- Async import (#459): the two-phase dialog auto-hides at the safe
              transition and the import lands here as a determinate task row.
              data-import-task-row is the FLIP flight target the import dialog
@@ -721,7 +752,7 @@ function tmFormatLabel(key, label) {
   return tmFallbackWorkerLabel(key);
 }
 
-/** A ComfyUI or import run's bar fill, as a CSS width clamped to 0-100%. */
+/** A ComfyUI run, download or import's bar fill, as a CSS width clamped to 0-100%. */
 function barWidth(run) {
   return `${Math.min(100, Math.max(0, Math.round(run.percent)))}%`;
 }

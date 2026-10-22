@@ -142,6 +142,9 @@ from pixlstash.routes.library_captions import (
 from pixlstash.routes.library_layout import (
     create_router as create_library_layout_router,
 )
+from pixlstash.routes.model_downloads import (
+    create_router as create_model_downloads_router,
+)
 from pixlstash.routes.model_files import create_router as create_model_files_router
 from pixlstash.routes.model_folders import create_router as create_model_folders_router
 from pixlstash.routes.model_imports import create_router as create_model_imports_router
@@ -1937,6 +1940,11 @@ class Server(
         )
         self.api.include_router(
             create_model_files_router(self),
+            prefix=API_V1_PREFIX,
+            dependencies=gate,
+        )
+        self.api.include_router(
+            create_model_downloads_router(self),
             prefix=API_V1_PREFIX,
             dependencies=gate,
         )
