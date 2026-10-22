@@ -262,7 +262,12 @@ Rationale column is empty where it equals the policy-meaning table above (e.g. `
 | GET | `/api/v1/users/me/watermark` | any_token |  |  |
 | POST | `/api/v1/users/me/watermark` | owner_only |  | Upload watermark; POST blocked for READ tokens; owner only |
 | DELETE | `/api/v1/users/me/watermark` | owner_only |  | Delete watermark; DELETE blocked for READ tokens; owner only |
-| GET | `/api/v1/workers/progress` | any_token |  | Worker counts and process usage for any token. `runs`, the ComfyUI runs in flight (#1862: prompt id, label, workflow id, state, percent), is the owner's: narrowed in the handler by `is_unscoped_owner_request`, so a READ or resource-scoped token is answered `[]`. A label names a workflow or a saved recipe, which no object scope describes |
+| GET | `/api/v1/workers/progress` | any_token |  | Worker counts and process usage for any token. `runs`, the ComfyUI runs in flight (#1862: run id, prompt id, label, workflow id, state, percent), is the owner's: narrowed in the handler by `is_unscoped_owner_request`, so a READ or resource-scoped token is answered `[]`. A label names a workflow or a saved recipe, which no object scope describes. `resources`, the VRAM arbiter's snapshot (GPUs, holders, lease labels naming workflows), is narrowed the same way and is `null` for any other token |
+| POST | `/api/v1/resources/leases/{lease_id}/run-anyway` | owner_only |  | Starts the owner's own waiting GPU work (a ComfyUI run) now; a lease id names no library object; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/resources/leases/{lease_id}/cancel` | owner_only |  | Cancels the owner's own waiting GPU work and the ComfyUI run behind it; POST blocked for READ tokens; owner only |
+| POST | `/api/v1/resources/comfyui/free` | owner_only |  | Asks the owner's configured ComfyUI to unload its models, the same reach the run route has; refused while it is busy; owner only |
+| GET | `/api/v1/compute/gpus` | local_owner_only |  | Names this host's GPUs, their memory and what runs on them: host hardware, local owner only (§16.3); also in `READ_BLOCKED_GET_PATHS` |
+| PATCH | `/api/v1/compute/gpu` | local_owner_only |  | Changes which of this host's GPUs the server runs on at its next start: host capability, local owner only (§16.3) |
 
 ### filesystem.py (§16.3)
 

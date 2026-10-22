@@ -243,6 +243,27 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/api/v1/session/context"): RoutePolicy(_ANY),
     ("GET", "/api/v1/workers/progress"): RoutePolicy(_ANY),
+    # ── resources.py (VRAM arbitration and the GPU picker) ─────────────────
+    ("POST", "/api/v1/resources/leases/{lease_id}/run-anyway"): RoutePolicy(
+        _OWNER,
+        justification="Starts the owner's own waiting GPU work (a ComfyUI run) now; a lease id names no library object; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/resources/leases/{lease_id}/cancel"): RoutePolicy(
+        _OWNER,
+        justification="Cancels the owner's own waiting GPU work and the ComfyUI run behind it; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/resources/comfyui/free"): RoutePolicy(
+        _OWNER,
+        justification="Asks the owner's configured ComfyUI to unload its models, the same reach the run route has; refused while it is busy; owner only",
+    ),
+    ("GET", "/api/v1/compute/gpus"): RoutePolicy(
+        _LOCAL,
+        justification="Names this host's GPUs, their memory and what runs on them: host hardware, local owner only (§16.3)",
+    ),
+    ("PATCH", "/api/v1/compute/gpu"): RoutePolicy(
+        _LOCAL,
+        justification="Changes which of this host's GPUs the server runs on at its next start: host capability, local owner only (§16.3)",
+    ),
     ("GET", "/api/v1/server-config/watch-folders"): RoutePolicy(
         _OWNER, justification="require_unscoped_owner; also READ_BLOCKED; owner only"
     ),
