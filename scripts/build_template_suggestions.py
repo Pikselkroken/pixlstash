@@ -7,9 +7,11 @@ runtime: it reads the committed file this script writes.
 
 **Source.** The ``comfyui-workflow-templates-json`` wheel on PyPI, the package
 ComfyUI itself installs to serve ``/templates``. It holds ``index.json`` (the
-catalogue) and one UI-format graph per template. A wheel is one pinned,
-hash-checked download, so a rebuild is reproducible and the version is recorded
-in the output; a weekly diff is one release to the next.
+catalogue) and one UI-format graph per template. A release is one download,
+so ``--version`` rebuilds the same file and the version is recorded in the
+output; a weekly diff is one release to the next. The sha256 it is checked
+against comes from the same PyPI answer as its URL, so it catches a broken
+download, not a compromised release: the review of the bot PR is that gate.
 
 **What is kept.** Per template: its name, title, description, kind (the
 catalogue category's type, ``edit`` for an image template tagged as an edit),
@@ -165,8 +167,14 @@ def _read_graphs(folder: Path) -> dict[str, str]:
 
 
 def _title(template: dict) -> str:
-    # The package's text, in a PR body: an @ there would notify somebody.
-    return template["title"].replace("@", "@\u200b")
+    """A title as plain text on one line of the PR body.
+
+    The package's text is not ours: an ``@`` would notify somebody, and
+    brackets, a ``#`` or a newline would add links, references or structure.
+    """
+    title = " ".join(template["title"].split())[:120]
+    title = re.sub(r"([\\`*_\[\]()<>#!|~])", r"\\\1", title)
+    return title.replace("@", "@\u200b")
 
 
 def summary(old: dict, new: dict, old_graphs: dict, new_graphs: dict) -> str:

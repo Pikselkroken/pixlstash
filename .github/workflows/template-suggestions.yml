@@ -26,6 +26,8 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    # The downloads' timeouts are per read, not in total.
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

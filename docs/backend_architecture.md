@@ -10674,7 +10674,9 @@ nothing for it.
   are) and `downloads` (`{name, url, directory, slot, sha256}`), with
   `source: "template"` and empty picture counts. Keep separate is the same
   declines list: a download's `sha256` is `file_decline_key`, the sha256 of
-  its folded name, since it has no bytes. Nothing left to offer, no offer.
+  its folded name, since it has no bytes. Nothing left to offer, no offer,
+  and no other template is tried. Keeping a pictures' offer separate lets
+  this one show, since it is a different question.
 - **A newer ComfyUI is a flag.** The route asks the owner's configured ComfyUI
   for its version (`probe_comfyui`, one second) and sets `needs_comfyui` on a
   template that wants a newer one. A set is only files, so making one is never

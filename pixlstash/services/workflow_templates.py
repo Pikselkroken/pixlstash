@@ -20,7 +20,8 @@ once. A template with no head is a row of its own.
 file of the template, a namesake counting as the file. A set made from the
 template covers it whatever it holds since.
 
-**A set with a head is offered the rest of its template** (#1999 §3), on the
+**A set holding a head on the shelf is offered the rest of its template**
+(#1999 §3), on the
 merge offer's own surface (:func:`attach_template_offers`): the files of the
 closest template whose head the set holds, the ones on the shelf to add and the
 rest with their download page. A pictures' offer goes first; Keep separate is
@@ -294,7 +295,8 @@ def file_decline_key(name: str) -> str:
 
     The ``declines`` list holds sha256s, and such a file has no bytes to hash,
     so it is the sha256 of its name instead: the same 64 hex characters, never
-    a real file's digest, and one name answers to it however it is cased.
+    a real file's digest, and one name answers to it however it is cased. Once
+    the file arrives it is offered by its real digest: having it is news.
     """
     return hashlib.sha256(
         f"template-file:{normalized_filename(name)}".encode()
@@ -311,7 +313,9 @@ def attach_template_offers(hub, hand_made: list[dict]) -> None:
     and the rest named in ``others``: the one the set was made from, then the
     fewest files lacking, then the fewest matched as another quant, then the
     most used. A file the set holds, kept out (``declined``), still hashing or
-    an engine is not offered; nothing left, no offer.
+    an engine is not offered; nothing left, no offer, and the next template is
+    not tried: Stop asking on the closest means stop. Keeping a pictures'
+    offer separate leaves the set free for this one, a different question.
 
     Args:
         hub: the hub holding the shelf.
