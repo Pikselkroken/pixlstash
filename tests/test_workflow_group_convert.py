@@ -1883,6 +1883,49 @@ def test_carrying_one_workflow_twice_onto_an_heir_writes_its_notes_once(tmp_path
         hub.close()
 
 
+def test_a_split_gives_every_heir_the_gpu_peaks_and_the_run_alone_flag(tmp_path):
+    """A re-keyed workflow must not run as never measured, nor lose "runs alone"."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    try:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES ('auto:old', 'm', 'GPU', 24576, ?, 'torch_reserved', "
+                "'completed', ?)",
+                [(9000, "2026-10-01T00:00:00"), (9500, "2026-10-02T00:00:00")],
+            )
+            conn.execute(
+                "INSERT INTO workflow_vram_policy (workflow_id, exclusive, source, at) "
+                "VALUES ('auto:old', 1, 'oom', '2026-10-02T00:00:00')"
+            )
+            # A split: a copy for the first heir (twice, as a re-run would),
+            # then the move to the last.
+            _carry_group_state(conn, "auto:old", "auto:a", keep=True)
+            _carry_group_state(conn, "auto:old", "auto:a", keep=True)
+            _carry_group_state(conn, "auto:old", "auto:b")
+        for heir in ("auto:a", "auto:b"):
+            peaks = hub.fetchall(
+                "SELECT peak_mb FROM workflow_vram_peak WHERE workflow_id = ? "
+                "ORDER BY peak_mb",
+                (heir,),
+            )
+            assert [row[0] for row in peaks] == [9000, 9500], heir
+            policy = hub.fetchone(
+                "SELECT source FROM workflow_vram_policy WHERE workflow_id = ?",
+                (heir,),
+            )
+            assert policy is not None and policy[0] == "oom", heir
+        assert not hub.fetchall(
+            "SELECT 1 FROM workflow_vram_peak WHERE workflow_id = 'auto:old'"
+        )
+        assert not hub.fetchall(
+            "SELECT 1 FROM workflow_vram_policy WHERE workflow_id = 'auto:old'"
+        )
+    finally:
+        hub.close()
+
+
 def test_a_carry_contained_in_longer_notes_is_still_written(tmp_path):
     """Only an exact repeat is dropped: "Also named: Foo" is not "...: Foo bar"."""
     hub = HubDatabase(str(tmp_path / "hub.db"))
