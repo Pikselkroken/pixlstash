@@ -133,6 +133,7 @@ pixlstash = [
     "data/comfyui-workflows/built-in/*.json",
     "data/scalar-assets/*",
     "data/workflow_templates.json",
+    "data/workflow_templates/*.json",
     "data/comfyui-pack/**/*",
 ]
 
