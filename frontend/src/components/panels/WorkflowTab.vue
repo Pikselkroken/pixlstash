@@ -1142,7 +1142,9 @@
             rel="noopener noreferrer"
             >ComfyUI-PixlStash</a
           >
-          node in ComfyUI. Install or update it, then restart ComfyUI.
+          node in ComfyUI. Install or update it, then restart ComfyUI. Already
+          installed? Restart ComfyUI, then leave Workflows and come back so
+          PixlStash checks again.
         </p>
         <p
           v-else-if="canOpenComfyui && changeCount"

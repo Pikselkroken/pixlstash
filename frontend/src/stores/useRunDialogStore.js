@@ -21,8 +21,8 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    * `{kind, pictureIds, workflowId, pickWorkflow, name, coverUrl}`:
    *   kind          - "picture" | "selection" | "card" | "edit", for the left
    *                   column's wording and for which body the run sends.
-   *                   "edit" is Edit with ComfyUI: the built-in edit card over
-   *                   the selection, reading none of the pictures' recipes.
+   *                   "edit" is the Edit tab's run over its picture, reading
+   *                   none of the picture's recipe.
    *   pictureIds    - what the run is made from; empty for a card.
    *   workflowId    - the workflow to run, when it is already known.
    *   pickWorkflow  - open with the workflow picker unset ("Run a workflow on
@@ -42,6 +42,9 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    *                   already showed one; unset, the popup decides.
    *   fromEditTab   - opened from the lightbox's Edit tab, which stays open
    *                   and follows the run itself (see `editRun`).
+   *   selection     - the Edit tab's Paint selection on its one picture
+   *                   (`{version, steps, refine}`), sent as the run's
+   *                   `selection`: where on the picture the edit goes.
    */
   const source = ref(null);
   /**

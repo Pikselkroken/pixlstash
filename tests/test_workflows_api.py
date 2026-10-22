@@ -48,6 +48,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from PIL import Image
 import requests
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -124,7 +125,7 @@ from pixlstash.services.workflow_run_service import (
     replace_missing_text_nodes,
     skip_requested_loras,
 )
-from pixlstash.utils.known_base_models import family_of, fold
+from pixlstash.utils.known_base_models import family_of, fold, identify
 import pixlstash.routes.config as config_routes
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
@@ -5440,6 +5441,9 @@ def test_a_manual_workflows_base_models_read_as_an_automatic_cards_do(
             "inputs": {"unet_name": "WAN_T2V_LOW.safetensors"},
         },
         "4": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+        # Every loader wired: one no node reads is not on the card.
+        "5": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}},
+        "6": {"class_type": "PreviewImage", "inputs": {"images": ["3", 0]}},
     }
     key = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "pair.json", graph
@@ -5465,6 +5469,7 @@ def test_the_pack_loaders_digests_reach_the_card_as_their_kind(
             "inputs": {"upscale_model_sha256": unknown},
         },
         "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+        "4": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}},
     }
     key = _file_a_workflow(
         workflow_env.server, tmp_path, monkeypatch, "pack.json", graph
@@ -10277,6 +10282,7 @@ def test_a_shelf_loader_graph_names_its_file_not_its_id(runnable):
             "class_type": "PixlStashCheckpointLoader",
             "inputs": {"checkpoint_id": 987654321},
         }
+        instance["10"] = {"class_type": "PreviewImage", "inputs": {"images": ["9", 0]}}
         conn.execute(
             "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
             (json.dumps(instance), RUN_INSTANCE),
@@ -10375,6 +10381,7 @@ def test_a_gone_shelf_loader_is_named_by_the_pictures_editor_graph(
         "class_type": "PixlStashCheckpointLoader",
         "inputs": {"checkpoint_id": "987654322"},
     }
+    embedded["10"] = {"class_type": "PreviewImage", "inputs": {"images": ["9", 0]}}
     editor["nodes"].append(
         {
             "id": 9,
@@ -11636,6 +11643,155 @@ def test_a_picture_not_yet_hashed_uploads_under_its_file_not_its_id(i2i):
     assert upload["name"] == _upload_name(
         i2i.server, picture, f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
     )
+
+
+# --- a selection: where on the picture the run changes ------------------------
+
+LEFT_HALF = {"steps": [{"tool": "rect", "mode": "new", "box": [0, 0, 0.5, 1]}]}
+
+
+def _real_picture(server, tmp_path, name: str) -> int:
+    """A kept picture whose file is a real 20x10 PNG, which a mask is drawn on."""
+    picture = _add_picture(server, tmp_path, name)
+    Image.new("RGB", (20, 10), (200, 40, 40)).save(tmp_path / name)
+    return picture
+
+
+def _uploads_with_pixels(i2i) -> list[dict]:
+    """Record each upload's pixels too: a masked upload's file is temporary."""
+    seen: list[dict] = []
+
+    def upload(base_url, path, upload_name=None):
+        with Image.open(path) as image:
+            seen.append({"name": upload_name, "pixels": np.array(image)})
+        return upload_name
+
+    i2i.monkeypatch.setattr(workflows_routes, "_upload_image_to_comfyui", upload)
+    return seen
+
+
+def test_a_selection_rides_in_the_uploads_alpha_as_its_mask(i2i):
+    """MASK is ``1 - alpha`` to LoadImage, so the selected half is transparent.
+
+    Wrong if the upload is the plain file, if the mask lands on the other half,
+    or if the name is the plain upload name (ComfyUI overwrites by name, so a
+    masked and a plain run of one picture would load each other's file).
+    """
+    i2i.graph["3"]["inputs"]["noise_mask"] = ["5", 1]
+    picture = _real_picture(i2i.server, i2i.tmp_path, "masked.png")
+    seen = _uploads_with_pixels(i2i)
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    [upload] = seen
+    alpha = upload["pixels"][..., 3]
+    assert (alpha[:, :10] == 0).all() and (alpha[:, 10:] == 255).all()
+    assert (upload["pixels"][..., :3] == (200, 40, 40)).all()
+    assert "-mask-" in upload["name"] and upload["name"].endswith(".png")
+    assert i2i.submitted[0]["graph"]["5"]["inputs"]["image"] == upload["name"]
+
+
+def test_a_selection_is_refused_where_nothing_reads_the_mask(i2i):
+    """A workflow that ignores MASK would change the whole picture: refused,
+    and nothing uploaded. Wrong if it runs, or if a run WITHOUT a selection on
+    the same workflow is refused too."""
+    picture = _real_picture(i2i.server, i2i.tmp_path, "unread.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "refused", r.json()
+    codes = [reason["code"] for reason in r.json()["groups"][0]["reasons"]]
+    assert codes == ["mask_not_read"], codes
+    assert i2i.uploads == [] and i2i.submitted == []
+    plain = _preflight(i2i.owner, picture_ids=[picture], target=RUN_WF)
+    assert plain["ok"] is True, plain
+
+
+def test_a_selection_runs_on_exactly_one_picture(i2i):
+    pictures = [_real_picture(i2i.server, i2i.tmp_path, f"m{n}.png") for n in (1, 2)]
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": pictures, "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_selection_on_a_file_that_is_not_a_picture_is_refused_first(i2i):
+    """The masked upload goes first and refuses cleanly: nothing reaches
+    ComfyUI's input folder, and nothing is queued."""
+    i2i.graph["3"]["inputs"]["noise_mask"] = ["5", 1]
+    picture = _add_picture(i2i.server, i2i.tmp_path, "not-a-picture.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 415, r.text
+    assert i2i.uploads == [] and i2i.submitted == []
+
+
+def test_a_masked_upload_still_names_the_picture_it_was_made_from():
+    """A replay reads what a run loaded off the upload name (`_made_from`); the
+    selection's digest on it must not hide the picture's content."""
+    content = "a" * 64
+    named = workflows_routes._UPLOAD_NAME_RE.fullmatch(
+        f"pixlstash-lib1-5-{content}-mask-{'0' * 16}.png"
+    )
+    assert named and named.group(1) == content
+
+
+def test_a_loader_pinned_to_the_selected_picture_reads_its_mask():
+    """A pin to the picture the selection is drawn on is that picture too;
+    a pin to another picture is not."""
+    graph = _i2i_graph()
+    graph["3"]["inputs"]["noise_mask"] = ["5", 1]
+    target = workflow_bindings.picture_target(graph, "5", "LoadImage")
+    assert workflows_routes._reads_mask(graph, [workflows_routes.Feed([target], 9)], 9)
+    assert not workflows_routes._reads_mask(
+        graph, [workflows_routes.Feed([target], 4)], 9
+    )
+    assert workflows_routes._reads_mask(
+        graph, [workflows_routes.Feed([target], None)], 9
+    )
+
+
+def test_a_load_image_mask_on_alpha_reads_the_selection():
+    """LoadImageMask hands on MASK at output 0, and only its alpha channel is
+    the selection; a colour channel is the picture, not the mask."""
+    graph = _i2i_graph()
+    graph["5"] = {
+        "class_type": "LoadImageMask",
+        "inputs": {"image": "subject.png", "channel": "alpha"},
+    }
+    graph["3"]["inputs"]["noise_mask"] = ["5", 0]
+    target = workflow_bindings.picture_target(graph, "5", "LoadImageMask")
+    feeds = [workflows_routes.Feed([target], 9)]
+    assert workflows_routes._reads_mask(graph, feeds, 9)
+    graph["5"]["inputs"]["channel"] = "red"
+    assert not workflows_routes._reads_mask(graph, feeds, 9)
+
+
+def test_a_selection_turns_a_pack_picture_loader_into_an_upload(pack):
+    """The pack's loader would fetch the picture by id, without the mask, so
+    the selected picture loads through LoadImage instead, wired the same."""
+    pack.graph = _pack_graph()
+    pack.graph["3"]["inputs"]["noise_mask"] = ["5", 1]
+    picture = _real_picture(pack.server, pack.tmp_path, "pack-masked.png")
+    seen = _uploads_with_pixels(pack)
+    r = pack.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_WF, "selection": LEFT_HALF},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    [upload] = seen
+    loader = pack.submitted[0]["graph"]["5"]
+    assert loader == {"class_type": "LoadImage", "inputs": {"image": upload["name"]}}
+    assert pack.submitted[0]["graph"]["3"]["inputs"]["noise_mask"] == ["5", 1]
 
 
 def test_each_save_node_keeps_its_own_prefix_under_the_stack_tag(i2i):
@@ -14913,6 +15069,53 @@ def test_a_set_plan_says_which_sets_will_not_load_and_why(cloneable):
     assert plans["unlisted"]["reason"] == "ComfyUI does not list unlisted.safetensors"
 
 
+def test_a_set_whose_checkpoint_only_the_shelf_has_clones_to_load_it_there(
+    cloneable,
+):
+    """#2009: a set checkpoint ComfyUI does not list is still cloned onto when
+    a run would load it off the shelf, through the pack's checkpoint loader.
+
+    Wrong if the plan says "ComfyUI does not list" with that loader in
+    ComfyUI and ComfyUI on this computer, or the clone is refused.
+    """
+    unlisted, digest = "test-moss-unlisted.safetensors", _h("moss-unlisted")
+    with cloneable.server.hub.transaction() as conn:
+        _shelve_with_copy(conn, "checkpoint", unlisted, digest)
+        row_id = conn.execute(
+            "SELECT id FROM model WHERE sha256 = ?", (digest,)
+        ).fetchone()[0]
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (info, None)
+    )
+    try:
+        # Without the pack's loader nothing can load it.
+        assert _plans(cloneable, moss=[row_id])[1]["moss"]["reason"] == (
+            f"ComfyUI does not list {unlisted}"
+        )
+        info["PixlStashCheckpointLoader"] = ID_LOADER_OBJECT_INFO[
+            "PixlStashCheckpointLoader"
+        ]
+        # A ComfyUI elsewhere cannot read the shelf's copy.
+        with cloneable.monkeypatch.context() as m:
+            m.setattr(workflows_routes, "locate", lambda url: (None, None))
+            assert _plans(cloneable, moss=[row_id])[1]["moss"]["fit"] == "wont_load"
+        plan = _plans(cloneable, moss=[row_id])[1]["moss"]
+        assert plan["fit"] != "wont_load", plan
+        assert plan["reason"] is None, plan
+        assert plan["swaps"] == {_SHELF_FILENAME: unlisted}, plan
+
+        r = _clone(cloneable, plan["swaps"])
+        assert r.status_code == 201, r.text
+        assert r.json()["unswapped"] == []
+        assert r.json()["verified"] is False
+        # Written unchecked: the run swaps the pack's loader in for it.
+        assert _written(cloneable, r.json())["1"]["inputs"]["ckpt_name"] == unlisted
+    finally:
+        with cloneable.server.hub.transaction() as conn:
+            _unshelve(conn, [digest])
+
+
 def test_a_gguf_set_on_a_whole_checkpoint_loader_names_the_loader_it_needs(
     cloneable,
 ):
@@ -15292,6 +15495,72 @@ def test_a_set_of_another_family_fits_only_when_its_encoder_is_retyped(cloneable
     mystery = plans["mystery"]
     assert mystery["fit"] == "other"
     assert mystery["maps_cleanly"] is False
+
+
+def test_a_sets_checkpoint_goes_to_the_loader_the_run_reads(cloneable):
+    """A set's one checkpoint replaces the base loader some output reads, never
+    a leftover one wired into nothing whose name happens to read closer, and
+    its encoder loads as MOSS-Image.
+
+    Wrong if `swaps` names the leftover loader's file: the tab has no row for
+    it, so the set fills no checkpoint and the run samples the old model.
+    """
+    moss = "moss_image_sft_int8.safetensors"
+    leftover = "moody_mix_int8.safetensors"
+    graph = _embedded_export_graph()
+    graph["8"] = {
+        "class_type": "CLIPLoader",
+        "inputs": {"clip_name": "qwen3vl_4b_bf16.safetensors", "type": "krea2"},
+    }
+    graph["5"]["inputs"]["clip"] = ["8", 0]
+    graph["6"]["inputs"]["clip"] = ["8", 0]
+    graph["9"] = {"class_type": "CheckpointLoaderSimple", "inputs": {}}
+    graph["9"]["inputs"]["ckpt_name"] = leftover
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["SaveImage"]["output_node"] = True
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0] += [
+        leftover,
+        moss,
+    ]
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        # As a scan stores it: identified from its filename.
+        checkpoint = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance, "
+            "base_model_canonical, base_model_source) "
+            "VALUES ('checkpoint', ?, 'scanned', ?, ?)",
+            (moss, *identify([], [moss])),
+        ).lastrowid
+        encoder = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('text_encoder', 'moss_encoder.safetensors', 'scanned')"
+        ).lastrowid
+    try:
+        body, plans = _plans(cloneable, moss=[checkpoint, encoder])
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "DELETE FROM model WHERE id = ?", [(checkpoint,), (encoder,)]
+            )
+    plan = plans["moss"]
+    assert body["base_filename"] == _SHELF_FILENAME
+    assert plan["swaps"] == {
+        _SHELF_FILENAME: moss,
+        "qwen3vl_4b_bf16.safetensors": "moss_encoder.safetensors",
+    }, plan
+    assert plan["unpaired_bases"] == [leftover]
+    clip = next(row for row in plan["loaders"] if row["node_id"] == "8")
+    assert (clip["was_type"], clip["now_type"]) == ("krea2", "moss_image")
+    # The leftover loader is no slot the set has to fill.
+    assert plan["maps_cleanly"] is True, plan
 
 
 def test_a_set_with_two_builds_of_its_encoder_fills_the_one_loader(cloneable):
@@ -21982,6 +22251,63 @@ def test_a_held_run_opens_on_the_picture_it_put_in_not_on_the_pin(id_loaders):
     }
     # Nothing picked: the pin is the picture, as from the Workflow tab's Open.
     assert loader()["inputs"]["picture_ids"] == str(env.picture)
+
+
+def test_a_masked_upload_stays_a_load_image_whatever_its_content_name():
+    """A picture not hashed yet is named by its file's mtime and size, not a
+    digest: its masked upload must still be kept from the pack's loader."""
+    graph = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {
+                "image": "pixlstash-ab12cd34-7-"
+                + "e" * 64
+                + "-mask-0123456789abcdef.png"
+            },
+        },
+        "2": {
+            "class_type": "LoadImage",
+            "inputs": {
+                "image": "pixlstash-ab12cd34-7-"
+                "18b2c3d4e5f60718-1f400-mask-0123456789abcdef.png"
+            },
+        },
+        "3": {
+            "class_type": "LoadImage",
+            "inputs": {"image": "pixlstash-ab12cd34-7-" + "e" * 64 + ".png"},
+        },
+        "4": {"class_type": "LoadImage", "inputs": {"image": ["9", 0]}},
+    }
+    assert workflows_routes._masked_loaders(graph) == {"1", "2"}
+
+
+def test_a_held_run_with_a_selection_opens_on_the_masked_upload(id_loaders):
+    """Open swaps a Load Image of a picture PixlStash holds for the pack's
+    loader, which fetches by id and would lose the mask. Wrong if the picture
+    the selection is drawn on opens in the pack's loader."""
+    env = id_loaders
+    seen: list[str] = []
+
+    def upload(url, path, name=None):
+        seen.append(name)
+        return name
+
+    env.monkeypatch.setattr(workflows_routes, "_upload_image_to_comfyui", upload)
+    picture = _real_picture(env.server, env.tmp_path, "held-masked.png")
+    document = _picture_document("subject.png")
+    document["9"] = {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "mask", "images": ["7", 1]},
+    }
+    workflow = workflows_routes.store_manual_workflow(
+        env.server.hub, "Masked", document, "import"
+    )
+    held = _hold_run(env, target=workflow, picture_ids=[picture], selection=LEFT_HALF)
+    assert held.status_code == 200, held.text
+    [name] = seen
+    assert "-mask-" in name
+    loader = _opened(env, workflow, run=held.json()["opening"])["workflow"]["7"]
+    assert loader == {"class_type": "LoadImage", "inputs": {"image": name}}
 
 
 def test_a_graph_opened_on_pixlstashs_own_ids_and_saved_untouched_stores_nothing(

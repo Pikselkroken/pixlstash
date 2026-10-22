@@ -890,6 +890,9 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # touched. Same class as the other per-picture mutations; READ tokens are
     # refused earlier by the middleware (POST not in READ_SAFE).
     ("POST", "/api/v1/pictures/{id}/text/read"): RoutePolicy(_PIC, id_param="id"),
+    # Renders a selection's mask on one picture (the Edit tab's preview):
+    # derived from the picture's own pixels, nothing is written.
+    ("POST", "/api/v1/pictures/{id}/mask"): RoutePolicy(_PIC, id_param="id"),
     ("GET", "/api/v1/pictures/thumbnails/{id}.webp"): RoutePolicy(_PIC, id_param="id"),
     ("PATCH", "/api/v1/pictures/{id}"): RoutePolicy(_PIC, id_param="id"),
     ("POST", "/api/v1/pictures/{id}/face"): RoutePolicy(_PIC, id_param="id"),

@@ -28,6 +28,8 @@
     :pluginProgressPercent="pluginProgressPercent"
     :comfyuiConfigured="filterStore.comfyuiConfigured"
     :guestScore="overlayGuestScore"
+    :editRequest="overlayEditRequest"
+    :compareRequest="overlayCompareRequest"
     @close="closeOverlay()"
     @apply-score="applyScore"
     @set-guest-score="(img, n) => setGuestScore(img, n)"
@@ -123,6 +125,7 @@
       :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
       :grouping-lock-reason="partialStackGroupingReason"
       :rotate-block-reason="selectionRotateBlockReason"
+      :compare-block-reason="selectionCompareBlockReason"
       :lock-reason="selectionLockReason"
       :locked-set-ids="lockedSetsStore.lockedSetIds"
       :available-plugins="availablePlugins"
@@ -153,7 +156,8 @@
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @make-more="makeMoreLikeSelection"
       @run-workflow="runWorkflowOnSelection"
-      @edit-with-comfyui="editSelectionWithComfyui"
+      @edit-pictures="editSelection"
+      @compare-pictures="compareSelection"
       @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
@@ -1172,6 +1176,7 @@
           :keep-cover-only-lock-reason="keepCoverOnlyLockReason"
           :grouping-lock-reason="partialStackGroupingReason"
           :rotate-block-reason="selectionRotateBlockReason"
+          :compare-block-reason="selectionCompareBlockReason"
           :available-plugins="availablePlugins"
           :tagger-plugins="taggerPlugins"
           :captioner-plugins="captionerPlugins"
@@ -1206,7 +1211,8 @@
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
           @make-more="makeMoreLikeSelection"
           @run-workflow="runWorkflowOnSelection"
-          @edit-with-comfyui="editSelectionWithComfyui"
+          @edit-pictures="editSelection"
+          @compare-pictures="compareSelection"
         />
       </template>
     </GridActionPill>
@@ -1369,6 +1375,7 @@ import {
   rotateBlockReason as buildRotateBlockReason,
   rotateSkipNote,
 } from "../../utils/rotate";
+import { compareBlockReason } from "../../utils/compare";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
 import {
   getCharacter,
@@ -2205,37 +2212,41 @@ function runWorkflowOnSelection() {
   openRunWithWorkflowPicker(selectedPictureIds());
 }
 
-/** The built-in workflow "Edit with ComfyUI…" runs: Flux.2 Klein image edit. */
+/** The built-in edit workflow, filed so the Edit tab can list it. */
 const EDIT_WORKFLOW = "Flux2-Klein-Image-Edit.json";
 
+/** The grid's *Edit…*, as the lightbox reads it: `{pictureIds}` per gesture. */
+const overlayEditRequest = ref(null);
+
 /**
- * "Edit with ComfyUI…", from either grid menu: the Run popup on the built-in
- * edit workflow, each selected picture fed into its one picture input and the
- * prompt box left empty for the instruction.
+ * "Edit…", from either grid menu: the lightbox on the first selected picture,
+ * on its Edit tab, where the Paint tools mark where and the instruction says
+ * what. With several pictures *Apply to* offers them all, which is the batch
+ * edit this row used to open the Run popup for.
  *
- * The built-in has no card until it is asked for, so its workflow id is
- * fetched on each gesture; the route is idempotent and answers the one filed.
+ * The built-in edit workflow has no card until it is asked for, so it is asked
+ * for first and the Edit tab lists it beside the owner's own. A failure there
+ * still opens the tab, which lists whatever edit workflows the owner has.
  */
-async function editSelectionWithComfyui() {
+async function editSelection() {
   const ids = selectedPictureIds();
   if (isReadOnly.value || !ids.length) return;
-  let workflowId;
   try {
-    ({ workflow_id: workflowId } = await cardForWorkflow(EDIT_WORKFLOW));
+    await cardForWorkflow(EDIT_WORKFLOW);
   } catch (err) {
-    console.warn(`Could not open the ${EDIT_WORKFLOW} workflow:`, err);
-    noticeStore.warning(
-      `Could not open the image edit workflow. ${errorDetail(err)}`,
-      { key: "edit-with-comfyui" },
+    console.warn(
+      `Could not file the ${EDIT_WORKFLOW} workflow for the Edit tab; it lists the owner's own edit workflows only:`,
+      err,
     );
-    return;
+    // The tab still opens, on the owner's own edit workflows: say why the
+    // built-in is not among them.
+    noticeStore.warning(
+      `Could not add the built-in image edit workflow. ${errorDetail(err)}`,
+      { key: "edit-pictures" },
+    );
   }
-  runDialogStore.openRun({
-    kind: "edit",
-    pictureIds: ids,
-    workflowId,
-    emptyPrompt: true,
-  });
+  overlayEditRequest.value = { pictureIds: ids };
+  openOverlay({ id: ids[0] });
 }
 
 /**
@@ -2266,6 +2277,7 @@ function openRunFromEditTab({
   prompt,
   edit = false,
   stack,
+  selection,
 } = {}) {
   const id = Number(getPictureId(pictureId));
   if (!Number.isFinite(id) || id <= 0 || isReadOnly.value) return;
@@ -2280,6 +2292,7 @@ function openRunFromEditTab({
     prompt: prompt || undefined,
     stack,
     fromEditTab: true,
+    selection: selection || undefined,
   });
 }
 
@@ -4953,6 +4966,26 @@ function selectedPictureRecords() {
 const selectionRotateBlockReason = computed(() =>
   buildRotateBlockReason(selectedPictureRecords()),
 );
+
+// Why Compare is greyed in both menus, or null for exactly two pictures.
+const selectionCompareBlockReason = computed(() =>
+  compareBlockReason(selectedPictureRecords()),
+);
+
+/** The grid's *Compare*, as the lightbox reads it: `{beforeId, afterId}`. */
+const overlayCompareRequest = ref(null);
+
+/**
+ * "Compare", from either grid menu: the lightbox on the second picture with
+ * the first laid over it, cut at the slider.
+ */
+function compareSelection() {
+  const pictures = selectedPictureRecords();
+  if (compareBlockReason(pictures)) return;
+  const [before, after] = pictures;
+  overlayCompareRequest.value = { beforeId: before.id, afterId: after.id };
+  openOverlay({ id: after.id });
+}
 
 const scrapheapEmptying = ref(false);
 const showSelectionBar = computed(() => {

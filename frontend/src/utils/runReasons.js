@@ -394,6 +394,13 @@ export function readReason(reason) {
     }
     case "no_runnable_source":
       return read("Nothing on this machine can produce a graph for this workflow.");
+    case "mask_not_read":
+      // The Edit tab's selection on a workflow that never reads its MASK:
+      // refused rather than run over the whole picture.
+      return read(
+        String(reason.message || "").trim() ||
+          "This workflow does not use a mask, so it would change the whole picture.",
+      );
     default:
       return read("This workflow cannot be run just now.");
   }

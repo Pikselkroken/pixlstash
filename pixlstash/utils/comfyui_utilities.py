@@ -743,8 +743,9 @@ def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     built from these is read beside one built from a stored slot list, and two
     answers to "which widget names a model" is how the two drift. That map
     carries the VAE, CLIP, ControlNet, upscale and Diffusers loaders as well as
-    the three that name a base model, so each recovered slot arrives under the
-    widget ``workflow_card_service.slot_kind`` turns into its real kind.
+    the three that name a base model, so each recovered slot arrives under a
+    widget ``workflow_card_service.slot_kind`` turns into its real kind, or a
+    LoRA widget (``is_lora_widget``), which the card files as a LoRA.
 
     It is still a list of classes, and no list of classes is every loader there
     is: a graph loading through a custom node recovers nothing for it. That is
@@ -756,7 +757,11 @@ def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     are read as well (:data:`_PACK_DIGEST_WIDGETS`), under their digest widget.
 
     Muted and bypassed nodes are skipped, because they do not load anything
-    when the workflow runs.
+    when the workflow runs, and so is a loader no node reads beside one that
+    is read: a leftover second checkpoint loader wired into nothing never
+    runs either, and a card naming it names a model the workflow does not
+    use. A graph that wires none of its loaders says nothing about which are
+    used, and every one is read.
 
     Order is document order, which is the order a reader sees the loaders in.
     Duplicates are kept: two LoRA loaders holding one file is two slots.
@@ -764,28 +769,46 @@ def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     if not isinstance(workflow, dict):
         return []
     if is_api_format(workflow):
-        found = []
+        read = {
+            str(value[0])
+            for node in workflow.values()
+            if isinstance(node, dict) and isinstance(node.get("inputs"), dict)
+            for value in node["inputs"].values()
+            if is_link(value)
+        }
+        by_node = []
         for node_id, node in workflow.items():
             if not isinstance(node, dict):
                 continue
-            found.extend(
+            named = [
                 (widget, value)
                 for _id, _cls, widget, value in iter_model_fields_api(
                     {node_id: node}, shelf_ids_as_text=True
                 )
-            )
+            ]
             digest = _PACK_DIGEST_WIDGETS.get(node.get("class_type"))
             inputs = node.get("inputs")
             value = inputs.get(digest) if digest and isinstance(inputs, dict) else None
             value = _pack_digest(value)
             if value:
-                found.append((digest, value))
-        return found
+                named.append((digest, value))
+            if named:
+                by_node.append((str(node_id) in read, named))
+        return _wired_loaders(by_node)
     return _loaded_model_widgets_ui(workflow)
 
 
+def _wired_loaders(by_node: list[tuple[bool, list]]) -> list[tuple[str, str]]:
+    """The models of each ``(read, models)`` loader, less the unread ones.
+
+    Only when some loader is read: see :func:`loaded_model_widgets`.
+    """
+    wired = any(read for read, _named in by_node)
+    return [pair for read, named in by_node if read or not wired for pair in named]
+
+
 def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
-    found = []
+    by_node = []
     for graph in _iter_ui_graphs(workflow):
         for node in graph.get("nodes") or []:
             if not isinstance(node, dict):
@@ -818,11 +841,20 @@ def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
                 if value is None:
                     value = (node.get("widgets_values") or [None])[0]
                 named.append((digest, _pack_digest(value)))
-            for widget, value in named:
-                value = _shelf_id_text(widget, value)
-                if isinstance(value, str) and value:
-                    found.append((widget, value))
-    return found
+            named = [(widget, _shelf_id_text(widget, value)) for widget, value in named]
+            named = [(w, v) for w, v in named if isinstance(v, str) and v]
+            if named:
+                # A node declaring no outputs says nothing, and is read.
+                outputs = node.get("outputs")
+                read = (
+                    not isinstance(outputs, list)
+                    or not outputs
+                    or any(
+                        isinstance(out, dict) and out.get("links") for out in outputs
+                    )
+                )
+                by_node.append((read, named))
+    return _wired_loaders(by_node)
 
 
 def _pack_digest(value):

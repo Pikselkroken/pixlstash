@@ -1792,13 +1792,13 @@ const picksDestination = computed(
 );
 
 /**
- * "edit" is "Edit with ComfyUI…" (the grid's menus): the built-in image edit
- * card run over the selection, which fills its picture input. The pictures are
- * what is edited, not recipes to replay, so none of their recipes is read.
+ * "edit" is the lightbox Edit tab's card that needs another picture: the
+ * workflow run over the open picture, which fills its picture input. The
+ * picture is what is edited, not a recipe to replay, so its recipe is not read.
  */
 const isEdit = computed(() => kind.value === "edit");
 const title = computed(() => {
-  if (isEdit.value) return "Edit with ComfyUI";
+  if (isEdit.value) return "Edit";
   if (loraSource.value) return "Create with LoRA";
   return kind.value === "card" ? "Run workflow" : "Run recipe";
 });
@@ -4125,6 +4125,11 @@ function runBody() {
   } else if (pictureIds.value.length) {
     body.picture_ids = pictureIds.value;
     body.target = activeKey.value;
+    // The Edit tab's selection rides along, on its one picture: the server
+    // puts it in that picture's alpha, the MASK its loader hands on.
+    if (props.source?.selection && pictureIds.value.length === 1) {
+      body.selection = props.source.selection;
+    }
     // A picture's own recipe again ("Run recipe", "Make more like these…" on
     // one): the picture is the run's output, so its picture input is what the
     // picture was made FROM, not the picture. An edit, a workflow the owner

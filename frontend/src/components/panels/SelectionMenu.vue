@@ -242,12 +242,32 @@
         class="ctx-item"
         :disabled="selectedCount === 0 || isReadOnly"
         @click="
-          $emit('edit-with-comfyui');
+          $emit('edit-pictures');
           $emit('close');
         "
       >
         <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
-        Edit with ComfyUI…
+        Edit…
+      </button>
+      <!-- Any two pictures, ComfyUI or not. Greyed with its reason otherwise,
+           mirrored in ImageGridContextMenu.vue. -->
+      <button
+        class="ctx-item"
+        :disabled="!!compareBlockReason"
+        @click="
+          $emit('compare-pictures');
+          $emit('close');
+        "
+      >
+        <Tooltip
+          :text="compareBlockReason || 'Lay one picture over the other, cut at a slider'"
+          activator="parent"
+        />
+        <v-icon class="ctx-icon">mdi-compare-horizontal</v-icon>
+        Compare
+        <span v-if="compareBlockReason" class="ctx-meta">{{
+          COMPARE_NOTES[compareBlockReason]
+        }}</span>
       </button>
       <div class="ctx-sep" />
     </template>
@@ -448,6 +468,7 @@ import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
+import { COMPARE_NOTES } from "../../utils/compare";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import EditStackMenu from "../widgets/EditStackMenu.vue";
@@ -483,6 +504,8 @@ const props = defineProps({
   // and doubles as their tooltip; null while at least one can be turned, since
   // a mixed selection rotates what it can and reports the skips.
   rotateBlockReason: { type: String, default: null },
+  // Why Compare is greyed (`compareBlockReason`), or null for two pictures.
+  compareBlockReason: { type: String, default: null },
 });
 
 const emit = defineEmits([
@@ -502,7 +525,8 @@ const emit = defineEmits([
   "open-plugin-panel",
   "make-more",
   "run-workflow",
-  "edit-with-comfyui",
+  "edit-pictures",
+  "compare-pictures",
   "reverse-image-search",
   "segment",
   "rotate-left",

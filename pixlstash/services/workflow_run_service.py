@@ -93,6 +93,7 @@ NO_SAVE_NODE = "no_save_node"
 NO_RUNNABLE_SOURCE = "no_runnable_source"
 LORA_NOT_SKIPPABLE = "lora_not_skippable"
 STAGE_NOT_SKIPPABLE = "stage_not_skippable"
+MASK_NOT_READ = "mask_not_read"
 MISSING_CHOICES = "missing_choices"
 
 # The sampler settings a run can swap for one this ComfyUI lists, and the

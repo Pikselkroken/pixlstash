@@ -525,14 +525,30 @@
           v-if="comfyuiConfigured"
           class="ctx-item"
           :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('edit-with-comfyui')"
+          @click="delegate('edit-pictures')"
         >
           <Tooltip
-            text="Change these pictures with a written instruction, using the Flux.2 Klein edit workflow"
+            text="Open the lightbox on the Edit tab: mark where, say what should change, or crop"
             activator="parent"
           />
           <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
-          Edit with ComfyUI…
+          Edit…
+        </button>
+        <!-- Any two pictures, ComfyUI or not; mirrors SelectionMenu.vue. -->
+        <button
+          class="ctx-item"
+          :disabled="!!compareBlockReason"
+          @click="delegate('compare-pictures')"
+        >
+          <Tooltip
+            :text="compareBlockReason || 'Lay one picture over the other, cut at a slider'"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-compare-horizontal</v-icon>
+          Compare
+          <span v-if="compareBlockReason" class="ctx-meta">{{
+            COMPARE_NOTES[compareBlockReason]
+          }}</span>
         </button>
         <button
           class="ctx-item"
@@ -792,6 +808,7 @@ import { hashCompareSnapshot } from "../../api/snapshots";
 import { getCharacterName } from "../../api/characters";
 import { faceBoxColor } from "../../utils/utils.js";
 import { isApplePlatform } from "../../utils/shortcutHints.js";
+import { COMPARE_NOTES } from "../../utils/compare";
 import { ROTATE_CCW, ROTATE_CW, rotateMenuLabel } from "../../utils/rotate";
 import { useSnapshotsStore } from "../../stores/useSnapshotsStore";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
@@ -834,6 +851,8 @@ const props = defineProps({
   // selection stays enabled and the receipt reports what was left alone, the
   // same rule Delete and Keep cover only follow.
   rotateBlockReason: { type: String, default: null },
+  // Why Compare is greyed (`compareBlockReason`), or null for two pictures.
+  compareBlockReason: { type: String, default: null },
   // Reason string when at least one selected picture is frozen by a locked set;
   // gates the label-data actions (tag / auto-tag / description / delete) and is
   // shown as their tooltip. Null when nothing in the selection is locked.
@@ -905,7 +924,8 @@ const emit = defineEmits([
   "open-plugin-panel",
   "make-more",
   "run-workflow",
-  "edit-with-comfyui",
+  "edit-pictures",
+  "compare-pictures",
   "use-as-input",
   "segment",
   "auto-tag",

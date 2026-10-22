@@ -3228,6 +3228,7 @@ describe("Open in ComfyUI", () => {
     const described = button.attributes("aria-describedby");
     const reason = wrapper.find(`#${described}`);
     expect(reason.text()).toContain("needs the ComfyUI-PixlStash node");
+    expect(reason.text()).toContain("leave Workflows and come back");
     const link = reason.find("a");
     expect(link.attributes("href")).toBe(
       "https://github.com/Pikselkroken/ComfyUI-PixlStash",

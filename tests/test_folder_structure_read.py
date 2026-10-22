@@ -1243,29 +1243,56 @@ def test_the_identity_threshold_is_where_it_says_it_is():
     A fixture built from the constant slides with it: the first version of this
     test passed at ``SAME_IDENTITY_COSINE = 0.05`` while its docstring claimed it
     would go red, because both sides of the comparison moved together. These
-    numbers are fixed, so moving the constant off 0.35 turns one of them red -
+    numbers are fixed, so moving the constant off 0.45 turns one of them red -
     which is the whole point of pinning the value that decides whether a real
     folder reads as a Person."""
-    assert SAME_IDENTITY_COSINE == 0.35, (
-        "the vectors below are chosen against 0.35; re-pick them deliberately"
+    assert SAME_IDENTITY_COSINE == 0.45, (
+        "the vectors below are chosen against 0.45; re-pick them deliberately"
     )
-    over = [_unit(1)] + [_near(1, 0.40) for _ in range(3)]
-    under = [_unit(1)] + [_near(1, 0.30) for _ in range(3)]
+    over = [_unit(1)] + [_near(1, 0.50) for _ in range(3)]
+    under = [_unit(1)] + [_near(1, 0.40) for _ in range(3)]
     assert _dominant_identity_count(over) == 4
     assert _dominant_identity_count(under) == 3, (
         "faces below the threshold are a different identity"
     )
 
 
+def test_a_face_near_many_different_people_is_not_one_person():
+    """#1988: the medoid alone used to decide membership, so one average face
+    within the threshold of sixteen strangers read as "one face, 17 of 20"."""
+    # Each stranger is 0.6 along the hub and 0.8 along its own axis: cosine
+    # 0.60 to the hub, 0.36 to every other stranger - either side of 0.45.
+    hub = _unit(0)
+    strangers = [0.6 * hub + 0.8 * _unit(i) for i in range(1, 17)]
+    faces = [hub] + strangers + [_unit(i) for i in range(17, 20)]
+    # The largest coherent group is a pair: the hub and any one stranger.
+    assert _dominant_identity_count(faces) == 2
+
+    # The same twenty with the strangers made one person still counts them all.
+    twin = 0.6 * hub + 0.8 * _unit(1)
+    assert _dominant_identity_count([hub] + [twin] * 16 + faces[17:]) == 17
+
+
+def test_a_face_bridging_two_look_alike_groups_does_not_merge_them():
+    """Review on #1994: two groups of nine, 0.36 apart, both 0.60 from one
+    bridging face. Each member matches 10 of the 19, which cleared a
+    "more than half" coherence rule and read as "one face, 19 of 20"."""
+    bridge = _unit(0)
+    left = [0.6 * bridge + 0.8 * _unit(1)] * 9
+    right = [0.6 * bridge + 0.8 * _unit(2)] * 9
+    faces = [bridge] + left + right + [_unit(3)]
+    assert _dominant_identity_count(faces) == 10, "one group plus the bridge"
+
+
 def test_the_face_majority_is_where_it_says_it_is():
-    """14 of 20 is 70% and reads as one person; 13 of 20 is 65% and does not."""
-    assert FACE_MAJORITY_PCT == 70, "the counts below are chosen against 70"
+    """16 of 20 is 80% and reads as one person; 15 of 20 is 75% and does not."""
+    assert FACE_MAJORITY_PCT == 80, "the counts below are chosen against 80"
     with _tree(_faces_spec(40)) as root:
         at_the_line = FolderStructureRead(
-            root, detect_faces=_detector_from_identity(lambda i: 1 if i < 14 else i + 2)
+            root, detect_faces=_detector_from_identity(lambda i: 1 if i < 16 else i + 2)
         ).run()
         below = FolderStructureRead(
-            root, detect_faces=_detector_from_identity(lambda i: 1 if i < 13 else i + 2)
+            root, detect_faces=_detector_from_identity(lambda i: 1 if i < 15 else i + 2)
         ).run()
     assert "person" in _offered(_rows(at_the_line, 2)["mira"]["proposal"])
     assert "person" not in _offered(_rows(below, 2)["mira"]["proposal"])
@@ -1500,7 +1527,7 @@ def test_a_six_picture_folder_needs_five_faces_not_four():
             detect_faces=_detector_from_identity(lambda i: 1 if i < 5 else i + 2),
         ).run()
     assert "person" not in _offered(_rows(four, 2)["mira"]["proposal"]), (
-        "4 of 6 is 66.7% and must not clear a 70% rule"
+        "4 of 6 is 66.7% and must not clear an 80% rule"
     )
     assert "person" in _offered(_rows(five, 2)["mira"]["proposal"])
 
