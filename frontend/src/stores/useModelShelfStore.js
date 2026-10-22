@@ -3140,8 +3140,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       async () => {
         const out = { removed: [], kept };
         if (kept.length) await changeDeclines(set.id, { add: kept });
-        if (rows.length) {
-          out.removed = (await removeWorkflowSetMembers(set.id, rows)).removed;
+        try {
+          if (rows.length) {
+            out.removed = (await removeWorkflowSetMembers(set.id, rows)).removed;
+          }
+        } catch (err) {
+          // The second write failed, so no receipt will carry an Undo for the
+          // first: take it back, or the set keeps a removal nobody can undo.
+          if (kept.length) await changeDeclines(set.id, { remove: kept });
+          throw err;
         }
         return out;
       },
@@ -3219,10 +3226,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return setWrite(
       async () => {
         const { previous } = await changeDeclines(set.id, { clear: true });
-        const removed = added.length
-          ? (await removeWorkflowSetMembers(set.id, added)).removed
-          : [];
-        return { previous, removed };
+        try {
+          const removed = added.length
+            ? (await removeWorkflowSetMembers(set.id, added)).removed
+            : [];
+          return { previous, removed };
+        } catch (err) {
+          // As in a removal: a failed second write leaves the set as it was,
+          // never with its removed list wiped and no Undo for it.
+          await changeDeclines(set.id, { add: previous });
+          throw err;
+        }
       },
       {
         receipt: `"${setLabel(set)}" is automatic again: it holds what its pictures ran with.`,

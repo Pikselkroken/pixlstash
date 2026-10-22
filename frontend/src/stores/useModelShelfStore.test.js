@@ -3913,6 +3913,30 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(markWorkflowSetSeen).toHaveBeenCalledWith(7, ["b".repeat(64)]);
   });
 
+  it("takes back the first write of a removal or a reset when the second fails", async () => {
+    const store = await openOn([livingSet(7, { extra: [added] })]);
+    const lists = [];
+    setWorkflowSetDeclines.mockReset().mockImplementation(async (_, list) => {
+      lists.push(list);
+      return { set: { declined: list }, previous: ["e".repeat(64)] };
+    });
+    removeWorkflowSetMembers
+      .mockReset()
+      .mockRejectedValue(new Error("test-remove-failed"));
+    // The LoRA is kept out, then the added VAE's row cannot be deleted.
+    await store.removeFromHandMadeSet(store.handMadeSets[0], [
+      "b".repeat(64),
+      "d".repeat(64),
+    ]);
+    expect(lists).toEqual([["b".repeat(64)], []]);
+
+    lists.length = 0;
+    await store.resetHandMadeSet(store.handMadeSets[0]);
+    // Cleared, then put back as it was.
+    expect(lists).toEqual([[], ["e".repeat(64)]]);
+    expect(useNoticeStore().notices.at(-1)).toMatchObject({ level: "error" });
+  });
+
   it("restores a removed model, and resets a set to automatic with an Undo", async () => {
     useOperationStore().setLocalReceiptHost(true);
     const kept = { ...member(lora, "b".repeat(64)), slot: "lora", name: "style" };
