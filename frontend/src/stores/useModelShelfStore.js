@@ -2744,8 +2744,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * seen what the pictures brought into it (#1972): its New marks go. Drawn
    * while the tray is open, so the owner sees what joined before it clears.
    */
-  watch(openSetKey, (_, left) => {
+  watch(openSetKey, async (_, left) => {
     if (!left?.startsWith("hand:")) return;
+    // A write still on the wire when the tray closes lands after it (a
+    // Restore brings a model back unseen): wait it out and read again, so the
+    // mark covers what the tray ended up holding.
+    while (setWritesInFlight.size) {
+      await Promise.allSettled([...setWritesInFlight]);
+      await loadWorkflowSets({ force: true });
+    }
     const set = handMadeSets.value.find((s) => `hand:${s.id}` === left);
     const fresh = (set?.members ?? []).filter((m) => m.new);
     if (!fresh.length) return;
@@ -3202,8 +3209,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * with. Its name stays. Undo puts both lists back.
    */
   function resetHandMadeSet(set) {
+    // The set as the last read left it, as `removeFromHandMadeSet` reads it:
+    // a caller may hold a copy from before a write that has since landed.
+    const live = handMadeSets.value.find((s) => s.id === set.id) ?? set;
     // The set's own checkpoints are never "added": they are what it follows.
-    const added = (set.members ?? [])
+    const added = (live.members ?? [])
       .filter((m) => m.origin === "added")
       .map((m) => m.sha256);
     return setWrite(

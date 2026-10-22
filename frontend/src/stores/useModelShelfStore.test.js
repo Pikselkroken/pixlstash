@@ -3875,6 +3875,44 @@ describe("sets from pictures are hidden, never deleted", () => {
     expect(removeWorkflowSetMembers).not.toHaveBeenCalled();
   });
 
+  it("resets from the set as last read, not a stale copy of it", async () => {
+    const store = await openOn([livingSet(7, { extra: [added] })]);
+    setWorkflowSetDeclines
+      .mockReset()
+      .mockResolvedValue({ set: { declined: [] }, previous: [] });
+    removeWorkflowSetMembers.mockReset().mockResolvedValue({ removed: [] });
+    // A copy from before the add: it does not know the VAE is the owner's.
+    await store.resetHandMadeSet({ id: 7, members: [] });
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(7, ["d".repeat(64)]);
+  });
+
+  it("marks what a write still on the wire brought in, once it lands", async () => {
+    const kept = { ...member(lora, "b".repeat(64)), slot: "lora", name: "style" };
+    const store = await openOn([livingSet(7, { removed: [kept] })]);
+    markWorkflowSetSeen.mockReset().mockResolvedValue({ seen: [] });
+    let land;
+    setWorkflowSetDeclines
+      .mockReset()
+      .mockImplementation(() => new Promise((resolve) => (land = resolve)));
+    const restoring = store.restoreToHandMadeSet(store.handMadeSets[0], [
+      "b".repeat(64),
+    ]);
+    // Closed while the Restore is out: nothing in the set is new yet.
+    store.toggleSet("hand:7");
+    await flush();
+    expect(markWorkflowSetSeen).not.toHaveBeenCalled();
+    // It lands, and the read after it serves the LoRA back, unseen.
+    fetchWorkflowSets.mockResolvedValue({
+      ...(await fetchWorkflowSets()),
+      hand_made: [livingSet(7, { newLora: true })],
+    });
+    land({ set: { declined: [] }, previous: ["b".repeat(64)] });
+    await restoring;
+    await flush();
+    await flush();
+    expect(markWorkflowSetSeen).toHaveBeenCalledWith(7, ["b".repeat(64)]);
+  });
+
   it("restores a removed model, and resets a set to automatic with an Undo", async () => {
     useOperationStore().setLocalReceiptHost(true);
     const kept = { ...member(lora, "b".repeat(64)), slot: "lora", name: "style" };
