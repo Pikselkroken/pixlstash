@@ -44,8 +44,6 @@ const putSetVerdict = vi.fn();
 const listAdapters = vi.fn();
 const listSupport = vi.fn();
 
-// The favourites are read on mount; answered empty so no test reaches the
-// network. The shelf reads the store, which the suites here do not need to see.
 // The favourites: read on mount and written by a card's heart, doubled so the
 // suite says what the hub holds and asserts the write.
 const listFavourites = vi.fn();
@@ -3729,39 +3727,38 @@ describe("hand-made sets (#1520)", () => {
     });
   });
 
-    it("leads a favourite hand-made set inside its group, and the groups keep their order", async () => {
-      listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["hand:11"] });
-      const { store } = await mountGrid({
-        rows: [row(1, "realvisXL_v5", "checkpoint")],
-        handMade: [handSet(10, [SET_CKPT]), handSet(11, [SET_CKPT])],
-      });
-      expect(store.handMadeGroups.map((g) => g.key)).toEqual(["hand:11", "hand:10"]);
-      store.setView({ favouritesFirst: false });
-      expect(store.handMadeGroups.map((g) => g.key)).toEqual(["hand:10", "hand:11"]);
+  it("leads a favourite hand-made set inside its group, and the groups keep their order", async () => {
+    listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["hand:11"] });
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT]), handSet(11, [SET_CKPT])],
     });
+    expect(store.handMadeGroups.map((g) => g.key)).toEqual(["hand:11", "hand:10"]);
+    store.setView({ favouritesFirst: false });
+    expect(store.handMadeGroups.map((g) => g.key)).toEqual(["hand:10", "hand:11"]);
+  });
 
-    it("draws a heart on a card and writes the set's own key when it is pressed", async () => {
-      const { wrapper } = await mountGrid({
-        rows: [row(1, "realvisXL_v5", "checkpoint")],
-        handMade: [handSet(10, [SET_CKPT])],
-      });
-      const heart = wrapper.find('[data-testid="model-set-card"] [data-testid="favourite-heart"]');
-      expect(heart.exists()).toBe(true);
-      await heart.trigger("click");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(setFavourites).toHaveBeenCalledWith("set", ["hand:10"], true);
+  it("draws a heart on a card and writes the set's own key when it is pressed", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT])],
     });
+    const heart = wrapper.find('[data-testid="model-set-card"] [data-testid="favourite-heart"]');
+    expect(heart.exists()).toBe(true);
+    await heart.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(setFavourites).toHaveBeenCalledWith("set", ["hand:10"], true);
+  });
 
-    it("Favourites only narrows the grid's cards to the favourite sets", async () => {
-      listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["hand:11"] });
-      const { store } = await mountGrid({
-        rows: [row(1, "realvisXL_v5", "checkpoint")],
-        handMade: [handSet(10, [SET_CKPT]), handSet(11, [SET_CKPT])],
-      });
-      store.setFilters({ favouritesOnly: true });
-      expect(store.handMadeGroups.map((g) => g.key)).toEqual(["hand:11"]);
+  it("Favourites only narrows the grid's cards to the favourite sets", async () => {
+    listFavourites.mockResolvedValue({ model: [], workflow: [], set: ["hand:11"] });
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT]), handSet(11, [SET_CKPT])],
     });
-
+    store.setFilters({ favouritesOnly: true });
+    expect(store.handMadeGroups.map((g) => g.key)).toEqual(["hand:11"]);
+  });
 });
 
 describe("hiding a set from pictures", () => {
