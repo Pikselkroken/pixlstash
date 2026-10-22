@@ -35,7 +35,7 @@
             </p>
             <AppButton
               size="sm"
-              variant="outline"
+              variant="secondary"
               icon-left="refresh"
               :loading="store.loading"
               data-testid="wtp-reread"
