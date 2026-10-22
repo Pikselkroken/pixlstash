@@ -413,3 +413,24 @@ def test_a_name_already_under_its_folder_is_not_put_under_it_twice(
         done = _wait(start_download(hub, "loras/style.safetensors")["id"])
     assert done["status"] == STATUS_DONE, done
     assert (chosen / "loras" / "style.safetensors").is_file()
+
+
+def test_a_thread_that_will_not_start_leaves_no_entry_behind(
+    hub, target, linked, monkeypatch
+):
+    def refuse(self):
+        raise RuntimeError("can't start new thread")
+
+    linked("https://example.com/never-fetched", None)
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    with pytest.raises(DownloadRefused) as caught:
+        start_download(hub, "unstarted.safetensors")
+    assert caught.value.status_code == 503
+    assert live_downloads() == []
+    monkeypatch.undo()
+    linked("https://example.com/never-fetched", None)
+    # Not "already being downloaded": nothing was left registered.
+    (target[0] / "unstarted.safetensors").write_bytes(b"x")
+    with pytest.raises(DownloadRefused) as caught:
+        start_download(hub, "unstarted.safetensors")
+    assert "already in" in str(caught.value)

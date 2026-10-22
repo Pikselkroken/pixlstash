@@ -213,7 +213,17 @@ def start_download(
         name=f"model-download-{entry['id'][:8]}",
         daemon=True,
     )
-    thread.start()
+    try:
+        thread.start()
+    except RuntimeError as exc:
+        # Left registered as running, it would refuse every retry as "already
+        # being downloaded" until a restart.
+        with _lock:
+            _downloads.pop(entry["id"], None)
+        logger.error("Could not start the download of %s: %s", target, exc)
+        raise DownloadRefused(
+            f"The download of {relpath} could not be started.", 503
+        ) from exc
     logger.info("Downloading %s from %s into %s.", relpath, parsed.netloc, target)
     return _public(entry)
 
