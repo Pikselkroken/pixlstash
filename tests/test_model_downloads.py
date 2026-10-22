@@ -116,7 +116,9 @@ def target(hub, tmp_path):
 
 @pytest.fixture
 def adapter_bytes(tmp_path):
-    return open(write_adapter(tmp_path / "src.safetensors"), "rb").read()
+    source = tmp_path / "src.safetensors"
+    write_adapter(source)
+    return source.read_bytes()
 
 
 def _wait(download_id, timeout=10):
