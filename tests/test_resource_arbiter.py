@@ -182,6 +182,24 @@ def test_comfyui_runs_share_one_reservation():
         lease.release()
 
 
+def test_a_comfyui_that_cannot_be_read_waits_on_its_last_card():
+    """A failed read is not a remote ComfyUI, which would be granted unchecked."""
+    arb, _fake, _ = make()
+    comfy = FakeComfy(usage=0)
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    arb.snapshot()
+
+    def unreadable():
+        raise RuntimeError("ComfyUI did not answer")
+
+    comfy.usage_mb = unreadable
+    lease = arb.request(Tenant.COMFYUI, "run", need_mb=1000)
+    assert lease.device == CARD
+    assert lease.state is LeaseState.WAITING
+    assert lease.waiting_reason["code"] == "comfyui_busy"
+    lease.release()
+
+
 def test_heavy_is_strict_fifo_per_device():
     arb, fake, _ = make(used_mb=10000)
     big = arb.request(Tenant.AITOOLKIT, "big", device=CARD, need_mb=20000)

@@ -654,6 +654,10 @@ class ResourceArbiter:
             ram_now = {"total_mb": 0, "available_mb": 0}
         with self._lock:
             tenant_probes = dict(self._probes) if probes else {}
+            last_devices = {
+                tenant: state.get("device")
+                for tenant, state in self._probe_state.items()
+            }
         states = {}
         for tenant, probe in tenant_probes.items():
             try:
@@ -669,8 +673,10 @@ class ResourceArbiter:
                     tenant.value,
                     exc,
                 )
+                # Its last card, not None: None means a remote tenant, which
+                # is granted unchecked. Busy keeps its leases waiting.
                 states[tenant] = {
-                    "device": None,
+                    "device": last_devices.get(tenant),
                     "usage": None,
                     "busy": True,
                     "idle": False,

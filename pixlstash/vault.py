@@ -2232,14 +2232,31 @@ class Vault:
         stopped = self._task_runner.preempt_gpu(f"preempted by {lease.label}")
         if not self._task_runner.wait_for_gpu_idle():
             logger.warning(
-                "The GPU worker did not finish its batch within a minute, so "
-                "the models stay loaded for %s (%s)",
+                "The GPU worker did not finish its batch within a minute; the "
+                "models are unloaded once it does, for %s (%s)",
                 lease.id,
                 lease.label,
             )
+            # Off the arbiter's thread: the planner hold keeps new work off,
+            # so the batch in flight is the last before the room is made.
+            threading.Thread(
+                target=self._unload_once_idle,
+                args=(lease, self._task_runner),
+                name=f"yield-{lease.id}",
+                daemon=True,
+            ).start()
             return stopped
         self.unload_models()
         return stopped
+
+    def _unload_once_idle(self, lease, runner) -> None:
+        """Unload the models when *runner*'s GPU work ends, if *lease* still waits."""
+        while lease.state.value == "waiting" and not self._closed:
+            if runner.wait_for_gpu_idle(timeout_s=5.0):
+                self.unload_models()
+                return
+            # A stopped runner answers at once; do not spin on it.
+            time.sleep(0.5)
 
     def _release_yield_hold(self, lease_id: str) -> None:
         if lease_id in self._yield_holds:

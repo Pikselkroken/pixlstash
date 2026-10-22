@@ -324,3 +324,18 @@ def test_a_run_already_started_is_read_off_the_queue(monkeypatch):
         "run-a": "running",
         "run-b": "queued",
     }
+
+
+def test_a_run_still_going_keeps_its_run_id_past_newer_ended_runs(monkeypatch):
+    monkeypatch.setattr(comfyui_service, "MAX_RUN_OUTCOMES", 2)
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        monkeypatch.setattr(comfyui_service, name, {})
+    monkeypatch.setattr(comfyui_service, "_listening", {COMFY})
+    comfyui_service.follow_run("p-long", COMFY, run_id="run-long")
+    for n in (1, 2):
+        comfyui_service.follow_run(f"p-{n}", COMFY, run_id=f"run-{n}")
+        comfyui_service.record_run_outcome(f"p-{n}", "completed")
+    comfyui_service.follow_run("p-3", COMFY, run_id="run-3")
+    assert comfyui_service.run_outcome("run-long")["status"] == "running"
+    assert comfyui_service.run_outcome("run-3")["status"] == "running"
+    assert len(comfyui_service._run_ids) == 2

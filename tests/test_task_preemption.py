@@ -226,3 +226,26 @@ def test_pixlstash_yields_only_for_a_lease_that_still_waits(meanwhile, stopped):
     assert [step for step in done if not step.startswith("release")] == stopped
     # The hold ends with the yield it was for, or stays for the lease's grant.
     assert (vault._yield_holds == set()) is (meanwhile is not LeaseState.WAITING)
+
+
+def test_models_are_unloaded_once_a_batch_that_outran_the_wait_ends():
+    """The waiting lease is not left short of the memory the models hold."""
+    unloaded = threading.Event()
+    answers = iter([False, False, True])
+    runner = SimpleNamespace(
+        preempt_gpu=lambda reason: [],
+        wait_for_gpu_idle=lambda timeout_s=60.0: next(answers),
+    )
+    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+    vault = SimpleNamespace(
+        _task_runner=runner,
+        _closed=False,
+        _work_planner=None,
+        _yield_holds=set(),
+        unload_models=unloaded.set,
+    )
+    vault._unload_once_idle = lambda lease, runner: Vault._unload_once_idle(
+        vault, lease, runner
+    )
+    Vault._yield_gpu(vault, lease)
+    assert unloaded.wait(5), "the models were never unloaded"

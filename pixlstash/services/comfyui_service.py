@@ -304,8 +304,17 @@ def follow_run(
             _held_cancels.pop(run_id, None)
             _run_outcomes.pop(run_id, None)
             _run_ids[run_id] = prompt_id
+            # As the outcomes are kept: an ended run's id goes before an older
+            # one still going, and never the one just added.
             while len(_run_ids) > MAX_RUN_OUTCOMES:
-                del _run_ids[next(iter(_run_ids))]
+                ended = (
+                    rid
+                    for rid, pid in _run_ids.items()
+                    if rid != run_id
+                    and (_run_outcomes.get(pid) or {}).get("status")
+                    not in ("running", "waiting")
+                )
+                del _run_ids[next(ended, None) or next(iter(_run_ids))]
     record_run_outcome(prompt_id, "running", library_uuid=library_uuid, run_id=run_id)
     with _run_outcomes_lock:
         _live_runs[prompt_id] = {
