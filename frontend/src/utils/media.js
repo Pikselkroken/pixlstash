@@ -162,6 +162,12 @@ export function isModelFile(file) {
   return filename.toLowerCase().endsWith(MODEL_FILE_EXTENSION);
 }
 
+/** A file the Workflows view adds: a ComfyUI workflow is a `.json`. */
+export function isWorkflowFile(file) {
+  const filename = typeof file === "string" ? file : file?.name || "";
+  return filename.toLowerCase().endsWith(".json");
+}
+
 export function isSupportedImportFile(file) {
   return (
     isImportableMediaFile(file) ||

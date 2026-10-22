@@ -186,16 +186,27 @@ describe("useWindowFileImport", () => {
     expect(startLocalImport).toHaveBeenCalledTimes(1);
   });
 
-  // F1b (#1404) retired the shelf, and the grid that replaced it has no drop
-  // handler — a workflow file is added through *Add…*. The stand-aside that
-  // let the shelf claim a JSON-only drop went with it, so there is no longer
-  // any element this listener treats specially: JSON is reported as
-  // unsupported wherever it lands.
-  //
-  // Deliberately NOT written as "dropped on `.wfv`". Nothing reads a class
-  // here any more, so a test that built one would pass whatever it was named
-  // — an assertion about generic handling wearing a view-specific title.
-  it("reports workflow JSON as unsupported wherever it is dropped", async () => {
+  // A drop of workflow JSON alone onto the Workflows view is the view's: it
+  // adds the files itself, so this listener must not also call them
+  // unsupported. Anywhere else, and with a picture beside it, it is still ours.
+  it("leaves workflow JSON dropped on the Workflows view to that view", async () => {
+    const view = document.createElement("div");
+    view.className = "wfv";
+    const card = document.createElement("span");
+    view.appendChild(card);
+    document.body.appendChild(view);
+    try {
+      await dropOn(card, "flow.json", "other.JSON");
+      expect(notices.notices).toEqual([]);
+      expect(startLocalImport).not.toHaveBeenCalled();
+      await dropOn(card, "flow.json", "holiday.jpg");
+      expect(startLocalImport).toHaveBeenCalledTimes(1);
+    } finally {
+      view.remove();
+    }
+  });
+
+  it("reports workflow JSON dropped anywhere else as unsupported", async () => {
     await drop("flow.json");
     expect(notices.notices.length).toBe(1);
     expect(startLocalImport).not.toHaveBeenCalled();

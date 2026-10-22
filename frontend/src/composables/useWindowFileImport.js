@@ -4,6 +4,7 @@ import {
   isInternalImageDrag,
   isModelFile,
   isSupportedImportFile,
+  isWorkflowFile,
 } from "../utils/media.js";
 import { addModelFile } from "../api/modelFiles";
 import { errorDetail } from "../utils/apiError";
@@ -50,6 +51,20 @@ export function useWindowFileImport({ sidebarRef }) {
     const target = event?.target;
     if (!(target instanceof Element)) return false;
     return Boolean(target.closest(".image-grid, .grid-scroll-wrapper"));
+  }
+
+  /**
+   * A drop of workflow JSON alone onto the Workflows view is that view's to
+   * take. This listener runs first, in the capture phase, so it stands aside
+   * rather than report the files as unsupported beside the view's own
+   * "Added". Anything else dropped there, a picture beside the JSON included,
+   * still imports here.
+   */
+  function isWorkflowDropOnWorkflowsView(event) {
+    const target = event?.target;
+    if (!(target instanceof Element) || !target.closest(".wfv")) return false;
+    const dropped = Array.from(event.dataTransfer?.files || []);
+    return dropped.length > 0 && dropped.every(isWorkflowFile);
   }
 
   function isExternalFileDragEvent(event) {
@@ -203,6 +218,7 @@ export function useWindowFileImport({ sidebarRef }) {
       event.preventDefault();
       return;
     }
+    if (isWorkflowDropOnWorkflowsView(event)) return;
     event.preventDefault();
     // Decided synchronously, from the flat list, because `stopPropagation` only
     // counts while the event is still being dispatched - which is now, before

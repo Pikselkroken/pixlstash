@@ -1663,7 +1663,7 @@ describe("the card menu opens the picture you pointed at", () => {
   });
 });
 
-describe("Add… and Unfiled recipes", () => {
+describe("Add…, a dropped file, and Unfiled recipes", () => {
   it("imports each file as a new workflow and opens the last one", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
@@ -1712,6 +1712,59 @@ describe("Add… and Unfiled recipes", () => {
     await flush();
     await flush();
     expect(wrapper.find('[role="status"]').text()).toBe("Added 2 workflows");
+  });
+
+  it("adds a .json dropped on the view the way Add… does, and leaves the rest", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    importWorkflow.mockResolvedValue({ name: "flow", workflow_id: "d" });
+    const files = [
+      new File(['{"nodes": []}'], "flow.JSON", { type: "application/json" }),
+      new File(["x"], "holiday.jpg", { type: "image/jpeg" }),
+    ];
+    const dataTransfer = { files, types: ["Files"], dropEffect: "none" };
+    const card = wrapper.find(".wfv-row");
+    await card.trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).toContain("wfv--drop");
+    await card.trigger("drop", { dataTransfer });
+    await flush();
+    await flush();
+
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+    // The picture is the window-wide importer's, never posted as a workflow.
+    expect(importWorkflow).toHaveBeenCalledTimes(1);
+    expect(importWorkflow).toHaveBeenCalledWith({
+      name: "flow",
+      workflow: { nodes: [] },
+    });
+    expect(store.selectedKeys).toEqual(["d"]);
+    expect(wrapper.find('[role="status"]').text()).toBe("Added flow");
+  });
+
+  it("says nothing about a picture dropped on the view", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    importWorkflow.mockReset();
+    const files = [new File(["x"], "holiday.jpg", { type: "image/jpeg" })];
+    await wrapper
+      .find(".wfv-row")
+      .trigger("drop", { dataTransfer: { files, types: ["Files"] } });
+    await flush();
+    // Not read as a workflow, so not reported as one that failed to add.
+    expect(store.error).toBe("");
+    expect(importWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("is not a drop target for a drag that carries no files", async () => {
+    const wrapper = await grid();
+    importWorkflow.mockReset();
+    const dataTransfer = { files: [], types: ["text/plain"] };
+    await wrapper.find(".wfv-row").trigger("dragenter", { dataTransfer });
+    expect(wrapper.find(".wfv").classes()).not.toContain("wfv--drop");
+    await wrapper.find(".wfv-row").trigger("drop", { dataTransfer });
+    await flush();
+    expect(importWorkflow).not.toHaveBeenCalled();
   });
 
   it("lists the unfiled recipes below the grid, and nothing while there are none", async () => {
