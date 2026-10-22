@@ -438,6 +438,14 @@ describe("Which GPU PixlStash uses", () => {
     expect(apply().attributes("disabled")).toBeDefined();
   });
 
+  it("disables the VRAM limit when the settings it saves into cannot be read", async () => {
+    compute.getUserConfig.mockReset().mockRejectedValue(new Error("offline"));
+    const wrapper = mount(ComputeSection, { props: { view: "compute" } });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Failed to load the sharing settings.");
+    expect(wrapper.findComponent({ name: "v-slider" }).attributes("disabled")).toBe("true");
+  });
+
   it("writes the run-alone switch through the user config", async () => {
     const wrapper = mount(ComputeSection, { props: { view: "compute" } });
     await flushPromises();

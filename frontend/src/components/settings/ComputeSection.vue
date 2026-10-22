@@ -433,6 +433,7 @@ const maxVramGbSavedValue = ref(null);
 const maxVramGbHydrating = ref(false);
 const maxVramGbAutoSaveReady = ref(false);
 let maxVramGbSaveTimer = null;
+let maxVramGbSavedTimer = null;
 
 function deriveMaxVramSliderMax(totalVramGb) {
   const total = Number(totalVramGb);
@@ -514,7 +515,9 @@ async function saveMaxVramGb() {
   } finally {
     maxVramGbLoading.value = false;
     if (maxVramGbSuccess.value) {
-      setTimeout(() => {
+      if (maxVramGbSavedTimer) clearTimeout(maxVramGbSavedTimer);
+      maxVramGbSavedTimer = setTimeout(() => {
+        maxVramGbSavedTimer = null;
         if (maxVramGbSuccess.value === "Saved.") maxVramGbSuccess.value = "";
       }, 2000);
     }
@@ -553,6 +556,7 @@ async function loadSharing() {
   } catch (err) {
     console.warn("Could not read the GPU sharing settings.", err);
     maxVramGbAutoSaveReady.value = false;
+    maxVramGbHydrating.value = false;
     sharingError.value = "Failed to load the sharing settings.";
   }
 }
@@ -591,6 +595,7 @@ onUnmounted(() => {
   if (stopProgress) stopProgress();
   if (portCheckTimer) clearTimeout(portCheckTimer);
   if (maxVramGbSaveTimer) clearTimeout(maxVramGbSaveTimer);
+  if (maxVramGbSavedTimer) clearTimeout(maxVramGbSavedTimer);
 });
 
 watch(
@@ -898,7 +903,7 @@ watch(
               color="primary"
               track-color="rgba(var(--v-theme-on-surface), 0.2)"
               aria-label="PixlStash's VRAM limit"
-              :disabled="maxVramGbLoading || maxVramGbHydrating"
+              :disabled="maxVramGbLoading || maxVramGbHydrating || !maxVramGbAutoSaveReady"
             />
           </div>
           <span class="vram-meta">

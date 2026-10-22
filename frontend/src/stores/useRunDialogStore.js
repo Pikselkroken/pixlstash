@@ -11,7 +11,7 @@
 // follows it and the Tasks tab reads it from the poll (`useTasksStore`).
 
 import { useTasksStore } from "./useTasksStore";
-import { normalizeRunId, runKey, runKeys } from "../utils/gpuMemory";
+import { normalizeRunId, runKey, runKeys, runMatches } from "../utils/gpuMemory";
 
 import { defineStore } from "pinia";
 import { onScopeDispose, ref } from "vue";
@@ -179,7 +179,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     if (!ran.promptIds?.length && !ran.runIds?.length) return true;
     return useTasksStore().comfyuiRuns.some(
       (run) =>
-        String(run.prompt_id) === promptId &&
+        runMatches(run, promptId) &&
         ran.runIds?.includes(runKey(run)),
     );
   }
