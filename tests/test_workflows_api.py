@@ -20081,6 +20081,49 @@ def test_a_recipe_on_an_automatic_workflow_keeps_its_graph_through_a_save(voted)
     assert "2" in _run(voted, saved_recipe_id=recipe_id)
 
 
+def test_an_automatic_workflows_earlier_version_duplicates_and_opens(voted):
+    """#1792 where version 1 is the graph read off the pictures.
+
+    And a version whose stored graph will not read is a 404, never the
+    pictures' graph under that version's number: the fallback a run takes
+    there is not that version. Wrong if either verb answers 201/200 then.
+    """
+    r = _save(
+        voted,
+        RUN_WF,
+        changes={"skip_loras": [{"node_id": "2", "field": "lora_name"}]},
+    )
+    assert r.status_code == 200, r.text
+    assert [row[0] for row in _versions_of(voted, RUN_WF)] == [1, 2]
+
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/duplicate", params={"version": 1})
+    assert r.status_code == 201, r.text
+    assert "2" in manual_document(voted.server.hub, r.json()["workflow_id"])
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/versions/1/opening")
+    assert r.status_code == 200, r.text
+    held = voted.owner.get(
+        f"{API}/workflows/{RUN_WF}/graph", params={"run": r.json()["opening"]}
+    ).json()
+    assert "2" in held["workflow"] and held["version"] == 1
+    assert (
+        "2" not in voted.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
+    )
+
+    with voted.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_version SET document = '{not json' "
+            "WHERE workflow_id = ? AND version = 1",
+            (RUN_WF,),
+        )
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/duplicate", params={"version": 1})
+    assert r.status_code == 404, r.text
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/versions/1/opening")
+    assert r.status_code == 404, r.text
+    # The version it is on still duplicates by number.
+    r = voted.owner.post(f"{API}/workflows/{RUN_WF}/duplicate", params={"version": 2})
+    assert r.status_code == 201, r.text
+
+
 def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
     """So the Tasks tab can offer the two verbs after the pictures are back."""
     _run(saving, workflow_id=saving.manual, **SKIP_FIVE)

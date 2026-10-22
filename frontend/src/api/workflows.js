@@ -426,8 +426,8 @@ export async function restoreWorkflowVersion(workflowId, version) {
 /**
  * Hold one version of a workflow for ComfyUI to open, without going back to
  * it (#1792). Answered as `openWorkflowRun` is, and opened the same way:
- * `?pixlstash_run=<opening>&pixlstash_of=<workflow_id>`. What ComfyUI saves
- * from it comes back as a new workflow.
+ * `?pixlstash_run=<opening>&pixlstash_of=<workflow_id>`, where the
+ * ComfyUI-PixlStash node sends a save back as a new workflow.
  *
  * @param {string} workflowId
  * @param {number} version

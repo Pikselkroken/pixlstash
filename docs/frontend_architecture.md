@@ -2550,8 +2550,8 @@ can no longer see.
     n)` with a notice; *Open in ComfyUI* is `openHeldInComfyui`
     (`useComfyuiOpen.js`): the tab is opened before
     `POST …/versions/{n}/opening`, as the Run popup opens it, and sent to
-    `?pixlstash_run=&pixlstash_of=`, so what ComfyUI saves from it comes back
-    as a new workflow.
+    `?pixlstash_run=&pixlstash_of=`, where the ComfyUI-PixlStash node sends a
+    save from it back as a new workflow, as it does a run's.
 - **A change to the graph waits, and one bar saves the set** (#1850, rules 1,
   2 and 7 of #1846). A model picked, a stage switched, a loader removed or
   its strength changed is not written when it is made: it joins the ONE set

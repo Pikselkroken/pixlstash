@@ -5472,8 +5472,11 @@ def create_router(server) -> APIRouter:
         )
         if source is not None:
             # A stored version that would not read: the pictures' graph runs,
-            # and an overwrite made on it is still made on that version.
-            source.workflow_version = edited_version
+            # and an overwrite made on it is still made on that version. Not
+            # when an earlier *version* was asked for: the pictures' graph is
+            # not that version, and a gesture on it (#1792) must not take it
+            # for one (`_require_version_read`).
+            source.workflow_version = edited_version if version is None else None
         return source, reason
 
     def _apply_addressed(graph: dict, values: list[RunValue]) -> None:
@@ -12338,9 +12341,10 @@ def create_router(server) -> APIRouter:
             "default recipe the workflow had then and without the changes "
             "waiting on it, held for a few minutes as `POST "
             "/workflows/run/opening` holds a run's. `opening` is what `GET "
-            "…/graph?run=` answers it for. Nothing is stored: what ComfyUI "
-            "saves from it comes back as a new workflow, so the workflow "
-            "stays on the version it has."
+            "…/graph?run=` answers it for. Nothing is stored. The "
+            "ComfyUI-PixlStash node sends what ComfyUI saves from a held "
+            "graph back as a new workflow (`PUT …/graph` with `as_new`), as "
+            "for a run's, so the workflow stays on the version it has."
         ),
         response_model=RunOpening,
         responses={
