@@ -16,16 +16,18 @@ template lists ``bf16``), and the row says so.
 to image, edit, an int8 cut) are variants of one row, so one download is offered
 once. A template with no head is a row of its own.
 
-**Covered** is the merge offer's rule (``_lacks``): a set holding every on-shelf
-file of the template, a namesake counting as the file. A set made from the
-template covers it whatever it holds since.
+**Covered** is ``model_workflow_sets._lacks``: a set holding every on-shelf
+file of the template, a namesake counting as the file. A set holds what the
+pictures on its checkpoint ran with as well as its own rows (#1972), so the
+pictures can make a set cover a template. A set made from the template covers
+it whatever it holds since.
 
 **A set holding a head on the shelf is offered the rest of its template**
-(#1999 §3), on the
-merge offer's own surface (:func:`attach_template_offers`): the files of the
-closest template whose head the set holds, the ones on the shelf to add and the
-rest with their download page. A pictures' offer goes first; Keep separate is
-the same ``declines`` list, a file off the shelf kept out by
+(#1999 §3) as the set's ``offer`` (:func:`attach_template_offers`): the files
+of the closest template whose head the set holds and that it does not already
+hold (from its pictures or its own rows, #1972), the ones on the shelf to add
+and the rest with their download page. Keep separate is the set's ``declines``
+list, its removed list, a file off the shelf kept out by
 :func:`file_decline_key`.
 
 **Nothing is stored for the offer.** The only state is ``model.arrived_at``,
@@ -304,18 +306,19 @@ def file_decline_key(name: str) -> str:
 
 
 def attach_template_offers(hub, hand_made: list[dict]) -> None:
-    """Offer each set the rest of its template, where it has no other offer.
+    """Offer each set the rest of its template.
 
     A set holding a template's head (on the shelf; another quant counts) is
-    offered that template's other files: on the shelf as ``models``, to add as
-    the merge offer's are, off it as ``downloads``. Of several templates
+    offered that template's other files: on the shelf as ``models``, to add,
+    off it as ``downloads``. Of several templates
     sharing the head (text to image, edit, an int8 cut) the closest is offered
     and the rest named in ``others``: the one the set was made from, then the
     fewest files lacking, then the fewest matched as another quant, then the
     most used. A file the set holds, kept out (``declined``), still hashing or
     an engine is not offered; nothing left, no offer, and the next template is
-    not tried: Stop asking on the closest means stop. Keeping a pictures'
-    offer separate leaves the set free for this one, a different question.
+    not tried: Stop asking on the closest means stop. What the set holds
+    includes what its pictures ran with (#1972), so those files are never
+    offered.
 
     Args:
         hub: the hub holding the shelf.

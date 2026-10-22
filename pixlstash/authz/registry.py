@@ -571,8 +571,12 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/models/workflow-sets/{set_id}/members/remove"): RoutePolicy(
         _OWNER
     ),
-    # The models kept out of a set's merge offer (#1523): same rows, same tier.
+    # The models removed from a set (#1523, #1972), merging sets on one
+    # checkpoint, and the models the owner has seen in a set: same rows, same
+    # tier.
     ("PUT", "/api/v1/models/workflow-sets/{set_id}/declines"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/models/workflow-sets/{set_id}/merge"): RoutePolicy(_OWNER),
+    ("PUT", "/api/v1/models/workflow-sets/{set_id}/seen"): RoutePolicy(_OWNER),
     # Which sets the active library hides (#1869): a hub row per library, the
     # grid's tier, the owner's own view of their shelf.
     ("PUT", "/api/v1/models/workflow-sets/hidden"): RoutePolicy(_OWNER),

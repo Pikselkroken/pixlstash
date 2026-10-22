@@ -1265,12 +1265,14 @@ class TestHandMadeWorkflowSets:
         apply_migrations(hub)
         hub.execute("DROP TABLE model_workflow_set_member")
         hub.execute("DROP TABLE model_workflow_set_decline")
+        hub.execute("DROP TABLE model_workflow_set_seen")
         hub.execute("DROP TABLE model_workflow_set")
         apply_migrations(hub)
         assert {
             "model_workflow_set",
             "model_workflow_set_member",
             "model_workflow_set_decline",
+            "model_workflow_set_seen",
         } <= table_names(hub)
         assert "AUTOINCREMENT" in ddl_for(hub, "model_workflow_set")
         assert read_schema_version(hub) == 2
