@@ -1,4 +1,5 @@
-// The version menu of the Workflow tab's head (#1850).
+// The version menu of the Workflow tab's head (#1850), and what can be done
+// with an earlier version from it (#1792).
 //
 // What can silently go wrong here: a reason re-worded on the way to the row,
 // the current version said by colour alone, and focus left on the page body
@@ -77,7 +78,14 @@ function mountMenu(props = {}) {
       ...props,
     },
     attachTo: document.body,
-    global: { stubs: { VMenu: VMenuStub, VIcon: true, Tooltip: TooltipStub } },
+    global: {
+      stubs: {
+        VMenu: VMenuStub,
+        VIcon: true,
+        Tooltip: TooltipStub,
+        ComfyuiIcon: true,
+      },
+    },
   });
   mounted.push(wrapper);
   return wrapper;
@@ -92,6 +100,9 @@ const name = (wrapper, number) => row(wrapper, number).attributes("aria-label");
 async function openMenu(wrapper) {
   await chip(wrapper).trigger("click");
 }
+
+const actions = (wrapper) => wrapper.find('[data-testid="wftab-version-actions"]');
+const action = (wrapper, verb) => wrapper.find(`[data-action="${verb}"]`);
 
 describe("versionDay", () => {
   const now = new Date("2026-10-05T12:00:00+00:00");
@@ -129,9 +140,9 @@ describe("the chip", () => {
     expect(text(chip(wrapper))).toMatch(/^Version 3 · (2 Oct|Oct 2)$/);
     expect(chip(wrapper).attributes("aria-haspopup")).toBe("menu");
     expect(chip(wrapper).attributes("aria-expanded")).toBe("false");
-    // A row acts at once: the chip says what the menu is for.
+    // The chip says what the menu is for.
     expect(chip(wrapper).find(".tip").attributes("data-text")).toBe(
-      "Go back to an earlier version",
+      "Go back to, duplicate or open an earlier version",
     );
   });
 
@@ -194,20 +205,53 @@ describe("the rows", () => {
     await openMenu(wrapper);
     expect(row(wrapper, 3).attributes("role")).toBe("menuitemradio");
     expect(row(wrapper, 3).attributes("aria-checked")).toBe("true");
-    expect(row(wrapper, 2).attributes("aria-checked")).toBe("false");
-    expect(row(wrapper, 1).attributes("aria-checked")).toBe("false");
+    // An earlier one is not a choice: it opens what can be done with it.
+    for (const number of [2, 1]) {
+      expect(row(wrapper, number).attributes("role")).toBe("menuitem");
+      expect(row(wrapper, number).attributes("aria-haspopup")).toBe("menu");
+      expect(row(wrapper, number).attributes("aria-checked")).toBeUndefined();
+    }
     // The leading slot is on every row, the check in the current one only.
     expect(wrapper.findAll("[data-version] .ctx-icon")).toHaveLength(3);
     expect(row(wrapper, 3).find("v-icon-stub.ctx-icon").exists()).toBe(true);
-    expect(row(wrapper, 2).find("v-icon-stub").exists()).toBe(false);
+    expect(row(wrapper, 2).find("v-icon-stub.ctx-icon").exists()).toBe(false);
   });
 
-  it("ask to go back to an older version, and close", async () => {
+  it("open an earlier version's actions on a click, and do nothing yet", async () => {
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    expect(actions(wrapper).exists()).toBe(false);
+    await row(wrapper, 2).trigger("click");
+    expect(row(wrapper, 2).attributes("aria-expanded")).toBe("true");
+    expect(actions(wrapper).attributes("aria-label")).toBe("Version 2");
+    expect(wrapper.emitted("go-back")).toBeUndefined();
+    // Still open: going back is never one click.
+    expect(row(wrapper, 2).exists()).toBe(true);
+  });
+
+  it.each([
+    ["go-back", "Go back to this version"],
+    ["duplicate", "Duplicate"],
+    ["open-comfyui", "Open in ComfyUI"],
+  ])("ask for %s on the version chosen, and close", async (verb, label) => {
+    const wrapper = mountMenu({ canOpenComfyui: true });
+    await openMenu(wrapper);
+    await row(wrapper, 1).trigger("click");
+    expect(action(wrapper, verb).text()).toBe(label);
+    await action(wrapper, verb).trigger("click");
+    expect(wrapper.emitted(verb)).toEqual([[ROWS[2]]]);
+    for (const other of ["go-back", "duplicate", "open-comfyui"]) {
+      if (other !== verb) expect(wrapper.emitted(other)).toBeUndefined();
+    }
+    expect(row(wrapper, 1).exists()).toBe(false);
+  });
+
+  it("offer no Open in ComfyUI where there is none to open", async () => {
     const wrapper = mountMenu();
     await openMenu(wrapper);
     await row(wrapper, 2).trigger("click");
-    expect(wrapper.emitted("go-back")).toEqual([[ROWS[1]]]);
-    expect(row(wrapper, 2).exists()).toBe(false);
+    expect(action(wrapper, "duplicate").exists()).toBe(true);
+    expect(action(wrapper, "open-comfyui").exists()).toBe(false);
   });
 
   it("only close on the version the workflow is on", async () => {
@@ -233,9 +277,10 @@ describe("focus", () => {
   it("goes back to the chip when a row closes the menu", async () => {
     const wrapper = mountMenu();
     await openMenu(wrapper);
-    row(wrapper, 2).element.focus();
-    expect(document.activeElement).toBe(row(wrapper, 2).element);
     await row(wrapper, 2).trigger("click");
+    action(wrapper, "go-back").element.focus();
+    expect(document.activeElement).toBe(action(wrapper, "go-back").element);
+    await action(wrapper, "go-back").trigger("click");
     await wrapper.vm.$nextTick();
     await wrapper.vm.$nextTick();
     expect(document.activeElement).toBe(chip(wrapper).element);
@@ -305,6 +350,21 @@ describe("focus", () => {
     expect(document.activeElement).toBe(
       wrapper.find('[data-testid="wftab-version-menu"]').element,
     );
+  });
+
+  it("opens an earlier version's actions on its first row with →, and ← goes back", async () => {
+    const wrapper = mountMenu();
+    await openMenu(wrapper);
+    row(wrapper, 2).element.focus();
+    await row(wrapper, 2).trigger("keydown", { key: "ArrowRight" });
+    await wrapper.vm.$nextTick();
+    expect(document.activeElement).toBe(action(wrapper, "go-back").element);
+    await actions(wrapper).trigger("keydown", { key: "ArrowDown" });
+    expect(document.activeElement).toBe(action(wrapper, "duplicate").element);
+    await action(wrapper, "duplicate").trigger("keydown", { key: "ArrowLeft" });
+    expect(actions(wrapper).exists()).toBe(false);
+    expect(document.activeElement).toBe(row(wrapper, 2).element);
+    expect(wrapper.emitted("go-back")).toBeUndefined();
   });
 
   it("can be put on the chip from outside", () => {

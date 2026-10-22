@@ -6763,6 +6763,7 @@ def create_router(server) -> APIRouter:
         extract: bool = False,
         saving: Literal["over", "new"] | None = None,
         cached: bool = False,
+        version: int | None = None,
     ) -> Plan:
         """Resolve, judge and prepare every run this body asks for.
 
@@ -6795,6 +6796,10 @@ def create_router(server) -> APIRouter:
 
         *cached* is a pre-flight asked only to draw its answer: ComfyUI's
         ``object_info`` may be the last minute's. Never a run's.
+
+        *version* builds the workflow's graph at that version, under the
+        default recipe it had then, as a saved recipe's is built on its own
+        (an opening of an earlier version, #1792).
         """
         hub = _hub()
         opening = opening or saving is not None
@@ -6837,6 +6842,8 @@ def create_router(server) -> APIRouter:
             saved_at = _saved_recipe(body).created_at
             if saved_at is not None:
                 as_of = workflow_versions.version_at(hub, workflow_id, saved_at)
+        if version is not None:
+            as_of = version
         recipe = _workflow_recipe(workflow_id, as_of) if workflow_id else None
         # A workflow run by itself is nobody's portrait: a person's LoRA is a
         # recipe's business, so only a run made from pictures places one the
@@ -8137,6 +8144,7 @@ def create_router(server) -> APIRouter:
         object_info: dict | None = None,
         comfyui_url: str | None = None,
         workflow_id: str | None = None,
+        version: int | None = None,
     ):
         """One card's runnable graph, or the 409 that says why there is none.
 
@@ -8146,7 +8154,8 @@ def create_router(server) -> APIRouter:
         answered. One that does not need it passes *comfyui_url* instead, read
         (cached) only when there is an editor graph to convert. *workflow_id*
         is the workflow the card is the base of, so the graph saved over that
-        workflow is the one read.
+        workflow is the one read; *version* reads that version of it instead
+        of the current one, and is the 404 of a version it does not keep.
 
         ``RecursionError`` is caught here rather than at each gesture because
         all three resolve through this one function and share the exposure: an
@@ -8158,7 +8167,7 @@ def create_router(server) -> APIRouter:
         """
         try:
             source, reason = _source_graph_for(
-                card, object_info, comfyui_url, workflow_id=workflow_id
+                card, object_info, comfyui_url, workflow_id=workflow_id, version=version
             )
         except RecursionError as exc:
             logger.warning(
@@ -8178,7 +8187,21 @@ def create_router(server) -> APIRouter:
                 status_code=409,
                 detail=_no_graph_sentence(reason.as_dict() if reason else None),
             )
+        _require_version_read(source, version)
         return source
+
+    def _require_version_read(source, version: int | None) -> None:
+        """The 404 of a *version* the graph was not read at.
+
+        A version the workflow no longer keeps (pruned), or one whose document
+        will not read, is answered by its current graph
+        (:func:`_source_graph_for`), which a gesture on that version must not
+        act on in its place.
+        """
+        if version is not None and source.workflow_version != version:
+            raise HTTPException(
+                status_code=404, detail="This workflow keeps no such version."
+            )
 
     def _file_stem(card, name: str | None = None) -> str:
         """What a file written for this workflow should be called, without .json.
@@ -8339,13 +8362,22 @@ def create_router(server) -> APIRouter:
             source=source.origin,
         )
 
-    def _opening_graph(request: Request, workflow, *, waiting: bool, all_stages: bool):
+    def _opening_graph(
+        request: Request,
+        workflow,
+        *,
+        waiting: bool,
+        all_stages: bool,
+        version: int | None = None,
+    ):
         """The graph *Open in ComfyUI* answers for *workflow*, and what it was
         built from: ``(graph, source, card, waiting_applied, object_info)``.
 
         ``GET …/graph``'s whole reading, apart from the route so a save from
         ComfyUI can ask what the workflow will open as next
-        (:func:`_keep_layout`). Raises the route's own 409s.
+        (:func:`_keep_layout`). *version* builds it on that version of the
+        workflow's graph, under the default recipe it had then. Raises the
+        route's own 409s.
         """
         hub = _hub()
         unsaved = WorkflowChanges()
@@ -8366,7 +8398,7 @@ def create_router(server) -> APIRouter:
             asked = asked.model_copy(
                 update={"skip_stages": [], "keep_stages": list(get_args(Stage))}
             )
-        plan, graph, source, card = _graph_to_open(request, asked)
+        plan, graph, source, card = _graph_to_open(request, asked, version)
         # The seed is a parameter like any other, and the default recipe's is
         # already applied. A stored recipe keeps none by design, and
         # `resolve_references` stands a 0 in for each null it had: those get a
@@ -8384,7 +8416,7 @@ def create_router(server) -> APIRouter:
             apply_seeds(graph, placeholders, None)
         return graph, source, card, unsaved.count() > 0, plan.object_info
 
-    def _graph_to_open(request: Request, asked: RunRequest):
+    def _graph_to_open(request: Request, asked: RunRequest, version: int | None = None):
         """``(plan, graph, source, card)``: the one graph *asked* opens in ComfyUI.
 
         Run's own plan with none of Run's workarounds (``_plan``'s
@@ -8397,7 +8429,7 @@ def create_router(server) -> APIRouter:
         # `RecursionError` for `_card_source`'s reason: the source graph came
         # out of a picture from somewhere else, so its depth is not ours to trust.
         try:
-            plan = _plan(request, asked, opening=True)
+            plan = _plan(request, asked, opening=True, version=version)
         except RecursionError as exc:
             logger.warning(
                 "Workflow %s has a source graph too deeply nested to read: %s",
@@ -9292,12 +9324,14 @@ def create_router(server) -> APIRouter:
             "Write this workflow into the user's workflow folder under a free "
             "name, so it can be opened and changed in ComfyUI without touching "
             "the original. A workflow the library only knows from its pictures "
-            "gets a file this way for the first time."
+            "gets a file this way for the first time. With `version`, that "
+            "version of its graph is copied instead of the current one, and "
+            "the workflow stays on the version it has."
         ),
         response_model=WorkflowFile,
         status_code=201,
         responses={
-            404: {"description": "This machine has no such card."},
+            404: {"description": "This machine has no such card, or version."},
             409: {"description": "There is no graph to duplicate."},
             413: {
                 "description": "The graph is past the size a stored workflow may be."
@@ -9305,7 +9339,19 @@ def create_router(server) -> APIRouter:
             500: {"description": "The copy could not be written."},
         },
     )
-    def duplicate_workflow(request: Request, workflow_id: str):
+    def duplicate_workflow(
+        request: Request,
+        workflow_id: str,
+        version: int | None = Query(
+            None,
+            ge=1,
+            le=MAX_VERSION_NUMBER,
+            description=(
+                "Copy this version of the workflow's graph "
+                "(`GET …/versions`), not the current one (#1792)."
+            ),
+        ),
+    ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         workflow, card = _require_base(hub, workflow_id)
@@ -9313,12 +9359,14 @@ def create_router(server) -> APIRouter:
             card,
             workflow_id=workflow.workflow_id,
             comfyui_url=_comfyui_url(_user(request)),
+            version=version,
         )
         # Unscrubbed on purpose: this file stays on the owner's machine and is
         # meant to RUN, and a copy with its models blanked would not.
         name, landed = _store_copy(
             hub,
-            f"{_file_stem(card, workflow.name)} (copy)",
+            f"{_file_stem(card, workflow.name)} "
+            + (f"(version {version})" if version is not None else "(copy)"),
             source.graph,
             source.bindings,
             "duplicate",
@@ -12279,6 +12327,64 @@ def create_router(server) -> APIRouter:
             ) from exc
         _announce(request, [workflow_id], "changed")
         return _versions_of(hub, workflow_id)
+
+    @router.post(
+        "/workflows/{workflow_id}/versions/{version}/opening",
+        summary="Hold an earlier version of a workflow for ComfyUI to open",
+        description=(
+            "*Open in ComfyUI* on one version of this workflow, without going "
+            "back to it (#1792): that version's graph, built as `GET "
+            "…/graph?pixlstash_nodes=true` builds the current one, under the "
+            "default recipe the workflow had then and without the changes "
+            "waiting on it, held for a few minutes as `POST "
+            "/workflows/run/opening` holds a run's. `opening` is what `GET "
+            "…/graph?run=` answers it for. Nothing is stored: what ComfyUI "
+            "saves from it comes back as a new workflow, so the workflow "
+            "stays on the version it has."
+        ),
+        response_model=RunOpening,
+        responses={
+            404: {"description": "No such workflow, or it keeps no such version."},
+            409: {"description": "There is no graph for that version."},
+        },
+    )
+    def hold_version_opening(
+        request: Request,
+        workflow_id: str,
+        version: int = Path(ge=1, le=MAX_VERSION_NUMBER),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, _ = _require_base(hub, workflow_id)
+        graph, source, card, _waiting, object_info = _opening_graph(
+            request, workflow, waiting=False, all_stages=False, version=version
+        )
+        _require_version_read(source, version)
+        own_nodes = deepcopy(graph)
+        _with_pack_nodes(
+            request, workflow.workflow_id, graph, source.bindings, object_info
+        )
+        opening = _hold_run_opening(
+            workflow.workflow_id,
+            WorkflowRunnableGraph(
+                name=f"{_file_stem(card, workflow.name)} (version {version})",
+                workflow=graph,
+                source=source.origin,
+                seedless=False,
+                forgotten=source.forgotten,
+                version=source.workflow_version,
+                editor=_layout_for(hub, workflow.workflow_id, graph, own_nodes),
+                people_loader=_people_loader_place(
+                    workflow.workflow_id, graph, object_info
+                ),
+            ),
+        )
+        logger.info(
+            "[workflows] Version %d of %s is held for ComfyUI to open.",
+            version,
+            workflow.workflow_id,
+        )
+        return RunOpening(opening=opening, workflow_id=workflow.workflow_id)
 
     # ── A whole graph saved over a workflow ─────────────────────────────────
 

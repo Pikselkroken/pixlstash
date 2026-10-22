@@ -3,7 +3,8 @@ import { join } from "node:path";
 
 import { test, expect } from "../fixtures/test.js";
 
-// The Workflow tab as the editor, and the version menu in its head (#1850).
+// The Workflow tab as the editor, and the version menu in its head (#1850,
+// and the submenu of what can be done with an earlier version, #1792).
 //
 // The unit tests hold the logic. What they cannot see is here, because jsdom
 // lays nothing out, opens no real `v-menu` and focuses nothing it is not told
@@ -183,6 +184,8 @@ async function stubWorkflows(page, world = {}) {
     saves: [],
     savesAsNew: [],
     restores: [],
+    duplicates: [],
+    openings: [],
     chainWrites: [],
     planAsks: [],
     unstubbed: [],
@@ -416,6 +419,19 @@ async function stubWorkflows(page, world = {}) {
         if (countOf(now.waiting[own])) now.stale[own] = true;
         return json(route, versionsOf(own));
       }
+      const opening = rest?.match(/^\/versions\/(\d+)\/opening$/);
+      if (opening && method === "POST") {
+        net.openings.push(Number(opening[1]));
+        return json(route, { opening: "ab".repeat(16), workflow_id: own });
+      }
+      if (rest === "/duplicate" && method === "POST") {
+        const version = url.searchParams.get("version");
+        net.duplicates.push(version === null ? null : Number(version));
+        const name = `${now.names[own]} (version ${version})`;
+        now.names[NEW_WF] = name;
+        now.versions[NEW_WF] = [];
+        return json(route, { name, workflow_id: NEW_WF }, 201);
+      }
       if (rest === "/save" && method === "POST") {
         const body = request.postDataJSON();
         net.saves.push(body);
@@ -473,7 +489,10 @@ const cardRow = (page, index = 0) => page.locator(".wfv-row").nth(index);
 const chip = (page) => rail(page).getByRole("button", { name: /^Version \d+/ });
 const versionMenu = (page) => page.getByRole("menu", { name: "Versions" });
 const versionRow = (page, number) =>
-  versionMenu(page).getByRole("menuitemradio", { name: new RegExp(`^Version ${number},`) });
+  versionMenu(page).locator(`[data-version="${number}"]`);
+/** The submenu an earlier version's row opens (#1792). */
+const versionActions = (page, number) =>
+  page.getByRole("menu", { name: `Version ${number}` });
 const bar = (page) => rail(page).getByRole("group", { name: "Unsaved changes" });
 const runButton = (page) => rail(page).getByRole("button", { name: /^Run( with changes)?…$/ });
 const checkpointRow = (page) => rail(page).getByTestId("wftab-row-checkpoint");
@@ -631,17 +650,18 @@ test.describe("the head and the version menu", () => {
     await chip(page).click();
     await expect(versionMenu(page)).toBeVisible();
     await expect(chip(page)).toHaveAttribute("aria-expanded", "true");
-    await expect(versionMenu(page).getByRole("menuitemradio")).toHaveCount(3);
+    await expect(versionMenu(page).locator("[data-version]")).toHaveCount(3);
     await settled(versionMenu(page));
     expect(await insideViewport(page, versionMenu(page))).toBe(true);
     // Not cut off where the rail ends: it is the surface drawn at its corners.
     expect(await drawnAtItsCorners(versionMenu(page))).toBe(true);
 
-    // The current version is said, and carries the check: the others do not.
+    // The current version is said, and carries the check: the others do not,
+    // and open what can be done with them instead.
     await expect(versionRow(page, 3)).toHaveAttribute("aria-checked", "true");
-    await expect(versionRow(page, 2)).toHaveAttribute("aria-checked", "false");
-    await expect(versionRow(page, 3).locator(".v-icon")).toHaveCount(1);
-    await expect(versionRow(page, 2).locator(".v-icon")).toHaveCount(0);
+    await expect(versionRow(page, 2)).toHaveAttribute("aria-haspopup", "menu");
+    await expect(versionRow(page, 3).locator(".ctx-icon.v-icon")).toHaveCount(1);
+    await expect(versionRow(page, 2).locator(".ctx-icon.v-icon")).toHaveCount(0);
     // The reason is the server's own words, the day beside it.
     await expect(versionRow(page, 2)).toContainText("28 Aug · LoRAs edited");
     await expect(versionRow(page, 1)).toContainText("as PixlStash first read it");
@@ -676,6 +696,18 @@ test.describe("the head and the version menu", () => {
 
     await chip(page).click();
     await versionRow(page, 2).click();
+    // The row opens what can be done with it, and the menu stays: a click in
+    // a real `v-menu`'s content closes it unless the row stops its click.
+    const actions = versionActions(page, 2);
+    await expect(actions).toBeVisible();
+    await expect(versionMenu(page)).toBeVisible();
+    expect(net.restores).toEqual([]);
+    await settled(actions);
+    // Beside the menu, inside the window, and not clipped by the menu.
+    expect(await insideViewport(page, actions)).toBe(true);
+    expect(await drawnAtItsCorners(actions)).toBe(true);
+    await shotAround(page, [rail(page), versionMenu(page), actions], "version-actions");
+    await actions.getByRole("menuitem", { name: "Go back to this version" }).click();
 
     await expect(chip(page)).toHaveText("Version 4 · today");
     expect(net.restores).toEqual([2]);
@@ -689,7 +721,7 @@ test.describe("the head and the version menu", () => {
 
     // The menu now lists the go-back itself, in the server's words.
     await chip(page).click();
-    await expect(versionMenu(page).getByRole("menuitemradio")).toHaveCount(4);
+    await expect(versionMenu(page).locator("[data-version]")).toHaveCount(4);
     await expect(versionRow(page, 4)).toHaveAttribute("aria-checked", "true");
     await expect(versionRow(page, 4)).toContainText("today · went back to version 2");
     await page.keyboard.press("Escape");
@@ -700,6 +732,40 @@ test.describe("the head and the version menu", () => {
     expect(net.restores).toEqual([2, 3]);
   });
 
+  test("an older row duplicates from the keyboard, and the workflow stays where it is", async ({ page }) => {
+    net = await stubWorkflows(page);
+    await selectWorkflow(page);
+
+    await chip(page).focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(versionRow(page, 3)).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(versionRow(page, 2)).toBeFocused();
+    // → opens it on its first row, ← goes back to the version's row.
+    await page.keyboard.press("ArrowRight");
+    const actions = versionActions(page, 2);
+    await expect(
+      actions.getByRole("menuitem", { name: "Go back to this version" }),
+    ).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(actions).toBeHidden();
+    await expect(versionRow(page, 2)).toBeFocused();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("ArrowDown");
+    await expect(actions.getByRole("menuitem", { name: "Duplicate" })).toBeFocused();
+    // No ComfyUI in this world: nothing offered to open.
+    await expect(actions.getByRole("menuitem", { name: "Open in ComfyUI" })).toHaveCount(0);
+    await page.keyboard.press("Enter");
+
+    await expect(notices(page).last()).toHaveText(
+      "Duplicated version 2 as Portrait, soft window light (version 2).",
+    );
+    expect(net.duplicates).toEqual([2]);
+    expect(net.restores).toEqual([]);
+    await expect(chip(page)).toHaveText("Version 3 · 2 Oct");
+    await expect(versionMenu(page)).toBeHidden();
+  });
+
   test("a refused go-back is said under the head, in the server's words", async ({ page }) => {
     const sentence = "That version cannot be read, so it cannot be gone back to.";
     net = await stubWorkflows(page, { restoreRefusal: sentence });
@@ -707,6 +773,9 @@ test.describe("the head and the version menu", () => {
 
     await chip(page).click();
     await versionRow(page, 1).click();
+    await versionActions(page, 1)
+      .getByRole("menuitem", { name: "Go back to this version" })
+      .click();
 
     const refusal = rail(page).getByRole("alert").filter({ hasText: "Could not go back" });
     await expect(refusal).toContainText(sentence);
@@ -1343,6 +1412,10 @@ test.describe("going back a version with changes waiting", () => {
 
     await chip(page).click();
     await versionRow(page, 2).click();
+    const actions = versionActions(page, 2);
+    // With ComfyUI set, the version can be opened there without going back.
+    await expect(actions.getByRole("menuitem", { name: "Open in ComfyUI" })).toBeVisible();
+    await actions.getByRole("menuitem", { name: "Go back to this version" }).click();
     await expect(chip(page)).toHaveText("Version 4 · today");
     expect(net.restores).toEqual([2]);
     // The changes are still there, and now say where they were made.
