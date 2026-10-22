@@ -15,14 +15,60 @@
 
     <div class="wfv-toolbar shelfbar toolbar">
       <span class="wfv-title">Workflows</span>
-      <span class="wfv-sub num">{{ subtitle }}</span>
+
+      <!-- Two sources for one grid (#2000): the owner's own workflows, and
+           the templates their ComfyUI serves. A view switch, so tablist/tab as
+           the model shelf's Shelf | Training runs: it changes which panel is
+           on screen rather than setting a value. -->
+      <div class="tbm-seg wfv-viewswitch" role="tablist" aria-label="Workflow source">
+        <button
+          id="wfv-tab-mine"
+          type="button"
+          role="tab"
+          class="tbm-seg-btn wfv-viewseg"
+          :class="{ 'tbm-seg-btn--on wfv-viewseg--on': !onTemplates }"
+          :aria-selected="!onTemplates"
+          :tabindex="onTemplates ? -1 : 0"
+          data-testid="wfv-tab-mine"
+          @click="showSource('mine')"
+          @keydown="onSourceKeydown"
+        >
+          <v-icon size="14">mdi-sitemap-outline</v-icon>
+          Mine
+          <span v-if="store.loaded" class="wfv-viewseg-n num">{{
+            store.cards.length
+          }}</span>
+        </button>
+        <button
+          id="wfv-tab-templates"
+          type="button"
+          role="tab"
+          class="tbm-seg-btn wfv-viewseg"
+          :class="{ 'tbm-seg-btn--on wfv-viewseg--on': onTemplates }"
+          :aria-selected="onTemplates"
+          :tabindex="onTemplates ? 0 : -1"
+          data-testid="wfv-tab-templates"
+          @click="showSource('templates')"
+          @keydown="onSourceKeydown"
+        >
+          <ComfyuiIcon :size="14" />
+          Templates
+          <span v-if="templates.loaded" class="wfv-viewseg-n num">{{
+            templates.templates.length
+          }}</span>
+        </button>
+      </div>
+
+      <span v-if="subtitle" class="wfv-sub num">{{ subtitle }}</span>
 
       <!-- "Add" is today's workflow import, unchanged: the file lands through
            `POST /comfyui/workflows/import`. A `.json` dropped on the view
            (not on a dialog or menu over it, which are teleported out of it)
            takes the same path (`addWorkflowFiles`), and
            `useWindowFileImport` stands aside for a drop of JSON alone. -->
-      <AppBarButton icon="plus" @click="fileInput?.click()">Add…</AppBarButton>
+      <AppBarButton v-if="!onTemplates" icon="plus" @click="fileInput?.click()"
+        >Add…</AppBarButton
+      >
       <input
         ref="fileInput"
         class="wfv-file-input"
@@ -47,7 +93,11 @@
             prefix="Sort:"
             aria-haspopup="menu"
             :aria-expanded="sortMenuOpen"
-            >{{ SORT_LABELS[store.sortKey].label }}</AppBarButton
+            >{{
+              onTemplates
+                ? TEMPLATE_SORT_LABELS[templates.sortKey].label
+                : SORT_LABELS[store.sortKey].label
+            }}</AppBarButton
           >
         </template>
         <div class="tbm">
@@ -59,6 +109,14 @@
           <div class="tbm-section">
             <span class="tbm-label">Sort by</span>
             <OptionRows
+              v-if="onTemplates"
+              :options="templateSortOptions"
+              :model-value="templates.sortKey"
+              aria-label="Sort by"
+              @update:model-value="(key) => (templates.sortKey = key)"
+            />
+            <OptionRows
+              v-else
               :options="sortOptions"
               :model-value="store.sortKey"
               aria-label="Sort by"
@@ -83,15 +141,21 @@
           <AppBarButton
             v-bind="menuProps"
             icon="filter"
-            :badge="store.filterChips.length || null"
-            :active="store.filterChips.length > 0 && !filterMenuOpen"
+            :badge="filterCount || null"
+            :active="filterCount > 0 && !filterMenuOpen"
             :open="filterMenuOpen"
             aria-haspopup="menu"
             :aria-expanded="filterMenuOpen"
             >Filters</AppBarButton
           >
         </template>
+        <WorkflowTemplateFilterMenu
+          v-if="onTemplates"
+          :open="filterMenuOpen"
+          :focus-name-request="nameFocusRequest"
+        />
         <WorkflowFilterMenu
+          v-else
           :open="filterMenuOpen"
           :focus-name-request="nameFocusRequest"
         />
@@ -100,6 +164,16 @@
       <!-- The name filter's toolbar copy, bound to the same text as the field
            at the top of Filters, which is always there when this one folds. -->
       <NameFilterField
+        v-if="onTemplates"
+        ref="nameFieldRef"
+        class="wfv-name-bar"
+        :model-value="templates.filters.name"
+        placeholder="Filter templates…"
+        label="Filter templates by title, tag or model"
+        @update:model-value="(name) => templates.setFilters({ name })"
+      />
+      <NameFilterField
+        v-else
         ref="nameFieldRef"
         class="wfv-name-bar"
         :model-value="store.filters.name"
@@ -130,187 +204,197 @@
     <!-- `on-clear-all` because two of these filters are the server's: removing
          the chips one at a time would be two `setFilters`, and so two grid
          reads, where the panel's own Clear all is one. -->
-    <FilterStrip
-      inline
-      :chips="store.filterChips"
-      :of-label="store.filterOfLabel"
-      :on-clear-all="store.clearFilters"
-      class="wfv-strip"
+    <WorkflowTemplatesPanel
+      v-if="onTemplates"
+      :column-min="COLUMN_MIN"
+      :column-gap="COLUMN_GAP"
+      @add="addSelectedTemplates"
+      @open-settings="(section) => emit('open-settings', section)"
     />
 
-    <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
-
-    <!-- A Recipe section's Open that named a workflow this grid does not list.
-         Said on screen and not only in the live region, because the reader
-         made a deliberate gesture and the screen otherwise looks as though it
-         ignored them. -->
-    <p v-if="linkMissed" class="wfv-note">
-      That workflow is not in this grid.
-      <template v-if="withheldNames">Left out: {{ withheldNames }}.</template>
-    </p>
-
-    <!-- A deep link whose card the payload holds and a filter hides.
-         Not the note above: that one is about what the SERVER left out and
-         offers no way in, and this one is one control away from fixed. -->
-    <p v-if="linkFiltered" class="wfv-note" data-testid="wfv-link-filtered">
-      That workflow is in this grid, but a filter is hiding it.
-      <button
-        class="wfv-note-clear"
-        type="button"
-        @click="store.clearFilters()"
-      >
-        Clear all
-      </button>
-    </p>
-
-    <!-- The fifth kind of empty: the library HAS workflows and the filters
-         leave none. Not the empty state below - that screen offers three ways
-         to get a first workflow, and this reader already has some. The strip
-         above carries the way back, so this only has to say which it is. -->
-    <p v-if="filteredOut" class="wfv-note">
-      No workflow matches these filters.
-      <button
-        class="wfv-note-clear"
-        type="button"
-        @click="store.clearFilters()"
-      >
-        Clear all
-      </button>
-    </p>
-
-    <!-- The §9 empty state: the shipped art, a Tiny5 `--text-2xl` headline and
-         one `--text-sm` line, then the routes out as plain buttons. Not the
-         bordered option rows `LibraryEmptyState` uses — that screen explains
-         three unfamiliar choices at first run; these three are one verb each. -->
-    <div v-if="showEmptyState" class="wfv-empty">
-      <div class="wfv-empty__card">
-        <div class="wfv-empty__illustration" aria-hidden="true">
-          <img src="/Empty.png" alt="" />
-        </div>
-        <h2 class="wfv-empty__title">Nothing found yet</h2>
-        <p v-if="withheldNames" class="wfv-empty__lead">
-          Every workflow this library has is being left out of the grid:
-          {{ withheldNames }}. Nothing has been lost.
-        </p>
-        <p v-else class="wfv-empty__lead">
-          A workflow arrives with the pictures it made, or as a file of its own.
-        </p>
-        <div class="wfv-empty__actions">
-          <AppButton
-            size="sm"
-            variant="primary"
-            icon-left="tray-arrow-up"
-            @click="fileInput?.click()"
-          >
-            Drop a workflow file
-          </AppButton>
-          <AppButton
-            v-if="watchedFolder"
-            size="sm"
-            variant="secondary"
-            icon-left="folder-eye-outline"
-            @click="openWatchedFolder"
-          >
-            Open watched folder
-          </AppButton>
-          <!-- Gone once connected: there is nothing to offer somebody who has
-               already done it. -->
-          <AppButton
-            v-if="!comfyuiConfigured"
-            size="sm"
-            variant="secondary"
-            icon-left="graph-outline"
-            @click="emit('open-settings', 'comfyui')"
-          >
-            Connect ComfyUI
-          </AppButton>
-        </div>
-        <p v-if="watchedFolder" class="wfv-empty__path">{{ watchedPath }}</p>
-      </div>
-    </div>
-
-    <!-- The scroller carries the padding so the grid below is the bare
-         track: `measure()` reads the grid's `clientWidth`, which INCLUDES its
-         own padding, and a padded grid would be measured 32px wider than the
-         space the columns actually have.
-         `tabindex="-1"` so a click on the background (or a gap in the grid)
-         lands focus here rather than on `<body>`, where Ctrl+A would select
-         the page's text instead of the cards. `.self` keeps keys from the
-         rows (already handled by the grid) and from the recipes tab out. -->
-    <div
-      v-else
-      ref="scrollEl"
-      class="wfv-scroll"
-      :class="{ 'wfv-scroll--edge-tab': !sidebarStore.workflowInspectorOpen }"
-      tabindex="-1"
-      @keydown.self="onBackgroundKeyDown"
-      @pointerdown="
-        pressedBackground = $event.button === 0 && isBackground($event.target)
-      "
-      @click="onBackgroundClick"
-    >
-      <!-- One `treegrid` and one tab stop: the cursor roves with the arrow
-           keys and the focused row is the only one at `tabindex="0"`. -->
-      <div
-        ref="gridEl"
-        class="wfv-grid"
-        role="treegrid"
-        aria-label="Workflow cards"
-        aria-multiselectable="true"
-        :aria-busy="store.loading"
-        :style="{
-          '--wf-columns': columns,
-          '--wf-column-min': `${COLUMN_MIN}px`,
-          '--wf-gap': `${COLUMN_GAP}px`,
-        }"
-        @keydown="onKeyDown"
-      >
-        <template v-for="(entry, index) in flatRows" :key="entry.id">
-          <div
-            class="wfv-row"
-            role="row"
-            aria-level="1"
-            :aria-selected="cardSelected(entry.key)"
-            :aria-posinset="entry.cardIndex + 1"
-            :aria-setsize="store.sortedCards.length"
-            :tabindex="index === cursorIndex ? 0 : -1"
-            :data-key="entry.key"
-            @click="onRowClick(index, $event)"
-            @contextmenu.prevent="openRowMenu(index, $event)"
-          >
-            <!-- A model file dropped here from outside goes beside this
-                 workflow's models (useModelDropTarget). -->
-            <div
-              class="wfv-cell"
-              :class="{ 'wfv-cell--drop': modelDropKey === entry.key }"
-              role="gridcell"
-              :data-model-drop-models="dropModels(entry.card)"
-              @dragover="
-                dropModels(entry.card) && onModelDragOver(entry.key, $event)
-              "
-              @dragleave="onModelDragLeave(entry.key, $event)"
-            >
-              <WorkflowCard
-                :card="entry.card"
-                :selected="cardSelected(entry.key)"
-                :run-failure="runDialog.failures[entry.card.id] ?? null"
-                @run="runCard(entry.card)"
-              />
-            </div>
-          </div>
-        </template>
-      </div>
-
-      <!-- Saved recipes whose workflow is gone (deleted, or never filed).
-           The Recipes tab's own rows, laid on this grid's columns; the tab
-           hides itself while there are none. -->
-      <WorkflowRecipesTab
-        unfiled
-        class="wfv-unfiled"
-        workflow-name="Unfiled recipes"
-        :style="{ '--wf-columns': columns }"
+    <template v-else>
+      <FilterStrip
+        inline
+        :chips="store.filterChips"
+        :of-label="store.filterOfLabel"
+        :on-clear-all="store.clearFilters"
+        class="wfv-strip"
       />
-    </div>
+
+      <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
+
+      <!-- A Recipe section's Open that named a workflow this grid does not list.
+           Said on screen and not only in the live region, because the reader
+           made a deliberate gesture and the screen otherwise looks as though it
+           ignored them. -->
+      <p v-if="linkMissed" class="wfv-note">
+        That workflow is not in this grid.
+        <template v-if="withheldNames">Left out: {{ withheldNames }}.</template>
+      </p>
+
+      <!-- A deep link whose card the payload holds and a filter hides.
+           Not the note above: that one is about what the SERVER left out and
+           offers no way in, and this one is one control away from fixed. -->
+      <p v-if="linkFiltered" class="wfv-note" data-testid="wfv-link-filtered">
+        That workflow is in this grid, but a filter is hiding it.
+        <button
+          class="wfv-note-clear"
+          type="button"
+          @click="store.clearFilters()"
+        >
+          Clear all
+        </button>
+      </p>
+
+      <!-- The fifth kind of empty: the library HAS workflows and the filters
+           leave none. Not the empty state below - that screen offers three ways
+           to get a first workflow, and this reader already has some. The strip
+           above carries the way back, so this only has to say which it is. -->
+      <p v-if="filteredOut" class="wfv-note">
+        No workflow matches these filters.
+        <button
+          class="wfv-note-clear"
+          type="button"
+          @click="store.clearFilters()"
+        >
+          Clear all
+        </button>
+      </p>
+
+      <!-- The §9 empty state: the shipped art, a Tiny5 `--text-2xl` headline and
+           one `--text-sm` line, then the routes out as plain buttons. Not the
+           bordered option rows `LibraryEmptyState` uses — that screen explains
+           three unfamiliar choices at first run; these three are one verb each. -->
+      <div v-if="showEmptyState" class="wfv-empty">
+        <div class="wfv-empty__card">
+          <div class="wfv-empty__illustration" aria-hidden="true">
+            <img src="/Empty.png" alt="" />
+          </div>
+          <h2 class="wfv-empty__title">Nothing found yet</h2>
+          <p v-if="withheldNames" class="wfv-empty__lead">
+            Every workflow this library has is being left out of the grid:
+            {{ withheldNames }}. Nothing has been lost.
+          </p>
+          <p v-else class="wfv-empty__lead">
+            A workflow arrives with the pictures it made, or as a file of its own.
+          </p>
+          <div class="wfv-empty__actions">
+            <AppButton
+              size="sm"
+              variant="primary"
+              icon-left="tray-arrow-up"
+              @click="fileInput?.click()"
+            >
+              Drop a workflow file
+            </AppButton>
+            <AppButton
+              v-if="watchedFolder"
+              size="sm"
+              variant="secondary"
+              icon-left="folder-eye-outline"
+              @click="openWatchedFolder"
+            >
+              Open watched folder
+            </AppButton>
+            <!-- Gone once connected: there is nothing to offer somebody who has
+                 already done it. -->
+            <AppButton
+              v-if="!comfyuiConfigured"
+              size="sm"
+              variant="secondary"
+              icon-left="graph-outline"
+              @click="emit('open-settings', 'comfyui')"
+            >
+              Connect ComfyUI
+            </AppButton>
+          </div>
+          <p v-if="watchedFolder" class="wfv-empty__path">{{ watchedPath }}</p>
+        </div>
+      </div>
+
+      <!-- The scroller carries the padding so the grid below is the bare
+           track: `measure()` reads the grid's `clientWidth`, which INCLUDES its
+           own padding, and a padded grid would be measured 32px wider than the
+           space the columns actually have.
+           `tabindex="-1"` so a click on the background (or a gap in the grid)
+           lands focus here rather than on `<body>`, where Ctrl+A would select
+           the page's text instead of the cards. `.self` keeps keys from the
+           rows (already handled by the grid) and from the recipes tab out. -->
+      <div
+        v-else
+        ref="scrollEl"
+        class="wfv-scroll"
+        :class="{ 'wfv-scroll--edge-tab': !sidebarStore.workflowInspectorOpen }"
+        tabindex="-1"
+        @keydown.self="onBackgroundKeyDown"
+        @pointerdown="
+          pressedBackground = $event.button === 0 && isBackground($event.target)
+        "
+        @click="onBackgroundClick"
+      >
+        <!-- One `treegrid` and one tab stop: the cursor roves with the arrow
+             keys and the focused row is the only one at `tabindex="0"`. -->
+        <div
+          ref="gridEl"
+          class="wfv-grid"
+          role="treegrid"
+          aria-label="Workflow cards"
+          aria-multiselectable="true"
+          :aria-busy="store.loading"
+          :style="{
+            '--wf-columns': columns,
+            '--wf-column-min': `${COLUMN_MIN}px`,
+            '--wf-gap': `${COLUMN_GAP}px`,
+          }"
+          @keydown="onKeyDown"
+        >
+          <template v-for="(entry, index) in flatRows" :key="entry.id">
+            <div
+              class="wfv-row"
+              role="row"
+              aria-level="1"
+              :aria-selected="cardSelected(entry.key)"
+              :aria-posinset="entry.cardIndex + 1"
+              :aria-setsize="store.sortedCards.length"
+              :tabindex="index === cursorIndex ? 0 : -1"
+              :data-key="entry.key"
+              @click="onRowClick(index, $event)"
+              @contextmenu.prevent="openRowMenu(index, $event)"
+            >
+              <!-- A model file dropped here from outside goes beside this
+                   workflow's models (useModelDropTarget). -->
+              <div
+                class="wfv-cell"
+                :class="{ 'wfv-cell--drop': modelDropKey === entry.key }"
+                role="gridcell"
+                :data-model-drop-models="dropModels(entry.card)"
+                @dragover="
+                  dropModels(entry.card) && onModelDragOver(entry.key, $event)
+                "
+                @dragleave="onModelDragLeave(entry.key, $event)"
+              >
+                <WorkflowCard
+                  :card="entry.card"
+                  :selected="cardSelected(entry.key)"
+                  :run-failure="runDialog.failures[entry.card.id] ?? null"
+                  @run="runCard(entry.card)"
+                />
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- Saved recipes whose workflow is gone (deleted, or never filed).
+             The Recipes tab's own rows, laid on this grid's columns; the tab
+             hides itself while there are none. -->
+        <WorkflowRecipesTab
+          unfiled
+          class="wfv-unfiled"
+          workflow-name="Unfiled recipes"
+          :style="{ '--wf-columns': columns }"
+        />
+      </div>
+    </template>
 
     <!-- The pill floats over the END of the list, exactly as the shelf's and
          the photo grid's do: the list is what the selection was made in, and a
@@ -328,7 +412,7 @@
       @open="openInspectorFromTab"
     />
 
-    <div class="selbar-float">
+    <div v-if="!onTemplates" class="selbar-float">
       <WorkflowSelectionBar
         ref="selBarRef"
         @select-all="selectAllShown"
@@ -419,6 +503,11 @@ import {
   SORT_LABELS,
   useWorkflowsStore,
 } from "../../stores/useWorkflowsStore";
+import {
+  TEMPLATE_SORT_KEYS,
+  TEMPLATE_SORT_LABELS,
+  useWorkflowTemplatesStore,
+} from "../../stores/useWorkflowTemplatesStore";
 import { errorMessage } from "../../utils/apiError";
 import { saveJsonAs } from "../../utils/downloadFile";
 import { isInternalImageDrag, isWorkflowFile } from "../../utils/media";
@@ -428,10 +517,13 @@ import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
 import WorkflowRecipesTab from "../panels/WorkflowRecipesTab.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
+import WorkflowTemplateFilterMenu from "../panels/WorkflowTemplateFilterMenu.vue";
+import WorkflowTemplatesPanel from "../panels/WorkflowTemplatesPanel.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import NameFilterField from "../widgets/NameFilterField.vue";
 import OptionRows from "../widgets/OptionRows.vue";
@@ -524,6 +616,101 @@ const sortOptions = SORT_KEYS.map((key) => ({
   label: SORT_LABELS[key].label,
 }));
 
+// ── Mine | Templates (#2000) ──────────────────────────────────────────────
+//
+// The tab lives in the templates store, not here: the right rail is
+// `App.vue`'s, and it mounts the template inspector while this one is shown.
+const templates = useWorkflowTemplatesStore();
+const onTemplates = computed(() => templates.shown);
+const templateSortOptions = TEMPLATE_SORT_KEYS.map((key) => ({
+  id: key,
+  label: TEMPLATE_SORT_LABELS[key].label,
+}));
+/** The Filters button's badge: the filters the shown tab has on. */
+const filterCount = computed(() =>
+  onTemplates.value ? templates.activeFilterCount : store.filterChips.length,
+);
+
+/** Show one source. Templates reads its list, or asks an unanswering ComfyUI again. */
+function showSource(which) {
+  templates.shown = which === "templates";
+  sortMenuOpen.value = false;
+  filterMenuOpen.value = false;
+  if (templates.shown) templates.fetchTemplates();
+}
+
+// Arrows move between the two tabs and show the one they land on (the APG's
+// automatic activation, as the model shelf's switch does).
+function onSourceKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const toTemplates =
+    event.key === "End" ||
+    (["ArrowLeft", "ArrowRight"].includes(event.key) && !onTemplates.value);
+  showSource(toTemplates ? "templates" : "mine");
+  nextTick(() =>
+    document
+      .getElementById(toTemplates ? "wfv-tab-templates" : "wfv-tab-mine")
+      ?.focus(),
+  );
+}
+
+// Arriving on a workflow by link means Mine, whatever tab was left open.
+watch(
+  () => route.query?.workflow || route.query?.topology,
+  (linked) => {
+    if (linked) templates.shown = false;
+  },
+  { immediate: true },
+);
+if (templates.shown) templates.fetchTemplates();
+watch(
+  () => templates.addRequest,
+  () => addSelectedTemplates(),
+);
+
+/**
+ * The pill's and the inspector's Add: store the selected templates, then land
+ * on Mine with what was made selected, so the next look is at it.
+ */
+async function addSelectedTemplates() {
+  const body = await templates.add();
+  if (!body) {
+    if (templates.error) notices.push({ level: "error", text: templates.error });
+    return;
+  }
+  const added = body.added ?? [];
+  const failed = body.failed ?? [];
+  if (failed.length) {
+    notices.push({
+      level: "error",
+      text: `Not added: ${failed
+        .map((entry) => `${entry.name} (${entry.detail})`)
+        .join("; ")}`,
+    });
+  }
+  if (!added.length) return;
+  // What did not go in stays picked on Templates, to try again.
+  templates.selectRange(failed.map((entry) => `${entry.module}/${entry.name}`));
+  await store.refetch();
+  showSource("mine");
+  const ids = added.map((entry) => entry.workflow_id);
+  store.selectRange(ids);
+  const at = flatRows.value.findIndex((entry) => entry.key === ids[0]);
+  if (at >= 0) moveCursor(at);
+  const drafts = added.filter((entry) => entry.draft).length;
+  let text =
+    added.length === 1 ? "Added 1 workflow." : `Added ${added.length} workflows.`;
+  if (drafts && added.length === 1) {
+    text += " It is a draft: open it in ComfyUI and save it to finish it.";
+  } else if (drafts) {
+    text += ` ${drafts} of them are drafts: open each in ComfyUI and save it to finish it.`;
+  }
+  notices.push({ level: "success", text });
+  announcement.value =
+    added.length === 1 ? "Added 1 workflow" : `Added ${added.length} workflows`;
+}
+
 const comfyuiConfigured = computed(() => filterStore.comfyuiConfigured);
 const showEmptyState = computed(
   () => store.loaded && !store.loading && store.cards.length === 0,
@@ -560,6 +747,9 @@ const withheldNames = computed(() => {
 });
 
 const subtitle = computed(() => {
+  // The strip under the bar counts the templates ("420 of 779"), and the bar
+  // has no room to say it twice beside the switch.
+  if (onTemplates.value) return "";
   const count = store.sortedCards.length;
   const parts = [count === 1 ? "1 workflow" : `${count} workflows`];
   // Only what is still being LEFT OUT, and one-offs alone: see `withheldNames`.
@@ -875,6 +1065,11 @@ watch(
 
 /** What the closed inspector would describe: a name, `N workflows`, or "". */
 const edgeTabLabel = computed(() => {
+  if (onTemplates.value) {
+    const chosen = templates.selectedTemplates;
+    if (chosen.length === 1) return chosen[0].title ?? "";
+    return chosen.length > 1 ? `${chosen.length} templates` : "";
+  }
   // `runnableCard` is the one card the inspector describes.
   if (store.runnableCard) return store.runnableCard.name ?? "";
   const count = store.selectedKeys.length;
@@ -1535,6 +1730,8 @@ async function addWorkflowFiles(files) {
     }
   }
   if (!last) return;
+  // A drop on the Templates tab still adds to Mine, so show Mine.
+  if (onTemplates.value) showSource("mine");
   await store.refetch();
   landOn(last.workflow_id);
   // Opened on the last, but the live region says how many arrived.
@@ -1656,15 +1853,18 @@ onBeforeUnmount(() => {
 }
 
 /* The identity pair every view bar wears, at the one size a 36px band takes.
-   The title gives first and from the right: every control here is `nowrap`,
-   so without a shrinking member the surplus leaves through the right edge and
-   what gets clipped is the tail. */
+   They give first and from the right: every control here is `nowrap`, so
+   without a shrinking member the surplus leaves through the right edge and
+   what gets clipped is the tail. The count gives long before the title: the
+   Mine | Templates switch carries the count too (#2000), and a title cut to
+   one letter beside it named nothing; the title gives only once the count
+   has, so the app-wide tail at the right edge is never what is clipped. */
 .wfv-title {
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   white-space: nowrap;
   min-width: 0;
-  flex-shrink: 6;
+  flex-shrink: 1;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1674,7 +1874,7 @@ onBeforeUnmount(() => {
   color: rgba(var(--v-theme-toolbar-text), 0.6);
   white-space: nowrap;
   min-width: 0;
-  flex-shrink: 4;
+  flex-shrink: 40;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1683,13 +1883,46 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 
+/* Mine | Templates: the model shelf's view switch (`.tbm-seg`, `App.css`),
+   sized for this 36px bar the same way - no gap between segments, a 4px
+   inset so the track sits inside the band with room for a focus ring, and
+   `--elevation-1` on the selected one as the cue beyond hue. */
+.wfv-viewswitch {
+  flex: none;
+  gap: 0;
+  padding: var(--space-1);
+}
+
+.wfv-viewseg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.wfv-viewseg--on {
+  box-shadow: var(--elevation-1);
+}
+
+.wfv-viewseg:focus-visible {
+  position: relative;
+  z-index: var(--z-raised);
+}
+
+.wfv-viewseg-n {
+  font-size: var(--text-2xs);
+  opacity: var(--opacity-text-secondary);
+}
+
 /* The toolbar's name field. A fixed width, so typing never moves the bar, and
    folded on a narrow bar, where the Filters menu's own field takes over. */
 .wfv-name-bar {
   width: 180px;
   flex: none;
 }
-@container shelfbar (max-width: 720px) {
+/* 960, not the 720 it was: the Mine | Templates switch (#2000) took the room
+   the bar had, and the field folds before the title gives. */
+@container shelfbar (max-width: 960px) {
   .wfv-name-bar {
     display: none;
   }

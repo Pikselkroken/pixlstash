@@ -92,7 +92,7 @@
       icon="play"
       data-verb="run"
       aria-label="Run this workflow"
-      :disabled="!runnable || busy"
+      :disabled="!canRun || busy"
       :loading="running('run')"
       :tooltip="runTitle"
       @click="emit('run')"
@@ -348,9 +348,15 @@ const countTitle = computed(() => {
 
 /** `POST /workflows/run` takes one workflow, and the Run popup shows one run. */
 const runnable = computed(() => Boolean(store.runnableCard));
-const runTitle = computed(() =>
-  runnable.value ? "Run this workflow" : "Select one workflow to run it",
-);
+// A draft (#2000) has no graph to run yet. Only Run is refused for it: Open in
+// ComfyUI, which `runnable` still gates, is how a draft is finished.
+const draft = computed(() => Boolean(store.runnableCard?.draft));
+const canRun = computed(() => runnable.value && !draft.value);
+const runTitle = computed(() => {
+  if (!runnable.value) return "Select one workflow to run it";
+  if (draft.value) return "Finish it in ComfyUI first: open it there and save it";
+  return "Run this workflow";
+});
 
 // *Open in ComfyUI*, the Workflow tab's two open verbs under one row. Absent
 // with no ComfyUI to open, as the tab's button is; refused for several cards,
@@ -792,7 +798,7 @@ const VerbMenu = () => {
       }),
       item("mdi-play", "Run…", {
         verb: "run",
-        disabled: !runnable.value,
+        disabled: !canRun.value,
         title: runTitle.value,
       }),
       comfyuiRow(),

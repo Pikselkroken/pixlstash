@@ -3486,6 +3486,21 @@ describe("hand-made sets (#1520)", () => {
       ).toEqual(["head:wan"]);
     });
 
+    // A detached field never takes focus, so the tries run on; a test file
+    // that ends meanwhile has its global `document` torn down under them.
+    it("tries to focus the search field without the global document", async () => {
+      const { wrapper } = await openPicker();
+      const errors = vi.fn();
+      wrapper.vm.$.appContext.config.errorHandler = errors;
+      vi.stubGlobal("document", undefined);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(errors).not.toHaveBeenCalled();
+    });
+
     it("Enter on the cursor row makes that row's set, from the search field", async () => {
       createWorkflowSet.mockResolvedValue(handSet(12, []));
       const { wrapper } = await openPicker();

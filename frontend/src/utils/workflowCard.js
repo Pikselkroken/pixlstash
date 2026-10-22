@@ -502,6 +502,8 @@ export function factChips(card, { short = false } = {}) {
     // clipped away is a card that reads as an ordinary one in the grid it was
     // deliberately kept out of.
     card.hidden ? "hidden" : null,
+    // A draft (#2000) cannot run yet, which is the first thing to know.
+    card.draft ? "Draft · from a template" : null,
     // Second, for the same reason: what kind of workflow this is.
     card.manual ? "Manual" : null,
     // The SERVED label, so the chip and a generated name say the type in

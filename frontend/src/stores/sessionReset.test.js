@@ -58,6 +58,7 @@ import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
+import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 import { useRunDialogStore } from "./useRunDialogStore";
 import { useFilterStore } from "./useFilterStore";
 
@@ -149,6 +150,24 @@ const STORES = [
       s.cards.length === 0 &&
       !s.loaded &&
       s.hidden === 0 &&
+      s.selectedKeys.length === 0,
+  },
+  {
+    // #2000, the Templates tab: what the owner's ComfyUI serves, its address,
+    // and which model files the owner's shelf holds. Owner-only, so none of
+    // it survives a credential change.
+    name: "useWorkflowTemplatesStore",
+    use: useWorkflowTemplatesStore,
+    seed: (s) => {
+      s.templates = [{ key: "default/x", files: [{ name: "a", present: true }] }];
+      s.comfyuiUrl = "http://127.0.0.1:8188";
+      s.loaded = true;
+      s.selectedKeys = ["default/x"];
+    },
+    isEmpty: (s) =>
+      s.templates.length === 0 &&
+      !s.loaded &&
+      s.comfyuiUrl === "" &&
       s.selectedKeys.length === 0,
   },
   {

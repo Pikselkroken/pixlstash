@@ -74,6 +74,8 @@ from pixlstash.hub.workflow_card_reads import (
     group_picture_inputs,
     group_pins,
     instance_documents,
+    is_draft,
+    manual_document_and_version,
     model_fix_labels,
     model_fixes,
     picture_keys,
@@ -736,6 +738,16 @@ class WorkflowCard(BaseModel):
             "The name of the workflow or recipe a manual workflow was made "
             "from (duplicate, fixed copy, clone, LoRA edit, extract), as it "
             "was called then; null for an imported one."
+        ),
+    )
+    draft: bool = Field(
+        False,
+        description=(
+            "A manual workflow made from a ComfyUI template that has no API "
+            "graph yet (#2000): PixlStash could not convert its editor "
+            "document, and ComfyUI has not saved it. Run, its pre-flight and "
+            "export refuse it; *Open in ComfyUI* opens the template for the "
+            "ComfyUI-PixlStash node to save back, which ends it."
         ),
     )
     origin_category: Literal["comfyui", "pictures", "own"] = Field(
@@ -2407,7 +2419,21 @@ class WorkflowRunnableGraph(BaseModel):
     """
 
     name: str = Field(description="What to call the workflow in ComfyUI.")
-    workflow: dict = Field(description="The ComfyUI API-format graph.")
+    workflow: dict | None = Field(
+        description=(
+            "The ComfyUI API-format graph. Null only for a `draft`, which has "
+            "none: open `editor`."
+        )
+    )
+    draft: bool = Field(
+        False,
+        description=(
+            "A workflow made from a ComfyUI template that has no API graph yet "
+            "(#2000), answered only to a caller that asked with `drafts`. "
+            "`editor` is the template as stored, to open as it is; a save of "
+            "it from ComfyUI (`PUT …/graph`) gives the workflow its graph."
+        ),
+    )
     source: str | None = Field(
         description="Where the graph was resolved from: edit, file, picture or instance."
     )
@@ -3840,6 +3866,7 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
         imported=figure.card.imported,
         manual=figure.card.manual,
         from_name=figure.card.from_name,
+        draft=figure.card.draft,
         origin_category=_origin_category(figure.card),
         versions=figure.card.versions,
         version=figure.card.version,
@@ -9267,6 +9294,15 @@ def create_router(server) -> APIRouter:
                 "parameters do not apply to it. 404 once it is no longer held."
             ),
         ),
+        drafts: bool = Query(
+            False,
+            description=(
+                "The caller can open a draft (#2000): a workflow made from a "
+                "ComfyUI template with no API graph yet is answered as "
+                "`draft` with its editor document, where it is otherwise a "
+                "409 saying what it is."
+            ),
+        ),
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
@@ -9282,9 +9318,17 @@ def create_router(server) -> APIRouter:
                     ),
                 )
             return held
-        graph, source, card, waiting_applied, object_info = _opening_graph(
-            request, workflow, waiting=waiting, all_stages=all_stages
-        )
+        try:
+            graph, source, card, waiting_applied, object_info = _opening_graph(
+                request, workflow, waiting=waiting, all_stages=all_stages
+            )
+        except HTTPException as exc:
+            # Asked after the read, not before: a draft PixlStash can convert
+            # now (a pack installed since) stores the conversion on that read
+            # and opens as any workflow does.
+            if exc.status_code != 409 or not is_draft(hub, workflow.workflow_id):
+                raise
+            return _draft_opening(hub, workflow, drafts, exc)
         # A layout kept from before workflows opened with ComfyUI-PixlStash
         # nodes was matched on the workflow's own classes: still that layout,
         # so the graph is read for it as it was before the swap too.
@@ -9318,6 +9362,41 @@ def create_router(server) -> APIRouter:
             people_loader=_people_loader_place(
                 workflow.workflow_id, graph, object_info
             ),
+        )
+
+    def _draft_opening(hub, workflow, drafts: bool, refusal: HTTPException):
+        """``GET …/graph``'s answer for a draft: its editor document, or a 409.
+
+        Only a caller that says it can open one (``drafts``, the
+        ComfyUI-PixlStash node from #2000 on) gets the document: an older
+        node, the MCP server and every other reader of an API graph get a 409
+        that says what the workflow is and what finishes it.
+        """
+        if not drafts:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow is a draft made from a ComfyUI template, "
+                    "and has no graph PixlStash can run yet. Open it in "
+                    "ComfyUI from PixlStash and save it there (this needs "
+                    "an up-to-date ComfyUI-PixlStash node). "
+                    f"{refusal.detail}"
+                ),
+            ) from refusal
+        document, version = manual_document_and_version(hub, workflow.workflow_id)
+        if document is None or api_graph(document) is not None:
+            raise refusal
+        logger.info(
+            "[workflows] Draft %s opens in ComfyUI as its template.",
+            workflow.workflow_id,
+        )
+        return WorkflowRunnableGraph(
+            name=download_stem(workflow.name or "") or "PixlStash workflow",
+            workflow=None,
+            draft=True,
+            source=None,
+            version=version,
+            editor=document,
         )
 
     @router.post(
@@ -12839,6 +12918,8 @@ def create_router(server) -> APIRouter:
         # Cached: only a bypass and the installed check ask it, and a save
         # from ComfyUI's own page arrives often.
         object_info = _owner_object_info()
+        if not payload.as_new and is_draft(hub, workflow_id):
+            return _finish_draft(request, workflow, payload, source, object_info)
         before = _card_source(card, workflow_id=workflow_id, object_info=object_info)
         recipe = _defaults(hub, workflow_id)
         # What waited, where the graph was read with it applied: its stages
@@ -13096,6 +13177,56 @@ def create_router(server) -> APIRouter:
                 for d, now in changed
             ],
             not_saved=not_saved,
+        )
+
+    def _finish_draft(
+        request: Request, workflow, payload, source: str, object_info
+    ) -> WorkflowGraphSaved:
+        """Store ComfyUI's graph of a draft as its next version (#2000).
+
+        A draft has no graph of its own, so nothing here compares with one:
+        no base model can be dropped (rule 2 is about a workflow that ran),
+        and no prompt, seed or parameter is held back. What a save always
+        does still holds: a person's LoRA is left out and the empty loader
+        for people comes off, and `editor` is kept as the layout. The version
+        this makes holds an API graph, which ends the draft.
+        """
+        hub = _hub()
+        workflow_id = workflow.workflow_id
+        graph = deepcopy(api_graph(payload.workflow))
+        left_out = _left_out_people(hub, graph, object_info)
+        run_service.take_out_empty_adapter_loaders(graph)
+        _document, current = manual_document_and_version(hub, workflow_id)
+
+        def also(conn, _made: int) -> None:
+            if payload.opening and source == workflow_versions.FROM_COMFYUI:
+                conn.execute(
+                    "UPDATE workflow_version SET opening = ? WHERE workflow_id = ? "
+                    "AND version = (SELECT MAX(version) FROM workflow_version "
+                    "WHERE workflow_id = ?)",
+                    (payload.opening, workflow_id, workflow_id),
+                )
+
+        version = _store_over(
+            hub,
+            workflow,
+            graph,
+            None,
+            source,
+            current,
+            original=graph,
+            also=also,
+            changed="This workflow got a newer version while the graph was being stored.",
+        )
+        logger.info(
+            "[workflows] Draft %s was saved from ComfyUI as version %s; it runs now.",
+            workflow_id,
+            version,
+        )
+        _announce(request, [workflow_id], "changed")
+        _keep_layout(workflow_id, payload.editor, graph, left_out)
+        return WorkflowGraphSaved(
+            workflow_id=workflow_id, version=version, left_out=left_out
         )
 
     # ── Who fits a workflow ─────────────────────────────────────────────────
