@@ -25,7 +25,9 @@ names it and the scanner skips the suffix).
 only a complete body is published (no clobber) and registered with that
 digest. A file the scanner cannot read as a model (a login page saved under a
 model's name) is removed again and reported, rather than left on the shelf.
-Cancel, failure and refusal all discard the partial file.
+Cancel, failure and refusal all discard the partial file, and a file the
+hub then refuses to register is removed again. A response with no
+``Content-Length`` is refused, since there would be no space check.
 
 **Where it lands inside the folder.** The name is the one the workflow asked
 for, its own subfolders included (``SDXL/foo.safetensors``). When the folder
@@ -123,7 +125,11 @@ def download_source(file: str) -> Optional[dict]:
 def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
     """Where *file* goes inside the download folder, relative to it."""
     name = file.replace("\\", "/").strip().strip("/")
-    if comfyui_folder and os.path.isdir(os.path.join(folder_path, comfyui_folder)):
+    if (
+        comfyui_folder
+        and not name.startswith(f"{comfyui_folder}/")
+        and os.path.isdir(os.path.join(folder_path, comfyui_folder))
+    ):
         name = f"{comfyui_folder}/{name}"
     return name
 
@@ -191,8 +197,10 @@ def start_download(
         "ended_at": None,
     }
     with _lock:
+        # Case folded: on macOS and Windows two spellings are one partial file.
         if any(
-            d["_target"] == target and d["status"] == STATUS_RUNNING
+            d["_target"].casefold() == target.casefold()
+            and d["status"] == STATUS_RUNNING
             for d in _downloads.values()
         ):
             raise DownloadRefused(f"{relpath} is already being downloaded.", 409)
@@ -214,7 +222,12 @@ def cancel_download(download_id: str) -> bool:
     """Ask a running download to stop. False when no such download is running."""
     with _lock:
         entry = _downloads.get(download_id)
-        if entry is None or entry["status"] != STATUS_RUNNING:
+        # Past `_committed` the file is being published and will land.
+        if (
+            entry is None
+            or entry["status"] != STATUS_RUNNING
+            or entry.get("_committed")
+        ):
             return False
         entry["_cancel"].set()
     return True
@@ -261,7 +274,7 @@ def _run(
     cancel = entry["_cancel"]
     try:
         digest = _fetch(url, partial, entry, cancel)
-        model_id = _publish(hub, partial, target, folder_id, relpath, digest, cancel)
+        model_id = _publish(hub, partial, entry, folder_id, relpath, digest)
     except _Cancelled:
         discard_partial(partial)
         logger.info("Download of %s cancelled.", target)
@@ -302,6 +315,9 @@ def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
         headers={"User-Agent": "PixlStash"},
     ) as response:
         response.raise_for_status()
+        # The list's links are https; a redirect must not drop to plain http.
+        if url.startswith("https://") and not response.url.startswith("https://"):
+            raise ValueError("The download was redirected away from https.")
         if "text/html" in response.headers.get("Content-Type", ""):
             raise ValueError(
                 "The link answered with a web page, not a file. It may need "
@@ -309,6 +325,10 @@ def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
                 "download link."
             )
         total = int(response.headers.get("Content-Length") or 0)
+        if total <= 0:
+            # Without a size there is no space check, and a stream that never
+            # ends would fill the disk.
+            raise ValueError("The server did not say how large the file is.")
         entry["total"] = total
         require_space(os.path.dirname(partial), total)
         with open(partial, "wb") as out:
@@ -326,22 +346,36 @@ def _fetch(url: str, partial: str, entry: dict, cancel: threading.Event) -> str:
 def _publish(
     hub: HubDatabase,
     partial: str,
-    target: str,
+    entry: dict,
     folder_id: int,
     relpath: str,
     digest: str,
-    cancel: threading.Event,
 ) -> int:
+    target = entry["_target"]
+    cancel = entry["_cancel"]
     # Waited for rather than refused: the bytes are already here, and a move
     # running now is no reason to fetch gigabytes again.
     while not SHELF_IO_LOCK.acquire(timeout=1):
         if cancel.is_set():
             raise _Cancelled()
     try:
+        # The last moment a cancel can win; after it `cancel_download` says no,
+        # so it never answers "cancelled" for a file that then lands.
+        with _lock:
+            if cancel.is_set():
+                raise _Cancelled()
+            entry["_committed"] = True
         publish_no_clobber(partial, target)
-        model_id = ModelFolderScanner(hub).register_file(
-            folder_id, target, relpath, sha256=digest
-        )
+        try:
+            model_id = ModelFolderScanner(hub).register_file(
+                folder_id, target, relpath, sha256=digest
+            )
+        except Exception:
+            # The hub refused the row (the folder was forgotten meanwhile): a
+            # file no row names would also refuse every retry as "already
+            # there", so it goes too.
+            discard_partial(target)
+            raise
         if model_id is None:
             discard_partial(target)
             raise ValueError(

@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+import sqlite3
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,7 +21,8 @@ from pixlstash.services.model_downloads import (
     live_downloads,
     start_download,
 )
-from pixlstash.services.model_mover import PARTIAL_SUFFIX
+from pixlstash.services.model_folder_scanner import ModelFolderScanner
+from pixlstash.services.model_mover import PARTIAL_SUFFIX, SHELF_IO_LOCK
 from pixlstash.services.workflow_run_service import MISSING_MODELS, judge
 from tests.test_downloads_intake import _register, write_adapter
 
@@ -29,16 +31,18 @@ from tests.test_downloads_intake import _register, write_adapter
 def serve_bytes(body, content_type="application/octet-stream", gate=None, length=None):
     """Serve *body* at a loopback URL; *gate*, when set, holds the second half.
 
-    *length* is the Content-Length claimed, the body's own unless given.
+    *length* is the Content-Length claimed, the body's own unless given;
+    ``-1`` sends none.
     """
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.send_header("Content-Type", content_type)
-            self.send_header(
-                "Content-Length", str(len(body) if length is None else length)
-            )
+            if length != -1:
+                self.send_header(
+                    "Content-Length", str(len(body) if length is None else length)
+                )
             self.end_headers()
             half = len(body) // 2
             self.wfile.write(body[:half])
@@ -317,3 +321,95 @@ def test_a_missing_model_the_list_links_is_marked_downloadable():
         },
         {"file": "my_own_lora.safetensors", "folder": "loras"},
     ]
+
+
+def test_a_body_of_unknown_length_is_refused(hub, target, adapter_bytes, linked):
+    chosen, _ = target
+    with serve_bytes(adapter_bytes, length=-1) as url:
+        linked(url, None)
+        done = _wait(start_download(hub, "unsized.safetensors")["id"])
+    assert done["status"] == STATUS_FAILED
+    assert "how large" in done["error"]
+    assert os.listdir(chosen) == ["loras"]
+
+
+def test_a_row_the_hub_refuses_takes_the_file_with_it(
+    hub, target, adapter_bytes, linked, monkeypatch
+):
+    chosen, _ = target
+
+    def refuse(*args, **kwargs):
+        raise sqlite3.IntegrityError("FOREIGN KEY constraint failed")
+
+    monkeypatch.setattr(ModelFolderScanner, "register_file", refuse)
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, None)
+        done = _wait(start_download(hub, "refused.safetensors")["id"])
+    assert done["status"] == STATUS_FAILED
+    # Nothing stranded at the real name, so a retry is not "already there".
+    assert os.listdir(chosen) == ["loras"]
+
+
+def test_a_cancel_while_waiting_for_the_shelf_wins(hub, target, adapter_bytes, linked):
+    chosen, _ = target
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, None)
+        with SHELF_IO_LOCK:
+            entry = start_download(hub, "waiting.safetensors")
+            deadline = time.monotonic() + 5
+            while next(d for d in live_downloads() if d["id"] == entry["id"])[
+                "received"
+            ] < len(adapter_bytes):
+                assert time.monotonic() < deadline
+                time.sleep(0.02)
+            assert cancel_download(entry["id"]) is True
+            done = _wait(entry["id"])
+    assert done["status"] == STATUS_CANCELLED
+    assert os.listdir(chosen) == ["loras"]
+
+
+def test_a_cancel_after_the_commit_says_no_and_the_file_lands(
+    hub, target, adapter_bytes, linked, monkeypatch
+):
+    chosen, _ = target
+    committed, release = threading.Event(), threading.Event()
+    real = model_downloads.publish_no_clobber
+
+    def held(partial, final):
+        committed.set()
+        release.wait(5)
+        real(partial, final)
+
+    monkeypatch.setattr(model_downloads, "publish_no_clobber", held)
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, None)
+        entry = start_download(hub, "landing.safetensors")
+        assert committed.wait(5)
+        assert cancel_download(entry["id"]) is False
+        release.set()
+        done = _wait(entry["id"])
+    assert done["status"] == STATUS_DONE
+    assert (chosen / "landing.safetensors").is_file()
+
+
+def test_two_spellings_of_one_file_are_one_download(hub, target, adapter_bytes, linked):
+    gate = threading.Event()
+    with serve_bytes(adapter_bytes, gate=gate) as url:
+        linked(url, None)
+        first = start_download(hub, "Spelled.safetensors")
+        with pytest.raises(DownloadRefused) as caught:
+            start_download(hub, "spelled.SAFETENSORS")
+        assert caught.value.status_code == 409
+        gate.set()
+        assert _wait(first["id"])["status"] == STATUS_DONE
+
+
+def test_a_name_already_under_its_folder_is_not_put_under_it_twice(
+    hub, target, adapter_bytes, linked
+):
+    chosen, _ = target
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, "loras")
+        done = _wait(start_download(hub, "loras/style.safetensors")["id"])
+    assert done["status"] == STATUS_DONE, done
+    assert (chosen / "loras" / "style.safetensors").is_file()

@@ -11049,11 +11049,17 @@ the server at an address of its choosing.
 - **The order.** Refused before a byte when the name is not a shelf suffix,
   would resolve outside the folder, is already there, or is already being
   downloaded. Bytes stream to `<name>.pixlstash-partial`, SHA-256'd on the way
-  in; a `text/html` answer (a login page) fails at once, and a body short of
-  its `Content-Length` is raised by urllib3. Then, under `SHELF_IO_LOCK`
+  in; a `text/html` answer (a login page), a response with no
+  `Content-Length` (no space check is possible) and a redirect from https to
+  http fail at once, and a body short of its `Content-Length` is raised by
+  urllib3. Then, under `SHELF_IO_LOCK`
   (waited for, since the bytes are already here), `publish_no_clobber` and
   `register_file` with that digest; bytes the scanner cannot read as a model
-  are removed again. Cancel, failure and refusal discard the partial file.
+  are removed again, and so is a published file the hub refuses to register
+  (its folder forgotten meanwhile), which would otherwise refuse every retry
+  as "already there". Cancel, failure and refusal discard the partial file.
+  **A cancel wins only before the publish**: once the file is committed under
+  the lock, `cancel_download` answers `false` and the file lands.
   `models_arrived` (integration §8) announces the new model.
 - **Followed in memory, one thread each**, like the ComfyUI runs in flight:
   `live_downloads()` is `downloads` on `GET /workers/progress` (owner only),
@@ -11061,7 +11067,8 @@ the server at an address of its choosing.
   polling client sees how it ended. `POST /model-downloads/{id}/cancel` stops
   one. ponytail: a restart forgets a download in flight and leaves its partial
   file behind (inert: no row names it and the scanner skips the suffix); no
-  Hugging Face or Civitai token is sent, so a gated file fails as a web page.
+  Hugging Face or Civitai token is sent, so a gated file fails as a web page;
+  relocating the download folder mid-download fails that download.
 
 ---
 
