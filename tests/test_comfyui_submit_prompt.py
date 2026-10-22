@@ -187,6 +187,7 @@ def test_the_listener_reads_progress_until_no_run_is_in_flight(listening, monkey
     assert opened == [f"wss://comfy.test/ws?clientId={comfyui_service.RUN_CLIENT_ID}"]
     assert seen == {
         "run-a": {
+            "run_id": None,
             "prompt_id": "run-a",
             "label": "ComfyUI",
             "workflow_id": None,
@@ -194,6 +195,7 @@ def test_the_listener_reads_progress_until_no_run_is_in_flight(listening, monkey
             "percent": 0.0,
         },
         "run-b": {
+            "run_id": None,
             "prompt_id": "run-b",
             "label": "Portrait",
             "workflow_id": "wf-1",

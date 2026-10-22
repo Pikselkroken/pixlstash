@@ -853,10 +853,10 @@ def test_the_read_holds_the_planner_per_batch_and_releases_it(owner_env, monkeyp
     calls: list[tuple[str, float | None]] = []
 
     class _Planner:
-        def hold(self, seconds):
+        def hold(self, owner, seconds):
             calls.append(("hold", seconds))
 
-        def release(self):
+        def release(self, owner):
             calls.append(("release", None))
 
     class _Runner:

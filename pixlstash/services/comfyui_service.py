@@ -189,8 +189,6 @@ def record_run_outcome(
             _held_cancels.pop(prompt_id, None)
         previous = _run_outcomes.pop(prompt_id, None) or {}
         run_id = run_id or previous.get("run_id")
-        if run_id is None and prompt_id.startswith("run-"):
-            run_id = prompt_id
         _run_outcomes[prompt_id] = {
             "run_id": run_id,
             "prompt_id": None if prompt_id == run_id else prompt_id,
