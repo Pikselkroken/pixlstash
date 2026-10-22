@@ -13,6 +13,7 @@ from sqlmodel import select
 
 from pixlstash.db_models import ImportFolder
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources.ledger import ledger
 from pixlstash.utils.accelerator import (
     CUDA,
     MPS,
@@ -28,11 +29,6 @@ try:
     import psutil
 except Exception:  # pragma: no cover - optional dependency
     psutil = None
-
-try:
-    import pynvml
-except Exception:  # pragma: no cover - optional dependency
-    pynvml = None
 
 logger = get_logger(__name__)
 
@@ -388,20 +384,22 @@ class HardwareMonitor:
             payload.update(self._vram_cache_payload)
             vram_collected = True
 
-        if not vram_collected and pynvml:
+        # The ledger's one NVML handle: initialising and shutting NVML down on
+        # every poll could shut it down under the arbiter's reads.
+        nvml = ledger().nvml() if not vram_collected else None
+        if nvml is not None:
             logger.debug("Collecting VRAM usage via NVML")
             try:
-                pynvml.nvmlInit()
                 pid = os.getpid()
                 used_bytes = 0
                 total_bytes = 0
                 process_listed = False
                 figure_seen = False
-                device_count = pynvml.nvmlDeviceGetCount()
+                device_count = nvml.nvmlDeviceGetCount()
                 for index in range(device_count):
-                    handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                    handle = nvml.nvmlDeviceGetHandleByIndex(index)
                     try:
-                        mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                        mem_info = nvml.nvmlDeviceGetMemoryInfo(handle)
                         total_bytes += int(getattr(mem_info, "total", 0) or 0)
                     except Exception as exc:
                         logger.debug(
@@ -411,13 +409,11 @@ class HardwareMonitor:
                         )
                     processes = []
                     try:
-                        processes = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+                        processes = nvml.nvmlDeviceGetComputeRunningProcesses(handle)
                     except Exception:
                         processes = []
                     try:
-                        processes += pynvml.nvmlDeviceGetGraphicsRunningProcesses(
-                            handle
-                        )
+                        processes += nvml.nvmlDeviceGetGraphicsRunningProcesses(handle)
                     except Exception as exc:
                         logger.debug(
                             "Failed to read NVML graphics processes for device %d: %s",
@@ -431,7 +427,7 @@ class HardwareMonitor:
                         used_gpu = getattr(entry, "usedGpuMemory", None)
                         if used_gpu is None:
                             continue
-                        if used_gpu == getattr(pynvml, "NVML_VALUE_NOT_AVAILABLE", -1):
+                        if used_gpu == getattr(nvml, "NVML_VALUE_NOT_AVAILABLE", -1):
                             continue
                         figure_seen = True
                         used_bytes += used_gpu
@@ -443,11 +439,6 @@ class HardwareMonitor:
                     vram_collected = _set_vram_payload(payload, used_bytes, total_bytes)
             except Exception as exc:
                 logger.debug("Failed to read VRAM usage: %s", exc)
-            finally:
-                try:
-                    pynvml.nvmlShutdown()
-                except Exception as exc:
-                    logger.debug("pynvml shutdown failed: %s", exc)
 
         if not vram_collected:
             vram_collected = collect_vram_from_torch(payload)
