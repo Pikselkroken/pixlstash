@@ -110,6 +110,7 @@ from pixlstash.hub import workflow_versions
 from pixlstash.services import (
     comfyui_link_service,
     comfyui_pack_service,
+    comfyui_templates,
     model_shelf_service,
     workflow_card_service,
 )
@@ -24362,6 +24363,20 @@ def test_a_template_thumbnail_is_fetched_only_for_a_listed_template(
     )
     assert r.status_code == 404, r.text
     assert not any("system_stats" in path for path in comfyui_templates_served.asked)
+
+
+def test_a_listed_name_of_dots_stays_one_segment_of_the_template_path():
+    """A pack or template ComfyUI names `.` or `..` is not a step out of the route."""
+    base = "http://127.0.0.1:8188"
+    for module, name in [("..", "x"), (".", "x"), ("pack", ".."), ("a/b", "c d")]:
+        url = comfyui_templates.graph_url(base, module, name)
+        prepared = requests.Request("GET", url).prepare().url
+        assert prepared.startswith(f"{base}/api/workflow_templates/"), prepared
+        assert prepared.count("/") == url.count("/"), prepared
+    # An ordinary name with dots in it is left as it is.
+    assert comfyui_templates.graph_url(base, "pack", "flux.1-dev").endswith(
+        "/pack/flux.1-dev.json"
+    )
 
 
 def test_a_template_that_converts_is_an_ordinary_workflow(

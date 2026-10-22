@@ -166,8 +166,13 @@ def _get_json(url: str):
 
 def _segment(value: str) -> str:
     """*value* as one path segment: a `/` or `..` in a name ComfyUI listed
-    stays inside it rather than reaching another of ComfyUI's paths."""
-    return quote(value, safe="")
+    stays inside it rather than reaching another of ComfyUI's paths.
+
+    `quote` keeps dots, and a segment of nothing but dots is a path step the
+    request collapses, so those dots are encoded as well.
+    """
+    quoted = quote(value, safe="")
+    return quoted if quoted.strip(".") else quoted.replace(".", "%2E")
 
 
 def graph_url(base_url: str, module: str, name: str) -> str:
