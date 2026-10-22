@@ -3,6 +3,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { nextTick } from "vue";
 
 const listTemplates = vi.fn();
 const addTemplates = vi.fn();
@@ -91,8 +92,43 @@ describe("which templates could run here", () => {
 
 describe("the Templates tab's list", () => {
   beforeEach(() => {
+    localStorage.clear();
     setActivePinia(createPinia());
     listTemplates.mockReset();
+  });
+
+  it("remembers the sort and filters for next time, but not the name text", async () => {
+    const store = useWorkflowTemplatesStore();
+    store.sortKey = "newest";
+    store.setFilters({ media: "video", readiness: "missing", showPartner: true, name: "flux" });
+    await nextTick();
+    expect(
+      JSON.parse(localStorage.getItem("pixlstash:workflowTemplatesView")),
+    ).not.toHaveProperty("name");
+    setActivePinia(createPinia());
+    const next = useWorkflowTemplatesStore();
+    expect(next.sortKey).toBe("newest");
+    expect(next.filters).toEqual({
+      name: "",
+      media: "video",
+      source: null,
+      readiness: "missing",
+      showPartner: true,
+    });
+  });
+
+  it("starts from the defaults on a blob it cannot trust", () => {
+    localStorage.setItem(
+      "pixlstash:workflowTemplatesView",
+      JSON.stringify({ v: 1, sortKey: "bogus", source: "nowhere", readiness: "missing" }),
+    );
+    const store = useWorkflowTemplatesStore();
+    expect(store.sortKey).toBe("readiness");
+    expect(store.filters.source).toBe(null);
+    expect(store.filters.readiness).toBe("missing");
+    localStorage.setItem("pixlstash:workflowTemplatesView", "{not json");
+    setActivePinia(createPinia());
+    expect(useWorkflowTemplatesStore().filters.readiness).toBe(null);
   });
 
   it("sorts by readiness: ready first, one that names its files ahead of one that names none, then fewest missing; partner hidden by default", async () => {

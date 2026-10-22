@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref, watch } from "vue";
 import { defineStore } from "pinia";
 
 import { addTemplates, listTemplates } from "../api/comfyui";
@@ -96,6 +96,36 @@ const DEFAULT_FILTERS = {
   showPartner: false,
 };
 
+// The sort and filters, remembered per browser as the model shelf's view is.
+const VIEW_KEY = "pixlstash:workflowTemplatesView";
+const VIEW_SCHEMA_VERSION = 1;
+
+/**
+ * The remembered sort and filters, each one dropped that this build would not
+ * draw. A blob that cannot be read (private mode, a disabled store, a corrupt
+ * value) is the defaults.
+ */
+function storedView() {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(window.localStorage?.getItem(VIEW_KEY) || "null");
+  } catch (err) {
+    console.warn(`[templates] could not read ${VIEW_KEY}`, err);
+  }
+  const ok = parsed?.v === VIEW_SCHEMA_VERSION;
+  const pick = (value, allowed) => (ok && allowed(value) ? value : null);
+  return {
+    sortKey: pick(parsed?.sortKey, (k) => TEMPLATE_SORT_KEYS.includes(k)) ?? "readiness",
+    filters: {
+      ...DEFAULT_FILTERS,
+      media: pick(parsed?.media, (m) => typeof m === "string"),
+      source: pick(parsed?.source, (s) => s in SOURCE_LABELS),
+      readiness: pick(parsed?.readiness, (r) => READINESS.includes(r)),
+      showPartner: ok && parsed.showPartner === true,
+    },
+  };
+}
+
 const SORTERS = {
   // Within a state: fewest missing, then a template that names its files
   // (one that names none is ready only as far as anybody can tell), then
@@ -138,8 +168,21 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   const detail = ref("");
   const error = ref("");
   const adding = ref(false);
-  const sortKey = ref("readiness");
-  const filters = ref({ ...DEFAULT_FILTERS });
+  const initial = storedView();
+  const sortKey = ref(initial.sortKey);
+  const filters = ref(initial.filters);
+  // The name text is left out, as the shelf leaves it out: it is never
+  // restored, so writing it would only leave a search lying in storage.
+  watch([sortKey, filters], ([sort, { name: _name, ...kept }]) => {
+    try {
+      window.localStorage?.setItem(
+        VIEW_KEY,
+        JSON.stringify({ v: VIEW_SCHEMA_VERSION, sortKey: sort, ...kept }),
+      );
+    } catch (err) {
+      console.warn(`[templates] could not remember ${VIEW_KEY} for next time`, err);
+    }
+  });
   const selectedKeys = ref([]);
   // Bumped by the inspector's Add: the view carries it out, since it lands
   // on the Mine tab afterwards (the `requestUseSet` pattern).
@@ -384,7 +427,8 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     detail.value = "";
     error.value = "";
     selectedKeys.value = [];
-    filters.value = { ...DEFAULT_FILTERS };
+    // What this browser remembers, as a fresh start would read it.
+    filters.value = storedView().filters;
   }
 
   onScopeDispose(onSessionReset(reset));
