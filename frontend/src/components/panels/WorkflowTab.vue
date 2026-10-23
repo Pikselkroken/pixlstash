@@ -291,12 +291,10 @@
                 >{{ missingNote(row.missing, row.kind) }}
               </p>
               <!-- What to do about it, in as few words: the why of an
-                   unmatched list is the mark's tooltip. -->
+                   unmatched list is the mark's tooltip. A stale file is
+                   never downloadable, so it reads as a pick. -->
               <p
-                v-if="
-                  !staleFiles.has(row.missing) &&
-                  (downloadableFiles.has(row.missing) || row.options.length)
-                "
+                v-if="downloadableFiles.has(row.missing) || row.options.length"
                 class="wftab-note wftab-quiet"
                 data-testid="wftab-missing-action"
               >

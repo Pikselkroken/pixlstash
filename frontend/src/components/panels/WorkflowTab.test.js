@@ -1337,6 +1337,37 @@ describe("a checkpoint that will not load", () => {
     );
   });
 
+  it("keeps the pick and its why on a stale row that has replacements", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "pack_outdated",
+              models: [
+                { file: "SDXL/realvisXL_v5.safetensors", folder: "checkpoints" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(
+        replacementsByKind({ checkpoint: [{ id: 7, filename: "sd15.safetensors" }] }, {}, false),
+      );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-missing-action"]').text()).toBe(
+      "Pick a replacement below.",
+    );
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(
+      true,
+    );
+  });
+
   it("makes a missing checkpoint a row that needs a pick, asked for by the graph's spelling", async () => {
     // The recipe says `realvisXL_v5`, the graph loads the fp8 build of it:
     // the missing file is still the Checkpoint row's, and it is the graph's
