@@ -1005,6 +1005,34 @@ describe("the GPU queue in the task manager", () => {
     expect(localStorage.getItem("pixlstash:tasks:pixlstash-fold")).toBe("1");
   });
 
+  it("folds every background worker, lease or not, and draws its sparkline only when open", async () => {
+    // Between batches a worker holds no lease; it used to fall out of the fold.
+    const tasksStore = setGpu(
+      gpuAnswer({ leases: [gpuLease({ id: "a", label: "Tags", worker_type: "TagTask", held_mb: 1200 })] }),
+    );
+    tasksStore.workerSnapshots = {
+      ImageEmbeddingTask: { label: "Image embeddings", current: 5, total: 9, running: true, active: true },
+      TagTask: { label: "Tags", current: 1, total: 9, running: true, active: true },
+    };
+    const wrapper = mount(TasksPanel, globalOpts);
+    const fold = wrapper.find('[data-testid="tm-pixlstash"]');
+    expect(fold.find('[data-testid="tm-pixl-count"]').text()).toBe("2");
+    // Collapsed: no worker is listed anywhere, inside the fold or beside it.
+    expect(wrapper.findAll(".tm-worker-row")).toHaveLength(0);
+
+    await fold.find(".tm-caret").trigger("click");
+    const rows = fold.findAll(".tm-worker-row");
+    expect(rows.map((row) => row.find(".tm-worker-label").text())).toEqual([
+      "Image Embeddings",
+      "Tags",
+    ]);
+    expect(rows.every((row) => row.find("canvas.tm-sparkline").exists())).toBe(true);
+    // The tagger's lease shows on the tagger's row, and is not a line of its own.
+    expect(rows[1].find('[data-testid="tm-worker-figure"]').text()).toBe("1.2 GB");
+    expect(rows[0].find('[data-testid="tm-worker-figure"]').exists()).toBe(false);
+    expect(wrapper.findAll(".tm-row--child")).toHaveLength(0);
+  });
+
   it("marks a task the backend stopped as stopped, not as lost", async () => {
     setGpu(
       gpuAnswer({

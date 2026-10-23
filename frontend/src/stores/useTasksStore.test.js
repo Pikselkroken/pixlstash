@@ -376,7 +376,7 @@ describe("the GPU queue", () => {
     }
   });
 
-  it("folds PixlStash's granted leases into one row, summing what they hold", async () => {
+  it("folds PixlStash's granted leases into one row, a worker's lease on that worker", async () => {
     const store = await pollWith({
       workers: {
         TagTask: { label: "pictures_tagged", current: 3, total: 10, running: true, active: true },
@@ -393,17 +393,59 @@ describe("the GPU queue", () => {
     try {
       const fold = store.pixlstashEntry;
       expect(fold.kind).toBe("pixlstash");
-      // Three granted leases and one stopped task: four tasks, and only the VRAM of the leases.
+      // The tagger, two leases no worker reports and one stopped task: four
+      // tasks, and only the VRAM of the leases.
       expect(fold.count).toBe(4);
       expect(fold.mb).toBe(3000);
-      expect(fold.children.map((c) => c.label)).toEqual(["Tagging", "OCR", "Quality scores", "FaceTask"]);
+      expect(fold.children.map((c) => c.key)).toEqual(["worker:TagTask", "lease:b", "lease:c", "preempted:0"]);
+      // The tagger's lease is on the tagger's child, not a line of its own.
+      expect(fold.children[0]).toMatchObject({ workerKey: "TagTask", mb: 2000 });
+      expect(fold.children[0].snapshot).toMatchObject({ current: 3, total: 10 });
       expect(fold.children[2].onCpu).toBe(true);
       expect(fold.children[3].stopped).toBe(true);
-      expect(fold.children[0].progress).toEqual({ current: 3, total: 10 });
+      expect(store.activeCount).toBe(4);
       // The folded worker is not listed a second time.
       expect(store.runningEntries.map((e) => e.key)).toEqual(["pixlstash"]);
       // Its tracker is still there for the taggingActive reader.
       expect(store.taggingActive).toBe(true);
+    } finally {
+      store.stopPolling();
+    }
+  });
+
+  it("folds every backend worker, with or without a lease, and on a server with no resources", async () => {
+    const workers = {
+      ImageEmbeddingTask: { label: "Image embeddings", current: 5, total: 9, running: true, active: true },
+      TagTask: { label: "Tags", current: 1, total: 9, running: false, active: true },
+    };
+    // Between batches no worker holds a lease; the server may send no resources at all.
+    for (const resources of [undefined, resourcesAnswer()]) {
+      const store = await pollWith({ workers, ...(resources ? { resources } : {}) });
+      try {
+        expect(store.runningEntries.map((e) => e.key)).toEqual(["pixlstash"]);
+        expect(store.pixlstashEntry.children.map((c) => c.key)).toEqual([
+          "worker:ImageEmbeddingTask",
+          "worker:TagTask",
+        ]);
+        expect(store.activeCount).toBe(2);
+      } finally {
+        store.stopPolling();
+      }
+      setActivePinia(createPinia());
+    }
+  });
+
+  it("marks a worker the backend stopped on that worker's child", async () => {
+    const store = await pollWith({
+      workers: { FaceTask: { label: "Faces", current: 2, total: 9, running: false, active: true } },
+      resources: resourcesAnswer({
+        preempted: [{ worker_type: "FaceTask", caused_by: "lease-z", since: "2026-10-22T10:01:00Z", text: "Stopped to make room" }],
+      }),
+    });
+    try {
+      expect(store.pixlstashEntry.children).toEqual([
+        expect.objectContaining({ key: "worker:FaceTask", stopped: true, text: "Stopped to make room" }),
+      ]);
     } finally {
       store.stopPolling();
     }

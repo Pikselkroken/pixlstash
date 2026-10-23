@@ -385,13 +385,39 @@ export const useTasksStore = defineStore("tasks", () => {
     );
   });
 
-  // PixlStash's own GPU work, folded into one entry: every granted PixlStash
-  // light lease, plus the tasks the backend stopped to make room (`preempted`).
+  // PixlStash's own background work, folded into one entry: one child per
+  // active backend worker, plus every granted PixlStash light lease and every
+  // task the backend stopped to make room (`preempted`). A lease is taken per
+  // task, so a worker between batches holds none; folding by lease alone left
+  // it, and every CPU-only worker, as a flat row beside the fold. A lease or a
+  // stopped task naming a worker in the fold lands on that worker's child.
   // Null when there is none, so no fold row is drawn.
   const pixlstashEntry = computed(() => {
     const children = [];
+    const byWorker = new Map();
+    for (const entry of activeWorkerEntries.value) {
+      const child = {
+        key: `worker:${entry.key}`,
+        label: entry.snapshot.label || entry.key,
+        workerKey: entry.key,
+        snapshot: entry.snapshot,
+        mb: 0,
+        onCpu: false,
+        stopped: false,
+        text: "",
+        progress: null,
+      };
+      children.push(child);
+      byWorker.set(entry.key, child);
+    }
     for (const lease of leases.value) {
       if (lease.tenant !== "pixlstash" || lease.state !== "granted") continue;
+      const own = lease.worker_type ? byWorker.get(lease.worker_type) : null;
+      if (own) {
+        own.mb += Number(lease.held_mb) || 0;
+        own.onCpu = own.onCpu || Boolean(lease.on_cpu);
+        continue;
+      }
       const snapshot = lease.worker_type
         ? workerSnapshots.value?.[lease.worker_type]
         : null;
@@ -399,6 +425,7 @@ export const useTasksStore = defineStore("tasks", () => {
         key: `lease:${lease.id}`,
         label: lease.label || "PixlStash task",
         workerKey: lease.worker_type || null,
+        snapshot: null,
         mb: Number(lease.held_mb) || 0,
         onCpu: Boolean(lease.on_cpu),
         stopped: false,
@@ -409,10 +436,17 @@ export const useTasksStore = defineStore("tasks", () => {
       });
     }
     for (const [index, stopped] of (resources.value?.preempted ?? []).entries()) {
+      const own = stopped.worker_type ? byWorker.get(stopped.worker_type) : null;
+      if (own) {
+        own.stopped = true;
+        own.text = stopped.text || "";
+        continue;
+      }
       children.push({
         key: `preempted:${index}`,
         label: stopped.worker_type || "PixlStash task",
         workerKey: stopped.worker_type || null,
+        snapshot: null,
         mb: 0,
         onCpu: false,
         stopped: true,
@@ -428,17 +462,6 @@ export const useTasksStore = defineStore("tasks", () => {
       mb: children.reduce((sum, child) => sum + child.mb, 0),
       children,
     };
-  });
-
-  // The backend workers PixlStash's fold already shows, so they are not listed
-  // a second time. Only when the backend sends `resources`.
-  const foldedWorkerKeys = computed(() => {
-    if (!resources.value) return new Set();
-    return new Set(
-      (pixlstashEntry.value?.children ?? [])
-        .map((child) => child.workerKey)
-        .filter(Boolean),
-    );
   });
 
   // Per-GPU bars: each card's split of what is on it, from `devices` and
@@ -459,13 +482,6 @@ export const useTasksStore = defineStore("tasks", () => {
     })),
   );
 
-  // Backend workers that the PixlStash fold does not already show.
-  const ungroupedWorkerEntries = computed(() =>
-    activeWorkerEntries.value.filter(
-      (entry) => !foldedWorkerKeys.value.has(entry.key),
-    ),
-  );
-
   // ComfyUI runs and imports lead: they are the work the user just kicked off
   // and is waiting on, so they read first in the Tasks tab, above the ambient
   // backend workers.
@@ -474,7 +490,6 @@ export const useTasksStore = defineStore("tasks", () => {
     ...downloadEntries.value,
     ...(pixlstashEntry.value ? [pixlstashEntry.value] : []),
     ...importEntries.value,
-    ...ungroupedWorkerEntries.value,
   ]);
 
   const activeEntries = computed(() => [
@@ -482,7 +497,13 @@ export const useTasksStore = defineStore("tasks", () => {
     ...waitingEntries.value,
   ]);
 
-  const activeCount = computed(() => activeEntries.value.length);
+  // The PixlStash fold is one row but counts each task in it.
+  const activeCount = computed(() =>
+    activeEntries.value.reduce(
+      (sum, entry) => sum + (entry.kind === "pixlstash" ? entry.count : 1),
+      0,
+    ),
+  );
   const hasActiveTasks = computed(() => activeCount.value > 0);
 
   // The tagger's worker key is its TaskType value. While it is running, a
