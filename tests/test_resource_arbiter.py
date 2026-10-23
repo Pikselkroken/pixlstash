@@ -774,6 +774,19 @@ def test_comfyuis_figure_is_its_process_when_its_weights_live_outside_torch(
     fake.by_card = {CARD: {5151: 20000}}
     assert probe.usage_mb() == 160
 
+    # No allocator figure at all: the process's stands, and with neither
+    # ComfyUI's memory is unread, not zero.
+    stats = _comfy_stats(TOTAL, TOTAL)
+    del stats["devices"][0]["torch_vram_total"]
+    probe._get = lambda path: stats
+    probe._stats = (0.0, None)
+    fake.by_card = {CARD: {4242: 13254}}
+    assert probe.usage_mb() == 13254
+    fake.by_card = {}
+    assert probe.usage_mb() is None
+    probe._get = lambda path: _comfy_stats(TOTAL, TOTAL, torch_mb=160)
+    probe._stats = (0.0, None)
+
     # Never the card of a remote ComfyUI, whatever runs here on that port.
     fake.by_card = {CARD: {4242: 13254}}
     probe._mapping = (probe._mapping[0], None)

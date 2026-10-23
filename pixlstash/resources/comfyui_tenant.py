@@ -236,12 +236,15 @@ class ComfyUIProbe:
         return candidates[0].uuid
 
     def usage_mb(self) -> int | None:
-        """What ComfyUI's allocator holds, MB; None when it cannot be read."""
+        """What ComfyUI holds, MB; None when it cannot be read."""
         row = self._device_row()
-        if row is None or row.get("torch_vram_total") is None:
+        if row is None:
             return None
+        held = self._process_mb()
+        if row.get("torch_vram_total") is None:
+            return held
         allocator = int(row.get("torch_vram_total") or 0) // _MB
-        return max(allocator, self._process_mb() or 0)
+        return max(allocator, held or 0)
 
     def _process_mb(self) -> int | None:
         """ComfyUI's process memory on its card per NVML, or None unknown.
