@@ -11,7 +11,9 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
+import psutil
 import pytest
 
 from pixlstash import gpu_select
@@ -23,7 +25,7 @@ from pixlstash.resources.arbiter import (
     Tenant,
     safety_margin_mb,
 )
-from pixlstash.resources.ledger import DeviceReading
+from pixlstash.resources.ledger import DeviceReading, Ledger
 
 CARD = "GPU-00000000-0000-0000-0000-000000000001"
 TOTAL = 24576  # 24 GB; margin is 5 % = 1228 MB
@@ -683,3 +685,131 @@ def test_a_read_failing_partway_through_the_card_match_is_not_cached_as_remote(
     # Never mapped, so taken as sharing PixlStash's card, not as remote.
     assert probe.device() == CARD
     assert probe._mapping[0] == 0.0, "a failed second read was cached as remote"
+
+
+def _comfy_stats(total_mb, free_mb, torch_mb=0):
+    mb = 1024 * 1024
+    return {
+        "devices": [
+            {
+                "name": "cuda:0 Test GPU : cudaMallocAsync",
+                "vram_total": total_mb * mb,
+                "vram_free": free_mb * mb,
+                "torch_vram_total": torch_mb * mb,
+            }
+        ]
+    }
+
+
+def test_a_comfyui_reporting_cudas_smaller_card_total_is_still_on_this_card(
+    monkeypatch,
+):
+    """CUDA's total leaves out what the driver keeps back (439 MB on a 32 GB
+    card): a ComfyUI on this machine taken for a remote one has its memory
+    drawn as other apps', and its runs granted unchecked."""
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid")
+    probe._get = lambda path: _comfy_stats(TOTAL - 439, TOTAL)
+    assert probe.device() == CARD
+
+
+class _ProcessLedger(FakeLedger):
+    def __init__(self, processes):
+        super().__init__()
+        self.by_card = processes
+
+    def processes(self, uuid=None):
+        # As the ledger: no card means every card.
+        if uuid is None:
+            return {
+                pid: mb for card in self.by_card.values() for pid, mb in card.items()
+            }
+        return dict(self.by_card.get(uuid, {}))
+
+
+def test_comfyuis_figure_is_its_process_when_its_weights_live_outside_torch(
+    monkeypatch,
+):
+    """Dynamic VRAM (comfy-aimdo) keeps the weights outside torch's allocator:
+    ``torch_vram_total`` reads 160 MB while the process holds 13 GB."""
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    ports = {4242: 8188, 5151: 7801}
+
+    class FakeProcess:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def net_connections(self, kind="inet"):
+            return [
+                SimpleNamespace(
+                    status=psutil.CONN_LISTEN,
+                    laddr=SimpleNamespace(port=ports[self.pid]),
+                )
+            ]
+
+    # The listener is not the largest process: the port picks it, not size.
+    fake = _ProcessLedger({CARD: {5151: 20000, 4242: 13254}})
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: fake)
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    monkeypatch.setattr(comfyui_tenant.psutil, "Process", FakeProcess)
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid:8188")
+    probe._get = lambda path: _comfy_stats(TOTAL, TOTAL, torch_mb=160)
+
+    assert probe.device() == CARD
+    assert probe.usage_mb() == 13254, "the process listening on ComfyUI's port"
+
+    # NVML cannot attribute memory here (WDDM, Docker): the allocator stands.
+    fake.by_card = {}
+    assert probe.usage_mb() == 160
+
+    # Nothing on the card listens on ComfyUI's port (a forwarding launcher).
+    fake.by_card = {CARD: {5151: 20000}}
+    assert probe.usage_mb() == 160
+
+    # Never the card of a remote ComfyUI, whatever runs here on that port.
+    fake.by_card = {CARD: {4242: 13254}}
+    probe._mapping = (probe._mapping[0], None)
+    assert probe.usage_mb() == 160
+
+
+def test_the_ledger_lists_one_cards_processes_without_its_own():
+    mb = 1024 * 1024
+    on_card = {
+        0: [(os.getpid(), 900), (4242, 13254)],
+        1: [(5151, 800), (6161, None)],
+    }
+    nvml = SimpleNamespace(
+        nvmlInit=lambda: None,
+        nvmlDeviceGetCount=lambda: 2,
+        nvmlDeviceGetHandleByIndex=lambda index: index,
+        nvmlDeviceGetUUID=lambda handle: f"GPU-{handle}",
+        nvmlDeviceGetComputeRunningProcesses=lambda handle: [
+            SimpleNamespace(pid=pid, usedGpuMemory=used and used * mb)
+            for pid, used in on_card[handle]
+        ],
+        NVML_VALUE_NOT_AVAILABLE=-1,
+    )
+    ledger = Ledger(nvml)
+    assert ledger.processes("GPU-0") == {4242: 13254}
+    assert ledger.processes("GPU-1") == {5151: 800}, "not available is no figure"
+    assert ledger.processes() == {4242: 13254, 5151: 800}
+
+
+def test_a_comfyui_on_a_card_a_gb_off_in_size_is_not_on_this_card(monkeypatch):
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid")
+    probe._get = lambda path: _comfy_stats(TOTAL - 1100, TOTAL)
+    assert probe.device() is None

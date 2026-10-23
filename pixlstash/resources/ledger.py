@@ -5,12 +5,13 @@ The ledger is the arbiter's only source of device memory (see
 device, keyed by NVML UUID and never by index, because NVML's ordering and
 CUDA's differ.
 
-It does not attribute memory per process: NVML reports per-process memory as
-NOT_AVAILABLE on Windows WDDM and inside Docker, which is where it is needed
-most. Each tenant measures itself instead (ComfyUI through ``/system_stats``,
-PixlStash through its own allocator), and what nobody claims is "other apps".
-The one per-process read left is ``other_processes``, the OOM notice's best
-effort at naming who else is on the card.
+It does not rely on per-process memory: NVML reports it as NOT_AVAILABLE on
+Windows WDDM and inside Docker, which is where it is needed most. Each tenant
+measures itself instead (ComfyUI through ``/system_stats``, PixlStash through
+its own allocator), and what nobody claims is "other apps". ``processes`` is
+the per-process read where NVML has one: the OOM notice's best effort at naming
+who else is on the card, and ComfyUI's figure when its weights live outside
+torch's allocator.
 """
 
 from __future__ import annotations
@@ -174,20 +175,22 @@ class Ledger:
         index = int(first) if first.isdigit() else 0
         return devices[index].uuid if index < len(devices) else devices[0].uuid
 
-    def other_processes(self, limit: int = 3) -> list[dict]:
-        """The other processes on the cards, largest first: ``{name, used_mb}``.
+    def processes(self, uuid: str | None = None) -> dict[int, int]:
+        """Each process's memory on the cards, MB by pid; on *uuid* alone if given.
 
-        For the out-of-memory notice only. Empty where NVML cannot attribute
-        memory (Windows WDDM, Docker), which is the honest answer there.
+        Not this process. Empty where NVML cannot attribute memory (no NVML,
+        Windows WDDM, Docker), which is the honest answer there.
         """
         nvml = self.nvml()
         if nvml is None:
-            return []
+            return {}
         own = os.getpid()
         found: dict[int, int] = {}
         try:
             for index in range(nvml.nvmlDeviceGetCount()):
                 handle = nvml.nvmlDeviceGetHandleByIndex(index)
+                if uuid is not None and _text(nvml.nvmlDeviceGetUUID(handle)) != uuid:
+                    continue
                 for entry in nvml.nvmlDeviceGetComputeRunningProcesses(handle):
                     used = getattr(entry, "usedGpuMemory", None)
                     if entry.pid == own or not isinstance(used, int) or used <= 0:
@@ -196,10 +199,18 @@ class Ledger:
                         continue
                     found[entry.pid] = found.get(entry.pid, 0) + used // _MB
         except Exception as exc:
-            logger.debug("Could not list the GPU's other processes: %s", exc)
-            return []
+            logger.debug("Could not list the GPU's processes: %s", exc)
+            return {}
+        return found
+
+    def other_processes(self, limit: int = 3) -> list[dict]:
+        """The other processes on the cards, largest first: ``{name, used_mb}``.
+
+        For the out-of-memory notice only.
+        """
         rows = [
-            {"name": _process_name(pid), "used_mb": used} for pid, used in found.items()
+            {"name": _process_name(pid), "used_mb": used}
+            for pid, used in self.processes().items()
         ]
         rows.sort(key=lambda row: -row["used_mb"])
         return rows[:limit]
