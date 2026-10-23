@@ -258,6 +258,17 @@ class TestReRunIsSafe:
         apply_migrations(hub)
         assert set(SHELF_TABLES) <= table_names(hub)
 
+    def test_an_existing_v2_hub_gains_the_workflow_thumbnail_table(self, hub):
+        """A hub made before custom workflow thumbnails gets their table on the
+        next open, without a version bump, the way the shelf tables did."""
+        apply_migrations(hub)
+        hub.execute("DROP TABLE workflow_thumbnail")
+        assert read_schema_version(hub) == 2
+        assert "workflow_thumbnail" not in table_names(hub)
+
+        apply_migrations(hub)
+        assert "workflow_thumbnail" in table_names(hub)
+
     def test_an_existing_v2_hub_gains_the_icon_column_on_next_open(self, hub):
         """The icon verb's column, added the same way and for the same reason.
 
