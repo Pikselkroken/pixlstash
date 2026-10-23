@@ -241,6 +241,7 @@ class TaskRunner:
                     task.type,
                     exc,
                 )
+                continue
             stopped.append(task.type)
         kept = []
         while True:

@@ -2109,6 +2109,21 @@ def _process_comfyui_outputs(
         # First, so nothing below can keep the card from the other tenants.
         if vram_lease is not None:
             vram_lease.release()
+        # Bookkeeping only: it runs inside the run's error handling, which
+        # must go on to record and announce how the run ended.
+        try:
+            write_peak(outcome)
+        except Exception as exc:
+            logger.error(
+                "Could not record the VRAM peak of run %s (workflow %s, ended %s): %s",
+                prompt_id,
+                workflow_id,
+                outcome,
+                exc,
+                exc_info=True,
+            )
+
+    def write_peak(outcome: str) -> None:
         peak = sampler.stop() if sampler is not None else None
         if sampler is None or not workflow_id:
             return
@@ -2123,26 +2138,16 @@ def _process_comfyui_outputs(
                 outcome,
             )
             return
-        try:
-            vram_history.record_peak(
-                server.hub,
-                workflow_id,
-                vram_model_set or "",
-                card.name,
-                card.total_mb,
-                peak,
-                "torch_reserved",
-                outcome,
-            )
-        except Exception as exc:
-            logger.error(
-                "Could not record the %s MB peak of run %s (workflow %s): %s",
-                peak,
-                prompt_id,
-                workflow_id,
-                exc,
-                exc_info=True,
-            )
+        vram_history.record_peak(
+            server.hub,
+            workflow_id,
+            vram_model_set or "",
+            card.name,
+            card.total_mb,
+            peak,
+            "torch_reserved",
+            outcome,
+        )
 
     def mark_alone_after_oom() -> str:
         """Make the workflow run alone when the owner allows; the sentence to show."""

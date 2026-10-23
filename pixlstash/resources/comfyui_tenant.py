@@ -210,7 +210,14 @@ class ComfyUIProbe:
         return int(row.get("torch_vram_total") or 0) // _MB
 
     def busy(self) -> bool:
-        """Work PixlStash did not submit is queued or running on ComfyUI."""
+        """Work PixlStash did not submit is queued or running on ComfyUI.
+
+        An unreadable queue is not busy. This only picks a waiting lease's
+        reason, "busy with work started outside PixlStash", which would be
+        false for an unreachable ComfyUI. Memory is guarded elsewhere: every
+        lease is admitted against the card's free memory, which counts what
+        ComfyUI holds, and reclaim asks ``idle``, which is False here.
+        """
         entries = self._entries()
         if entries is None:
             return False

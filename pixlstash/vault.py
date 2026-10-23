@@ -2226,8 +2226,11 @@ class Vault:
             self._work_planner.hold(lease.id, None)
             if lease.state.value != "waiting":
                 # Granted or withdrawn while the hold was being taken: nothing
-                # needs the room any more, so no GPU work is stopped.
-                self._release_yield_hold(lease.id)
+                # needs the room any more, so no GPU work is stopped. Released
+                # here even if the listener already ended it, since its
+                # release can land before this hold does.
+                self._yield_holds.discard(lease.id)
+                self._work_planner.release(lease.id)
                 return []
         stopped = self._task_runner.preempt_gpu(f"preempted by {lease.label}")
         if not self._task_runner.wait_for_gpu_idle():

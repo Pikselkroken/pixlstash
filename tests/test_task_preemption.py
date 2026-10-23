@@ -164,6 +164,21 @@ def test_interactive_work_is_never_preempted(runner):
     assert _until(lambda: "FaceDetectionTask" in runner.endings)
 
 
+def test_a_task_whose_cancel_hook_fails_is_not_reported_stopped(runner):
+    """Nothing stopped, so the snapshot must not say it was paused."""
+
+    class _Stubborn(_GpuTask):
+        def on_cancel(self):
+            raise RuntimeError("cannot stop")
+
+    task = _Stubborn("OcrTask")
+    runner.runner.submit(task)
+    assert task.started.wait(5)
+    assert runner.runner.preempt_gpu("preempted by Training") == []
+    task._cancel_event.set()
+    assert _until(lambda: "OcrTask" in runner.endings)
+
+
 def test_a_cpu_queue_task_granted_gpu_memory_counts_as_gpu_work():
     """``_admit`` leases a CPU-queue task that says it needs VRAM; it then runs
     on the card, so it is stopped to make room and models wait for it."""
@@ -328,6 +343,34 @@ def test_pixlstash_yields_only_for_a_lease_that_still_waits(meanwhile, stopped):
     assert [step for step in done if not step.startswith("release")] == stopped
     # The hold ends with the yield it was for, or stays for the lease's grant.
     assert (vault._yield_holds == set()) is (meanwhile is not LeaseState.WAITING)
+
+
+def test_a_grant_landing_before_the_hold_does_not_leave_the_planner_held():
+    """The listener ends the hold between ``_yield_holds.add`` and ``hold``."""
+    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+    holds = set()
+
+    class _Planner:
+        def hold(self, owner, seconds):
+            lease.state = LeaseState.GRANTED
+            Vault._on_resource_lease(vault, {"change": "granted", "lease_id": owner})
+            holds.add(owner)
+
+        def release(self, owner):
+            holds.discard(owner)
+
+    vault = SimpleNamespace(
+        _task_runner=SimpleNamespace(preempt_gpu=lambda reason: []),
+        _closed=False,
+        _work_planner=_Planner(),
+        _yield_holds=set(),
+        notify=lambda *args: None,
+    )
+    vault._release_yield_hold = lambda lease_id: Vault._release_yield_hold(
+        vault, lease_id
+    )
+    assert Vault._yield_gpu(vault, lease) == []
+    assert holds == set(), "the planner stays held for the rest of the session"
 
 
 def test_models_are_unloaded_once_a_batch_that_outran_the_wait_ends():
