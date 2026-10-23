@@ -25194,10 +25194,15 @@ def test_a_workflow_takes_an_uploaded_thumbnail_and_the_owner_unpins_it(
     hub = workflow_env.server.hub
     path = f"{API}/workflows/{BUSY_WF}"
     before = _card(owner, BUSY_WF)["name"]
-    # Refused whole: the name sent beside the pin is not written either.
-    r = owner.patch(path, json={"thumbnail_pinned": True, "name": "Not written"})
+    # Refused whole: the name and the GPU flag sent beside the pin are not
+    # written either.
+    r = owner.patch(
+        path,
+        json={"thumbnail_pinned": True, "name": "Not written", "exclusive": True},
+    )
     assert r.status_code == 409, r.text
     assert _card(owner, BUSY_WF)["name"] == before
+    assert _card(owner, BUSY_WF)["vram"]["exclusive"] is False
     try:
         r = owner.post(
             f"{path}/thumbnail",

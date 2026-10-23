@@ -4850,12 +4850,6 @@ def create_router(server) -> APIRouter:
         hub = _hub()
         _require_workflow(hub, workflow_id)
         changes = payload.model_dump(exclude_unset=True)
-        if "exclusive" in changes:
-            # A hub table of its own, not a group attribute: the VRAM
-            # arbiter reads it on every run of the workflow.
-            vram_history.set_exclusive(
-                hub, workflow_id, bool(changes.pop("exclusive")), "owner"
-            )
         pinned = changes.pop("thumbnail_pinned", None)
         # Refused before anything is written, so a 409 leaves the whole PATCH
         # unapplied; the pin itself is written last, after the attributes.
@@ -4864,6 +4858,12 @@ def create_router(server) -> APIRouter:
         ):
             raise HTTPException(
                 status_code=409, detail="This workflow has no custom thumbnail."
+            )
+        if "exclusive" in changes:
+            # A hub table of its own, not a group attribute: the VRAM
+            # arbiter reads it on every run of the workflow.
+            vram_history.set_exclusive(
+                hub, workflow_id, bool(changes.pop("exclusive")), "owner"
             )
         if "hidden" in changes and changes["hidden"] is None:
             # The column is NOT NULL and has no "unset" state: a null there is
