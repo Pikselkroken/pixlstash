@@ -1117,7 +1117,7 @@ def test_hold_leases_the_planner_and_expires_on_its_own():
     runner.on_submit = submitted.append
     planner = WorkPlanner(task_runner=runner, task_finders=[_OneShotFinder()])
 
-    planner.hold(0.4)
+    planner.hold("test", 0.4)
     planner.start()
     try:
         time.sleep(0.2)
@@ -1134,8 +1134,8 @@ def test_hold_leases_the_planner_and_expires_on_its_own():
 
 def test_hold_is_from_now_and_does_not_accumulate():
     planner = WorkPlanner(task_runner=_FastCompleteRunner(), task_finders=[])
-    planner.hold(60)
-    planner.hold(60)
+    planner.hold("test", 60)
+    planner.hold("test", 60)
     # Bounded on both sides: a lease that accumulated would read near 120, and
     # the upper bound holds because monotonic() never runs backwards between
     # the hold and the read - up to float rounding, since `(t + 60) - t` on a
@@ -1143,15 +1143,25 @@ def test_hold_is_from_now_and_does_not_accumulate():
     assert 59.0 < planner._held_for() <= 60.0 + 1e-6
 
 
+def test_one_owner_releasing_does_not_end_another_owners_hold():
+    planner = WorkPlanner(task_runner=_FastCompleteRunner(), task_finders=[])
+    planner.hold("folder-read", 60)
+    planner.hold("lease-1", None)
+    planner.release("folder-read")
+    assert planner._held_for() > 0, "the open-ended hold still stands"
+    planner.release("lease-1")
+    assert planner._held_for() <= 0
+
+
 def test_release_ends_the_hold_without_waiting_for_the_lease():
     runner = _FastCompleteRunner()
     submitted = []
     runner.on_submit = submitted.append
     planner = WorkPlanner(task_runner=runner, task_finders=[_OneShotFinder()])
-    planner.hold(60)
+    planner.hold("test", 60)
     planner.start()
     try:
-        planner.release()
+        planner.release("test")
         deadline = time.monotonic() + 3.0
         while not submitted and time.monotonic() < deadline:
             time.sleep(0.02)

@@ -478,6 +478,9 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     takes no path and no URL (the link is looked up by file name in the
     committed template list), and nothing spawns. Its cancel writes nothing
     but its own partial file and is ``owner_only``.
+    64 = 56 + 8 with ``GET /compute/gpus`` and ``PATCH /compute/gpu``: the first
+    names this host's GPUs and what runs on them, the second changes which one
+    the server runs on at its next start.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -492,7 +495,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
     assert len(loopback) == 8, sorted(loopback)
-    assert len(local) == 54, sorted(local)
+    assert len(local) == 56, sorted(local)
 
 
 # ===========================================================================

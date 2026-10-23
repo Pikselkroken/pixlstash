@@ -31,6 +31,9 @@ const {
   reloadAfterFullRestore: vi.fn(),
 }));
 
+const patchWorkflowCard = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock("../api/workflows", () => ({ patchWorkflowCard }));
+
 vi.mock("../stores/useDedupStore", () => ({
   useDedupStore: () => ({ applyPictureEvent }),
 }));
@@ -746,3 +749,61 @@ describe("useUpdatesSocket: workflows_changed (#1696)", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 });
+
+describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
+  it("re-reads the Tasks tab's poll on every lease change, and says nothing for a preemption", () => {
+    connect();
+    const tasks = useTasksStore();
+    const nudge = vi.spyOn(tasks, "nudge");
+
+    receive({ type: "resource_lease", lease_id: "lease-1", tenant: "comfyui", label: "x", kind: "heavy", state: "waiting", change: "waiting", worker_type: null, run_id: "run-1", workflow_id: "auto:k", code: null, text: "" });
+    expect(nudge).toHaveBeenCalledTimes(1);
+
+    receive({ type: "resource_lease", lease_id: "lease-2", tenant: "pixlstash", label: "Tagging", kind: "light", state: "released", change: "preempted", worker_type: "TagTask", run_id: null, workflow_id: null, code: null, text: "Stopped to make room" });
+    expect(nudge).toHaveBeenCalledTimes(2);
+    expect(useNoticeStore().notices).toHaveLength(0);
+  });
+
+  it("warns once that a workflow now runs alone after it ran out of memory, with Undo", async () => {
+    connect();
+    receive({
+      type: "resource_lease",
+      lease_id: "lease-3",
+      tenant: "comfyui",
+      label: "ComfyUI 'Portrait upscale ×4'",
+      kind: "exclusive",
+      state: "granted",
+      change: "warning",
+      worker_type: null,
+      run_id: "run-3",
+      workflow_id: "auto:portrait",
+      code: "vram_oom_exclusive",
+      text: "ComfyUI 'Portrait upscale ×4' ran out of GPU memory. It will run alone from now on.",
+    });
+
+    const noticeStore = useNoticeStore();
+    const [notice] = noticeStore.notices;
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("It will run alone from now on.");
+    expect(notice.action.label).toBe("Undo");
+
+    // Undo turns the switch back off, for that workflow only.
+    noticeStore.invokeAction(notice.id);
+    await vi.waitFor(() =>
+      expect(patchWorkflowCard).toHaveBeenCalledWith("auto:portrait", { exclusive: false }),
+    );
+  });
+
+  it("does not warn for a run-alone switch that names no workflow", () => {
+    connect();
+    receive({ type: "resource_lease", change: "warning", code: "vram_oom_exclusive", text: "x" });
+    expect(useNoticeStore().notices).toHaveLength(0);
+  });
+
+  it("does not warn for a warning with another code", () => {
+    connect();
+    receive({ type: "resource_lease", change: "warning", code: "something_else", workflow_id: "w", text: "x" });
+    expect(useNoticeStore().notices).toHaveLength(0);
+  });
+});
+

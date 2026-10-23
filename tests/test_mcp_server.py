@@ -953,6 +953,34 @@ def test_a_wait_is_held_to_the_most_the_server_allows(monkeypatch):
     assert len(seen) == 2, seen
 
 
+def test_a_run_waiting_for_the_gpu_is_followed_by_its_run_id(monkeypatch):
+    """A held run has no prompt id yet; "waiting" is not an ending."""
+    monkeypatch.setattr(mcp_server, "RUN_POLL_SECONDS", 0)
+    waiting = {
+        "status": "waiting",
+        "message": None,
+        "stopped": False,
+        "picture_ids": [],
+    }
+    done = {
+        "status": "completed",
+        "prompt_id": "p7",
+        "message": None,
+        "stopped": False,
+        "picture_ids": [12],
+    }
+    fetch, seen = _run_fetch(
+        {"run-1": [waiting, waiting, done]},
+        prompts=[{"workflow_id": WORKFLOW_ID, "run_id": "run-1", "prompt_id": None}],
+    )
+    result = _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID, wait_seconds=5)
+    assert result["isError"] is False, result
+    (prompt,) = json.loads(result["content"][0]["text"])["prompts"]
+    assert (prompt["status"], prompt["prompt_id"]) == ("completed", "p7")
+    assert prompt["picture_ids"] == [12]
+    assert [path for _m, path, _b in seen[1:]] == ["/workflows/runs/run-1"] * 3
+
+
 def test_one_bad_answer_does_not_stop_a_run_being_followed(monkeypatch):
     """A 500 while polling is a blip, not the run's ending: the run is asked
     about again, and its real ending is what the tool answers with."""

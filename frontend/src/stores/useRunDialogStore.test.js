@@ -137,6 +137,33 @@ describe("useRunDialogStore", () => {
       expect(store.ranChanges["wf-a"].finished).toBe(true);
     });
 
+    it("is ready when the run it waited for was held, and sent under a prompt the poll names", async () => {
+      const { useTasksStore } = await import("./useTasksStore");
+      const tasks = useTasksStore();
+      const store = useRunDialogStore();
+      // A run held at submit has no prompt id; one prompt is already known.
+      store.ranWith("wf-a", { ...record, runIds: ["run-held", "run-sent"], promptIds: ["p-sent"] });
+      // The poll says the held run was sent as p-held, which is not on record yet.
+      tasks.comfyuiRuns = [{ run_id: "run-held", prompt_id: "p-held", status: "queued" }];
+      // A prompt the poll does not connect to this run is not it.
+      store.runEvent(completed("wf-a", "p-stranger"));
+      expect(store.ranChanges["wf-a"].finished).toBe(false);
+      // The held run's own prompt is the run on record.
+      store.runEvent(completed("wf-a", "p-held"));
+      expect(store.ranChanges["wf-a"].finished).toBe(true);
+    });
+
+    it("is ready for a held run by the run id its ending names, and for no other run", () => {
+      const store = useRunDialogStore();
+      // Every run of it was held: run ids only, no prompt id at all.
+      store.ranWith("wf-a", { ...record, runIds: ["run-held"], promptIds: [] });
+      // Another run of the same workflow ending is not this one.
+      store.runEvent({ ...completed("wf-a", "p-other"), pixlstash_run_id: "run-other" });
+      expect(store.ranChanges["wf-a"].finished).toBe(false);
+      store.runEvent({ ...completed("wf-a", "p-held"), pixlstash_run_id: "run-held" });
+      expect(store.ranChanges["wf-a"].finished).toBe(true);
+    });
+
     it("is not made ready by a run that failed", () => {
       const store = useRunDialogStore();
       store.ranWith("wf-a", record);

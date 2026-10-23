@@ -19,6 +19,7 @@ import { useMovesStore } from "../stores/useMovesStore";
 import { useNoticeStore } from "../stores/useNoticeStore";
 import { useTasksStore } from "../stores/useTasksStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
+import { patchWorkflowCard } from "../api/workflows";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
 import {
   isFullRestoreRequestInFlight,
@@ -463,6 +464,46 @@ export function useUpdatesSocket({
           key: Date.now(),
           payload,
         };
+      } else if (payload?.type === "resource_lease" && !isReadOnly.value) {
+        // The GPU's queue moved: the Tasks tab re-reads it from the poll rather
+        // than patching rows from the event. `preempted` stays quiet.
+        tasksStore.nudge();
+        if (
+          payload.change === "warning" &&
+          payload.code === "vram_oom_exclusive" &&
+          payload.workflow_id
+        ) {
+          // The backend switched the workflow to run alone after an out-of-
+          // memory run; Undo turns that back off.
+          const workflowId = payload.workflow_id;
+          noticeStore.push({
+            level: "warning",
+            text: payload.text || "A ComfyUI run ran out of GPU memory. It will run alone from now on.",
+            key: `resource-lease-exclusive-${workflowId}`,
+            action: {
+              label: "Undo",
+              handler: async () => {
+                // The notice can outlive a switch to a read-only session.
+                if (isReadOnly.value) return;
+                try {
+                  await patchWorkflowCard(workflowId, { exclusive: false });
+                  noticeStore.push({
+                    level: "success",
+                    text: "Running alone is off for this workflow.",
+                    timeout: 4000,
+                  });
+                } catch (err) {
+                  console.warn(`Could not undo run-alone for ${workflowId}`, err);
+                  noticeStore.push({
+                    level: "error",
+                    text: "Could not turn off running alone for this workflow.",
+                    key: `resource-lease-undo-${workflowId}`,
+                  });
+                }
+              },
+            },
+          });
+        }
       } else if (payload?.type === "vram_oom" && !isReadOnly.value) {
         // A fact about the machine, not about the library, so no grid-filter or
         // origin decision applies. The backend only delivers it to owner-level

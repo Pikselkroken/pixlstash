@@ -17,7 +17,7 @@
 4. [Top-Level Modules](#4-top-level-modules)
 5. [Routes / HTTP API](#5-routes--http-api)
 6. [Database Models](#6-database-models)
-7. [Task System](#7-task-system)
+7. [Task System](#7-task-system) — incl. [VRAM arbitration](#vram-arbitration)
 8. [Image Plugins](#8-image-plugins) — incl. [8.1 Installing and checking plugins from the CLI](#81-installing-and-checking-plugins-from-the-cli-issue-958)
 9. [Tagger Plugins](#9-tagger-plugins)
 10. [Services Layer](#10-services-layer)
@@ -1021,7 +1021,7 @@ Snapshot: id, kind, created_at, relative_path,
 - **`BaseTask`** (`tasks/base_task.py`) — abstract task. Declares `task_type`, `queue_type` (CPU/GPU), `priority`, `run()`.
 - **`BaseTaskFinder`** (`tasks/base_task_finder.py`) — queries DB for missing work, claims picture IDs, builds task instances, releases claims in `on_task_complete()`.
 - **`TaskType`** (`tasks/task_type.py`) — enum of all task types.
-- **`TaskRunner`** — executes tasks from CPU and GPU queues. CPU queue is multi-threaded (`NUM_WORKERS` per `worker_config.py`); GPU queue is serialised to avoid CUDA contention.
+- **`TaskRunner`** — executes tasks from CPU and GPU queues. CPU queue is multi-threaded (`NUM_WORKERS` per `worker_config.py`); GPU queue is serialised to avoid CUDA contention. Every task that may touch the GPU first asks the VRAM arbiter for a LIGHT lease, and never blocks on one (see *VRAM arbitration* below).
 - **`WorkPlanner`** — polls each finder, respects `*_MAX_INFLIGHT` limits, applies adaptive backoff when no work is found.
 
 **Release is unconditional.** A task's claimed picture ids and its in-flight slot are given back only by the `TaskRunner` completion callbacks, so *every* path that ends a task fires them, not just the worker's `finally`: `TaskRunner._cancel_queued_task` is the single cancel path (used by `cancel_pending_tasks()`, `stop()`'s drain and the worker's post-stop dequeue) and passes a `TaskCancelledError`, and `WorkPlanner._release_unsubmitted` hands back a task the planner found but decided not to submit. Anything that skips this wedges the finder at max in-flight for the life of the process and makes the claimed pictures permanently un-selectable — `start()` does not heal it.
@@ -1093,6 +1093,53 @@ The write path has to tell the two apart. Blanking a description is how a pictur
 Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `MissingSmartScoreFinder` (the two hottest) have been narrowed so far.
 
 **User-triggered tasks** (e.g. `DETECTION`, `PICTURE_IMPORT`, `MODEL_FOLDER_SCAN`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column. A route that needs background work therefore submits a task (`Vault.submit_task`) — **never a bare thread**. The task runner owns the lifecycle, which is what gives the work a queue position, live progress in the worker-progress snapshot, a real terminal `status`, and a deterministic shutdown (#856).
+
+### VRAM arbitration
+
+PixlStash, a ComfyUI on the same machine and (later) AI-toolkit do not fit in one card together. `pixlstash/resources/` makes PixlStash the arbiter for **work it starts**: its own tasks and the ComfyUI runs it submits. Memory held by anything else simply shrinks the budget. Anything that does not fit waits, says why, and can be started anyway.
+
+| Module | Holds |
+|---|---|
+| `resources/ledger.py` | `Ledger`: one long-lived `nvmlInit`, a `DeviceReading` per card keyed by NVML **UUID** (never index: NVML's order and CUDA's differ), `pixlstash_device()`, `other_processes()` for the OOM notice. `HardwareMonitor` reads NVML through it instead of initialising and shutting NVML down per poll. With no NVML but an accelerator in use, one unmeasurable device `local`. |
+| `resources/arbiter.py` | `ResourceArbiter` (one per process, `arbiter()`; it outlives library switches), `Lease`, `LeaseKind`, `Tenant`, the rollback constant `VRAM_ORCHESTRATION_ENFORCING`. |
+| `resources/comfyui_tenant.py` | `ComfyUIProbe` (the arbiter's `TenantProbe` for ComfyUI) and `PeakSampler`. |
+| `services/vram_history.py` | Learned peaks, the "runs alone" policy and the owner's `auto_exclusive_after_oom`, in the hub. |
+| `gpu_select.py` | Which GPU PixlStash itself runs on, applied before torch loads. |
+
+**No per-process attribution.** NVML reports per-process memory as NOT_AVAILABLE on Windows WDDM and inside Docker. Each tenant measures itself instead: ComfyUI through `/system_stats` `devices[].torch_vram_total` (its allocator, cache included), PixlStash through `torch.cuda.memory_reserved()`. What nobody claims is "other apps" (`unattributed`).
+
+**Lease kinds.** `LIGHT` is one PixlStash task, decided on the spot by `try_light` and never queued: refused, the task spills to the CPU (`allow_cpu_spillover`, recorded with `note_on_cpu`) or goes back on its queue after a backoff (`TaskRunner.VRAM_REQUEUE_BASE_S`, doubling to 15 s) while the worker takes the next task. **The single GPU worker never blocks on a lease**: URGENT interactive tasks queue behind it. `HEAVY` is a ComfyUI run, queued strictly FIFO per device. `EXCLUSIVE` must have the card to itself. Every GPU-queue task asks for a lease, even with no estimate, so an exclusive lease can keep it off the card; a CPU-queue task asks only when `estimated_vram_mb()` says it needs VRAM. `task_runner._wait_for_vram_budget` (the old gate, which gave up after 1.5 s and gated almost nothing) and the nvidia-smi helpers are gone.
+
+**Admission** runs under the arbiter's lock on every request and release, and on its poll thread (`POLL_S`, 2 s) while anything waits or heavy work holds a card. One grant per pass:
+
+1. **Budget** = NVML free − outstanding reservations − `safety_margin_mb` (max of 1 GB and 5 % of the card). *Outstanding* is a tenant's reservation less what its usage has grown since its first live lease was granted; an unmeasurable tenant keeps its whole reservation outstanding. **ComfyUI's runs share one reservation, the largest**: ComfyUI executes one prompt at a time and a run's need is its whole allocation, what it grows *to*.
+2. **ComfyUI's own cache counts as room for its own run.** It evicts its models to make room, so without this back-to-back runs of one workflow wait for ever behind their own cache. Nobody else gets that credit.
+3. **FIFO** for heavy work: the first waiting lease that does not fit blocks every later one on its device (`fifo`). `run_anyway` grants one regardless; the rest keep their order.
+4. **Exclusive.** Fits only with no other tenant's heavy lease on the device. While one is granted *or waiting*, LIGHT grants on its device are refused. An unmeasured ComfyUI workflow (no peaks yet, D2) asks `alone`: it keeps other tenants' heavy work off the card but never sends `/free`, and ComfyUI runs never block each other.
+5. **LIGHT** is refused while a heavy lease on its device waits *for memory* (`vram`, `ram`, `exclusive_held`) - not while one waits for a busy ComfyUI, which LIGHT cannot help. URGENT and `submit_and_wait` tasks are fit-checked only.
+6. **ComfyUI must be ours to fill.** A ComfyUI lease waits (`comfyui_busy`) while ComfyUI's `/queue` holds a prompt PixlStash did not submit (a different `client_id` than `RUN_CLIENT_ID`).
+7. **RAM** is checked for leases that state `ram_mb` (training, later).
+8. **`max_vram_gb`** caps the PIXLSTASH tenant's granted leases together, and still sizes `VramBudget` batches. ComfyUI is not limited by it.
+
+A device with no NVML (`measurable: false`: Metal, ROCm) runs heavy work one at a time (`unmeasurable`) and LIGHT freely.
+
+**The reclaim ladder** runs for the first lease short of memory, one rung per poll, re-reading the cards after each: (1) **PixlStash yields** (`Vault._yield_gpu`): the planner is held under the lease's id (`WorkPlanner.hold(owner, None)`), `TaskRunner.preempt_gpu` stops the running GPU task at a task boundary and cancels the queued GPU tasks (never URGENT or awaited ones, never the CPU queue), and once the worker is idle `Vault.unload_models()` unloads everything whatever `keep_models_in_memory` says. The hold ends when that lease is granted or released. An exclusive lease always has PixlStash yield before it is granted (Q27). (2) **ComfyUI frees** (`POST /free`, settled over two reads within 30 s), only if nothing at all is queued on it and the lease asking is not ComfyUI's own. (3) Otherwise it waits. **ComfyUI after ComfyUI never frees.**
+
+**Preemption never looks like a failure.** A finder defers a batch for the session on any error other than `TaskCancelledError` (`MissingOcrFinder`, `MissingPromptMatchFinder`), so a task stopped to make room ends as exactly `TaskCancelledError` whatever it raised on the way out (`TaskRunner._run` rewrites it), and its unprocessed pictures, still `NULL`, are found again. `WorkPlanner.hold` is keyed by owner (`hold(owner, seconds | None)`, `release(owner)`) so the folder-structure read and a VRAM lease cannot end each other's hold.
+
+**ComfyUI as a tenant.** `ComfyUIProbe.device()` maps a ComfyUI to a card when an NVML device has its name and size **and** its free memory tracks the card's within 512 MB on two reads 0.3 s apart (cached 60 s); the address alone cannot tell a Docker host from a remote box with the same card. A remote ComfyUI has no card here and its runs are granted at once; an *unreachable* one keeps its last mapping rather than being taken for remote. Failed reads are cached for their TTL, and `try_light` never reads a probe, so a hung ComfyUI never stalls the GPU worker. `POST /workflows/run` asks a lease per run (`_vram_lease`): granted at once, it is submitted inline as before; otherwise it is held (`comfyui_service.hold_run`, status `waiting`, a `run-<hex>` id and no prompt id) and `_dispatch_held_run` submits it on grant. The lease is released the moment the run's final `/history` status arrives (`settle_vram` in `_process_comfyui_outputs`, and in its `finally`: a leaked lease keeps the card from every other tenant). `PeakSampler` samples `torch_vram_total` every 0.5 s between ComfyUI starting the run and its end (`_note_run_message` marks `execution_start` and `executing {node: null}`) and the peak is written to `workflow_vram_peak`.
+
+**Learned need.** A workflow's need is the largest of its newest five peaks × 1.1 (aborted and out-of-memory runs do not count: an OOM peak is the card's total, which no budget meets), for the same `model_set` (base model, text encoder and VAE, not LoRAs) where it has some, else the workflow's own. 50 peaks are kept per workflow. `# ponytail:` resolution and batch are not in the key: a much larger batch is under-admitted once, then measured. A run that **runs out of memory** fails with `code: vram_oom` (no retry), writes a peak of the card's total with outcome `oom`, and when the owner's `auto_exclusive_after_oom` is on (the default) marks the workflow `exclusive` (`source: oom`) and announces a `vram_oom_exclusive` warning. Owners set or clear "runs alone" on the card (`PATCH /workflows/{id}` `exclusive`). A workflow re-key carries both tables: peaks are copied to every heir of a split, the policy rides with the id (`_carry_group_state`).
+
+**State and controls.** `arbiter().snapshot()` is the `resources` block of `GET /workers/progress` (owner only). Every heavy lease's state change, every preemption and every warning is a `resource_lease` event (`integration_architecture.md` §8). `routes/resources.py` holds run-anyway, cancel (which also cancels the held run) and `POST /resources/comfyui/free` (OWNER_ONLY), and the GPU picker (LOCAL_OWNER_ONLY).
+
+**Picking PixlStash's GPU (G1-G5).** `gpu_select.apply()` runs first in `app.py`, before anything imports torch: with two or more NVIDIA GPUs it resolves `compute_gpu` (`auto` or a UUID, in `server-config.json`) and sets `CUDA_VISIBLE_DEVICES` to that UUID, so torch and ONNX Runtime see one card as device 0 and every `"cuda"` string keeps working. Auto takes a spare: the biggest card of at least 4 GB that ComfyUI is not on (`comfyui_gpu_uuid`, remembered whenever the GPU list is read; never seen, ComfyUI is taken to be on the first card), else shares the biggest. A `CUDA_VISIBLE_DEVICES` the owner set wins. NVML ignores the variable, so the arbiter still sees every card. `ponytail:` NVIDIA only; AMD and integrated GPUs are not listed.
+
+**Start-up.** Little free VRAM at boot no longer pins the session to the CPU in auto mode, nor fails boot with an explicit device; the start-up note names who holds the card. `min_free_vram_mb` is retired.
+
+**Rollback:** `VRAM_ORCHESTRATION_ENFORCING = False` in `resources/arbiter.py` grants every request at once; decisions are still computed and logged.
+
+**Not measured yet (needs hardware):** the VRAM ComfyUI keeps resident after `/free`, and whether `torch_vram_total` is populated under ComfyUI's `cudaMallocAsync` allocator. If it is not, ComfyUI's runs are taken as unmeasured. **Scaffolding for AI-toolkit** is in the arbiter (`Tenant.AITOOLKIT`, `ram_mb`, `owner_pid`, `Lease.shrink`, the ComfyUI rung of the ladder); its tenant module, the `training_run` table, adoption at boot and the pid sweeper come with the training feature.
 
 ### Multi-frame sampling: videos and animated GIFs
 
@@ -4882,6 +4929,7 @@ when that is felt.
 | `EXTERNAL_MOVES_PENDING` | ✓ broadcast |
 | `CHANGED_WORKFLOWS`      | ✓ broadcast |
 | `MODELS_ARRIVED`         | ✓ broadcast |
+| `RESOURCE_LEASE`         | ✓ broadcast |
 <!-- AUTOGEN:end name="events" -->
 
 - Events are published from `Vault` whenever a task or domain operation completes; the broadcaster in `server.py` fans the filtered subset out to **owner-level** connected clients (see WebSocket authentication below).

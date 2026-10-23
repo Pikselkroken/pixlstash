@@ -40,3 +40,7 @@ class EventType(Enum):
     # "look again" nudge for the shelf and the sidebar's `new` tag on Models;
     # it names the model ids and carries no row.
     MODELS_ARRIVED = auto()
+    # A VRAM lease changed state (waiting, granted, released), PixlStash work
+    # was paused to make room, or a lease carries a new warning. Machine-level
+    # like VRAM_OOM; the SPA re-reads ``resources`` on GET /workers/progress.
+    RESOURCE_LEASE = auto()

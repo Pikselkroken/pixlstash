@@ -1622,6 +1622,50 @@ CREATE TABLE IF NOT EXISTS shelf_identity (
 )
 """
 
+# What a workflow's ComfyUI runs measured on the GPU (VRAM orchestration,
+# ``services/vram_history.py``). ``peak_mb`` is ComfyUI's whole allocation at
+# the run's peak (``/system_stats`` ``torch_vram_total``), so it is what
+# ComfyUI grows *to*, cache included. ``model_set`` digests the base model,
+# text encoder and VAE only, not LoRAs: every LoRA combination would otherwise
+# be a workflow never measured. ``outcome`` is ``completed``, ``failed``,
+# ``oom`` (``peak_mb`` is then the card's total) or ``aborted``, which the need
+# ignores. ``measured_by`` is ``torch_reserved`` or ``device_delta``. The 50
+# newest rows per workflow are kept.
+_V2_WORKFLOW_VRAM_PEAK = """
+CREATE TABLE IF NOT EXISTS workflow_vram_peak (
+    id               INTEGER PRIMARY KEY,
+    workflow_id      TEXT NOT NULL,
+    model_set        TEXT NOT NULL,
+    device_name      TEXT NOT NULL,
+    device_total_mb  INTEGER NOT NULL,
+    peak_mb          INTEGER NOT NULL,
+    measured_by      TEXT NOT NULL,
+    outcome          TEXT NOT NULL,
+    at               TEXT NOT NULL
+)
+"""
+
+# A workflow that runs alone on the GPU: set by the owner on the workflow card
+# (``source`` ``owner``), or after a run of it ran out of memory (``oom``),
+# when the owner's ``user_vram_preference`` allows. No row: it shares the GPU.
+_V2_WORKFLOW_VRAM_POLICY = """
+CREATE TABLE IF NOT EXISTS workflow_vram_policy (
+    workflow_id  TEXT PRIMARY KEY,
+    exclusive    INTEGER NOT NULL,
+    source       TEXT NOT NULL,
+    at           TEXT NOT NULL
+)
+"""
+
+# Per-user VRAM settings that are not columns on ``user`` (hub rule: new
+# tables only). No row means the defaults.
+_V2_USER_VRAM_PREFERENCE = """
+CREATE TABLE IF NOT EXISTS user_vram_preference (
+    user_id                   INTEGER PRIMARY KEY,
+    auto_exclusive_after_oom  INTEGER NOT NULL DEFAULT 1
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1651,6 +1695,9 @@ _V2_WORKFLOW_INDEXES = (
     # manual workflow.
     "CREATE INDEX IF NOT EXISTS ix_workflow_group_member_workflow "
     "ON workflow_group_member(workflow_id)",
+    # "The newest peaks of this workflow" - every run's admission.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_vram_peak_by_wf "
+    "ON workflow_vram_peak(workflow_id, at)",
 )
 
 _V2_WORKFLOW_TABLES = (
@@ -1705,6 +1752,10 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_KEPT_VARIANT,
     _V2_WORKFLOW_LAYOUT,
     _V2_SHELF_IDENTITY,
+    # VRAM orchestration, in v2 for the same reason as every table above.
+    _V2_WORKFLOW_VRAM_PEAK,
+    _V2_WORKFLOW_VRAM_POLICY,
+    _V2_USER_VRAM_PREFERENCE,
     *_V2_WORKFLOW_INDEXES,
 )
 

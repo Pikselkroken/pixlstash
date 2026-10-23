@@ -83,8 +83,9 @@ describe("UserSettingsDialog library navigation", () => {
 
     // The whole order, not an adjacency: an index comparison between two
     // entries also holds when one of them is missing from the rail entirely.
-    // Compute and Backend are desktop-only and absent under jsdom; ComfyUI
-    // stays, because a browser connects ComfyUI too.
+    // Backend is desktop-only and absent under jsdom. Compute is on a browser
+    // too: its GPU picker and sharing controls are the server's. ComfyUI stays,
+    // because a browser connects ComfyUI too.
     expect(
       wrapper.findAll(".settings-nav-item").map((n) => n.attributes("id")),
     ).toEqual([
@@ -100,6 +101,7 @@ describe("UserSettingsDialog library navigation", () => {
       "settings-nav-snapshots",
       "settings-nav-privacy",
       "settings-nav-comfyui",
+      "settings-nav-compute",
       "settings-nav-account",
     ]);
   });
@@ -133,7 +135,8 @@ describe("UserSettingsDialog library navigation", () => {
     expect(pane.find(".comfyui-host-stub").attributes("data-first")).toBe(
       "true",
     );
-    expect(wrapper.find(".compute-stub").exists()).toBe(false);
+    // The Compute pane is on a browser as well (which GPU, what it may take).
+    expect(wrapper.find(".compute-stub").exists()).toBe(true);
   });
 
   it("splits ComfyUI and Compute into two desktop panes", async () => {

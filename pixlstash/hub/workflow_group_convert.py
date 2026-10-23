@@ -1409,6 +1409,8 @@ _WORKFLOW_ID_COLUMNS = (
     ("workflow_key_successor", "workflow_id"),
     ("workflow_id_successor", "successor_id"),
     ("workflow_document", "from_workflow_id"),
+    ("workflow_vram_peak", "workflow_id"),
+    ("workflow_vram_policy", "workflow_id"),
 )
 
 
@@ -1727,6 +1729,9 @@ def _carry_group_state(
         # Each library's own hide rides with the id, so re-identifying a
         # workflow does not drop it back to the machine-wide fallback (#1869).
         ("workflow_group_hidden", "library_uuid"),
+        # "Runs alone on the GPU" is a fact about the graphs, which every
+        # heir runs.
+        ("workflow_vram_policy", None),
     ):
         if table == "workflow_group_pins" and both_pinned:
             if not keep:
@@ -1761,7 +1766,24 @@ def _carry_group_state(
             )
         if not keep:
             conn.execute(f"DELETE FROM {table} WHERE workflow_id = ?", (group,))
+    # The measured GPU peaks go to every heir of a split, copied: each runs
+    # the same graphs, and an heir without them would run as never measured.
+    # Not by ``INSERT OR IGNORE`` above: the rows have their own ids. A row
+    # the heir already has (a re-run of the carry) is not copied twice.
+    conn.execute(
+        "INSERT INTO workflow_vram_peak (workflow_id, model_set, device_name, "
+        "device_total_mb, peak_mb, measured_by, outcome, at) "
+        "SELECT ?, model_set, device_name, device_total_mb, peak_mb, "
+        "measured_by, outcome, at FROM workflow_vram_peak AS p WHERE "
+        "workflow_id = ? AND NOT EXISTS (SELECT 1 FROM workflow_vram_peak AS h "
+        "WHERE h.workflow_id = ? AND h.at = p.at AND h.peak_mb = p.peak_mb "
+        "AND h.model_set = p.model_set AND h.device_name = p.device_name "
+        "AND h.device_total_mb = p.device_total_mb "
+        "AND h.measured_by = p.measured_by AND h.outcome = p.outcome)",
+        (heir, group, heir),
+    )
     if not keep:
+        conn.execute("DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (group,))
         conn.execute("DELETE FROM workflow_group_attr WHERE workflow_id = ?", (group,))
         # Changes that waited unsaved name loaders of the graph this id read
         # off its pictures; an heir may read another, so they go with the id.

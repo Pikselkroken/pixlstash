@@ -39,6 +39,7 @@ import shutil
 import socket
 import sqlite3
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import replace
@@ -75,6 +76,10 @@ from pixlstash.db_models import (
 )
 from pixlstash.db_models.saved_recipe import SavedRecipe
 from pixlstash.event_types import EventType
+from pixlstash.resources import arbiter as arbiter_module
+from pixlstash.resources import comfyui_tenant
+from pixlstash.resources.arbiter import LeaseKind, LeaseState, ResourceArbiter, Tenant
+from pixlstash.resources.ledger import DeviceReading
 from pixlstash.hub.workflow_card_reads import (
     AUTO_STACK_PREFIX,
     Card,
@@ -112,6 +117,7 @@ from pixlstash.services import (
     comfyui_pack_service,
     comfyui_templates,
     model_shelf_service,
+    vram_history,
     workflow_card_service,
 )
 from pixlstash.services.workflow_run_service import (
@@ -13689,6 +13695,7 @@ def test_a_queued_run_is_followed_and_its_ending_can_be_read(runnable):
     )
     r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.status_code == 200, r.text
+    run_id = r.json()["prompts"][0]["run_id"]
     path = f"{API}/workflows/runs/followed-run-1"
     assert_real_route(
         runnable.server.api, "GET", path, API + "/workflows/runs/{prompt_id}"
@@ -13696,11 +13703,13 @@ def test_a_queued_run_is_followed_and_its_ending_can_be_read(runnable):
     r = runnable.owner.get(path)
     assert r.status_code == 200, r.text
     assert r.json() == {
+        "run_id": run_id,
         "prompt_id": "followed-run-1",
         "status": "running",
         "message": None,
         "stopped": False,
         "picture_ids": [],
+        "code": None,
     }
     # Filed under the library it was started in, which is what lets the route
     # refuse it from another one (below).
@@ -13736,6 +13745,546 @@ def test_a_queued_run_is_followed_and_its_ending_can_be_read(runnable):
     assert r.status_code == 404, r.text
 
 
+# --- held for the GPU (VRAM orchestration) -----------------------------------
+
+_HELD_CARD = "GPU-00000000-0000-0000-0000-0000000000aa"
+
+
+class _HeldCard:
+    """One 24 GB card, as the arbiter's ledger."""
+
+    def __init__(self, used_mb=0):
+        self.used_mb = used_mb
+
+    def nvml(self):
+        return None
+
+    def devices(self, max_age_s=1.0):
+        return [
+            DeviceReading(
+                uuid=_HELD_CARD,
+                name="Test GPU",
+                total_mb=24576,
+                used_mb=self.used_mb,
+                free_mb=24576 - self.used_mb,
+            )
+        ]
+
+    def device(self, uuid):
+        return next((d for d in self.devices() if d.uuid == uuid), None)
+
+    def pixlstash_device(self):
+        return None
+
+    def other_processes(self, limit=3):
+        return []
+
+
+class _HeldComfy:
+    """A ComfyUI on that card, idle and holding nothing."""
+
+    def device(self):
+        return _HELD_CARD
+
+    def usage_mb(self):
+        return 0
+
+    def busy(self):
+        return False
+
+    def idle(self):
+        return True
+
+    def reclaim(self):
+        return False
+
+
+@pytest.fixture
+def held(runnable):
+    """The run route over an arbiter that sees one card and a ComfyUI on it."""
+    card = _HeldCard()
+    arb = ResourceArbiter(
+        card,
+        usage=lambda: None,
+        ram_reader=lambda: {"total_mb": 0, "available_mb": 0},
+    )
+    comfy = _HeldComfy()
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    runnable.monkeypatch.setattr(arbiter_module, "_arbiter", arb)
+    runnable.monkeypatch.setattr(
+        comfyui_tenant, "probe", lambda client_id, base_url=None: comfy
+    )
+    polled: list[dict] = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_process_comfyui_outputs",
+        lambda *args, **kwargs: polled.append(kwargs),
+    )
+    yield SimpleNamespace(
+        runnable=runnable, card=card, arbiter=arb, polled=polled, owner=runnable.owner
+    )
+    for lease in arb.leases():
+        lease.release()
+
+
+def _hold_the_card(arb):
+    """Something PixlStash started that has the card to itself."""
+    return arb.request(
+        Tenant.AITOOLKIT, "Training", kind=LeaseKind.EXCLUSIVE, device=_HELD_CARD
+    )
+
+
+def _until(condition, seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return condition()
+
+
+def test_a_run_with_room_is_submitted_inline_under_a_granted_lease(held):
+    """The common case answers exactly as before: ComfyUI took it, here is its id."""
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    (prompt,) = r.json()["prompts"]
+    assert prompt["status"] == "queued"
+    assert prompt["prompt_id"] == "prompt-1"
+    assert prompt["run_id"].startswith("run-")
+    assert len(held.runnable.submitted) == 1
+    assert _until(lambda: held.polled)
+    lease = held.polled[0]["vram_lease"]
+    assert lease.state is LeaseState.GRANTED
+    # Never measured: it keeps other tenants off the card, asking nobody to free.
+    assert lease.alone and lease.need_mb == 0
+    assert lease.run_id == prompt["run_id"]
+    # Both ids name the run.
+    by_run = held.owner.get(f"{API}/workflows/runs/{prompt['run_id']}").json()
+    assert (by_run["prompt_id"], by_run["status"]) == ("prompt-1", "running")
+
+
+def test_a_run_without_room_waits_in_pixlstash_and_is_sent_on_grant(held):
+    """Held, not in ComfyUI's queue: nothing is submitted until the card has room."""
+    blocker = _hold_the_card(held.arbiter)
+    r = held.owner.post(
+        f"{API}/workflows/run", json={"workflow_id": RUN_WF, "label": "Night market"}
+    )
+    assert r.status_code == 200, r.text
+    (prompt,) = r.json()["prompts"]
+    assert (prompt["status"], prompt["prompt_id"]) == ("waiting", None)
+    run_id = prompt["run_id"]
+    time.sleep(0.3)
+    assert held.runnable.submitted == [], "a waiting run must not reach ComfyUI"
+
+    progress = held.owner.get(f"{API}/workers/progress").json()
+    waiting = [run for run in progress["runs"] if run["run_id"] == run_id]
+    assert waiting and waiting[0]["status"] == "waiting"
+    assert waiting[0]["prompt_id"] is None
+    lease = next(
+        row for row in progress["resources"]["leases"] if row["run_id"] == run_id
+    )
+    assert lease["state"] == "waiting"
+    assert lease["waiting_reason"]["code"] == "exclusive_held"
+    assert lease["waiting_reason"]["blocked_by"][0]["label"] == "Training"
+    assert held.owner.get(f"{API}/workflows/runs/{run_id}").json()["status"] == (
+        "waiting"
+    )
+
+    blocker.release()
+    assert _until(lambda: held.runnable.submitted), "the held run was never sent"
+    assert _until(
+        lambda: (
+            held.owner.get(f"{API}/workflows/runs/{run_id}").json()["status"]
+            == "running"
+        )
+    )
+    assert held.owner.get(f"{API}/workflows/runs/{run_id}").json()["prompt_id"] == (
+        "prompt-1"
+    )
+
+
+def test_a_held_run_comfyui_refuses_on_grant_fails_with_comfyuis_words(held):
+    blocker = _hold_the_card(held.arbiter)
+
+    def refuse(base_url, workflow_instance, client_id=None):
+        raise HTTPException(
+            status_code=502, detail="ComfyUI prompt failed: 400 KSampler: bad cfg"
+        )
+
+    held.runnable.monkeypatch.setattr(
+        workflows_routes, "_submit_comfyui_prompt", refuse
+    )
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    run_id = r.json()["prompts"][0]["run_id"]
+    blocker.release()
+    assert _until(
+        lambda: (
+            held.owner.get(f"{API}/workflows/runs/{run_id}").json()["status"]
+            == "failed"
+        )
+    )
+    outcome = held.owner.get(f"{API}/workflows/runs/{run_id}").json()
+    assert "KSampler: bad cfg" in outcome["message"]
+    assert not held.arbiter.leases(Tenant.COMFYUI), "the failed run kept its lease"
+
+
+def test_a_run_comfyui_takes_without_naming_a_prompt_answers_failed(held):
+    held.runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_submit_comfyui_prompt",
+        lambda base_url, workflow_instance, client_id=None: {"node_errors": {}},
+    )
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    (prompt,) = r.json()["prompts"]
+    assert (prompt["status"], prompt["prompt_id"]) == ("failed", None)
+    outcome = held.owner.get(f"{API}/workflows/runs/{prompt['run_id']}").json()
+    assert outcome["status"] == "failed"
+    assert not held.arbiter.leases(Tenant.COMFYUI), "the failed run kept its lease"
+
+
+def test_abort_cancels_the_runs_waiting_for_the_gpu(held):
+    blocker = _hold_the_card(held.arbiter)
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    run_id = r.json()["prompts"][0]["run_id"]
+    # Never the ComfyUI on the default address: a development box runs one.
+    held.runnable.monkeypatch.setattr(
+        comfyui_service.requests,
+        "post",
+        lambda *a, **k: SimpleNamespace(status_code=200, text=""),
+    )
+    r = held.owner.post(f"{API}/comfyui/abort")
+    assert r.status_code == 200, r.text
+    outcome = held.owner.get(f"{API}/workflows/runs/{run_id}").json()
+    assert (outcome["status"], outcome["stopped"]) == ("failed", True)
+    assert _until(lambda: not held.arbiter.leases(Tenant.COMFYUI))
+    blocker.release()
+    time.sleep(0.6)
+    assert held.runnable.submitted == [], "an aborted held run was sent anyway"
+
+
+def test_cancelling_a_waiting_lease_cancels_its_run_and_only_a_waiting_one(held):
+    blocker = _hold_the_card(held.arbiter)
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    run_id = r.json()["prompts"][0]["run_id"]
+    lease = next(
+        lease for lease in held.arbiter.leases(Tenant.COMFYUI) if lease.run_id == run_id
+    )
+    path = f"{API}/resources/leases/{lease.id}/cancel"
+    assert_real_route(
+        held.runnable.server.api,
+        "POST",
+        path,
+        API + "/resources/leases/{lease_id}/cancel",
+    )
+    # The blocker is granted, not waiting: there is nothing to cancel.
+    r = held.owner.post(f"{API}/resources/leases/{blocker.id}/cancel")
+    assert r.status_code == 409, r.text
+    assert held.owner.post(f"{API}/resources/leases/lease-nope/cancel").status_code == (
+        404
+    )
+    r = held.owner.post(path)
+    assert r.status_code == 200, r.text
+    outcome = held.owner.get(f"{API}/workflows/runs/{run_id}").json()
+    assert (outcome["status"], outcome["stopped"]) == ("failed", True)
+    blocker.release()
+    time.sleep(0.6)
+    assert held.runnable.submitted == []
+
+
+def test_a_held_run_is_either_sent_or_cancelled_never_both(held):
+    """Cancel and dispatch race for the same run; exactly one may win."""
+    # The runs registry is module-wide: these two must not outlive the test.
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        held.runnable.monkeypatch.setattr(comfyui_service, name, {})
+    comfyui_service.hold_run("run-race-1", "http://comfy.invalid")
+    assert comfyui_service.cancel_held_runs("run-race-1") == ["run-race-1"]
+    assert comfyui_service.claim_held_run("run-race-1") is False
+    comfyui_service.hold_run("run-race-2", "http://comfy.invalid")
+    assert comfyui_service.claim_held_run("run-race-2") is True
+    assert comfyui_service.cancel_held_runs("run-race-2") == []
+    assert comfyui_service.run_outcome("run-race-2")["status"] == "waiting"
+
+
+def test_an_abort_that_sees_a_held_run_can_cancel_it(held):
+    """An abort landing the moment the run reads as waiting must stop it."""
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        held.runnable.monkeypatch.setattr(comfyui_service, name, {})
+    real = threading.Lock()
+    aborted = []
+
+    class _AbortOnRelease:
+        def __enter__(self):
+            real.acquire()
+
+        def __exit__(self, *exc):
+            real.release()
+            visible = comfyui_service._run_outcomes.get("run-gap")
+            if visible and not aborted:
+                aborted.append(None)
+                aborted[0] = comfyui_service.cancel_held_runs("run-gap")
+
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_run_outcomes_lock", _AbortOnRelease()
+    )
+    comfyui_service.hold_run("run-gap", "http://comfy.invalid")
+    assert aborted == [["run-gap"]]
+    assert comfyui_service.claim_held_run("run-gap") is False
+
+
+def test_a_held_run_stays_readable_as_it_is_sent(held):
+    """Between waiting and running, ``run_outcome(run_id)`` never answers None."""
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        held.runnable.monkeypatch.setattr(comfyui_service, name, {})
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_listening", {"http://comfy.invalid"}
+    )
+    real = threading.Lock()
+    gaps = []
+
+    class _ReadOnRelease:
+        def __enter__(self):
+            real.acquire()
+
+        def __exit__(self, *exc):
+            real.release()
+            key = comfyui_service._run_ids.get("run-send", "run-send")
+            if comfyui_service._run_outcomes.get(key) is None:
+                gaps.append(key)
+
+    comfyui_service.hold_run("run-send", "http://comfy.invalid")
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_run_outcomes_lock", _ReadOnRelease()
+    )
+    comfyui_service.follow_run("prompt-send", "http://comfy.invalid", run_id="run-send")
+    assert gaps == []
+    assert comfyui_service.run_outcome("run-send")["status"] == "running"
+
+
+def test_run_anyway_sends_a_waiting_run_past_what_holds_the_card(held):
+    blocker = _hold_the_card(held.arbiter)
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    run_id = r.json()["prompts"][0]["run_id"]
+    lease = next(
+        lease for lease in held.arbiter.leases(Tenant.COMFYUI) if lease.run_id == run_id
+    )
+    r = held.owner.post(f"{API}/resources/leases/{lease.id}/run-anyway")
+    assert r.status_code == 200, r.text
+    assert r.json()["lease"]["state"] == "granted"
+    assert _until(lambda: held.runnable.submitted)
+    assert blocker.state is LeaseState.GRANTED, "run anyway takes nothing from others"
+
+
+def test_a_workflow_set_to_run_alone_asks_for_the_card_to_itself(held):
+    r = held.owner.patch(f"{API}/workflows/{RUN_WF}", json={"exclusive": True})
+    assert r.status_code == 200, r.text
+    vram = r.json()["card"]["vram"]
+    assert (vram["exclusive"], vram["exclusive_source"]) == (True, "owner")
+    r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.json()["prompts"][0]["status"] == "queued"
+    assert _until(lambda: held.polled)
+    assert held.polled[0]["vram_lease"].kind is LeaseKind.EXCLUSIVE
+    r = held.owner.patch(f"{API}/workflows/{RUN_WF}", json={"exclusive": None})
+    assert r.json()["card"]["vram"]["exclusive"] is False
+
+
+def test_measured_peaks_set_the_need_and_reach_the_card(held):
+    hub = held.runnable.server.hub
+    for peak, at in ((8000, "2026-10-01"), (9000, "2026-10-02")):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES (?, 'x', 'Test GPU', 24576, ?, 'torch_reserved', "
+                "'completed', ?)",
+                (RUN_WF, peak, at),
+            )
+    try:
+        card = held.owner.get(f"{API}/workflows/{RUN_WF}").json()["card"]
+        assert card["vram"]["need_mb"] == int(9000 * 1.1)
+        assert card["vram"]["measured_runs"] == 2
+        assert [p["peak_mb"] for p in card["vram"]["peaks"]] == [9000, 8000]
+        grid = held.owner.get(f"{API}/workflows").json()["cards"]
+        assert next(c for c in grid if c["id"] == RUN_WF)["vram"]["need_mb"] == 9900
+        r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+        assert r.status_code == 200, r.text
+        assert _until(lambda: held.polled)
+        lease = held.polled[0]["vram_lease"]
+        assert (lease.need_mb, lease.alone) == (9900, False)
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+            )
+
+
+def test_the_card_shows_the_need_of_the_newest_runs_model_set(held):
+    """Admission asks with the run's model set; the card shows that need."""
+    hub = held.runnable.server.hub
+    for model_set, peak, at in (
+        ("big", 12000, "2026-10-01"),
+        ("small", 6000, "2026-10-02"),
+    ):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES (?, ?, 'Test GPU', 24576, ?, 'torch_reserved', "
+                "'completed', ?)",
+                (RUN_WF, model_set, peak, at),
+            )
+    try:
+        card = vram_history.card_vram(hub, [RUN_WF])[RUN_WF]
+        assert card["need_mb"] == vram_history.need_mb(hub, RUN_WF, "small")
+        assert card["need_mb"] == int(6000 * 1.1)
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+            )
+
+
+def test_an_out_of_memory_run_is_not_counted_as_measured(held):
+    hub = held.runnable.server.hub
+    for outcome, peak, at in (
+        ("completed", 6000, "2026-10-01"),
+        ("oom", 24576, "2026-10-02"),
+    ):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES (?, 'x', 'Test GPU', 24576, ?, 'torch_reserved', ?, ?)",
+                (RUN_WF, peak, outcome, at),
+            )
+    try:
+        assert vram_history.card_vram(hub, [RUN_WF])[RUN_WF]["measured_runs"] == 1
+        rows = [{"peak_mb": 24576, "outcome": "oom"}] + [
+            {"peak_mb": 6000, "outcome": "completed"}
+        ] * (2 * vram_history.NEED_WINDOW)
+        assert vram_history._trend(rows) == "flat", "one OOM made the trend rise"
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+            )
+
+
+class _Peak:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def stop(self):
+        return 5000
+
+
+def test_a_run_with_no_outputs_records_its_peak_as_failed(held):
+    """The card is handed back at once; the peak waits for how the run ended."""
+    server = held.runnable.server
+    lease = held.arbiter.request(
+        Tenant.COMFYUI, "ComfyUI 'Krea'", need_mb=1000, workflow_id=RUN_WF
+    )
+    held.runnable.monkeypatch.setattr(comfyui_service, "PeakSampler", _Peak)
+    held.runnable.monkeypatch.setattr(comfyui_service, "ledger", lambda: held.card)
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_wait_for_comfyui_outputs", lambda *a, **k: ([], None)
+    )
+    try:
+        comfyui_service._process_comfyui_outputs(
+            server,
+            "http://comfy.invalid",
+            "prompt-empty",
+            None,
+            None,
+            None,
+            workflow_id=RUN_WF,
+            vram_lease=lease,
+            label="Krea",
+        )
+        assert lease.state is LeaseState.RELEASED
+        row = server.hub.fetchone(
+            "SELECT peak_mb, outcome FROM workflow_vram_peak WHERE workflow_id = ?",
+            (RUN_WF,),
+        )
+        assert (row["peak_mb"], row["outcome"]) == (5000, "failed")
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+            )
+
+
+class _NoPeak:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def stop(self):
+        return None
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_a_run_out_of_memory_fails_once_and_runs_alone_after_when_allowed(
+    held, allowed
+):
+    """No retry; the peak is the card; "runs alone" only if the owner allows."""
+    server = held.runnable.server
+    owner_id = server._user.id
+    vram_history.set_auto_exclusive_after_oom(server.hub, owner_id, allowed)
+    lease = held.arbiter.request(
+        Tenant.COMFYUI, "ComfyUI 'Krea'", need_mb=1000, workflow_id=RUN_WF
+    )
+    events = []
+    held.arbiter.add_listener(events.append)
+    held.runnable.monkeypatch.setattr(comfyui_service, "PeakSampler", _NoPeak)
+    held.runnable.monkeypatch.setattr(comfyui_service, "ledger", lambda: held.card)
+
+    def out_of_memory(*args, **kwargs):
+        raise RuntimeError(
+            "KSampler (KSampler) failed: torch.OutOfMemoryError Allocation on "
+            "device 0 would exceed allowed memory."
+        )
+
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_wait_for_comfyui_outputs", out_of_memory
+    )
+    try:
+        comfyui_service._process_comfyui_outputs(
+            server,
+            "http://comfy.invalid",
+            "prompt-oom",
+            None,
+            None,
+            None,
+            workflow_id=RUN_WF,
+            vram_lease=lease,
+            label="Krea",
+        )
+        assert lease.state is LeaseState.RELEASED
+        outcome = comfyui_service.run_outcome("prompt-oom")
+        assert (outcome["status"], outcome["code"]) == ("failed", "vram_oom")
+        row = server.hub.fetchone(
+            "SELECT peak_mb, outcome FROM workflow_vram_peak WHERE workflow_id = ?",
+            (RUN_WF,),
+        )
+        assert (row["peak_mb"], row["outcome"]) == (24576, "oom")
+        # Recorded, but not a need: a card's total plus headroom fits nowhere,
+        # and the next run would wait for ever.
+        assert vram_history.need_mb(server.hub, RUN_WF) is None
+        policy = vram_history.policy(server.hub, RUN_WF)
+        warned = [e for e in events if e.get("code") == "vram_oom_exclusive"]
+        if allowed:
+            assert policy is not None and policy["source"] == "oom"
+            assert warned and warned[0]["workflow_id"] == RUN_WF
+            assert "run alone from now on" in outcome["message"]
+        else:
+            assert policy is None and not warned
+    finally:
+        vram_history.set_auto_exclusive_after_oom(server.hub, owner_id, True)
+        vram_history.set_exclusive(server.hub, RUN_WF, False, "owner")
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+            )
+
+
 def test_a_run_in_flight_is_reported_with_the_workers_until_it_ends(runnable):
     """``GET /workers/progress`` carries the runs in flight (#1862), which is
     what puts a run's row in the Tasks tab of every tab and view: queued from
@@ -13755,6 +14304,7 @@ def test_a_run_in_flight_is_reported_with_the_workers_until_it_ends(runnable):
     )
     assert r.status_code == 200, r.text
     named = r.json()["prompts"][0]["prompt_id"]
+    named_run = r.json()["prompts"][0]["run_id"]
     r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     unnamed = r.json()["prompts"][0]["prompt_id"]
     assert [call["client_id"] for call in runnable.submitted] == [
@@ -13763,6 +14313,7 @@ def test_a_run_in_flight_is_reported_with_the_workers_until_it_ends(runnable):
 
     runs = reported()
     assert runs[named] == {
+        "run_id": named_run,
         "prompt_id": named,
         "label": "Night market",
         "workflow_id": RUN_WF,

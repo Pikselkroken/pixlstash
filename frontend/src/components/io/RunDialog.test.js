@@ -5993,11 +5993,17 @@ describe("Save what you ran", () => {
     it("is recorded with the band's own words when a changed run is queued", async () => {
       const wrapper = await mountRun(fromCard);
       await changeThree(wrapper);
+      // The server answers with the run's id and its prompt id, as it does now.
+      runWorkflowCard.mockResolvedValueOnce({
+        status: "success",
+        prompts: [{ run_id: "run-1", prompt_id: "p1", status: "queued" }],
+      });
       await wrapper.vm.submit();
       expect(useRunDialogStore().ranChanges[KEY]).toEqual({
         name: "Cinematic portrait",
         count: 3,
         text: "Checkpoint, 1 LoRA removed, Steps.",
+        runIds: ["run-1"],
         promptIds: ["p1"],
         finished: false,
       });

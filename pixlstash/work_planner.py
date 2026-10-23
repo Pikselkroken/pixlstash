@@ -1,3 +1,4 @@
+import math
 import sys
 import threading
 import time
@@ -254,10 +255,12 @@ class WorkPlanner:
         self._stalled_since: dict[str, float] = {}
         self._gpu_util_unavailable = False
         self._gpu_util_torch_missing_logged = False
-        # Monotonic time until which no finder is swept. A lease, not a switch:
-        # the holder renews it while it works and a holder that stalls or dies
-        # lets background work back in by itself.
-        self._hold_until = 0.0
+        # Who holds the planner, and until when (monotonic; ``inf`` for a hold
+        # with no end). A lease, not a switch: a timed holder renews it while it
+        # works, and one that stalls or dies lets background work back in by
+        # itself. Keyed so two holders cannot end each other's hold: the
+        # folder-structure read and a VRAM lease making room hold it at once.
+        self._holds: dict[str, float] = {}
         self._lock = threading.Lock()
         # Serialises start()/stop() so a restart cannot interleave with a
         # shutdown that is still joining the outgoing thread.
@@ -356,27 +359,39 @@ class WorkPlanner:
         with self._lock:
             return int(self._inflight_by_finder.get(finder_name, 0))
 
-    def hold(self, seconds: float) -> None:
-        """Keep every finder from submitting work for *seconds* from now.
+    def hold(self, owner: str, seconds: float | None) -> None:
+        """Keep every finder from submitting work while *owner* holds it.
 
-        Renewing resets the lease to ``now + seconds``; it never accumulates.
-        Tasks already queued or running are not touched, and a sweep that is
-        under way stops at its next finder rather than mid-turn.
+        *seconds* from now, or until ``release(owner)`` when None. Renewing
+        resets the owner's lease to ``now + seconds``; it never accumulates.
+        The planner is held while any owner holds it. Tasks already queued or
+        running are not touched, and a sweep that is under way stops at its
+        next finder rather than mid-turn.
         """
+        until = math.inf if seconds is None else time.monotonic() + seconds
         with self._lock:
-            self._hold_until = time.monotonic() + seconds
+            self._holds[owner] = until
         self._wake.set()
 
-    def release(self) -> None:
-        """End the hold now rather than letting the lease run out."""
+    def release(self, owner: str) -> None:
+        """End *owner*'s hold now rather than letting its lease run out."""
         with self._lock:
-            self._hold_until = 0.0
+            self._holds.pop(owner, None)
         self._wake.set()
 
     def _held_for(self) -> float:
-        """Seconds left on the hold; zero or negative when not held."""
+        """Seconds left on the longest hold; zero or negative when not held.
+
+        Capped at a minute so a hold with no end still wakes the loop now and
+        then; ``release`` wakes it at once anyway.
+        """
+        now = time.monotonic()
         with self._lock:
-            return self._hold_until - time.monotonic()
+            for owner in [o for o, until in self._holds.items() if until <= now]:
+                del self._holds[owner]
+            if not self._holds:
+                return 0.0
+            return min(60.0, max(self._holds.values()) - now)
 
     def wake(self):
         self._wake.set()

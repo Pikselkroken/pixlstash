@@ -5,8 +5,6 @@ import platform
 import queue
 import threading
 import traceback
-import subprocess
-import os
 import time
 
 from typing import Any, Callable, Optional
@@ -14,6 +12,8 @@ from datetime import datetime, UTC
 
 from .event_types import EventType
 from .pixl_logging import get_logger
+from .resources.arbiter import Lease, ResourceArbiter, arbiter
+from .resources.ledger import ledger
 from .tasks.base_task import BaseTask, QueueType, TaskPriority, TaskStatus
 from .utils.vram_utils import empty_device_cache
 
@@ -34,9 +34,6 @@ class TaskRunner:
     ensures correct ordering while all threads remain busy.
     """
 
-    SPILLOVER_GRACE_SECONDS = 1.5
-    SPILLOVER_TOLERANCE_MB = 256
-
     # Pause between attempts after a GPU out-of-memory failure. Long enough to
     # be worth waiting for - whatever else is holding the card has to give some
     # back - and short enough that the single GPU worker is not parked on it:
@@ -44,22 +41,18 @@ class TaskRunner:
     # queues behind this and has a 60 s budget. Two pauses is the worst case.
     VRAM_OOM_RETRY_PAUSE_S = 5.0
 
-    # Cache nvidia-smi results: (timestamp, value). A fresh query is only made
-    # if the cached value is older than this many seconds, preventing all 4
-    # worker threads from spawning simultaneous nvidia-smi subprocesses.
-    _VRAM_CACHE_TTL_S = 1.5
-    _vram_cache_lock = threading.Lock()
-    _vram_cache_value: int = 0
-    _vram_cache_ts: float = 0.0
-    # Timeout for nvidia-smi calls: prevents workers from hanging indefinitely
-    # when nvidia-smi stalls under heavy GPU load.
-    _NVIDIA_SMI_TIMEOUT_S = 5
+    # A task the arbiter refuses GPU memory, and that cannot spill to the CPU,
+    # goes back on its queue after this long, doubling to the cap. The worker
+    # never waits on it: it takes the next task meanwhile.
+    VRAM_REQUEUE_BASE_S = 1.0
+    VRAM_REQUEUE_MAX_S = 15.0
 
     def __init__(
         self,
         name: str = "TaskRunner",
         num_workers: int = 1,
         notifier: Optional[Callable[[EventType, Any], None]] = None,
+        resource_arbiter: Optional[ResourceArbiter] = None,
     ):
         self._name = name
         # Bound ``Vault.notify``, so a GPU out-of-memory retry can reach the
@@ -67,6 +60,8 @@ class TaskRunner:
         # the same reason the work finders take one: this is all the runner
         # needs from it.
         self._notifier = notifier
+        # Every task that may touch the GPU asks it for a LIGHT lease first.
+        self._arbiter = resource_arbiter or arbiter()
         self._num_workers = max(1, int(num_workers))
         # CPU queue: serviced by num_workers threads.
         self._queue: queue.PriorityQueue[tuple[int, int, BaseTask]] = (
@@ -82,103 +77,21 @@ class TaskRunner:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._lock = threading.Lock()
-        self._vram_gate_lock = threading.Lock()
         self._active_task_lock = threading.Lock()
         self._active_tasks: dict[int, BaseTask] = {}  # thread ident -> running task
-        self._vram_reserved_mb: int = 0
+        # Running CPU-queue tasks that were granted GPU memory. Under
+        # ``_active_task_lock``.
+        self._leased_on_gpu: set[str] = set()
+        # Tasks refused GPU memory, waiting out their backoff off the queue:
+        # task id -> (timer, task). Under ``_active_task_lock``.
+        self._requeued: dict[str, tuple[threading.Timer, BaseTask]] = {}
+        self._requeue_counts: dict[str, int] = {}
+        # Task id -> why it was stopped to make room, for the ones preempted.
+        self._preempted: dict[str, str] = {}
         self._closed = False
         self._on_task_complete_callbacks: list[
             Callable[[BaseTask, Optional[BaseException]], None]
         ] = []
-        self._max_vram_usage_mb: Optional[int] = None
-
-    def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
-        if max_vram_gb is None:
-            self._max_vram_usage_mb = None
-            return
-        try:
-            requested_mb = int(float(max_vram_gb) * 1024)
-        except Exception:
-            self._max_vram_usage_mb = None
-            return
-        if requested_mb <= 0:
-            self._max_vram_usage_mb = None
-            return
-        # Store the user's requested budget exactly and never silently reduce it.
-        total_mb = self._get_total_vram_mb()
-        self._max_vram_usage_mb = requested_mb
-        if total_mb > 0 and requested_mb > total_mb:
-            logger.warning(
-                "Configured task-runner VRAM budget %.2f GB exceeds detected GPU total %.2f GB; keeping configured budget as requested.",
-                requested_mb / 1024.0,
-                total_mb / 1024.0,
-            )
-
-    @staticmethod
-    def _get_total_vram_mb() -> int:
-        try:
-            output = subprocess.check_output(
-                [
-                    "nvidia-smi",
-                    "--query-gpu=memory.total",
-                    "--format=csv,noheader,nounits",
-                ],
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=TaskRunner._NVIDIA_SMI_TIMEOUT_S,
-            )
-            totals = []
-            for line in output.splitlines():
-                value = line.strip()
-                if not value:
-                    continue
-                totals.append(int(float(value)))
-            return sum(totals)
-        except Exception:
-            # nvidia-smi absent/failing is normal on CPU-only hosts; 0 (no VRAM)
-            # IS the documented answer, so logging it would be routine noise.
-            return 0
-
-    @classmethod
-    def _get_process_vram_mb(cls) -> int:
-        """Return this process's VRAM usage in MB.
-
-        Results are cached for ``_VRAM_CACHE_TTL_S`` seconds so that
-        concurrent worker threads don't all spawn nvidia-smi at once, and so
-        that a stalled nvidia-smi (which can happen under heavy GPU load) only
-        blocks one thread rather than all of them.
-        """
-        now = time.perf_counter()
-        with cls._vram_cache_lock:
-            if now - cls._vram_cache_ts < cls._VRAM_CACHE_TTL_S:
-                return cls._vram_cache_value
-            # Set the timestamp far enough into the future to cover the full
-            # subprocess timeout, so concurrent threads don't race to spawn
-            # additional nvidia-smi processes while one is already in-flight.
-            cls._vram_cache_ts = now + cls._NVIDIA_SMI_TIMEOUT_S
-
-        pid = os.getpid()
-        try:
-            used_mb = sum(
-                row_mb
-                for row_pid, _name, row_mb in cls._query_compute_apps()
-                if row_pid == pid
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "nvidia-smi timed out after %ss; reusing last VRAM reading.",
-                cls._NVIDIA_SMI_TIMEOUT_S,
-            )
-            with cls._vram_cache_lock:
-                return cls._vram_cache_value
-        except Exception:
-            with cls._vram_cache_lock:
-                return cls._vram_cache_value
-
-        with cls._vram_cache_lock:
-            cls._vram_cache_value = used_mb
-            cls._vram_cache_ts = time.perf_counter()
-        return used_mb
 
     def _pause_and_report_vram_oom(
         self, task: BaseTask, attempt: int, error: BaseException
@@ -195,9 +108,7 @@ class TaskRunner:
             error: The out-of-memory error, for the log line.
         """
         try:
-            if empty_device_cache():
-                with TaskRunner._vram_cache_lock:
-                    TaskRunner._vram_cache_ts = 0.0
+            empty_device_cache()
         except Exception:
             logger.warning(
                 "Failed to flush CUDA cache before retrying task %s (%s): %s",
@@ -215,63 +126,6 @@ class TaskRunner:
             # for. ``run()`` records it as the task's failure, as it would have
             # done had the last attempt failed.
             raise error
-
-    @classmethod
-    def _query_compute_apps(cls) -> list[tuple[int, str, int]]:
-        """Every process on the card as nvidia-smi sees it: ``(pid, name, MB)``.
-
-        The one nvidia-smi call behind both the VRAM gate (which wants our own
-        total) and the OOM notice (which wants everyone else's name). Raises
-        what ``subprocess`` raises; the callers decide what a failure means.
-        """
-        output = subprocess.check_output(
-            [
-                "nvidia-smi",
-                "--query-compute-apps=pid,process_name,used_memory",
-                "--format=csv,noheader,nounits",
-            ],
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=cls._NVIDIA_SMI_TIMEOUT_S,
-        )
-        rows: list[tuple[int, str, int]] = []
-        for line in output.splitlines():
-            # rsplit, because a process name is a path and may hold commas.
-            parts = [part.strip() for part in line.rsplit(",", 1)]
-            head = parts[0].split(",", 1) if parts else []
-            if len(parts) < 2 or len(head) < 2:
-                continue
-            try:
-                rows.append((int(head[0]), head[1].strip(), int(float(parts[1]))))
-            except ValueError as exc:
-                logger.debug("Skipping an unparseable nvidia-smi row %r: %s", line, exc)
-        return rows
-
-    @classmethod
-    def gpu_tenants(cls, limit: int = 3) -> list[dict]:
-        """The other processes holding the card, largest first, for the OOM notice.
-
-        "Another program is probably holding the card" was the toast's best
-        guess; this names it. The name is nvidia-smi's process path reduced to
-        its basename - enough to recognise ``lms`` or ``ComfyUI``'s python -
-        and never sent anywhere but this owner's own browser.
-        """
-        pid = os.getpid()
-        try:
-            rows = cls._query_compute_apps()
-        except Exception as exc:
-            # No nvidia-smi, or it stalled: the notice simply names nobody.
-            logger.debug("Could not list GPU tenants for the OOM notice: %s", exc)
-            return []
-        others = sorted(
-            (
-                {"name": os.path.basename(name) or name, "used_mb": mb}
-                for row_pid, name, mb in rows
-                if row_pid != pid and mb > 0
-            ),
-            key=lambda row: -row["used_mb"],
-        )
-        return others[:limit]
 
     def _report_vram_oom(
         self, task: BaseTask, attempt: int, final: bool, recovered: bool = False
@@ -298,7 +152,7 @@ class TaskRunner:
                     # Who else is on the card, so the toast can say "LM Studio
                     # is holding 18 GB" instead of guessing. Not on the
                     # recovery frame: the contention is over.
-                    "other_processes": [] if recovered else self.gpu_tenants(),
+                    "other_processes": [] if recovered else ledger().other_processes(),
                 },
             )
         except Exception as exc:
@@ -308,204 +162,6 @@ class TaskRunner:
                 task.type,
                 exc,
             )
-
-    def _wait_for_vram_budget(self, task: BaseTask) -> int:
-        """Wait until VRAM budget allows the task and return the MB reserved.
-
-        The caller must release the reservation (subtract from
-        ``self._vram_reserved_mb``) once the task finishes.
-        """
-        budget_mb = self._max_vram_usage_mb
-        if not budget_mb:
-            logger.debug(
-                "Task %s (%s) VRAM gate: no budget configured, running immediately.",
-                task.id,
-                task.type,
-            )
-            return 0
-        estimated_mb = max(0, int(getattr(task, "estimated_vram_mb", lambda: 0)()))
-        if estimated_mb <= 0:
-            logger.debug(
-                "Task %s (%s) VRAM gate: no VRAM estimate, running immediately (budget=%sMB).",
-                task.id,
-                task.type,
-                budget_mb,
-            )
-            return 0
-        if estimated_mb > budget_mb:
-            # A single task larger than the whole budget can never satisfy the
-            # gate, but it should still not stampede over tasks already in flight.
-            # Fall through into the wait loop instead of returning immediately:
-            # the loop serializes it (waits for reserved_mb to reach 0) and then
-            # runs it alone via the escape hatch, reserving its estimate so later
-            # tasks queue behind it rather than piling on top.
-            logger.warning(
-                "Task %s (%s) estimated VRAM %sMB exceeds configured budget %sMB; "
-                "will run alone once the GPU is otherwise idle.",
-                task.id,
-                task.type,
-                estimated_mb,
-                budget_mb,
-            )
-
-        wait_started_at = time.perf_counter()
-        last_log_s = -1.0
-        LOG_INTERVAL_S = 5.0
-        spillover_allowed = bool(getattr(task, "allow_cpu_spillover", lambda: False)())
-        while not self._stop.is_set():
-            used_mb = self._get_process_vram_mb()
-            waited_s = time.perf_counter() - wait_started_at
-            if used_mb <= 0:
-                logger.debug(
-                    "Task %s (%s) VRAM gate: nvidia-smi reports 0 MB used, running immediately "
-                    "(estimated=%sMB budget=%sMB waited=%.3fs).",
-                    task.id,
-                    task.type,
-                    estimated_mb,
-                    budget_mb,
-                    waited_s,
-                )
-                with self._vram_gate_lock:
-                    self._vram_reserved_mb += estimated_mb
-                return estimated_mb
-            # Include VRAM already committed by other in-flight tasks that have
-            # passed the gate but may not yet be visible to nvidia-smi.
-            with self._vram_gate_lock:
-                reserved_mb = self._vram_reserved_mb
-            required_mb = used_mb + reserved_mb + estimated_mb
-            overflow_mb = required_mb - budget_mb
-            if overflow_mb <= 0:
-                if waited_s > 0.01:
-                    logger.debug(
-                        "Task %s (%s) VRAM gate released after %.3fs "
-                        "(used=%sMB reserved=%sMB estimated=%sMB budget=%sMB).",
-                        task.id,
-                        task.type,
-                        waited_s,
-                        used_mb,
-                        reserved_mb,
-                        estimated_mb,
-                        budget_mb,
-                    )
-                else:
-                    logger.debug(
-                        "Task %s (%s) VRAM gate passed immediately "
-                        "(used=%sMB reserved=%sMB estimated=%sMB budget=%sMB).",
-                        task.id,
-                        task.type,
-                        used_mb,
-                        reserved_mb,
-                        estimated_mb,
-                        budget_mb,
-                    )
-                with self._vram_gate_lock:
-                    self._vram_reserved_mb += estimated_mb
-                return estimated_mb
-
-            if overflow_mb <= self.SPILLOVER_TOLERANCE_MB:
-                logger.debug(
-                    "Task %s (%s) VRAM gate allowing small overflow "
-                    "(used=%sMB reserved=%sMB estimated=%sMB overflow=%sMB tolerance=%sMB budget=%sMB waited=%.3fs).",
-                    task.id,
-                    task.type,
-                    used_mb,
-                    reserved_mb,
-                    estimated_mb,
-                    overflow_mb,
-                    self.SPILLOVER_TOLERANCE_MB,
-                    budget_mb,
-                    waited_s,
-                )
-                with self._vram_gate_lock:
-                    self._vram_reserved_mb += estimated_mb
-                return estimated_mb
-
-            if waited_s - last_log_s >= LOG_INTERVAL_S:
-                logger.debug(
-                    "Task %s (%s) VRAM gate waiting: used=%sMB reserved=%sMB estimated=%sMB "
-                    "required=%sMB budget=%sMB overflow=%sMB waited=%.1fs spillover_allowed=%s.",
-                    task.id,
-                    task.type,
-                    used_mb,
-                    reserved_mb,
-                    estimated_mb,
-                    required_mb,
-                    budget_mb,
-                    overflow_mb,
-                    waited_s,
-                    spillover_allowed,
-                )
-                last_log_s = waited_s
-
-            # Escape hatch: if nothing is currently in flight (reserved_mb==0),
-            # waiting longer cannot help - the overflow comes from loaded models
-            # or an external process (e.g. ComfyUI) that won't be freed.
-            # If the task supports CPU spillover, try that first so we don't
-            # pile more GPU work onto an already-full device.
-            if reserved_mb == 0 and waited_s >= self.SPILLOVER_GRACE_SECONDS:
-                if spillover_allowed:
-                    try:
-                        getattr(task, "enable_cpu_spillover", lambda: None)()
-                        logger.warning(
-                            "Task %s (%s) VRAM gate escape (external VRAM pressure): "
-                            "enabling CPU spillover (used=%sMB estimated=%sMB budget=%sMB overflow=%sMB).",
-                            task.id,
-                            task.type,
-                            used_mb,
-                            estimated_mb,
-                            budget_mb,
-                            overflow_mb,
-                        )
-                        return estimated_mb
-                    except Exception as exc:
-                        logger.warning(
-                            "Task %s (%s) CPU spillover hook failed during escape: %s",
-                            task.id,
-                            task.type,
-                            exc,
-                        )
-                logger.warning(
-                    "Task %s (%s) VRAM gate escape: no tasks in flight after %.1fs; "
-                    "running despite overflow (used=%sMB estimated=%sMB budget=%sMB overflow=%sMB). "
-                    "VRAM baseline exceeds budget - models likely loaded into memory.",
-                    task.id,
-                    task.type,
-                    waited_s,
-                    used_mb,
-                    estimated_mb,
-                    budget_mb,
-                    overflow_mb,
-                )
-                with self._vram_gate_lock:
-                    self._vram_reserved_mb += estimated_mb
-                return estimated_mb
-
-            if spillover_allowed and waited_s < self.SPILLOVER_GRACE_SECONDS:
-                time.sleep(0.1)
-                continue
-
-            if spillover_allowed:
-                try:
-                    getattr(task, "enable_cpu_spillover", lambda: None)()
-                    logger.debug(
-                        "Task %s (%s) switched to CPU spillover (used=%sMB reserved=%sMB estimated=%sMB budget=%sMB).",
-                        task.id,
-                        task.type,
-                        used_mb,
-                        reserved_mb,
-                        estimated_mb,
-                        budget_mb,
-                    )
-                    return estimated_mb
-                except Exception as exc:
-                    logger.warning(
-                        "Task %s (%s) CPU spillover hook failed: %s",
-                        task.id,
-                        task.type,
-                        exc,
-                    )
-            time.sleep(0.1)
-        return 0
 
     def add_task_complete_callback(
         self, callback: Callable[[BaseTask, Optional[BaseException]], None]
@@ -531,6 +187,7 @@ class TaskRunner:
                     continue
                 self._cancel_queued_task(queued_task, "drained from the queue")
                 cancelled += 1
+        cancelled += self._cancel_requeued("drained from the queue")
         logger.debug(
             "TaskRunner %s: cancelled %d pending task(s).", self._name, cancelled
         )
@@ -544,9 +201,244 @@ class TaskRunner:
     def has_active_gpu_tasks(self) -> bool:
         """True while the GPU worker is executing a task."""
         with self._active_task_lock:
-            return any(
-                t.queue_type == QueueType.GPU for t in self._active_tasks.values()
+            return any(self._on_gpu(t) for t in self._active_tasks.values())
+
+    def preempt_gpu(self, reason: str) -> list[str]:
+        """Stop PixlStash's GPU work to make room, at a task boundary.
+
+        Running GPU tasks are asked to stop (``on_cancel``): the ones that can
+        stop early do, the rest finish their batch. Queued GPU tasks are
+        cancelled; the CPU queue, imports included, is not touched. Interactive
+        tasks - URGENT, or waited on by ``submit_and_wait`` - are never stopped.
+
+        Everything stopped ends as ``TaskCancelledError``, the one ending the
+        finders do not defer pictures over, so the pictures it did not process
+        are found again once the planner runs.
+
+        Args:
+            reason: Said in the cancellation and the log ("preempted by ...").
+
+        Returns:
+            The worker types that were stopped, for the snapshot's
+            ``preempted`` entries.
+        """
+        stopped: list[str] = []
+        with self._active_task_lock:
+            running = [
+                task
+                for task in self._active_tasks.values()
+                if self._on_gpu(task) and not self._interactive(task)
+            ]
+            for task in running:
+                self._preempted[task.id] = reason
+        for task in running:
+            try:
+                task.on_cancel()
+            except Exception as exc:
+                logger.warning(
+                    "Task %s (%s) cancel hook failed while making room: %s",
+                    task.id,
+                    task.type,
+                    exc,
+                )
+                # Not asked to stop, so its ending is not a preemption.
+                with self._active_task_lock:
+                    self._preempted.pop(task.id, None)
+                continue
+            stopped.append(task.type)
+        kept = []
+        while True:
+            try:
+                item = self._gpu_queue.get_nowait()
+            except queue.Empty:
+                break
+            queued_task = item[2]
+            if isinstance(queued_task, _StopTask) or self._interactive(queued_task):
+                kept.append(item)
+                continue
+            self._cancel_queued_task(queued_task, reason)
+            stopped.append(queued_task.type)
+        for item in kept:
+            self._gpu_queue.put(item)
+        with self._active_task_lock:
+            waiting = [
+                task_id
+                for task_id, (_timer, task) in self._requeued.items()
+                if task.queue_type == QueueType.GPU and not self._interactive(task)
+            ]
+        for task_id in waiting:
+            task = self._take_requeued(task_id)
+            if task is not None:
+                self._cancel_queued_task(task, reason)
+                stopped.append(task.type)
+        if stopped:
+            logger.warning(
+                "TaskRunner %s: stopped %d GPU task(s) (%s): %s",
+                self._name,
+                len(stopped),
+                ", ".join(sorted(set(stopped))),
+                reason,
             )
+        return stopped
+
+    def wait_for_gpu_idle(self, timeout_s: float = 60.0) -> bool:
+        """Block until no GPU task runs, interactive ones included; True if so.
+
+        Interactive tasks are never stopped, but they are short, and unloading
+        a model under one makes it return nothing: what this waits for is the
+        moment models can be unloaded.
+        """
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            with self._active_task_lock:
+                busy = any(self._on_gpu(t) for t in self._active_tasks.values())
+            if not busy:
+                return True
+            if self._stop.wait(0.1):
+                return False
+        return False
+
+    def _on_gpu(self, task: BaseTask) -> bool:
+        """*task* is running on the card; call under ``_active_task_lock``.
+
+        Every GPU-queue task counts, even one running on the CPU: it holds a
+        model, and ``unload_models`` under its batch makes it return nothing.
+        """
+        return task.queue_type == QueueType.GPU or task.id in self._leased_on_gpu
+
+    @staticmethod
+    def _interactive(task: BaseTask) -> bool:
+        return task.priority == TaskPriority.URGENT or getattr(task, "_awaited", False)
+
+    def _admit(
+        self, task: BaseTask, work_queue: queue.PriorityQueue
+    ) -> tuple[bool, Optional[Lease]]:
+        """Ask the arbiter for the GPU memory *task* needs, without blocking.
+
+        Every GPU-queue task asks, even one with no estimate, so an exclusive
+        lease elsewhere can keep it off the card; a CPU-queue task asks only
+        when it says it needs VRAM. Refused, the task spills to the CPU where
+        it can, or goes back on its queue after a backoff while this worker
+        takes the next one.
+
+        Returns:
+            ``(run_now, lease)``. ``run_now`` False means the task was put
+            aside and must not run on this pass.
+        """
+        try:
+            need_mb = max(0, int(task.estimated_vram_mb()))
+        except Exception as exc:
+            logger.warning(
+                "Task %s (%s) VRAM estimate failed; asking for none: %s",
+                task.id,
+                task.type,
+                exc,
+            )
+            need_mb = 0
+        if task.queue_type != QueueType.GPU and need_mb <= 0:
+            return True, None
+        try:
+            lease = self._arbiter.try_light(
+                task.type,
+                need_mb=need_mb,
+                worker_type=task.type,
+                urgent=self._interactive(task),
+            )
+        except Exception as exc:
+            # Raised here, it would end the worker thread and every task
+            # queued behind this one. Taken as a refusal instead: it spills
+            # to the CPU or is tried again after the backoff.
+            logger.error(
+                "Task %s (%s) could not be checked against the GPU's memory: %s",
+                task.id,
+                task.type,
+                exc,
+                exc_info=True,
+            )
+            lease = None
+        if lease is not None:
+            self._requeue_counts.pop(task.id, None)
+            return True, lease
+        if task.allow_cpu_spillover():
+            try:
+                task.enable_cpu_spillover()
+                logger.info(
+                    "Task %s (%s) moved to the CPU: the GPU has no room for %s MB",
+                    task.id,
+                    task.type,
+                    need_mb,
+                )
+                self._requeue_counts.pop(task.id, None)
+                return True, self._arbiter.note_on_cpu(task.type, task.type)
+            except Exception as exc:
+                logger.warning(
+                    "Task %s (%s) could not move to the CPU, so it waits for "
+                    "the GPU instead: %s",
+                    task.id,
+                    task.type,
+                    exc,
+                )
+        attempts = self._requeue_counts.get(task.id, 0)
+        self._requeue_counts[task.id] = attempts + 1
+        delay = min(self.VRAM_REQUEUE_MAX_S, self.VRAM_REQUEUE_BASE_S * (2**attempts))
+        logger.debug(
+            "Task %s (%s) waits %.0fs for GPU memory (%s MB)",
+            task.id,
+            task.type,
+            delay,
+            need_mb,
+        )
+        timer = threading.Timer(delay, self._requeue, args=(task.id, work_queue))
+        timer.daemon = True
+        with self._active_task_lock:
+            self._requeued[task.id] = (timer, task)
+        timer.start()
+        return False, None
+
+    def _take_requeued(self, task_id: str) -> Optional[BaseTask]:
+        with self._active_task_lock:
+            entry = self._requeued.pop(task_id, None)
+        self._requeue_counts.pop(task_id, None)
+        if entry is None:
+            return None
+        entry[0].cancel()
+        return entry[1]
+
+    def _requeue(self, task_id: str, work_queue: queue.PriorityQueue) -> None:
+        with self._active_task_lock:
+            entry = self._requeued.pop(task_id, None)
+        if entry is None:
+            return
+        task = entry[1]
+        if self._stop.is_set():
+            self._requeue_counts.pop(task_id, None)
+            self._cancel_queued_task(task, "runner stopped")
+            return
+        work_queue.put((task.priority, next(self._queue_seq), task))
+        if self._stop.is_set():
+            # stop() may have drained the queue between the check and the put.
+            self._drain(work_queue, "runner stopped")
+
+    def _drain(self, work_queue: queue.PriorityQueue, reason: str) -> None:
+        """Cancel every task still waiting in *work_queue*."""
+        while True:
+            try:
+                _priority, _seq, queued_task = work_queue.get_nowait()
+            except queue.Empty:
+                return
+            if not isinstance(queued_task, _StopTask):
+                self._cancel_queued_task(queued_task, reason)
+
+    def _cancel_requeued(self, reason: str) -> int:
+        with self._active_task_lock:
+            task_ids = list(self._requeued)
+        cancelled = 0
+        for task_id in task_ids:
+            task = self._take_requeued(task_id)
+            if task is not None:
+                self._cancel_queued_task(task, reason)
+                cancelled += 1
+        return cancelled
 
     def start(self):
         with self._lock:
@@ -584,14 +476,8 @@ class TaskRunner:
         # Cancel tasks still waiting in both queues so task-specific background
         # resources (such as preload threads) can be released deterministically.
         for q in (self._queue, self._gpu_queue):
-            while True:
-                try:
-                    _priority, _seq, queued_task = q.get_nowait()
-                except queue.Empty:
-                    break
-                if isinstance(queued_task, _StopTask):
-                    continue
-                self._cancel_queued_task(queued_task, "runner stopped")
+            self._drain(q, "runner stopped")
+        self._cancel_requeued("runner stopped")
 
         # Cancel tasks that are currently executing so their loops can exit early.
         with self._active_task_lock:
@@ -669,11 +555,18 @@ class TaskRunner:
                 (e.g. the runner was stopped).
             RuntimeError: The task failed; the original error message is included.
         """
+        # Somebody is waiting on it: it is never stopped to make room for
+        # other work, and a waiting heavy lease does not hold it back.
+        task._awaited = True
         self.submit(task)
         if not task._done_event.wait(timeout=timeout_s):
             # Nobody is waiting any more: a task still queued is skipped when the
-            # worker reaches it, rather than running for no one.
+            # worker reaches it, rather than running for no one, and one
+            # waiting out a GPU backoff is not put back at all.
             task.on_cancel()
+            requeued = self._take_requeued(task.id)
+            if requeued is not None:
+                self._cancel_queued_task(requeued, "nobody is waiting for it any more")
             raise TimeoutError(
                 f"Task {task.id} ({task.type}) did not complete within {timeout_s}s"
             )
@@ -712,15 +605,9 @@ class TaskRunner:
                 work_queue.qsize(),
             )
 
-            # GPU-queue tasks are physically serialised by the single GPU worker
-            # thread - only one runs at a time, so there is no concurrent GPU
-            # usage to gate against.  Skipping the VRAM gate avoids the
-            # spillover escape that fires when loaded-model baseline VRAM
-            # already exceeds the configured budget.
-            if task.queue_type == QueueType.GPU:
-                vram_reserved_mb = 0
-            else:
-                vram_reserved_mb = self._wait_for_vram_budget(task)
+            run_now, lease = self._admit(task, work_queue)
+            if not run_now:
+                continue
 
             task_start = time.perf_counter()
             logger.debug(
@@ -733,6 +620,8 @@ class TaskRunner:
             thread_ident = threading.current_thread().ident
             with self._active_task_lock:
                 self._active_tasks[thread_ident] = task
+                if lease is not None and not lease.on_cpu:
+                    self._leased_on_gpu.add(task.id)
             try:
                 task.run(on_vram_oom=self._pause_and_report_vram_oom)
                 # ``vram_oom_attempts`` decides whether the user has a card open
@@ -747,6 +636,15 @@ class TaskRunner:
                     )
             except Exception as exc:
                 error = exc
+                preempted_by = self._preempted.get(task.id)
+                if preempted_by is not None:
+                    # Stopped to make room, whatever the task raised on the
+                    # way out. A finder defers a batch for the session on any
+                    # other error; this one says nothing about the pictures.
+                    task.status = TaskStatus.CANCELLED
+                    error = TaskCancelledError(
+                        f"Task {task.id} ({task.type}) {preempted_by}"
+                    )
                 # Same split: a task that OOMed twice and then died of something
                 # else still has a card open, and it closes naming the attempt
                 # that died - as does one abandoned at shutdown, which used one
@@ -771,15 +669,17 @@ class TaskRunner:
             finally:
                 with self._active_task_lock:
                     self._active_tasks.pop(thread_ident, None)
+                    self._leased_on_gpu.discard(task.id)
+                    self._preempted.pop(task.id, None)
+                if lease is not None:
+                    lease.release()
                 # Always flush PyTorch's CUDA allocator cache after a GPU-queue
                 # task so that activation tensors (data, not models) are returned
                 # promptly.  CPU-queue tasks only flush when they held a VRAM
                 # reservation.
                 if task.queue_type == QueueType.GPU:
                     try:
-                        if empty_device_cache():
-                            with TaskRunner._vram_cache_lock:
-                                TaskRunner._vram_cache_ts = 0.0
+                        empty_device_cache()
                     except Exception:
                         logger.warning(
                             "Failed to flush CUDA cache after task %s (%s): %s",
@@ -805,15 +705,9 @@ class TaskRunner:
                                 task.type,
                                 traceback.format_exc(),
                             )
-                elif vram_reserved_mb > 0:
-                    with self._vram_gate_lock:
-                        self._vram_reserved_mb = max(
-                            0, self._vram_reserved_mb - vram_reserved_mb
-                        )
+                elif lease is not None and not lease.on_cpu:
                     try:
-                        if empty_device_cache():
-                            with TaskRunner._vram_cache_lock:
-                                TaskRunner._vram_cache_ts = 0.0
+                        empty_device_cache()
                     except Exception:
                         logger.warning(
                             "Failed to flush CUDA cache after task %s (%s): %s",

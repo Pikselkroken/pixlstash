@@ -588,6 +588,8 @@ jobs:
           tests/test_reference_folder_moves.py
           tests/test_reference_folder_watcher.py
           tests/test_repair_copied_face_rows.py
+          tests/test_resource_arbiter.py
+          tests/test_resources_routes.py
           tests/test_restore.py
           tests/test_reviews_api.py
           tests/test_rocm_device_check.py
@@ -617,6 +619,7 @@ jobs:
           tests/test_tag_worker.py
           tests/test_tagger_plugin_registry.py
           tests/test_tagger_user_plugins.py
+          tests/test_task_preemption.py
           tests/test_task_runner_submit_and_wait.py
           tests/test_temp_vault_first_import.py
           tests/test_thumbnail_cache_headers.py

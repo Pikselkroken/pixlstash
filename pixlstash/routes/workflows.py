@@ -164,18 +164,25 @@ from pixlstash.services.comfyui_service import (
     PIXLSTASH_PICTURE_LOADER,
     _extract_output_node_ids,
     RUN_CLIENT_ID,
+    _emit_comfyui_failure_progress,
     _process_comfyui_outputs,
     _submit_comfyui_prompt,
     _download_comfyui_image,
     _upload_image_to_comfyui,
     library_ids_named,
     own_picture_ids,
+    claim_held_run,
     follow_run,
+    hold_run,
+    new_run_id,
+    record_run_outcome,
     run_outcome,
     swap_pixlstash_savers,
     unfed_picture_loaders,
 )
-from pixlstash.services import workflow_bindings, workflow_inbox
+from pixlstash.services import vram_history, workflow_bindings, workflow_inbox
+from pixlstash.resources import comfyui_tenant
+from pixlstash.resources.arbiter import LeaseKind, LeaseState, Tenant, arbiter
 from pixlstash.services.edit_selection import (
     UNREADABLE_PICTURE,
     Selection,
@@ -911,6 +918,60 @@ class WorkflowCard(BaseModel):
             "badge is drawn from. 0 when nothing waits."
         ),
     )
+    vram: "WorkflowVram | None" = Field(
+        None,
+        description=(
+            "What a ComfyUI run of this workflow needs on the GPU, learned "
+            "from its measured runs, and whether it runs alone."
+        ),
+    )
+
+
+class WorkflowVramPeak(BaseModel):
+    """One measured run of a workflow, newest first."""
+
+    peak_mb: int
+    outcome: Literal["completed", "failed", "oom", "aborted"]
+    at: str
+    used: bool = Field(
+        description="One of the (up to) five runs the need is taken from."
+    )
+
+
+class WorkflowVram(BaseModel):
+    """A workflow's GPU memory, as the VRAM arbiter admits its runs."""
+
+    need_mb: int | None = Field(
+        None,
+        description=(
+            "The largest of the newest five peaks, with 10 % headroom; null "
+            "when the workflow was never measured (its runs then keep other "
+            "heavy work off the GPU)."
+        ),
+    )
+    measured_runs: int = 0
+    exclusive: bool = Field(
+        False, description="Runs alone on the GPU: PixlStash moves its own work off it."
+    )
+    exclusive_source: Literal["owner", "oom"] | None = Field(
+        None,
+        description="owner when set on the card, oom when set after it ran out of memory.",
+    )
+    exclusive_at: str | None = None
+    trend: Literal["rising", "falling", "flat"] | None = Field(
+        None,
+        description=(
+            "The mean of the newest five peaks against the five before, "
+            "beyond 10 %; null below ten measured runs."
+        ),
+    )
+    peaks: list[WorkflowVramPeak] = Field(
+        default_factory=list,
+        description="The kept peaks, newest first; on the detail route only.",
+    )
+
+
+WorkflowCard.model_rebuild()
 
 
 class WorkflowCards(BaseModel):
@@ -1110,6 +1171,13 @@ class WorkflowCardEdit(BaseModel):
     name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
     notes: str | None = Field(None, max_length=MAX_NOTES_LENGTH)
     hidden: bool | None = None
+    exclusive: bool | None = Field(
+        None,
+        description=(
+            "Run alone on the GPU. true sets it as the owner's choice; false "
+            "or null clears it, including one set after an out-of-memory run."
+        ),
+    )
 
 
 def _one_row_per_address(entries) -> None:
@@ -2300,7 +2368,16 @@ class RunResult(BaseModel):
     status: str = "success"
     runs: int = 0
     groups: list[RunGroup] = Field(default_factory=list)
-    prompts: list[dict] = Field(default_factory=list)
+    prompts: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "One entry per submission: workflow_id, run_id, prompt_id and "
+            "status. status is queued (sent to ComfyUI), waiting (held by "
+            "PixlStash until the GPU has room; prompt_id is then null, and "
+            "the run is followed by its run_id) or failed (ComfyUI took it "
+            "but named no prompt)."
+        ),
+    )
     error: str | None = Field(
         default=None,
         description=(
@@ -2311,10 +2388,28 @@ class RunResult(BaseModel):
 
 
 class RunOutcome(BaseModel):
-    """``GET /workflows/runs/{prompt_id}``: how one submitted run stands."""
+    """``GET /workflows/runs/{run_id}``: how one submitted run stands."""
 
-    prompt_id: str
-    status: str = Field(description="running, completed or failed.")
+    run_id: str | None = Field(
+        default=None,
+        description="PixlStash's id for the run, which it has from the start.",
+    )
+    prompt_id: str | None = Field(
+        default=None,
+        description=(
+            "ComfyUI's id for the run; null while PixlStash holds it for the GPU."
+        ),
+    )
+    status: str = Field(
+        description=(
+            "waiting (held by PixlStash until the GPU has room, not yet sent "
+            "to ComfyUI), running, completed or failed."
+        )
+    )
+    code: str | None = Field(
+        default=None,
+        description="vram_oom for a run that ran out of GPU memory, else null.",
+    )
     message: str | None = Field(
         default=None,
         description=(
@@ -4190,7 +4285,9 @@ def create_router(server) -> APIRouter:
         names = _display_names(grid.figures)
         cards = [_entry(figure, names=names) for figure in grid.cards]
         waiting = waiting_counts(_hub())
+        vram = vram_history.card_vram(_hub(), [card.id for card in cards])
         for card in cards:
+            card.vram = WorkflowVram(**vram[card.id])
             if card.id in waiting:
                 card.unsaved_changes = _count_changes(waiting[card.id], card.id)
         return WorkflowCards(cards=cards, one_offs=grid.one_offs, hidden=grid.hidden)
@@ -4231,6 +4328,9 @@ def create_router(server) -> APIRouter:
             else _graph_base_models(hub, figure.base)
         )
         card = _entry(figure, recipe, _display_names(grid.figures))
+        card.vram = WorkflowVram(
+            **vram_history.card_vram(hub, [workflow_id], with_peaks=True)[workflow_id]
+        )
         card.unsaved_changes = _count_changes(
             read_changes(hub, workflow_id).get(WAITING, ({}, None))[0], workflow_id
         )
@@ -4697,6 +4797,12 @@ def create_router(server) -> APIRouter:
         hub = _hub()
         _require_workflow(hub, workflow_id)
         changes = payload.model_dump(exclude_unset=True)
+        if "exclusive" in changes:
+            # A hub table of its own, not a group attribute: the VRAM
+            # arbiter reads it on every run of the workflow.
+            vram_history.set_exclusive(
+                hub, workflow_id, bool(changes.pop("exclusive")), "owner"
+            )
         if "hidden" in changes and changes["hidden"] is None:
             # The column is NOT NULL and has no "unset" state: a null there is
             # a caller meaning "not hidden", which the hub is told plainly
@@ -7790,8 +7896,9 @@ def create_router(server) -> APIRouter:
         "/workflows/runs/{prompt_id}",
         summary="How a run ended",
         description=(
-            "One run POST /workflows/run submitted, by the prompt_id it "
-            "answered with: running, completed (with the pictures it added) "
+            "One run POST /workflows/run submitted, by the run_id or the "
+            "prompt_id it answered with: waiting (held by PixlStash until the "
+            "GPU has room), running, completed (with the pictures it added) "
             "or failed, with the message the app shows - the node that failed "
             "and why. stopped marks a failed run that was interrupted or "
             "taken off ComfyUI's queue. Kept in memory for the most recent "
@@ -7991,59 +8098,244 @@ def create_router(server) -> APIRouter:
                         apply_seeds(instance, seed_targets, body.seed)
                     elif body.seed_mode == "new":
                         apply_seeds(instance, seed_targets, None)
-                    # Under the backend's own client, so ComfyUI tells the
-                    # one listener how far the run is (`follow_run`).
-                    submitted = _submit_comfyui_prompt(
-                        comfyui_url, instance, RUN_CLIENT_ID
+                    library = request.state.library_lease
+                    poll_kwargs = {
+                        "view_context": destination,
+                        "origin_generation": library.generation,
+                        "origin_library_uuid": library.library_uuid,
+                        "run_workflow_id": run_workflow_id,
+                        "run_workflow_version": run_workflow_version,
+                        "workflow_id": group.workflow_id,
+                        "lora_character_ids": lora_character_ids,
+                        "label": label,
+                    }
+                    run_id = new_run_id()
+                    vram_lease, model_set = _vram_lease(
+                        comfyui_url, instance, group.workflow_id, label, run_id
                     )
-                    prompt_id = submitted.get("prompt_id") or submitted.get("id")
-                    # ComfyUI accepts a prompt when ANY output validates and
-                    # drops the rest, naming them in `node_errors`.
-                    rejected = format_prompt_rejection(
-                        {"node_errors": submitted.get("node_errors")}
-                    )
-                    if rejected:
-                        logger.warning(
-                            "[workflows] ComfyUI dropped outputs of prompt %s: %s",
-                            prompt_id,
-                            rejected,
-                        )
-                    if prompt_id:
-                        lease = request.state.library_lease
-                        # Before the thread, so a read straight after this
-                        # answer never finds the run unknown.
-                        follow_run(
-                            str(prompt_id),
-                            comfyui_url,
-                            label=label,
-                            workflow_id=group.workflow_id,
-                            library_uuid=lease.library_uuid,
-                        )
-                        threading.Thread(
-                            target=_process_comfyui_outputs,
-                            args=(
-                                server,
+                    if vram_lease.state is LeaseState.GRANTED:
+                        # The common case: room now, so submitted inline
+                        # exactly as before, and ComfyUI's validation answer
+                        # still reaches this response.
+                        try:
+                            prompt_id = _dispatch_run(
                                 comfyui_url,
-                                str(prompt_id),
+                                instance,
                                 output_node_ids,
                                 stack_id,
                                 source_id,
+                                run_id,
+                                vram_lease,
+                                model_set,
+                                poll_kwargs,
+                            )
+                        except BaseException:
+                            vram_lease.release()
+                            raise
+                        # None: ComfyUI took it but named no prompt, which
+                        # `_dispatch_run` has recorded as the run's failure.
+                        status = "queued" if prompt_id else "failed"
+                    else:
+                        # No room: held here, not in ComfyUI's queue, and sent
+                        # once the arbiter grants it (`_dispatch_held_run`).
+                        prompt_id = None
+                        status = "waiting"
+                        cancel = hold_run(
+                            run_id,
+                            comfyui_url,
+                            label=label,
+                            workflow_id=group.workflow_id,
+                            library_uuid=library.library_uuid,
+                        )
+                        threading.Thread(
+                            target=_dispatch_held_run,
+                            args=(
+                                comfyui_url,
+                                instance,
+                                output_node_ids,
+                                stack_id,
+                                source_id,
+                                run_id,
+                                vram_lease,
+                                model_set,
+                                poll_kwargs,
+                                cancel,
                             ),
-                            kwargs={
-                                "view_context": destination,
-                                "origin_generation": lease.generation,
-                                "origin_library_uuid": lease.library_uuid,
-                                "run_workflow_id": run_workflow_id,
-                                "run_workflow_version": run_workflow_version,
-                                "rejected": rejected,
-                                "workflow_id": group.workflow_id,
-                                "lora_character_ids": lora_character_ids,
-                            },
+                            name=f"held-run-{run_id}",
                             daemon=True,
                         ).start()
                     prompts.append(
-                        {"workflow_id": group.workflow_id, "prompt_id": prompt_id}
+                        {
+                            "workflow_id": group.workflow_id,
+                            "run_id": run_id,
+                            "prompt_id": prompt_id,
+                            "status": status,
+                        }
                     )
+
+    def _vram_lease(
+        comfyui_url: str, graph: dict, workflow_id: str | None, label, run_id: str
+    ):
+        """Ask the VRAM arbiter for one run's memory; ``(lease, model_set)``.
+
+        A workflow that runs alone asks for the card to itself. One measured
+        before asks for the largest of its newest peaks with headroom; one
+        never measured keeps the other heavy tenants off the card without
+        asking anyone to free memory (D2), and is measured by this run.
+        """
+        hub = _hub()
+        model_set = vram_history.model_set_of(graph)
+        runs_alone = vram_history.policy(hub, workflow_id) is not None
+        need = vram_history.need_mb(hub, workflow_id, model_set)
+        comfyui_tenant.probe(RUN_CLIENT_ID, comfyui_url)
+        name = f"ComfyUI '{label}'" if label else "ComfyUI run"
+        lease = arbiter().request(
+            Tenant.COMFYUI,
+            name,
+            need_mb=need or 0,
+            kind=LeaseKind.EXCLUSIVE if runs_alone else LeaseKind.HEAVY,
+            alone=need is None and not runs_alone,
+            run_id=run_id,
+            workflow_id=workflow_id,
+        )
+        if lease.state is LeaseState.WAITING:
+            logger.info(
+                "[workflows] Run %s of %s waits for the GPU: %s",
+                run_id,
+                workflow_id,
+                (lease.waiting_reason or {}).get("text"),
+            )
+        return lease, model_set
+
+    def _dispatch_run(
+        comfyui_url: str,
+        instance: dict,
+        output_node_ids,
+        stack_id,
+        source_id,
+        run_id: str,
+        vram_lease,
+        model_set: str,
+        poll_kwargs: dict,
+    ) -> str | None:
+        """Submit one run to ComfyUI and follow it; its prompt id.
+
+        Raises what ``_submit_comfyui_prompt`` raises: a 502 carrying
+        ComfyUI's validation answer.
+        """
+        # Under the backend's own client, so ComfyUI tells the one listener
+        # how far the run is (`follow_run`).
+        submitted = _submit_comfyui_prompt(comfyui_url, instance, RUN_CLIENT_ID)
+        prompt_id = submitted.get("prompt_id") or submitted.get("id")
+        # ComfyUI accepts a prompt when ANY output validates and drops the
+        # rest, naming them in `node_errors`.
+        rejected = format_prompt_rejection(
+            {"node_errors": submitted.get("node_errors")}
+        )
+        if rejected:
+            logger.warning(
+                "[workflows] ComfyUI dropped outputs of prompt %s: %s",
+                prompt_id,
+                rejected,
+            )
+        if not prompt_id:
+            vram_lease.release()
+            logger.warning(
+                "[workflows] ComfyUI accepted run %s but named no prompt: %s",
+                run_id,
+                submitted,
+            )
+            # Keyed by the run id: there is no prompt id to key it by.
+            record_run_outcome(
+                prompt_id=run_id,
+                status="failed",
+                message="ComfyUI accepted the run but did not say which it was.",
+                run_id=run_id,
+            )
+            return None
+        # Before the thread, so a read straight after this answer never finds
+        # the run unknown.
+        follow_run(
+            str(prompt_id),
+            comfyui_url,
+            label=poll_kwargs["label"],
+            workflow_id=poll_kwargs["workflow_id"],
+            library_uuid=poll_kwargs["origin_library_uuid"],
+            run_id=run_id,
+        )
+        threading.Thread(
+            target=_process_comfyui_outputs,
+            args=(
+                server,
+                comfyui_url,
+                str(prompt_id),
+                output_node_ids,
+                stack_id,
+                source_id,
+            ),
+            kwargs={
+                **poll_kwargs,
+                "rejected": rejected,
+                "vram_lease": vram_lease,
+                "vram_model_set": model_set,
+            },
+            daemon=True,
+        ).start()
+        return str(prompt_id)
+
+    def _dispatch_held_run(
+        comfyui_url: str,
+        instance: dict,
+        output_node_ids,
+        stack_id,
+        source_id,
+        run_id: str,
+        vram_lease,
+        model_set: str,
+        poll_kwargs: dict,
+        cancel: threading.Event,
+    ) -> None:
+        """Wait for a held run's lease, then submit it as ``_dispatch_run`` does.
+
+        A run cancelled meanwhile (an abort, the lease's cancel) is never sent.
+        ComfyUI refusing the graph now becomes the run's failure, with
+        ComfyUI's own words, since the request that asked for it has long been
+        answered.
+        """
+        try:
+            granted = vram_lease.wait(cancel)
+            if not granted or not claim_held_run(run_id):
+                logger.info(
+                    "[workflows] Held run %s was cancelled before it started", run_id
+                )
+                vram_lease.release()
+                return
+            _dispatch_run(
+                comfyui_url,
+                instance,
+                output_node_ids,
+                stack_id,
+                source_id,
+                run_id,
+                vram_lease,
+                model_set,
+                poll_kwargs,
+            )
+        except Exception as exc:
+            vram_lease.release()
+            message = str(getattr(exc, "detail", None) or exc)
+            logger.warning(
+                "[workflows] Held run %s could not be submitted once it had room: %s",
+                run_id,
+                message,
+                exc_info=not isinstance(exc, HTTPException),
+            )
+            record_run_outcome(run_id, "failed", message=message)
+            announce = getattr(server, "vault", None)
+            if announce is not None:
+                _emit_comfyui_failure_progress(
+                    server, run_id, message, workflow_id=poll_kwargs["workflow_id"]
+                )
 
     def _keep_seeds_of(
         graph: dict, targets: list[dict], picture_id: int, object_info: dict | None

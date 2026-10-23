@@ -34,8 +34,10 @@ from pixlstash.services import (
     scrapheap_service,
     workflow_ghost_service,
 )
+from pixlstash.services import vram_history
 from pixlstash.services.comfyui_service import live_runs
 from pixlstash.services.model_downloads import live_downloads
+from pixlstash.resources.arbiter import arbiter
 from pixlstash.telemetry import mark_install_established
 from pixlstash.server_config_io import persist_server_config
 from pixlstash.utils.quality.smart_score_utils import smart_score_penalised_tags
@@ -83,6 +85,10 @@ def create_router(server) -> APIRouter:
         payload = serialize_user_config(user)
         payload["similarity_character"] = (
             library_settings_service.get_similarity_character(server.vault.db)
+        )
+        # A table of its own in the hub (no new columns on ``user``).
+        payload["auto_exclusive_after_oom"] = vram_history.auto_exclusive_after_oom(
+            server.hub, getattr(user, "id", None)
         )
         return payload
 
@@ -183,7 +189,20 @@ def create_router(server) -> APIRouter:
         stack_strictness: Optional[float] = None
         apply_tag_filter: Optional[bool] = None
         keep_models_in_memory: Optional[bool] = None
-        max_vram_gb: Optional[float] = None
+        max_vram_gb: Optional[float] = Field(
+            default=None,
+            description=(
+                "The most PixlStash's own GPU work (tagging, search, faces) may "
+                "hold, in GB. ComfyUI runs are not limited by it."
+            ),
+        )
+        auto_exclusive_after_oom: Optional[bool] = Field(
+            default=None,
+            description=(
+                "When a ComfyUI run of a workflow runs out of GPU memory, make "
+                "that workflow run alone from then on. On unless turned off."
+            ),
+        )
         check_for_updates: Optional[bool] = None
         telemetry_send_install_id: Optional[bool] = Field(
             default=None,
@@ -338,6 +357,16 @@ def create_router(server) -> APIRouter:
         runs: list[dict] = []
         downloads: list[dict] = []
         process: dict
+        resources: Optional[dict] = Field(
+            default=None,
+            description=(
+                "The VRAM arbiter's view of this machine's GPUs: each device's "
+                "memory and budget, who holds it, every lease (granted or "
+                "waiting, with why it waits and what can be done), and the "
+                "PixlStash work paused to make room. Null for any token but "
+                "the owner's."
+            ),
+        )
 
     class WatchFoldersResponse(BaseModel):
         model_config = ConfigDict(extra="allow")
@@ -526,6 +555,15 @@ def create_router(server) -> APIRouter:
         start_time = time.time()
         logger.debug(f"[TIMING] PATCH /users/me/config called at {start_time:.3f}")
         patch_data = await request.json()
+        auto_exclusive = (
+            patch_data.pop("auto_exclusive_after_oom", None)
+            if isinstance(patch_data, dict)
+            else None
+        )
+        if auto_exclusive is not None and not isinstance(auto_exclusive, bool):
+            raise HTTPException(
+                status_code=400, detail="auto_exclusive_after_oom must be true or false"
+            )
 
         def preview_patch(session: Session, user_id: int):
             """Validate the patch and work out which tag weights would change.
@@ -732,6 +770,14 @@ def create_router(server) -> APIRouter:
                     logger.warning(
                         "Could not apply tagger_settings from patch: %s", exc
                     )
+        if auto_exclusive is not None:
+            if auto_exclusive != vram_history.auto_exclusive_after_oom(
+                server.hub, user_id
+            ):
+                vram_history.set_auto_exclusive_after_oom(
+                    server.hub, user_id, auto_exclusive
+                )
+                updated = True
         elapsed = time.time() - start_time
         logger.debug(
             f"[TIMING] PATCH /users/me/config completed in {elapsed:.3f} seconds"
@@ -993,11 +1039,14 @@ def create_router(server) -> APIRouter:
         description=(
             "Returns background worker progress plus process CPU, RAM, and VRAM "
             "usage metrics. runs lists the ComfyUI runs in flight in this "
-            "library, oldest first, each with its prompt_id, label, "
-            "workflow_id, status (queued or running) and percent (the running "
-            "node's own progress); empty for any token but the owner's. "
+            "library, oldest first, each with its run_id, prompt_id (null "
+            "while held), label, workflow_id, status (waiting for the GPU, "
+            "queued or running) and percent (the running node's own "
+            "progress); empty for any token but the owner's. "
             "downloads lists the model downloads running or just ended "
-            "(`POST /model-downloads`), likewise for the owner only."
+            "(`POST /model-downloads`), likewise for the owner only. "
+            "resources is the VRAM arbiter's snapshot, null for any token but "
+            "the owner's."
         ),
     )
     def get_workers_progress(request: Request):
@@ -1020,6 +1069,13 @@ def create_router(server) -> APIRouter:
                 else []
             ),
             "process": hw_monitor.get_usage(),
+            # The machine's GPUs and who holds them: the owner's alone, like
+            # the runs, since a lease label names a workflow.
+            "resources": (
+                arbiter().snapshot()
+                if server.auth.is_unscoped_owner_request(request)
+                else None
+            ),
         }
 
     @router.get(

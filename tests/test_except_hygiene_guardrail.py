@@ -109,22 +109,6 @@ _SILENT_SWALLOW_ALLOWLIST = {
         "downloading; True IS the safe default and download() surfaces real errors"
     ),
     (
-        "pixlstash/task_runner.py",
-        "_get_total_vram_mb",
-        "Exception",
-    ): (
-        "nvidia-smi absent/failing is normal on CPU-only hosts; 0 (no VRAM) IS the "
-        "documented answer, so logging it would be routine noise"
-    ),
-    (
-        "pixlstash/task_runner.py",
-        "_get_process_vram_mb",
-        "Exception",
-    ): (
-        "per-line parse guard around nvidia-smi output: an unparseable row is "
-        "skipped, which IS the correct handling"
-    ),
-    (
         "pixlstash/utils/image_processing/image_utils.py",
         "_coerce_metadata_value",
         "Exception",

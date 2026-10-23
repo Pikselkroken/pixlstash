@@ -113,6 +113,24 @@ describe("the lightbox's progress", () => {
     expect(progress.value).toMatchObject({ visible: false, status: "idle" });
   });
 
+  it("follows a held run by its run id: it is not asked after while listed, and held is not ended", async () => {
+    getRunOutcome.mockResolvedValue({ run_id: "run-h", prompt_id: null, status: "waiting" });
+    const { progress, follow } = mountRuns();
+    // Held at submit: no prompt id, so it is followed by its run id alone.
+    follow({ prompts: [{ run_id: "run-h", prompt_id: null }] });
+    tasks.comfyuiRuns = [{ run_id: "run-h", prompt_id: null, label: "x", status: "waiting", percent: 0 }];
+    await nextTick();
+    expect(getRunOutcome).not.toHaveBeenCalled();
+    expect(progress.value.status).toBe("queued");
+
+    // Left the poll while still held: asked, and a held answer is not an ending.
+    tasks.comfyuiRuns = [];
+    await nextTick();
+    await flushPromises();
+    expect(getRunOutcome.mock.calls).toEqual([["run-h"]]);
+    expect(progress.value.status).toBe("queued");
+  });
+
   it("waits when the poll that missed a run was read before it was queued", async () => {
     getRunOutcome.mockResolvedValue({ status: "running" });
     const { progress, follow } = mountRuns();

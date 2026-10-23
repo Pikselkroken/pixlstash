@@ -5,6 +5,8 @@ import { getWorkerProgress } from "../api/workers";
 import { abortRun } from "../api/comfyui";
 import { cancelModelDownload } from "../api/modelDownloads";
 import { formatModelSize } from "../utils/modelShelf";
+import { cancelLease, freeComfyui, runLeaseAnyway } from "../api/resources";
+import { deviceVramBar, runKey, runMatches } from "../utils/gpuMemory";
 import { useNoticeStore } from "./useNoticeStore";
 
 // Adaptive poll cadence (ms). Fast while the Tasks tab is open or something is
@@ -63,8 +65,12 @@ export const useTasksStore = defineStore("tasks", () => {
 
   // ── ComfyUI runs (backend-reported) ───────────────────────────────────────
   // The runs in flight as the last poll listed them, oldest first:
-  // [{ prompt_id, label, workflow_id, status: "queued" | "running", percent }].
+  // [{ run_id, prompt_id, label, workflow_id, status: "waiting" | "queued" |
+  // "running", percent }]. A `waiting` run has no prompt_id yet.
   const comfyuiRuns = ref([]);
+  // The GPU's state as the poll reports it (`resources`), or null when the
+  // backend does not send it (an older server, or a read-only session).
+  const resources = ref(null);
 
   /**
    * Stop ComfyUI: the run in progress is interrupted and its queue emptied,
@@ -170,6 +176,40 @@ export const useTasksStore = defineStore("tasks", () => {
       })),
   );
 
+  /**
+   * Start a waiting lease now, past the memory it is short of ("Run anyway").
+   * A refusal (409: no longer waiting) is an error notice; the poll then shows
+   * what is true now.
+   */
+  async function runWaitingAnyway(leaseId) {
+    return waitingAction(() => runLeaseAnyway(leaseId), "Could not start that run.");
+  }
+
+  /** Cancel a waiting lease, and the ComfyUI run held behind it. */
+  async function cancelWaiting(leaseId) {
+    return waitingAction(() => cancelLease(leaseId), "Could not cancel that run.");
+  }
+
+  /** Ask ComfyUI to free its cache for a non-ComfyUI job that is short of memory. */
+  async function freeComfyuiCache() {
+    return waitingAction(
+      () => freeComfyui(),
+      "ComfyUI could not free its cache.",
+    );
+  }
+
+  async function waitingAction(call, failure) {
+    let answer = null;
+    try {
+      answer = await call();
+    } catch (e) {
+      console.warn(`tasks: ${failure}`, e);
+      useNoticeStore().error(failure, { key: `gpu-action-failed:${failure}` });
+    }
+    nudge();
+    return answer;
+  }
+
   // ── Import run state (frontend-driven, #459) ──────────────────────────────
   // The async import (ImageImporter) surfaces its server-side Phase B here as a
   // determinate task row: the two-phase dialog auto-hides at the safe
@@ -262,28 +302,153 @@ export const useTasksStore = defineStore("tasks", () => {
       .map(([key, snapshot]) => ({ kind: "worker", key, snapshot }));
   });
 
-  // One row for the runs in flight, not one each: ComfyUI works through them
-  // one at a time, and the row's abort stops them all. It names the run
-  // ComfyUI is on (the first in line until one starts) and counts the rest.
-  const comfyuiEntries = computed(() => {
-    const runs = comfyuiRuns.value;
-    if (!runs.length) return [];
-    const front = runs.find((run) => run.status === "running") || runs[0];
-    const state =
-      front.status === "running" ? "ComfyUI running…" : "ComfyUI queued…";
-    const behind = runs.length - 1;
-    return [
-      {
+  // ── GPU leases (backend-reported, `resources`) ────────────────────────────
+  const leases = computed(() => resources.value?.leases ?? []);
+
+  /** The lease a ComfyUI run holds, joined by run id; null when it has none. */
+  function leaseOfRun(run) {
+    return (
+      leases.value.find(
+        (lease) => lease.run_id && runMatches(run, lease.run_id),
+      ) ?? null
+    );
+  }
+
+  // One row per ComfyUI run that is not held: the run's own label, its percent
+  // and the VRAM its lease holds. ComfyUI works through them one at a time, and
+  // the abort on a row stops every run in flight.
+  const comfyuiEntries = computed(() =>
+    comfyuiRuns.value
+      .filter((run) => run.status !== "waiting")
+      .map((run) => ({
         kind: "comfyui",
-        key: "comfyui",
+        key: `run:${runKey(run)}`,
+        runId: runKey(run),
         run: {
-          status: front.status,
-          percent: Number(front.percent) || 0,
-          label: front.label || "ComfyUI",
-          message: behind ? `${state} ${behind} more queued` : state,
+          status: run.status,
+          percent: Number(run.percent) || 0,
+          label: run.label || "ComfyUI",
+          message:
+            run.status === "running" ? "ComfyUI running…" : "Queued in ComfyUI",
         },
-      },
-    ];
+        figureMb: leaseOfRun(run)?.held_mb ?? null,
+      })),
+  );
+
+  // "Waiting for the GPU": a lease in the wait, in the queue order the arbiter
+  // runs them (`waiting_reason.position`). A ComfyUI run held by PixlStash is
+  // listed once, through its lease; one with no lease yet still gets a row.
+  const waitingEntries = computed(() => {
+    const out = [];
+    const coveredRuns = new Set();
+    for (const lease of leases.value) {
+      if (lease.state !== "waiting") continue;
+      const run = comfyuiRuns.value.find(
+        (entry) =>
+          entry.status === "waiting" &&
+          lease.run_id &&
+          runMatches(entry, lease.run_id),
+      );
+      if (run) coveredRuns.add(runKey(run));
+      const reason = lease.waiting_reason ?? null;
+      out.push({
+        kind: "waiting",
+        key: `lease:${lease.id}`,
+        lease,
+        runId: lease.run_id || "",
+        tenant: lease.tenant,
+        label: lease.label || run?.label || "Waiting",
+        needMb: lease.need_mb ?? null,
+        text: reason?.text || "",
+        position: reason?.position ?? Number.POSITIVE_INFINITY,
+        actions: reason?.actions ?? [],
+      });
+    }
+    for (const run of comfyuiRuns.value) {
+      if (run.status !== "waiting" || coveredRuns.has(runKey(run))) continue;
+      out.push({
+        kind: "waiting",
+        key: `run:${runKey(run)}`,
+        lease: null,
+        runId: runKey(run),
+        tenant: "comfyui",
+        label: run.label || "ComfyUI",
+        needMb: null,
+        text: "",
+        position: Number.POSITIVE_INFINITY,
+        actions: [],
+      });
+    }
+    // Stable, so rows with no position keep the order they came in.
+    return out.sort((a, b) =>
+      a.position === b.position ? 0 : a.position < b.position ? -1 : 1,
+    );
+  });
+
+  // PixlStash's own GPU work, folded into one entry: every granted PixlStash
+  // light lease, plus the tasks the backend stopped to make room (`preempted`).
+  // Null when there is none, so no fold row is drawn.
+  const pixlstashEntry = computed(() => {
+    const children = [];
+    for (const lease of leases.value) {
+      if (lease.tenant !== "pixlstash" || lease.state !== "granted") continue;
+      const snapshot = lease.worker_type
+        ? workerSnapshots.value?.[lease.worker_type]
+        : null;
+      children.push({
+        key: `lease:${lease.id}`,
+        label: lease.label || "PixlStash task",
+        workerKey: lease.worker_type || null,
+        mb: Number(lease.held_mb) || 0,
+        onCpu: Boolean(lease.on_cpu),
+        stopped: false,
+        text: "",
+        progress: snapshot
+          ? { current: Number(snapshot.current) || 0, total: Number(snapshot.total) || 0 }
+          : null,
+      });
+    }
+    for (const [index, stopped] of (resources.value?.preempted ?? []).entries()) {
+      children.push({
+        key: `preempted:${index}`,
+        label: stopped.worker_type || "PixlStash task",
+        workerKey: stopped.worker_type || null,
+        mb: 0,
+        onCpu: false,
+        stopped: true,
+        text: stopped.text || "",
+        progress: null,
+      });
+    }
+    if (!children.length) return null;
+    return {
+      kind: "pixlstash",
+      key: "pixlstash",
+      count: children.length,
+      mb: children.reduce((sum, child) => sum + child.mb, 0),
+      children,
+    };
+  });
+
+  // The backend workers PixlStash's fold already shows, so they are not listed
+  // a second time. Only when the backend sends `resources`.
+  const foldedWorkerKeys = computed(() => {
+    if (!resources.value) return new Set();
+    return new Set(
+      (pixlstashEntry.value?.children ?? [])
+        .map((child) => child.workerKey)
+        .filter(Boolean),
+    );
+  });
+
+  // Per-GPU bars: each card's split of what is on it, from `devices` and
+  // `holders`. Empty when the backend sends no resources.
+  const vramBars = computed(() => {
+    const holders = resources.value?.holders ?? [];
+    return (resources.value?.devices ?? []).map((device) => ({
+      device,
+      ...deviceVramBar(device, holders),
+    }));
   });
 
   const importEntries = computed(() =>
@@ -294,14 +459,27 @@ export const useTasksStore = defineStore("tasks", () => {
     })),
   );
 
+  // Backend workers that the PixlStash fold does not already show.
+  const ungroupedWorkerEntries = computed(() =>
+    activeWorkerEntries.value.filter(
+      (entry) => !foldedWorkerKeys.value.has(entry.key),
+    ),
+  );
+
   // ComfyUI runs and imports lead: they are the work the user just kicked off
   // and is waiting on, so they read first in the Tasks tab, above the ambient
   // backend workers.
-  const activeEntries = computed(() => [
+  const runningEntries = computed(() => [
     ...comfyuiEntries.value,
     ...downloadEntries.value,
+    ...(pixlstashEntry.value ? [pixlstashEntry.value] : []),
     ...importEntries.value,
-    ...activeWorkerEntries.value,
+    ...ungroupedWorkerEntries.value,
+  ]);
+
+  const activeEntries = computed(() => [
+    ...runningEntries.value,
+    ...waitingEntries.value,
   ]);
 
   const activeCount = computed(() => activeEntries.value.length);
@@ -405,6 +583,7 @@ export const useTasksStore = defineStore("tasks", () => {
       noteDownloads(
         Array.isArray(progress?.downloads) ? progress.downloads : [],
       );
+      resources.value = progress?.resources ?? null;
       const now = Date.now() / 1000;
       nowSeconds.value = now;
       const nextSeries = { ...series.value };
@@ -519,6 +698,15 @@ export const useTasksStore = defineStore("tasks", () => {
     downloadsLanded,
     downloadStarted,
     cancelDownload,
+    // gpu resources (VRAM orchestration)
+    resources,
+    vramBars,
+    runningEntries,
+    waitingEntries,
+    pixlstashEntry,
+    runWaitingAnyway,
+    cancelWaiting,
+    freeComfyuiCache,
     // import runs (#459)
     importRuns,
     setImportRun,

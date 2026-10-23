@@ -388,6 +388,24 @@
   --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);   /* entering elements */
   --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);   /* leaving elements */
   --ease-spring: cubic-bezier(0.2, 1.4, 0.4, 1);   /* landing with overshoot (flight/badge/sticker) */
+
+  /* ── GPU queue aliases (the Tasks tab's VRAM bars and rows) ───────────────
+     Each names a meaning once and points at the token that already carries
+     the colour, so a theme change lands here without a second edit. They sit
+     on :root, where Vuetify writes the theme colours: a var() resolves where it
+     is declared. Use as rgb(var(--state-running)) or rgba(var(--…), a). */
+  --state-running: var(--v-theme-selected-ink);   /* olive: a task holds the GPU */
+  --state-waiting: var(--v-theme-accent);         /* amber: waiting for the GPU */
+  --tenant-pixlstash: var(--v-theme-accent);      /* PixlStash's own work */
+  --tenant-comfyui: var(--v-theme-tertiary);      /* ComfyUI */
+  --tenant-aitoolkit: var(--v-theme-quaternary);  /* AI Toolkit */
+  /* One hatch for memory that is not any tenant's: other apps, the spare
+     margin. A texture, so it reads without colour. */
+  --hatch-not-ours: repeating-linear-gradient(
+    -45deg,
+    rgba(var(--v-theme-on-surface), 0.35) 0 2px,
+    transparent 2px 5px
+  );
 }
 
 /* Honour the OS "reduce motion" setting everywhere. Non-negotiable. */

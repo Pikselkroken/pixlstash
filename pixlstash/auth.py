@@ -228,6 +228,8 @@ READ_SAFE_POST_PATHS: frozenset[str] = frozenset(
 READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
     {
         "/api/v1/users/me/config",
+        # This host's GPUs and what runs on them; LOCAL_OWNER_ONLY in the gate.
+        "/api/v1/compute/gpus",
         "/api/v1/server-config/watch-folders",
         "/api/v1/server-config/filesystem-roots",
         "/api/v1/filesystem/browse",

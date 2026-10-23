@@ -336,6 +336,9 @@ def test_event_types_fully_classified():
             # The GPU ran out of memory. A fact about the machine, so it goes to
             # every client regardless of grid filters.
             EventType.VRAM_OOM.name,
+            # A VRAM lease changed state or work was paused to make room: the
+            # machine's GPU again, so no grid filter applies.
+            EventType.RESOURCE_LEASE.name,
             # Vault-wide reconciliation queue nudge (v1.11 Phase 5), like
             # VRAM_OOM: not a grid view a client's filters could exclude it from.
             EventType.EXTERNAL_MOVES_PENDING.name,

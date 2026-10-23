@@ -23,11 +23,27 @@ vi.mock("vuetify/components", () => {
   const stub = (name) => ({ name, template: "<div><slot /></div>" });
   return {
     VSwitch: stub("v-switch"),
+    VSlider: stub("v-slider"),
     VIcon: { name: "v-icon", template: "<i><slot /></i>" },
     VTooltip: stub("v-tooltip"),
     VProgressLinear: stub("v-progress-linear"),
   };
 });
+
+const compute = vi.hoisted(() => ({
+  getComputeGpus: vi.fn(),
+  setComputeGpu: vi.fn(),
+  getUserConfig: vi.fn(),
+  patchUserConfig: vi.fn(),
+}));
+vi.mock("../../api/compute", () => ({
+  getComputeGpus: (...args) => compute.getComputeGpus(...args),
+  setComputeGpu: (...args) => compute.setComputeGpu(...args),
+}));
+vi.mock("../../api/config", () => ({
+  getUserConfig: (...args) => compute.getUserConfig(...args),
+  patchUserConfig: (...args) => compute.patchUserConfig(...args),
+}));
 
 import ComputeSection from "./ComputeSection.vue";
 
@@ -53,6 +69,13 @@ async function mountCompute(accelState) {
 
 // Helpers to read the SettingsRow-based runtime list.
 const rows = (wrapper) => wrapper.findAll(".s-row");
+// The runtime list only: the GPU picker and the sharing rows are their own
+// sections above it, and carry rows of their own.
+const runtimeRows = (wrapper) =>
+  wrapper
+    .findAll(".s-section")
+    .find((section) => section.find(".s-section__title").text() === "Compute acceleration")
+    .findAll(".s-row");
 const rowLabel = (row) => row.find(".s-row__label").text();
 const rowSub = (row) =>
   row.find(".s-row__sub").exists() ? row.find(".s-row__sub").text() : "";
@@ -89,9 +112,15 @@ describe("ComputeSection unified runtime list", () => {
     delete window.pixlstashDesktop;
   });
 
+  it("draws the GPU picker as the pane's one first section", async () => {
+    const { wrapper } = await mountCompute(gpuActiveState());
+    const firsts = wrapper.findAll(".s-section--first").map((s) => s.find(".s-section__title").text());
+    expect(firsts).toEqual(["Which GPU PixlStash uses"]);
+  });
+
   it("lists an active GPU overlay exactly once, with the bundled runtime as first row", async () => {
     const { wrapper } = await mountCompute(gpuActiveState());
-    const all = rows(wrapper);
+    const all = runtimeRows(wrapper);
 
     const gpuRows = all.filter((r) => rowLabel(r) === "NVIDIA GPU (CUDA)");
     expect(gpuRows).toHaveLength(1);
@@ -113,7 +142,7 @@ describe("ComputeSection unified runtime list", () => {
 
   it("offers Use on the bundled row (not the active overlay) while a GPU is active", async () => {
     const { wrapper, desktop } = await mountCompute(gpuActiveState());
-    const all = rows(wrapper);
+    const all = runtimeRows(wrapper);
 
     expect(rowButtons(all[0])).toEqual(["Use"]);
     const useBtn = all[0].find("button");
@@ -133,7 +162,7 @@ describe("ComputeSection unified runtime list", () => {
   it("reads correctly after a failed GPU activation reverts to the built-in runtime", async () => {
     // Post-reversion state: bundled active again, overlay merely installed.
     const { wrapper, desktop } = await mountCompute(bundledActiveState());
-    const all = rows(wrapper);
+    const all = runtimeRows(wrapper);
 
     // Same row order as the GPU-active state - nothing moved.
     expect(rowLabel(all[0])).toBe("Built-in (CPU)");
@@ -159,9 +188,9 @@ describe("ComputeSection unified runtime list", () => {
       items: [],
     });
 
-    expect(rows(wrapper).map(rowLabel)).toEqual(["Development environment"]);
-    expect(rowSub(rows(wrapper)[0])).toContain("Python environment");
-    expect(wrapper.findAll("button")).toHaveLength(0);
+    expect(runtimeRows(wrapper).map(rowLabel)).toEqual(["Development environment"]);
+    expect(rowSub(runtimeRows(wrapper)[0])).toContain("Python environment");
+    expect(runtimeRows(wrapper).flatMap((row) => row.findAll("button"))).toHaveLength(0);
     expect(wrapper.text()).toContain("Development run");
     expect(wrapper.text()).not.toContain("No discrete GPU detected");
   });
@@ -305,3 +334,140 @@ describe("Desktop › Shell command", () => {
     ).toBe(true);
   });
 });
+
+// The GPU picker and the sharing controls are the server's, so they are on a
+// headless install too; only the acceleration runtime needs the desktop bridge.
+const GPU_4090 = {
+  uuid: "GPU-4090",
+  name: "NVIDIA GeForce RTX 4090",
+  vendor: "nvidia",
+  total_mb: 24576,
+  free_mb: 10000,
+  integrated: false,
+  backend: "cu128",
+  backend_installed: true,
+  backend_active: true,
+  used_by: ["comfyui"],
+  pickable: true,
+  reason: null,
+};
+const GPU_3060 = { ...GPU_4090, uuid: "GPU-3060", name: "NVIDIA GeForce RTX 3060", total_mb: 12288, used_by: [], };
+const GPU_UHD = {
+  ...GPU_4090,
+  uuid: "GPU-UHD",
+  name: "Intel UHD Graphics 770",
+  vendor: "intel",
+  integrated: true,
+  pickable: false,
+  reason: "Integrated graphics share the computer's RAM and can't be used.",
+};
+
+function gpuAnswer(over = {}) {
+  return {
+    gpus: [GPU_4090, GPU_3060, GPU_UHD],
+    selected: "auto",
+    resolved: "GPU-3060",
+    auto_reason: "Picks RTX 3060 (12.0 GB), which nothing else is using",
+    suggestions: [],
+    restart_required: false,
+    ...over,
+  };
+}
+
+describe("Which GPU PixlStash uses", () => {
+  beforeEach(() => {
+    compute.getComputeGpus.mockReset().mockResolvedValue(gpuAnswer());
+    compute.setComputeGpu.mockReset().mockResolvedValue({ status: "success", selected: "GPU-3060", restart_required: true });
+    compute.getUserConfig.mockReset().mockResolvedValue({ auto_exclusive_after_oom: true, max_vram_gb: 8 });
+    compute.patchUserConfig.mockReset().mockResolvedValue({});
+    delete window.pixlstashDesktop;
+  });
+
+  it("is on a headless install, with Auto first and an integrated GPU listed but not pickable", async () => {
+    const wrapper = mount(ComputeSection, { props: { view: "compute" } });
+    await flushPromises();
+    const radios = wrapper.findAll('input[name="gpu-pick"]');
+    expect(radios.map((r) => r.attributes("value"))).toEqual(["auto", "GPU-4090", "GPU-3060", "GPU-UHD"]);
+    expect(radios[3].attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain("Integrated graphics share the computer's RAM");
+    // The runtime list is desktop-only and is not drawn here.
+    expect(wrapper.text()).not.toContain("Compute acceleration");
+  });
+
+  it("is not committed until a different GPU is chosen, then Apply & restart is the one write", async () => {
+    const wrapper = mount(ComputeSection, { props: { view: "compute" } });
+    await flushPromises();
+    const apply = () => wrapper.findAll("button").find((b) => b.text() === "Apply & restart");
+    expect(apply().attributes("disabled")).toBeDefined();
+    expect(compute.setComputeGpu).not.toHaveBeenCalled();
+
+    await wrapper.find('input[value="GPU-3060"]').setValue(true);
+    expect(apply().attributes("disabled")).toBeUndefined();
+    compute.getComputeGpus.mockResolvedValue(gpuAnswer({ selected: "GPU-3060", restart_required: true }));
+    await apply().trigger("click");
+    await flushPromises();
+    expect(compute.setComputeGpu).toHaveBeenCalledWith("GPU-3060");
+    // Headless cannot restart itself: it says so, once.
+    expect(wrapper.text().split("Restart PixlStash to use it.").length - 1).toBe(1);
+  });
+
+  it("restarts through the accelerator already in use on desktop", async () => {
+    const desktop = installDesktop({
+      bundled: { accel: "cpu", label: "Built-in (CPU)", active: false },
+      items: [{ accel: "cuda", label: "NVIDIA GPU (CUDA)", installed: true, active: true, recommended: true }],
+    });
+    const wrapper = mount(ComputeSection, { props: { view: "compute" } });
+    await flushPromises();
+    await wrapper.find('input[value="GPU-3060"]').setValue(true);
+    await wrapper.findAll("button").find((b) => b.text() === "Apply & restart").trigger("click");
+    await flushPromises();
+    expect(compute.setComputeGpu).toHaveBeenCalledWith("GPU-3060");
+    expect(desktop.useAccelerator).toHaveBeenCalledWith("cuda");
+  });
+
+  it("reads the stored GPU back when the restart after Apply fails", async () => {
+    const desktop = installDesktop({
+      bundled: { accel: "cpu", label: "Built-in (CPU)", active: false },
+      items: [{ accel: "cuda", label: "NVIDIA GPU (CUDA)", installed: true, active: true, recommended: true }],
+    });
+    desktop.useAccelerator.mockRejectedValue(new Error("restart failed"));
+    compute.getComputeGpus
+      .mockResolvedValueOnce(gpuAnswer())
+      .mockResolvedValue(gpuAnswer({ selected: "GPU-3060" }));
+    const wrapper = mount(ComputeSection, { props: { view: "compute" } });
+    await flushPromises();
+    await wrapper.find('input[value="GPU-3060"]').setValue(true);
+    const apply = () => wrapper.findAll("button").find((b) => b.text() === "Apply & restart");
+    await apply().trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Could not change the GPU.");
+    // Stored already: nothing is left staged to apply twice.
+    expect(apply().attributes("disabled")).toBeDefined();
+  });
+
+  it("disables the VRAM limit when the settings it saves into cannot be read", async () => {
+    compute.getUserConfig.mockReset().mockRejectedValue(new Error("offline"));
+    const wrapper = mount(ComputeSection, { props: { view: "compute" } });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Failed to load the sharing settings.");
+    expect(wrapper.findComponent({ name: "v-slider" }).attributes("disabled")).toBe("true");
+    // Nor the run-alone switch: its default is not the stored value.
+    const sw = wrapper.findAllComponents({ name: "v-switch" }).find(
+      (c) => c.attributes("aria-label") === "Run a workflow alone after it runs out of memory",
+    );
+    expect(sw.attributes("disabled")).toBe("true");
+  });
+
+  it("writes the run-alone switch through the user config", async () => {
+    const wrapper = mount(ComputeSection, { props: { view: "compute" } });
+    await flushPromises();
+    const sw = wrapper.findAllComponents({ name: "v-switch" }).find(
+      (c) => c.attributes("aria-label") === "Run a workflow alone after it runs out of memory",
+    );
+    expect(sw).toBeDefined();
+    sw.vm.$emit("update:modelValue", false);
+    await flushPromises();
+    expect(compute.patchUserConfig).toHaveBeenCalledWith({ auto_exclusive_after_oom: false });
+  });
+});
+

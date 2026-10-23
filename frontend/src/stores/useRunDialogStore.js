@@ -10,6 +10,9 @@
 // is filed) and feeds it in. A run itself belongs to no view: the backend
 // follows it and the Tasks tab reads it from the poll (`useTasksStore`).
 
+import { useTasksStore } from "./useTasksStore";
+import { normalizeRunId, runKey, runKeys, runMatches } from "../utils/gpuMemory";
+
 import { defineStore } from "pinia";
 import { onScopeDispose, ref } from "vue";
 import { onSessionReset } from "../utils/apiClient";
@@ -162,13 +165,32 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    * anything else is null. One that completed marks what that run changed as
    * ready to offer: the pictures are back.
    */
+  /**
+   * Whether a run event's prompt id is one of the run on record. Lifecycle
+   * events key on the prompt id, and a run held at submit had none then, so
+   * the record also holds its run ids. The ending names PixlStash's run id
+   * (`pixlstash_run_id`), and the poll says which prompt each was sent as.
+   * Only a record with neither (an older answer) takes any event of the
+   * workflow to be the run on record.
+   */
+  function eventIsRecordedRun(ran, promptId, pixlstashRunId = null) {
+    if (pixlstashRunId && ran.runIds?.includes(normalizeRunId(pixlstashRunId))) return true;
+    if (ran.promptIds?.includes(promptId)) return true;
+    if (!ran.promptIds?.length && !ran.runIds?.length) return true;
+    return useTasksStore().comfyuiRuns.some(
+      (run) =>
+        runMatches(run, promptId) &&
+        ran.runIds?.includes(runKey(run)),
+    );
+  }
+
   function runEvent(payload) {
     if (String(payload?.plugin || "").toLowerCase() !== "comfyui") return null;
     const ran = ranChanges.value[payload.workflow_id];
+    const promptId = normalizeRunId(payload.run_id);
     if (payload.status === "completed" && ran && !ran.finished) {
-      const promptId = String(payload.run_id || "").replace(/^comfyui-/i, "");
       // Of the run on record, not of an earlier one still finishing.
-      if (!ran.promptIds?.length || ran.promptIds.includes(promptId)) {
+      if (eventIsRecordedRun(ran, promptId, payload.pixlstash_run_id || null)) {
         ranChanges.value = {
           ...ranChanges.value,
           [payload.workflow_id]: { ...ran, finished: true },
@@ -177,7 +199,7 @@ export const useRunDialogStore = defineStore("runDialog", () => {
     }
     if (payload.status !== "failed") return null;
     const failure = {
-      promptId: String(payload.run_id || "").replace(/^comfyui-/i, ""),
+      promptId,
       message: String(payload.message || "").trim() || "ComfyUI failed",
       stopped: Boolean(payload.stopped),
     };
@@ -196,10 +218,10 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   function started(prompts, pictureIds = []) {
     // Running a workflow again takes its last failure down. Not a failure OF
     // one of these prompts: a run can fail before `/workflows/run` answers.
-    const startedIds = new Set(prompts.map((prompt) => String(prompt?.prompt_id)));
+    const startedIds = new Set(prompts.flatMap((prompt) => runKeys(prompt)));
     for (const prompt of prompts) {
       const failure = failures.value[prompt?.workflow_id];
-      if (failure && !startedIds.has(String(failure.promptId))) {
+      if (failure && !startedIds.has(failure.promptId)) {
         dismissFailure(prompt.workflow_id);
       }
     }

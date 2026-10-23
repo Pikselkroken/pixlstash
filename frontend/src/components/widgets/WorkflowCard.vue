@@ -70,6 +70,20 @@
       >
         <v-icon size="12">mdi-star</v-icon>{{ card.rating.toFixed(1) }}
       </span>
+      <span
+        v-if="card.vram"
+        class="wf-card__badge wf-card__badge--need"
+        data-testid="wf-card-need"
+        aria-hidden="true"
+      >
+        <v-icon size="12">mdi-memory</v-icon>{{ needLabel(card.vram.need_mb) }}
+        <v-icon
+          v-if="card.vram.exclusive"
+          size="12"
+          data-testid="wf-card-need-lock"
+          >mdi-lock</v-icon
+        >
+      </span>
     </div>
     <div v-else class="wf-card__cover wf-card__cover--empty">
       <span v-if="card.type" class="wf-card__type" aria-hidden="true">{{
@@ -81,6 +95,20 @@
       <span v-if="hasRecipe" class="wf-card__empty-line" aria-hidden="true"
         >No {{ outputNoun(card) }}s yet</span
       >
+      <span
+        v-if="card.vram"
+        class="wf-card__badge wf-card__badge--need"
+        data-testid="wf-card-need"
+        aria-hidden="true"
+      >
+        <v-icon size="12">mdi-memory</v-icon>{{ needLabel(card.vram.need_mb) }}
+        <v-icon
+          v-if="card.vram.exclusive"
+          size="12"
+          data-testid="wf-card-need-lock"
+          >mdi-lock</v-icon
+        >
+      </span>
       <AppButton
         variant="outline"
         size="sm"
@@ -239,6 +267,7 @@ import { VIcon } from "vuetify/components";
 import { workflowCoverUrl } from "../../api/workflows";
 import { openWorkflowInComfyui } from "../../composables/useComfyuiOpen";
 import { quantBadge } from "../../utils/modelShelf";
+import { needLabel } from "../../utils/gpuMemory";
 import {
   cardAccessibleName,
   baseModels,
@@ -654,7 +683,15 @@ const accessibleName = computed(() =>
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+/* The need: the cover's free bottom-left corner, the fourth of the pills. */
+.wf-card__badge--need {
+  top: auto;
+  bottom: var(--space-3);
+  left: var(--space-3);
+}
+
 .wf-card__cover--empty {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
