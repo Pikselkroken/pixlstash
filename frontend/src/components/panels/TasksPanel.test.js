@@ -1011,14 +1011,24 @@ describe("the GPU queue in the task manager", () => {
       gpuAnswer({ leases: [gpuLease({ id: "a", label: "Tags", worker_type: "TagTask", held_mb: 1200 })] }),
     );
     tasksStore.workerSnapshots = {
-      ImageEmbeddingTask: { label: "Image embeddings", current: 5, total: 9, running: true, active: true },
-      TagTask: { label: "Tags", current: 1, total: 9, running: true, active: true },
+      ImageEmbeddingTask: { label: "Image embeddings", current: 5, total: 9, running: false, active: true },
+      TagTask: { label: "Tags", current: 1, total: 9, running: false, active: true },
     };
     const wrapper = mount(TasksPanel, globalOpts);
     const fold = wrapper.find('[data-testid="tm-pixlstash"]');
     expect(fold.find('[data-testid="tm-pixl-count"]').text()).toBe("2");
+    // Both idle between batches: the fold does not pulse for them.
+    expect(fold.find(".tm-mark").classes("tm-mark--running")).toBe(false);
     // Collapsed: no worker is listed anywhere, inside the fold or beside it.
     expect(wrapper.findAll(".tm-worker-row")).toHaveLength(0);
+    expect(wrapper.findAll("canvas.tm-sparkline")).toHaveLength(0);
+
+    tasksStore.workerSnapshots = {
+      ...tasksStore.workerSnapshots,
+      TagTask: { ...tasksStore.workerSnapshots.TagTask, running: true },
+    };
+    await flushPromises();
+    expect(fold.find(".tm-mark").classes("tm-mark--running")).toBe(true);
 
     await fold.find(".tm-caret").trigger("click");
     const rows = fold.findAll(".tm-worker-row");

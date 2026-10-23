@@ -150,11 +150,7 @@
                 <div class="tm-worker-row-top">
                   <span
                     class="tm-status-dot"
-                    :class="{
-                      'tm-status-dot--running':
-                        !child.stopped &&
-                        (child.snapshot.running || tmGetLatestRate(child.workerKey) > 0),
-                    }"
+                    :class="{ 'tm-status-dot--running': childRunning(child) }"
                     :data-state="child.stopped ? 'stopped' : undefined"
                   ></span>
                   <span class="tm-worker-label">{{
@@ -631,9 +627,19 @@ function togglePixl() {
   }
 }
 
-/** The fold's mark pulses while any of its tasks runs, on the GPU or the CPU: not stopped. */
+/**
+ * Whether a fold child is working now: not stopped, and a worker only while it
+ * runs or moves, as its own dot says; between batches it is in the fold idle.
+ */
+function childRunning(child) {
+  if (child.stopped) return false;
+  if (!child.snapshot) return true;
+  return Boolean(child.snapshot.running) || tmGetLatestRate(child.workerKey) > 0;
+}
+
+/** The fold's mark pulses while any of its tasks runs, on the GPU or the CPU. */
 function pixlstashRunning(entry) {
-  return entry.children.some((child) => !child.stopped);
+  return entry.children.some(childRunning);
 }
 
 const SEGMENT_NAMES = {
