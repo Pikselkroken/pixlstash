@@ -34,7 +34,7 @@
       </AppButton>
     </div>
     <div
-      v-else-if="hasPictures"
+      v-else-if="hasPictures || showThumbnail"
       class="wf-card__cover"
       :class="`wf-card__cover--${coverCells.length}`"
     >
@@ -60,7 +60,11 @@
           loading="lazy"
         />
       </span>
-      <span class="wf-card__badge wf-card__badge--end" aria-hidden="true">
+      <span
+        v-if="card.picture_count"
+        class="wf-card__badge wf-card__badge--end"
+        aria-hidden="true"
+      >
         <v-icon size="12">mdi-image-multiple</v-icon>{{ card.picture_count }}
       </span>
       <span
@@ -337,6 +341,17 @@ const covers = computed(() =>
   (props.card.covers ?? []).filter((cover) => cover?.url).slice(0, 3),
 );
 /**
+ * The workflow's own picture replaces its cover strip: always when the owner
+ * pinned it, else only until it has pictures (a ComfyUI template's picture,
+ * until the first run). It names no library picture, so the menu's open row
+ * falls back to the cover picture.
+ */
+const showThumbnail = computed(
+  () =>
+    Boolean(props.card.thumbnail?.url) &&
+    (props.card.thumbnail.pinned || !props.card.picture_count),
+);
+/**
  * The cells the cover draws: one per picture it was handed, each with the URL
  * a browser can load and the crop that keeps the face in the cell.
  *
@@ -355,6 +370,9 @@ const covers = computed(() =>
  * which is the `--empty` cover's own look and says "there is nothing here".
  */
 const coverCells = computed(() => {
+  if (showThumbnail.value) {
+    return [{ src: workflowCoverUrl(props.card.thumbnail), style: null, id: null }];
+  }
   const count = covers.value.length;
   if (!count) {
     return Array(Math.min(props.card.picture_count ?? 1, 3)).fill({

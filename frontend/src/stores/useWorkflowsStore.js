@@ -6,6 +6,7 @@ import {
   duplicateWorkflow,
   listWorkflowCards,
   patchWorkflowCard,
+  setWorkflowThumbnail,
 } from "../api/workflows";
 import {
   WORKFLOW_ORIGIN_LABELS,
@@ -530,6 +531,34 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     return Boolean(done);
   }
 
+  /** Give one card a custom thumbnail from an image file; it is pinned. */
+  async function setThumbnail(key, file) {
+    const done = await busyCall(
+      "thumbnail",
+      key,
+      "Could not set that workflow's thumbnail.",
+      async () => {
+        await setWorkflowThumbnail(key, file);
+        return true;
+      },
+    );
+    return Boolean(done);
+  }
+
+  /** Show one card's custom thumbnail over its pictures (`pinned`), or not. */
+  async function pinThumbnail(key, pinned) {
+    const done = await busyCall(
+      "thumbnail",
+      key,
+      "Could not change that workflow's thumbnail.",
+      async () => {
+        await patchWorkflowCard(key, { thumbnail_pinned: pinned });
+        return true;
+      },
+    );
+    return Boolean(done);
+  }
+
   /**
    * Copy one workflow as a new manual workflow.
    *
@@ -772,6 +801,8 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     invalidate,
     hideSelected,
     renameCard,
+    setThumbnail,
+    pinThumbnail,
     duplicateCard,
     deleteSelected,
     select,

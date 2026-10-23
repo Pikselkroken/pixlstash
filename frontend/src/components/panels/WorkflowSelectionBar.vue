@@ -233,6 +233,8 @@ const emit = defineEmits([
   "run",
   "open-comfyui",
   "rename",
+  "set-thumbnail",
+  "pin-thumbnail",
   "hide",
   "export",
   "duplicate",
@@ -524,6 +526,32 @@ const renameTitle = computed(() =>
 );
 
 /**
+ * The custom thumbnail (a picture of the owner's choosing, or the one a
+ * ComfyUI template came with). *Pin* shows it over the workflow's pictures;
+ * unpinned it shows only until there are some.
+ */
+const thumbnail = computed(() => store.runnableCard?.thumbnail ?? null);
+const setThumbnailTitle = computed(() =>
+  single.value
+    ? "Choose a PNG, JPEG or WebP to show on this workflow's card"
+    : "Select one workflow to give it a thumbnail",
+);
+const pinThumbnailLabel = computed(() =>
+  thumbnail.value?.pinned
+    ? `Show generated ${noun.value}s`
+    : "Always show custom thumbnail",
+);
+const pinThumbnailTitle = computed(() => {
+  if (!single.value) return "Select one workflow to change its thumbnail";
+  if (!thumbnail.value) {
+    return "This workflow has no custom thumbnail. Choose one first";
+  }
+  return thumbnail.value.pinned
+    ? `Show this workflow's ${noun.value}s on its card instead of its thumbnail`
+    : `Keep its thumbnail on the card even once it has ${noun.value}s`;
+});
+
+/**
  * Is every selected card already hidden?
  *
  * `every`, not `some`: a mixed selection is hidden, because the gesture a
@@ -611,6 +639,7 @@ function onVerb(verb) {
   moreMenuOpen.value = false;
   comfyuiSubOpen.value = false;
   if (verb === "hide") emit("hide", allHidden.value);
+  else if (verb === "pin-thumbnail") emit("pin-thumbnail", !thumbnail.value?.pinned);
   else if (verb === "open-comfyui") emit("open-comfyui", false);
   else if (verb === "open-comfyui-original") emit("open-comfyui", true);
   else emit(verb);
@@ -857,6 +886,20 @@ const VerbMenu = () => {
         title: renameTitle.value,
         kbd: "F2",
       }),
+      item("mdi-image-edit-outline", "Choose thumbnail…", {
+        verb: "set-thumbnail",
+        disabled: !single.value,
+        title: setThumbnailTitle.value,
+      }),
+      item(
+        thumbnail.value?.pinned ? "mdi-pin-off-outline" : "mdi-pin-outline",
+        pinThumbnailLabel.value,
+        {
+          verb: "pin-thumbnail",
+          disabled: !thumbnail.value,
+          title: pinThumbnailTitle.value,
+        },
+      ),
       item(
         allHidden.value ? "mdi-eye-outline" : "mdi-eye-off-outline",
         allHidden.value ? "Unhide" : "Hide",

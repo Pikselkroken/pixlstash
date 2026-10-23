@@ -53,7 +53,17 @@ from typing import Annotated, Literal, get_args
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from fastapi import APIRouter, Body, HTTPException, Path, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    Body,
+    File,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from pydantic import (
     BaseModel,
     Field,
@@ -64,7 +74,7 @@ from pydantic import (
 )
 
 from pixlstash.auth import COMFYUI_SCOPE
-from pixlstash.hub import workflow_versions
+from pixlstash.hub import workflow_thumbnails, workflow_versions
 from pixlstash.hub.workflow_card_reads import (
     Workflow,
     asset_names,
@@ -183,6 +193,7 @@ from pixlstash.services.comfyui_service import (
 from pixlstash.services import vram_history, workflow_bindings, workflow_inbox
 from pixlstash.resources import comfyui_tenant
 from pixlstash.resources.arbiter import LeaseKind, LeaseState, Tenant, arbiter
+from pixlstash.services.model_icons import MAX_ICON_BYTES, IconRefused, store_icon
 from pixlstash.services.edit_selection import (
     UNREADABLE_PICTURE,
     Selection,
@@ -619,6 +630,24 @@ class WorkflowCover(BaseModel):
     )
 
 
+class WorkflowThumbnail(BaseModel):
+    """A workflow's own picture, which its card can show in place of covers."""
+
+    url: str = Field(
+        description=(
+            "API-relative (`/model-icons/{sha256}`), prefixed by the client as a "
+            "cover's `url` is."
+        )
+    )
+    pinned: bool = Field(
+        description=(
+            "Shown over the workflow's pictures. Unpinned, it is shown only "
+            "while the workflow has none, which is how a ComfyUI template "
+            "arrives."
+        )
+    )
+
+
 class RecipeValue(BaseModel):
     """One value a workflow's kept pictures used, and on how many of them."""
 
@@ -926,6 +955,9 @@ class WorkflowCard(BaseModel):
             "from its measured runs, and whether it runs alone."
         ),
     )
+    thumbnail: WorkflowThumbnail | None = Field(
+        None, description="Its custom thumbnail, or null when it has none."
+    )
 
 
 class WorkflowVramPeak(BaseModel):
@@ -1177,6 +1209,13 @@ class WorkflowCardEdit(BaseModel):
         description=(
             "Run alone on the GPU. true sets it as the owner's choice; false "
             "or null clears it, including one set after an out-of-memory run."
+        ),
+    )
+    thumbnail_pinned: bool | None = Field(
+        None,
+        description=(
+            "Show its custom thumbnail over its pictures (true), or only "
+            "until it has pictures (false). 409 when it has no thumbnail."
         ),
     )
 
@@ -3575,6 +3614,17 @@ def _covers(covers) -> list[WorkflowCover]:
     return strip
 
 
+def _add_thumbnails(hub, cards: list[WorkflowCard]) -> None:
+    """Put each card's custom thumbnail on it, from one read of the table."""
+    stored = workflow_thumbnails.thumbnails(hub)
+    for card in cards:
+        thumbnail = stored.get(card.id)
+        if thumbnail is not None:
+            card.thumbnail = WorkflowThumbnail(
+                url=f"/model-icons/{thumbnail.icon_sha256}", pinned=thumbnail.pinned
+            )
+
+
 # The last resort, when a card has no base model to be named after and no type
 # to say what it does. Never shown bare where two cards reach it: the grid
 # numbers every generated name it would otherwise print twice
@@ -4285,6 +4335,7 @@ def create_router(server) -> APIRouter:
         )
         names = _display_names(grid.figures)
         cards = [_entry(figure, names=names) for figure in grid.cards]
+        _add_thumbnails(_hub(), cards)
         waiting = waiting_counts(_hub())
         vram = vram_history.card_vram(_hub(), [card.id for card in cards])
         for card in cards:
@@ -4332,6 +4383,7 @@ def create_router(server) -> APIRouter:
         card.vram = WorkflowVram(
             **vram_history.card_vram(hub, [workflow_id], with_peaks=True)[workflow_id]
         )
+        _add_thumbnails(hub, [card])
         card.unsaved_changes = _count_changes(
             read_changes(hub, workflow_id).get(WAITING, ({}, None))[0], workflow_id
         )
@@ -4798,6 +4850,15 @@ def create_router(server) -> APIRouter:
         hub = _hub()
         _require_workflow(hub, workflow_id)
         changes = payload.model_dump(exclude_unset=True)
+        pinned = changes.pop("thumbnail_pinned", None)
+        # Refused before anything is written, so a 409 leaves the whole PATCH
+        # unapplied; the pin itself is written last, after the attributes.
+        if pinned is not None and workflow_id not in workflow_thumbnails.thumbnails(
+            hub
+        ):
+            raise HTTPException(
+                status_code=409, detail="This workflow has no custom thumbnail."
+            )
         if "exclusive" in changes:
             # A hub table of its own, not a group attribute: the VRAM
             # arbiter reads it on every run of the workflow.
@@ -4815,6 +4876,38 @@ def create_router(server) -> APIRouter:
             library_uuid=_library_uuid(),
             **changes,
         )
+        if pinned is not None:
+            workflow_thumbnails.set_pinned(hub, workflow_id, pinned)
+        _announce(request, [workflow_id], "changed")
+        return _read_detail(hub, workflow_id)
+
+    @router.post(
+        "/workflows/{workflow_id}/thumbnail",
+        summary="Give a workflow a custom thumbnail",
+        description=(
+            "Stores the uploaded PNG, JPEG or WebP in the hub's icon store and "
+            "makes it the workflow's thumbnail, pinned: its card shows it over "
+            "its pictures until `PATCH` unpins it. Answers with the workflow."
+        ),
+        response_model=WorkflowCardDetail,
+        responses={
+            400: {"description": "Empty, too large, or not an image."},
+            404: {"description": "This machine has no such workflow."},
+        },
+    )
+    async def upload_thumbnail(
+        request: Request, workflow_id: str, file: UploadFile = File(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow_id = _require_workflow(hub, workflow_id).workflow_id
+        try:
+            # One byte past the cap is enough for store_icon to refuse it.
+            digest = store_icon(hub.path, await file.read(MAX_ICON_BYTES + 1))
+        except IconRefused as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=True)
+        logger.info("Workflow %s has custom thumbnail %s.", workflow_id, digest[:12])
         _announce(request, [workflow_id], "changed")
         return _read_detail(hub, workflow_id)
 

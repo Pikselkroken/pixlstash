@@ -79,6 +79,17 @@
         aria-hidden="true"
         @change="filesChosen"
       />
+      <!-- *Choose thumbnail…* from the card menu: one image for one card. -->
+      <input
+        ref="thumbnailInput"
+        class="wfv-file-input"
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        tabindex="-1"
+        aria-hidden="true"
+        @change="thumbnailChosen"
+        @cancel="focusCursorRow"
+      />
 
       <v-menu
         v-model="sortMenuOpen"
@@ -439,6 +450,8 @@
         @run="runSelected"
         @open-comfyui="openSelectedInComfyui"
         @rename="startRename"
+        @set-thumbnail="thumbnailInput?.click()"
+        @pin-thumbnail="pinThumbnail"
         @hide="hideSelected"
         @export="exportSelected"
         @duplicate="duplicateSelected"
@@ -1507,6 +1520,40 @@ async function saveRename() {
     announcement.value = name
       ? `Renamed to ${name}`
       : `Name cleared, now ${renamed?.name ?? "unnamed"}`;
+  }
+}
+
+// ── The custom thumbnail ──────────────────────────────────────────────────
+
+const thumbnailInput = ref(null);
+
+/**
+ * The image *Choose thumbnail…* picked, onto the one selected card.
+ *
+ * Focus goes back to the cursor row however the picker closed (`cancel` is
+ * the other way out): it was opened from code, so nothing else returns it.
+ */
+async function thumbnailChosen(event) {
+  const file = event.target?.files?.[0];
+  event.target.value = "";
+  const card = onlyCard.value;
+  try {
+    if (file && card && (await store.setThumbnail(card.id, file))) {
+      announcement.value = `Thumbnail set on ${card.name}`;
+    }
+  } finally {
+    focusCursorRow();
+  }
+}
+
+/** Pin the selected card's thumbnail over its pictures, or unpin it. */
+async function pinThumbnail(pinned) {
+  const card = onlyCard.value;
+  if (!card) return;
+  if (await store.pinThumbnail(card.id, pinned)) {
+    announcement.value = pinned
+      ? `${card.name} now always shows its thumbnail`
+      : `${card.name} shows its ${outputNoun(card)}s once it has some`;
   }
 }
 

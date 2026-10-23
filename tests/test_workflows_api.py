@@ -253,6 +253,7 @@ _WORKFLOW_ROUTES = (
 # describe one.
 _WORKFLOW_WRITE_ROUTES = (
     ("PATCH", "/api/v1/workflows/{workflow_id}"),
+    ("POST", "/api/v1/workflows/{workflow_id}/thumbnail"),
     ("PUT", "/api/v1/workflows/{workflow_id}/model-fix"),
     ("PUT", "/api/v1/workflows/{workflow_id}/defaults"),
     ("PUT", "/api/v1/workflows/{workflow_id}/default-lora"),
@@ -6598,6 +6599,13 @@ _EVERY_WORKFLOW_ROUTE = (
         None,
     ),
     ("PATCH", "/workflows/{workflow_id}", f"/workflows/{BUSY_WF}", {"notes": "n"}),
+    # No file, so the owner's answer is a 422: reached, and nothing stored.
+    (
+        "POST",
+        "/workflows/{workflow_id}/thumbnail",
+        f"/workflows/{BUSY_WF}/thumbnail",
+        None,
+    ),
     (
         "PUT",
         "/workflows/{workflow_id}/defaults",
@@ -25135,6 +25143,99 @@ def test_templates_are_not_added_while_comfyui_does_not_list_its_nodes(
         workflow_env.server.hub.fetchone("SELECT COUNT(*) FROM workflow_document")[0]
         == before
     )
+
+
+# A WebP by its magic bytes, which is all the icon store checks.
+_THUMBNAIL_WEBP = b"RIFF\x0c\x00\x00\x00WEBPVP8 example-"
+
+
+def test_a_template_arrives_with_its_picture_as_an_unpinned_thumbnail(
+    workflow_env, comfyui_templates_served
+):
+    """The template's picture is the new workflow's thumbnail, unpinned.
+
+    Wrong if it is not kept, or kept pinned (the workflow's own pictures would
+    then never replace it); if a template with no picture fails to add; or if
+    deleting the workflow leaves its row behind.
+    """
+    comfyui_templates_served.served["/templates/image_example-1.webp"] = _THUMBNAIL_WEBP
+    owner = workflow_env.owner
+    hub = workflow_env.server.hub
+    added = _add_templates(
+        owner, ("default", "image_example"), ("Example-Pack", "pack example")
+    )["added"]
+    with_picture, without = (entry["workflow_id"] for entry in added)
+    thumbnail = _card(owner, with_picture)["thumbnail"]
+    assert thumbnail == {
+        "url": f"/model-icons/{hashlib.sha256(_THUMBNAIL_WEBP).hexdigest()}",
+        "pinned": False,
+    }
+    r = owner.get(API + thumbnail["url"])
+    assert r.status_code == 200 and r.content == _THUMBNAIL_WEBP
+    assert _card(owner, without)["thumbnail"] is None
+    assert owner.delete(f"{API}/workflows/{with_picture}").status_code == 200
+    assert (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_thumbnail WHERE workflow_id = ?", (with_picture,)
+        )
+        is None
+    )
+
+
+def test_a_workflow_takes_an_uploaded_thumbnail_and_the_owner_unpins_it(
+    workflow_env,
+):
+    """An upload is pinned at once; the PATCH flag unpins it.
+
+    Wrong if a file that is not an image is stored, if pinning a workflow
+    with no thumbnail answers 200, or if the grid and the write disagree.
+    """
+    owner = workflow_env.owner
+    hub = workflow_env.server.hub
+    path = f"{API}/workflows/{BUSY_WF}"
+    before = _card(owner, BUSY_WF)["name"]
+    # Refused whole: the name and the GPU flag sent beside the pin are not
+    # written either.
+    r = owner.patch(
+        path,
+        json={"thumbnail_pinned": True, "name": "Not written", "exclusive": True},
+    )
+    assert r.status_code == 409, r.text
+    assert _card(owner, BUSY_WF)["name"] == before
+    assert _card(owner, BUSY_WF)["vram"]["exclusive"] is False
+    try:
+        r = owner.post(
+            f"{path}/thumbnail",
+            files={"file": ("notes.txt", b"not an image", "text/plain")},
+        )
+        assert r.status_code == 400, r.text
+        assert _card(owner, BUSY_WF)["thumbnail"] is None
+        # Read only one byte past the cap, so a big upload is still refused.
+        big = _THUMBNAIL_WEBP + b"0" * (2 * 1024 * 1024)
+        r = owner.post(
+            f"{path}/thumbnail", files={"file": ("big.webp", big, "image/webp")}
+        )
+        assert r.status_code == 400, r.text
+        r = owner.post(
+            f"{path}/thumbnail",
+            files={"file": ("cover.webp", _THUMBNAIL_WEBP, "image/webp")},
+        )
+        assert r.status_code == 200, r.text
+        thumbnail = r.json()["card"]["thumbnail"]
+        assert thumbnail == {
+            "url": f"/model-icons/{hashlib.sha256(_THUMBNAIL_WEBP).hexdigest()}",
+            "pinned": True,
+        }
+        assert _card(owner, BUSY_WF)["thumbnail"] == thumbnail
+        r = owner.patch(path, json={"thumbnail_pinned": False})
+        assert r.status_code == 200, r.text
+        assert r.json()["card"]["thumbnail"]["pinned"] is False
+        assert _card(owner, BUSY_WF)["thumbnail"]["pinned"] is False
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_thumbnail WHERE workflow_id = ?", (BUSY_WF,)
+            )
 
 
 def test_a_listing_comfyui_shapes_otherwise_is_read_as_far_as_it_goes(

@@ -1897,6 +1897,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Name, notes and hidden on one workflow; PATCH blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/workflows/{workflow_id}/thumbnail"): RoutePolicy(
+        _OWNER,
+        justification="Upload a workflow's custom thumbnail into the hub's icon store; POST blocked for READ tokens; owner only",
+    ),
     # The workflow's LoRAs counted over the whole vault.
     ("GET", "/api/v1/workflows/{workflow_id}/lora-summary"): RoutePolicy(
         _OWNER,
