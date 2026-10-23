@@ -140,8 +140,12 @@ def _declared_inputs(node_spec: dict) -> list[tuple[str, object, dict, bool]]:
                 continue
             options = entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else {}
             # A V3 multi-type input (`"FLOAT,INT"`) names the widget it draws
-            # in `widgetType`, and the editor reads `widgetType ?? type`.
-            type_field = options.get("widgetType") or entry[0]
+            # in `widgetType`, and the editor reads `widgetType ?? type`. Only
+            # a plain widget type is taken: a custom one (`PAINTER` on a
+            # STRING) is still a widget, which the declared type already says.
+            type_field = entry[0]
+            if options.get("widgetType") in _WIDGET_TYPES:
+                type_field = options["widgetType"]
             declared.append((str(name), type_field, options, group == "required"))
     return declared
 

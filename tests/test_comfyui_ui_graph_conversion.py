@@ -408,6 +408,28 @@ class TestItConvertsExactly:
             "batch_size": 1,
         }
 
+    def test_a_custom_widget_type_keeps_its_slot(self):
+        """`CameraAngle`'s `view` is a STRING the editor draws as its own widget.
+
+        `widgetType` there names a frontend widget, not a value type, so the
+        input is still the STRING widget it declares and takes its slot.
+        """
+        object_info = {
+            "CameraAngle": {
+                "input": {
+                    "required": {
+                        "view": ["STRING", {"widgetType": "CAMERA_ANGLE_VIEW"}],
+                        "zoom": ["FLOAT", {}],
+                    }
+                },
+                "input_order": {"required": ["view", "zoom"]},
+            }
+        }
+        graph = _graph([_node(5, "CameraAngle", widgets=["front", 1.5])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, object_info)
+        assert problems == []
+        assert prompt["5"]["inputs"] == {"view": "front", "zoom": 1.5}
+
     def test_a_wired_WIDGET_input_keeps_the_slot_it_left_behind(self):
         """The rule the whole positional read turns on.
 
