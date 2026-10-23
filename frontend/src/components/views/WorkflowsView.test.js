@@ -793,6 +793,30 @@ describe("the closed inspector", () => {
     expect(sidebar.statsOpen).toBe(false);
   });
 
+  it("opens, and keeps open, on a card's double-click", async () => {
+    const wrapper = await closedGrid();
+    const sidebar = useSidebarStore();
+    await wrapper.findAll(".wfv-row")[0].trigger("dblclick");
+    await flush();
+    expect(sidebar.workflowInspectorOpen).toBe(true);
+    expect(sidebar.cardTabRequest).toBe(1);
+    expect(window.localStorage.getItem("pixlstash:workflowInspectorOpen")).toBe(
+      "true",
+    );
+
+    // Open already: the reader's tab is left alone.
+    await wrapper.findAll(".wfv-row")[2].trigger("dblclick");
+    await flush();
+    expect(sidebar.cardTabRequest).toBe(1);
+  });
+
+  it("leaves a double-click on a card's own button to the button", async () => {
+    const wrapper = await closedGrid();
+    await wrapper.findAll(".wfv-row")[0].find("button").trigger("dblclick");
+    await flush();
+    expect(useSidebarStore().workflowInspectorOpen).toBe(false);
+  });
+
   it("opens, without persisting, on a ?topology= hit", async () => {
     route.query = { topology: "topology-d" };
     window.localStorage.setItem("pixlstash:workflowInspectorOpen", "false");

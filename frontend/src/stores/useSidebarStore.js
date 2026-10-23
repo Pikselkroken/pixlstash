@@ -150,6 +150,23 @@ export const useSidebarStore = defineStore("sidebar", () => {
     tasksTabRequest.value += 1;
   }
 
+  // A double-click on a card: "show me this one". Opens the screen's rail
+  // (`workflows` or `models`) only when it is shut, and then the rail on
+  // screen selects the tab that describes a card. Persisted, as the toolbar
+  // toggle is: it is the reader's own gesture, not a deep link. A rail
+  // already open is left on whatever tab the reader chose.
+  const cardTabRequest = ref(0);
+  function showCardInInspector(rail) {
+    if (rail === "workflows") {
+      if (workflowInspectorOpen.value) return;
+      toggleWorkflowInspector();
+    } else {
+      if (modelsRailOpen.value) return;
+      setModelsRailOpen(true);
+    }
+    cardTabRequest.value += 1;
+  }
+
   // Back-compat helper used elsewhere.
   function persistSidebarDocked(val) {
     setSidebarDocked(val);
@@ -168,6 +185,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     modelsRailOpen,
     inspectorNudge,
     tasksTabRequest,
+    cardTabRequest,
     sidebarForcedHidden,
     statsForcedHidden,
     setSidebarDocked,
@@ -180,6 +198,7 @@ export const useSidebarStore = defineStore("sidebar", () => {
     setModelsRailOpen,
     toggleModelsRail,
     showTasksTab,
+    showCardInInspector,
     persistSidebarDocked,
   };
 });

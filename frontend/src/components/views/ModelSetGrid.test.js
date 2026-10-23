@@ -100,6 +100,7 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 
 const globalOpts = {
   global: {
@@ -677,6 +678,27 @@ describe("the cards", () => {
     expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
       name: "sdxl_vae",
     });
+  });
+
+  it("opens a shut Models rail on a card's double-click, tray and all", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    const sidebar = useSidebarStore();
+    const card = wrapper.find(".msg__row[data-key='model:1']");
+    expect(sidebar.modelsRailOpen).toBe(false);
+
+    await card.trigger("dblclick");
+    expect(store.openSetKey).toBe("model:1");
+    expect(sidebar.modelsRailOpen).toBe(true);
+    expect(sidebar.cardTabRequest).toBe(1);
+
+    // Open already: the tray still closes, the rail keeps its tab.
+    await card.trigger("dblclick");
+    expect(store.openSetKey).toBe("");
+    expect(sidebar.cardTabRequest).toBe(1);
   });
 
   it("opens and closes a tray from the keyboard", async () => {

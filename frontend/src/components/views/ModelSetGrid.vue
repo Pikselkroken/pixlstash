@@ -238,7 +238,7 @@
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
             @click="onRowClick(entry, $event)"
-            @dblclick="targetOwnsTheGesture($event) || toggle(entry)"
+            @dblclick="targetOwnsTheGesture($event) || onCardDblClick(entry)"
             @contextmenu="onRowMenu(entry, $event)"
             :data-rail-drop="railTargets.has(entry.key) ? entry.key : undefined"
             :data-rail-refused="railTargets.get(entry.key)?.refused || undefined"
@@ -847,6 +847,12 @@ watch(
 
 function toggle(entry) {
   if (entry?.kind === "card") store.toggleSet(entry.key);
+}
+
+/** A double-click opens or closes the tray, and opens a shut rail. */
+function onCardDblClick(entry) {
+  toggle(entry);
+  sidebarStore.showCardInInspector("models");
 }
 
 /**

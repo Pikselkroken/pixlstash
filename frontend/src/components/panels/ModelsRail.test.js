@@ -566,6 +566,22 @@ describe("the rail's own selection", () => {
   });
 });
 
+describe("a set card's double-click", () => {
+  it("brings a shut rail back on its Models tab", async () => {
+    const { wrapper } = await mountRail();
+    const sidebar = useSidebarStore();
+    sidebar.showTasksTab();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(false);
+
+    sidebar.modelsRailOpen = false;
+    sidebar.showCardInInspector("models");
+    await wrapper.vm.$nextTick();
+    expect(sidebar.modelsRailOpen).toBe(true);
+    expect(wrapper.find('[role="listbox"]').exists()).toBe(true);
+  });
+});
+
 describe("the shelf's verbs, from the rail", () => {
   const menuItems = (wrapper) => wrapper.findAll(".mrail-menu .ctx-item");
   const menuItem = (wrapper, label) =>

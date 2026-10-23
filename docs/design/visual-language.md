@@ -1034,7 +1034,10 @@ it names the shelf's selection and takes the same nudge, and with nothing
 selected it is the same tab reading `All models`, without the selection stripe,
 which also bounces when a card's tray opens. Closed, it is **never re-opened by itself**
 — opening the docked rail takes a column away under the pointer — so the
-closed state has to say what it is hiding:
+closed state has to say what it is hiding. (The reader can still ask for it
+from the content: a **double-click on a card**, a workflow card or a Models set
+card, opens the closed rail on the tab that describes the card, Workflow or
+Models. An open rail keeps its tab.) The handle:
 
 | Part | Value |
 |---|---|
