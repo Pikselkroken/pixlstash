@@ -209,7 +209,10 @@ def set_auto_exclusive_after_oom(hub, user_id: int, enabled: bool) -> None:
 
 
 def _trend(rows: list) -> str | None:
-    measured = [row["peak_mb"] for row in rows if row["outcome"] != "aborted"]
+    # An out-of-memory run is recorded at the card's total, not measured.
+    measured = [
+        row["peak_mb"] for row in rows if row["outcome"] not in ("aborted", "oom")
+    ]
     if len(measured) < TREND_MIN_RUNS:
         return None
     newest = sum(measured[:NEED_WINDOW]) / NEED_WINDOW
@@ -249,7 +252,9 @@ def card_vram(hub, workflow_ids: list[str], with_peaks: bool = False) -> dict:
             "need_mb": int(max(row["peak_mb"] for row in used) * COMFYUI_PEAK_MARGIN)
             if used
             else None,
-            "measured_runs": sum(1 for row in rows if row["outcome"] != "aborted"),
+            "measured_runs": sum(
+                1 for row in rows if row["outcome"] not in ("aborted", "oom")
+            ),
             "exclusive": held is not None,
             "exclusive_source": held["source"] if held is not None else None,
             "exclusive_at": held["at"] if held is not None else None,

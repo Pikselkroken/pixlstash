@@ -299,7 +299,11 @@ class TaskRunner:
         return False
 
     def _on_gpu(self, task: BaseTask) -> bool:
-        """*task* is running on the card; call under ``_active_task_lock``."""
+        """*task* is running on the card; call under ``_active_task_lock``.
+
+        Every GPU-queue task counts, even one running on the CPU: it holds a
+        model, and ``unload_models`` under its batch makes it return nothing.
+        """
         return task.queue_type == QueueType.GPU or task.id in self._leased_on_gpu
 
     @staticmethod

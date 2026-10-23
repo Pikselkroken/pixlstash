@@ -415,6 +415,8 @@ async function applyGpu() {
 
 // ── Sharing the GPU ────────────────────────────────────────────────────────────
 const autoExclusive = ref(true);
+// Off until the stored value is read: the default shown before is not it.
+const autoExclusiveLoaded = ref(false);
 const autoExclusiveError = ref("");
 const sharingError = ref("");
 
@@ -539,6 +541,7 @@ async function loadSharing() {
     const cfg = await getUserConfig();
     autoExclusive.value =
       typeof cfg?.auto_exclusive_after_oom === "boolean" ? cfg.auto_exclusive_after_oom : true;
+    autoExclusiveLoaded.value = true;
     await fetchVramSliderBounds();
     maxVramGbHydrating.value = true;
     const parsedMaxVram = Number(cfg?.max_vram_gb);
@@ -919,6 +922,7 @@ watch(
       >
         <v-switch
           :model-value="autoExclusive"
+          :disabled="!autoExclusiveLoaded"
           color="primary"
           density="compact"
           hide-details

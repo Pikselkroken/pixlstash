@@ -14142,6 +14142,76 @@ def test_the_card_shows_the_need_of_the_newest_runs_model_set(held):
             )
 
 
+def test_an_out_of_memory_run_is_not_counted_as_measured(held):
+    hub = held.runnable.server.hub
+    for outcome, peak, at in (
+        ("completed", 6000, "2026-10-01"),
+        ("oom", 24576, "2026-10-02"),
+    ):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES (?, 'x', 'Test GPU', 24576, ?, 'torch_reserved', ?, ?)",
+                (RUN_WF, peak, outcome, at),
+            )
+    try:
+        assert vram_history.card_vram(hub, [RUN_WF])[RUN_WF]["measured_runs"] == 1
+        rows = [{"peak_mb": 24576, "outcome": "oom"}] + [
+            {"peak_mb": 6000, "outcome": "completed"}
+        ] * (2 * vram_history.NEED_WINDOW)
+        assert vram_history._trend(rows) == "flat", "one OOM made the trend rise"
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+            )
+
+
+class _Peak:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def stop(self):
+        return 5000
+
+
+def test_a_run_with_no_outputs_records_its_peak_as_failed(held):
+    """The card is handed back at once; the peak waits for how the run ended."""
+    server = held.runnable.server
+    lease = held.arbiter.request(
+        Tenant.COMFYUI, "ComfyUI 'Krea'", need_mb=1000, workflow_id=RUN_WF
+    )
+    held.runnable.monkeypatch.setattr(comfyui_service, "PeakSampler", _Peak)
+    held.runnable.monkeypatch.setattr(comfyui_service, "ledger", lambda: held.card)
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_wait_for_comfyui_outputs", lambda *a, **k: ([], None)
+    )
+    try:
+        comfyui_service._process_comfyui_outputs(
+            server,
+            "http://comfy.invalid",
+            "prompt-empty",
+            None,
+            None,
+            None,
+            workflow_id=RUN_WF,
+            vram_lease=lease,
+            label="Krea",
+        )
+        assert lease.state is LeaseState.RELEASED
+        row = server.hub.fetchone(
+            "SELECT peak_mb, outcome FROM workflow_vram_peak WHERE workflow_id = ?",
+            (RUN_WF,),
+        )
+        assert (row["peak_mb"], row["outcome"]) == (5000, "failed")
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+            )
+
+
 class _NoPeak:
     def __init__(self, *args, **kwargs):
         pass

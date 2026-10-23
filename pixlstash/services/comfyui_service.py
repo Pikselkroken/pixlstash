@@ -2100,17 +2100,27 @@ def _process_comfyui_outputs(
             comfyui_tenant.probe(RUN_CLIENT_ID, base_url),
             lambda: run_executing(prompt_id),
         )
+    released = False
     settled = False
 
+    def release_vram() -> None:
+        """Give the card back the moment ComfyUI is done with the run. Once."""
+        nonlocal released
+        if released:
+            return
+        released = True
+        if vram_lease is not None:
+            vram_lease.release()
+
     def settle_vram(outcome: str) -> None:
-        """Release the run's lease and write its peak. Once."""
+        """Release the lease if it is still held, and write the run's peak with
+        how the run ended. Once."""
         nonlocal settled
         if settled:
             return
         settled = True
         # First, so nothing below can keep the card from the other tenants.
-        if vram_lease is not None:
-            vram_lease.release()
+        release_vram()
         # Bookkeeping only: it runs inside the run's error handling, which
         # must go on to record and announce how the run ended.
         try:
@@ -2239,7 +2249,8 @@ def _process_comfyui_outputs(
         images, pixlstash_ids = _wait_for_comfyui_outputs(
             base_url, prompt_id, output_node_ids
         )
-        settle_vram("completed")
+        # ComfyUI is done with the card; the peak waits for how the run ends.
+        release_vram()
         if not images and pixlstash_ids is None:
             logger.warning("ComfyUI produced no outputs for prompt %s", prompt_id)
             emit_failure(rejected or "ComfyUI finished without outputs.")
@@ -2368,6 +2379,7 @@ def _process_comfyui_outputs(
                     exc,
                 )
         notice = _duplicates_notice(len(new_ids), len(held)) if held else None
+        settle_vram("completed")
         record_run_outcome(prompt_id, "completed", message=notice, picture_ids=new_ids)
         _emit_comfyui_completed_progress(pinned_server, prompt_id, workflow_id, notice)
     except ComfyUIRunStopped as exc:
@@ -2376,7 +2388,7 @@ def _process_comfyui_outputs(
         emit_failure(str(exc), stopped=True)
     except RuntimeError as exc:
         logger.warning("ComfyUI prompt %s failed before outputs: %s", prompt_id, exc)
-        if not settled and _is_vram_oom_text(str(exc)):
+        if not released and _is_vram_oom_text(str(exc)):
             settle_vram("oom")
             emit_failure(f"{mark_alone_after_oom()} {exc}", code="vram_oom")
         else:

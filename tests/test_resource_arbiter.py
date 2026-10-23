@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -271,6 +272,31 @@ def test_a_light_lease_with_no_card_is_on_the_cpu():
     row = next(r for r in arb.snapshot()["leases"] if r["id"] == light.id)
     assert row["on_cpu"] and row["held_mb"] == 0
     light.release()
+
+
+def test_a_failed_pass_does_not_end_the_thread_waiting_leases_need(monkeypatch):
+    monkeypatch.setattr(arbiter_module, "POLL_S", 0.05)
+    arb, fake, _ = make(used_mb=20000)
+    lease = arb.request(Tenant.AITOOLKIT, "train", device=CARD, need_mb=8000)
+    assert lease.state is LeaseState.WAITING
+    real = fake.devices
+    failed = []
+
+    def once_then_free(max_age_s=1.0):
+        if not failed:
+            failed.append(True)
+            raise RuntimeError("test-nvml-hiccup")
+        fake.used_mb = 0
+        return real(max_age_s)
+
+    fake.devices = once_then_free
+    arb.kick()
+    deadline = time.monotonic() + 5
+    while lease.state is LeaseState.WAITING and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert failed, "the pass never read the card"
+    assert lease.state is LeaseState.GRANTED, "the thread died on one bad reading"
+    lease.release()
 
 
 def test_pixlstash_cap_limits_only_pixlstash():

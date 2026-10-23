@@ -21,7 +21,7 @@ from pixlstash.resources.ledger import DeviceReading
 from pixlstash.task_runner import TaskCancelledError, TaskRunner
 from pixlstash.tasks.base_task import BaseTask, QueueType, TaskPriority
 from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
-from pixlstash.vault import Vault
+from pixlstash.vault import YIELD_WAIT_S, Vault
 
 
 class _NoCard:
@@ -402,8 +402,6 @@ def test_a_grant_landing_before_the_hold_does_not_leave_the_planner_held():
 
 def test_making_room_waits_only_briefly_on_the_arbiters_thread():
     """Every other lease waits on that thread; a long batch is waited for off it."""
-    from pixlstash import vault as vault_module
-
     waited = []
     lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
     vault = SimpleNamespace(
@@ -417,7 +415,23 @@ def test_making_room_waits_only_briefly_on_the_arbiters_thread():
         unload_models=lambda: None,
     )
     Vault._yield_gpu(vault, lease)
-    assert waited == [vault_module.YIELD_WAIT_S] and waited[0] <= 5
+    assert waited == [YIELD_WAIT_S] and waited[0] <= 5
+
+
+def test_a_lease_granted_during_the_wait_unloads_nothing():
+    """The room is there; unloading now would only cost the next batch a reload."""
+    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+    unloaded = []
+
+    def granted_meanwhile(timeout_s=60.0):
+        lease.state = LeaseState.GRANTED
+        return True
+
+    vault = SimpleNamespace(_closed=False, unload_models=lambda: unloaded.append(1))
+    Vault._unload_once_idle(
+        vault, lease, SimpleNamespace(wait_for_gpu_idle=granted_meanwhile)
+    )
+    assert unloaded == []
 
 
 def test_models_are_unloaded_once_a_batch_that_outran_the_wait_ends():

@@ -1153,15 +1153,27 @@ class ResourceArbiter:
             # Cleared before the pass, not after the wait: a kick that lands
             # during the pass is then seen by the next wait.
             self._wake.clear()
-            self._refresh()
-            with self._lock:
-                changes = self._evaluate_locked()
-            self._announce(changes)
-            if self._reclaim_step():
+            try:
                 self._refresh()
                 with self._lock:
                     changes = self._evaluate_locked()
                 self._announce(changes)
+                if self._reclaim_step():
+                    self._refresh()
+                    with self._lock:
+                        changes = self._evaluate_locked()
+                    self._announce(changes)
+            except Exception as exc:
+                # The one thread every waiting lease is granted by: a failed
+                # pass is logged and tried again, never the end of it.
+                logger.error(
+                    "The VRAM arbiter's pass failed; trying again in %ss: %s",
+                    POLL_S,
+                    exc,
+                    exc_info=True,
+                )
+                self._wake.wait(POLL_S)
+                continue
             with self._lock:
                 live = [
                     lease

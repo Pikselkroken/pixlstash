@@ -2262,7 +2262,10 @@ class Vault:
         """Unload the models when *runner*'s GPU work ends, if *lease* still waits."""
         while lease.state.value == "waiting" and not self._closed:
             if runner.wait_for_gpu_idle(timeout_s=5.0):
-                self.unload_models()
+                # Granted during the wait: the room is there, and unloading now
+                # would only cost the next batch a reload.
+                if lease.state.value == "waiting" and not self._closed:
+                    self.unload_models()
                 return
             # A stopped runner answers at once; do not spin on it.
             time.sleep(0.5)

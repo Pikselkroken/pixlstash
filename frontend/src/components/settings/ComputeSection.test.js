@@ -451,6 +451,11 @@ describe("Which GPU PixlStash uses", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("Failed to load the sharing settings.");
     expect(wrapper.findComponent({ name: "v-slider" }).attributes("disabled")).toBe("true");
+    // Nor the run-alone switch: its default is not the stored value.
+    const sw = wrapper.findAllComponents({ name: "v-switch" }).find(
+      (c) => c.attributes("aria-label") === "Run a workflow alone after it runs out of memory",
+    );
+    expect(sw.attributes("disabled")).toBe("true");
   });
 
   it("writes the run-alone switch through the user config", async () => {
