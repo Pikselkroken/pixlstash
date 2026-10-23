@@ -3620,6 +3620,20 @@ describe("the Tasks tab", () => {
     expect(textOf(wrapper)).toContain("No active tasks");
   });
 
+  it("comes back to the Workflow tab when a card's double-click opens it", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    useSidebarStore().showTasksTab();
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("No active tasks");
+
+    const sidebar = useSidebarStore();
+    sidebar.workflowInspectorOpen = false;
+    sidebar.showCardInInspector("workflows");
+    await flush(wrapper);
+    expect(textOf(wrapper)).not.toContain("No active tasks");
+    expect(wrapper.find(".inspector-tab--active").text()).toContain("Workflow");
+  });
+
   it("pulses the tab while work is running, and only then", async () => {
     const { wrapper } = await mountWith([KEY]);
     const tasksStore = useTasksStore();

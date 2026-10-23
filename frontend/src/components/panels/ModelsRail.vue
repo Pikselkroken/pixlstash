@@ -471,6 +471,13 @@ watch(
     tab.value = "tasks";
   },
 );
+// A double-click on a set card that opened this rail (`showCardInInspector`).
+watch(
+  () => sidebarStore.cardTabRequest,
+  () => {
+    tab.value = "models";
+  },
+);
 
 /**
  * Every model the rail can offer: what the tab counts. A stack is one row, its

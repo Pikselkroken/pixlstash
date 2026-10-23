@@ -385,6 +385,7 @@
               :tabindex="index === cursorIndex ? 0 : -1"
               :data-key="entry.key"
               @click="onRowClick(index, $event)"
+              @dblclick="onRowDblClick"
               @contextmenu.prevent="openRowMenu(index, $event)"
             >
               <!-- A model file dropped here from outside goes beside this
@@ -1138,6 +1139,16 @@ function onRowClick(index, event) {
   cursorId.value = entry.id;
   if (event?.shiftKey) selectToCursor(index);
   else store.select(entry.key, { additive: event?.ctrlKey || event?.metaKey });
+}
+
+/**
+ * A double-click opens a shut inspector on the card's Workflow tab. Its two
+ * clicks have already selected the card. A double-click on one of the card's
+ * own buttons (Run it…, the heart) is that button's.
+ */
+function onRowDblClick(event) {
+  if (event.target?.closest?.("button, a[href], [role='button']")) return;
+  sidebarStore.showCardInInspector("workflows");
 }
 
 /**

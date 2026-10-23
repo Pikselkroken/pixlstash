@@ -1466,6 +1466,13 @@ watch(
     tab.value = "tasks";
   },
 );
+// A double-click on a card that opened this rail (`showCardInInspector`).
+watch(
+  () => sidebarStore.cardTabRequest,
+  () => {
+    tab.value = "workflow";
+  },
+);
 
 // `?tab=recipes`, from the lightbox banner naming the recipe a picture matches
 // (#1480). The workflow itself is selected by `?workflow=`, which `WorkflowsView`
