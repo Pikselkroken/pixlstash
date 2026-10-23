@@ -204,7 +204,7 @@ export const useTasksStore = defineStore("tasks", () => {
       answer = await call();
     } catch (e) {
       console.warn(`tasks: ${failure}`, e);
-      useNoticeStore().error(failure, { key: "gpu-action-failed" });
+      useNoticeStore().error(failure, { key: `gpu-action-failed:${failure}` });
     }
     nudge();
     return answer;

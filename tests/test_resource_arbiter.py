@@ -263,6 +263,16 @@ def test_light_is_refused_while_heavy_waits_for_memory_but_not_for_a_busy_comfyu
     heavy.release()
 
 
+def test_a_light_lease_with_no_card_is_on_the_cpu():
+    arb, _fake, _ = make()
+    arb.set_pixlstash_on_gpu(False)
+    light = arb.try_light("Tagging", need_mb=500)
+    assert light.on_cpu and light.device is None
+    row = next(r for r in arb.snapshot()["leases"] if r["id"] == light.id)
+    assert row["on_cpu"] and row["held_mb"] == 0
+    light.release()
+
+
 def test_pixlstash_cap_limits_only_pixlstash():
     arb, _fake, _ = make()
     arb.set_pixlstash_cap_gb(2)

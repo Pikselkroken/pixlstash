@@ -484,7 +484,7 @@ export function useUpdatesSocket({
               label: "Undo",
               handler: async () => {
                 // The notice can outlive a switch to a read-only session.
-                if (isReadOnly.value) return false;
+                if (isReadOnly.value) return;
                 try {
                   await patchWorkflowCard(workflowId, { exclusive: false });
                   noticeStore.push({
@@ -499,7 +499,6 @@ export function useUpdatesSocket({
                     text: "Could not turn off running alone for this workflow.",
                     key: `resource-lease-undo-${workflowId}`,
                   });
-                  return false;
                 }
               },
             },

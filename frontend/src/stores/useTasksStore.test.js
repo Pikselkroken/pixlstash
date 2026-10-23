@@ -472,5 +472,21 @@ describe("the GPU queue", () => {
       store.stopPolling();
     }
   });
+
+  it("keeps two different refused actions as two notices", async () => {
+    const store = await pollWith({ resources: resourcesAnswer() });
+    try {
+      runLeaseAnyway.mockRejectedValueOnce(new Error("409"));
+      cancelLease.mockRejectedValueOnce(new Error("409"));
+      await store.runWaitingAnyway("lease-gone");
+      await store.cancelWaiting("lease-gone");
+      expect(useNoticeStore().notices.map((n) => [n.text, n.count])).toEqual([
+        ["Could not start that run.", 1],
+        ["Could not cancel that run.", 1],
+      ]);
+    } finally {
+      store.stopPolling();
+    }
+  });
 });
 

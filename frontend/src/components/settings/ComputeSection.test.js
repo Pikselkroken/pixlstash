@@ -397,11 +397,12 @@ describe("Which GPU PixlStash uses", () => {
 
     await wrapper.find('input[value="GPU-3060"]').setValue(true);
     expect(apply().attributes("disabled")).toBeUndefined();
+    compute.getComputeGpus.mockResolvedValue(gpuAnswer({ selected: "GPU-3060", restart_required: true }));
     await apply().trigger("click");
     await flushPromises();
     expect(compute.setComputeGpu).toHaveBeenCalledWith("GPU-3060");
-    // Headless cannot restart itself: it says so.
-    expect(wrapper.text()).toContain("Restart PixlStash to use it.");
+    // Headless cannot restart itself: it says so, once.
+    expect(wrapper.text().split("Restart PixlStash to use it.").length - 1).toBe(1);
   });
 
   it("restarts through the accelerator already in use on desktop", async () => {

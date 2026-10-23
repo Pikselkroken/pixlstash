@@ -356,7 +356,6 @@ const gpus = ref(null); // GET /compute/gpus, or null until it is read
 const gpuPick = ref("auto"); // the staged choice; Apply & restart commits it
 const gpuBusy = ref(false);
 const gpuError = ref("");
-const gpuNote = ref("");
 
 const USED_BY_NAMES = { comfyui: "ComfyUI", aitoolkit: "AI Toolkit", pixlstash: "PixlStash" };
 
@@ -396,17 +395,15 @@ async function applyGpu() {
   if (gpuBusy.value || !gpuDirty.value) return;
   gpuBusy.value = true;
   gpuError.value = "";
-  gpuNote.value = "";
   try {
     await setComputeGpu(gpuPick.value);
     // Before the restart: stored, the choice is no longer staged even if the
     // restart then fails.
     await refreshGpus();
+    // Headless reads the server's restart_required back and says to restart.
     if (desktop?.useAccelerator) {
       await refresh();
       await desktop.useAccelerator(activeAccelerator());
-    } else {
-      gpuNote.value = "Restart PixlStash to use it.";
     }
   } catch (err) {
     console.warn("Could not change the GPU PixlStash uses.", err);
@@ -878,7 +875,6 @@ watch(
       </div>
       <div v-else-if="!gpuError" class="compute-loading">Loading…</div>
       <div v-if="gpuError" class="settings-error">{{ gpuError }}</div>
-      <div v-if="gpuNote" class="compute-note">{{ gpuNote }}</div>
     </SettingsSection>
 
     <!-- What PixlStash may take, and what a run that ran out of memory does. -->

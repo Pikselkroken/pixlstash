@@ -354,11 +354,13 @@ class ResourceArbiter:
         )
         lease._arbiter = self
         if not self._pixlstash_on_gpu:
+            lease.on_cpu = True
             return self._admit_light(lease, "PixlStash runs on the CPU")
         self._refresh(cached=True, probes=False)
         with self._lock:
             lease.device = self._tenant_device(Tenant.PIXLSTASH)
             if lease.device is None:
+                lease.on_cpu = True
                 return self._admit_light(lease, "no GPU")
             refusal = self._light_refusal_locked(lease)
             if refusal is not None and self.enforcing:
