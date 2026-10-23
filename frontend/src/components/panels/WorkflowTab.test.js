@@ -1256,7 +1256,9 @@ describe("a checkpoint that will not load", () => {
       );
       const { wrapper } = await mountWith([KEY], [shown]);
       await settle(wrapper);
-      const button = wrapper.find('[data-testid="model-download"]');
+      const button = wrapper
+        .find('[data-testid="wftab-row-checkpoint"]')
+        .find('[data-testid="model-download"]');
       expect(button.exists()).toBe(offered);
       wrapper.unmount();
     }
