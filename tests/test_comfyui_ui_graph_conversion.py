@@ -371,6 +371,43 @@ class TestItConvertsExactly:
         # first and only value.
         assert prompt["8"]["inputs"] == {"text": ["6", 0], "weight": 0.5}
 
+    def test_a_multi_type_input_takes_the_slot_of_its_widget_type(self):
+        """A V3 multi-type input names the widget it draws in `widgetType`.
+
+        `LTXVEmptyLatentAudio` declares `frame_rate` as `"FLOAT,INT"`, which is
+        no widget type, and the editor draws a FLOAT box for it all the same.
+        Read as a socket, `frame_rate` took no slot and every LTX-2 template
+        was refused with three values for two inputs.
+        """
+        object_info = {
+            "LTXVEmptyLatentAudio": {
+                "input": {
+                    "required": {
+                        "frames_number": ["INT", {}],
+                        "frame_rate": ["FLOAT,INT", {"widgetType": "FLOAT"}],
+                        "batch_size": ["INT", {}],
+                        "audio_vae": ["VAE", {}],
+                    }
+                },
+                "input_order": {
+                    "required": [
+                        "frames_number",
+                        "frame_rate",
+                        "batch_size",
+                        "audio_vae",
+                    ]
+                },
+            }
+        }
+        graph = _graph([_node(5, "LTXVEmptyLatentAudio", widgets=[97, 25, 1])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, object_info)
+        assert problems == []
+        assert prompt["5"]["inputs"] == {
+            "frames_number": 97,
+            "frame_rate": 25,
+            "batch_size": 1,
+        }
+
     def test_a_wired_WIDGET_input_keeps_the_slot_it_left_behind(self):
         """The rule the whole positional read turns on.
 
