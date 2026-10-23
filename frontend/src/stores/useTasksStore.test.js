@@ -451,6 +451,26 @@ describe("the GPU queue", () => {
     }
   });
 
+  it("keeps a worker paused by two waiting runs as one task with both reasons", async () => {
+    const paused = (by) => ({ worker_type: "FaceTask", caused_by: by, since: "2026-10-22T10:01:00Z", text: `Paused: making room for ${by}` });
+    for (const workers of [{ FaceTask: { label: "Faces", current: 2, total: 9, running: false, active: true } }, {}]) {
+      const store = await pollWith({
+        workers,
+        resources: resourcesAnswer({ preempted: [paused("run A"), paused("run B")] }),
+      });
+      try {
+        expect(store.pixlstashEntry.count).toBe(1);
+        expect(store.pixlstashEntry.children[0]).toMatchObject({
+          stopped: true,
+          text: "Paused: making room for run A · Paused: making room for run B",
+        });
+      } finally {
+        store.stopPolling();
+      }
+      setActivePinia(createPinia());
+    }
+  });
+
   it("has no PixlStash row when none of its leases is granted", async () => {
     const store = await pollWith({
       resources: resourcesAnswer({ leases: [lease({ tenant: "comfyui", label: "x", run_id: "run-q" })] }),

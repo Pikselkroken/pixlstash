@@ -436,13 +436,17 @@ export const useTasksStore = defineStore("tasks", () => {
       });
     }
     for (const [index, stopped] of (resources.value?.preempted ?? []).entries()) {
+      // Each waiting run that paused a worker names it once, so two runs can
+      // name one worker: still one task, paused for both reasons.
       const own = stopped.worker_type ? byWorker.get(stopped.worker_type) : null;
       if (own) {
         own.stopped = true;
-        own.text = stopped.text || "";
+        if (stopped.text && !own.text.includes(stopped.text)) {
+          own.text = own.text ? `${own.text} · ${stopped.text}` : stopped.text;
+        }
         continue;
       }
-      children.push({
+      const child = {
         key: `preempted:${index}`,
         label: stopped.worker_type || "PixlStash task",
         workerKey: stopped.worker_type || null,
@@ -452,7 +456,9 @@ export const useTasksStore = defineStore("tasks", () => {
         stopped: true,
         text: stopped.text || "",
         progress: null,
-      });
+      };
+      children.push(child);
+      if (stopped.worker_type) byWorker.set(stopped.worker_type, child);
     }
     if (!children.length) return null;
     return {
