@@ -33,6 +33,9 @@ logger = get_logger(__name__)
 
 #: How old a ``/system_stats`` or ``/queue`` read may be.
 STATS_TTL_S = 1.0
+#: How long a failed read stands: a hung ComfyUI costs one timeout per this,
+#: not one per progress poll. An explicit fresh read (``max_age_s=0``) still asks.
+FAILED_READ_TTL_S = 10.0
 #: How long a same-host decision stands before it is checked again.
 MAPPING_TTL_S = 60.0
 #: How closely ComfyUI's free memory must track the NVML card's.
@@ -94,7 +97,7 @@ class ComfyUIProbe:
         read_at, value = self._stats
         # A failed read is cached too: a hung ComfyUI must cost one timeout
         # per TTL, not one per caller.
-        if read_at and time.monotonic() - read_at < max_age_s:
+        if read_at and time.monotonic() - read_at < _ttl(value, max_age_s):
             return value
         try:
             value = self._get("/system_stats")
@@ -110,7 +113,7 @@ class ComfyUIProbe:
         if self._base_url is None:
             return None
         read_at, value = self._queue
-        if read_at and time.monotonic() - read_at < STATS_TTL_S:
+        if read_at and time.monotonic() - read_at < _ttl(value, STATS_TTL_S):
             return value
         try:
             value = self._get("/queue")
@@ -286,6 +289,13 @@ class ComfyUIProbe:
             last,
         )
         return max(0, before - last)
+
+
+def _ttl(value, max_age_s: float) -> float:
+    """How long a read stands: longer for a failed one, unless asked fresh."""
+    return (
+        max(max_age_s, FAILED_READ_TTL_S) if value is None and max_age_s else max_age_s
+    )
 
 
 class PeakSampler:

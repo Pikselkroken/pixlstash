@@ -175,6 +175,7 @@ def test_a_task_whose_cancel_hook_fails_is_not_reported_stopped(runner):
     runner.runner.submit(task)
     assert task.started.wait(5)
     assert runner.runner.preempt_gpu("preempted by Training") == []
+    assert task.id not in runner.runner._preempted, "its ending would read as preempted"
     task._cancel_event.set()
     assert _until(lambda: "OcrTask" in runner.endings)
 
@@ -355,7 +356,7 @@ def test_pixlstash_yields_only_for_a_lease_that_still_waits(meanwhile, stopped):
     vault = SimpleNamespace(
         _task_runner=SimpleNamespace(
             preempt_gpu=lambda reason: done.append(reason) or [],
-            wait_for_gpu_idle=lambda: True,
+            wait_for_gpu_idle=lambda timeout_s=60.0: True,
         ),
         _closed=False,
         _work_planner=_Planner(),
@@ -397,6 +398,26 @@ def test_a_grant_landing_before_the_hold_does_not_leave_the_planner_held():
     )
     assert Vault._yield_gpu(vault, lease) == []
     assert holds == set(), "the planner stays held for the rest of the session"
+
+
+def test_making_room_waits_only_briefly_on_the_arbiters_thread():
+    """Every other lease waits on that thread; a long batch is waited for off it."""
+    from pixlstash import vault as vault_module
+
+    waited = []
+    lease = SimpleNamespace(id="lease-1", label="Portrait", state=LeaseState.WAITING)
+    vault = SimpleNamespace(
+        _task_runner=SimpleNamespace(
+            preempt_gpu=lambda reason: [],
+            wait_for_gpu_idle=lambda timeout_s=60.0: waited.append(timeout_s) or True,
+        ),
+        _closed=False,
+        _work_planner=None,
+        _yield_holds=set(),
+        unload_models=lambda: None,
+    )
+    Vault._yield_gpu(vault, lease)
+    assert waited == [vault_module.YIELD_WAIT_S] and waited[0] <= 5
 
 
 def test_models_are_unloaded_once_a_batch_that_outran_the_wait_ends():

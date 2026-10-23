@@ -79,6 +79,10 @@ from pixlstash.tasks.downloads_intake_finder import DownloadsIntakeFinder
 
 logger = get_logger(__name__)
 
+#: How long making room waits, on the arbiter's thread, for the GPU batch in
+#: flight to end; past it the models are unloaded off that thread.
+YIELD_WAIT_S = 2.0
+
 
 class Vault:
     AGGRESSIVE_UNLOAD_INTERVAL = 180
@@ -2233,10 +2237,12 @@ class Vault:
                 self._work_planner.release(lease.id)
                 return []
         stopped = self._task_runner.preempt_gpu(f"preempted by {lease.label}")
-        if not self._task_runner.wait_for_gpu_idle():
-            logger.warning(
-                "The GPU worker did not finish its batch within a minute; the "
-                "models are unloaded once it does, for %s (%s)",
+        # Briefly: this runs on the arbiter's one thread, which every other
+        # lease waits on. A batch that takes longer is waited for off it.
+        if not self._task_runner.wait_for_gpu_idle(timeout_s=YIELD_WAIT_S):
+            logger.info(
+                "The GPU worker is still finishing its batch; the models are "
+                "unloaded once it does, for %s (%s)",
                 lease.id,
                 lease.label,
             )

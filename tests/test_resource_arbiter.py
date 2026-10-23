@@ -556,6 +556,32 @@ def test_an_unreachable_comfyui_is_not_taken_for_a_remote_one():
     assert probe._mapping[0] == 0.0, "an unreachable answer was cached as remote"
 
 
+def test_a_failed_comfyui_read_stands_longer_than_a_good_one(monkeypatch):
+    """A hung ComfyUI must not cost a timeout on every progress poll."""
+    import requests
+
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    calls = []
+
+    def hung(path):
+        calls.append(path)
+        raise requests.Timeout("test-hung")
+
+    now = [1000.0]
+    monkeypatch.setattr(comfyui_tenant.time, "monotonic", lambda: now[0])
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid")
+    probe._get = hung
+    assert probe.stats() is None
+    now[0] += comfyui_tenant.STATS_TTL_S * 3
+    assert probe.stats() is None
+    assert calls == ["/system_stats"], "a failed read was asked again a second later"
+    assert probe.stats(max_age_s=0.0) is None
+    assert len(calls) == 2, "an explicit fresh read must still ask"
+
+
 def test_a_read_failing_partway_through_the_card_match_is_not_cached_as_remote(
     monkeypatch,
 ):

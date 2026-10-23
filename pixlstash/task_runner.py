@@ -241,6 +241,9 @@ class TaskRunner:
                     task.type,
                     exc,
                 )
+                # Not asked to stop, so its ending is not a preemption.
+                with self._active_task_lock:
+                    self._preempted.pop(task.id, None)
                 continue
             stopped.append(task.type)
         kept = []
