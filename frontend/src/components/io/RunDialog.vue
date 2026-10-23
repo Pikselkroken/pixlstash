@@ -1243,6 +1243,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useFavouritesStore, favouritesFirst } from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { comfyuiLink } from "../../utils/comfyuiLink";
@@ -1358,6 +1359,7 @@ const runDialog = useRunDialogStore();
 const entityLists = useEntityListsStore();
 const workflows = useWorkflowsStore();
 const favourites = useFavouritesStore();
+const tasksStore = useTasksStore();
 favourites.ensureLoaded();
 
 const loading = ref(false);
@@ -4928,6 +4930,13 @@ async function runPreflight() {
     if (mine()) preflighting.value = false;
   }
 }
+
+// A model just downloaded may be one the last answer says is missing or left
+// out, as the Workflow tab asks again for its rows.
+watch(
+  () => tasksStore.downloadsLanded,
+  () => void runPreflight(),
+);
 
 async function load() {
   const ask = ++readAsk;

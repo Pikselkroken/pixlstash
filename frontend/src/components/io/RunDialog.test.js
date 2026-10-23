@@ -119,6 +119,7 @@ vi.mock("vuetify/components", async () => {
 import RunDialog from "./RunDialog.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { notifySessionReset } from "../../utils/apiClient";
 import { pictureThumbnailUrl } from "../../api/pictures";
 
@@ -758,6 +759,36 @@ describe("a refusal the popup offers to fix", () => {
         models: [{ file: "character.safetensors", folder: "loras" }],
       },
     ]);
+  });
+
+  it("asks again when a download lands, so a fetched LoRA stops being named", async () => {
+    preflightWorkflowRun.mockResolvedValueOnce({
+      ok: true,
+      runs: 1,
+      groups: [
+        {
+          workflow_id: KEY,
+          reasons: [],
+          bypassed_loras: [
+            { file: "character.safetensors", folder: "loras", downloadable: true },
+          ],
+        },
+      ],
+    });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.runNotes.map((note) => note.code)).toEqual(["loras_bypassed"]);
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [{ workflow_id: KEY, reasons: [], bypassed_loras: [] }],
+    });
+    const asked = preflightWorkflowRun.mock.calls.length;
+
+    useTasksStore().downloadsLanded += 1;
+    await flushPromises();
+
+    expect(preflightWorkflowRun.mock.calls.length).toBe(asked + 1);
+    expect(wrapper.vm.runNotes).toEqual([]);
   });
 
   it("names a replaced seed node beside a bypassed LoRA, blocking neither (#1463)", async () => {

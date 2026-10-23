@@ -882,7 +882,7 @@ Seven rules the client must not re-derive:
    "these four are missing the same model" cannot do it from prose.
    **Four group fields are facts rather than refusals** and must not be read
    as reasons: `substitutions`, `bypassed_loras: [{file, folder, node_id,
-   class_type, field, requested}]`, `unplaced_loras: [{filename, sha256,
+   class_type, field, requested, downloadable?}]`, `unplaced_loras: [{filename, sha256,
    node_id, reason}]` and `replaced_nodes: [{node_id, class_type, replacement,
    consumers}]`. Each says what this run will do differently from what the
    graph or the saved recipe says, on the pre-flight and on the run alike.

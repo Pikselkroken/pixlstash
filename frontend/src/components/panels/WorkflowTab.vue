@@ -682,7 +682,7 @@
             </span>
             <span v-else class="wftab-value wftab-lora-value">
               <v-icon
-                v-if="!lora.on_shelf"
+                v-if="!lora.on_shelf || lora.leftOut"
                 size="16"
                 class="wftab-chain-flag"
                 aria-hidden="true"
@@ -696,6 +696,14 @@
               <span v-if="!lora.on_shelf" class="visually-hidden"
                 >, not on your model shelf</span
               >
+              <span v-else-if="lora.leftOut" class="visually-hidden"
+                >, not in this ComfyUI</span
+              >
+              <ModelDownloadButton
+                v-if="lora.downloadable"
+                class="wftab-lora-download"
+                :file="lora.file"
+              />
               <!-- The strength is edited where it is read. Only a loader the
                    graph has, holding a LoRA the shelf knows, can be named in
                    a change; any other keeps its strength as text. A
@@ -1359,7 +1367,7 @@ import {
   openWorkflowInComfyui,
   useComfyuiOpen,
 } from "../../composables/useComfyuiOpen";
-import { useModelPickUp } from "../../composables/useModelPickUp";
+import { pickUpKey, useModelPickUp } from "../../composables/useModelPickUp";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -1778,6 +1786,11 @@ const missingByKind = ref({});
 const staleFiles = ref(new Set());
 /** The missing files the server can download (`downloadable`). */
 const downloadableFiles = ref(new Set());
+/**
+ * The LoRAs a run leaves out because this ComfyUI lacks them
+ * (`bypassed_loras`), by `pickUpKey`: `true` where the server can download one.
+ */
+const leftOutLoras = ref(new Map());
 const PACK_OUTDATED_TEXT = "Restart ComfyUI";
 /** What follows a missing file's name, once ComfyUI has answered. */
 function missingNote(file) {
@@ -2675,6 +2688,9 @@ const loraRows = computed(() =>
       strengthEdited: waitingStrength !== null,
       savedStrengthText: formatStrength(row.savedStrength) || "—",
       canStrength: Boolean(slot?.sha256) && row.savedStrength !== null,
+      leftOut: Boolean(row.file) && leftOutLoras.value.has(pickUpKey(row.file)),
+      downloadable:
+        Boolean(row.file) && leftOutLoras.value.get(pickUpKey(row.file)) === true,
     };
   }),
 );
@@ -4529,6 +4545,7 @@ async function checkInstalled(key, { quiet = false } = {}) {
     missingByKind.value = {};
     staleFiles.value = new Set();
     downloadableFiles.value = new Set();
+    leftOutLoras.value = new Map();
     preflightAnswered.value = false;
     replacementsByFile.value = {};
   }
@@ -4555,6 +4572,14 @@ async function checkInstalled(key, { quiet = false } = {}) {
       modelsOf("missing_models")
         .filter((model) => model.downloadable)
         .map((model) => String(model.file)),
+    );
+    // Not the owner's skips, nor a loader the default recipe leaves out: only
+    // a file this ComfyUI does not have, as the Run popup's notice reads it.
+    leftOutLoras.value = new Map(
+      (answer?.groups ?? [])
+        .flatMap((group) => group.bypassed_loras ?? [])
+        .filter((lora) => lora?.file && !lora.requested && !lora.recipe)
+        .map((lora) => [pickUpKey(lora.file), Boolean(lora.downloadable)]),
     );
     missingByKind.value = Object.fromEntries(
       Object.entries(MODEL_ROWS).map(([kind, spec]) => [
@@ -5132,6 +5157,11 @@ async function checkInstalled(key, { quiet = false } = {}) {
 .wftab-lora-value > .app-btn {
   flex-shrink: 0;
   margin-right: calc(-1 * var(--space-2));
+}
+
+/* Beside the name, not at the row's end: the row's gap is its spacing. */
+.wftab-lora-value > .wftab-lora-download {
+  margin: 0;
 }
 
 .wftab-checks {
