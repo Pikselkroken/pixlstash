@@ -1238,7 +1238,7 @@ describe("a checkpoint that will not load", () => {
     expect(textOf(wrapper)).toContain("Checkpoint missing");
     const line = missingLine(wrapper);
     // The name as a person looks for it; the whole recorded value is the tip.
-    expect(line.text).toBe("realvisXL_v5 is not installed in ComfyUI.");
+    expect(line.text).toBe("realvisXL_v5 is not in ComfyUI or PixlStash.");
     expect(line.tooltip).toBe("SDXL/realvisXL_v5.safetensors");
   });
 
@@ -1257,9 +1257,31 @@ describe("a checkpoint that will not load", () => {
       const { wrapper } = await mountWith([KEY], [shown]);
       await settle(wrapper);
       const button = wrapper
-        .find('[data-testid="wftab-missing-file"]')
+        .find('[data-testid="wftab-row-checkpoint"]')
         .find('[data-testid="model-download"]');
       expect(button.exists()).toBe(offered);
+      wrapper.unmount();
+    }
+  });
+
+  it("says what to do in one line: download it, pick one, or both", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    for (const [extra, replacements, said] of [
+      [{ downloadable: true }, [{ id: 7, filename: "sd15.safetensors" }], "Download it or pick a replacement below."],
+      [{ downloadable: true }, [], "Download it"],
+      [{}, [{ id: 7, filename: "sd15.safetensors" }], "Pick a replacement below."],
+      [{}, [], null],
+    ]) {
+      preflightWorkflowRun.mockResolvedValue(
+        missingFile("SDXL/realvisXL_v5.safetensors", extra),
+      );
+      readModelSwap
+        .mockReset()
+        .mockImplementation(replacementsByKind({ checkpoint: replacements }));
+      const { wrapper } = await mountWith([KEY], [named]);
+      await settle(wrapper);
+      const line = wrapper.find('[data-testid="wftab-missing-action"]');
+      expect(line.exists() ? line.text().replace(/\s+/g, " ") : null).toBe(said);
       wrapper.unmount();
     }
   });
@@ -1314,6 +1336,37 @@ describe("a checkpoint that will not load", () => {
       "realvisXL_v5 is on your model shelf, but the ComfyUI-PixlStash " +
         "running in ComfyUI is out of date and cannot load it. " +
         "Restart ComfyUI, or update the pack.",
+    );
+  });
+
+  it("keeps the pick and its why on a stale row that has replacements", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "pack_outdated",
+              models: [
+                { file: "SDXL/realvisXL_v5.safetensors", folder: "checkpoints" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(
+        replacementsByKind({ checkpoint: [{ id: 7, filename: "sd15.safetensors" }] }, {}, false),
+      );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-missing-action"]').text()).toBe(
+      "Pick a replacement below.",
+    );
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(
+      true,
     );
   });
 
@@ -1378,9 +1431,13 @@ describe("a checkpoint that will not load", () => {
     const { wrapper } = await mountWith([KEY], [named]);
     await settle(wrapper);
     expect(wrapper.find('[data-testid="wftab-pick-checkpoint"]').exists()).toBe(true);
-    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').text()).toContain(
-      "is known to match it",
-    );
+    // The why is the mark's tooltip; the line says only what to do.
+    expect(
+      wrapper.find('[data-testid="wftab-missing-action"]').text(),
+    ).toBe("Pick a replacement below.");
+    expect(
+      wrapper.find('[data-testid="wftab-replace-unmatched"]').attributes("data-note"),
+    ).toContain("is known to match it");
   });
 
   it.each([
@@ -1463,7 +1520,7 @@ describe("a checkpoint that will not load", () => {
     const { wrapper } = await mountWith([KEY], [unnamed]);
     await settle(wrapper);
     const line = missingLine(wrapper);
-    expect(line.text).toBe("klein-9b-fp8 is not installed in ComfyUI.");
+    expect(line.text).toBe("klein-9b-fp8 is not in ComfyUI or PixlStash.");
     expect(line.tooltip).toBe("Flux/klein-9b-fp8.safetensors");
     expect(textOf(wrapper)).not.toContain("Not recorded");
     // Named, so never also "no file name was kept" (#1985 put a row between
@@ -1951,7 +2008,7 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
     await settle(wrapper);
     expect(row(wrapper, "text_encoder").text()).toContain("Text encoder missing");
     expect(row(wrapper, "text_encoder").text()).toContain(
-      "t5xxl_fp8 is not installed in ComfyUI.",
+      "t5xxl_fp8 is not in ComfyUI.",
     );
     expect(
       wrapper.find('[data-testid="wftab-no-replacement-text_encoder"]').text(),
@@ -2043,6 +2100,10 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
     expect(
       wrapper.find('[data-testid="wftab-no-replacement-vae"]').text(),
     ).toContain("Could not read what could replace it");
+    // Only a checkpoint is loaded off the shelf, so only it says PixlStash.
+    expect(
+      row(wrapper, "vae").find('[data-testid="wftab-missing-file"]').text(),
+    ).toBe("sdxl_vae_fp8 is not in ComfyUI.");
   });
 
   it("still reads the pickers when ComfyUI cannot be asked what is missing", async () => {
