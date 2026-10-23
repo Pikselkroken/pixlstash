@@ -239,7 +239,10 @@ def card_vram(hub, workflow_ids: list[str], with_peaks: bool = False) -> dict:
     cards = {}
     for workflow_id in workflow_ids:
         rows = peaks.get(workflow_id, [])
-        used = _need_rows(rows, None)
+        # The newest run's model set, as admission would ask for the next run:
+        # a workflow measured with two base models shows the need it will get.
+        usable = [row for row in rows if row["outcome"] not in ("aborted", "oom")]
+        used = _need_rows(rows, usable[0]["model_set"] if usable else None)
         used_ids = {id(row) for row in used}
         held = policies.get(workflow_id)
         cards[workflow_id] = {

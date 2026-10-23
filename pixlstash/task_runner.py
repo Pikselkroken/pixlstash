@@ -663,7 +663,7 @@ class TaskRunner:
                 with self._active_task_lock:
                     self._active_tasks.pop(thread_ident, None)
                     self._leased_on_gpu.discard(task.id)
-                self._preempted.pop(task.id, None)
+                    self._preempted.pop(task.id, None)
                 if lease is not None:
                     lease.release()
                 # Always flush PyTorch's CUDA allocator cache after a GPU-queue

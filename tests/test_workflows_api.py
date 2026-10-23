@@ -14116,6 +14116,32 @@ def test_measured_peaks_set_the_need_and_reach_the_card(held):
             )
 
 
+def test_the_card_shows_the_need_of_the_newest_runs_model_set(held):
+    """Admission asks with the run's model set; the card shows that need."""
+    hub = held.runnable.server.hub
+    for model_set, peak, at in (
+        ("big", 12000, "2026-10-01"),
+        ("small", 6000, "2026-10-02"),
+    ):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+                "device_name, device_total_mb, peak_mb, measured_by, outcome, at) "
+                "VALUES (?, ?, 'Test GPU', 24576, ?, 'torch_reserved', "
+                "'completed', ?)",
+                (RUN_WF, model_set, peak, at),
+            )
+    try:
+        card = vram_history.card_vram(hub, [RUN_WF])[RUN_WF]
+        assert card["need_mb"] == vram_history.need_mb(hub, RUN_WF, "small")
+        assert card["need_mb"] == int(6000 * 1.1)
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+            )
+
+
 class _NoPeak:
     def __init__(self, *args, **kwargs):
         pass
