@@ -4,8 +4,9 @@ Enforces the CLAUDE.md exception-handling policy across the backend: a *broad*
 exception handler (``except Exception``/``except BaseException``/bare ``except``)
 anywhere in ``pixlstash/`` must NOT silently swallow the error. "Silently swallow"
 means the handler body is *only* control flow - ``return``/``continue``/``break``/
-``pass`` - with no logging call and no re-raise, so an unexpected failure vanishes
-with no trace.
+``pass`` - with no logging call, no re-raise and no use of the bound exception,
+so an unexpected failure vanishes with no trace. A handler that hands the caught
+exception on (``return None, [f"... {exc}"]``) has surfaced it, not swallowed it.
 
 This runs in AUDIT MODE with a closed allowlist of deliberate best-effort swallows
 (see ``_SILENT_SWALLOW_ALLOWLIST``). The allowlist may only SHRINK: adding a log
@@ -134,7 +135,7 @@ _SILENT_SWALLOW_ALLOWLIST = {
     ),
     (
         "pixlstash/utils/service/export_utils.py",
-        "generate_zip",
+        "_write_export_pictures",
         "Exception",
     ): (
         "skip a non-UTF-8 PNG text chunk during export; dropping an undecodable "
@@ -181,7 +182,14 @@ def _broad_exception_name(handler: ast.ExceptHandler) -> str | None:
 
 
 def _is_silent_swallow(handler: ast.ExceptHandler) -> bool:
-    """True if the handler body is only control flow (no logging, no re-raise)."""
+    """True if the handler body is only control flow (no logging, no re-raise)
+    and never reads the bound exception, so nothing of the error leaves it."""
+    if handler.name and any(
+        isinstance(node, ast.Name) and node.id == handler.name
+        for stmt in handler.body
+        for node in ast.walk(stmt)
+    ):
+        return False
     return bool(handler.body) and all(
         isinstance(stmt, _CONTROL_FLOW) for stmt in handler.body
     )
@@ -276,6 +284,20 @@ def test_detector_has_teeth():
         .body[0]
         .handlers[0]
     )
+    # Surfaced: the caught exception is handed back to the caller as a value.
+    surfaced = (
+        ast.parse(
+            "try:\n    f()\nexcept Exception as exc:\n    return None, [str(exc)]\n"
+        )
+        .body[0]
+        .handlers[0]
+    )
+    # Bound but unused: naming the exception is not the same as surfacing it.
+    bound_unused = (
+        ast.parse("try:\n    f()\nexcept Exception as exc:\n    return None\n")
+        .body[0]
+        .handlers[0]
+    )
     narrow = (
         ast.parse("try:\n    f()\nexcept ValueError:\n    return None\n")
         .body[0]
@@ -287,5 +309,7 @@ def test_detector_has_teeth():
     # Logged: still broad, but the log call means the body is not control-flow-only.
     assert _broad_exception_name(logged) == "Exception"
     assert not _is_silent_swallow(logged)
+    assert not _is_silent_swallow(surfaced)
+    assert _is_silent_swallow(bound_unused)
     # Narrow typed handler is never a broad swallow.
     assert _broad_exception_name(narrow) is None
