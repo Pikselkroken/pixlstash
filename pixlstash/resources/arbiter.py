@@ -569,8 +569,10 @@ class ResourceArbiter:
         if lease.state is not LeaseState.GRANTED or lease.on_cpu:
             return 0
         if lease.tenant is Tenant.COMFYUI:
-            usage = self._probe_state.get(Tenant.COMFYUI, {}).get("usage")
-            return int(usage) if usage is not None else lease.need_mb
+            state = self._probe_state.get(Tenant.COMFYUI) or {}
+            # Its reading counts only for the card this lease was granted on.
+            if state.get("device") == lease.device and state.get("usage") is not None:
+                return int(state["usage"])
         return lease.need_mb
 
     def _holders_locked(self, reading: DeviceReading) -> list[dict]:

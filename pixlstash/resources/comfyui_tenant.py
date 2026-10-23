@@ -153,12 +153,20 @@ class ComfyUIProbe:
         if self.stats() is None:
             # Unreachable is not remote: keep the last answer and ask again,
             # rather than admit this ComfyUI's runs unchecked for a minute.
-            return mapped
+            return self._unread_answer(checked_at, mapped)
         found = self._map_device()
         if found is _UNREAD:
-            return mapped
+            return self._unread_answer(checked_at, mapped)
         self._mapping = (time.monotonic(), found)
         return found
+
+    @staticmethod
+    def _unread_answer(checked_at: float, mapped: str | None) -> str | None:
+        """The card to assume when ComfyUI cannot be read: the last one found,
+        or, never found yet, PixlStash's own. None would read as remote, whose
+        runs are granted unchecked; sharing PixlStash's card keeps them
+        fit-checked until a read says otherwise."""
+        return mapped if checked_at else ledger().pixlstash_device()
 
     def _map_device(self) -> str | None | object:
         first = self._device_row()

@@ -566,20 +566,37 @@ def test_the_gpu_is_chosen_before_anything_loads_torch():
     assert applied < source.index("from pixlstash.pixl_logging import")
 
 
-def test_an_unreachable_comfyui_is_not_taken_for_a_remote_one():
-    """Remote is granted unchecked; a local ComfyUI that blinked must not be."""
+def test_an_unreachable_comfyui_is_not_taken_for_a_remote_one(monkeypatch):
+    """Remote is granted unchecked; a ComfyUI never reached must not be."""
     import requests
 
+    from pixlstash.resources import comfyui_tenant
     from pixlstash.resources.comfyui_tenant import ComfyUIProbe
 
     def unreachable(path):
         raise requests.ConnectionError("test-unreachable")
 
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
     probe._get = unreachable
-    assert probe.device() is None
-    assert probe._mapping[0] == 0.0, "an unreachable answer was cached as remote"
+    # Taken as sharing PixlStash's card, so its runs are fit-checked.
+    assert probe.device() == CARD
+    assert probe._mapping[0] == 0.0, "an unreachable answer was cached"
+
+
+def test_comfyuis_reading_counts_only_on_the_card_its_lease_holds():
+    arb, _fake, _ = make()
+    arb.register_probe(Tenant.COMFYUI, FakeComfy(usage=9000, device="GPU-other"))
+    arb.kick()
+    lease = arb.request(Tenant.COMFYUI, "run", device=CARD, need_mb=3000)
+    assert lease.state is LeaseState.GRANTED
+    with arb._lock:
+        arb._probe_state[Tenant.COMFYUI] = {"device": "GPU-other", "usage": 9000}
+        assert arb._held_mb_locked(lease) == 3000
+        arb._probe_state[Tenant.COMFYUI] = {"device": CARD, "usage": 9000}
+        assert arb._held_mb_locked(lease) == 9000
+    lease.release()
 
 
 def test_a_failed_comfyui_read_stands_longer_than_a_good_one(monkeypatch):
@@ -642,5 +659,6 @@ def test_a_read_failing_partway_through_the_card_match_is_not_cached_as_remote(
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
     probe._get = first_read_only
-    assert probe.device() is None
+    # Never mapped, so taken as sharing PixlStash's card, not as remote.
+    assert probe.device() == CARD
     assert probe._mapping[0] == 0.0, "a failed second read was cached as remote"
