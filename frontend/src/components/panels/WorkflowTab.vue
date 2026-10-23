@@ -1793,8 +1793,12 @@ const downloadableFiles = ref(new Set());
 const PACK_OUTDATED_TEXT = "Restart ComfyUI";
 /**
  * What follows a missing file's name, once ComfyUI has answered. A missing
- * checkpoint is not on the shelf either: a run would load a shelf one through
- * ComfyUI-PixlStash. Other kinds are not loaded off the shelf.
+ * checkpoint is said to be off the shelf too, because a current
+ * ComfyUI-PixlStash would load a shelf one. Other kinds are not loaded off
+ * the shelf.
+ * ponytail: wrong where ComfyUI-PixlStash is not installed, or for an fp8
+ * diffusion loader the pack leaves alone; the pre-flight would have to say
+ * whether the shelf holds the file to tell those apart.
  */
 function missingNote(file, kind) {
   if (!preflightAnswered.value) return "";
