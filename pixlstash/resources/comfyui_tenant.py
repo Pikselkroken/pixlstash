@@ -10,7 +10,12 @@ every platform and inside Docker:
   ``host.docker.internal``, and a remote box can have the same card. A remote
   ComfyUI has no card here, and its runs are granted at once;
 * **what it holds**: ``/system_stats`` ``devices[].torch_vram_total``,
-  ComfyUI's reserved allocator bytes, cache included;
+  ComfyUI's reserved allocator bytes, cache included, or, for a ComfyUI on
+  this machine, its process's memory as NVML reports it when that is more.
+  ComfyUI's dynamic VRAM (``comfy-aimdo``) keeps model weights outside
+  torch's allocator, so ``torch_vram_total`` alone reads a fraction of a GB
+  while ComfyUI holds most of the card. The process is the one NVML lists on
+  ComfyUI's card that listens on ComfyUI's port;
 * **whether it is ours to fill**: ``/queue`` holding nothing PixlStash did not
   submit (``busy``), or nothing at all (``idle``);
 * **freeing**: ``POST /free``, only on hand-off to a tenant that is not
@@ -23,6 +28,7 @@ import threading
 import time
 from urllib.parse import urlparse
 
+import psutil
 import requests
 
 from pixlstash.pixl_logging import get_logger
@@ -40,6 +46,10 @@ FAILED_READ_TTL_S = 10.0
 MAPPING_TTL_S = 60.0
 #: How closely ComfyUI's free memory must track the NVML card's.
 SAME_HOST_FREE_TOLERANCE_MB = 512
+#: How closely ComfyUI's card size must match the NVML card's. ComfyUI reports
+#: CUDA's total, which leaves out what the driver keeps back: 439 MB less than
+#: NVML's on a 32 GB card. Cards of one name differ by whole GBs.
+SAME_CARD_TOTAL_TOLERANCE_MB = 1024
 #: How long ``free`` waits for ComfyUI's memory to settle: ``unload_all_models``
 #: moves weights to RAM first, so the figure falls over seconds, not at once.
 FREE_SETTLE_TIMEOUT_S = 30.0
@@ -69,6 +79,10 @@ class ComfyUIProbe:
         self._stats: tuple[float, dict | None] = (0.0, None)
         self._queue: tuple[float, dict | None] = (0.0, None)
         self._mapping: tuple[float, str | None] = (0.0, None)
+        self._pid: int | None = None
+        # The card's pids last searched for ComfyUI's, so a search that found
+        # nothing is not repeated on every poll until they change.
+        self._searched: frozenset[int] = frozenset()
 
     @property
     def base_url(self) -> str | None:
@@ -82,6 +96,8 @@ class ComfyUIProbe:
                 self._stats = (0.0, None)
                 self._queue = (0.0, None)
                 self._mapping = (0.0, None)
+                self._pid = None
+                self._searched = frozenset()
 
     # ── reads ────────────────────────────────────────────────────────────
 
@@ -185,7 +201,9 @@ class ComfyUIProbe:
         candidates = [
             card
             for card in cards
-            if card.name and card.name in name and abs(card.total_mb - total) <= 256
+            if card.name
+            and card.name in name
+            and abs(card.total_mb - total) <= SAME_CARD_TOTAL_TOLERANCE_MB
         ]
         if not candidates:
             return None
@@ -218,11 +236,62 @@ class ComfyUIProbe:
         return candidates[0].uuid
 
     def usage_mb(self) -> int | None:
-        """What ComfyUI's allocator holds, MB; None when it cannot be read."""
+        """What ComfyUI holds, MB; None when it cannot be read."""
         row = self._device_row()
-        if row is None or row.get("torch_vram_total") is None:
+        if row is None:
             return None
-        return int(row.get("torch_vram_total") or 0) // _MB
+        held = self._process_mb()
+        if row.get("torch_vram_total") is None:
+            return held
+        allocator = int(row.get("torch_vram_total") or 0) // _MB
+        return max(allocator, held or 0)
+
+    def _process_mb(self) -> int | None:
+        """ComfyUI's process memory on its card per NVML, or None unknown.
+
+        Only for a ComfyUI already mapped to a card here. None where NVML
+        cannot attribute memory (Windows WDDM, Docker) or the process is not
+        found, and the allocator's figure stands alone.
+        """
+        card = self._mapping[1]
+        if not card or card == UNMEASURED_DEVICE:
+            return None
+        processes = ledger().processes(card)
+        if self._pid not in processes and frozenset(processes) != self._searched:
+            self._searched = frozenset(processes)
+            self._pid = self._listening_pid(processes)
+            if self._pid is None and processes:
+                logger.warning(
+                    "No process on ComfyUI's card listens on %s, so its memory "
+                    "is read from its allocator alone and may show as other "
+                    "apps'",
+                    self._base_url,
+                )
+        return processes.get(self._pid)
+
+    def _listening_pid(self, pids) -> int | None:
+        """Which of *pids* listens on ComfyUI's port, or None."""
+        url = urlparse(self._base_url or "")
+        try:
+            port = url.port or (443 if url.scheme == "https" else 80)
+        except ValueError as exc:
+            logger.debug("ComfyUI's address %s has no port: %s", self._base_url, exc)
+            return None
+        for pid in pids:
+            try:
+                connections = psutil.Process(pid).net_connections(kind="inet")
+            except psutil.Error as exc:
+                logger.debug("Could not read process %s's sockets: %s", pid, exc)
+                continue
+            if any(
+                # An empty tuple for a socket with no local address yet.
+                conn.status == psutil.CONN_LISTEN
+                and conn.laddr
+                and conn.laddr.port == port
+                for conn in connections
+            ):
+                return pid
+        return None
 
     def busy(self) -> bool:
         """Work PixlStash did not submit is queued or running on ComfyUI.

@@ -1626,11 +1626,14 @@ const tmSystemItems = computed(() => {
   min-width: 0;
 }
 
+/* The column label sits over the rows' figures: inset by a row's padding and
+   border. */
 .tm-group-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--space-3);
+  padding-inline-end: calc(var(--space-3) + 1px);
 }
 
 .tm-group-col {
