@@ -761,7 +761,7 @@ describe("a refusal the popup offers to fix", () => {
     ]);
   });
 
-  it("asks again when a download lands, so a fetched LoRA stops being named", async () => {
+  it("asks the pre-flight again when a download lands", async () => {
     preflightWorkflowRun.mockResolvedValueOnce({
       ok: true,
       runs: 1,

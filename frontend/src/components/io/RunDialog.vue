@@ -4932,10 +4932,13 @@ async function runPreflight() {
 }
 
 // A model just downloaded may be one the last answer says is missing or left
-// out, as the Workflow tab asks again for its rows.
+// out, as the Workflow tab asks again for its rows. Not while a run is being
+// submitted: that run asks for itself.
 watch(
   () => tasksStore.downloadsLanded,
-  () => void runPreflight(),
+  () => {
+    if (!submitting.value) void runPreflight();
+  },
 );
 
 async function load() {
