@@ -21,12 +21,15 @@ The allowlist was seeded across two stages of the B1 triage sweep
   broad swallows, 12 logged and 17 kept as deliberate best-effort survivors (14
   distinct call sites; ``_coerce_metadata_value`` holds 4 sites under one key).
 
-Scope covers all of ``pixlstash/`` EXCEPT two trees:
+Scope covers all of ``pixlstash/`` EXCEPT three trees:
 - ``authz/`` - security-sensitive; its swallows are reviewed under the separate
   authz sign-off process, not this ratchet.
 - ``migrations/`` - one-shot Alembic scripts that are immutable once shipped
   (CLAUDE.md: a migration on main must never be modified), so a log-only fix is
   not an available remedy and the ratchet would have nothing to enforce.
+- ``data/comfyui-pack/`` - the ComfyUI-PixlStash nodes ``setup.py`` copies in
+  from the submodule at install time (gitignored here, and ruff excludes it too):
+  another project's code, held to its own rules in its own repository.
 """
 
 import ast
@@ -34,8 +37,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
 PIXLSTASH_DIR = REPO_ROOT / "pixlstash"
-# Top-level ``pixlstash/`` subtrees excluded from the scan (see module docstring).
-_EXCLUDED_TOP_DIRS = frozenset({"authz", "migrations"})
+# ``pixlstash/`` subtrees excluded from the scan (see module docstring).
+_EXCLUDED_DIRS = (("authz",), ("migrations",), ("data", "comfyui-pack"))
 
 # Statements that count as pure control flow. A handler whose body is composed
 # ONLY of these does no work and logs nothing - it silently swallows.
@@ -210,11 +213,12 @@ def _enclosing_function_name(tree: ast.AST, lineno: int) -> str:
 def _iter_silent_broad_swallows():
     """Yield (rel_path, lineno, func_name, exc_name) for each silent broad swallow.
 
-    Scans all of ``pixlstash/`` except the ``authz/`` and ``migrations/`` subtrees
-    (see the module docstring for why those are excluded).
+    Scans all of ``pixlstash/`` except the ``_EXCLUDED_DIRS`` subtrees (see the
+    module docstring for why those are excluded).
     """
     for path in sorted(PIXLSTASH_DIR.rglob("*.py")):
-        if path.relative_to(PIXLSTASH_DIR).parts[0] in _EXCLUDED_TOP_DIRS:
+        parts = path.relative_to(PIXLSTASH_DIR).parts
+        if any(parts[: len(d)] == d for d in _EXCLUDED_DIRS):
             continue
         source = path.read_text()
         tree = ast.parse(source, filename=str(path))
