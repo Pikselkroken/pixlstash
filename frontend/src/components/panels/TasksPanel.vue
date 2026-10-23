@@ -58,8 +58,8 @@
     </ul>
   </div>
 
-  <!-- Running: ComfyUI runs as rows of their own, PixlStash's own GPU work
-       folded behind one row, and the import and ambient workers as before. -->
+  <!-- Running: ComfyUI runs as rows of their own, PixlStash's own background
+       work folded behind one row, and imports as before. -->
   <section
     v-if="tasksStore.runningEntries.length"
     class="tm-group"
@@ -106,8 +106,10 @@
             :describe="false"
           />
         </div>
-        <!-- PixlStash's own GPU work: one folded row with its count and the
-             VRAM its leases hold. The caret lists one line per task. -->
+        <!-- PixlStash's own background work: one folded row with its count
+             and the VRAM its leases hold. The caret lists one line per task:
+             a worker with its sparkline, a lease or stopped task no worker
+             reports as a plain line. -->
         <div
           v-else-if="entry.kind === 'pixlstash'"
           class="tm-fold"
@@ -141,24 +143,62 @@
             <Tooltip :text="foldTip(entry)" activator="parent" :describe="false" />
           </div>
           <div v-if="pixlOpen" id="tm-pixl-children" class="tm-children">
-            <div
-              v-for="child in entry.children"
-              :key="child.key"
-              class="tm-row tm-row--child"
-            >
-              <span
-                class="tm-mark"
-                :class="child.stopped ? '' : 'tm-mark--running'"
-                :data-state="child.stopped ? 'stopped' : undefined"
-                aria-hidden="true"
-              ></span>
-              <span class="tm-app-gap" aria-hidden="true"></span>
-              <span class="tm-name">{{ childLabel(child) }}</span>
-              <span class="tm-figure">
-                <span class="tm-fig-text">{{ childFigure(child) }}</span>
-              </span>
-              <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
-            </div>
+            <template v-for="child in entry.children" :key="child.key">
+              <!-- A backend worker: throughput sparkline + rate, and what its
+                   lease holds while it holds one. -->
+              <div v-if="child.snapshot" class="tm-worker-row">
+                <div class="tm-worker-row-top">
+                  <span
+                    class="tm-status-dot"
+                    :class="{ 'tm-status-dot--running': childRunning(child) }"
+                    :data-state="child.stopped ? 'stopped' : undefined"
+                  ></span>
+                  <span class="tm-worker-label">{{
+                    tmFormatLabel(child.workerKey, child.snapshot.label)
+                  }}</span>
+                  <span class="tm-worker-progress">{{
+                    tmFormatProgress(child.snapshot)
+                  }}</span>
+                  <span
+                    v-if="child.stopped || child.onCpu || child.mb"
+                    class="tm-worker-progress"
+                    data-testid="tm-worker-figure"
+                  >{{ childFigure(child) }}</span>
+                </div>
+                <div class="tm-worker-row-bottom">
+                  <canvas
+                    :ref="(el) => tmRegisterCanvas(child.workerKey, el)"
+                    class="tm-sparkline"
+                  ></canvas>
+                  <span class="tm-worker-rate">
+                    {{ tmFormatRate(tmGetLatestRate(child.workerKey)) }}/s
+                  </span>
+                </div>
+                <Tooltip
+                  v-if="child.stopped || child.onCpu"
+                  :text="childTip(child)"
+                  activator="parent"
+                  :describe="false"
+                />
+              </div>
+              <div
+                v-else
+                class="tm-row tm-row--child"
+              >
+                <span
+                  class="tm-mark"
+                  :class="child.stopped ? '' : 'tm-mark--running'"
+                  :data-state="child.stopped ? 'stopped' : undefined"
+                  aria-hidden="true"
+                ></span>
+                <span class="tm-app-gap" aria-hidden="true"></span>
+                <span class="tm-name">{{ childLabel(child) }}</span>
+                <span class="tm-figure">
+                  <span class="tm-fig-text">{{ childFigure(child) }}</span>
+                </span>
+                <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
+              </div>
+            </template>
           </div>
         </div>
         <!-- A model downloading for a workflow: its bytes as a bar, and a
@@ -235,33 +275,6 @@
             <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
           </div>
           <div class="tm-comfy-message">{{ entry.run.message }}</div>
-        </div>
-        <!-- Backend worker: throughput sparkline + rate -->
-        <div v-else class="tm-worker-row">
-          <div class="tm-worker-row-top">
-            <span
-              class="tm-status-dot"
-              :class="{
-                'tm-status-dot--running':
-                  entry.snapshot.running || tmGetLatestRate(entry.key) > 0,
-              }"
-            ></span>
-            <span class="tm-worker-label">{{
-              tmFormatLabel(entry.key, entry.snapshot.label)
-            }}</span>
-            <span class="tm-worker-progress">{{
-              tmFormatProgress(entry.snapshot)
-            }}</span>
-          </div>
-          <div class="tm-worker-row-bottom">
-            <canvas
-              :ref="(el) => tmRegisterCanvas(entry.key, el)"
-              class="tm-sparkline"
-            ></canvas>
-            <span class="tm-worker-rate">
-              {{ tmFormatRate(tmGetLatestRate(entry.key)) }}/s
-            </span>
-          </div>
         </div>
       </template>
     </div>
@@ -614,9 +627,19 @@ function togglePixl() {
   }
 }
 
-/** The fold's mark pulses while any of its tasks runs, on the GPU or the CPU: not stopped. */
+/**
+ * Whether a fold child is working now: not stopped, and a worker only while it
+ * runs or moves, as its own dot says; between batches it is in the fold idle.
+ */
+function childRunning(child) {
+  if (child.stopped) return false;
+  if (!child.snapshot) return true;
+  return Boolean(child.snapshot.running) || tmGetLatestRate(child.workerKey) > 0;
+}
+
+/** The fold's mark pulses while any of its tasks runs, on the GPU or the CPU. */
 function pixlstashRunning(entry) {
-  return entry.children.some((child) => !child.stopped);
+  return entry.children.some(childRunning);
 }
 
 const SEGMENT_NAMES = {
