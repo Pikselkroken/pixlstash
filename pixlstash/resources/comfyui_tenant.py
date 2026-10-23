@@ -46,6 +46,8 @@ FREE_SETTLE_MB = 256
 PEAK_SAMPLE_S = 0.5
 
 _MB = 1024 * 1024
+# What ``_map_device`` answers when a read failed partway: unknown, not remote.
+_UNREAD = object()
 _NO_PROXY = {"http": None, "https": None, "all": None}
 
 
@@ -149,14 +151,16 @@ class ComfyUIProbe:
             # Unreachable is not remote: keep the last answer and ask again,
             # rather than admit this ComfyUI's runs unchecked for a minute.
             return mapped
-        mapped = self._map_device()
-        self._mapping = (time.monotonic(), mapped)
-        return mapped
+        found = self._map_device()
+        if found is _UNREAD:
+            return mapped
+        self._mapping = (time.monotonic(), found)
+        return found
 
-    def _map_device(self) -> str | None:
+    def _map_device(self) -> str | None | object:
         first = self._device_row()
         if first is None:
-            return None
+            return _UNREAD
         cards = ledger().devices(max_age_s=0.0)
         if cards and not cards[0].measurable:
             # No NVML to compare with (Metal, ROCm). A ComfyUI on a loopback
@@ -179,7 +183,7 @@ class ComfyUIProbe:
         for attempt in range(2):
             row = first if attempt == 0 else self._device_row()
             if row is None:
-                return None
+                return _UNREAD
             free = int(row.get("vram_free") or 0) // _MB
             readings = {card.uuid: card for card in ledger().devices(max_age_s=0.0)}
             candidates = [

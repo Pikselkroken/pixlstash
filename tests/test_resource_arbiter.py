@@ -554,3 +554,41 @@ def test_an_unreachable_comfyui_is_not_taken_for_a_remote_one():
     probe._get = unreachable
     assert probe.device() is None
     assert probe._mapping[0] == 0.0, "an unreachable answer was cached as remote"
+
+
+def test_a_read_failing_partway_through_the_card_match_is_not_cached_as_remote(
+    monkeypatch,
+):
+    import requests
+
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    mb = 1024 * 1024
+    reads = iter(
+        [
+            {
+                "devices": [
+                    {
+                        "name": "cuda:0 Test GPU",
+                        "vram_total": TOTAL * mb,
+                        "vram_free": TOTAL * mb,
+                    }
+                ]
+            }
+        ]
+    )
+
+    def first_read_only(path):
+        try:
+            return next(reads)
+        except StopIteration:
+            raise requests.ConnectionError("test-timeout") from None
+
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid")
+    probe._get = first_read_only
+    assert probe.device() is None
+    assert probe._mapping[0] == 0.0, "a failed second read was cached as remote"

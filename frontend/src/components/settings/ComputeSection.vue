@@ -934,7 +934,6 @@ watch(
       v-if="desktop"
       title="Compute acceleration"
       desc="PixlStash includes a built-in runtime that works out of the box. If this machine has a discrete GPU, add acceleration for faster tagging and search. Switching the runtime restarts the local server."
-      first
     >
       <template v-if="state">
         <!-- One unified runtime list: the built-in runtime first, then every

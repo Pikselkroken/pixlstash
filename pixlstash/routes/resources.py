@@ -129,13 +129,17 @@ def create_router(server) -> APIRouter:
     def cancel(request: Request, lease_id: str):
         server.auth.ensure_secure_when_required(request)
         lease = _waiting_lease(lease_id)
-        if lease.run_id and not cancel_held_runs(lease.run_id):
-            # Granted and sent a moment ago: it is a ComfyUI run now, which
-            # Stop on its row interrupts. Its lease is not ours to drop.
-            raise HTTPException(
-                status_code=409, detail="That run has just started on ComfyUI."
-            )
-        if arbiter().cancel(lease_id) is None:
+        if lease.run_id:
+            if not cancel_held_runs(lease.run_id):
+                # Granted and sent a moment ago: it is a ComfyUI run now, which
+                # Stop on its row interrupts. Its lease is not ours to drop.
+                raise HTTPException(
+                    status_code=409, detail="That run has just started on ComfyUI."
+                )
+            # Cancelled. Its waiting thread wakes on the cancel and may have
+            # dropped the lease already, so this one is not asked to win.
+            arbiter().cancel(lease_id)
+        elif arbiter().cancel(lease_id) is None:
             raise HTTPException(
                 status_code=409, detail="That work has just been given the GPU."
             )

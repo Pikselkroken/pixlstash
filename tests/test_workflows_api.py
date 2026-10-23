@@ -14030,6 +14030,35 @@ def test_an_abort_that_sees_a_held_run_can_cancel_it(held):
     assert comfyui_service.claim_held_run("run-gap") is False
 
 
+def test_a_held_run_stays_readable_as_it_is_sent(held):
+    """Between waiting and running, ``run_outcome(run_id)`` never answers None."""
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        held.runnable.monkeypatch.setattr(comfyui_service, name, {})
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_listening", {"http://comfy.invalid"}
+    )
+    real = threading.Lock()
+    gaps = []
+
+    class _ReadOnRelease:
+        def __enter__(self):
+            real.acquire()
+
+        def __exit__(self, *exc):
+            real.release()
+            key = comfyui_service._run_ids.get("run-send", "run-send")
+            if comfyui_service._run_outcomes.get(key) is None:
+                gaps.append(key)
+
+    comfyui_service.hold_run("run-send", "http://comfy.invalid")
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_run_outcomes_lock", _ReadOnRelease()
+    )
+    comfyui_service.follow_run("prompt-send", "http://comfy.invalid", run_id="run-send")
+    assert gaps == []
+    assert comfyui_service.run_outcome("run-send")["status"] == "running"
+
+
 def test_run_anyway_sends_a_waiting_run_past_what_holds_the_card(held):
     blocker = _hold_the_card(held.arbiter)
     r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})

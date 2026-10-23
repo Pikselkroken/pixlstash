@@ -286,6 +286,32 @@ def test_only_the_batch_refused_gpu_memory_runs_on_the_cpu():
         runner.stop()
 
 
+def test_an_admission_that_raises_does_not_end_the_worker():
+    class _RaisesOnce(ResourceArbiter):
+        raised = False
+
+        def try_light(self, *args, **kwargs):
+            if not self.raised:
+                self.raised = True
+                raise RuntimeError("test-ledger-failure")
+            return super().try_light(*args, **kwargs)
+
+    runner = TaskRunner(
+        name="admit-raises", resource_arbiter=_RaisesOnce(_NoCard(), usage=lambda: None)
+    )
+    runner.VRAM_REQUEUE_BASE_S = 0.05
+    done = threading.Event()
+    runner.add_task_complete_callback(lambda task, error: done.set())
+    runner.start()
+    try:
+        task = _QuickGpuTask()
+        runner.submit(task)
+        assert done.wait(5), "the worker died on the admission error"
+        assert task.status.value == "completed"
+    finally:
+        runner.stop()
+
+
 def test_a_requeued_task_cancelled_by_stop_leaves_no_attempt_count():
     class _Refusing(ResourceArbiter):
         def try_light(self, *args, **kwargs):

@@ -112,6 +112,12 @@ describe("ComputeSection unified runtime list", () => {
     delete window.pixlstashDesktop;
   });
 
+  it("draws the GPU picker as the pane's one first section", async () => {
+    const { wrapper } = await mountCompute(gpuActiveState());
+    const firsts = wrapper.findAll(".s-section--first").map((s) => s.find(".s-section__title").text());
+    expect(firsts).toEqual(["Which GPU PixlStash uses"]);
+  });
+
   it("lists an active GPU overlay exactly once, with the bundled runtime as first row", async () => {
     const { wrapper } = await mountCompute(gpuActiveState());
     const all = runtimeRows(wrapper);

@@ -169,6 +169,33 @@ def test_run_anyway_and_cancel_act_on_a_waiting_lease_only(env):
         blocker.release()
 
 
+def test_cancelling_a_held_run_succeeds_when_its_thread_drops_the_lease_first(
+    env, monkeypatch
+):
+    """The held run's thread wakes on the cancel and releases the lease itself."""
+    from pixlstash.routes import resources as resources_routes
+
+    blocker = arbiter().request(
+        Tenant.AITOOLKIT, "Training", kind=LeaseKind.EXCLUSIVE, device="GPU-x"
+    )
+    waiting = arbiter().request(
+        Tenant.COMFYUI, "Held run", device="GPU-x", run_id="run-held"
+    )
+
+    def cancelled_and_released(run_id):
+        waiting.release()
+        return [run_id]
+
+    monkeypatch.setattr(resources_routes, "cancel_held_runs", cancelled_and_released)
+    try:
+        assert waiting.state.value == "waiting"
+        r = env.owner.post(f"{API}/resources/leases/{waiting.id}/cancel")
+        assert r.status_code == 200, r.text
+    finally:
+        waiting.release()
+        blocker.release()
+
+
 def test_the_gpu_list_is_for_a_local_owner(env, tokens, fake_gpus):
     path = f"{API}/compute/gpus"
     assert_real_route(env.server.api, "GET", path, path)

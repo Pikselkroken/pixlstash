@@ -330,12 +330,25 @@ class TaskRunner:
             need_mb = 0
         if task.queue_type != QueueType.GPU and need_mb <= 0:
             return True, None
-        lease = self._arbiter.try_light(
-            task.type,
-            need_mb=need_mb,
-            worker_type=task.type,
-            urgent=self._interactive(task),
-        )
+        try:
+            lease = self._arbiter.try_light(
+                task.type,
+                need_mb=need_mb,
+                worker_type=task.type,
+                urgent=self._interactive(task),
+            )
+        except Exception as exc:
+            # Raised here, it would end the worker thread and every task
+            # queued behind this one. Taken as a refusal instead: it spills
+            # to the CPU or is tried again after the backoff.
+            logger.error(
+                "Task %s (%s) could not be checked against the GPU's memory: %s",
+                task.id,
+                task.type,
+                exc,
+                exc_info=True,
+            )
+            lease = None
         if lease is not None:
             self._requeue_counts.pop(task.id, None)
             return True, lease

@@ -346,8 +346,10 @@ def follow_run(
                 if victim is None:
                     break
                 del _run_ids[victim]
-    record_run_outcome(prompt_id, "running", library_uuid=library_uuid, run_id=run_id)
-    with _run_outcomes_lock:
+        # In the same step: the run is never missing under either id.
+        _record_run_outcome_locked(
+            prompt_id, "running", library_uuid=library_uuid, run_id=run_id
+        )
         _live_runs[prompt_id] = {
             "run_id": run_id,
             "prompt_id": prompt_id,
