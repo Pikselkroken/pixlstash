@@ -466,6 +466,8 @@ describe("Change model set…", () => {
     const verbs = rowVerbs(verbMenus(wrapper)[0]);
     expect(verbs.slice(verbs.indexOf("rename"))).toEqual([
       "rename",
+      "set-thumbnail",
+      "pin-thumbnail",
       "hide",
       "use-set",
       "export",
@@ -489,6 +491,58 @@ describe("Change model set…", () => {
       expect(said).not.toMatch(/\b(cop(y|ies|ied)|clon(e|ed|ing)|fixed|edited|original)\b/i);
       wrapper.unmount();
     }
+  });
+});
+
+// The custom thumbnail's two rows (#2000's template pictures, and the owner's).
+describe("the thumbnail rows", () => {
+  const rowOf = (wrapper, name) =>
+    verbMenus(wrapper)[0]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === name);
+
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("refuses to pin a workflow with no thumbnail, saying why", async () => {
+    const { wrapper } = bar(["a"]);
+    const pin = rowOf(wrapper, "pin-thumbnail");
+    expect(pin.attributes("aria-disabled")).toBe("true");
+    expect(pin.find(".tip").attributes("data-text")).toBe(
+      "This workflow has no custom thumbnail. Choose one first",
+    );
+    await pin.trigger("click");
+    expect(wrapper.emitted("pin-thumbnail")).toBeUndefined();
+    // Choosing one is still offered.
+    const choose = rowOf(wrapper, "set-thumbnail");
+    expect(choose.attributes("aria-disabled")).toBeUndefined();
+    await choose.trigger("click");
+    expect(wrapper.emitted("set-thumbnail")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("pins an unpinned thumbnail and unpins a pinned one", async () => {
+    for (const [pinned, label, sent] of [
+      [false, "Always show custom thumbnail", true],
+      [true, "Show generated pictures", false],
+    ]) {
+      const { wrapper, store } = bar([]);
+      store.cards = [card("t", { thumbnail: { url: "/model-icons/x", pinned } })];
+      store.selectRange(["t"]);
+      await flushPromises();
+      const pin = rowOf(wrapper, "pin-thumbnail");
+      expect(pin.find(".ctx-label-text").text()).toBe(label);
+      await pin.trigger("click");
+      expect(wrapper.emitted("pin-thumbnail")).toEqual([[sent]]);
+      wrapper.unmount();
+    }
+  });
+
+  it("is refused for several workflows", () => {
+    const { wrapper } = bar(["a", "b"]);
+    for (const name of ["set-thumbnail", "pin-thumbnail"]) {
+      expect(rowOf(wrapper, name).attributes("aria-disabled")).toBe("true");
+    }
+    wrapper.unmount();
   });
 });
 

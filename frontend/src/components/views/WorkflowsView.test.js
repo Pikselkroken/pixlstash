@@ -55,6 +55,7 @@ const patchWorkflowCard = vi.fn();
 const duplicateWorkflow = vi.fn();
 const deleteWorkflow = vi.fn();
 const exportWorkflow = vi.fn();
+const setWorkflowThumbnail = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -69,6 +70,7 @@ vi.mock("../../api/workflows", () => ({
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
   deleteWorkflow: (...args) => deleteWorkflow(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
+  setWorkflowThumbnail: (...args) => setWorkflowThumbnail(...args),
 }));
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: vi.fn(async () => []),
@@ -1427,6 +1429,34 @@ describe("the verbs the bar fires", () => {
     // Said as the verb is named (rule 9 of #1846).
     const { useNoticeStore } = await import("../../stores/useNoticeStore");
     expect(useNoticeStore().notices.at(-1).text).toBe("Duplicated as a (2).");
+  });
+
+  it("Choose thumbnail… uploads the picked image onto the one card", async () => {
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["a"]);
+    setWorkflowThumbnail.mockReset();
+    setWorkflowThumbnail.mockResolvedValue({});
+    const input = wrapper.find('input[accept="image/png,image/jpeg,image/webp"]');
+    const opened = vi.spyOn(input.element, "click");
+
+    await bar(wrapper).vm.$emit("set-thumbnail");
+    expect(opened).toHaveBeenCalledTimes(1);
+    const file = new File(["x"], "cover.png", { type: "image/png" });
+    Object.defineProperty(input.element, "files", { value: [file] });
+    await input.trigger("change");
+    await flush();
+    expect(setWorkflowThumbnail).toHaveBeenCalledWith("a", file);
+  });
+
+  it("the pin row's answer reaches the server as thumbnail_pinned", async () => {
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["a"]);
+    patchWorkflowCard.mockResolvedValue({});
+    await bar(wrapper).vm.$emit("pin-thumbnail", false);
+    await flush();
+    expect(patchWorkflowCard).toHaveBeenLastCalledWith("a", {
+      thumbnail_pinned: false,
+    });
   });
 
   it("Rename opens on the current name and writes only a changed one", async () => {

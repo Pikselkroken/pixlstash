@@ -98,11 +98,25 @@ export async function getWorkflowCard(workflowId) {
  * the field out — so callers pass only what they mean to change.
  *
  * @param {string} workflowId
- * @param {{name?: ?string, notes?: ?string, hidden?: boolean}} changes
+ * @param {{name?: ?string, notes?: ?string, hidden?: boolean, thumbnail_pinned?: boolean}} changes
  * @returns {Promise<Object>} the same shape `getWorkflowCard` returns
  */
 export async function patchWorkflowCard(workflowId, changes) {
   return unwrap(apiClient.patch(wf(workflowId), changes));
+}
+
+/**
+ * Give a workflow a custom thumbnail, pinned over its pictures. Answers with
+ * the card re-read; `patchWorkflowCard(id, {thumbnail_pinned})` toggles it.
+ *
+ * @param {string} workflowId
+ * @param {File|Blob} file - PNG, JPEG or WebP, checked server-side by its bytes.
+ * @returns {Promise<Object>} the same shape `getWorkflowCard` returns
+ */
+export async function setWorkflowThumbnail(workflowId, file) {
+  const form = new FormData();
+  form.append("file", file);
+  return unwrap(apiClient.post(wf(workflowId, "/thumbnail"), form));
 }
 
 /**

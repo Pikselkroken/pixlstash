@@ -1406,6 +1406,7 @@ _WORKFLOW_ID_COLUMNS = (
     ("workflow_version", "workflow_id"),
     ("workflow_change", "workflow_id"),
     ("workflow_layout", "workflow_id"),
+    ("workflow_thumbnail", "workflow_id"),
     ("workflow_key_successor", "workflow_id"),
     ("workflow_id_successor", "successor_id"),
     ("workflow_document", "from_workflow_id"),
@@ -1784,6 +1785,15 @@ def _carry_group_state(
     )
     if not keep:
         conn.execute("DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (group,))
+    # The owner's picture for the workflow is not of its graph, so it goes
+    # with the heir; the heir's own wins.
+    conn.execute(
+        "INSERT OR IGNORE INTO workflow_thumbnail (workflow_id, icon_sha256, pinned) "
+        "SELECT ?, icon_sha256, pinned FROM workflow_thumbnail WHERE workflow_id = ?",
+        (heir, group),
+    )
+    if not keep:
+        conn.execute("DELETE FROM workflow_thumbnail WHERE workflow_id = ?", (group,))
         conn.execute("DELETE FROM workflow_group_attr WHERE workflow_id = ?", (group,))
         # Changes that waited unsaved name loaders of the graph this id read
         # off its pictures; an heir may read another, so they go with the id.

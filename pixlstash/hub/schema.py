@@ -1610,6 +1610,19 @@ CREATE TABLE IF NOT EXISTS workflow_layout (
 )
 """
 
+# A workflow's own picture (the custom thumbnail): the hash of an image in the
+# hub's icon store (``services/model_icons.py``), so it survives a library
+# switch as the workflow does. ``pinned`` 0 shows it only while the workflow
+# has no pictures, which is how a ComfyUI template arrives; 1 is the owner
+# choosing it over the pictures for good.
+_V2_WORKFLOW_THUMBNAIL = """
+CREATE TABLE IF NOT EXISTS workflow_thumbnail (
+    workflow_id  TEXT PRIMARY KEY,
+    icon_sha256  TEXT NOT NULL,
+    pinned       INTEGER NOT NULL DEFAULT 0
+)
+"""
+
 # This shelf's own id (#1912): what a graph names beside a shelf row id, so
 # the id can be told from another PixlStash's when the graph is read back out
 # of a picture. A row id alone cannot say: ids start at 1 on every shelf. One
@@ -1751,6 +1764,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_CHANGE,
     _V2_WORKFLOW_KEPT_VARIANT,
     _V2_WORKFLOW_LAYOUT,
+    _V2_WORKFLOW_THUMBNAIL,
     _V2_SHELF_IDENTITY,
     # VRAM orchestration, in v2 for the same reason as every table above.
     _V2_WORKFLOW_VRAM_PEAK,

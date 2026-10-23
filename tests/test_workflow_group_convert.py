@@ -3181,6 +3181,38 @@ def test_a_retired_workflows_versions_go_with_it_and_are_not_carried(tmp_path):
     assert [tuple(row) for row in rows] == [(living, 1), (living, 2), (manual, 1)]
 
 
+def test_a_retired_workflows_thumbnail_goes_to_its_heir(tmp_path):
+    """The owner's picture is not of the graph, so it is carried, the heir's
+    own winning; a workflow that lives on through a split keeps its own."""
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    retired, living, heir, owned, split = (f"auto:{d * 64}" for d in "12345")
+    try:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO workflow_thumbnail (workflow_id, icon_sha256, pinned) "
+                "VALUES (?, ?, ?)",
+                [(retired, "a" * 64, 1), (living, "b" * 64, 0), (owned, "c" * 64, 0)],
+            )
+        assert retired in stranded_workflow_ids(hub, {living, owned}, set())
+        with hub.transaction() as conn:
+            _carry_group_state(conn, retired, heir)
+            _carry_group_state(conn, living, owned, keep=True)
+            # A split's other heir gets a copy, as it does the rest.
+            _carry_group_state(conn, living, split, keep=True)
+        rows = hub.fetchall(
+            "SELECT workflow_id, icon_sha256, pinned FROM workflow_thumbnail "
+            "ORDER BY workflow_id"
+        )
+        assert [tuple(row) for row in rows] == [
+            (living, "b" * 64, 0),
+            (heir, "a" * 64, 1),
+            (owned, "c" * 64, 0),
+            (split, "b" * 64, 0),
+        ]
+    finally:
+        hub.close()
+
+
 def test_a_retired_workflows_unsaved_changes_go_with_it(tmp_path):
     """They name loaders of the graph the retired id read, which an heir may
     not read; a workflow that lives on through a split keeps its own."""

@@ -613,6 +613,7 @@ def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
             "workflow_group_hidden",
             "workflow_change",
             "workflow_layout",
+            "workflow_thumbnail",
             "workflow_version",
             "workflow_document",
         ):

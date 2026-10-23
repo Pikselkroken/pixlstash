@@ -20,7 +20,12 @@ from typing import Literal, Optional
 from pixlstash.db_models import (
     Picture,
 )
-from pixlstash.hub import workflow_cards, workflow_origin, workflow_versions
+from pixlstash.hub import (
+    workflow_cards,
+    workflow_origin,
+    workflow_thumbnails,
+    workflow_versions,
+)
 from pixlstash.hub.workflow_card_reads import (
     find_workflow,
     manual_documents_holding,
@@ -128,6 +133,7 @@ from pixlstash.services import (
     comfyui_pack_service,
     comfyui_templates,
 )
+from pixlstash.services.model_icons import IconRefused, store_icon
 from pixlstash.services.workflow_library_service import read_library_ids
 
 # Re-exported so existing call sites and tests that import these helpers from
@@ -347,6 +353,28 @@ def store_manual_workflow(
         api_document=api_document,
         record=record,
     )
+
+
+def keep_template_thumbnail(hub, comfyui_url: str, template, workflow_id: str) -> None:
+    """Make *template*'s picture the new workflow's thumbnail, unpinned.
+
+    Unpinned, so the workflow's own pictures replace it once there are any. A
+    template with no picture, or one the icon store will not take (a GIF, one
+    past its size cap), is stored without one: the workflow is what was asked
+    for, and its card falls back to the empty cover.
+    """
+    try:
+        content, _media_type = comfyui_templates.fetch_thumbnail(comfyui_url, template)
+        digest = store_icon(hub.path, content)
+    except (LookupError, IconRefused, OSError) as exc:
+        logger.info(
+            "Template %s is stored as workflow %s without a thumbnail: %s",
+            template.key,
+            workflow_id,
+            exc,
+        )
+        return
+    workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=False)
 
 
 def store_over_workflow(
@@ -2683,6 +2711,7 @@ def create_router(server) -> APIRouter:
                     }
                 )
                 continue
+            keep_template_thumbnail(hub, comfyui_url, template, workflow_id)
             logger.info(
                 "Stored template %s as %s workflow %s.",
                 template.key,

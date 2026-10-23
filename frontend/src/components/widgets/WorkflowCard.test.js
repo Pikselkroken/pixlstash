@@ -786,6 +786,44 @@ describe("WorkflowCard", () => {
     expect(wrapper.emitted("run")).toHaveLength(1);
   });
 
+  // The custom thumbnail: a ComfyUI template's picture until the first run,
+  // or the owner's, pinned over the pictures.
+  it("shows an unpinned thumbnail only until the workflow has pictures", () => {
+    const thumbnail = { url: "/model-icons/abc", pinned: false };
+    const before = mountCard({
+      ...BARE,
+      covers: [],
+      picture_count: 0,
+      rating: 0,
+      thumbnail,
+    });
+    const cells = before.findAll(".wf-card__pic img");
+    expect(cells).toHaveLength(1);
+    expect(cells[0].attributes("src")).toContain("/model-icons/abc");
+    // No "0" badge on a workflow that has made nothing yet.
+    expect(before.find(".wf-card__cover .wf-card__badge--end").exists()).toBe(
+      false,
+    );
+
+    const after = mountCard({ ...BARE, thumbnail });
+    const srcs = after.findAll(".wf-card__pic img").map((img) => img.attributes("src"));
+    expect(srcs).toHaveLength(3);
+    expect(srcs.join(" ")).not.toContain("/model-icons/");
+  });
+
+  it("shows a pinned thumbnail over the pictures, keeping their count", () => {
+    const wrapper = mountCard({
+      ...BARE,
+      thumbnail: { url: "/model-icons/abc", pinned: true },
+    });
+    const cells = wrapper.findAll(".wf-card__pic");
+    expect(cells).toHaveLength(1);
+    expect(cells[0].find("img").attributes("src")).toContain("/model-icons/abc");
+    // It is no library picture, so a right-click on it offers none.
+    expect(cells[0].attributes("data-picture-id")).toBeUndefined();
+    expect(wrapper.find(".wf-card__badge--end").text()).toContain("22");
+  });
+
   it("hides every visible row from assistive tech", () => {
     // The card's own label already reads all four rows, including the marks
     // "+N" clipped; leaving them exposed reads the card out twice.
