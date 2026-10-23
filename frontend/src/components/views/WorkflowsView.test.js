@@ -1446,6 +1446,15 @@ describe("the verbs the bar fires", () => {
     await input.trigger("change");
     await flush();
     expect(setWorkflowThumbnail).toHaveBeenCalledWith("a", file);
+    // Opened from code, so focus is handed back to the card, either way out.
+    expect(cursorKey(wrapper)).toBe("a");
+    expect(document.activeElement?.dataset.key).toBe("a");
+    document.activeElement.blur();
+    expect(document.activeElement).toBe(document.body);
+    await bar(wrapper).vm.$emit("set-thumbnail");
+    await input.trigger("cancel");
+    await flush();
+    expect(document.activeElement?.dataset.key).toBe("a");
   });
 
   it("the pin row's answer reaches the server as thumbnail_pinned", async () => {

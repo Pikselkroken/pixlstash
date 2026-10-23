@@ -88,6 +88,7 @@
         tabindex="-1"
         aria-hidden="true"
         @change="thumbnailChosen"
+        @cancel="focusCursorRow"
       />
 
       <v-menu
@@ -1526,14 +1527,22 @@ async function saveRename() {
 
 const thumbnailInput = ref(null);
 
-/** The image *Choose thumbnail…* picked, onto the one selected card. */
+/**
+ * The image *Choose thumbnail…* picked, onto the one selected card.
+ *
+ * Focus goes back to the cursor row however the picker closed (`cancel` is
+ * the other way out): it was opened from code, so nothing else returns it.
+ */
 async function thumbnailChosen(event) {
   const file = event.target?.files?.[0];
   event.target.value = "";
   const card = onlyCard.value;
-  if (!file || !card) return;
-  if (await store.setThumbnail(card.id, file)) {
-    announcement.value = `Thumbnail set on ${card.name}`;
+  try {
+    if (file && card && (await store.setThumbnail(card.id, file))) {
+      announcement.value = `Thumbnail set on ${card.name}`;
+    }
+  } finally {
+    focusCursorRow();
   }
 }
 
