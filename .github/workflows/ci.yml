@@ -497,6 +497,7 @@ jobs:
           tests/test_docker_demo_hub_rewrite.py
           tests/test_downloads_intake.py
           tests/test_edit_selection.py
+          tests/test_except_hygiene_guardrail.py
           tests/test_export_api.py
           tests/test_face_score_aggregation.py
           tests/test_facial_features_worker.py

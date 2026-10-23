@@ -4,8 +4,9 @@ Enforces the CLAUDE.md exception-handling policy across the backend: a *broad*
 exception handler (``except Exception``/``except BaseException``/bare ``except``)
 anywhere in ``pixlstash/`` must NOT silently swallow the error. "Silently swallow"
 means the handler body is *only* control flow - ``return``/``continue``/``break``/
-``pass`` - with no logging call and no re-raise, so an unexpected failure vanishes
-with no trace.
+``pass`` - with no logging call, no re-raise and no use of the bound exception,
+so an unexpected failure vanishes with no trace. A handler that hands the caught
+exception on (``return None, [f"... {exc}"]``) has surfaced it, not swallowed it.
 
 This runs in AUDIT MODE with a closed allowlist of deliberate best-effort swallows
 (see ``_SILENT_SWALLOW_ALLOWLIST``). The allowlist may only SHRINK: adding a log
@@ -20,12 +21,15 @@ The allowlist was seeded across two stages of the B1 triage sweep
   broad swallows, 12 logged and 17 kept as deliberate best-effort survivors (14
   distinct call sites; ``_coerce_metadata_value`` holds 4 sites under one key).
 
-Scope covers all of ``pixlstash/`` EXCEPT two trees:
+Scope covers all of ``pixlstash/`` EXCEPT three trees:
 - ``authz/`` - security-sensitive; its swallows are reviewed under the separate
   authz sign-off process, not this ratchet.
 - ``migrations/`` - one-shot Alembic scripts that are immutable once shipped
   (CLAUDE.md: a migration on main must never be modified), so a log-only fix is
   not an available remedy and the ratchet would have nothing to enforce.
+- ``data/comfyui-pack/`` - the ComfyUI-PixlStash nodes ``setup.py`` copies in
+  from the submodule at install time (gitignored here, and ruff excludes it too):
+  another project's code, held to its own rules in its own repository.
 """
 
 import ast
@@ -33,8 +37,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
 PIXLSTASH_DIR = REPO_ROOT / "pixlstash"
-# Top-level ``pixlstash/`` subtrees excluded from the scan (see module docstring).
-_EXCLUDED_TOP_DIRS = frozenset({"authz", "migrations"})
+# ``pixlstash/`` subtrees excluded from the scan (see module docstring).
+_EXCLUDED_DIRS = (("authz",), ("migrations",), ("data", "comfyui-pack"))
 
 # Statements that count as pure control flow. A handler whose body is composed
 # ONLY of these does no work and logs nothing - it silently swallows.
@@ -134,7 +138,7 @@ _SILENT_SWALLOW_ALLOWLIST = {
     ),
     (
         "pixlstash/utils/service/export_utils.py",
-        "generate_zip",
+        "_write_export_pictures",
         "Exception",
     ): (
         "skip a non-UTF-8 PNG text chunk during export; dropping an undecodable "
@@ -181,7 +185,14 @@ def _broad_exception_name(handler: ast.ExceptHandler) -> str | None:
 
 
 def _is_silent_swallow(handler: ast.ExceptHandler) -> bool:
-    """True if the handler body is only control flow (no logging, no re-raise)."""
+    """True if the handler body is only control flow (no logging, no re-raise)
+    and never reads the bound exception, so nothing of the error leaves it."""
+    if handler.name and any(
+        isinstance(node, ast.Name) and node.id == handler.name
+        for stmt in handler.body
+        for node in ast.walk(stmt)
+    ):
+        return False
     return bool(handler.body) and all(
         isinstance(stmt, _CONTROL_FLOW) for stmt in handler.body
     )
@@ -202,11 +213,12 @@ def _enclosing_function_name(tree: ast.AST, lineno: int) -> str:
 def _iter_silent_broad_swallows():
     """Yield (rel_path, lineno, func_name, exc_name) for each silent broad swallow.
 
-    Scans all of ``pixlstash/`` except the ``authz/`` and ``migrations/`` subtrees
-    (see the module docstring for why those are excluded).
+    Scans all of ``pixlstash/`` except the ``_EXCLUDED_DIRS`` subtrees (see the
+    module docstring for why those are excluded).
     """
     for path in sorted(PIXLSTASH_DIR.rglob("*.py")):
-        if path.relative_to(PIXLSTASH_DIR).parts[0] in _EXCLUDED_TOP_DIRS:
+        parts = path.relative_to(PIXLSTASH_DIR).parts
+        if any(parts[: len(d)] == d for d in _EXCLUDED_DIRS):
             continue
         source = path.read_text()
         tree = ast.parse(source, filename=str(path))
@@ -276,6 +288,20 @@ def test_detector_has_teeth():
         .body[0]
         .handlers[0]
     )
+    # Surfaced: the caught exception is handed back to the caller as a value.
+    surfaced = (
+        ast.parse(
+            "try:\n    f()\nexcept Exception as exc:\n    return None, [str(exc)]\n"
+        )
+        .body[0]
+        .handlers[0]
+    )
+    # Bound but unused: naming the exception is not the same as surfacing it.
+    bound_unused = (
+        ast.parse("try:\n    f()\nexcept Exception as exc:\n    return None\n")
+        .body[0]
+        .handlers[0]
+    )
     narrow = (
         ast.parse("try:\n    f()\nexcept ValueError:\n    return None\n")
         .body[0]
@@ -287,5 +313,7 @@ def test_detector_has_teeth():
     # Logged: still broad, but the log call means the body is not control-flow-only.
     assert _broad_exception_name(logged) == "Exception"
     assert not _is_silent_swallow(logged)
+    assert not _is_silent_swallow(surfaced)
+    assert _is_silent_swallow(bound_unused)
     # Narrow typed handler is never a broad swallow.
     assert _broad_exception_name(narrow) is None

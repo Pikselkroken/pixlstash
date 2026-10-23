@@ -217,7 +217,6 @@ DEFERRED_FROM_GATE = frozenset(
         "test_detection_florence.py",
         "test_detection_model.py",
         "test_docker_windows_host_paths.py",
-        "test_except_hygiene_guardrail.py",
         "test_face_detection_extreme_aspect_ratio.py",
         "test_face_extraction_speed.py",
         "test_full_pipeline.py",
