@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         "--security",
         choices=SECURITY_LEVELS,
         help=(
-            "Tag the heading '[Security: LEVEL]'. The release workflow reads "
+            "Tag the heading '[Security:LEVEL]'. The release workflow reads "
             "this off the top heading to publish latest-version.json."
         ),
     )
@@ -120,10 +120,10 @@ def main(argv: list[str] | None = None) -> int:
     entries = read_entries(paths)
     heading = f"# [{args.version}]"
     if args.security:
-        heading += f" [Security: {args.security}]"
+        heading += f" [Security:{args.security}]"
 
     # The heading is written even with nothing under it. `release-version.yml`
-    # reads `[Security: LEVEL]` off whatever heading is at the top of the
+    # reads `[Security:LEVEL]` off whatever heading is at the top of the
     # released tag's CHANGELOG.md, so a release that skipped this step would
     # publish the PREVIOUS release's security level as its own. A release with
     # no user-visible change is a real thing - an rc bump, a cycle of internal

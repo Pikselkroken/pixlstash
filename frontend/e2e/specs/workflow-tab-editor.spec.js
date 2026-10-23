@@ -1189,14 +1189,14 @@ test("changes stay with the workflow when another card is selected, and nothing 
   expect(asked).toEqual([]);
 });
 
-// ── 6. Use a set… and Edit LoRAs… ───────────────────────────────────────────
+// ── 6. Change model set… and Edit LoRAs… ───────────────────────────────────────────
 
-test.describe("Use a set…", () => {
+test.describe("Change model set…", () => {
   test("opens from the Models head inside the window and fills rows as unsaved changes", async ({ page }) => {
     net = await stubWorkflows(page);
     await selectWorkflow(page);
 
-    const button = rail(page).getByRole("button", { name: "Use a set…" });
+    const button = rail(page).getByRole("button", { name: "Change model set…" });
     const models = rail(page).getByTestId("wftab-default-recipe");
     const head = await models.locator(".wftab-sec-head").boundingBox();
     const box = await button.boundingBox();

@@ -63,5 +63,5 @@ That prepends one `# [1.11.1]` section to `CHANGELOG.md` with every fragment's
 lines under it, then removes the fragments. Read the assembled section before
 committing it — ordering is by filename, so a release worth reading usually
 wants a hand-edit afterwards to group the entries and lead with the ones that
-matter. `--security` writes the `[Security: LEVEL]` tag the release workflow
+matter. `--security` writes the `[Security:LEVEL]` tag the release workflow
 reads off the top heading to publish `latest-version.json`.

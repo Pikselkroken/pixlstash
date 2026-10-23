@@ -203,6 +203,7 @@ from pixlstash.services.workflow_card_service import (
     slot_kind,
     lora_modal_strength,
     shelf_filenames,
+    with_stock_loaders,
     workflow_defaults,
     workflow_lora_summary,
 )
@@ -5536,8 +5537,12 @@ def create_router(server) -> APIRouter:
                 converted, version, problems = converted_manual_document(
                     _hub(), card.workflow_key, read_object_info
                 )
+            # A save from ComfyUI leaves the pack's loaders in it: read as
+            # the stock ones, as the default recipe's rows read it.
             source, reason = run_service.resolve_source(
-                card, file_document=converted, file_problems=problems
+                card,
+                file_document=with_stock_loaders(_hub(), converted),
+                file_problems=problems,
             )
             if source is not None:
                 # The version read with the document, so the number the run
@@ -5548,7 +5553,9 @@ def create_router(server) -> APIRouter:
         if edited is not None:
             # What the owner saved over this workflow's graph: no file,
             # picture or instance is read, since none of them is its graph now.
-            source, reason = run_service.resolve_source(card, edited_document=edited)
+            source, reason = run_service.resolve_source(
+                card, edited_document=with_stock_loaders(_hub(), edited)
+            )
             if source is not None:
                 source.workflow_version = edited_version
             return source, reason

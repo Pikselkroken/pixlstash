@@ -546,6 +546,88 @@ class TestOpeningWithPackNodes:
         assert structure(swapped, classes) != structure(stock, classes)
 
 
+class TestReadingPackLoadersAsStock:
+    """A graph saved from ComfyUI holds the pack's model loaders; the screens
+    that change models read each as the stock loader of its file."""
+
+    ROWS = {("130", "this-shelf"): "unet.safetensors"}
+    DIGESTS = {
+        "a" * 64: "vae.safetensors",
+        "b" * 64: "t5.safetensors",
+        "c" * 64: "clip_l.safetensors",
+    }
+
+    def _read(self, graph):
+        return comfyui_recipe_service.as_stock_loaders(
+            graph,
+            lambda row, shelf: self.ROWS.get((row, shelf)),
+            self.DIGESTS.get,
+        )
+
+    def test_each_model_loader_reads_as_the_stock_one_of_its_file(self):
+        graph = {
+            "1": {
+                "class_type": CKPT,
+                "inputs": {"checkpoint_id": "130", "shelf": "this-shelf"},
+            },
+            "2": {
+                "class_type": "PixlStashVAELoader",
+                "inputs": {"vae_sha256": "A" * 64},
+            },
+            "3": {
+                "class_type": "PixlStashCLIPLoader",
+                "inputs": {
+                    "clip_sha256": "b" * 64,
+                    "clip_sha256_2": "c" * 64,
+                    "type": "flux",
+                },
+            },
+            "4": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+        }
+        read, done = self._read(graph)
+        # Only its MODEL is read: a diffusion model's loader.
+        assert read["1"] == {
+            "class_type": "UNETLoader",
+            "inputs": {"unet_name": "unet.safetensors", "weight_dtype": "default"},
+        }
+        assert read["2"]["inputs"] == {"vae_name": "vae.safetensors"}
+        assert read["3"] == {
+            "class_type": "DualCLIPLoader",
+            "inputs": {
+                "clip_name1": "t5.safetensors",
+                "clip_name2": "clip_l.safetensors",
+                "type": "flux",
+            },
+        }
+        assert read["4"] is graph["4"]
+        assert {d["node_id"] for d in done} == {"1", "2", "3"}
+        # The graph it was handed is left as it was.
+        assert graph["1"]["class_type"] == CKPT
+
+        # Its CLIP read too: the whole checkpoint's loader.
+        graph["5"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1]}}
+        assert self._read(graph)[0]["1"] == {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "unet.safetensors"},
+        }
+
+    def test_a_loader_naming_no_file_of_this_shelf_stays(self):
+        graph = {
+            # Another shelf's row, and one with no shelf: not this hub's ids.
+            "1": {
+                "class_type": CKPT,
+                "inputs": {"checkpoint_id": "130", "shelf": "another-shelf"},
+            },
+            "2": {"class_type": CKPT, "inputs": {"checkpoint_id": "130"}},
+            "3": {
+                "class_type": "PixlStashVAELoader",
+                "inputs": {"vae_sha256": "d" * 64},
+            },
+        }
+        read, done = self._read(graph)
+        assert read == graph and done == []
+
+
 class TestHistoryExtraction:
     def test_picture_ids_are_parsed_from_the_comma_joined_string(self):
         payload = _history(

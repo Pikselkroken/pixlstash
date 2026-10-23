@@ -464,12 +464,12 @@
         v-model="renameDraft"
         label="Name"
         autofocus
-        :placeholder="renameFallback"
+        autoselect
         @enter="saveRename"
       />
       <p class="wfv-hint">
-        It is called {{ renameFallback }} now. Leave this empty to keep the name
-        PixlStash builds from the workflow itself.
+        Leave this empty to use the name PixlStash builds from the workflow
+        itself.
       </p>
       <template #footer>
         <AppButton size="sm" variant="ghost" @click="closeRename"
@@ -1430,24 +1430,6 @@ async function hideSelected(unhide) {
 // ── Rename ────────────────────────────────────────────────────────────────
 
 /**
- * What the card is called now, shown as the field's PLACEHOLDER.
- *
- * **The field opens empty, and that is deliberate.** `name` is never null —
- * the server falls back to the workflow file, then to a description built from
- * what the card loads and does — and the payload does not say WHICH of the
- * three it gave, so a field seeded from it would turn a generated name into a
- * typed one the moment somebody opened Rename and pressed the button without
- * changing anything. The card would stop following the workflow from then on,
- * invisibly.
- *
- * So empty means "no name of my own", which is what an empty field looks like
- * everywhere, and saving it clears the stored name back to the generated one.
- * The cost is that editing a name you already typed means typing it again;
- * the placeholder and the line under the field are what make that legible.
- */
-const renameFallback = computed(() => onlyCard.value?.name ?? "");
-
-/**
  * Put focus back on the roving cursor's row.
  *
  * Every surface this view opens is TELEPORTED — the context menu to a pair of
@@ -1494,14 +1476,20 @@ function closeRename() {
   focusCursorRow();
 }
 
+/**
+ * Open Rename on what the card is called now, selected.
+ *
+ * `name` is never null — the server falls back to the workflow file, then to a
+ * description built from what the card loads and does — and the payload does
+ * not say WHICH of the three it gave. So saving it untouched writes nothing
+ * (`saveRename`): writing it would turn a generated name into a typed one, and
+ * the card would stop following the workflow from then on, invisibly.
+ * Emptying the field clears the stored name back to the generated one.
+ */
 function startRename() {
   const card = onlyCard.value;
   if (!card) return;
-  // The card's `name` is never null — the server falls back to the file, then
-  // to a built description — so the field cannot be seeded from it without
-  // turning a generated name into a typed one on the first Rename that is
-  // cancelled halfway. It opens EMPTY, with that name as the placeholder.
-  renameDraft.value = "";
+  renameDraft.value = card.name ?? "";
   renameOpen.value = true;
 }
 
@@ -1510,6 +1498,7 @@ async function saveRename() {
   closeRename();
   if (!card) return;
   const name = renameDraft.value.trim();
+  if (name === String(card.name ?? "").trim()) return;
   if (await store.renameCard(card.id, name)) {
     // The cleared case says what the card is called NOW rather than "cleared":
     // the server re-derives a name immediately, so "cleared" would describe a
@@ -1601,7 +1590,7 @@ function landOn(workflowId) {
 }
 
 /**
- * *Use a set…* from the grid's menu. The menu itself is the Workflow tab's, in
+ * *Change model set…* from the grid's menu. The menu itself is the Workflow tab's, in
  * the rail: it is asked for through the store, and the rail is opened (not
  * persisted, as a deep link's "show me" is) so there is somewhere for it to
  * open.

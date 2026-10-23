@@ -328,7 +328,7 @@
       @update:query="(value) => (chooserQuery = value)"
       @update:order="store.setPickOrder"
       @add="addChosen"
-      @undo="undoLastPick"
+      @remove="unpick"
       @close="closeChooser"
     />
 
@@ -1289,8 +1289,13 @@ const chooserSections = computed(() => {
   if (mode === "set") {
     return fillSections(fillSetItems.value, (item) => item.from.join(", "));
   }
+  const added = new Set(picked.value.map((entry) => entry.model_id));
   return slotSuggestions({
-    set,
+    // Ranked by the set's members as they stood when the popup opened, so an
+    // add neither drops its row out of the list nor reshuffles the rows around
+    // it: the menu stays still and the row takes a tick instead. Other sets and
+    // the recipe evidence are still read live; an add here changes neither.
+    set: chooser.value.held ?? set,
     slotId: chooser.value.slotId,
     rows: store.offeredRows,
     sets: store.shownHandMadeSets,
@@ -1305,6 +1310,7 @@ const chooserSections = computed(() => {
           id: row.id,
           row,
           detail: formatModelSize(row.file_size),
+          checked: added.has(row.id),
         })),
   }));
 });
@@ -1357,28 +1363,26 @@ const chooserEmpty = computed(() =>
 );
 
 /**
- * What a slot's picker has added since it opened, in order: its status line,
- * the Undo in it, and the one receipt it leaves behind when it closes.
+ * What a slot's picker has added since it opened, in order: the rows it ticks,
+ * what its live region announces, and the one receipt it leaves behind when it
+ * closes.
  */
 const picked = ref([]);
 /**
- * What the status line says when the last thing that happened was not an
- * add: an Undo, or a pick the set already held.
+ * What the live region says when the last thing that happened was not an
+ * add: a take-back, or a pick the set already held.
  */
 const pickNote = ref("");
 
 const chooserStatus = computed(() => {
   const list = picked.value;
-  const undo = list.length > 0;
-  if (pickNote.value) return { text: pickNote.value, undo };
-  if (!undo) return null;
-  const text =
-    list.length === 1
-      ? `Added ${list[0].name}`
-      : list.length === 2
-        ? `Added ${list[0].name} and ${list[1].name}`
-        : `Added ${list.length} ${chooserSlot.value?.noun ?? "models"}`;
-  return { text, undo };
+  if (pickNote.value) return pickNote.value;
+  if (!list.length) return "";
+  return list.length === 1
+    ? `Added ${list[0].name}`
+    : list.length === 2
+      ? `Added ${list[0].name} and ${list[1].name}`
+      : `Added ${list.length} ${chooserSlot.value?.noun ?? "models"}`;
 });
 
 /**
@@ -1399,6 +1403,11 @@ function openChooser(mode, el, slotId = "") {
     mode,
     slotId,
     setId: openHand.value.set.id,
+    // The set as it stood, which a slot's picker ranks by while it is open.
+    held: {
+      ...openHand.value.set,
+      members: [...(openHand.value.set.members ?? [])],
+    },
     target: box ? [box.left, box.bottom] : [0, 0],
     returnTo: slotId ? `slot:add:${slotId}` : cursorId.value,
     // Decided by what the TRIGGER is, not by where the cursor was: a Fill
@@ -1712,8 +1721,8 @@ async function addChosen(ids) {
  * Add button was two decisions for one). The Checkpoint slot holds one, so its
  * popup closes, the add raises its own receipt, and the cursor lands on the
  * checkpoint just added. Any other slot takes any number: the popup stays open,
- * the added model drops out of the list, the status line says what went in, and
- * the receipt waits for the popup to close (#1574).
+ * the added model stays where it was with a tick, and the receipt waits for the
+ * popup to close (#1574).
  */
 async function pickIntoSlot(set, slotId, ids) {
   const fresh = ids.filter((id) => !picking.has(id));
@@ -1773,29 +1782,44 @@ async function pickIntoSlot(set, slotId, ids) {
   if (at >= 0) moveCursor(at);
 }
 
-/** The status line's Undo: take the last add back out, quietly. */
-async function undoLastPick() {
+/**
+ * A click on a ticked row: take that add back out, quietly. Only what this
+ * popup added is ticked, so nothing the set held before it opened goes.
+ */
+async function unpick([modelId]) {
   const { setId, slotId } = chooser.value ?? {};
   const set = store.handMadeSets.find((candidate) => candidate.id === setId);
-  const last = picked.value.at(-1);
-  if (!set || !last) return;
-  picked.value = picked.value.slice(0, -1);
-  const done = await store.removeFromHandMadeSet(set, [last.sha256], {
-    quiet: true,
-  });
+  const entry = picked.value.find((candidate) => candidate.model_id === modelId);
+  if (!set || !entry || picking.has(modelId)) return;
+  picking.add(modelId);
+  picked.value = picked.value.filter((candidate) => candidate !== entry);
+  let done;
+  try {
+    done = await store.removeFromHandMadeSet(set, [entry.sha256], {
+      quiet: true,
+    });
+  } finally {
+    picking.delete(modelId);
+  }
   const still =
     chooser.value?.setId === setId && chooser.value?.slotId === slotId;
   if (done) {
-    if (still) pickNote.value = `Took out ${last.name}`;
+    // Nothing removed means it had already left the set some other way.
+    if (still) {
+      pickNote.value = done.removed?.length
+        ? `Took out ${entry.name}`
+        : `${entry.name} was no longer in this set`;
+    }
   } else if (still) {
-    // Back in the set: the line goes back to the adds, not an earlier undo.
-    picked.value = [...picked.value, last];
+    // Still in the set: its tick comes back, and the line goes back to the
+    // adds, not an earlier take-back.
+    picked.value = [...picked.value, entry];
     pickNote.value = "";
   } else {
-    // The popup closed while the undo was out, and it failed: the model is
-    // still in the set, so it still gets its receipt.
+    // The popup closed while the take-back was out, and it failed: the model
+    // is still in the set, so it still gets its receipt.
     const noun = SET_SLOTS.find((slot) => slot.id === slotId)?.noun;
-    store.announceAdded(set, [last], noun ?? "models");
+    store.announceAdded(set, [entry], noun ?? "models");
   }
 }
 

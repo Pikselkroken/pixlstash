@@ -429,8 +429,8 @@ describe("the two menus cannot diverge", () => {
 });
 
 // #1850, part 3: the clone dialogs went, and what they did is the Workflow
-// tab's *Use a set…*, which this row asks for.
-describe("Use a set…", () => {
+// tab's *Change model set…*, which this row asks for.
+describe("Change model set…", () => {
   const rowOf = (wrapper, name) =>
     verbMenus(wrapper)[0]
       .findAll(".ctx-item")
@@ -439,7 +439,7 @@ describe("Use a set…", () => {
   it("is offered for one workflow, and asks for it", async () => {
     const { wrapper } = bar(["a"]);
     const row = rowOf(wrapper, "use-set");
-    expect(row.find(".ctx-label-text").text()).toBe("Use a set…");
+    expect(row.find(".ctx-label-text").text()).toBe("Change model set…");
     expect(row.attributes("aria-disabled")).toBeUndefined();
     expect(row.find(".tip").attributes("data-text")).toBe(
       "Fill its model rows from one of your sets, as unsaved changes",
@@ -454,7 +454,7 @@ describe("Use a set…", () => {
     const row = rowOf(wrapper, "use-set");
     expect(row.attributes("aria-disabled")).toBe("true");
     expect(row.find(".tip").attributes("data-text")).toBe(
-      "Select one workflow to use a set on it",
+      "Select one workflow to change its model set",
     );
     await row.trigger("click");
     expect(wrapper.emitted("use-set")).toBeUndefined();

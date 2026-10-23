@@ -77,6 +77,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -89,6 +90,10 @@ from pixlstash.services.builtin_caches import huggingface_cache_dir
 from pixlstash.services.builtin_models import BUILTIN_OWNER
 from pixlstash.services import comfyui_link_service
 from pixlstash.services.comfyui_service import comfyui_model_roots
+from pixlstash.services.downloads_intake import (
+    IN_FLIGHT_SUFFIXES,
+    safetensors_complete,
+)
 from pixlstash.services.managed_model_store import (
     MANAGED_KIND,
     deletes_unclaimed_files,
@@ -98,7 +103,9 @@ from pixlstash.services.managed_model_store import (
 )
 from pixlstash.services.model_folder_scanner import (
     DOWNLOADS_FOLDER_KIND,
+    SHELF_MODEL_SUFFIXES,
     TAKEN_FROM_KINDS,
+    ModelFolderScanner,
 )
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from pixlstash.tasks.base_task import TaskStatus
@@ -133,6 +140,11 @@ _DERIVED_BY_KIND = {
 # The kinds a model can be put into by default: catalogued, and the owner's to
 # write into. Never a taken-from kind, and never PixlStash's own `foreign` roots.
 DEFAULT_ELIGIBLE_KINDS = ("user", MANAGED_KIND)
+
+# How long a file must sit unchanged before a pick-up takes it (#1985). A
+# workflow names a missing file exactly while it is downloading, and `curl -O`
+# writes straight to the final name; the Downloads intake waits the same way.
+PICK_UP_SETTLE_S = 10.0
 
 # The most recent scan submitted for each folder, whatever state it ended in.
 # One entry per registered folder, dropped when the folder is forgotten, so it
@@ -540,6 +552,61 @@ class ModelFolderRescanResponse(BaseModel):
             "`scan_status`."
         ),
     )
+
+
+class ModelFolderPickUpRequest(BaseModel):
+    """Body of ``POST /model-folders/pick-up``."""
+
+    files: list[str] = Field(
+        min_length=1,
+        max_length=200,
+        description=(
+            "Model filenames a workflow names and ComfyUI does not have, as the "
+            "pre-flight's `missing_models` reports them. Matched by basename, "
+            "case-insensitively: `sdxl/foo.safetensors` finds `foo.safetensors` "
+            "anywhere in a scanned folder."
+        ),
+    )
+    add: bool = Field(
+        default=False,
+        description=(
+            "False only looks, which is a walk and nothing more. True also "
+            "registers each file found, which reads its header and may hash it."
+        ),
+    )
+
+
+class ModelFolderPickedUpFile(BaseModel):
+    """One file ``POST /model-folders/pick-up`` found."""
+
+    folder_id: int
+    relpath: str
+    model_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "The shelf row the file now belongs to. Null when the request only "
+            "looked, or when the file could not be read (logged)."
+        ),
+    )
+
+
+class ModelFolderPickUpResponse(BaseModel):
+    """Body of ``POST /model-folders/pick-up``."""
+
+    files: list[ModelFolderPickedUpFile]
+
+
+def _settled(path: str) -> bool:
+    """Whether a file found by a pick-up has finished arriving."""
+    if any(os.path.exists(path + suffix) for suffix in IN_FLIGHT_SUFFIXES):
+        return False
+    try:
+        if time.time() - os.path.getmtime(path) < PICK_UP_SETTLE_S:
+            return False
+    except OSError as exc:
+        logger.info("Cannot stat %s for a pick-up, skipping it: %s", path, exc)
+        return False
+    return safetensors_complete(path)
 
 
 def _normalize_optional_host_path(value: Optional[str]) -> Optional[str]:
@@ -1276,5 +1343,90 @@ def create_router(server) -> APIRouter:
             server, folder_id, folder["path"], folder["kind"]
         )
         return ModelFolderRescanResponse(status=status, id=folder_id, task_id=task_id)
+
+    @router.post(
+        "/model-folders/pick-up",
+        summary="Find and register model files that landed after the last scan",
+        description=(
+            "Looks through every scanned folder for files named one of `files` "
+            "that the shelf has no `present` row for, and that have finished "
+            "arriving (unchanged for 10 s, and a whole safetensors file): a model downloaded after its "
+            "folder's last scan, which a workflow then reports missing (#1985). "
+            "With `add` false it only walks, nothing is opened or hashed, "
+            "so it is cheap enough to ask whenever a file is missing. With "
+            "`add` true each file found is registered as a scan would, "
+            "without sweeping anything else in its folder."
+        ),
+        tags=["model_shelf"],
+        response_model=ModelFolderPickUpResponse,
+    )
+    def pick_up_model_files(body: ModelFolderPickUpRequest, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        names = {
+            name.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            for name in body.files
+            if name and name.lower().endswith(SHELF_MODEL_SUFFIXES)
+        }
+        if not names:
+            return ModelFolderPickUpResponse(files=[])
+        # The folders a rescan would walk (see `rescan_model_folder`).
+        folders = [
+            (int(row["id"]), row["path"])
+            for row in server.hub.fetchall(
+                "SELECT id, path, kind, owner FROM model_folder ORDER BY id"
+            )
+            if row["kind"] not in TAKEN_FROM_KINDS and row["owner"] != BUILTIN_OWNER
+        ]
+        scanner = ModelFolderScanner(server.hub)
+        found = [
+            hit for hit in scanner.find_unregistered(folders, names) if _settled(hit[1])
+        ]
+        files = [
+            ModelFolderPickedUpFile(folder_id=folder_id, relpath=relpath)
+            for folder_id, _abs_path, relpath in found
+        ]
+        if not body.add or not found:
+            return ModelFolderPickUpResponse(files=files)
+        # A move publishes its destination before it repoints the row, so a
+        # file registered in between would fail the move. Busy is "not now":
+        # the next look, 15 s on, tries again.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            logger.info(
+                "Not picking up %s yet: a model move or import is running.",
+                ", ".join(relpath for _folder_id, _abs_path, relpath in found),
+            )
+            return ModelFolderPickUpResponse(files=files)
+        try:
+            for file, (folder_id, abs_path, relpath) in zip(files, found):
+                try:
+                    file.model_id = scanner.register_file(folder_id, abs_path, relpath)
+                except sqlite3.IntegrityError as exc:
+                    # The folder was forgotten while this ran (see `scan_folder`).
+                    logger.warning(
+                        "Could not pick up %s in model folder %s: %s. It stays "
+                        "missing until the folder is scanned.",
+                        abs_path,
+                        folder_id,
+                        exc,
+                    )
+                    continue
+                if file.model_id is None:
+                    logger.warning(
+                        "Found %s in model folder %s but could not register it "
+                        "(see above); it stays missing.",
+                        abs_path,
+                        folder_id,
+                    )
+                else:
+                    logger.info(
+                        "Picked up %s in model folder %s as model %s: it landed "
+                        "after the folder's last scan.",
+                        relpath,
+                        folder_id,
+                        file.model_id,
+                    )
+        finally:
+            SHELF_IO_LOCK.release()
+        return ModelFolderPickUpResponse(files=files)
 
     return router

@@ -3268,6 +3268,69 @@ def test_a_symlink_to_an_allowed_folder_registers_at_its_resolved_path(
     assert r.status_code == 202, r.text
 
 
+def test_pick_up_registers_a_late_file_only_when_asked(shelf_env, tmp_path):
+    """A model that landed after its folder's last scan (#1985): looking finds
+    it and writes nothing, registering puts it on the shelf, a folder that is
+    taken from or built in is never looked in, a file still arriving is left,
+    and a running move holds the registration back."""
+    hub = shelf_env.server.hub
+    loras = tmp_path / "loras"
+    downloads = tmp_path / "downloads"
+    builtin = tmp_path / "builtin"
+    for folder in (loras, downloads, builtin):
+        folder.mkdir()
+    with hub.transaction() as conn:
+        folder_id = conn.execute(
+            "INSERT INTO model_folder (path, kind, movable, created_at) "
+            "VALUES (?, 'user', 'per_item', '2026-08-09T00:00:00Z')",
+            (str(loras),),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable, created_at) "
+            "VALUES (?, 'downloads', 'external', '2026-08-09T00:00:00Z')",
+            (str(downloads),),
+        )
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, owner, movable, created_at) "
+            "VALUES (?, 'user', ?, 'per_item', '2026-08-09T00:00:00Z')",
+            (str(builtin), builtin_models.BUILTIN_OWNER),
+        )
+    settled = time.time() - 60
+    for folder in (loras, downloads, builtin):
+        os.utime(
+            write_adapter(folder / "Late.safetensors", name="Late"), (settled,) * 2
+        )
+    write_adapter(loras / "arriving.safetensors", name="Arriving")
+    url = f"{API}/model-folders/pick-up"
+    assert_real_route(shelf_env.server.api, "POST", url)
+    body = {"files": ["sdxl\\late.safetensors", "arriving.safetensors"]}
+
+    looked = shelf_env.owner.post(url, json=body)
+
+    assert looked.status_code == 200, looked.text
+    assert looked.json()["files"] == [
+        {"folder_id": folder_id, "relpath": "Late.safetensors", "model_id": None}
+    ]
+    count = "SELECT COUNT(*) AS n FROM model_file WHERE model_folder_id = ?"
+    assert hub.fetchone(count, (folder_id,))["n"] == 0
+
+    with SHELF_IO_LOCK:
+        held = shelf_env.owner.post(url, json={**body, "add": True})
+    assert held.json()["files"][0]["model_id"] is None
+    assert hub.fetchone(count, (folder_id,))["n"] == 0
+
+    picked = shelf_env.owner.post(url, json={**body, "add": True})
+
+    assert picked.status_code == 200, picked.text
+    (file,) = picked.json()["files"]
+    row = hub.fetchone(
+        "SELECT model_id, state FROM model_file WHERE model_folder_id = ?",
+        (folder_id,),
+    )
+    assert (row["model_id"], row["state"]) == (file["model_id"], "present")
+    assert shelf_env.owner.post(url, json=body).json()["files"] == []
+
+
 def test_a_path_that_is_not_a_directory_is_refused(shelf_env, tmp_path):
     """An existing directory or nothing: a file or a missing path registers a
     folder that can only ever scan as unreachable."""
@@ -3962,6 +4025,11 @@ _FOLDER_MUTATORS = (
     ("PATCH", f"{API}/model-folders/1", {"json": {}}),
     ("DELETE", f"{API}/model-folders/1", {}),
     ("POST", f"{API}/model-folders/1/rescan", {}),
+    (
+        "POST",
+        f"{API}/model-folders/pick-up",
+        {"json": {"files": ["probe.safetensors"]}},
+    ),
 )
 
 

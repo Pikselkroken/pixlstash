@@ -111,6 +111,7 @@
             v-model="renameDraft"
             aria-label="Name for this recipe"
             autofocus
+            autoselect
             @enter="commitRename(recipe)"
             @blur="commitRename(recipe)"
             @keydown.esc.stop.prevent="cancelRename"

@@ -10,6 +10,7 @@
       label="Name"
       :placeholder="fallback"
       autofocus
+      autoselect
       @enter="save"
     />
     <p class="wsr__note">
@@ -28,10 +29,14 @@
 /**
  * Rename one hand-made workflow set (#1520). A name is optional: empty goes back
  * to the checkpoint's name, or "Untitled set" without one.
+ *
+ * The field opens on the name the card shows, selected, so typing replaces it.
+ * Saving that name untouched just closes: a set called after its checkpoint
+ * goes on following the checkpoint rather than adopting its name.
  */
 import { ref, watch } from "vue";
 
-import { setCheckpoint } from "../../utils/workflowSets";
+import { handMadeName, setCheckpoint } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -45,18 +50,21 @@ const emit = defineEmits(["close", "save"]);
 
 const name = ref("");
 const fallback = ref("");
+let seed = "";
 
 watch(
   () => props.set,
   (set) => {
-    name.value = set?.name ?? "";
+    seed = set ? handMadeName(set) : "";
+    name.value = seed;
     fallback.value = setCheckpoint(set)?.name || "Untitled set";
   },
   { immediate: true },
 );
 
 function save() {
-  emit("save", name.value);
+  if (name.value.trim() === seed.trim()) emit("close");
+  else emit("save", name.value);
 }
 </script>
 

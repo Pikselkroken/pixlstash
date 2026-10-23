@@ -3985,15 +3985,17 @@ const FROM_FILE_TAG_TITLE =
 const editingRowKey = ref("");
 const editingName = ref("");
 let editingRow = null;
+let editingSeed = "";
 
-/** Put the field on a row, seeded with the GIVEN name, not the shown one. */
+/** Put the field on a row, seeded with the name it shows and selected. */
 function startRename(row) {
   editingRow = row;
   editingRowKey.value = row.rowKey;
-  // Seeded from `display_name`, so opening the field on a derived row offers an
-  // empty box: the derived string is a guess and pre-filling it would turn one
-  // Enter into somebody having chosen it.
-  editingName.value = row.display_name || "";
+  // Seeded with the SHOWN name, selected, so typing replaces it and an edit is
+  // one word rather than a retype. A derived name is a guess, so committing the
+  // seed untouched writes nothing (`commitRename`) rather than adopting it.
+  editingSeed = row.name?.text || row.display_name || "";
+  editingName.value = editingSeed;
   nextTick(() => {
     const el = rootEl.value?.querySelector(".shelf-row-rename");
     el?.focus();
@@ -4182,8 +4184,9 @@ async function commitRename() {
   const row = editingRow;
   if (!row) return;
   const next = editingName.value.trim();
+  const seed = editingSeed.trim();
   endRename();
-  if (next === String(row.display_name || "").trim()) return;
+  if (next === seed || next === String(row.display_name || "").trim()) return;
   // A cover stands for every member of the run, and they share one name.
   await store.editModelIds(row.memberIds ?? [row.id], {
     display_name: next || null,

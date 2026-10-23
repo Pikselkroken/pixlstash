@@ -66,6 +66,12 @@ vi.mock("../../api/workflows", () => ({
   saveWorkflowAsNew: (...args) => saveWorkflowAsNew(...args),
 }));
 
+// A missing model is looked for in the model folders (#1985).
+const pickUpModelFiles = vi.fn().mockResolvedValue([]);
+vi.mock("../../api/modelFolders", () => ({
+  pickUpModelFiles: (...args) => pickUpModelFiles(...args),
+}));
+
 const getPixlstashNode = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   getPixlstashNode: (...args) => getPixlstashNode(...args),
@@ -96,7 +102,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 
-/** Called with the workflow id when *Use a set…* is opened from outside. */
+/** Called with the workflow id when *Change model set…* is opened from outside. */
 const useSetOpened = vi.fn();
 /** What waits on the server: the changes routes below are one small fake. */
 let waitingOnServer = null;
@@ -133,7 +139,7 @@ const globalOpts = {
           },
         },
         template:
-          '<button data-testid="wftab-use-set" :disabled="disabled">Use a set…</button>',
+          '<button data-testid="wftab-use-set" :disabled="disabled">Change model set…</button>',
       },
     },
   },
@@ -1258,6 +1264,31 @@ describe("a checkpoint that will not load", () => {
     }
   });
 
+  it("picks up a file downloaded after the last scan and asks again", async () => {
+    let added;
+    pickUpModelFiles
+      .mockResolvedValueOnce([{ folder_id: 1, relpath: "realvisXL_v5.safetensors" }])
+      .mockReturnValueOnce(new Promise((resolve) => (added = resolve)));
+    preflightWorkflowRun
+      .mockResolvedValueOnce(missingFile("SDXL/realvisXL_v5.safetensors"))
+      .mockResolvedValue({ groups: [{ reasons: [] }] });
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    const asked = preflightWorkflowRun.mock.calls.length;
+
+    expect(wrapper.find('[data-testid="wftab-adding"]').text()).toContain(
+      "Found in your model folders",
+    );
+
+    added([{ folder_id: 1, relpath: "realvisXL_v5.safetensors", model_id: 3 }]);
+    await settle(wrapper);
+
+    expect(preflightWorkflowRun.mock.calls.length).toBe(asked + 1);
+    expect(wrapper.find('[data-testid="wftab-adding"]').exists()).toBe(false);
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+  });
+
   it("says restart ComfyUI for a shelf checkpoint its old pack cannot load", async () => {
     // #1923: the running ComfyUI-PixlStash predates the loader's shelf widget.
     preflightWorkflowRun.mockResolvedValue({
@@ -1435,6 +1466,9 @@ describe("a checkpoint that will not load", () => {
     expect(line.text).toBe("klein-9b-fp8 is not installed in ComfyUI.");
     expect(line.tooltip).toBe("Flux/klein-9b-fp8.safetensors");
     expect(textOf(wrapper)).not.toContain("Not recorded");
+    // Named, so never also "no file name was kept" (#1985 put a row between
+    // that line and its v-if once).
+    expect(textOf(wrapper)).not.toContain("No file name was kept");
   });
 
   it("says so plainly when no file name was kept anywhere", async () => {
@@ -2117,7 +2151,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
       "Parameters",
     ]);
     expect(heads[0].find("[data-testid='wftab-use-set']").text()).toBe(
-      "Use a set…",
+      "Change model set…",
     );
     expect(heads[1].find("[data-testid='wftab-edit-loras']").exists()).toBe(true);
     expect(textOf(wrapper)).not.toContain("In every picture");
@@ -4492,7 +4526,7 @@ describe("the tab as the editor (#1850)", () => {
     });
   });
 
-  describe("Use a set…", () => {
+  describe("Change model set…", () => {
     it("is handed the rows a set may fill, and fills them as unsaved changes", async () => {
       const { wrapper } = await mountEditor();
       await settle(wrapper);
