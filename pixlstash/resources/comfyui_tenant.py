@@ -284,7 +284,10 @@ class ComfyUIProbe:
                 logger.debug("Could not read process %s's sockets: %s", pid, exc)
                 continue
             if any(
-                conn.status == psutil.CONN_LISTEN and conn.laddr.port == port
+                # An empty tuple for a socket with no local address yet.
+                conn.status == psutil.CONN_LISTEN
+                and conn.laddr
+                and conn.laddr.port == port
                 for conn in connections
             ):
                 return pid

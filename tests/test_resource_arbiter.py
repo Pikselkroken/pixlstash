@@ -748,10 +748,11 @@ def test_comfyuis_figure_is_its_process_when_its_weights_live_outside_torch(
 
         def net_connections(self, kind="inet"):
             return [
+                SimpleNamespace(status=psutil.CONN_LISTEN, laddr=()),
                 SimpleNamespace(
                     status=psutil.CONN_LISTEN,
                     laddr=SimpleNamespace(port=ports[self.pid]),
-                )
+                ),
             ]
 
     # The listener is not the largest process: the port picks it, not size.
