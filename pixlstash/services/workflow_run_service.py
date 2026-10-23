@@ -863,6 +863,13 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
                 # Taken out because the file is not here, not because the owner
                 # asked: `skip_requested_loras` marks its own `True`.
                 "requested": False,
+                # As on `missing_models`, and only where true: the run goes
+                # ahead without it, but it can still be fetched for the next.
+                **(
+                    {"downloadable": True}
+                    if download_source(str(item.get("value"))) is not None
+                    else {}
+                ),
             }
             for item in missing
         )

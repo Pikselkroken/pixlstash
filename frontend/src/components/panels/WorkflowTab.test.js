@@ -3821,6 +3821,38 @@ describe("the LoRA chain (#1478)", () => {
     );
   });
 
+  it("flags a LoRA this ComfyUI lacks and offers its download where the server can fetch it", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [],
+          bypassed_loras: [
+            { file: "LCM/lightning-8step.safetensors", folder: "loras", requested: false, downloadable: true },
+            { file: "film-grain-35mm.safetensors", folder: "loras", requested: false },
+            // The owner's own skip is no missing file.
+            { file: "neon-rain-v2.safetensors", folder: "loras", requested: true, downloadable: true },
+          ],
+        },
+      ],
+    });
+    const { wrapper } = await mountChain();
+    await settle(wrapper);
+    const rows = wrapper.findAll("[data-testid='wftab-default-lora']");
+    expect(
+      rows.map((row) => [
+        row.find(".wftab-chain-name").text(),
+        row.find(".wftab-chain-flag").exists(),
+        row.find("[data-testid='model-download']").exists(),
+      ]),
+    ).toEqual([
+      ["lightning-8step", true, true],
+      ["neon-rain-v2", false, false],
+      ["film-grain-35mm", true, false],
+      // Flagged as off the shelf, as before.
+      ["hairstyle-v3.safetensors", true, false],
+    ]);
+  });
+
   it("lists the default recipe's LoRAs in the chain's order, joined by digest", async () => {
     // Given out of order. The chain says the order, by shelf DIGEST; the
     // summary, joined by ASSET reference (another hash), says what to call each and whether it is on the shelf; the strength is

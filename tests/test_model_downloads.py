@@ -25,7 +25,11 @@ from pixlstash.services.model_downloads import (
 )
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import PARTIAL_SUFFIX, SHELF_IO_LOCK
-from pixlstash.services.workflow_run_service import MISSING_MODELS, judge
+from pixlstash.services.workflow_run_service import (
+    MISSING_MODELS,
+    bypass_missing_loras,
+    judge,
+)
 from tests.test_downloads_intake import _register, write_adapter
 
 
@@ -355,6 +359,45 @@ def test_a_missing_model_the_list_links_is_marked_downloadable():
         },
         {"file": "my_own_lora.safetensors", "folder": "loras"},
     ]
+
+
+def test_a_bypassed_lora_the_list_links_is_marked_downloadable():
+    """A missing LoRA is left out of the run, not refused, but still offered."""
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": "Wuli-Qwen-Image-2512-Turbo-LoRA-2steps-V1.0-bf16.safetensors",
+                "model": ["1", 0],
+            },
+        },
+        "3": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "my_own_lora.safetensors", "model": ["2", 0]},
+        },
+        "4": {"class_type": "KSampler", "inputs": {"model": ["3", 0]}},
+    }
+    lora_spec = {
+        "input": {
+            "required": {
+                "model": ["MODEL"],
+                "lora_name": [["other.safetensors"], {}],
+            }
+        },
+        "output": ["MODEL"],
+    }
+    object_info = {
+        "CheckpointLoaderSimple": {"input": {"required": {}}, "output": ["MODEL"]},
+        "LoraLoader": lora_spec,
+        "KSampler": {"input": {"required": {"model": ["MODEL"]}}, "output": []},
+    }
+    bypassed = bypass_missing_loras(graph, object_info)
+    assert {entry["file"]: entry.get("downloadable") for entry in bypassed} == {
+        "Wuli-Qwen-Image-2512-Turbo-LoRA-2steps-V1.0-bf16.safetensors": True,
+        "my_own_lora.safetensors": None,
+    }
+    assert graph["4"]["inputs"]["model"] == ["1", 0]
 
 
 def test_a_body_of_unknown_length_is_refused(hub, target, adapter_bytes, linked):

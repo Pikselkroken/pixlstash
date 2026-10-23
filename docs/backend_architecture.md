@@ -11099,13 +11099,16 @@ Unclassified. A recorded workflow that loads the file says what it is, and
 
 ### 25.12 Downloading a model a workflow is missing
 
-A run pre-flight's `missing_models` entry carries `downloadable: true` (absent
-otherwise) when `services/model_downloads.download_source` finds a file of that
-name, case folded and without the loader's subfolder, in the committed ComfyUI
-template list (`data/workflow_templates.json`, #1999), which gives an https
-link and the ComfyUI folder it belongs in. `POST /model-downloads {file}`
-fetches it; **the request names a file, never a URL**, so no client can point
-the server at an address of its choosing.
+A run pre-flight's `missing_models` entry, and a `bypassed_loras` entry the
+server left out because this ComfyUI lacks its file (§25.9, "A missing LoRA
+bypasses its loader": the run goes ahead without it, but it can be fetched
+for the next), carries `downloadable: true` (absent otherwise) when
+`services/model_downloads.download_source` finds a file of that name, case
+folded and without the loader's subfolder, in the committed ComfyUI template
+list (`data/workflow_templates.json`, #1999), which gives an https link and
+the ComfyUI folder it belongs in. `POST /model-downloads {file}` fetches it;
+**the request names a file, never a URL**, so no client can point the server at
+an address of its choosing.
 
 - **Where it lands.** The download folder: `model_folder.is_download_target`,
   at most one by `ux_model_folder_single_download_target`, set through

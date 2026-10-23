@@ -92,6 +92,25 @@ describe("a bypassed LoRA, which is not a refusal", () => {
     expect(wrapper.text()).toContain("without them");
   });
 
+  it("offers a download beside the file only where the server can fetch it", () => {
+    const wrapper = mount(RunReasonNotice, {
+      props: {
+        reason: {
+          code: "loras_bypassed",
+          models: [
+            { file: "listed.safetensors", folder: "loras", downloadable: true },
+            { file: "own.safetensors", folder: "loras" },
+          ],
+        },
+      },
+      global: { stubs: { AppButton: true, ModelDownloadButton: true } },
+    });
+    const offered = wrapper
+      .findAll(".rrn-files li")
+      .map((row) => row.find("model-download-button-stub").exists());
+    expect(offered).toEqual([true, false]);
+  });
+
   it("offers nothing to press: there is nothing left to fix", () => {
     // The run is happening. A button here would have to either undo the
     // bypass - which puts back a graph ComfyUI refuses - or do nothing.
