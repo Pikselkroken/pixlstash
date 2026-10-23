@@ -299,6 +299,27 @@ def test_a_failed_pass_does_not_end_the_thread_waiting_leases_need(monkeypatch):
     lease.release()
 
 
+def test_a_card_whose_use_keeps_moving_does_not_spin_the_poll(monkeypatch):
+    """A model loading moves the reading every pass; the loop still pauses."""
+    monkeypatch.setattr(arbiter_module, "POLL_S", 0.05)
+    monkeypatch.setattr(arbiter_module, "MOVED_POLL_S", 0.05, raising=False)
+    arb, fake, _ = make(used_mb=20000)
+    reads = []
+    real = fake.devices
+
+    def moving(max_age_s=1.0):
+        reads.append(1)
+        fake.used_mb = 20000 + (len(reads) % 2) * 1000
+        return real(max_age_s)
+
+    fake.devices = moving
+    lease = arb.request(Tenant.AITOOLKIT, "train", device=CARD, need_mb=8000)
+    time.sleep(0.5)
+    lease.release()
+    # About ten at one pass per 0.05 s; a loop with no pause makes hundreds.
+    assert len(reads) < 40, f"{len(reads)} passes in half a second"
+
+
 def test_pixlstash_cap_limits_only_pixlstash():
     arb, _fake, _ = make()
     arb.set_pixlstash_cap_gb(2)

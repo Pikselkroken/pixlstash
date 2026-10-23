@@ -55,6 +55,9 @@ POLL_S = 2.0
 
 #: A device-used change this large wakes the arbiter between polls.
 LEDGER_WAKE_MB = 256
+#: The pause between passes while the card's use keeps moving (a model
+#: loading): soon, but never a spin.
+MOVED_POLL_S = 0.25
 
 
 class Tenant(str, Enum):
@@ -1192,8 +1195,7 @@ class ResourceArbiter:
                 for uuid_, used in devices.items()
             )
             last_used = devices
-            if not moved:
-                self._wake.wait(POLL_S)
+            self._wake.wait(MOVED_POLL_S if moved else POLL_S)
 
     # ── events ───────────────────────────────────────────────────────────
 
