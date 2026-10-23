@@ -288,11 +288,36 @@
                   ><Tooltip :text="row.missing" activator="parent" />{{
                     modelLabel(fileName(row.missing))
                   }}</span
-                >{{ missingNote(row.missing) }}
-                <ModelDownloadButton
-                  v-if="downloadableFiles.has(row.missing)"
-                  :file="row.missing"
-                />
+                >{{ missingNote(row.missing, row.kind) }}
+              </p>
+              <!-- What to do about it, in as few words: the why of an
+                   unmatched list is the mark's tooltip. -->
+              <p
+                v-if="
+                  !staleFiles.has(row.missing) &&
+                  (downloadableFiles.has(row.missing) || row.options.length)
+                "
+                class="wftab-note wftab-quiet"
+                data-testid="wftab-missing-action"
+              >
+                <template v-if="downloadableFiles.has(row.missing)"
+                  >Download it<ModelDownloadButton :file="row.missing" />{{
+                    row.options.length ? " or pick a replacement below." : ""
+                  }}</template
+                ><template v-else>Pick a replacement below.</template
+                ><span
+                  v-if="row.unmatched"
+                  class="wftab-info-mark"
+                  tabindex="0"
+                  aria-label="Why every checkpoint is listed"
+                  data-testid="wftab-replace-unmatched"
+                  :data-note="UNMATCHED_REPLACEMENTS_TEXT"
+                  ><Tooltip
+                    :text="UNMATCHED_REPLACEMENTS_TEXT"
+                    activator="parent" /><v-icon size="16" aria-hidden="true"
+                    >mdi-help-circle-outline</v-icon
+                  ></span
+                >
               </p>
               <p
                 v-if="isAdding(row.missing)"
@@ -302,15 +327,6 @@
               >
                 <v-progress-circular indeterminate size="12" width="2" />
                 Found in your model folders. Adding it to your shelf…
-              </p>
-              <!-- A pick is saved on the workflow, so an offer that is not of
-                   the missing one's base model says so before it. -->
-              <p
-                v-if="row.unmatched"
-                class="wftab-note wftab-quiet"
-                data-testid="wftab-replace-unmatched"
-              >
-                {{ UNMATCHED_REPLACEMENTS_TEXT }}
               </p>
             </template>
             <AppSelect
@@ -495,16 +511,19 @@
                   ><Tooltip :text="missingCheckpointFile" activator="parent" />{{
                     modelLabel(fileName(missingCheckpointFile))
                   }}</span
-                >{{ missingNote(missingCheckpointFile) }}
-                <ModelDownloadButton
-                  v-if="downloadableFiles.has(missingCheckpointFile)"
-                  :file="missingCheckpointFile"
-                />
+                >{{ missingNote(missingCheckpointFile, "checkpoint") }}
               </p>
               <p v-else class="wftab-note wftab-quiet">
                 No file name was kept for it anywhere.
               </p>
               <!-- After the v-else pair: between them it would take the else. -->
+              <p
+                v-if="downloadableFiles.has(missingCheckpointFile)"
+                class="wftab-note wftab-quiet"
+                data-testid="wftab-missing-action"
+              >
+                Download it<ModelDownloadButton :file="missingCheckpointFile" />
+              </p>
               <p
                 v-if="isAdding(missingCheckpointFile)"
                 class="wftab-note wftab-quiet wftab-adding"
@@ -1772,12 +1791,18 @@ const staleFiles = ref(new Set());
 /** The missing files the server can download (`downloadable`). */
 const downloadableFiles = ref(new Set());
 const PACK_OUTDATED_TEXT = "Restart ComfyUI";
-/** What follows a missing file's name, once ComfyUI has answered. */
-function missingNote(file) {
+/**
+ * What follows a missing file's name, once ComfyUI has answered. A missing
+ * checkpoint is not on the shelf either: a run would load a shelf one through
+ * ComfyUI-PixlStash. Other kinds are not loaded off the shelf.
+ */
+function missingNote(file, kind) {
   if (!preflightAnswered.value) return "";
-  return staleFiles.value.has(file)
-    ? ` is on your model shelf, but the ComfyUI-PixlStash running in ComfyUI is out of date and cannot load it. ${PACK_OUTDATED_ACTION}`
-    : " is not installed in ComfyUI.";
+  if (staleFiles.value.has(file))
+    return ` is on your model shelf, but the ComfyUI-PixlStash running in ComfyUI is out of date and cannot load it. ${PACK_OUTDATED_ACTION}`;
+  return kind === "checkpoint"
+    ? " is not in ComfyUI or PixlStash."
+    : " is not in ComfyUI.";
 }
 const missingBaseFiles = computed(() => missingByKind.value.checkpoint ?? []);
 const preflightAnswered = ref(false);
@@ -4837,6 +4862,15 @@ async function checkInstalled(key, { quiet = false } = {}) {
   display: inline-flex;
   vertical-align: text-bottom;
   margin-right: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+/* Why a missing checkpoint's list is every checkpoint: the fix mark's shape,
+   trailing its sentence. */
+.wftab-info-mark {
+  display: inline-flex;
+  vertical-align: text-bottom;
+  margin-left: var(--space-2);
   border-radius: var(--radius-sm);
 }
 
