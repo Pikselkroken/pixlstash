@@ -184,28 +184,51 @@ def record_run_outcome(
     the runs on hearing of one never finds it still listed.
     """
     with _run_outcomes_lock:
-        if status not in ("running", "waiting"):
-            _live_runs.pop(prompt_id, None)
-            _held_cancels.pop(prompt_id, None)
-        previous = _run_outcomes.pop(prompt_id, None) or {}
-        run_id = run_id or previous.get("run_id")
-        _run_outcomes[prompt_id] = {
-            "run_id": run_id,
-            "prompt_id": None if prompt_id == run_id else prompt_id,
-            "status": status,
-            "message": message,
-            "stopped": stopped,
-            "picture_ids": list(picture_ids or []),
-            "library_uuid": library_uuid or previous.get("library_uuid"),
-            "code": code,
-        }
-        while len(_run_outcomes) > MAX_RUN_OUTCOMES:
-            ended = (
-                key
-                for key, outcome in _run_outcomes.items()
-                if outcome["status"] not in ("running", "waiting")
-            )
-            del _run_outcomes[next(ended, None) or next(iter(_run_outcomes))]
+        _record_run_outcome_locked(
+            prompt_id,
+            status,
+            message,
+            stopped,
+            picture_ids,
+            library_uuid,
+            code,
+            run_id,
+        )
+
+
+def _record_run_outcome_locked(
+    prompt_id: str,
+    status: str,
+    message: str | None = None,
+    stopped: bool = False,
+    picture_ids: list[int] | None = None,
+    library_uuid: str | None = None,
+    code: str | None = None,
+    run_id: str | None = None,
+) -> None:
+    """``record_run_outcome``'s body; call under ``_run_outcomes_lock``."""
+    if status not in ("running", "waiting"):
+        _live_runs.pop(prompt_id, None)
+        _held_cancels.pop(prompt_id, None)
+    previous = _run_outcomes.pop(prompt_id, None) or {}
+    run_id = run_id or previous.get("run_id")
+    _run_outcomes[prompt_id] = {
+        "run_id": run_id,
+        "prompt_id": None if prompt_id == run_id else prompt_id,
+        "status": status,
+        "message": message,
+        "stopped": stopped,
+        "picture_ids": list(picture_ids or []),
+        "library_uuid": library_uuid or previous.get("library_uuid"),
+        "code": code,
+    }
+    while len(_run_outcomes) > MAX_RUN_OUTCOMES:
+        ended = (
+            key
+            for key, outcome in _run_outcomes.items()
+            if outcome["status"] not in ("running", "waiting")
+        )
+        del _run_outcomes[next(ended, None) or next(iter(_run_outcomes))]
 
 
 def run_outcome(run_or_prompt_id: str) -> dict | None:
@@ -228,10 +251,13 @@ def hold_run(
     Listed by ``live_runs`` as ``waiting`` with no prompt id until
     ``follow_run`` names the prompt ComfyUI accepted. Returns the event that
     cancels it (an abort, or the lease's cancel) before it is submitted.
+    One step under the lock: an abort that can see the run can cancel it.
     """
-    record_run_outcome(run_id, "waiting", library_uuid=library_uuid, run_id=run_id)
     cancel = threading.Event()
     with _run_outcomes_lock:
+        _record_run_outcome_locked(
+            run_id, "waiting", library_uuid=library_uuid, run_id=run_id
+        )
         _held_cancels[run_id] = cancel
         _live_runs[run_id] = {
             "run_id": run_id,

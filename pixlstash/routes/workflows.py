@@ -8245,9 +8245,10 @@ def create_router(server) -> APIRouter:
                 run_id,
                 submitted,
             )
+            # Keyed by the run id: there is no prompt id to key it by.
             record_run_outcome(
-                run_id,
-                "failed",
+                prompt_id=run_id,
+                status="failed",
                 message="ComfyUI accepted the run but did not say which it was.",
                 run_id=run_id,
             )

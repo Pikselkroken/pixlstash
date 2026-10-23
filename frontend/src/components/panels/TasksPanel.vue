@@ -362,7 +362,7 @@
     :device="runAnyway?.device || null"
     :holders="tasksStore.resources?.holders || []"
     :busy="busyLease !== ''"
-    @close="runAnyway = null"
+    @close="closeRunAnyway"
     @confirm="confirmRunAnyway"
   />
   <!-- What the last run of a workflow changed (#1850): the Run popup's two
@@ -663,7 +663,17 @@ function askRunAnyway(entry) {
     label: entry.label,
     needMb: Number(entry.lease.need_mb) || 0,
     device,
+    // Opened from code, so the overlay cannot hand focus back by itself.
+    trigger: document.activeElement,
   };
+}
+
+/** Close the dialog and give focus back to the button that opened it. */
+function closeRunAnyway() {
+  const trigger = runAnyway.value?.trigger;
+  runAnyway.value = null;
+  // Gone if the run started meanwhile; then focus stays where it lands.
+  nextTick(() => trigger?.isConnected && trigger.focus?.());
 }
 
 async function confirmRunAnyway() {
@@ -676,7 +686,7 @@ async function confirmRunAnyway() {
     await tasksStore.runWaitingAnyway(pending.leaseId);
   } finally {
     busyLease.value = "";
-    runAnyway.value = null;
+    closeRunAnyway();
   }
 }
 

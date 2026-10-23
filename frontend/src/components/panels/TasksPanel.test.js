@@ -1098,4 +1098,42 @@ describe("the GPU queue in the task manager", () => {
     await flushPromises();
     expect(runLeaseAnyway).toHaveBeenCalledWith("lease-b");
   });
+
+  it("hands focus back to Run anyway when its dialog closes", async () => {
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-b",
+            tenant: "comfyui",
+            label: "ComfyUI 'Klein inpaint'",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            run_id: "run-b",
+            waiting_reason: { code: "vram", text: "Needs 14.6 GB", need_mb: 14600, free_mb: 11500, short_by_mb: 3100, position: 1, blocked_by: [], actions: ["run_anyway"] },
+          }),
+        ],
+      }),
+    );
+    const wrapper = mount(TasksPanel, {
+      global: { stubs: { ...globalOpts.global.stubs, AppDialog: true } },
+      attachTo: document.body,
+    });
+    // Where focus is while the dialog is up.
+    const inDialog = document.body.appendChild(document.createElement("button"));
+    try {
+      const button = wrapper.find('[data-testid="tm-run-anyway"]');
+      button.element.focus();
+      await button.trigger("click");
+      inDialog.focus();
+      wrapper.findComponent(RunAnywayDialog).vm.$emit("close");
+      await flushPromises();
+      expect(document.activeElement).toBe(button.element);
+    } finally {
+      inDialog.remove();
+      wrapper.unmount();
+    }
+  });
 });

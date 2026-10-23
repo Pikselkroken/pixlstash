@@ -39,6 +39,7 @@ import shutil
 import socket
 import sqlite3
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import replace
@@ -14001,6 +14002,32 @@ def test_a_held_run_is_either_sent_or_cancelled_never_both(held):
     assert comfyui_service.claim_held_run("run-race-2") is True
     assert comfyui_service.cancel_held_runs("run-race-2") == []
     assert comfyui_service.run_outcome("run-race-2")["status"] == "waiting"
+
+
+def test_an_abort_that_sees_a_held_run_can_cancel_it(held):
+    """An abort landing the moment the run reads as waiting must stop it."""
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        held.runnable.monkeypatch.setattr(comfyui_service, name, {})
+    real = threading.Lock()
+    aborted = []
+
+    class _AbortOnRelease:
+        def __enter__(self):
+            real.acquire()
+
+        def __exit__(self, *exc):
+            real.release()
+            visible = comfyui_service._run_outcomes.get("run-gap")
+            if visible and not aborted:
+                aborted.append(None)
+                aborted[0] = comfyui_service.cancel_held_runs("run-gap")
+
+    held.runnable.monkeypatch.setattr(
+        comfyui_service, "_run_outcomes_lock", _AbortOnRelease()
+    )
+    comfyui_service.hold_run("run-gap", "http://comfy.invalid")
+    assert aborted == [["run-gap"]]
+    assert comfyui_service.claim_held_run("run-gap") is False
 
 
 def test_run_anyway_sends_a_waiting_run_past_what_holds_the_card(held):
