@@ -7041,8 +7041,9 @@ unchanged by the tab's existence.
   the chips keep the room: its tooltip names the address, and a click opens a
   small panel with the address and *Read the templates again* (`refresh`).
   With no ComfyUI answering the list is the copy PixlStash ships
-  (`reachable: false` with templates), drawn the same way: the dot takes the
-  `warning` fill and the panel says these are the shipped templates and that
+  (`reachable: false` with templates), drawn the same way: the dot gives way to a
+  red disconnected glyph (`mdi-lan-disconnect`, `surface-error`) over the mark,
+  and the panel says these are the shipped templates and that
   node-pack ones appear once ComfyUI answers.
 - **Readiness is one function** (`templateReadiness`): `partner`, else
   `pack_not_loaded` when the server says the pack's nodes did not load, else

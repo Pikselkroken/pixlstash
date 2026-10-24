@@ -2,8 +2,8 @@
   <div class="wtp" role="tabpanel" aria-labelledby="wfv-tab-templates">
     <!-- Where the list comes from, first on the strip: none of it is the
          owner's own work until it is added. A ComfyUI mark with a connected
-         dot (a warning one for the shipped copy), so the strip keeps its room
-         for the chips; the address and the re-read are one hover and one
+         dot (a disconnected glyph for the shipped copy), so the strip keeps
+         its room for the chips; the address and the re-read are one hover and one
          click away. -->
     <div v-if="listed && store.loaded" class="wtp-strip">
       <v-menu location="bottom start" :close-on-content-click="false">
@@ -17,10 +17,13 @@
           >
             <ComfyuiIcon :size="16" />
             <span
+              v-if="store.reachable"
               class="wtp-link-dot"
-              :class="{ 'wtp-link-dot--shipped': !store.reachable }"
               aria-hidden="true"
             ></span>
+            <span v-else class="wtp-link-off" aria-hidden="true">
+              <v-icon size="12">mdi-lan-disconnect</v-icon>
+            </span>
             <Tooltip :text="sourceLabel" activator="parent" :describe="false" />
           </button>
         </template>
@@ -369,8 +372,16 @@ function onKeyDown(event) {
   box-shadow: 0 0 0 2px rgb(var(--v-theme-background));
 }
 
-.wtp-link-dot--shipped {
-  background: rgb(var(--v-theme-warning));
+/* The shipped copy's mark: a disconnected glyph in the error hue, on the
+   strip's ground so it reads apart from the mark beneath. */
+.wtp-link-off {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: inline-flex;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-background));
+  color: rgb(var(--v-theme-surface-error));
 }
 
 .wtp-link-menu {
