@@ -1,624 +1,637 @@
 <template>
-  <!-- Deliberately multi-root: these are the inspector body's own flex
-       children, exactly as they were when they lived in `StatsSidebar`. A
-       wrapper div would make them one child and change the spacing in a rail
-       this change is not supposed to touch. It also means `.tm-system-bar`'s
-       `margin-top: auto` still resolves against the body: inert in the stats
-       rail, which never gives `.inspector-body` a height, and a real pin to
-       the bottom on `/workflows`, where the inspector's footer slot makes the
-       body `flex: 1` (`.inspector-content--footed`). That difference is pre-existing and left alone. -->
-  <!-- A finished run is not an active task, and the panel is not empty with
-       one in it either: the idle line gives way. -->
   <div
-    v-if="tasksStore.activeEntries.length === 0 && finished.length === 0"
-    class="tm-idle-msg"
+    ref="root"
+    class="tm"
+    :class="{ 'tm--lightbox': lightbox }"
+    @focusout="onFocusOut"
   >
-    No active tasks
-  </div>
-  <!-- The GPU, one bar per device (Direction A): what holds each card's memory,
-       with the free part and the spare margin. Drawn only when the backend
-       reports `resources`. -->
-  <div v-if="tasksStore.vramBars.length" class="tm-gpu" data-testid="tm-gpu">
+    <!-- One root, but no box of its own in a rail (`display: contents`): the
+         rows stay the inspector body's own flex children, exactly as they were
+         when they lived in `StatsSidebar`, so the body's gap spaces them. It also
+         means `.tm-system-bar`'s `margin-top: auto` still resolves against the
+         body: inert in the stats rail, which never gives `.inspector-body` a
+         height, and a real pin to the bottom on `/workflows`, where the
+         inspector's footer slot makes the body `flex: 1`
+         (`.inspector-content--footed`). That difference is pre-existing and
+         left alone. The lightbox variant is a box: its own scrolling column, on
+         the lightbox's dark ground (`.tm--lightbox` below). -->
+    <!-- A finished run is not an active task, and the panel is not empty with
+         one in it either: the idle line gives way. -->
     <div
-      v-for="bar in tasksStore.vramBars"
-      :key="bar.device.uuid"
-      class="tm-gpu-dev"
+      v-if="tasksStore.activeEntries.length === 0 && finished.length === 0"
+      class="tm-idle-msg"
     >
-      <div class="tm-gpu-head">
-        <span class="tm-gpu-name">{{ bar.device.name }}</span>
-        <span class="tm-gpu-figs">
-          {{ formatGb(bar.total) }} VRAM · {{ formatGb(bar.free) }} free
-        </span>
-      </div>
+      No active tasks
+    </div>
+    <!-- The GPU, one bar per device (Direction A): what holds each card's memory,
+         with the free part and the spare margin. Drawn only when the backend
+         reports `resources`. -->
+    <div v-if="tasksStore.vramBars.length" class="tm-gpu" data-testid="tm-gpu">
       <div
-        class="tm-vram"
-        role="img"
-        :aria-label="`${bar.device.name}: ${formatGb(bar.free)} free of ${formatGb(bar.total)}`"
+        v-for="bar in tasksStore.vramBars"
+        :key="bar.device.uuid"
+        class="tm-gpu-dev"
       >
-        <span
-          v-for="segment in bar.segments"
-          :key="segment.kind"
-          class="tm-vram-seg"
-          :class="`tm-vram-seg--${segment.kind}`"
-          :style="{ width: pctText(segment.pct) }"
-        >
-          <Tooltip
-            :text="segmentTip(segment)"
-            activator="parent"
-            :describe="false"
-          />
-        </span>
-      </div>
-    </div>
-    <ul class="tm-legend" aria-label="What the bars show">
-      <li><span class="tm-swatch tm-vram-seg--pixlstash"></span>PixlStash</li>
-      <li><span class="tm-swatch tm-vram-seg--comfyui"></span>ComfyUI</li>
-      <li><span class="tm-swatch tm-vram-seg--other"></span>Other apps</li>
-      <li><span class="tm-swatch tm-vram-seg--spare"></span>Spare</li>
-    </ul>
-  </div>
-
-  <!-- Running: ComfyUI runs as rows of their own, PixlStash's own background
-       work folded behind one row, and imports as before. -->
-  <section
-    v-if="tasksStore.runningEntries.length"
-    class="tm-group"
-    aria-labelledby="tm-running-head"
-  >
-    <div class="tm-group-head">
-      <span id="tm-running-head" class="section-label">Running</span>
-      <span class="tm-group-col">VRAM</span>
-    </div>
-    <div class="tm-worker-list">
-      <template v-for="entry in tasksStore.runningEntries" :key="entry.key">
-        <!-- A ComfyUI run in flight: its own row, named for what it is. The
-             stop button takes the figure's place on hover or focus, and stops
-             every run ComfyUI has, as it always has. -->
+        <div class="tm-gpu-head">
+          <span class="tm-gpu-name">{{ bar.device.name }}</span>
+          <span class="tm-gpu-figs">
+            {{ formatGb(bar.total) }} VRAM · {{ formatGb(bar.free) }} free
+          </span>
+        </div>
         <div
-          v-if="entry.kind === 'comfyui'"
-          class="tm-row tm-row--run"
-          data-testid="tm-comfy-row"
+          class="tm-vram"
+          role="img"
+          :aria-label="`${bar.device.name}: ${formatGb(bar.free)} free of ${formatGb(bar.total)}`"
         >
           <span
-            class="tm-mark"
-            :class="entry.run.status === 'running' ? 'tm-mark--running' : ''"
-            aria-hidden="true"
-          ></span>
-          <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
-          <span class="tm-name">{{ entry.run.label }}</span>
-          <span class="tm-figure">
-            <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
-            <span class="tm-acts">
-              <button
-                class="tm-act"
-                type="button"
-                aria-label="Stop ComfyUI"
-                @click="tasksStore.abortComfyuiRuns()"
-              >
-                <Tooltip text="Stop ComfyUI" activator="parent" :describe="false" />
-                <v-icon size="16">mdi-stop</v-icon>
-              </button>
-            </span>
+            v-for="segment in bar.segments"
+            :key="segment.kind"
+            class="tm-vram-seg"
+            :class="`tm-vram-seg--${segment.kind}`"
+            :style="{ width: pctText(segment.pct) }"
+          >
+            <Tooltip
+              :text="segmentTip(segment)"
+              activator="parent"
+              :describe="false"
+            />
           </span>
-          <Tooltip
-            :text="`${entry.run.message}, ${Math.round(entry.run.percent)}%`"
-            activator="parent"
-            :describe="false"
-          />
         </div>
-        <!-- PixlStash's own background work: one folded row with its count
-             and the VRAM its leases hold. The caret lists one line per task:
-             a worker with its sparkline, a lease or stopped task no worker
-             reports as a plain line. -->
-        <div
-          v-else-if="entry.kind === 'pixlstash'"
-          class="tm-fold"
-          data-testid="tm-pixlstash"
-        >
-          <div class="tm-row tm-row--fold">
+      </div>
+      <ul class="tm-legend" aria-label="What the bars show">
+        <li><span class="tm-swatch tm-vram-seg--pixlstash"></span>PixlStash</li>
+        <li><span class="tm-swatch tm-vram-seg--comfyui"></span>ComfyUI</li>
+        <li><span class="tm-swatch tm-vram-seg--other"></span>Other apps</li>
+        <li><span class="tm-swatch tm-vram-seg--spare"></span>Spare</li>
+      </ul>
+    </div>
+
+    <!-- Running: ComfyUI runs as rows of their own, PixlStash's own background
+         work folded behind one row, and imports as before. -->
+    <section
+      v-if="tasksStore.runningEntries.length"
+      class="tm-group"
+      aria-labelledby="tm-running-head"
+    >
+      <div class="tm-group-head">
+        <span id="tm-running-head" class="section-label">Running</span>
+        <span class="tm-group-col">VRAM</span>
+      </div>
+      <div class="tm-worker-list">
+        <template v-for="entry in tasksStore.runningEntries" :key="entry.key">
+          <!-- A ComfyUI run in flight: its own row, named for what it is. The
+               stop button takes the figure's place on hover or focus, and stops
+               every run ComfyUI has, as it always has. -->
+          <div
+            v-if="entry.kind === 'comfyui'"
+            class="tm-row tm-row--run"
+            data-testid="tm-comfy-row"
+          >
             <span
               class="tm-mark"
-              :class="pixlstashRunning(entry) ? 'tm-mark--running' : ''"
+              :class="entry.run.status === 'running' ? 'tm-mark--running' : ''"
               aria-hidden="true"
             ></span>
-            <span class="tm-app-gap" aria-hidden="true"></span>
-            <span class="tm-name">
-              PixlStash processing
-              <span class="tm-count" data-testid="tm-pixl-count">{{ entry.count }}</span>
-            </span>
+            <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
+            <span class="tm-name">{{ entry.run.label }}</span>
             <span class="tm-figure">
-              <span class="tm-fig-text">{{ formatGb(entry.mb) }}</span>
-              <button
-              class="tm-caret"
-              type="button"
-              :aria-expanded="pixlOpen ? 'true' : 'false'"
-              aria-controls="tm-pixl-children"
-              :aria-label="pixlOpen ? 'Hide PixlStash tasks' : 'Show PixlStash tasks'"
-              data-testid="tm-pixl-caret"
-              @click="togglePixl"
-            >
-              <v-icon size="16">{{ pixlOpen ? "mdi-chevron-down" : "mdi-chevron-right" }}</v-icon>
-            </button>
+              <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
+              <span class="tm-acts">
+                <button
+                  class="tm-act"
+                  type="button"
+                  aria-label="Stop ComfyUI"
+                  @click="tasksStore.abortComfyuiRuns()"
+                >
+                  <Tooltip text="Stop ComfyUI" activator="parent" :describe="false" />
+                  <v-icon size="16">mdi-stop</v-icon>
+                </button>
+              </span>
             </span>
-            <Tooltip :text="foldTip(entry)" activator="parent" :describe="false" />
+            <Tooltip
+              :text="`${entry.run.message}, ${Math.round(entry.run.percent)}%`"
+              activator="parent"
+              :describe="false"
+            />
           </div>
-          <div v-if="pixlOpen" id="tm-pixl-children" class="tm-children">
-            <template v-for="child in entry.children" :key="child.key">
-              <!-- A backend worker: throughput sparkline + rate, and what its
-                   lease holds while it holds one. -->
-              <div v-if="child.snapshot" class="tm-worker-row">
-                <div class="tm-worker-row-top">
+          <!-- PixlStash's own background work: one folded row with its count
+               and the VRAM its leases hold. The caret lists one line per task:
+               a worker with its sparkline, a lease or stopped task no worker
+               reports as a plain line. -->
+          <div
+            v-else-if="entry.kind === 'pixlstash'"
+            class="tm-fold"
+            data-testid="tm-pixlstash"
+          >
+            <div class="tm-row tm-row--fold">
+              <span
+                class="tm-mark"
+                :class="pixlstashRunning(entry) ? 'tm-mark--running' : ''"
+                aria-hidden="true"
+              ></span>
+              <span class="tm-app-gap" aria-hidden="true"></span>
+              <span class="tm-name">
+                PixlStash processing
+                <span class="tm-count" data-testid="tm-pixl-count">{{ entry.count }}</span>
+              </span>
+              <span class="tm-figure">
+                <span class="tm-fig-text">{{ formatGb(entry.mb) }}</span>
+                <button
+                class="tm-caret"
+                type="button"
+                :aria-expanded="pixlOpen ? 'true' : 'false'"
+                aria-controls="tm-pixl-children"
+                :aria-label="pixlOpen ? 'Hide PixlStash tasks' : 'Show PixlStash tasks'"
+                data-testid="tm-pixl-caret"
+                @click="togglePixl"
+              >
+                <v-icon size="16">{{ pixlOpen ? "mdi-chevron-down" : "mdi-chevron-right" }}</v-icon>
+              </button>
+              </span>
+              <Tooltip :text="foldTip(entry)" activator="parent" :describe="false" />
+            </div>
+            <div v-if="pixlOpen" id="tm-pixl-children" class="tm-children">
+              <template v-for="child in entry.children" :key="child.key">
+                <!-- A backend worker: throughput sparkline + rate, and what its
+                     lease holds while it holds one. -->
+                <div v-if="child.snapshot" class="tm-worker-row">
+                  <div class="tm-worker-row-top">
+                    <span
+                      class="tm-status-dot"
+                      :class="{ 'tm-status-dot--running': childRunning(child) }"
+                      :data-state="child.stopped ? 'stopped' : undefined"
+                    ></span>
+                    <span class="tm-worker-label">{{
+                      tmFormatLabel(child.workerKey, child.snapshot.label)
+                    }}</span>
+                    <span class="tm-worker-progress">{{
+                      tmFormatProgress(child.snapshot)
+                    }}</span>
+                    <span
+                      v-if="child.stopped || child.onCpu || child.mb"
+                      class="tm-worker-progress"
+                      data-testid="tm-worker-figure"
+                    >{{ childFigure(child) }}</span>
+                  </div>
+                  <div class="tm-worker-row-bottom">
+                    <canvas
+                      :ref="(el) => tmRegisterCanvas(child.workerKey, el)"
+                      class="tm-sparkline"
+                    ></canvas>
+                    <span class="tm-worker-rate">
+                      {{ tmFormatRate(tmGetLatestRate(child.workerKey)) }}/s
+                    </span>
+                  </div>
+                  <Tooltip
+                    v-if="child.stopped || child.onCpu"
+                    :text="childTip(child)"
+                    activator="parent"
+                    :describe="false"
+                  />
+                </div>
+                <div
+                  v-else
+                  class="tm-row tm-row--child"
+                >
                   <span
-                    class="tm-status-dot"
-                    :class="{ 'tm-status-dot--running': childRunning(child) }"
+                    class="tm-mark"
+                    :class="child.stopped ? '' : 'tm-mark--running'"
                     :data-state="child.stopped ? 'stopped' : undefined"
+                    aria-hidden="true"
                   ></span>
-                  <span class="tm-worker-label">{{
-                    tmFormatLabel(child.workerKey, child.snapshot.label)
-                  }}</span>
-                  <span class="tm-worker-progress">{{
-                    tmFormatProgress(child.snapshot)
-                  }}</span>
-                  <span
-                    v-if="child.stopped || child.onCpu || child.mb"
-                    class="tm-worker-progress"
-                    data-testid="tm-worker-figure"
-                  >{{ childFigure(child) }}</span>
-                </div>
-                <div class="tm-worker-row-bottom">
-                  <canvas
-                    :ref="(el) => tmRegisterCanvas(child.workerKey, el)"
-                    class="tm-sparkline"
-                  ></canvas>
-                  <span class="tm-worker-rate">
-                    {{ tmFormatRate(tmGetLatestRate(child.workerKey)) }}/s
+                  <span class="tm-app-gap" aria-hidden="true"></span>
+                  <span class="tm-name">{{ childLabel(child) }}</span>
+                  <span class="tm-figure">
+                    <span class="tm-fig-text">{{ childFigure(child) }}</span>
                   </span>
+                  <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
                 </div>
+              </template>
+            </div>
+          </div>
+          <!-- A model downloading for a workflow: its bytes as a bar, and a
+               cancel that discards what it had fetched. -->
+          <div
+            v-else-if="entry.kind === 'download'"
+            class="tm-worker-row"
+            data-testid="tm-download-row"
+          >
+            <div class="tm-worker-row-top">
+              <span class="tm-status-dot tm-status-dot--running"></span>
+              <span class="tm-worker-label">{{ entry.run.label }}</span>
+              <button
+                v-if="!isReadOnly"
+                class="tm-comfy-abort"
+                type="button"
+                :aria-label="`Cancel downloading ${entry.run.label}`"
+                data-testid="tm-download-cancel"
+                @click="tasksStore.cancelDownload(entry.id)"
+              >
                 <Tooltip
-                  v-if="child.stopped || child.onCpu"
-                  :text="childTip(child)"
+                  text="Cancel download"
                   activator="parent"
                   :describe="false"
                 />
-              </div>
-              <div
-                v-else
-                class="tm-row tm-row--child"
-              >
-                <span
-                  class="tm-mark"
-                  :class="child.stopped ? '' : 'tm-mark--running'"
-                  :data-state="child.stopped ? 'stopped' : undefined"
-                  aria-hidden="true"
-                ></span>
-                <span class="tm-app-gap" aria-hidden="true"></span>
-                <span class="tm-name">{{ childLabel(child) }}</span>
-                <span class="tm-figure">
-                  <span class="tm-fig-text">{{ childFigure(child) }}</span>
-                </span>
-                <Tooltip :text="childTip(child)" activator="parent" :describe="false" />
-              </div>
-            </template>
+                ✕
+              </button>
+            </div>
+            <div class="tm-comfy-bar">
+              <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
+            </div>
+            <div class="tm-comfy-message">{{ entry.run.message }}</div>
           </div>
-        </div>
-        <!-- A model downloading for a workflow: its bytes as a bar, and a
-             cancel that discards what it had fetched. -->
-        <div
-          v-else-if="entry.kind === 'download'"
-          class="tm-worker-row"
-          data-testid="tm-download-row"
-        >
-          <div class="tm-worker-row-top">
-            <span class="tm-status-dot tm-status-dot--running"></span>
-            <span class="tm-worker-label">{{ entry.run.label }}</span>
-            <button
-              v-if="!isReadOnly"
-              class="tm-comfy-abort"
-              type="button"
-              :aria-label="`Cancel downloading ${entry.run.label}`"
-              data-testid="tm-download-cancel"
-              @click="tasksStore.cancelDownload(entry.id)"
-            >
-              <Tooltip
-                text="Cancel download"
-                activator="parent"
-                :describe="false"
-              />
-              ✕
-            </button>
-          </div>
-          <div class="tm-comfy-bar">
-            <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
-          </div>
-          <div class="tm-comfy-message">{{ entry.run.message }}</div>
-        </div>
-        <!-- Async import (#459): the two-phase dialog auto-hides at the safe
-             transition and the import lands here as a determinate task row.
-             data-import-task-row is the FLIP flight target the import dialog
-             flies its count chip into. -->
-        <div
-          v-else-if="entry.kind === 'import'"
-          class="tm-worker-row tm-import-row"
-          :data-import-task-row="entry.key"
-        >
-          <div class="tm-worker-row-top">
-            <span
-              class="tm-status-dot"
-              :class="{
-                'tm-status-dot--running': entry.run.status === 'running',
-              }"
-            ></span>
-            <span class="tm-worker-label">{{ entry.run.label }}</span>
-            <span v-if="entry.run.total > 0" class="tm-worker-progress">
-              {{ entry.run.current }} / {{ entry.run.total }}
-            </span>
-            <!-- Cancel is offered only while the import is genuinely
-                 client-abortable (the pre-commit upload window, run.abortable).
-                 A committed server-side import cannot be stopped from the
-                 client, so no cancel control is shown for it. -->
-            <button
-              v-if="entry.run.abortable && !isReadOnly"
-              class="tm-comfy-abort"
-              type="button"
-              aria-label="Cancel import"
-              @click="tasksStore.abortImportRun(entry.key)"
-            >
-              <Tooltip
-                text="Cancel import"
-                activator="parent"
-                :describe="false"
-              />
-              ✕
-            </button>
-          </div>
-          <div class="tm-comfy-bar">
-            <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
-          </div>
-          <div class="tm-comfy-message">{{ entry.run.message }}</div>
-        </div>
-      </template>
-    </div>
-  </section>
-
-  <!-- Waiting for the GPU: in the order the arbiter will run them. The
-       backend's sentence is the tooltip; the actions it offers take the
-       figure's place on hover or focus. -->
-  <section
-    v-if="tasksStore.waitingEntries.length"
-    class="tm-group"
-    aria-labelledby="tm-waiting-head"
-  >
-    <div class="tm-group-head">
-      <span id="tm-waiting-head" class="section-label">Waiting for the GPU</span>
-      <span class="tm-group-col">Needs</span>
-    </div>
-    <div class="tm-worker-list">
-      <div
-        v-for="entry in tasksStore.waitingEntries"
-        :key="entry.key"
-        class="tm-row tm-row--waiting"
-        data-testid="tm-waiting-row"
-      >
-        <span class="tm-mark tm-mark--waiting" aria-hidden="true">
-          <v-icon size="16">mdi-hourglass</v-icon>
-        </span>
-        <ComfyuiIcon
-          v-if="entry.tenant === 'comfyui'"
-          :size="18"
-          class="tm-app"
-          aria-hidden="true"
-        />
-        <AiToolkitIcon
-          v-else-if="entry.tenant === 'aitoolkit'"
-          :size="18"
-          class="tm-app"
-          aria-hidden="true"
-        />
-        <span v-else class="tm-app-gap" aria-hidden="true"></span>
-        <span class="tm-name">{{ entry.label }}</span>
-        <span class="tm-figure">
-          <span class="tm-fig-text">{{ needText(entry) }}</span>
-          <span v-if="actionsOf(entry).length" class="tm-acts">
-            <button
-              v-if="actionsOf(entry).includes('run_anyway')"
-              class="tm-act"
-              type="button"
-              data-testid="tm-run-anyway"
-              :aria-label="`Run ${entry.label} anyway`"
-              :disabled="busyLease === entry.lease?.id"
-              @click="askRunAnyway(entry)"
-            >
-              <Tooltip text="Run anyway" activator="parent" :describe="false" />
-              <v-icon size="16">mdi-play</v-icon>
-            </button>
-            <button
-              v-if="actionsOf(entry).includes('free_comfyui')"
-              class="tm-act"
-              type="button"
-              data-testid="tm-free-comfyui"
-              aria-label="Free ComfyUI's cache"
-              @click="freeComfyuiCache()"
-            >
-              <Tooltip text="Free ComfyUI's cache" activator="parent" :describe="false" />
-              <v-icon size="16">mdi-broom</v-icon>
-            </button>
-            <button
-              v-if="actionsOf(entry).includes('cancel')"
-              class="tm-act"
-              type="button"
-              data-testid="tm-cancel-wait"
-              :aria-label="`Cancel ${entry.label}`"
-              :disabled="busyLease === entry.lease?.id"
-              @click="cancelWait(entry)"
-            >
-              <Tooltip text="Cancel" activator="parent" :describe="false" />
-              <v-icon size="16">mdi-close</v-icon>
-            </button>
-          </span>
-        </span>
-        <Tooltip
-          :text="entry.text || `${entry.label} is waiting for the GPU`"
-          activator="parent"
-          :describe="false"
-        />
-      </div>
-    </div>
-  </section>
-
-  <!-- Mounted only while it is asked: a closed Vuetify dialog still sets up
-       its overlay, which a panel with nothing to ask need not carry. -->
-  <RunAnywayDialog
-    v-if="runAnyway"
-    open
-    :label="runAnyway?.label || ''"
-    :need-mb="runAnyway?.needMb || 0"
-    :device="runAnyway?.device || null"
-    :holders="tasksStore.resources?.holders || []"
-    :busy="busyLease !== ''"
-    @close="closeRunAnyway"
-    @confirm="confirmRunAnyway"
-  />
-  <!-- Finished (#2050): the runs that ended, one line each on the Running and
-       Waiting grid, read from the server so a reload and every tab agree. A
-       run with changes from the workflow (#1850) wears a pill and opens to
-       its pictures and the Run popup's two verbs again, so the offer to save
-       is always one of the runs you can see. Pictures get rated before that
-       is decided: it stays until dismissed, saved, or the workflow runs
-       again. -->
-  <section
-    v-if="finished.length"
-    ref="offersList"
-    class="tm-group"
-    aria-labelledby="tm-finished-head"
-    data-testid="tm-finished"
-  >
-    <div class="tm-group-head tm-group-head--finished">
-      <span id="tm-finished-head" class="section-label">Finished</span>
-      <!-- Clear takes the column label's place on hover or focus, as a row's
-           actions take its figure's. It never throws away unsaved changes. -->
-      <span class="tm-group-col tm-head-swap">
-        <span class="tm-head-col" aria-hidden="true">Made</span>
-        <button
-          class="tm-head-act"
-          type="button"
-          data-testid="tm-finished-clear"
-          aria-label="Clear the finished runs. Runs with unsaved changes stay."
-          :disabled="Boolean(dismissing) || Boolean(busy)"
-          @click="clearFinished"
-        >
-          Clear
-        </button>
-      </span>
-    </div>
-    <div class="tm-worker-list">
-      <div
-        v-for="run in finished"
-        :key="run.id"
-        class="tm-fold"
-        data-testid="tm-finished-run"
-        :data-run="run.id"
-        :role="run.offer ? 'group' : undefined"
-        :aria-label="run.offer ? `Changes the run of ${run.offer.name} was made with` : undefined"
-        :data-offer="run.offer ? run.offer.workflowId : undefined"
-      >
-        <div class="tm-row tm-row--done" :class="{ 'tm-row--open': run.open }">
-          <span
-            class="tm-mark tm-mark--done"
-            :data-state="run.failed ? 'failed' : 'done'"
-            aria-hidden="true"
+          <!-- Async import (#459): the two-phase dialog auto-hides at the safe
+               transition and the import lands here as a determinate task row.
+               data-import-task-row is the FLIP flight target the import dialog
+               flies its count chip into. -->
+          <div
+            v-else-if="entry.kind === 'import'"
+            class="tm-worker-row tm-import-row"
+            :data-import-task-row="entry.key"
           >
-            <v-icon size="14">{{ run.failed ? "mdi-alert-circle-outline" : "mdi-check" }}</v-icon>
-          </span>
-          <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
-          <!-- The name gives way to the pill: folded, the pill is all that
-               says the changes are still unsaved. -->
-          <span class="tm-name tm-name--pill">
-            <span class="tm-name-text">{{ run.label }}</span>
-            <span v-if="run.offer" class="tm-pill" data-testid="tm-finished-pill">{{
-              changesWord(run.offer.count)
-            }}</span>
-          </span>
-          <span class="tm-figure">
-            <span class="tm-fig-text">
-              <v-icon size="12">mdi-image-outline</v-icon>
-              {{ run.made }}
-            </span>
-            <span class="tm-acts">
+            <div class="tm-worker-row-top">
+              <span
+                class="tm-status-dot"
+                :class="{
+                  'tm-status-dot--running': entry.run.status === 'running',
+                }"
+              ></span>
+              <span class="tm-worker-label">{{ entry.run.label }}</span>
+              <span v-if="entry.run.total > 0" class="tm-worker-progress">
+                {{ entry.run.current }} / {{ entry.run.total }}
+              </span>
+              <!-- Cancel is offered only while the import is genuinely
+                   client-abortable (the pre-commit upload window, run.abortable).
+                   A committed server-side import cannot be stopped from the
+                   client, so no cancel control is shown for it. -->
               <button
+                v-if="entry.run.abortable && !isReadOnly"
+                class="tm-comfy-abort"
+                type="button"
+                aria-label="Cancel import"
+                @click="tasksStore.abortImportRun(entry.key)"
+              >
+                <Tooltip
+                  text="Cancel import"
+                  activator="parent"
+                  :describe="false"
+                />
+                ✕
+              </button>
+            </div>
+            <div class="tm-comfy-bar">
+              <div class="tm-comfy-fill" :style="{ width: barWidth(entry.run) }"></div>
+            </div>
+            <div class="tm-comfy-message">{{ entry.run.message }}</div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- Waiting for the GPU: in the order the arbiter will run them. The
+         backend's sentence is the tooltip; the actions it offers take the
+         figure's place on hover or focus. -->
+    <section
+      v-if="tasksStore.waitingEntries.length"
+      class="tm-group"
+      aria-labelledby="tm-waiting-head"
+    >
+      <div class="tm-group-head">
+        <span id="tm-waiting-head" class="section-label">Waiting for the GPU</span>
+        <span class="tm-group-col">Needs</span>
+      </div>
+      <div class="tm-worker-list">
+        <div
+          v-for="entry in tasksStore.waitingEntries"
+          :key="entry.key"
+          class="tm-row tm-row--waiting"
+          data-testid="tm-waiting-row"
+        >
+          <span class="tm-mark tm-mark--waiting" aria-hidden="true">
+            <v-icon size="16">mdi-hourglass</v-icon>
+          </span>
+          <ComfyuiIcon
+            v-if="entry.tenant === 'comfyui'"
+            :size="18"
+            class="tm-app"
+            aria-hidden="true"
+          />
+          <AiToolkitIcon
+            v-else-if="entry.tenant === 'aitoolkit'"
+            :size="18"
+            class="tm-app"
+            aria-hidden="true"
+          />
+          <span v-else class="tm-app-gap" aria-hidden="true"></span>
+          <span class="tm-name">{{ entry.label }}</span>
+          <span class="tm-figure">
+            <span class="tm-fig-text">{{ needText(entry) }}</span>
+            <span v-if="actionsOf(entry).length" class="tm-acts">
+              <button
+                v-if="actionsOf(entry).includes('run_anyway')"
                 class="tm-act"
                 type="button"
-                data-testid="tm-finished-dismiss"
-                :aria-label="run.offer ? `Dismiss what the run of ${run.label} changed` : `Clear the run of ${run.label}`"
-                :disabled="Boolean(dismissing) || Boolean(busy)"
-                @click="dismiss(run)"
+                data-testid="tm-run-anyway"
+                :aria-label="`Run ${entry.label} anyway`"
+                :disabled="busyLease === entry.lease?.id"
+                @click="askRunAnyway(entry)"
               >
-                <Tooltip
-                  :text="run.offer ? 'Dismiss' : 'Clear'"
-                  activator="parent"
-                  :describe="false"
-                />
+                <Tooltip text="Run anyway" activator="parent" :describe="false" />
+                <v-icon size="16">mdi-play</v-icon>
+              </button>
+              <button
+                v-if="actionsOf(entry).includes('free_comfyui')"
+                class="tm-act"
+                type="button"
+                data-testid="tm-free-comfyui"
+                aria-label="Free ComfyUI's cache"
+                @click="freeComfyuiCache()"
+              >
+                <Tooltip text="Free ComfyUI's cache" activator="parent" :describe="false" />
+                <v-icon size="16">mdi-broom</v-icon>
+              </button>
+              <button
+                v-if="actionsOf(entry).includes('cancel')"
+                class="tm-act"
+                type="button"
+                data-testid="tm-cancel-wait"
+                :aria-label="`Cancel ${entry.label}`"
+                :disabled="busyLease === entry.lease?.id"
+                @click="cancelWait(entry)"
+              >
+                <Tooltip text="Cancel" activator="parent" :describe="false" />
                 <v-icon size="16">mdi-close</v-icon>
               </button>
             </span>
-            <button
-              class="tm-caret"
-              type="button"
-              data-testid="tm-finished-caret"
-              :aria-expanded="run.open ? 'true' : 'false'"
-              :aria-controls="`${whyId}-run-${run.id}`"
-              :aria-label="run.open ? `Hide the run of ${run.label}` : `Show the run of ${run.label}`"
-              @click="tasksStore.toggleFinished(run.id)"
-            >
-              <v-icon size="16">{{ run.open ? "mdi-chevron-down" : "mdi-chevron-right" }}</v-icon>
-            </button>
           </span>
-          <Tooltip :text="run.tip" activator="parent" :describe="false" />
-        </div>
-        <div
-          v-if="run.open"
-          :id="`${whyId}-run-${run.id}`"
-          class="tm-detail"
-        >
-          <div
-            v-if="run.pictureIds.length"
-            class="tm-tiles"
-            role="group"
-            aria-label="Pictures the run made"
-          >
-            <button
-              v-for="(pictureId, at) in run.pictureIds.slice(0, TILES)"
-              :key="pictureId"
-              class="tm-tile"
-              type="button"
-              :aria-label="`Open picture ${at + 1} of ${run.pictureIds.length}`"
-              data-testid="tm-finished-tile"
-              @click="openPicture(pictureId)"
-            >
-              <img
-                :src="pictureThumbnailUrl(pictureId)"
-                alt=""
-                loading="lazy"
-                @error="$event.target.hidden = true"
-              />
-            </button>
-          </div>
-          <p v-if="run.offer" class="tm-offer-text">
-            Ran {{ run.ago }} with
-            <b>{{ changesWord(run.offer.count) }} from the workflow</b
-            ><template v-if="run.offer.text">: {{ run.offer.text }}</template
-            ><template v-else>.</template>
-          </p>
-          <p v-else class="tm-offer-text">
-            {{ run.failed ? "Failed" : "Finished" }} {{ run.ago
-            }}<template v-if="run.message">: {{ run.message }}</template
-            ><template v-else>.</template>
-          </p>
-          <template v-if="run.offer">
-            <!-- Save as new… is the row's one question: the name. One write is
-                 out at a time, and while it is every verb of every row says
-                 so. The field is `readonly` for it, not `disabled`: Enter
-                 leaves the keyboard in it, a disabled field cannot hold the
-                 keyboard, and a refusal has to find it there. -->
-            <template v-if="naming === run.offer.workflowId">
-              <AppInput
-                v-model="newName"
-                label="Name of the new workflow"
-                :readonly="Boolean(busy)"
-                :class="{ 'tm-offer-refused': Boolean(busy) }"
-                @enter="saveAsNew(run.offer)"
-                @keydown.esc="backFromName(run.offer)"
-                @keydown.stop
-              />
-              <div class="tm-offer-acts">
-                <AppButton
-                  variant="ghost"
-                  size="sm"
-                  :disabled="Boolean(busy)"
-                  @click="backFromName(run.offer)"
-                >
-                  Back
-                </AppButton>
-                <AppButton
-                  size="sm"
-                  :loading="busy === `new:${run.offer.workflowId}`"
-                  :disabled="Boolean(busy)"
-                  :class="{ 'tm-offer-refused': !newName.trim() }"
-                  :aria-disabled="newName.trim() ? undefined : 'true'"
-                  @click="saveAsNew(run.offer)"
-                >
-                  Save as new workflow
-                </AppButton>
-              </div>
-            </template>
-            <div v-else class="tm-offer-acts">
-              <AppButton
-                data-as-new
-                size="sm"
-                :disabled="Boolean(busy)"
-                @click="askName(run.offer)"
-              >
-                Save as new…
-              </AppButton>
-              <!-- `aria-disabled`, not `disabled`: a closed Save stays
-                   reachable, with the server's reason as its description. -->
-              <AppButton
-                size="sm"
-                icon-left="content-save-outline"
-                :loading="busy === `save:${run.offer.workflowId}`"
-                :disabled="Boolean(busy)"
-                :class="{ 'tm-offer-refused': Boolean(run.offer.closed) }"
-                :aria-disabled="run.offer.closed ? 'true' : undefined"
-                :aria-describedby="run.offer.closed ? `${whyId}-${run.offer.workflowId}` : undefined"
-                @click="save(run.offer)"
-              >
-                Save
-              </AppButton>
-            </div>
-            <p
-              v-if="run.offer.closed && naming !== run.offer.workflowId"
-              :id="`${whyId}-${run.offer.workflowId}`"
-              class="tm-offer-why"
-            >
-              {{ run.offer.closed }}
-            </p>
-            <p
-              v-if="errors[run.offer.workflowId]"
-              class="tm-offer-why tm-offer-bad"
-              role="alert"
-            >
-              {{ errors[run.offer.workflowId] }}
-            </p>
-          </template>
+          <Tooltip
+            :text="entry.text || `${entry.label} is waiting for the GPU`"
+            activator="parent"
+            :describe="false"
+          />
         </div>
       </div>
-    </div>
-  </section>
-  <!-- What the last save here did, and where focus goes when the row and its
-       buttons leave with the offer: read on landing there, so it is no live
-       region as well. It stands until an offer arrives after it. What the
-       save left of the Workflow tab's changes is inside it, so it is read
-       with it and goes with it: two lines to the eye, and a space between
-       them for whatever reads the text. -->
-  <p
-    v-if="doneNote"
-    ref="doneLine"
-    class="tm-offer-done"
-    tabindex="-1"
-    data-testid="tm-offer-done"
-  >
-    {{ doneNote }}
-    <span v-if="doneLost" class="tm-offer-lost">{{ doneLost }}</span
-    >{{ " " }}<span v-if="doneWaits">{{ doneWaits }}</span>
-  </p>
-  <div v-if="tmSystemItems.length" class="tm-system-bar">
-    <!-- The figures are the server process's own, not the machine's. -->
-    <div class="tm-system-heading section-label">
-      <span class="tm-system-mark" aria-hidden="true"></span>
-      PixlStash resource usage
-    </div>
-    <div v-for="item in tmSystemItems" :key="item.label" class="tm-system-item">
-      <span class="tm-system-label">{{ item.label }}</span>
-      <span class="tm-system-value">{{ item.value }}</span>
+    </section>
+
+    <!-- Mounted only while it is asked: a closed Vuetify dialog still sets up
+         its overlay, which a panel with nothing to ask need not carry. -->
+    <RunAnywayDialog
+      v-if="runAnyway"
+      open
+      :label="runAnyway?.label || ''"
+      :need-mb="runAnyway?.needMb || 0"
+      :device="runAnyway?.device || null"
+      :holders="tasksStore.resources?.holders || []"
+      :busy="busyLease !== ''"
+      @close="closeRunAnyway"
+      @confirm="confirmRunAnyway"
+    />
+    <!-- Finished (#2050): the runs that ended, one line each on the Running and
+         Waiting grid, read from the server so a reload and every tab agree. A
+         run with changes from the workflow (#1850) wears a pill and opens to
+         its pictures and the Run popup's two verbs again, so the offer to save
+         is always one of the runs you can see. Pictures get rated before that
+         is decided: it stays until dismissed, saved, or the workflow runs
+         again. -->
+    <section
+      v-if="finished.length"
+      ref="offersList"
+      class="tm-group"
+      aria-labelledby="tm-finished-head"
+      data-testid="tm-finished"
+    >
+      <div class="tm-group-head tm-group-head--finished">
+        <span id="tm-finished-head" class="section-label">Finished</span>
+        <!-- Clear takes the column label's place on hover or focus, as a row's
+             actions take its figure's. It never throws away unsaved changes. -->
+        <span class="tm-group-col tm-head-swap">
+          <span class="tm-head-col" aria-hidden="true">Made</span>
+          <button
+            class="tm-head-act"
+            type="button"
+            data-testid="tm-finished-clear"
+            aria-label="Clear the finished runs. Runs with unsaved changes stay."
+            :disabled="Boolean(dismissing) || Boolean(busy)"
+            @click="clearFinished"
+          >
+            Clear
+          </button>
+        </span>
+      </div>
+      <div class="tm-worker-list">
+        <div
+          v-for="run in finished"
+          :key="run.id"
+          class="tm-fold"
+          data-testid="tm-finished-run"
+          :data-run="run.id"
+          :role="run.offer ? 'group' : undefined"
+          :aria-label="run.offer ? `Changes the run of ${run.offer.name} was made with` : undefined"
+          :data-offer="run.offer ? run.offer.workflowId : undefined"
+        >
+          <div class="tm-row tm-row--done" :class="{ 'tm-row--open': run.open }">
+            <span
+              class="tm-mark tm-mark--done"
+              :data-state="run.failed ? 'failed' : 'done'"
+              aria-hidden="true"
+            >
+              <v-icon size="14">{{ run.failed ? "mdi-alert-circle-outline" : "mdi-check" }}</v-icon>
+            </span>
+            <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
+            <!-- The name gives way to the pill: folded, the pill is all that
+                 says the changes are still unsaved. -->
+            <span class="tm-name tm-name--pill">
+              <span class="tm-name-text">{{ run.label }}</span>
+              <span v-if="run.offer" class="tm-pill" data-testid="tm-finished-pill">{{
+                changesWord(run.offer.count)
+              }}</span>
+            </span>
+            <span class="tm-figure">
+              <span class="tm-fig-text">
+                <v-icon size="12">mdi-image-outline</v-icon>
+                {{ run.made }}
+              </span>
+              <span class="tm-acts">
+                <button
+                  class="tm-act"
+                  type="button"
+                  data-testid="tm-finished-dismiss"
+                  :aria-label="run.offer ? `Dismiss what the run of ${run.label} changed` : `Clear the run of ${run.label}`"
+                  :disabled="Boolean(dismissing) || Boolean(busy)"
+                  @click="dismiss(run)"
+                >
+                  <Tooltip
+                    :text="run.offer ? 'Dismiss' : 'Clear'"
+                    activator="parent"
+                    :describe="false"
+                  />
+                  <v-icon size="16">mdi-close</v-icon>
+                </button>
+              </span>
+              <button
+                class="tm-caret"
+                type="button"
+                data-testid="tm-finished-caret"
+                :aria-expanded="run.open ? 'true' : 'false'"
+                :aria-controls="`${whyId}-run-${run.id}`"
+                :aria-label="run.open ? `Hide the run of ${run.label}` : `Show the run of ${run.label}`"
+                @click="tasksStore.toggleFinished(run.id)"
+              >
+                <v-icon size="16">{{ run.open ? "mdi-chevron-down" : "mdi-chevron-right" }}</v-icon>
+              </button>
+            </span>
+            <Tooltip :text="run.tip" activator="parent" :describe="false" />
+          </div>
+          <div
+            v-if="run.open"
+            :id="`${whyId}-run-${run.id}`"
+            class="tm-detail"
+          >
+            <div
+              v-if="run.pictureIds.length"
+              class="tm-tiles"
+              role="group"
+              aria-label="Pictures the run made"
+            >
+              <button
+                v-for="(pictureId, at) in run.pictureIds.slice(0, TILES)"
+                :key="pictureId"
+                class="tm-tile"
+                type="button"
+                :aria-label="`Open picture ${at + 1} of ${run.pictureIds.length}`"
+                data-testid="tm-finished-tile"
+                @click="openPicture(pictureId)"
+              >
+                <img
+                  :src="pictureThumbnailUrl(pictureId)"
+                  alt=""
+                  loading="lazy"
+                  @error="$event.target.hidden = true"
+                />
+              </button>
+            </div>
+            <p v-if="run.offer" class="tm-offer-text">
+              Ran {{ run.ago }} with
+              <b>{{ changesWord(run.offer.count) }} from the workflow</b
+              ><template v-if="run.offer.text">: {{ run.offer.text }}</template
+              ><template v-else>.</template>
+            </p>
+            <p v-else class="tm-offer-text">
+              {{ run.failed ? "Failed" : "Finished" }} {{ run.ago
+              }}<template v-if="run.message">: {{ run.message }}</template
+              ><template v-else>.</template>
+            </p>
+            <template v-if="run.offer">
+              <!-- Save as new… is the row's one question: the name. One write is
+                   out at a time, and while it is every verb of every row says
+                   so. The field is `readonly` for it, not `disabled`: Enter
+                   leaves the keyboard in it, a disabled field cannot hold the
+                   keyboard, and a refusal has to find it there. -->
+              <template v-if="naming === run.offer.workflowId">
+                <AppInput
+                  v-model="newName"
+                  label="Name of the new workflow"
+                  :readonly="Boolean(busy)"
+                  :class="{ 'tm-offer-refused': Boolean(busy) }"
+                  @enter="saveAsNew(run.offer)"
+                  @keydown.esc="backFromName(run.offer)"
+                  @keydown.stop
+                />
+                <div class="tm-offer-acts">
+                  <AppButton
+                    :on-dark="lightbox"
+                    variant="ghost"
+                    size="sm"
+                    :disabled="Boolean(busy)"
+                    @click="backFromName(run.offer)"
+                  >
+                    Back
+                  </AppButton>
+                  <AppButton
+                    :on-dark="lightbox"
+                    size="sm"
+                    :loading="busy === `new:${run.offer.workflowId}`"
+                    :disabled="Boolean(busy)"
+                    :class="{ 'tm-offer-refused': !newName.trim() }"
+                    :aria-disabled="newName.trim() ? undefined : 'true'"
+                    @click="saveAsNew(run.offer)"
+                  >
+                    Save as new workflow
+                  </AppButton>
+                </div>
+              </template>
+              <div v-else class="tm-offer-acts">
+                <AppButton
+                  :on-dark="lightbox"
+                  data-as-new
+                  size="sm"
+                  :disabled="Boolean(busy)"
+                  @click="askName(run.offer)"
+                >
+                  Save as new…
+                </AppButton>
+                <!-- `aria-disabled`, not `disabled`: a closed Save stays
+                     reachable, with the server's reason as its description. -->
+                <AppButton
+                  :on-dark="lightbox"
+                  size="sm"
+                  icon-left="content-save-outline"
+                  :loading="busy === `save:${run.offer.workflowId}`"
+                  :disabled="Boolean(busy)"
+                  :class="{ 'tm-offer-refused': Boolean(run.offer.closed) }"
+                  :aria-disabled="run.offer.closed ? 'true' : undefined"
+                  :aria-describedby="run.offer.closed ? `${whyId}-${run.offer.workflowId}` : undefined"
+                  @click="save(run.offer)"
+                >
+                  Save
+                </AppButton>
+              </div>
+              <p
+                v-if="run.offer.closed && naming !== run.offer.workflowId"
+                :id="`${whyId}-${run.offer.workflowId}`"
+                class="tm-offer-why"
+              >
+                {{ run.offer.closed }}
+              </p>
+              <p
+                v-if="errors[run.offer.workflowId]"
+                class="tm-offer-why tm-offer-bad"
+                role="alert"
+              >
+                {{ errors[run.offer.workflowId] }}
+              </p>
+            </template>
+          </div>
+        </div>
+      </div>
+    </section>
+    <!-- What the last save here did, and where focus goes when the row and its
+         buttons leave with the offer: read on landing there, so it is no live
+         region as well. It stands until an offer arrives after it. What the
+         save left of the Workflow tab's changes is inside it, so it is read
+         with it and goes with it: two lines to the eye, and a space between
+         them for whatever reads the text. -->
+    <p
+      v-if="doneNote"
+      ref="doneLine"
+      class="tm-offer-done"
+      tabindex="-1"
+      data-testid="tm-offer-done"
+    >
+      {{ doneNote }}
+      <span v-if="doneLost" class="tm-offer-lost">{{ doneLost }}</span
+      >{{ " " }}<span v-if="doneWaits">{{ doneWaits }}</span>
+    </p>
+    <div v-if="tmSystemItems.length" class="tm-system-bar">
+      <!-- The figures are the server process's own, not the machine's. -->
+      <div class="tm-system-heading section-label">
+        <span class="tm-system-mark" aria-hidden="true"></span>
+        PixlStash resource usage
+      </div>
+      <div v-for="item in tmSystemItems" :key="item.label" class="tm-system-item">
+        <span class="tm-system-label">{{ item.label }}</span>
+        <span class="tm-system-value">{{ item.value }}</span>
+      </div>
     </div>
   </div>
 </template>
@@ -657,8 +670,9 @@ export function tasksTabFor(tasksStore) {
 // It started inside StatsSidebar and is a component of its own because the
 // Workflows view's inspector offers the same tab: somebody browsing
 // workflows or recipes has to be able to watch the work their last run started
-// without leaving the screen to do it. The image overlay is the one inspector
-// that does not offer it - it is a picture's pane, laid over the picture.
+// without leaving the screen to do it. The image overlay offers it too (#2056),
+// as the `lightbox` variant: a run started from its Edit tab can be queued,
+// stopped or read back there without leaving the picture.
 //
 // The data (worker snapshots, rate series, active-state, ComfyUI runs) lives in
 // the shared tasks store, which is the single poller of /workers/progress. This
@@ -705,6 +719,32 @@ import AppInput from "../widgets/AppInput.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import RunAnywayDialog from "./RunAnywayDialog.vue";
+
+defineProps({
+  // The lightbox's inspector: dark in both themes, so the panel takes the
+  // dark-surface inks rather than the theme's (`.tm--lightbox`).
+  lightbox: { type: Boolean, default: false },
+});
+const root = ref(null);
+
+// A row goes when its run does, and takes a focused Stop or Cancel with it;
+// focus then falls to <body>: the ring is gone and a keyboard user is out of
+// the tab order with nothing saying so. Every host is an inspector whose band
+// holds this tab, so the keyboard goes back to that tab. Checked a tick
+// later, after any hand-off of the panel's own (a save's receipt line) has
+// had its turn.
+function onFocusOut(event) {
+  const left = event.target;
+  nextTick(() => {
+    if (left.isConnected) return;
+    const now = document.activeElement;
+    if (now && now !== document.body) return;
+    root.value
+      ?.closest(".inspector")
+      ?.querySelector(".inspector-tab--active")
+      ?.focus();
+  });
+}
 
 const tasksStore = useTasksStore();
 
@@ -1248,17 +1288,19 @@ function tmRegisterCanvas(key, el) {
   );
 }
 
-function tmGetThemeRgb(name) {
+// Read off the canvas, not the document: the lightbox variant restates the
+// theme's colours on the panel, and a canvas only sees what it is told.
+function tmGetThemeRgb(el, name) {
   if (typeof window === "undefined") return null;
   return (
-    getComputedStyle(document.documentElement)
+    getComputedStyle(el)
       .getPropertyValue(`--v-theme-${name}`)
       .trim() || null
   );
 }
 
-function tmThemeRgba(name, alpha, fallback = "0,0,0") {
-  const v = tmGetThemeRgb(name) || fallback;
+function tmThemeRgba(el, name, alpha, fallback = "0,0,0") {
+  const v = tmGetThemeRgb(el, name) || fallback;
   return `rgba(${v}, ${alpha})`;
 }
 
@@ -1322,7 +1364,7 @@ function tmDrawSparkline(canvas, samples) {
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = tmThemeRgba("tertiary", 0.85, "142,166,4");
+  ctx.strokeStyle = tmThemeRgba(canvas, "tertiary", 0.85, "142,166,4");
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
@@ -1330,7 +1372,7 @@ function tmDrawSparkline(canvas, samples) {
   ctx.lineTo(tToX(last.t ?? tNow), pad + plotH);
   ctx.lineTo(pad, pad + plotH);
   ctx.closePath();
-  ctx.fillStyle = tmThemeRgba("tertiary", 0.18, "142,166,4");
+  ctx.fillStyle = tmThemeRgba(canvas, "tertiary", 0.18, "142,166,4");
   ctx.fill();
 }
 
@@ -1459,6 +1501,57 @@ const tmSystemItems = computed(() => {
 </script>
 
 <style scoped>
+/* No box in a rail: the rows are the inspector body's own flex children. */
+.tm {
+  display: contents;
+}
+
+/* The lightbox variant (#2056). Its pane is dark in both themes, so every ink
+   the rows read is restated as the dark-surface one (visual-language.md,
+   "Status hue anywhere inside a dark-surface"): with the theme's, light mode
+   would paint near-black words and deepened status hues on a dark ground.
+   A custom property holding var() resolves where it is declared, so the
+   aliases built on :root (`--state-*`, `--tenant-pixlstash`, the hover wash,
+   the hatch) are restated here rather than inherited. The deep olive and teal
+   are one value in both themes but under 3:1 on this ground, so the progress
+   bars, the ComfyUI segment and the sparkline take their dark-surface values
+   too. AI Toolkit's violet has no dark-surface token and stays as it is, as
+   does the error tint (a wash, not a mark). */
+.tm--lightbox {
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --v-theme-surface-error: var(--v-theme-dark-surface-error);
+  --v-theme-surface-warning: var(--v-theme-dark-surface-warning);
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
+  --v-theme-primary: var(--v-theme-dark-surface-primary);
+  --v-theme-tertiary: var(--v-theme-dark-surface-tertiary);
+  --state-running: var(--v-theme-dark-surface-primary);
+  --state-waiting: var(--v-theme-dark-surface-accent);
+  --tenant-pixlstash: var(--v-theme-dark-surface-accent);
+  --tenant-comfyui: var(--v-theme-dark-surface-tertiary);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --hatch-not-ours: repeating-linear-gradient(
+    -45deg,
+    rgba(var(--v-theme-on-dark-surface), 0.35) 0 2px,
+    transparent 2px 5px
+  );
+  /* The lightbox's body clips (it is a fixed-height pane), so the panel is
+     its own scroll region, with the bar its other regions use. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+/* The name field of Save as new…, as the Edit tab's instruction box. */
+.tm--lightbox :deep(.app-input__wrap) {
+  background: rgba(var(--v-theme-shadow), 0.35);
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.2);
+}
+
 .tm-idle-msg {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.4);

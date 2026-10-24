@@ -1054,6 +1054,14 @@
             @running="(on) => (editRunning = on)"
             @more-options="(payload) => emit('edit-more-options', payload)"
           />
+
+          <!-- `v-if` on the pane being open as well: the lightbox keeps its
+               pane mounted while collapsed, and a mounted panel holds the
+               tasks poll at its fast cadence. -->
+          <TasksPanel
+            v-if="sidebarOpen && sidebarTab === 'tasks'"
+            lightbox
+          />
         </AppInspector>
 
         <!-- The lightbox's own narration of an undoable action. Last child of
@@ -1151,6 +1159,8 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useProjectStore } from "../../stores/useProjectStore";
 import { useSearchStore } from "../../stores/useSearchStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { nextFreeCharacterName } from "../../utils/characterCreateFlow.js";
 import AddToEntityControl from "../widgets/AddToEntityControl.vue";
 import AppInspector from "../widgets/AppInspector.vue";
@@ -1163,6 +1173,7 @@ import OverlayEditPanel from "./OverlayEditPanel.vue";
 import PaintLayer from "./PaintLayer.vue";
 import PaintOptionsBar from "./PaintOptionsBar.vue";
 import PaintToolbox from "./PaintToolbox.vue";
+import TasksPanel, { tasksTabFor } from "../panels/TasksPanel.vue";
 import {
   PAINT_TOOLS,
   usePaintSelection,
@@ -1395,6 +1406,25 @@ const editRunning = ref(false);
 const editTabShowsRun = computed(
   () => editRunning.value && sidebarOpen.value && sidebarTab.value === "edit",
 );
+// ── Tasks (#2056) ──────────────────────────────────────────────────────────
+//
+// The rail's task manager, so a run started from Edit can be queued, stopped or
+// read back without leaving the picture. Last in the band, as on every other
+// inspector. Absent in a read-only session: the tasks endpoint is owner-only,
+// so the panel could only ever say there is nothing.
+const sidebarStore = useSidebarStore();
+const tasksStore = useTasksStore();
+const tasksTabShown = computed(() => !isReadOnly.value);
+// A deep link to the Tasks tab (a notice's *Show*, `showTasksTab`): the rail
+// it opens is behind the lightbox, so the lightbox answers it as well.
+watch(
+  () => sidebarStore.tasksTabRequest,
+  () => {
+    if (!open.value || !tasksTabShown.value) return;
+    sidebarOpen.value = true;
+    chosenSidebarTab.value = "tasks";
+  },
+);
 // The reader's CHOICE is remembered even while the tab it names is gone, so
 // stepping over a photo in a run of ComfyUI pictures does not silently move
 // them to Info for the rest of the walk.
@@ -1403,6 +1433,7 @@ const sidebarTab = computed({
     const chosen = chosenSidebarTab.value;
     if (chosen === "recipe" && !recipeTabShown.value) return "info";
     if (chosen === "edit" && !editTabShown.value) return "info";
+    if (chosen === "tasks" && !tasksTabShown.value) return "info";
     return chosen;
   },
   set: (value) => {
@@ -1426,6 +1457,7 @@ const sidebarTabs = computed(() => {
     // else (the Run popup, *Use as input for…*, the Workflows view).
     tabs.push({ value: "edit", label: "Edit", icon: "mdi-sitemap-outline" });
   }
+  if (tasksTabShown.value) tabs.push(tasksTabFor(tasksStore));
   return tabs.length > 1 ? tabs : [];
 });
 
@@ -2872,6 +2904,18 @@ function handleKeydown(e) {
     } else {
       return;
     }
+  }
+
+  // Space is a focused button's own key. Without this the chrome toggle below
+  // took it, so no button in the pane (a Tasks row's Stop, the Edit tab's Run)
+  // could be pressed with it. Only a keyboard-focused one: a button just
+  // clicked keeps focus without `:focus-visible`, and Space then still hides
+  // the chrome as it always has.
+  if (
+    (e.key === " " || e.key === "Spacebar") &&
+    e.target?.closest?.(".overlay-sidebar button:focus-visible")
+  ) {
+    return;
   }
 
   if (

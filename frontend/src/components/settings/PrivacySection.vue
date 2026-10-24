@@ -18,7 +18,7 @@
            architecture does not have. -->
       <SettingsRow
         label="Send an anonymous install ID"
-        sub="Lets us tell whether people keep using PixlStash rather than just downloading it. Not derived from anything about you or your computer."
+        sub="Lets us tell whether people keep using PixlStash, not just download it. Not derived from anything about you or your computer."
       >
         <v-switch
           v-model="installIdModel"

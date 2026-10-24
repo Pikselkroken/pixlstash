@@ -32,6 +32,8 @@ import { createPinia, setActivePinia } from "pinia";
 import ImageOverlay from "./ImageOverlay.vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 enableAutoUnmount(afterEach);
 
@@ -95,13 +97,14 @@ const getMock = vi.fn(async (url) => {
   return { data: [] };
 });
 
-vi.mock("../../utils/apiClient", () => ({
+// A real ref, so a session turning read-only under an open lightbox re-renders.
+vi.mock("../../utils/apiClient", async () => ({
   API_BASE_URL: "/api/v1",
   onSessionReset: () => () => {},
   sessionContext: { value: null },
   apiClient: { get: (...a) => getMock(...a), post: vi.fn(), delete: vi.fn() },
   appendShareToken: (u) => u,
-  isReadOnly: { value: false },
+  isReadOnly: (await import("vue")).ref(false),
 }));
 
 const STUBS = {
@@ -192,10 +195,12 @@ const recipePanel = (wrapper) =>
 describe("the lightbox Recipe tab follows the picture", () => {
   it("is offered for a picture that has a recipe", async () => {
     const wrapper = await openOn(7);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
   });
 
   it("takes the whole tab band away for a picture that has none", async () => {
+    // Read-only, the one session with no Tasks tab to keep the band up.
+    isReadOnly.value = true;
     picturesWithARecipe = new Set();
     const wrapper = await openOn(7);
     // The regression this replaces: a tab whose whole content was "nothing
@@ -205,19 +210,25 @@ describe("the lightbox Recipe tab follows the picture", () => {
     expect(wrapper.find(".inspector-tabs").exists()).toBe(false);
   });
 
+  it("leaves Info and Tasks for a picture that has none", async () => {
+    picturesWithARecipe = new Set();
+    const wrapper = await openOn(7);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
+  });
+
   it("goes away when the reader steps onto a picture without one", async () => {
     const wrapper = await openOn(7, [
       { id: 7, tags: [] },
       { id: 8, tags: [] },
     ]);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
     await wrapper.findAll(".inspector-tab")[1].trigger("click");
     expect(activeTab(wrapper)).toBe("Recipe");
 
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual([]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
     // And the reader is looking at the Info panel rather than at a pane whose
     // tab has gone.
     expect(wrapper.find(".overlay-sidebar-group").isVisible()).toBe(true);
@@ -235,7 +246,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual([]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
 
     await wrapper.setProps({ initialImageId: 9 });
     await flush();
@@ -243,7 +254,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     // Not "Info": somebody reading recipes wants the next picture's recipe,
     // and having to re-pick the tab after every photo would make the walk
     // useless.
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
     expect(activeTab(wrapper)).toBe("Recipe");
   });
 
@@ -260,7 +271,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
       conversion_problems: ["this ComfyUI has no node class 'SomePackNode'"],
     };
     const wrapper = await openOn(7);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
   });
 
   it("hands the panel the reasons the rebuild failed", async () => {
@@ -292,7 +303,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     expect(recipePanel(wrapper).props("recipe").conversionProblems).toEqual([]);
   });
 
-  it("moves focus off the tab band before it unmounts", async () => {
+  it("moves focus off a tab button before it unmounts", async () => {
     // Arrow keys are a window listener, so a reader can walk the filmstrip
     // with focus on a tab button. Losing it to `document.body` is silent:
     // the shortcuts keep working and only the focus ring goes.
@@ -311,7 +322,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual([]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(
       wrapper.find(".overlay-canvas").element,
@@ -325,12 +336,12 @@ describe("the lightbox Recipe tab follows the picture", () => {
       { id: 7, tags: [] },
       { id: 8, tags: [] },
     ]);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
     recipeThrows = true;
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual([]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
   });
 
   it("does not blink out while the next picture's recipe is being read", async () => {
@@ -338,20 +349,108 @@ describe("the lightbox Recipe tab follows the picture", () => {
       { id: 7, tags: [] },
       { id: 8, tags: [] },
     ]);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
 
     // Hold the next read open: this is the window in which the overlay knows
     // nothing about picture 8's recipe.
     pendingRecipe = {};
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
 
     pendingRecipe.release();
     pendingRecipe = null;
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual([]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Tasks"]);
+  });
+});
+
+// The Tasks tab (#2056): the rail's task manager, so a run started from Edit is
+// followed from inside the lightbox. It hangs off the session alone.
+describe("the lightbox Tasks tab", () => {
+  const tasksPanel = (wrapper) => wrapper.findComponent({ name: "TasksPanel" });
+
+  it("sits last, and shows the task manager in its dark variant", async () => {
+    const wrapper = await openOn(7, undefined, { comfyuiConfigured: true });
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit", "Tasks"]);
+    expect(tasksPanel(wrapper).exists()).toBe(false);
+
+    await wrapper.findAll(".inspector-tab")[3].trigger("click");
+    expect(activeTab(wrapper)).toBe("Tasks");
+    expect(tasksPanel(wrapper).props("lightbox")).toBe(true);
+    expect(wrapper.text()).toContain("No active tasks");
+    // Info is `v-show`: kept, out of sight.
+    expect(wrapper.find(".overlay-sidebar-group").isVisible()).toBe(false);
+  });
+
+  it("is absent in a read-only session, and a chosen Tasks falls back to Info", async () => {
+    const wrapper = await openOn(7);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(activeTab(wrapper)).toBe("Tasks");
+
+    isReadOnly.value = true;
+    await flush();
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(activeTab(wrapper)).toBe("Info");
+    expect(tasksPanel(wrapper).exists()).toBe(false);
+  });
+
+  it("holds the fast poll only while the pane is open on it", async () => {
+    const wrapper = await openOn(7);
+    const tasks = useTasksStore();
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(tasks.tasksTabOpen).toBe(true);
+
+    // The lightbox keeps a collapsed pane mounted; the panel must not be.
+    await wrapper.find(".overlay-topbar-sidebar-toggle").trigger("click");
+    expect(tasksPanel(wrapper).exists()).toBe(false);
+    expect(tasks.tasksTabOpen).toBe(false);
+  });
+
+  it("puts focus back on the tab when a row takes it away", async () => {
+    const wrapper = await openOn(7, undefined, { attach: true });
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    const tasks = useTasksStore();
+    tasks.comfyuiRuns = [
+      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
+    ];
+    await flush();
+    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
+    stop.focus();
+
+    tasks.comfyuiRuns = [];
+    // Chromium fires this as the button goes; jsdom does not.
+    stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await flush();
+    expect(stop.isConnected).toBe(false);
+    expect(document.activeElement).toBe(
+      wrapper.find(".inspector-tab--active").element,
+    );
+  });
+
+  // Space was the chrome toggle's even on a focused button, so no button in
+  // the pane could be pressed with it.
+  it("leaves Space to a keyboard-focused button in the pane", async () => {
+    const wrapper = await openOn(7, undefined, { attach: true });
+    const tab = wrapper.findAll(".inspector-tab")[2];
+    tab.element.focus({ focusVisible: true });
+    const press = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    tab.element.dispatchEvent(press);
+    await flush();
+    expect(press.defaultPrevented).toBe(false);
+    expect(wrapper.find(".overlay-sidebar").classes()).not.toContain("hidden");
+  });
+
+  it("answers a deep link to the Tasks tab, opening the pane", async () => {
+    const wrapper = await openOn(7);
+    await wrapper.find(".overlay-topbar-sidebar-toggle").trigger("click");
+    expect(tasksPanel(wrapper).exists()).toBe(false);
+
+    useSidebarStore().showTasksTab();
+    await flush();
+    expect(activeTab(wrapper)).toBe("Tasks");
+    expect(tasksPanel(wrapper).exists()).toBe(true);
   });
 });
 
@@ -363,18 +462,18 @@ describe("the lightbox Edit tab", () => {
 
   it("sits after Recipe when ComfyUI is configured", async () => {
     const wrapper = await openOn(7, undefined, configured);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit", "Tasks"]);
   });
 
   it("is offered on a picture with no recipe", async () => {
     picturesWithARecipe = new Set();
     const wrapper = await openOn(7, undefined, configured);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Edit"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Edit", "Tasks"]);
   });
 
   it("is absent without ComfyUI", async () => {
     const wrapper = await openOn(7);
-    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Tasks"]);
     expect(wrapper.find(".edit-stub").exists()).toBe(false);
   });
 
