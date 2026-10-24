@@ -28,6 +28,7 @@ vi.mock("../../utils/apiClient", () => ({
 import OverlayEditPanel from "./OverlayEditPanel.vue";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 enableAutoUnmount(afterEach);
 
@@ -51,6 +52,10 @@ async function mountPanel(extra = {}) {
         AppButton: { template: "<button class='run' @click=\"$emit('click')\"><slot /></button>" },
         "v-icon": true,
         Tooltip: true,
+        ModelDownloadButton: {
+          props: ["file"],
+          template: "<i class='dl'>{{ file }}</i>",
+        },
         // Renders the field and the menu side by side, so the rows can be
         // read and clicked without Vuetify's overlay.
         "v-menu": {
@@ -112,12 +117,16 @@ describe("the Edit tab", () => {
   });
 
   it("leaves out an edit card the pre-flight says cannot run", async () => {
+    // A missing model alongside another reason: a download would not fix it.
     preflightWorkflowRun.mockImplementation(async ({ target }) => ({
       groups: [
         {
           reasons:
             target === "i2i"
-              ? [{ code: "missing_models", models: [] }]
+              ? [
+                  { code: "missing_models", models: [{ file: "a.safetensors" }] },
+                  { code: "missing_nodes", nodes: ["Foo"] },
+                ]
               : [],
         },
       ],
@@ -130,6 +139,175 @@ describe("the Edit tab", () => {
       picture_ids: [7],
       target: "i2i",
     });
+  });
+
+  it("lists a card missing only models, flagged, with Run held", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "out"
+              ? [
+                  {
+                    code: "missing_models",
+                    models: [
+                      { file: "fill.safetensors", folder: "unet", downloadable: true },
+                      { file: "mine.safetensors", folder: "vae" },
+                    ],
+                  },
+                ]
+              : [],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    const rows = wrapper.findAll("[role=menuitemradio]");
+    expect(rows.map((row) => row.text())).toEqual([
+      "Widen, 2 models missing, Outpaint",
+      "Relight, Image to Image",
+    ]);
+    // Not the default while a runnable card is there.
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(wrapper.find(".edit-missing-notice").exists()).toBe(false);
+
+    await rows[0].trigger("click");
+    const notice = wrapper.find(".edit-missing-notice");
+    expect(notice.text()).toContain("2 models are missing.");
+    // A download only where the server can fetch the file.
+    expect(notice.findAll(".dl").map((dl) => dl.text())).toEqual([
+      "fill.safetensors",
+    ]);
+    expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
+    // Nor through Ctrl+Enter, which calls submit directly.
+    await wrapper.vm.submit();
+    expect(runWorkflowCard).not.toHaveBeenCalled();
+  });
+
+  it("asks again when a download lands, and turns Run on", async () => {
+    let present = false;
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "i2i" && !present
+              ? [{ code: "missing_models", models: [{ file: "a.safetensors" }] }]
+              : [],
+        },
+      ],
+    }));
+    listWorkflowCards.mockResolvedValue({ cards: [CARDS[3]] });
+    const wrapper = await mountPanel();
+    // The only card, so chosen though it cannot run yet.
+    expect(checkedRow(wrapper)).toContain("1 model missing");
+    expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
+
+    present = true;
+    useTasksStore().downloadsLanded += 1;
+    await flush();
+    await flush();
+    expect(wrapper.find(".edit-missing-notice").exists()).toBe(false);
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard).toHaveBeenCalled();
+  });
+
+  it("keeps a re-check that failed, and drops one that found another reason", async () => {
+    let after = null;
+    preflightWorkflowRun.mockImplementation(async ({ target }) => {
+      if (after && target !== "out") return after(target);
+      return {
+        groups: [
+          {
+            reasons:
+              target === "out"
+                ? []
+                : [{ code: "missing_models", models: [{ file: "a.safetensors" }] }],
+          },
+        ],
+      };
+    });
+    listWorkflowCards.mockResolvedValue({
+      cards: [CARDS[2], CARDS[3], { ...CARDS[3], id: "i2b", name: "Recolor" }],
+    });
+    const wrapper = await mountPanel();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+
+    after = async (target) => {
+      if (target === "i2i") throw new Error("offline");
+      return { groups: [{ reasons: [{ code: "missing_nodes", nodes: ["Foo"] }] }] };
+    };
+    useTasksStore().downloadsLanded += 1;
+    await flush();
+    await flush();
+    const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+    expect(rows).toEqual([
+      "Widen, Outpaint",
+      "Relight, 1 model missing, Image to Image",
+    ]);
+    await wrapper.findAll("[role=menuitemradio]")[1].trigger("click");
+    expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
+  });
+
+  it("falls back to another card when the chosen one is dropped", async () => {
+    let after = false;
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "out"
+              ? []
+              : after
+                ? [{ code: "missing_nodes", nodes: ["Foo"] }]
+                : [{ code: "missing_models", models: [{ file: "a.safetensors" }] }],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    await wrapper.findAll("[role=menuitemradio]")[1].trigger("click");
+    expect(checkedRow(wrapper)).toContain("Relight");
+    after = true;
+    useTasksStore().downloadsLanded += 1;
+    await flush();
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+  });
+
+  it("asks again when a download lands while the list is being read", async () => {
+    let calls = 0;
+    preflightWorkflowRun.mockImplementation(async () => {
+      calls += 1;
+      if (calls > 1) return { groups: [{ reasons: [] }] };
+      // The answer predates the download that lands before it arrives.
+      useTasksStore().downloadsLanded += 1;
+      return {
+        groups: [
+          { reasons: [{ code: "missing_models", models: [{ file: "a.safetensors" }] }] },
+        ],
+      };
+    });
+    listWorkflowCards.mockResolvedValue({ cards: [CARDS[3]] });
+    const wrapper = await mountPanel();
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+  });
+
+  it("does not default to a remembered card that is missing models", async () => {
+    window.localStorage.setItem("pixlstash:editTabWorkflow:", "out");
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "out"
+              ? [{ code: "missing_models", models: [{ file: "a.safetensors" }] }]
+              : [],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
   });
 
   it("sends a card missing only a picture straight to the Run popup", async () => {
@@ -597,6 +775,28 @@ describe("the Edit tab with the Paint tools", () => {
     expect(toggle.attributes("aria-expanded")).toBe("true");
     expect(help.element.style.display).toBe("");
     expect(help.text()).toContain("make the sky stormy");
+  });
+
+  it("moves onto an inpaint card a download would fix", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "fill"
+              ? [{ code: "missing_models", models: [{ file: "a.safetensors" }] }]
+              : [],
+        },
+      ],
+    }));
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    paint.hasSelection.value = true;
+    paint.selection.value = { ...paint.selection.value, steps: [RECT] };
+    await flush();
+    expect(checkedRow(wrapper)).toContain("Fill");
+    expect(wrapper.find(".edit-missing-notice").exists()).toBe(true);
   });
 
   it("warns, and does not send a mask, where the workflow has none", async () => {

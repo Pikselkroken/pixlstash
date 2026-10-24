@@ -35,11 +35,14 @@ export const UNCHECKED_CODES = ["comfyui_unreachable", "comfyui_not_configured"]
 export const PACK_OUTDATED = "pack_outdated";
 export const PACK_OUTDATED_ACTION = "Restart ComfyUI, or update the pack.";
 
+/** A model file the graph names that this machine does not have. */
+export const MISSING_MODELS = "missing_models";
+
 /**
  * Installing a file, or restarting ComfyUI, is a trip away from the keyboard,
  * so either stops the batch.
  */
-export const BLOCKS_BATCH = ["missing_models", PACK_OUTDATED];
+export const BLOCKS_BATCH = [MISSING_MODELS, PACK_OUTDATED];
 
 /**
  * Not a refusal: a LoRA loader the server took out of the graph (#1463).
@@ -299,7 +302,7 @@ export function readReason(reason) {
       );
     case "comfyui_unreachable":
       return read("ComfyUI did not answer, so its graph could not be checked.");
-    case "missing_models": {
+    case MISSING_MODELS: {
       const files = (reason.models || []).filter(Boolean);
       const count = files.length;
       return read(
