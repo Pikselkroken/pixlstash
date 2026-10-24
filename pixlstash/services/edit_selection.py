@@ -159,7 +159,8 @@ def _shape(step: SelectionStep, image: np.ndarray) -> np.ndarray:
 # cv2.dilate/erode: a disc kernel costs its area per pixel, about 1.5 s for a
 # 51px radius on a 7680 x 5120 picture, while the transform is one pass at any
 # radius. The mask is still 0/255 here, which is all the transform reads.
-# Outside the picture counts as neither, as with OpenCV's default border.
+# Outside the picture is ignored, as with OpenCV's default border: a shrink
+# keeps a selection that runs to the edge, a grow does not spill past it.
 def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
     """Every pixel within *radius* of a selected one."""
     dist = cv2.distanceTransform(255 - mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)

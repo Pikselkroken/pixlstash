@@ -86,7 +86,7 @@ def test_refine_fills_holes_grows_and_feathers():
     assert 0 < feathered[5, 20] < 255
 
 
-def test_refine_treats_the_picture_edge_as_neither_selected_nor_not():
+def test_refine_ignores_what_lies_outside_the_picture():
     """Shrinking keeps a selection that runs to the edge, growing nothing
     stays nothing, and growing reaches out by a disc, not a square."""
     left = [{"tool": "rect", "mode": "new", "box": [0, 0, 0.5, 1]}]
