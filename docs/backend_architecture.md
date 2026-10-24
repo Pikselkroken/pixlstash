@@ -11120,7 +11120,10 @@ an address of its choosing.
   by `scripts/build_template_suggestions.py`, kept per link across weekly
   runs; a gated file has none). It is `downloadable` only where the link
   `download_source` would fetch for that name is the one listed under the
-  digest, so the fetched file is the one the loader asks for. Such a missing
+  digest. **Every download whose link has a listed digest is checked against
+  it** before it is published: another file under the same link (a re-upload
+  since the list was built) fails with both digests named and is removed,
+  rather than landing and leaving the loader missing. Such a missing
   model refuses the run rather than failing inside ComfyUI, a LoRA included:
   only a LoRA named by file is bypassed.
 

@@ -103,7 +103,8 @@ def _sha256_of(url: str) -> str | None:
             return etag
         location = response.headers.get("Location")
         url = urllib.parse.urljoin(url, location) if location else ""
-        if urllib.parse.urlsplit(url).hostname != DIGEST_HOST:
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme != "https" or parts.hostname != DIGEST_HOST:
             return None
     return None
 

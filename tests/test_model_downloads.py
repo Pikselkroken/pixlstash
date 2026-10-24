@@ -2,6 +2,7 @@
 
 import contextlib
 import gzip
+import hashlib
 import json
 import os
 import sqlite3
@@ -101,11 +102,11 @@ def no_downloads_left():
 def linked(monkeypatch):
     """Point every file name at *url*, in the ComfyUI folder *directory*."""
 
-    def link(url, directory="loras"):
+    def link(url, directory="loras", sha256=None):
         monkeypatch.setattr(
             model_downloads,
             "download_source",
-            lambda file: {"url": url, "directory": directory},
+            lambda file: {"url": url, "directory": directory, "sha256": sha256},
         )
 
     return link
@@ -186,6 +187,25 @@ def test_a_download_lands_in_the_marked_folder_and_is_registered(
         (chosen_id, "loras/SDXL/Style.safetensors"),
     )
     assert row is not None and arrived == [row["model_id"]] == [done["model_id"]]
+
+
+def test_a_download_that_is_not_the_listed_file_is_refused(
+    hub, target, adapter_bytes, linked
+):
+    """Wrong if a body whose digest is not the one the list records lands on
+    the shelf: a loader asking for the listed digest would stay missing."""
+    chosen, chosen_id = target
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, sha256="0" * 64)
+        refused = _wait(start_download(hub, "other.safetensors")["id"])
+        linked(url, sha256=hashlib.sha256(adapter_bytes).hexdigest())
+        kept = _wait(start_download(hub, "listed.safetensors")["id"])
+    assert refused["status"] == STATUS_FAILED, refused
+    assert "not the file the template list names" in refused["error"]
+    assert not (chosen / "loras" / "other.safetensors").exists()
+    assert not (chosen / "loras" / ("other.safetensors" + PARTIAL_SUFFIX)).exists()
+    assert kept["status"] == STATUS_DONE, kept
+    assert (chosen / "loras" / "listed.safetensors").read_bytes() == adapter_bytes
 
 
 def test_without_the_comfyui_subfolder_the_file_goes_at_the_top(
