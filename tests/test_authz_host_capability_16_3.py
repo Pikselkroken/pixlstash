@@ -48,6 +48,7 @@ from pixlstash.authz.policy import (
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.route_inventory import api_endpoint_set
+from pixlstash.services import node_pack_install_service
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4
 
@@ -1055,8 +1056,6 @@ def test_node_pack_install_is_loopback_only_even_with_flag_on(monkeypatch):
     """Both directions on one server: a loopback owner reaches the install (the
     positive control, which also proves the route resolves), and an owner on
     the LAN, Tailscale or the internet is 403'd before the service is asked."""
-    from pixlstash.services import node_pack_install_service
-
     asked = []
 
     def install(comfyui_url, pack_id):
