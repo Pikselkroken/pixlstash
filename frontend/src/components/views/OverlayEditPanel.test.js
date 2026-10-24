@@ -250,6 +250,30 @@ describe("the Edit tab", () => {
     expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
   });
 
+  it("falls back to another card when the chosen one is dropped", async () => {
+    let after = false;
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "out"
+              ? []
+              : after
+                ? [{ code: "missing_nodes", nodes: ["Foo"] }]
+                : [{ code: "missing_models", models: [{ file: "a.safetensors" }] }],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    await wrapper.findAll("[role=menuitemradio]")[1].trigger("click");
+    expect(checkedRow(wrapper)).toContain("Relight");
+    after = true;
+    useTasksStore().downloadsLanded += 1;
+    await flush();
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+  });
+
   it("asks again when a download lands while the list is being read", async () => {
     let calls = 0;
     preflightWorkflowRun.mockImplementation(async () => {

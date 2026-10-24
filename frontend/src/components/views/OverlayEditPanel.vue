@@ -720,16 +720,9 @@ async function loadCards() {
     );
     unrunnable.value = edits.length - cards.value.length;
     rememberedKey.value = readRemembered();
-    // The last one used from this tab, else the first Image to Image card in
-    // the grid's own order, else whatever edit card comes first - of the
-    // cards the open picture alone can run. With none, the first a download
-    // would fix, so its notice is on screen rather than behind the picker.
-    const here = cards.value.filter((card) => runsHere(card.id));
     workflowId.value = runsHere(rememberedKey.value)
       ? rememberedKey.value
-      : (here.find((card) => card.type === "img2img") || here[0])?.id ||
-        missing.value.keys().next().value ||
-        "";
+      : defaultKey();
     // Drawn before the tab was first shown.
     if (hasSelection.value) moveToMasked();
     loaded.value = true;
@@ -743,6 +736,21 @@ async function loadCards() {
 }
 
 const FILL = "fill";
+
+/**
+ * The card the tab falls back to: the first Image to Image card in the grid's
+ * own order, else whatever edit card comes first - of the cards the open
+ * picture alone can run. With none, the first a download would fix, so its
+ * notice is on screen rather than behind the picker.
+ */
+function defaultKey() {
+  const here = cards.value.filter((card) => runsHere(card.id));
+  return (
+    (here.find((card) => card.type === "img2img") || here[0])?.id ||
+    missing.value.keys().next().value ||
+    ""
+  );
+}
 
 /** A listed card the open picture alone can run. */
 function runsHere(key) {
@@ -841,7 +849,7 @@ async function recheckMissing() {
   if (dropped.size) {
     cards.value = cards.value.filter((card) => !dropped.has(card.id));
     unrunnable.value += dropped.size;
-    if (dropped.has(workflowId.value)) workflowId.value = "";
+    if (dropped.has(workflowId.value)) workflowId.value = defaultKey();
   }
 }
 
