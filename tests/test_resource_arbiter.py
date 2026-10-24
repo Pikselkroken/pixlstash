@@ -356,6 +356,59 @@ def test_a_stalled_ledger_read_still_stores_the_tenants_it_read_after():
     assert arb._probe_state[Tenant.COMFYUI]["usage"] == 0
 
 
+def test_a_cached_read_that_stalls_never_stores_over_a_fresh_one():
+    """The cached pass samples 23 GB, stalls, and the fresh 0 must survive it."""
+    arb, fake, _ = make(used_mb=23000, thread=False)
+    sampled, go = threading.Event(), threading.Event()
+    ram = arb._ram
+
+    def stalled_ram():
+        if threading.current_thread().name == "cached-read":
+            sampled.set()
+            go.wait(5)
+        return ram()
+
+    arb._ram = stalled_ram
+    cached = threading.Thread(
+        target=arb._refresh, kwargs={"cached": True}, name="cached-read"
+    )
+    cached.start()
+    try:
+        assert sampled.wait(5)
+        fake.used_mb = 0
+        arb._refresh()
+    finally:
+        go.set()
+        cached.join(5)
+    assert arb._devices[0].used_mb == 0
+
+
+def test_a_stalled_tenant_read_never_stores_over_a_newer_one():
+    """The stalled pass reads ComfyUI at 5000 MB, then a newer pass reads 0."""
+    arb, _fake, _ = make(thread=False)
+    sampled, go = threading.Event(), threading.Event()
+
+    class StallingComfy(FakeComfy):
+        def idle(self):  # the last thing a pass asks a tenant
+            if threading.current_thread().name == "stalled-read":
+                sampled.set()
+                go.wait(5)
+            return super().idle()
+
+    comfy = StallingComfy(usage=5000)
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    stalled = threading.Thread(target=arb._refresh, name="stalled-read")
+    stalled.start()
+    try:
+        assert sampled.wait(5)
+        comfy.usage = 0
+        arb._refresh()
+    finally:
+        go.set()
+        stalled.join(5)
+    assert arb._probe_state[Tenant.COMFYUI]["usage"] == 0
+
+
 def test_urgent_light_is_fit_checked_only():
     arb, _fake, _ = make(used_mb=23000)
     exclusive = arb.request(
