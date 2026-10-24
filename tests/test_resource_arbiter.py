@@ -218,6 +218,39 @@ def test_heavy_is_strict_fifo_per_device():
     small.release()
 
 
+def test_a_comfyui_run_that_fits_passes_a_comfyui_run_that_does_not():
+    """One run too big for the card now must not hold back the next one."""
+    arb, _fake, _ = make(used_mb=20000)
+    arb.register_probe(Tenant.COMFYUI, FakeComfy(usage=0))
+    big = arb.request(Tenant.COMFYUI, "big", need_mb=10000)
+    small = arb.request(Tenant.COMFYUI, "small", need_mb=2000)
+    assert big.waiting_reason["code"] == "vram"
+    assert small.state is LeaseState.GRANTED
+    # Another tenant still keeps its place, in both directions.
+    train = arb.request(Tenant.AITOOLKIT, "train", device=CARD, need_mb=100)
+    assert train.waiting_reason["code"] == "fifo"
+    assert train.waiting_reason["blocked_by"][0]["label"] == "big"
+    after = arb.request(Tenant.COMFYUI, "after", need_mb=2000)
+    assert after.waiting_reason["code"] == "fifo"
+    assert after.waiting_reason["blocked_by"][0]["label"] == "train"
+    for lease in (after, train, small, big):
+        lease.release()
+
+
+def test_a_comfyui_run_passes_a_comfyui_run_waiting_to_run_alone():
+    """Running alone keeps other tenants off; ComfyUI's runs never blocked it."""
+    arb, _fake, _ = make(used_mb=20000)
+    arb.register_probe(Tenant.COMFYUI, FakeComfy(usage=0))
+    alone = arb.request(
+        Tenant.COMFYUI, "alone", need_mb=10000, kind=LeaseKind.EXCLUSIVE
+    )
+    small = arb.request(Tenant.COMFYUI, "small", need_mb=2000)
+    assert alone.waiting_reason["code"] == "vram"
+    assert small.state is LeaseState.GRANTED
+    for lease in (small, alone):
+        lease.release()
+
+
 def test_exclusive_blocks_light_while_granted_or_waiting():
     arb, fake, _ = make(used_mb=23000)
     exclusive = arb.request(

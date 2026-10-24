@@ -383,8 +383,9 @@ export const useTasksStore = defineStore("tasks", () => {
       })),
   );
 
-  // "Waiting for the GPU": a lease in the wait, in the queue order the arbiter
-  // runs them (`waiting_reason.position`). A ComfyUI run held by PixlStash is
+  // "Waiting for the GPU": a lease in the wait, in the order it was asked for
+  // (`waiting_reason.position`). A ComfyUI run that fits may start before
+  // ComfyUI runs listed above it. A ComfyUI run held by PixlStash is
   // listed once, through its lease; one with no lease yet still gets a row.
   const waitingEntries = computed(() => {
     const out = [];
