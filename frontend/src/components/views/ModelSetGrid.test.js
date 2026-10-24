@@ -2254,6 +2254,39 @@ describe("hand-made sets (#1520)", () => {
     ]);
   });
 
+  it("still adds a download by its digest when it lands between draw and click", async () => {
+    const late = "9".repeat(64);
+    const tasks = useTasksStore();
+    tasks.modelDownloads = [
+      { id: "z", file: "late.safetensors", status: "running", sha256: late, slot: "lora" },
+    ];
+    addWorkflowSetMembers.mockReset().mockResolvedValue({
+      set: handSet(10, [SET_CKPT]),
+      added: [late],
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const option = wrapper
+      .find('[data-testid="workflow-set-chooser"]')
+      .findAll('[role="option"]')
+      .find((o) => o.text().includes("late"));
+    // The poll says it finished; the row on screen is the one clicked.
+    tasks.modelDownloads = [{ ...tasks.modelDownloads[0], status: "done" }];
+    await option.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers.mock.calls).toEqual([
+      [10, [{ sha256: late, slot: "lora", label: "late.safetensors" }]],
+    ]);
+  });
+
   it("takes a pick back out with a click on its ticked row, without a pill", async () => {
     const shaOf = (modelId) => String(modelId).repeat(64).slice(0, 64);
     addWorkflowSetMembers.mockReset().mockImplementation((id, members) =>

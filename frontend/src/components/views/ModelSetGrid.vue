@@ -1777,20 +1777,26 @@ async function pickIntoSlot(set, slotId, ids) {
   const single = slotId === "checkpoint";
   if (single) closeChooser();
   // A download joins by the digest it will land with, named by its file.
+  // Every download the last poll listed, ended ones too: one that landed
+  // since the picker drew it is still added by its digest, which the shelf
+  // row now carries. A key no listing knows any more adds nothing.
   const coming = new Map(
-    tasksStore.runningDownloads.map((d) => [`download:${d.id}`, d]),
+    tasksStore.modelDownloads
+      .filter((d) => d.sha256)
+      .map((d) => [`download:${d.id}`, d]),
   );
-  const memberOf = (id) => {
+  const members = fresh.flatMap((id) => {
     const d = coming.get(id);
-    return d
-      ? { sha256: d.sha256, slot: slotId, label: d.file }
-      : { model_id: id, slot: slotId };
-  };
+    if (d) return [{ sha256: d.sha256, slot: slotId, label: d.file }];
+    return String(id).startsWith("download:")
+      ? []
+      : [{ model_id: id, slot: slotId }];
+  });
   let result;
   try {
-    result = await store.addToHandMadeSet(set, fresh.map(memberOf), {
-      quiet: !single,
-    });
+    result = members.length
+      ? await store.addToHandMadeSet(set, members, { quiet: !single })
+      : null;
   } finally {
     fresh.forEach((id) => picking.delete(id));
   }
