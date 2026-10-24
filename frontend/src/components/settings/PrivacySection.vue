@@ -18,7 +18,7 @@
            architecture does not have. -->
       <SettingsRow
         label="Send an anonymous install ID"
-        sub="Lets us tell whether people keep using PixlStash rather than just downloading it. Never derived from anything about your computer."
+        sub="Lets us tell whether people keep using PixlStash rather than just downloading it. Not derived from anything about you or your computer."
       >
         <v-switch
           v-model="installIdModel"
@@ -96,7 +96,7 @@
   <SettingsSection
     v-if="ghosts"
     title="Ghosts"
-    desc="What is left of pictures you deleted for good. Workflows › Ghosts lists their workflows."
+    desc="Leave a trace of pictures you deleted. Workflows, recipes and thumbnails. Allows recreation of deleted pictures at a fraction of the size."
   >
     <SettingsRow
       label="Keep picture ghosts"
@@ -276,7 +276,7 @@ const purgeKind = ref(null);
 
 const retentionOptions = [
   { id: "off", label: "Never" },
-  { id: "covered", label: "While matched" },
+  { id: "covered", label: "Partially" },
   { id: "on", label: "Always" },
 ];
 
@@ -284,10 +284,10 @@ const retentionOptions = [
 // Never must not read as a purge: somebody choosing it for privacy would believe
 // the ghosts were gone.
 const RETENTION_SUBS = {
-  off: "From now on, none: a permanently deleted picture cannot be made again. Ghosts already kept stay until you purge them below.",
+  off: "From now on, none: a permanently deleted picture cannot be made again. Ghosts already kept stay until you purge them.",
   covered:
-    "Only while a picture you kept has the same workflow and prompt. Deleting the last one removes the ghosts it matched.",
-  on: "Every permanently deleted picture, until you purge them below.",
+    "Only while you still have pictures with the same workflow and prompt. Deleting the last one clears the ghosts.",
+  on: "Every permanently deleted picture, until you purge them.",
 };
 
 const plural = (n, one, many) =>
