@@ -118,6 +118,7 @@
           :tabindex="index === cursorIndex ? 0 : -1"
           :data-key="template.key"
           @click="onRowClick(index, $event)"
+          @contextmenu.prevent="onRowMenu(index, $event)"
         >
           <div class="wtp-cell" role="gridcell">
             <WorkflowTemplateCard
@@ -159,6 +160,62 @@
         />
       </div>
     </div>
+
+    <!-- The card menu: right-click, the Menu key or Shift+F10 on a template.
+         Everything the pill does, and the download of what they lack. -->
+    <v-menu
+      v-model="contextOpen"
+      :target="contextAt"
+      location="bottom end"
+      origin="top start"
+      :offset="2"
+    >
+      <div
+        class="ctx-menu"
+        role="menu"
+        tabindex="-1"
+        data-testid="wtp-menu"
+        @keydown="onMenuKeydown"
+      >
+        <button
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          data-verb="add"
+          @click="verb(() => emit('add'))"
+        >
+          <v-icon class="ctx-icon">mdi-plus</v-icon>
+          <span class="ctx-label-text">{{ addLabel }}</span>
+        </button>
+        <!-- `aria-disabled`, not `disabled`, so the reason stays one hover
+             away (`WorkflowSelectionBar`'s rule). -->
+        <button
+          class="ctx-item"
+          :class="{ 'ctx-item--disabled': !downloadFiles.length }"
+          type="button"
+          role="menuitem"
+          data-verb="download-missing"
+          :aria-disabled="downloadFiles.length ? undefined : 'true'"
+          @click="downloadFiles.length && verb(downloadMissing)"
+        >
+          <Tooltip :text="downloadTitle" activator="parent" />
+          <v-icon class="ctx-icon">mdi-download-outline</v-icon>
+          <span class="ctx-label-text">{{ downloadLabel }}</span>
+        </button>
+        <div class="ctx-sep"></div>
+        <button
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          data-verb="clear"
+          @click="verb(() => store.clearSelection())"
+        >
+          <v-icon class="ctx-icon">mdi-close</v-icon>
+          <span class="ctx-label-text">Clear selection</span>
+          <span class="ctx-shortcut">Esc</span>
+        </button>
+      </div>
+    </v-menu>
   </div>
 </template>
 
@@ -168,11 +225,15 @@
  * owner's ComfyUI serves, drawn as cards on the Mine grid's columns, with the
  * same click, Ctrl, Shift and keyboard selection, and one verb on the pill:
  * Add, which the view carries out (`add`), since it lands on the Mine tab.
+ * The card menu has Add too, and downloads the files the selection lacks.
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
+import { useContextMenuAt } from "../../composables/useContextMenuAt";
+import { downloadModels } from "../../composables/useModelDownloads";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
+import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
@@ -214,6 +275,67 @@ const addLabel = computed(() => {
   const n = store.selectedKeys.length;
   return n === 1 ? "Add to my workflows" : `Add ${n} to my workflows`;
 });
+
+const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
+
+/** The selection's missing files PixlStash knows where to get. */
+const downloadFiles = computed(() => [
+  ...new Set(
+    store.selectedTemplates.flatMap((template) =>
+      (template.files ?? [])
+        .filter((file) => file.downloadable)
+        .map((file) => file.name),
+    ),
+  ),
+]);
+const downloadLabel = computed(() => {
+  const n = downloadFiles.value.length;
+  if (!n) return "Download missing models";
+  return n === 1 ? "Download 1 missing model" : `Download ${n} missing models`;
+});
+const downloadTitle = computed(() => {
+  if (downloadFiles.value.length) return downloadFiles.value.join(", ");
+  const lacking = store.selectedTemplates.some((t) =>
+    (t.files ?? []).some((file) => !file.present),
+  );
+  return lacking
+    ? "PixlStash does not know where to get the files missing from your shelf"
+    : "Every file they load is on your shelf";
+});
+
+function downloadMissing() {
+  void downloadModels(downloadFiles.value);
+}
+
+/** Shut the menu, then do what its row says. */
+function verb(run) {
+  contextOpen.value = false;
+  run();
+}
+
+/**
+ * Right-click a card: the file-manager rule, as on Mine. One that is not
+ * selected becomes the selection; one that is keeps the selection whole.
+ */
+function onRowMenu(index, event) {
+  const template = store.sortedTemplates[index];
+  if (!template) return;
+  cursorKey.value = template.key;
+  if (!selected(template.key)) store.select(template.key);
+  openContextMenu(event.clientX, event.clientY, event.currentTarget);
+}
+
+/** The Menu key and Shift+F10: the menu under the cursor card. */
+function openMenuAtCursor() {
+  const template = store.sortedTemplates[cursorIndex.value];
+  if (!template) return;
+  if (!selected(template.key)) store.select(template.key);
+  const row = Array.from(gridEl.value?.querySelectorAll(".wtp-row") ?? []).find(
+    (element) => element.dataset.key === template.key,
+  );
+  const box = row?.getBoundingClientRect();
+  openContextMenu(box ? box.left + 24 : 0, box ? box.bottom : 0, row);
+}
 
 function measure() {
   const width = gridEl.value?.clientWidth ?? 0;
@@ -286,6 +408,11 @@ function onKeyDown(event) {
   if (step) {
     event.preventDefault();
     moveCursor(cursorIndex.value + step);
+    return;
+  }
+  if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+    event.preventDefault();
+    openMenuAtCursor();
     return;
   }
   if (event.key === " " && template) {

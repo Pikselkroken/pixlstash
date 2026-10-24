@@ -7072,9 +7072,17 @@ unchanged by the tab's existence.
   template". Run is refused for it in the pill, the context menu and the
   Workflow tab, with the reason; *Open in ComfyUI* stays, since saving it there
   is what finishes it.
-- **Not built:** the design's *Download the missing* button. The app has no
-  model download path yet (#1866); a missing file's row in the inspector links
-  to where its template says to get it (`https:` only).
+- **The card menu** (right-click, the Menu key, Shift+F10; the file-manager
+  rule: right-clicking an unselected card selects it alone) has everything the
+  pill does, Add and Clear selection, and *Download missing models*: each file
+  of the selection the server marks `downloadable`, once by name, through
+  `downloadModels` (`composables/useModelDownloads.js`, which the one-file
+  `ModelDownloadButton` uses too). Refused with the reason when there is none.
+  Mine's card menu and `⋯` carry the same row; there the view asks the run
+  pre-flight (cached) of each selected non-draft workflow, as the Workflow tab
+  does, and downloads what `downloadableInPreflight` reads off the answer.
+- **Not built:** a download button in the template inspector. A missing file's
+  row there links to where its template says to get it (`https:` only).
 
 ---
 

@@ -24975,7 +24975,7 @@ def _card(owner, workflow_id):
 
 
 def test_the_template_list_reads_the_owners_comfyui(
-    workflow_env, comfyui_templates_served
+    workflow_env, comfyui_templates_served, monkeypatch
 ):
     """Built-ins, partner and pack templates, each with what it downloads.
 
@@ -24984,6 +24984,13 @@ def test_the_template_list_reads_the_owners_comfyui(
     template's graph is read at all.
     """
     hub = workflow_env.server.hub
+    # PixlStash's own list links every name, the shelf's file included: only
+    # the missing one may be offered for download.
+    monkeypatch.setattr(
+        comfyui_module,
+        "download_source",
+        lambda file: {"url": "https://example.com/model", "directory": "vae"},
+    )
     model_id = hub.fetchone(
         "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
     )[0]
@@ -25022,9 +25029,12 @@ def test_the_template_list_reads_the_owners_comfyui(
         1234,
     )
     assert example["thumbnail"] is True
-    assert {(f["name"], f["directory"], f["present"]) for f in example["files"]} == {
-        (_SHELF_FILENAME.upper(), "diffusion_models", True),
-        (_TEMPLATE_SUBGRAPH_VAE, "vae", False),
+    assert {
+        (f["name"], f["directory"], f["present"], f["downloadable"])
+        for f in example["files"]
+    } == {
+        (_SHELF_FILENAME.upper(), "diffusion_models", True, False),
+        (_TEMPLATE_SUBGRAPH_VAE, "vae", False, True),
     }
     assert listed["default/api_example"]["source"] == "partner"
     assert listed["default/api_example"]["files"] == []

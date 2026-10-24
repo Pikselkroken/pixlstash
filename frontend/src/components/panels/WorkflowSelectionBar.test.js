@@ -707,3 +707,41 @@ describe("Favourite (#1578)", () => {
     expect(wrapper.emitted("favourite")).toHaveLength(2);
   });
 });
+
+// Download missing models: the view asks the pre-flight; the row only says
+// whether there is a graph to ask about.
+describe("Download missing models", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  const rowOf = (wrapper) =>
+    verbMenus(wrapper)[0]
+      .findAll(".ctx-item")
+      .find((el) => el.attributes("data-verb") === "download-missing");
+
+  it("is offered over several workflows, drafts among them, and asks", async () => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("x", { manual: true, draft: true })];
+    store.selectRange(["a", "x"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBeUndefined();
+    await row.trigger("click");
+    expect(wrapper.emitted("download-missing")).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("is refused over drafts alone, saying what finishes one", async () => {
+    const store = useWorkflowsStore();
+    store.cards = [...CARDS, card("x", { manual: true, draft: true })];
+    store.selectRange(["x"]);
+    const wrapper = mount(WorkflowSelectionBar, globalOpts);
+    const row = rowOf(wrapper);
+    expect(row.attributes("aria-disabled")).toBe("true");
+    expect(row.find(".tip").attributes("data-text")).toBe(
+      "A draft has no graph to check yet: open it in ComfyUI and save it",
+    );
+    await row.trigger("click");
+    expect(wrapper.emitted("download-missing")).toBeUndefined();
+    wrapper.unmount();
+  });
+});

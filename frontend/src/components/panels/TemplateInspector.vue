@@ -143,9 +143,8 @@
  * loaders name, each marked as on the shelf or not. Add is the pill's verb
  * too; both ask the view (`requestAdd`), which lands on Mine afterwards.
  *
- * The design's *Download the missing* is not here: PixlStash has no path that
- * downloads a model yet (#1866). A missing file links to where its template
- * says to get it instead.
+ * The design's *Download the missing* is the card menu's, not here. A missing
+ * file links to where its template says to get it.
  */
 import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
