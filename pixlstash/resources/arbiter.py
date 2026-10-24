@@ -11,7 +11,8 @@ Leases come in three kinds:
   the task spills to the CPU or is retried later, so the single GPU worker
   never blocks on a lease.
 * ``HEAVY``: a ComfyUI run (later a training job once its peak is known).
-  Queued strictly FIFO per device.
+  Queued FIFO per device, except that a ComfyUI run that fits passes ComfyUI
+  runs waiting ahead of it.
 * ``EXCLUSIVE``: heavy work that must have the card to itself. While one is
   granted or waiting, LIGHT grants on its device are refused.
 
@@ -836,7 +837,8 @@ class ResourceArbiter:
         return []
 
     def _evaluate_locked(self, log_only: bool = False) -> list[tuple[Lease, str]]:
-        """One admission pass, one grant at a time, FIFO per device.
+        """One admission pass, one grant at a time, FIFO per device (a ComfyUI
+        run may pass ComfyUI runs waiting ahead of it).
 
         Returns the state changes to announce once the lock is let go.
         """
@@ -859,11 +861,22 @@ class ResourceArbiter:
             ),
             key=lambda lease: lease.seq,
         )
-        blocked: dict[str, Lease] = {}
+        blocked: dict[str, list[Lease]] = {}
         positions: dict[str, int] = {}
         for lease in waiting:
             positions[lease.device] = positions.get(lease.device, 0) + 1
-            reason = self._fit_locked(lease, blocked.get(lease.device))
+            # A ComfyUI run passes ComfyUI runs that wait ahead of it: what
+            # ComfyUI holds counts as room for its own runs, so granting it
+            # takes nothing from them. Anyone else's work keeps its place.
+            ahead = next(
+                (
+                    other
+                    for other in blocked.get(lease.device, ())
+                    if not (lease.tenant is other.tenant is Tenant.COMFYUI)
+                ),
+                None,
+            )
+            reason = self._fit_locked(lease, ahead)
             if reason is None or lease.run_anyway:
                 if log_only:
                     return None
@@ -883,7 +896,7 @@ class ResourceArbiter:
                     reason["text"],
                 )
             lease.waiting_reason = reason
-            blocked.setdefault(lease.device, lease)
+            blocked.setdefault(lease.device, []).append(lease)
         return None
 
     def _fit_locked(self, lease: Lease, ahead: Lease | None) -> dict | None:
