@@ -284,7 +284,7 @@ const retentionOptions = [
 // Never must not read as a purge: somebody choosing it for privacy would believe
 // the ghosts were gone.
 const RETENTION_SUBS = {
-  off: "From now on, none: a permanently deleted picture cannot be made again. Ghosts already kept stay until you purge them.",
+  off: "From now on, none: a permanently deleted picture cannot be made again. Ghosts already kept stay until purged.",
   covered:
     "Only while you still have pictures with the same workflow and prompt. Deleting the last one clears the ghosts.",
   on: "Every permanently deleted picture, until you purge them.",

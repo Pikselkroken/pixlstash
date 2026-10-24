@@ -73,7 +73,7 @@ beforeEach(() => {
 describe("ghost retention", () => {
   it("shows the three positions and a count on each purge", async () => {
     const wrapper = await mountPane();
-    for (const label of ["Never", "While matched", "Always"]) {
+    for (const label of ["Never", "Partially", "Always"]) {
       expect(button(wrapper, label)).toBeTruthy();
     }
     expect(button(wrapper, "Purge 12")).toBeTruthy();
@@ -95,7 +95,7 @@ describe("ghost retention", () => {
     const wrapper = await mountPane();
     await button(wrapper, "Always").trigger("click");
     await flushPromises();
-    expect(button(wrapper, "While matched").attributes("aria-checked")).toBe(
+    expect(button(wrapper, "Partially").attributes("aria-checked")).toBe(
       "true",
     );
     expect(wrapper.find("[role='alert']").text()).toContain(
@@ -114,7 +114,7 @@ describe("ghost retention", () => {
     const wrapper = await mountPane();
     await button(wrapper, "Never").trigger("click");
     expect(button(wrapper, "Always").attributes("disabled")).toBeUndefined();
-    await button(wrapper, "While matched").trigger("click");
+    await button(wrapper, "Partially").trigger("click");
     await button(wrapper, "Always").trigger("click");
     finish(payload({ workflow_ghost_retention: "off" }));
     await flushPromises();
