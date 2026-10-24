@@ -2,7 +2,7 @@
   <div class="wtp" role="tabpanel" aria-labelledby="wfv-tab-templates">
     <!-- Where the list comes from, first on the strip: none of it is the
          owner's own work until it is added. A ComfyUI mark with a connected
-         dot (a disconnected glyph for the shipped copy), so the strip keeps
+         dot (a red cross for the shipped copy), so the strip keeps
          its room for the chips; the address and the re-read are one hover and one
          click away. -->
     <div v-if="listed && store.loaded" class="wtp-strip">
@@ -22,7 +22,7 @@
               aria-hidden="true"
             ></span>
             <span v-else class="wtp-link-off" aria-hidden="true">
-              <v-icon size="12">mdi-lan-disconnect</v-icon>
+              <v-icon size="12">mdi-close-thick</v-icon>
             </span>
             <Tooltip :text="sourceLabel" activator="parent" :describe="false" />
           </button>
@@ -372,7 +372,7 @@ function onKeyDown(event) {
   box-shadow: 0 0 0 2px rgb(var(--v-theme-background));
 }
 
-/* The shipped copy's mark: a disconnected glyph in the error fill, on the
+/* The shipped copy's mark: a cross in the error fill, on the
    strip's ground so it reads apart from the mark beneath. The fill, not
    `surface-error`: the owner's call, since the dark theme's lifted value reads
    amber at this size. */

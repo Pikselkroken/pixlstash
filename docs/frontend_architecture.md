@@ -7042,7 +7042,7 @@ unchanged by the tab's existence.
   small panel with the address and *Read the templates again* (`refresh`).
   With no ComfyUI answering the list is the copy PixlStash ships
   (`reachable: false` with templates), drawn the same way: the dot gives way to a
-  red disconnected glyph (`mdi-lan-disconnect`, the `error` fill: `surface-error` reads amber there in dark) over the mark,
+  red cross (`mdi-close-thick`, the `error` fill: `surface-error` reads amber there in dark) over the mark,
   and the panel says these are the shipped templates and that
   node-pack ones appear once ComfyUI answers.
 - **Readiness is one function** (`templateReadiness`): `partner`, else

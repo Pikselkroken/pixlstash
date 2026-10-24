@@ -2058,7 +2058,7 @@ describe("Mine | Templates", () => {
     );
     const source = wrapper.find('[data-testid="wtp-source"]');
     expect(source.attributes("aria-label")).toContain("PixlStash ships");
-    expect(source.find(".wtp-link-off").text()).toContain("mdi-lan-disconnect");
+    expect(source.find(".wtp-link-off").text()).toContain("mdi-close-thick");
     expect(source.find(".wtp-link-dot").exists()).toBe(false);
 
     await wrapper.find('[data-testid="template-card"]').trigger("click");
