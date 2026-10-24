@@ -357,16 +357,19 @@
  * are left out (a form with a dead text box) and stay on *Use as input for…*.
  * Hidden cards stay out because the grid's default list leaves them out.
  *
- * **Only cards that would run.** Each edit card is pre-flighted against the
- * open picture, the same question Run asks, and one that answers with a reason
- * is dropped: a missing node, a UI-format file. A card whose only reason is
- * missing models (#2055) is listed with a warning glyph, since a download
- * fixes it: chosen, it shows the Run popup's notice with each file's download,
- * Run waits, and a download landing asks those cards again. A card whose only
- * reason is an open picture input (a reference beside the open picture) is
- * listed with an ellipsis and never becomes the tab's card: an instruction
- * alone cannot run it, so choosing it opens the Run popup, which can fill it. A node the server replaces (a seed node) or a LoRA it bypasses is not
- * a reason, so those cards stay. A ComfyUI that cannot be asked (not set up,
+ * **Only cards that would run, or would after a download.** Each edit card is
+ * pre-flighted against the open picture, the same question Run asks, and one
+ * that answers with a reason is dropped: a missing node, a UI-format file. A
+ * card whose only reason is missing models (#2055) is listed with a warning
+ * glyph, since a download fixes it: chosen, it shows the Run popup's notice
+ * with each file's download, and Run waits. A download landing asks those
+ * cards again; one that now answers with another reason is dropped, and one
+ * whose re-check failed keeps waiting. A card whose only reason is an open
+ * picture input (a reference beside the open picture) is listed with an
+ * ellipsis and never becomes the tab's card: an instruction alone cannot run
+ * it, so choosing it opens the Run popup, which can fill it. A node the server
+ * replaces (a seed node) or a LoRA it bypasses is not a reason, so those cards
+ * stay. A ComfyUI that cannot be asked (not set up,
  * not running) is no verdict on any one card, so every card stays and the run
  * says why; so does a card whose pre-flight itself failed.
  *
@@ -578,10 +581,15 @@ let beforeSelection = "";
 /** The workflow a selection runs with: the last one run on one, else the first. */
 function maskedCard() {
   const last = readRemembered(LAST_MASKED_KEY_PREFIX);
-  const usable = cards.value.filter(
-    (card) => MASK_TYPES.has(card.type) && runsHere(card.id),
+  const masked = cards.value.filter((card) => MASK_TYPES.has(card.type));
+  const usable = masked.filter((card) => runsHere(card.id));
+  // One a download would fix beats staying on a card that ignores the mask.
+  return (
+    usable.find((card) => card.id === last) ||
+    usable[0] ||
+    masked.find((card) => missing.value.has(card.id)) ||
+    null
   );
-  return usable.find((card) => card.id === last) || usable[0] || null;
 }
 
 function moveToMasked() {
@@ -699,6 +707,7 @@ async function loadCards() {
     // long to be any use.
     const { cards: all } = await listWorkflowCards();
     const edits = all.filter((card) => EDIT_TYPES.has(card.type));
+    const landed = tasksStore.downloadsLanded;
     const runs = await Promise.all(edits.map(wouldRun));
     cards.value = edits.filter((_, index) => runs[index]);
     fillInPopup.value = new Set(
@@ -724,6 +733,8 @@ async function loadCards() {
     // Drawn before the tab was first shown.
     if (hasSelection.value) moveToMasked();
     loaded.value = true;
+    // A download that landed during the read may postdate its answers.
+    if (tasksStore.downloadsLanded !== landed) void recheckMissing();
   } catch (err) {
     loadError.value = errorMessage(err, "Could not read your workflows.");
   } finally {
@@ -749,31 +760,36 @@ function runsHere(key) {
  * otherwise.
  */
 async function wouldRun(card) {
-  const id = Number(props.pictureId);
-  if (!Number.isFinite(id) || id <= 0) return true;
   try {
-    const answer = await preflightWorkflowRun({
-      picture_ids: [id],
-      target: card.id,
-    });
-    const reasons = (answer?.groups || [])
-      .flatMap((group) => group.reasons || [])
-      .filter((reason) => !UNCHECKED_CODES.includes(reason.code));
-    if (!reasons.length) return true;
-    if (reasons.every((reason) => reason.code === PICTURE_INPUT_UNFILLED)) {
-      return FILL;
-    }
-    if (reasons.every((reason) => reason.code === MISSING_MODELS)) {
-      return {
-        code: MISSING_MODELS,
-        models: reasons.flatMap((reason) => reason.models || []),
-      };
-    }
-    return false;
+    return await verdict(card.id);
   } catch (err) {
     console.warn(`Could not pre-flight ${card.id} for the Edit tab:`, err);
     return true;
   }
+}
+
+/** `wouldRun`'s answer, throwing when the pre-flight itself fails. */
+async function verdict(key) {
+  const id = Number(props.pictureId);
+  if (!Number.isFinite(id) || id <= 0) return true;
+  const answer = await preflightWorkflowRun({
+    picture_ids: [id],
+    target: key,
+  });
+  const reasons = (answer?.groups || [])
+    .flatMap((group) => group.reasons || [])
+    .filter((reason) => !UNCHECKED_CODES.includes(reason.code));
+  if (!reasons.length) return true;
+  if (reasons.every((reason) => reason.code === PICTURE_INPUT_UNFILLED)) {
+    return FILL;
+  }
+  if (reasons.every((reason) => reason.code === MISSING_MODELS)) {
+    return {
+      code: MISSING_MODELS,
+      models: reasons.flatMap((reason) => reason.models || []),
+    };
+  }
+  return false;
 }
 
 watch(
@@ -788,29 +804,46 @@ watch(
 // cards again, so Run turns on without a reload. Only the newest ask is kept,
 // since two downloads can land a moment apart.
 let recheckAsk = 0;
-watch(
-  () => tasksStore.downloadsLanded,
-  async () => {
-    const keys = [...missing.value.keys()];
-    if (!keys.length) return;
-    const ask = ++recheckAsk;
-    const runs = await Promise.all(keys.map((id) => wouldRun({ id })));
-    if (ask !== recheckAsk) return;
-    const still = new Map(missing.value);
-    const fill = new Set(fillInPopup.value);
-    keys.forEach((key, index) => {
-      const verdict = runs[index];
-      if (verdict?.code === MISSING_MODELS) {
-        still.set(key, verdict);
-        return;
-      }
-      still.delete(key);
-      if (verdict === FILL) fill.add(key);
-    });
-    missing.value = still;
-    fillInPopup.value = fill;
-  },
-);
+watch(() => tasksStore.downloadsLanded, recheckMissing);
+
+async function recheckMissing() {
+  const keys = [...missing.value.keys()];
+  if (!keys.length) return;
+  const ask = ++recheckAsk;
+  // A failed re-check is no news: that card keeps waiting.
+  const NO_ANSWER = {};
+  const runs = await Promise.all(
+    keys.map((key) =>
+      verdict(key).catch((err) => {
+        console.warn(`Could not pre-flight ${key} again for the Edit tab:`, err);
+        return NO_ANSWER;
+      }),
+    ),
+  );
+  if (ask !== recheckAsk) return;
+  const still = new Map(missing.value);
+  const fill = new Set(fillInPopup.value);
+  const dropped = new Set();
+  keys.forEach((key, index) => {
+    const answer = runs[index];
+    if (answer === NO_ANSWER) return;
+    if (answer?.code === MISSING_MODELS) {
+      still.set(key, answer);
+      return;
+    }
+    still.delete(key);
+    if (answer === FILL) fill.add(key);
+    // Another reason now, which a fresh read would have dropped the card for.
+    if (answer === false) dropped.add(key);
+  });
+  missing.value = still;
+  fillInPopup.value = fill;
+  if (dropped.size) {
+    cards.value = cards.value.filter((card) => !dropped.has(card.id));
+    unrunnable.value += dropped.size;
+    if (dropped.has(workflowId.value)) workflowId.value = "";
+  }
+}
 
 /**
  * The picture this run made: the newest stack member that was not there

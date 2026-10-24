@@ -213,6 +213,79 @@ describe("the Edit tab", () => {
     expect(runWorkflowCard).toHaveBeenCalled();
   });
 
+  it("keeps a re-check that failed, and drops one that found another reason", async () => {
+    let after = null;
+    preflightWorkflowRun.mockImplementation(async ({ target }) => {
+      if (after && target !== "out") return after(target);
+      return {
+        groups: [
+          {
+            reasons:
+              target === "out"
+                ? []
+                : [{ code: "missing_models", models: [{ file: "a.safetensors" }] }],
+          },
+        ],
+      };
+    });
+    listWorkflowCards.mockResolvedValue({
+      cards: [CARDS[2], CARDS[3], { ...CARDS[3], id: "i2b", name: "Recolor" }],
+    });
+    const wrapper = await mountPanel();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+
+    after = async (target) => {
+      if (target === "i2i") throw new Error("offline");
+      return { groups: [{ reasons: [{ code: "missing_nodes", nodes: ["Foo"] }] }] };
+    };
+    useTasksStore().downloadsLanded += 1;
+    await flush();
+    await flush();
+    const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+    expect(rows).toEqual([
+      "Widen, Outpaint",
+      "Relight, 1 model missing, Image to Image",
+    ]);
+    await wrapper.findAll("[role=menuitemradio]")[1].trigger("click");
+    expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
+  });
+
+  it("asks again when a download lands while the list is being read", async () => {
+    let calls = 0;
+    preflightWorkflowRun.mockImplementation(async () => {
+      calls += 1;
+      if (calls > 1) return { groups: [{ reasons: [] }] };
+      // The answer predates the download that lands before it arrives.
+      useTasksStore().downloadsLanded += 1;
+      return {
+        groups: [
+          { reasons: [{ code: "missing_models", models: [{ file: "a.safetensors" }] }] },
+        ],
+      };
+    });
+    listWorkflowCards.mockResolvedValue({ cards: [CARDS[3]] });
+    const wrapper = await mountPanel();
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+  });
+
+  it("does not default to a remembered card that is missing models", async () => {
+    window.localStorage.setItem("pixlstash:editTabWorkflow:", "out");
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "out"
+              ? [{ code: "missing_models", models: [{ file: "a.safetensors" }] }]
+              : [],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+  });
+
   it("sends a card missing only a picture straight to the Run popup", async () => {
     preflightWorkflowRun.mockImplementation(async ({ target }) => ({
       groups: [
@@ -678,6 +751,28 @@ describe("the Edit tab with the Paint tools", () => {
     expect(toggle.attributes("aria-expanded")).toBe("true");
     expect(help.element.style.display).toBe("");
     expect(help.text()).toContain("make the sky stormy");
+  });
+
+  it("moves onto an inpaint card a download would fix", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "fill"
+              ? [{ code: "missing_models", models: [{ file: "a.safetensors" }] }]
+              : [],
+        },
+      ],
+    }));
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    paint.hasSelection.value = true;
+    paint.selection.value = { ...paint.selection.value, steps: [RECT] };
+    await flush();
+    expect(checkedRow(wrapper)).toContain("Fill");
+    expect(wrapper.find(".edit-missing-notice").exists()).toBe(true);
   });
 
   it("warns, and does not send a mask, where the workflow has none", async () => {
