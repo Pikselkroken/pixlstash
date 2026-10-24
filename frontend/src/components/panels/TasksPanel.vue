@@ -7,10 +7,10 @@
        rail, which never gives `.inspector-body` a height, and a real pin to
        the bottom on `/workflows`, where the inspector's footer slot makes the
        body `flex: 1` (`.inspector-content--footed`). That difference is pre-existing and left alone. -->
-  <!-- An offer to save what a run changed is not an active task, and the
-       panel is not empty with one in it either: the idle line gives way. -->
+  <!-- A finished run is not an active task, and the panel is not empty with
+       one in it either: the idle line gives way. -->
   <div
-    v-if="tasksStore.activeEntries.length === 0 && offers.length === 0"
+    v-if="tasksStore.activeEntries.length === 0 && finished.length === 0"
     class="tm-idle-msg"
   >
     No active tasks
@@ -378,104 +378,221 @@
     @close="closeRunAnyway"
     @confirm="confirmRunAnyway"
   />
-  <!-- What the last run of a workflow changed (#1850): the Run popup's two
-       verbs again, once the pictures are back. Rows of the same list, not a
-       toast: pictures get rated before this is decided, so the offer stays
-       until that workflow runs again or the changes are saved. -->
-  <div
-    v-if="offers.length"
+  <!-- Finished (#2050): the runs that ended, one line each on the Running and
+       Waiting grid, read from the server so a reload and every tab agree. A
+       run with changes from the workflow (#1850) wears a pill and opens to
+       its pictures and the Run popup's two verbs again, so the offer to save
+       is always one of the runs you can see. Pictures get rated before that
+       is decided: it stays until dismissed, saved, or the workflow runs
+       again. -->
+  <section
+    v-if="finished.length"
     ref="offersList"
-    class="tm-worker-list"
-    data-testid="tm-offers"
+    class="tm-group"
+    aria-labelledby="tm-finished-head"
+    data-testid="tm-finished"
   >
-    <div
-      v-for="offer in offers"
-      :key="offer.workflowId"
-      class="tm-worker-row tm-offer"
-      role="group"
-      :aria-label="`Changes the last run of ${offer.name} was made with`"
-      :data-offer="offer.workflowId"
-    >
-      <div class="tm-worker-row-top">
-        <span class="tm-worker-label">{{ offer.name }}</span>
-      </div>
-      <p class="tm-offer-text">
-        Ran with <b>{{ changesWord(offer.count) }} from the workflow</b
-        ><template v-if="offer.text">: {{ offer.text }}</template
-        ><template v-else>.</template>
-      </p>
-      <!-- Save as new… is the row's one question: the name. One write is out
-           at a time, and while it is every verb of every row says so. The
-           field is `readonly` for it, not `disabled`: Enter leaves the
-           keyboard in it, a disabled field cannot hold the keyboard, and a
-           refusal has to find it there. -->
-      <template v-if="naming === offer.workflowId">
-        <AppInput
-          v-model="newName"
-          label="Name of the new workflow"
-          :readonly="Boolean(busy)"
-          :class="{ 'tm-offer-refused': Boolean(busy) }"
-          @enter="saveAsNew(offer)"
-          @keydown.esc="backFromName(offer)"
-          @keydown.stop
-        />
-        <div class="tm-offer-acts">
-          <AppButton
-            variant="ghost"
-            size="sm"
-            :disabled="Boolean(busy)"
-            @click="backFromName(offer)"
-          >
-            Back
-          </AppButton>
-          <AppButton
-            size="sm"
-            :loading="busy === `new:${offer.workflowId}`"
-            :disabled="Boolean(busy)"
-            :class="{ 'tm-offer-refused': !newName.trim() }"
-            :aria-disabled="newName.trim() ? undefined : 'true'"
-            @click="saveAsNew(offer)"
-          >
-            Save as new workflow
-          </AppButton>
-        </div>
-      </template>
-      <div v-else class="tm-offer-acts">
-        <AppButton
-          data-as-new
-          size="sm"
-          :disabled="Boolean(busy)"
-          @click="askName(offer)"
+    <div class="tm-group-head tm-group-head--finished">
+      <span id="tm-finished-head" class="section-label">Finished</span>
+      <!-- Clear takes the column label's place on hover or focus, as a row's
+           actions take its figure's. It never throws away unsaved changes. -->
+      <span class="tm-group-col tm-head-swap">
+        <span class="tm-head-col" aria-hidden="true">Made</span>
+        <button
+          class="tm-head-act"
+          type="button"
+          data-testid="tm-finished-clear"
+          aria-label="Clear the finished runs. Runs with unsaved changes stay."
+          :disabled="Boolean(dismissing) || Boolean(busy)"
+          @click="clearFinished"
         >
-          Save as new…
-        </AppButton>
-        <!-- `aria-disabled`, not `disabled`: a closed Save stays reachable,
-             with the server's reason as its description. -->
-        <AppButton
-          size="sm"
-          icon-left="content-save-outline"
-          :loading="busy === `save:${offer.workflowId}`"
-          :disabled="Boolean(busy)"
-          :class="{ 'tm-offer-refused': Boolean(offer.closed) }"
-          :aria-disabled="offer.closed ? 'true' : undefined"
-          :aria-describedby="offer.closed ? `${whyId}-${offer.workflowId}` : undefined"
-          @click="save(offer)"
-        >
-          Save
-        </AppButton>
-      </div>
-      <p
-        v-if="offer.closed && naming !== offer.workflowId"
-        :id="`${whyId}-${offer.workflowId}`"
-        class="tm-offer-why"
-      >
-        {{ offer.closed }}
-      </p>
-      <p v-if="errors[offer.workflowId]" class="tm-offer-why tm-offer-bad" role="alert">
-        {{ errors[offer.workflowId] }}
-      </p>
+          Clear
+        </button>
+      </span>
     </div>
-  </div>
+    <div class="tm-worker-list">
+      <div
+        v-for="run in finished"
+        :key="run.id"
+        class="tm-fold"
+        data-testid="tm-finished-run"
+        :data-run="run.id"
+        :role="run.offer ? 'group' : undefined"
+        :aria-label="run.offer ? `Changes the run of ${run.offer.name} was made with` : undefined"
+        :data-offer="run.offer ? run.offer.workflowId : undefined"
+      >
+        <div class="tm-row tm-row--done" :class="{ 'tm-row--open': run.open }">
+          <span
+            class="tm-mark tm-mark--done"
+            :data-state="run.failed ? 'failed' : 'done'"
+            aria-hidden="true"
+          >
+            <v-icon size="14">{{ run.failed ? "mdi-alert-circle-outline" : "mdi-check" }}</v-icon>
+          </span>
+          <ComfyuiIcon :size="18" class="tm-app" aria-hidden="true" />
+          <!-- The name gives way to the pill: folded, the pill is all that
+               says the changes are still unsaved. -->
+          <span class="tm-name tm-name--pill">
+            <span class="tm-name-text">{{ run.label }}</span>
+            <span v-if="run.offer" class="tm-pill" data-testid="tm-finished-pill">{{
+              changesWord(run.offer.count)
+            }}</span>
+          </span>
+          <span class="tm-figure">
+            <span class="tm-fig-text">
+              <v-icon size="12">mdi-image-outline</v-icon>
+              {{ run.made }}
+            </span>
+            <span class="tm-acts">
+              <button
+                class="tm-act"
+                type="button"
+                data-testid="tm-finished-dismiss"
+                :aria-label="run.offer ? `Dismiss what the run of ${run.label} changed` : `Clear the run of ${run.label}`"
+                :disabled="Boolean(dismissing) || Boolean(busy)"
+                @click="dismiss(run)"
+              >
+                <Tooltip
+                  :text="run.offer ? 'Dismiss' : 'Clear'"
+                  activator="parent"
+                  :describe="false"
+                />
+                <v-icon size="16">mdi-close</v-icon>
+              </button>
+            </span>
+            <button
+              class="tm-caret"
+              type="button"
+              data-testid="tm-finished-caret"
+              :aria-expanded="run.open ? 'true' : 'false'"
+              :aria-controls="`${whyId}-run-${run.id}`"
+              :aria-label="run.open ? `Hide the run of ${run.label}` : `Show the run of ${run.label}`"
+              @click="tasksStore.toggleFinished(run.id)"
+            >
+              <v-icon size="16">{{ run.open ? "mdi-chevron-down" : "mdi-chevron-right" }}</v-icon>
+            </button>
+          </span>
+          <Tooltip :text="run.tip" activator="parent" :describe="false" />
+        </div>
+        <div
+          v-if="run.open"
+          :id="`${whyId}-run-${run.id}`"
+          class="tm-detail"
+        >
+          <div
+            v-if="run.pictureIds.length"
+            class="tm-tiles"
+            role="group"
+            aria-label="Pictures the run made"
+          >
+            <button
+              v-for="(pictureId, at) in run.pictureIds.slice(0, TILES)"
+              :key="pictureId"
+              class="tm-tile"
+              type="button"
+              :aria-label="`Open picture ${at + 1} of ${run.pictureIds.length}`"
+              data-testid="tm-finished-tile"
+              @click="openPicture(pictureId)"
+            >
+              <img
+                :src="pictureThumbnailUrl(pictureId)"
+                alt=""
+                loading="lazy"
+                @error="$event.target.hidden = true"
+              />
+            </button>
+          </div>
+          <p v-if="run.offer" class="tm-offer-text">
+            Ran {{ run.ago }} with
+            <b>{{ changesWord(run.offer.count) }} from the workflow</b
+            ><template v-if="run.offer.text">: {{ run.offer.text }}</template
+            ><template v-else>.</template>
+          </p>
+          <p v-else class="tm-offer-text">
+            {{ run.failed ? "Failed" : "Finished" }} {{ run.ago
+            }}<template v-if="run.message">: {{ run.message }}</template
+            ><template v-else>.</template>
+          </p>
+          <template v-if="run.offer">
+            <!-- Save as new… is the row's one question: the name. One write is
+                 out at a time, and while it is every verb of every row says
+                 so. The field is `readonly` for it, not `disabled`: Enter
+                 leaves the keyboard in it, a disabled field cannot hold the
+                 keyboard, and a refusal has to find it there. -->
+            <template v-if="naming === run.offer.workflowId">
+              <AppInput
+                v-model="newName"
+                label="Name of the new workflow"
+                :readonly="Boolean(busy)"
+                :class="{ 'tm-offer-refused': Boolean(busy) }"
+                @enter="saveAsNew(run.offer)"
+                @keydown.esc="backFromName(run.offer)"
+                @keydown.stop
+              />
+              <div class="tm-offer-acts">
+                <AppButton
+                  variant="ghost"
+                  size="sm"
+                  :disabled="Boolean(busy)"
+                  @click="backFromName(run.offer)"
+                >
+                  Back
+                </AppButton>
+                <AppButton
+                  size="sm"
+                  :loading="busy === `new:${run.offer.workflowId}`"
+                  :disabled="Boolean(busy)"
+                  :class="{ 'tm-offer-refused': !newName.trim() }"
+                  :aria-disabled="newName.trim() ? undefined : 'true'"
+                  @click="saveAsNew(run.offer)"
+                >
+                  Save as new workflow
+                </AppButton>
+              </div>
+            </template>
+            <div v-else class="tm-offer-acts">
+              <AppButton
+                data-as-new
+                size="sm"
+                :disabled="Boolean(busy)"
+                @click="askName(run.offer)"
+              >
+                Save as new…
+              </AppButton>
+              <!-- `aria-disabled`, not `disabled`: a closed Save stays
+                   reachable, with the server's reason as its description. -->
+              <AppButton
+                size="sm"
+                icon-left="content-save-outline"
+                :loading="busy === `save:${run.offer.workflowId}`"
+                :disabled="Boolean(busy)"
+                :class="{ 'tm-offer-refused': Boolean(run.offer.closed) }"
+                :aria-disabled="run.offer.closed ? 'true' : undefined"
+                :aria-describedby="run.offer.closed ? `${whyId}-${run.offer.workflowId}` : undefined"
+                @click="save(run.offer)"
+              >
+                Save
+              </AppButton>
+            </div>
+            <p
+              v-if="run.offer.closed && naming !== run.offer.workflowId"
+              :id="`${whyId}-${run.offer.workflowId}`"
+              class="tm-offer-why"
+            >
+              {{ run.offer.closed }}
+            </p>
+            <p
+              v-if="errors[run.offer.workflowId]"
+              class="tm-offer-why tm-offer-bad"
+              role="alert"
+            >
+              {{ errors[run.offer.workflowId] }}
+            </p>
+          </template>
+        </div>
+      </div>
+    </div>
+  </section>
   <!-- What the last save here did, and where focus goes when the row and its
        buttons leave with the offer: read on landing there, so it is no live
        region as well. It stands until an offer arrives after it. What the
@@ -559,7 +676,12 @@ import {
   watch,
 } from "vue";
 
+import { useRoute, useRouter } from "vue-router";
+
+import { pictureThumbnailUrl } from "../../api/pictures";
 import {
+  clearFinishedRuns,
+  dismissFinishedRun,
   getWorkflowChanges,
   saveWorkflow,
   saveWorkflowAsNew,
@@ -576,6 +698,7 @@ import {
   suggestedName,
 } from "../../utils/workflowChanges";
 import { formatGb } from "../../utils/gpuMemory";
+import { relativeDate } from "../../utils/snapshots";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -762,32 +885,34 @@ function foldTip(entry) {
   ].join(". ");
 }
 
-// ── Save what a run changed (#1850) ────────────────────────────────────────
+// ── Finished runs, and saving what one changed (#1850, #2050) ───────────────
 //
-// Whether there is an offer is the server's to say: `GET …/changes` answers
-// `ran`, the set the workflow's last run was made with, until it runs again,
-// is saved, or gets another version. The Run popup leaves a record of the run
-// in `useRunDialogStore` (the band's own words, and when its pictures are
-// back), which is what an offer is WORDED from and when it appears; the
-// record is never the reason one is drawn. After a reload the record is gone
-// and the server's `ran` is not, so the one workflow selected on the
-// Workflows screen is asked about too, and offered with a count alone.
+// The Finished group is the poll's `finished`: the runs that ended, read from
+// the server, so a reload and every tab agree. Whether a run has an offer is
+// the server's to say too (`offer`, the batch its workflow's run set was made
+// with), and `GET …/changes` answers what that set is. The Run popup leaves a
+// record of the run in `useRunDialogStore` (the band's own words), which is
+// what an offer is WORDED from where this tab saw the run; after a reload the
+// record is gone, and the offer reads with a count alone.
 
 const runDialog = useRunDialogStore();
 const workflows = useWorkflowsStore();
+const route = useRoute();
+const router = useRouter();
 const whyId = useId();
+/** How many of a run's pictures its row shows. */
+const TILES = 4;
 
-/** The workflows there may be an offer for. None in a read-only session. */
+/** The workflows there is an offer for. None in a read-only session. */
 const candidates = computed(() => {
   if (isReadOnly.value) return [];
-  const ids = Object.keys(runDialog.ranChanges).filter(
-    (id) => runDialog.ranChanges[id].finished,
-  );
-  const selected =
-    workflows.selectedKeys.length === 1 ? workflows.selectedKeys[0] : "";
-  // One whose run is on record and still out is not offered yet.
-  if (selected && !(selected in runDialog.ranChanges)) ids.push(selected);
-  return ids;
+  return [
+    ...new Set(
+      tasksStore.finishedRuns
+        .filter((run) => run.offer && run.workflow_id)
+        .map((run) => run.workflow_id),
+    ),
+  ];
 });
 /** workflow id -> what the server answered, for the ones it has a `ran` for. */
 const confirmed = ref({});
@@ -820,31 +945,125 @@ watch(
   { immediate: true },
 );
 
-const offers = computed(() =>
-  candidates.value.flatMap((id) => {
-    const state = confirmed.value[id];
-    if (!state) return [];
-    const record = runDialog.ranChanges[id];
-    const card = workflows.cards.find((entry) => entry.id === id);
-    return [
-      {
-        workflowId: id,
-        name: record?.name || card?.name || "This workflow",
-        // The band's own count and sentence where this tab saw the run; a
-        // count alone otherwise, since the labels were the popup's.
-        count: record?.count ?? describeChanges(state.ran).count,
-        text: record?.text || "",
-        ran: state.ran,
-        version: state.version ?? null,
-        // The server's sentence for a closed Save, printed as sent.
-        closed:
-          state.ran_save && !state.ran_save.open
-            ? state.ran_save.reason || "Save is not open for these changes."
-            : "",
-      },
-    ];
+/** The offer of the run *run* is, or null: the server's set, the band's words. */
+function offerOf(run) {
+  const state = run.offer ? confirmed.value[run.workflow_id] : null;
+  if (!state) return null;
+  const id = run.workflow_id;
+  const kept = runDialog.ranChanges[id];
+  // The band's words are of the run on record, not of an earlier one.
+  const record = !kept?.runIds?.length || kept.runIds.includes(run.id) ? kept : null;
+  const card = workflows.cards.find((entry) => entry.id === id);
+  return {
+    workflowId: id,
+    name: record?.name || card?.name || run.label || "This workflow",
+    // The band's own count and sentence where this tab saw the run; a count
+    // alone otherwise, since the labels were the popup's.
+    count: record?.count ?? describeChanges(state.ran).count,
+    text: record?.text || "",
+    ran: state.ran,
+    version: state.version ?? null,
+    // The server's sentence for a closed Save, printed as sent.
+    closed:
+      state.ran_save && !state.ran_save.open
+        ? state.ran_save.reason || "Save is not open for these changes."
+        : "",
+  };
+}
+
+const finished = computed(() =>
+  tasksStore.finishedRuns.map((run) => {
+    const failed = run.status === "failed";
+    const ago = relativeDate(run.ended_at);
+    const made = Number(run.made) || 0;
+    return {
+      id: run.id,
+      label: run.label,
+      failed,
+      made,
+      message: run.message || "",
+      pictureIds: run.picture_ids ?? [],
+      offer: offerOf(run),
+      open: Boolean(tasksStore.finishedOpen[run.id]),
+      ago,
+      tip: failed
+        ? `Failed ${ago}`
+        : `Finished ${ago}, ${made} ${made === 1 ? "picture" : "pictures"}`,
+    };
   }),
 );
+
+const offers = computed(() => finished.value.flatMap((run) => run.offer ?? []));
+
+/** The run id a dismiss or a Clear is out for, or "". */
+const dismissing = ref("");
+
+/** Put the keyboard on the row at *at* (or the one before it) once it is drawn. */
+async function focusRowAt(at) {
+  await nextTick();
+  const carets = offersList.value?.querySelectorAll('[data-testid="tm-finished-caret"]');
+  const next = carets?.[Math.min(at, (carets?.length ?? 0) - 1)];
+  next?.focus();
+}
+
+/** The × of a row: the run, and with an offer what its workflow kept from it. */
+async function dismiss(run) {
+  if (dismissing.value || busy.value) return;
+  dismissing.value = run.id;
+  const at = finished.value.findIndex((entry) => entry.id === run.id);
+  try {
+    const answer = await dismissFinishedRun(run.id);
+    tasksStore.forgetFinished([run.id]);
+    const workflowId = answer?.workflow_id || run.offer?.workflowId;
+    if (workflowId) {
+      const next = { ...confirmed.value };
+      delete next[workflowId];
+      confirmed.value = next;
+      if (naming.value === workflowId) naming.value = "";
+      runDialog.ranWith(workflowId, null);
+    }
+    await focusRowAt(at);
+  } catch (err) {
+    console.warn(`[tasks] could not dismiss the run ${run.id}`, err);
+    useNoticeStore().error(`The run of ${run.label} could not be dismissed.`);
+  } finally {
+    dismissing.value = "";
+    tasksStore.nudge();
+  }
+}
+
+/** The group's Clear: every finished run but those with unsaved changes. */
+async function clearFinished() {
+  // A save out keeps the keyboard where it is: Clear would move it.
+  if (dismissing.value || busy.value) return;
+  dismissing.value = "clear";
+  try {
+    await clearFinishedRuns();
+    tasksStore.forgetFinished(
+      tasksStore.finishedRuns.filter((run) => !run.offer).map((run) => run.id),
+    );
+    await focusRowAt(0);
+  } catch (err) {
+    console.warn("[tasks] could not clear the finished runs", err);
+    useNoticeStore().error("The finished runs could not be cleared.");
+  } finally {
+    dismissing.value = "";
+    tasksStore.nudge();
+  }
+}
+
+/**
+ * Open one of a run's pictures in the lightbox. The Workflows view opens it
+ * itself (it parks its place first); everywhere else the grid behind the
+ * panel opens whatever `?overlay=` names.
+ */
+function openPicture(pictureId) {
+  if (route?.name === "workflows") {
+    workflows.requestOpenPicture(pictureId);
+    return;
+  }
+  router?.push({ query: { ...route?.query, overlay: String(pictureId) } });
+}
 
 /** `save:<id>` or `new:<id>` while that write is out, else "". */
 const busy = ref("");
@@ -873,7 +1092,7 @@ const doneWaits = ref("");
 
 /** A control of one offer's row: found by the `data-offer` the row carries. */
 function inOffer(workflowId, selector) {
-  const row = [...(offersList.value?.children ?? [])].find(
+  const row = [...(offersList.value?.querySelectorAll("[data-offer]") ?? [])].find(
     (el) => el.dataset.offer === String(workflowId),
   );
   return row?.querySelector(selector) ?? null;
@@ -918,6 +1137,8 @@ async function landed(offer, note, saved, savedAs = "") {
   const next = { ...confirmed.value };
   delete next[offer.workflowId];
   confirmed.value = next;
+  // The run stays as a receipt; the server says the same on the next poll.
+  tasksStore.dropOffer(offer.workflowId);
   runDialog.changesSaved(offer.workflowId, savedAs);
   workflows.invalidate();
   await nextTick();
@@ -1421,11 +1642,7 @@ const tmSystemItems = computed(() => {
   flex-shrink: 0;
 }
 
-/* ── What a run changed, offered for saving ────────────────────────────────── */
-.tm-offer {
-  gap: var(--space-3);
-  padding: var(--space-3);
-}
+/* ── What a run changed, offered for saving (in a Finished row's detail) ────────────────────────────────── */
 .tm-offer-text,
 .tm-offer-why,
 .tm-offer-done {
@@ -1806,6 +2023,153 @@ const tmSystemItems = computed(() => {
 
 .tm-row--fold .tm-figure {
   font-weight: var(--weight-semibold);
+}
+
+/* ── Finished (#2050) ────────────────────────────────────────────────────── */
+
+/* Done: a grey check, a different shape from the running dot and the waiting
+   hourglass, not only a different colour. */
+.tm-mark--done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  background: none;
+  color: rgba(var(--v-theme-on-surface), 0.55);
+}
+
+.tm-name--pill {
+  display: flex;
+  align-items: center;
+}
+
+.tm-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What keeps a folded run with unsaved changes findable. */
+.tm-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: var(--badge-size);
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgba(var(--state-waiting), 0.22);
+  color: rgb(var(--v-theme-surface-warning));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+}
+
+.tm-row--done .tm-figure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+.tm-row--done .tm-fig-text {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.tm-row--done:hover .tm-fig-text,
+.tm-row--done:focus-within .tm-fig-text {
+  display: none;
+}
+
+/* Open: the row and its detail are one card. */
+.tm-row--open {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom-color: transparent;
+}
+
+/* Indented to the name column: past the row's padding, both marks and gaps. */
+.tm-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: calc(-1 * var(--space-1));
+  padding: var(--space-2) var(--space-3) var(--space-3)
+    calc(var(--space-3) + var(--gutter-glyph) + 18px + 2 * var(--space-3));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.07);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+/* The verbs stay right-aligned to the row, not to the indented text. */
+.tm-detail .tm-offer-acts {
+  margin-left: calc(-1 * (var(--gutter-glyph) + 18px + 2 * var(--space-3)));
+}
+
+.tm-tiles {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.tm-tile {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.tm-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* A thumbnail that will not load leaves the tile's own ground, not a broken glyph. */
+.tm-tile img[hidden] {
+  display: none;
+}
+
+.tm-tile:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-on-surface));
+  outline-offset: 1px;
+}
+
+/* The column label and Clear share one cell; Clear shows on hover or focus. */
+.tm-head-swap {
+  display: inline-grid;
+  justify-items: end;
+}
+
+.tm-head-swap > * {
+  grid-area: 1 / 1;
+}
+
+.tm-head-act {
+  opacity: 0;
+  padding: 0;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), 0.85);
+}
+
+.tm-head-act:hover,
+.tm-head-act:focus-visible {
+  text-decoration: underline;
+}
+
+.tm-group-head--finished:hover .tm-head-act,
+.tm-group-head--finished:focus-within .tm-head-act {
+  opacity: 1;
+}
+
+.tm-group-head--finished:hover .tm-head-col,
+.tm-group-head--finished:focus-within .tm-head-col {
+  visibility: hidden;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -8,13 +8,13 @@ from typing import Annotated, Literal, Optional
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from PIL import Image
 
 from pixlstash.auth import is_local_or_tailscale_ip
 from pixlstash.database import DBPriority
-from pixlstash.db_models import User
+from pixlstash.db_models import Picture, User
 from pixlstash.hub.workflows import (
     forget_model_ghosts,
     model_ghost_names,
@@ -28,13 +28,14 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.routes._helpers import require_hub
 from pixlstash.routes.model_folders import register_comfyui_model_folders
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services import (
     config_service,
     library_settings_service,
     scrapheap_service,
     workflow_ghost_service,
 )
-from pixlstash.services import vram_history
+from pixlstash.services import run_log, vram_history
 from pixlstash.services.comfyui_service import live_runs
 from pixlstash.services.model_downloads import live_downloads
 from pixlstash.resources.arbiter import arbiter
@@ -355,6 +356,15 @@ def create_router(server) -> APIRouter:
         status: str
         workers: dict
         runs: list[dict] = []
+        finished: Optional[list[dict]] = Field(
+            default_factory=list,
+            description=(
+                "The runs of this library that ended, newest first, one per "
+                "workflow per `POST /workflows/run` (`services/run_log.py`). "
+                "Empty for any token but the owner's; null when they could "
+                "not be read, which is not the same as none."
+            ),
+        )
         downloads: list[dict] = []
         process: dict
         resources: Optional[dict] = Field(
@@ -1032,6 +1042,36 @@ def create_router(server) -> APIRouter:
     def get_session_context(request: Request):
         return server.auth.get_session_context(request)
 
+    def _finished_runs(library_uuid: str | None) -> list[dict] | None:
+        """The poll's ``finished``; ``None``, logged, when it cannot be read:
+        a poll that failed over it would take every other row with it, and
+        an empty list would say nothing finished."""
+
+        def existing(ids: list[int]) -> set[int]:
+            def read(session):
+                found = set()
+                for batch in chunked(sorted(set(ids))):
+                    found.update(
+                        session.exec(
+                            select(Picture.id).where(
+                                col(Picture.id).in_(batch),
+                                Picture.deleted.is_(False),
+                            )
+                        ).all()
+                    )
+                return found
+
+            return server.vault.db.run_immediate_read_task(read)
+
+        try:
+            return run_log.finished(require_hub(server), library_uuid, existing)
+        except Exception:
+            logger.exception(
+                "The finished runs could not be read, so the Tasks tab keeps "
+                "the ones it last had."
+            )
+            return None
+
     @router.get(
         "/workers/progress",
         summary="Get worker progress",
@@ -1043,6 +1083,13 @@ def create_router(server) -> APIRouter:
             "while held), label, workflow_id, status (waiting for the GPU, "
             "queued or running) and percent (the running node's own "
             "progress); empty for any token but the owner's. "
+            "finished lists the runs that ended (the Tasks tab's Finished "
+            "group), newest first, each with its id (what DELETE "
+            "/workflows/runs/{run_id} takes), workflow_id, label, ended_at, "
+            "status (completed or failed), message, made (how many pictures "
+            "it imported), picture_ids (those still in the library) and "
+            "offer (its changes from the workflow can still be saved); "
+            "likewise for the owner only. "
             "downloads lists the model downloads running or just ended "
             "(`POST /model-downloads`), likewise for the owner only. "
             "resources is the VRAM arbiter's snapshot, null for any token but "
@@ -1059,6 +1106,13 @@ def create_router(server) -> APIRouter:
             # or recipes: a narrower token is told of none.
             "runs": (
                 live_runs(request.state.library_lease.library_uuid)
+                if server.auth.is_unscoped_owner_request(request)
+                else []
+            ),
+            # The owner's as the runs are, and their pictures are named
+            # wherever in the library they were filed.
+            "finished": (
+                _finished_runs(request.state.library_lease.library_uuid)
                 if server.auth.is_unscoped_owner_request(request)
                 else []
             ),

@@ -55,6 +55,11 @@ WAITING, RAN = "waiting", "run"
 # the run's own row, so it lives exactly as long as the run's set does.
 WAITED = "waited"
 
+# A key of a run's set beside its changes: the batch of runs it was made with
+# (``services/run_log``'s ``batch_id``), so the Tasks tab's Finished row of that
+# batch is the one that offers to save it (#2050). Lives as long as the set.
+RAN_BY = "run_id"
+
 # Sentinel: this attribute was not in the request, so it stands.
 UNSET = object()
 

@@ -20,6 +20,19 @@ import { test, expect } from "../fixtures/test.js";
 const WF = `auto:${"a".repeat(64)}`;
 const NEW_WF = `manual:${"b".repeat(32)}`;
 const OTHER_WF = `auto:${"c".repeat(64)}`;
+/** The workflow's last run, as the poll lists it under `finished` (#2050). */
+const FINISHED = {
+  id: "run-e2e-finished",
+  workflow_id: WF,
+  label: "Portrait, soft window light",
+  ended_at: new Date().toISOString(),
+  status: "completed",
+  message: null,
+  made: 2,
+  // Two of the e2e library's pictures, for the tiles.
+  picture_ids: [1, 2],
+  offer: true,
+};
 const CKPT = "core:CheckpointLoader/ckpt_name";
 const VAE = "core:VAELoader/vae_name";
 const GRAIN_SHA = "1".repeat(64);
@@ -176,6 +189,12 @@ async function stubWorkflow(page, world = {}) {
       saveExtra: {},
       /** ComfyUI configured, so the toolbar offers Generate. */
       comfyui: false,
+      /**
+       * The poll's finished runs (#2050), or null to leave the poll alone.
+       * A row offers its changes while `changes.ran` holds them, as the
+       * server's `offer` follows the run set.
+       */
+      finished: null,
       ...world,
     },
     /** A held answer, by route: a gate to release (see `gate`). */
@@ -217,6 +236,16 @@ async function stubWorkflow(page, world = {}) {
         return json(route, { adapters });
       }
       if (path === "/recipes" && method === "GET") return json(route, []);
+      if (now.finished && path === "/workers/progress" && method === "GET") {
+        const real = await route.fetch();
+        return route.fulfill({
+          response: real,
+          json: {
+            ...(await real.json()),
+            finished: now.finished.map((run) => ({ ...run, offer: Boolean(now.changes.ran) })),
+          },
+        });
+      }
       if (now.comfyui && path === "/users/me/config" && method === "GET") {
         const real = await route.fetch();
         return route.fulfill({
@@ -961,6 +990,9 @@ test.describe("the Tasks tab's offer", () => {
   async function openTasks(page) {
     await selectWorkflow(page);
     await rail(page).getByRole("button", { name: "Tasks" }).click();
+    // After a reload the run comes back folded; its pill says why to open it.
+    await expect(rail(page).getByTestId("tm-finished-pill")).toHaveText("3 changes");
+    await rail(page).getByRole("button", { name: `Show the run of ${FINISHED.label}` }).click();
   }
 
   test("is drawn from the server's `ran` after a reload, with a count alone, inside the rail", async ({
@@ -968,10 +1000,12 @@ test.describe("the Tasks tab's offer", () => {
   }) => {
     net = await stubWorkflow(page, {
       changes: changesState({ ran: RAN, ran_save: OPEN }),
+      finished: [FINISHED],
     });
     await openTasks(page);
     await expect(offer(page)).toContainText("Portrait, soft window light");
-    await expect(offer(page)).toContainText("Ran with 3 changes from the workflow.");
+    await expect(offer(page)).toContainText("with 3 changes from the workflow.");
+    await expect(offer(page).getByRole("group", { name: "Pictures the run made" })).toBeVisible();
     // Not an active task, and the panel is not empty either.
     await expect(rail(page)).not.toContainText("No active tasks");
     await expect(offer(page).getByRole("button", { name: "Save as new…" })).toBeVisible();
@@ -991,23 +1025,23 @@ test.describe("the Tasks tab's offer", () => {
   });
 
   test("offers nothing where the last run changed nothing", async ({ page }) => {
-    net = await stubWorkflow(page);
+    net = await stubWorkflow(page, { finished: [FINISHED] });
     await selectWorkflow(page);
-    // Asked, and answered: an absence seen before the answer proves nothing.
-    const asked = page.waitForResponse(
-      (response) => response.url().endsWith("/changes") && response.request().method() === "GET",
-    );
     await rail(page).getByRole("button", { name: "Tasks" }).click();
-    await asked;
-    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    // Listed, as a receipt: no pill, and opened, no verbs.
+    const run = rail(page).getByTestId("tm-finished-run");
+    await expect(run).toContainText(FINISHED.label);
+    await rail(page).getByRole("button", { name: `Show the run of ${FINISHED.label}` }).click();
+    await expect(run).toContainText("Finished just now.");
+    await expect(rail(page).getByTestId("tm-finished-pill")).toHaveCount(0);
     await expect(offer(page)).toHaveCount(0);
-    await expect(rail(page)).toContainText("No active tasks");
   });
 
   test("saves what the run was made with, and says so where the row was", async ({ page }) => {
     net = await stubWorkflow(page, {
       changes: changesState({ ran: RAN, ran_save: OPEN }),
       afterSave: { changes: changesState({ version: 4 }) },
+      finished: [FINISHED],
     });
     await openTasks(page);
     await offer(page).getByRole("button", { name: "Save", exact: true }).click();
@@ -1026,6 +1060,7 @@ test.describe("the Tasks tab's offer", () => {
       // The save drops `ran`, as the server does: an offer that came back
       // after the receipt would take the receipt down.
       afterSave: { changes: changesState() },
+      finished: [FINISHED],
     });
     await openTasks(page);
     const asNew = offer(page).getByRole("button", { name: "Save as new…" });
@@ -1057,6 +1092,7 @@ test.describe("the Tasks tab's offer", () => {
       "This changes the checkpoint, which makes it another workflow. Save it as a new one.";
     net = await stubWorkflow(page, {
       changes: changesState({ ran: RAN, ran_save: { open: false, reason } }),
+      finished: [FINISHED],
     });
     await openTasks(page);
     await expect(offer(page)).toContainText(reason);
@@ -1308,9 +1344,11 @@ test.describe("the Tasks tab's receipt says what the save left", () => {
       changes: changesState({ ran: RAN, ran_save: OPEN }),
       afterSave: { changes: changesState({ version: 4 }) },
       saveExtra,
+      finished: [FINISHED],
     });
     await selectWorkflow(page);
     await rail(page).getByRole("button", { name: "Tasks" }).click();
+    await rail(page).getByRole("button", { name: `Show the run of ${FINISHED.label}` }).click();
     await offer(page).getByRole("button", { name: "Save", exact: true }).click();
     const done = rail(page).getByTestId("tm-offer-done");
     await expect(done).toContainText("Saved to Portrait, soft window light.");
