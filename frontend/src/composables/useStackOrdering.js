@@ -260,23 +260,18 @@ export function useStackOrdering(
       ? lastFetchedGridImages.value
       : [];
     if (!source.length) return [];
-    const members = source.filter((img) => getPictureStackId(img) === stackId);
-    const activeSort = String(sortStore.selectedSort || "").toUpperCase();
-    const useBackendOrder =
-      !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
-    return useBackendOrder ? members : sortStackMembers(members);
+    // An open stack is laid out in its own order, cover first, under any sort:
+    // the sort places the stack, the stack orders its members. That is the
+    // order the lightbox's filmstrip draws and the place chips number.
+    return sortStackMembers(
+      source.filter((img) => getPictureStackId(img) === stackId),
+    );
   }
 
   function cacheExpandedStackMembers(stackId, members) {
     if (!stackId || !Array.isArray(members) || members.length === 0)
       return false;
-    const activeSort = String(sortStore.selectedSort || "").toUpperCase();
-    const useBackendOrder =
-      !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
-    const sorted = useBackendOrder
-      ? members.slice()
-      : sortStackMembers(members);
-    const ordered = sorted
+    const ordered = sortStackMembers(members)
       .filter((img) => img && img.id != null)
       .map((img) =>
         img.stack_id !== undefined || img.stackId !== undefined
@@ -307,14 +302,7 @@ export function useStackOrdering(
     const entry = expandedStackMembers.value.get(stackId);
     const ids = Array.isArray(entry?.ids) ? entry.ids : [];
     const images = Array.isArray(entry?.images) ? entry.images : [];
-    const activeSort = String(sortStore.selectedSort || "").toUpperCase();
-    const useBackendOrder =
-      !!activeSort && activeSort !== LIKENESS_GROUPS_SORT_KEY;
-    const sourceImages = ids.length
-      ? images
-      : useBackendOrder
-        ? images.slice()
-        : sortStackMembers(images);
+    const sourceImages = ids.length ? images : sortStackMembers(images);
     const imageById = new Map(
       sourceImages
         .filter((img) => img && img.id != null)
@@ -349,19 +337,21 @@ export function useStackOrdering(
       addImage(fallbackImg);
     }
 
-    const fallbackIdStr =
-      fallbackImg?.id != null ? String(fallbackImg.id) : null;
-    if (fallbackIdStr) {
-      const headerIdx = ordered.findIndex(
-        (img) => String(img?.id) === fallbackIdStr,
-      );
-      if (headerIdx !== -1) {
-        ordered[headerIdx] = { ...ordered[headerIdx], stackCount };
+    return withBadgeOnFirst(ordered, stackCount);
+  }
+
+  // The badge rides on a stack's first tile, the one a collapse keeps.
+  function withBadgeOnFirst(members, stackCount) {
+    return members.map((img, idx) => {
+      if (idx === 0) return { ...img, stackCount };
+      if (img.stackCount === undefined && img.stack_count === undefined) {
+        return img;
       }
-    } else if (ordered.length) {
-      ordered[0] = { ...ordered[0], stackCount };
-    }
-    return ordered;
+      const next = { ...img };
+      delete next.stackCount;
+      delete next.stack_count;
+      return next;
+    });
   }
 
   function insertExpandedStackMembers(stackId, fallbackCount) {
@@ -396,23 +386,31 @@ export function useStackOrdering(
         .filter((img) => img && img.id != null)
         .map((img) => [getPictureId(img.id), img]),
     );
-    const expandedHeader = expanded[0];
-    const mergedHeader = hydrateGridImage(
-      { ...expandedHeader, ...header, stackCount },
-      0,
-      existingById,
-    );
-    const insertItems = expanded
+    // The whole stack takes the tile's place in its own order, so a tile that
+    // was not the cover (a stale row, or a leader picked off a sorted list)
+    // does not stay in front of it. The members list is fresher than the tile
+    // about the tile's place in the stack.
+    const merged = expanded
       .filter((img) => img && img.id != null)
-      .filter((img) => String(img.id) !== headerId)
-      .map((img) => hydrateGridImage(img, 0, existingById));
+      .map((img) =>
+        String(img.id) === headerId
+          ? {
+              ...img,
+              ...header,
+              stack_position: img.stack_position ?? header.stack_position,
+            }
+          : img,
+      );
+    const stackItems = withBadgeOnFirst(merged, stackCount).map((img) =>
+      hydrateGridImage(img, 0, existingById),
+    );
     const insertIndex = filteredHeaderIndex + 1;
     const before = filtered.slice(0, filteredHeaderIndex);
     const after = filtered.slice(filteredHeaderIndex + 1);
-    const result = [...before, mergedHeader, ...insertItems, ...after];
+    const result = [...before, ...stackItems, ...after];
     setGridIndices(result);
     allGridImages.value = result;
-    const insertCount = insertItems.length;
+    const insertCount = stackItems.length - 1;
     const removedExistingCount = items.length - filtered.length;
     const netDelta = insertCount - removedExistingCount;
     const affectedEnd =
@@ -435,12 +433,13 @@ export function useStackOrdering(
       adjustScrollWindowForDelta(insertIndex, netDelta, result.length);
     }
     if (insertCount > 0) {
+      // From the stack's first tile: the one the tile stood on may have moved.
       markVisibleFetchSuppressedForExpand(
-        insertIndex,
+        filteredHeaderIndex,
         insertIndex + insertCount + 1,
       );
       fetchThumbnailsForRangeNow(
-        insertIndex,
+        filteredHeaderIndex,
         insertIndex + insertCount + 1,
         "stack-expand-insert",
       );
@@ -602,16 +601,9 @@ export function useStackOrdering(
       nextLoading.add(stackId);
       expandedStackLoading.value = nextLoading;
       try {
-        const activeSort = sortStore.selectedSort ?? "";
-        const isStackSort =
-          !activeSort || activeSort === LIKENESS_GROUPS_SORT_KEY;
-        const picsData = await listStackPictures(stackId, {
-          sort: activeSort || undefined,
-          descending: sortStore.selectedDescending,
-        });
+        const picsData = await listStackPictures(stackId);
         const pics = Array.isArray(picsData) ? picsData : [];
-        const sorted = isStackSort ? sortStackMembers(pics) : pics;
-        const ordered = sorted
+        const ordered = sortStackMembers(pics)
           .filter((img) => img && img.id != null)
           .map((img) =>
             img.stack_id !== undefined || img.stackId !== undefined
