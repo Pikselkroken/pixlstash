@@ -1508,7 +1508,8 @@ providers, thumbnail, files: [{name, directory, url, present, downloadable}]}`,
 `providers` being who a partner template's API nodes call, from ComfyUI's
 `logos`; a partner card wears ComfyUI's own "Partner API" crown badge.
 `downloadable` is `POST /model-downloads`' own lookup by name (the committed
-template list), so a pack file with a `url` can still be false. `present` is
+template list), so a pack file with a `url` can still be false; the card menu's *Download
+missing models* sends each missing one. `present` is
 worked out on every read, and a `models_arrived` re-reads the list the tab
 holds (`onModelsArrived`) without `refresh` (so ComfyUI is asked again only
 once the server's ten-minute listing has lapsed), keeping the list it has if

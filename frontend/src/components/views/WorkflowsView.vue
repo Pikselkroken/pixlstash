@@ -457,6 +457,7 @@
         @export="exportSelected"
         @duplicate="duplicateSelected"
         @use-set="useSetOnSelected"
+        @download-missing="downloadMissingSelected"
         @favourite="toggleFavourites([...store.selectedKeys])"
         @delete="confirmDelete"
       />
@@ -521,9 +522,17 @@ import { VIcon, VMenu } from "vuetify/components";
 
 import { importWorkflow } from "../../api/comfyui";
 import { listImportFolders } from "../../api/folders";
-import { exportWorkflow, workflowCoverUrl } from "../../api/workflows";
+import {
+  exportWorkflow,
+  preflightWorkflowRun,
+  workflowCoverUrl,
+} from "../../api/workflows";
 import { openWorkflowInComfyui } from "../../composables/useComfyuiOpen";
 import { useConfirm } from "../../composables/useConfirm";
+import {
+  downloadableInPreflight,
+  downloadModels,
+} from "../../composables/useModelDownloads";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import {
   FAVOURITE_KEY,
@@ -1665,6 +1674,66 @@ function useSetOnSelected() {
   if (!card) return;
   sidebarStore.openWorkflowInspector();
   store.requestUseSet(card.id);
+}
+
+/**
+ * *Download missing models* from the card menu: ask the run pre-flight what
+ * each selected workflow lacks (as the Workflow tab does, from ComfyUI's last
+ * node list), and download every file PixlStash knows where to get. A draft
+ * has no graph to ask about.
+ */
+// A second press while the checks run would start the same files twice.
+let checkingMissing = false;
+async function downloadMissingSelected() {
+  if (checkingMissing) return;
+  checkingMissing = true;
+  try {
+    await downloadMissingOf(store.selectedCards.filter((card) => !card.draft));
+  } finally {
+    checkingMissing = false;
+  }
+}
+
+async function downloadMissingOf(cards) {
+  const files = [];
+  let unasked = 0;
+  for (const card of cards) {
+    try {
+      const answer = await preflightWorkflowRun(
+        { workflow_id: card.id, values: [] },
+        { cached: true },
+      );
+      files.push(...downloadableInPreflight(answer));
+    } catch (err) {
+      unasked += 1;
+      console.warn("Could not check what a workflow is missing", card.id, err);
+    }
+  }
+  if (unasked === cards.length && cards.length) {
+    notices.error(
+      cards.length === 1
+        ? "Could not check what this workflow is missing."
+        : "Could not check what these workflows are missing.",
+    );
+    return;
+  }
+  if (unasked) {
+    notices.push({
+      level: "warning",
+      text: `Could not check what ${unasked} of these ${cards.length} workflows are missing.`,
+    });
+  }
+  if (!files.length) {
+    notices.push({
+      level: "info",
+      text:
+        cards.length === 1
+          ? "Nothing this workflow is missing can be downloaded."
+          : "Nothing these workflows are missing can be downloaded.",
+    });
+    return;
+  }
+  await downloadModels(files);
 }
 
 /**

@@ -56,7 +56,9 @@ const duplicateWorkflow = vi.fn();
 const deleteWorkflow = vi.fn();
 const exportWorkflow = vi.fn();
 const setWorkflowThumbnail = vi.fn();
+const preflightWorkflowRun = vi.fn();
 vi.mock("../../api/workflows", () => ({
+  preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   // `WorkflowCard` renders its covers through this, so a mock without it
@@ -71,6 +73,11 @@ vi.mock("../../api/workflows", () => ({
   deleteWorkflow: (...args) => deleteWorkflow(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
   setWorkflowThumbnail: (...args) => setWorkflowThumbnail(...args),
+}));
+const startModelDownload = vi.fn();
+vi.mock("../../api/modelDownloads", () => ({
+  startModelDownload: (...args) => startModelDownload(...args),
+  cancelModelDownload: vi.fn(),
 }));
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: vi.fn(async () => []),
@@ -2211,5 +2218,87 @@ describe("favourites (#1578)", () => {
     await flush();
     expect(setFavourites).toHaveBeenCalledWith("workflow", ["c", "d"], false);
     expect(store.selectedKeys).toEqual([]);
+  });
+});
+
+// Download missing models from the card menu: what each selected workflow's
+// pre-flight marks downloadable, once each, and a word for the ones unchecked.
+describe("Download missing models", () => {
+  const bar = (wrapper) =>
+    wrapper.findComponent({ name: "WorkflowSelectionBar" });
+  const answer = (...files) => ({
+    groups: [
+      {
+        reasons: [
+          {
+            code: "missing_models",
+            models: files.map((file) => ({ file, downloadable: true })),
+          },
+        ],
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    preflightWorkflowRun.mockReset();
+    startModelDownload.mockReset();
+    startModelDownload.mockImplementation(async (file) => ({
+      id: file,
+      file,
+      status: "running",
+    }));
+  });
+
+  it("asks each selected workflow but a draft, and starts each file once", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [card("a"), card("c"), card("x", { manual: true, draft: true })],
+      one_offs: 0,
+      hidden: 0,
+    });
+    preflightWorkflowRun.mockImplementation(async ({ workflow_id }) =>
+      workflow_id === "a"
+        ? answer("vae.safetensors", "shared.safetensors")
+        : answer("shared.safetensors"),
+    );
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["a", "c", "x"]);
+    await flush();
+    await bar(wrapper).vm.$emit("download-missing");
+    await flush();
+    expect(preflightWorkflowRun.mock.calls.map(([body]) => body.workflow_id)).toEqual([
+      "a",
+      "c",
+    ]);
+    expect(preflightWorkflowRun.mock.calls[0][1]).toEqual({ cached: true });
+    expect(startModelDownload.mock.calls.map(([file]) => file)).toEqual([
+      "vae.safetensors",
+      "shared.safetensors",
+    ]);
+  });
+
+  it("says how many it could not check, and one press runs once", async () => {
+    let release;
+    preflightWorkflowRun
+      .mockImplementationOnce(
+        () => new Promise((resolve) => (release = () => resolve(answer("m.safetensors")))),
+      )
+      .mockRejectedValueOnce(new Error("ComfyUI went away"));
+    const wrapper = await grid();
+    useWorkflowsStore().selectRange(["a", "c"]);
+    await flush();
+    await bar(wrapper).vm.$emit("download-missing");
+    // A second press while the first is still asking does nothing.
+    await bar(wrapper).vm.$emit("download-missing");
+    release();
+    await flush();
+    await flush();
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(2);
+    expect(startModelDownload.mock.calls.map(([file]) => file)).toEqual([
+      "m.safetensors",
+    ]);
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(useNoticeStore().notices.map((n) => n.text)).toContain(
+      "Could not check what 1 of these 2 workflows are missing.",
+    );
   });
 });

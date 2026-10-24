@@ -215,6 +215,7 @@ import AppBarButton from "../widgets/AppBarButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
+import { isReadOnly } from "../../utils/apiClient";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import {
   favouriteVerb,
@@ -239,6 +240,7 @@ const emit = defineEmits([
   "export",
   "duplicate",
   "use-set",
+  "download-missing",
   "delete",
 ]);
 
@@ -632,6 +634,24 @@ const useSetTitle = computed(() =>
     : "Select one workflow to change its model set",
 );
 
+/**
+ * *Download missing models*: what the run pre-flight says each selected
+ * workflow lacks and PixlStash knows where to get. The view asks; the card
+ * alone cannot name a missing file. A draft has no graph to ask about.
+ */
+const downloadable = computed(
+  () => !isReadOnly.value && cards.value.some((card) => !card.draft),
+);
+const downloadTitle = computed(() => {
+  if (isReadOnly.value) return "This session cannot download models";
+  if (!downloadable.value) {
+    return "A draft has no graph to check yet: open it in ComfyUI and save it";
+  }
+  return single.value
+    ? "Download every model this workflow lacks that PixlStash knows where to get"
+    : "Download every model these workflows lack that PixlStash knows where to get";
+});
+
 /** Fire a verb and shut whichever surface it was pressed on. */
 function onVerb(verb) {
   countMenuOpen.value = false;
@@ -878,6 +898,11 @@ const VerbMenu = () => {
         verb: "show-pictures",
         disabled: !hasPictures.value,
         title: showPicturesTitle.value,
+      }),
+      item("mdi-download-outline", "Download missing models", {
+        verb: "download-missing",
+        disabled: !downloadable.value || busy.value,
+        title: downloadTitle.value,
       }),
       sep(),
       item("mdi-pencil-outline", "Rename", {
