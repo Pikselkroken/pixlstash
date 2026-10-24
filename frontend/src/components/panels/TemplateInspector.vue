@@ -4,9 +4,13 @@
     class="tpli"
     label="Inspector"
     :open="sidebarStore.workflowInspectorOpen"
-    :tabs="TABS"
+    :tabs="tabs"
   >
-    <p v-if="!chosen.length" class="tpli-empty">
+    <!-- The task manager, as on Mine: a run started there is still going
+         when the reader moves over to browse templates. -->
+    <TasksPanel v-if="tab === 'tasks'" />
+
+    <p v-else-if="!chosen.length" class="tpli-empty">
       Pick a template to see what it would download, then add it to your
       workflows.
     </p>
@@ -115,7 +119,7 @@
       </div>
     </template>
 
-    <template v-if="chosen.length" #footer>
+    <template v-if="chosen.length && tab === 'template'" #footer>
       <div class="tpli-foot">
         <AppButton
           variant="primary"
@@ -159,6 +163,7 @@ import { VIcon } from "vuetify/components";
 
 import { templateThumbnailUrl } from "../../api/comfyui";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { isReadOnly } from "../../utils/apiClient";
 import {
   missingCount,
@@ -171,12 +176,22 @@ import AppInspector from "../widgets/AppInspector.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
-
-const TABS = [{ value: "template", label: "Template" }];
+import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 
 const sidebarStore = useSidebarStore();
+const tasksStore = useTasksStore();
 const templates = useWorkflowTemplatesStore();
 const tab = ref("template");
+// A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
+watch(
+  () => sidebarStore.tasksTabRequest,
+  () => (tab.value = "tasks"),
+);
+
+const tabs = computed(() => [
+  { value: "template", label: "Template", icon: "mdi-sitemap-outline" },
+  tasksTabFor(tasksStore),
+]);
 const thumbnailFailed = ref(false);
 
 const chosen = computed(() => templates.selectedTemplates);
