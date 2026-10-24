@@ -571,6 +571,19 @@ describe("the Edit tab with the Paint tools", () => {
     expect(checkedRow(wrapper)).toBe("Fill, Inpaint");
   });
 
+  it("keeps a card chosen with a selection up when the library list arrives late", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const wrapper = await mountPanel({ paint: fakePaint([RECT]) });
+    expect(checkedRow(wrapper)).toBe("Fill, Inpaint");
+    const relight = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Relight"));
+    await relight.trigger("click");
+    useLibrariesStore().libraries = [{ uuid: "lib-1", is_active: true }];
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+  });
+
   it("shows how to write the prompt on request", async () => {
     const wrapper = await mountPanel();
     const toggle = wrapper

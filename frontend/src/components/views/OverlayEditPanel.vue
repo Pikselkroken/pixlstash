@@ -598,7 +598,8 @@ watch(libraryKey, () => {
   if (!choseByHand && runsHere(rememberedKey.value)) {
     workflowId.value = rememberedKey.value;
   }
-  if (hasSelection.value) moveToMasked();
+  // A card chosen by hand stays chosen, with a selection up or not.
+  if (hasSelection.value && !choseByHand) moveToMasked();
 });
 
 // The run belongs to the picture it started from (and the picture it made);
