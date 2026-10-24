@@ -29,7 +29,7 @@ export function downloadableInPreflight(answer) {
     .flatMap((group) => group.reasons ?? [])
     .filter((reason) => reason.code === "missing_models")
     .flatMap((reason) => reason.models ?? [])
-    .filter((model) => model.downloadable)
+    .filter((model) => model?.file && model.downloadable)
     .map((model) => String(model.file));
   const loras = groups
     .flatMap((group) => group.bypassed_loras ?? [])
@@ -51,11 +51,12 @@ export async function downloadModels(files) {
   // By basename: a download's `file` is the name it lands under, never the
   // loader's subfolder spelling.
   const byName = new Map();
+  let running = 0;
   for (const file of files) {
     const name = modelBaseName(file);
-    if (!byName.has(name) && !tasksStore.runningDownloadFiles.has(name)) {
-      byName.set(name, file);
-    }
+    if (byName.has(name)) continue;
+    if (tasksStore.runningDownloadFiles.has(name)) running += 1;
+    else byName.set(name, file);
   }
   const started = [];
   for (const [name, file] of byName) {
@@ -85,6 +86,18 @@ export async function downloadModels(files) {
         started.length === 1
           ? `model-download-started-${started[0]}`
           : "model-downloads-started",
+    });
+  } else if (running && !byName.size) {
+    // Everything asked for is on its way already, which is not nothing.
+    notices.push({
+      level: "info",
+      text: "Already downloading: the Tasks tab shows how far.",
+      action: {
+        label: "Show",
+        handler: () => useSidebarStore().showTasksTab(),
+      },
+      timeout: DEFAULT_TIMEOUTS.info,
+      key: "model-downloads-already-running",
     });
   }
   return started.length;

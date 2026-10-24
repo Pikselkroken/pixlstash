@@ -33,6 +33,7 @@ describe("downloadableInPreflight", () => {
               models: [
                 { file: "vae/a.safetensors", downloadable: true },
                 { file: "b.safetensors" },
+                { downloadable: true },
               ],
             },
             { code: "missing_nodes", models: [{ file: "c.safetensors", downloadable: true }] },
@@ -79,6 +80,19 @@ describe("downloadModels", () => {
     ]);
     expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
       "Downloading 2 models.",
+    ]);
+  });
+
+  it("says so when everything asked for is already downloading", async () => {
+    useTasksStore().downloadStarted({
+      id: "x",
+      file: "running.safetensors",
+      status: "running",
+    });
+    expect(await downloadModels(["loras/running.safetensors"])).toBe(0);
+    expect(startModelDownload).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices.map((n) => n.text)).toEqual([
+      "Already downloading: the Tasks tab shows how far.",
     ]);
   });
 
