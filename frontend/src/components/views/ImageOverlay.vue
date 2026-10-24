@@ -3167,6 +3167,13 @@ function handleOverlayClick(event) {
     handleUserActivity();
     return;
   }
+  // The Edit tab's tools live in the chrome. A click that reaches here while
+  // they are out is a selection gesture that ended past the input layer (or a
+  // Hand-tool press), never a wish to hide the toolbox mid-edit.
+  if (paintActive.value) {
+    handleUserActivity();
+    return;
+  }
   chromeHidden.value = true;
 }
 
@@ -4234,7 +4241,8 @@ function onTouchEnd(event) {
       handleUserActivity();
       return;
     }
-    if (chromeHidden.value) {
+    // As a click: the Edit tab keeps its chrome.
+    if (chromeHidden.value || paintActive.value) {
       handleUserActivity();
     } else {
       chromeHidden.value = true;

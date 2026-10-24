@@ -580,6 +580,23 @@ describe("the lightbox Edit tab", () => {
     expect(wrapper.vm.paint.tool.value).toBe("eraser");
   });
 
+  it("keeps the chrome on a canvas click while the Edit tab is open", async () => {
+    // Attached: a click on a detached target never hides the chrome at all.
+    const wrapper = await openOn(7, undefined, { ...configured, attach: true });
+    const shellHidden = () =>
+      wrapper.find(".overlay-shell").classes().includes("chrome-hidden");
+    // Past the 500 ms guard that follows opening the lightbox.
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    await wrapper.find(".overlay-canvas").trigger("click");
+    expect(shellHidden()).toBe(false);
+    // On another tab the same click still hides it.
+    await wrapper.findAll(".inspector-tab")[0].trigger("click");
+    await wrapper.find(".overlay-canvas").trigger("click");
+    now.mockRestore();
+    expect(shellHidden()).toBe(true);
+  });
+
   it("clears the selection on the first Escape and closes on the next", async () => {
     const wrapper = await openOn(7, undefined, configured);
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
