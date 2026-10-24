@@ -484,7 +484,7 @@ WORKFLOW_TOOLS = [
         "description": "Whether run_workflow would run this workflow, submitting "
         "nothing: {ok, runs, groups}, each group with the reasons it would "
         "not run (missing_nodes, missing_models, pack_outdated, "
-        "comfyui_unreachable...). Call "
+        "models_downloading, comfyui_unreachable...). Call "
         "it before run_workflow.",
         "inputSchema": _RUN_SCHEMA,
         "annotations": {"readOnlyHint": True, "openWorldHint": True},

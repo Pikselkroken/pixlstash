@@ -42,10 +42,16 @@ export const MISSING_MODELS = "missing_models";
 export const MISSING_NODES = "missing_nodes";
 
 /**
- * Installing a file, or restarting ComfyUI, is a trip away from the keyboard,
- * so either stops the batch.
+ * A model file the graph names that PixlStash is still downloading: put in
+ * while it was on its way, and refused until it lands. Each carries `percent`.
  */
-export const BLOCKS_BATCH = [MISSING_MODELS, PACK_OUTDATED];
+export const MODELS_DOWNLOADING = "models_downloading";
+
+/**
+ * Installing a file, restarting ComfyUI or waiting for a download is a trip
+ * away from the keyboard, so each stops the batch.
+ */
+export const BLOCKS_BATCH = [MISSING_MODELS, PACK_OUTDATED, MODELS_DOWNLOADING];
 
 /**
  * Not a refusal: a LoRA loader the server took out of the graph (#1463).
@@ -308,9 +314,30 @@ export function readReason(reason) {
       return read("ComfyUI did not answer, so its graph could not be checked.");
     case MISSING_MODELS: {
       const files = (reason.models || []).filter(Boolean);
-      const count = files.length;
+      // A caller may fold the files still downloading in (the Edit tab's one
+      // notice per card): they are not missing, and are said apart.
+      const count = files.filter((file) => !file.downloading).length;
+      const coming = files.length - count;
       return read(
-        `${count} ${count === 1 ? "model is" : "models are"} missing.`,
+        [
+          count ? `${count} ${count === 1 ? "model is" : "models are"} missing.` : "",
+          coming
+            ? `${coming} ${coming === 1 ? "model is" : "models are"} still downloading.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        null,
+        files,
+      );
+    }
+    case MODELS_DOWNLOADING: {
+      const files = (reason.models || [])
+        .filter(Boolean)
+        .map((file) => ({ ...file, downloading: true }));
+      const one = files.length === 1;
+      return read(
+        `${one ? "A model it needs is" : `${files.length} models it needs are`} still downloading. Run it once ${one ? "it has" : "they have"} finished: the Tasks tab shows how far.`,
         null,
         files,
       );

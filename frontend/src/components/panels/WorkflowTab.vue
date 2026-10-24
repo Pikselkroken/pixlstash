@@ -279,8 +279,12 @@
           </span>
           <div class="wftab-col wftab-model">
             <template v-if="row.missing && !row.edited">
-              <p class="wftab-warn">
-                <v-icon size="16">mdi-alert-outline</v-icon>
+              <p class="wftab-warn" :class="{ 'wftab-coming': row.coming }">
+                <DownloadingMark
+                  v-if="row.coming"
+                  :percent="row.coming.percent"
+                />
+                <v-icon v-else size="16">mdi-alert-outline</v-icon>
                 {{ row.missingText }}
               </p>
               <p class="wftab-note wftab-quiet" data-testid="wftab-missing-file">
@@ -1468,6 +1472,7 @@ import {
 import { editModels } from "../../api/modelShelf";
 import { fileKindLabel, quantBadge } from "../../utils/modelShelf";
 import {
+  MODELS_DOWNLOADING,
   PACK_OUTDATED,
   PACK_OUTDATED_ACTION,
   PIXLSTASH_PACK_URL,
@@ -1517,6 +1522,7 @@ import BreakableTitle from "../widgets/BreakableTitle.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
 import KindMenu from "../widgets/KindMenu.vue";
+import DownloadingMark from "../widgets/DownloadingMark.vue";
 import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import ExposeParameterDialog from "../io/ExposeParameterDialog.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
@@ -1888,6 +1894,8 @@ const PACK_OUTDATED_TEXT = "Restart ComfyUI";
  */
 function missingNote(file, kind) {
   if (!preflightAnswered.value) return "";
+  if (tasksStore.runningDownload({ file, slot: kind }))
+    return " is still downloading. It runs once it has finished.";
   if (staleFiles.value.has(file))
     return ` is on your model shelf, but the ComfyUI-PixlStash running in ComfyUI is out of date and cannot load it. ${PACK_OUTDATED_ACTION}`;
   return kind === "checkpoint"
@@ -2073,6 +2081,16 @@ const modelRows = computed(() => {
       (candidate) => !sameFile(candidate.filename, file),
     );
     const pick = canPick ? modelPick(waiting.value, model.address) : null;
+    const coming = comingOptions(spec, canPick ? file : null);
+    const extraPick =
+      pick &&
+      !candidates.some((candidate) => candidate.filename === pick) &&
+      !coming.some((option) => option.value === pick);
+    // The row's own file on its way: said so, not "missing".
+    // A row's kind is its set slot's id (checkpoint, vae, text_encoder).
+    const goneComing = gone
+      ? tasksStore.runningDownload({ file: gone, slot: model.kind })
+      : null;
     // A missing file's candidates filed under how likely each is to run it,
     // where the server gave them a verdict; the file itself is no option.
     const grouped =
@@ -2104,9 +2122,12 @@ const modelRows = computed(() => {
       fix: autoFixOf(gone, pick, candidates),
       yours: model.provenance === "edited",
       missing: gone,
-      missingText: staleFiles.value.has(gone)
-        ? PACK_OUTDATED_TEXT
-        : spec.missingText,
+      coming: goneComing,
+      missingText: goneComing
+        ? `Downloading${goneComing.percent ? ` · ${Math.round(goneComing.percent)}%` : ""}`
+        : staleFiles.value.has(gone)
+          ? PACK_OUTDATED_TEXT
+          : spec.missingText,
       unmatched:
         model.kind === "checkpoint" &&
         candidates.length > 0 &&
@@ -2121,11 +2142,12 @@ const modelRows = computed(() => {
       options: grouped
         ? [
             ...verdictOptions(candidates, target, shownName),
-            ...(pick && !picked
+            ...(extraPick
               ? [{ value: pick, label: modelLabel(fileName(pick)) }]
               : []),
+            ...coming,
           ]
-        : candidates.length || pick
+        : candidates.length || pick || coming.length
           ? [
               // A missing file is no choice: said, or it reads as picked.
               { value: "", label: gone ? `${savedLabel} (missing)` : savedLabel },
@@ -2133,10 +2155,10 @@ const modelRows = computed(() => {
                 value: candidate.filename,
                 label: candidateLabel(candidate),
               })),
-              ...(pick &&
-              !candidates.some((candidate) => candidate.filename === pick)
+              ...(extraPick
                 ? [{ value: pick, label: modelLabel(fileName(pick)) }]
                 : []),
+              ...coming,
             ]
           : [],
       noOptions: noReplacementText(model.kind, answer),
@@ -2146,6 +2168,30 @@ const modelRows = computed(() => {
     };
   });
 });
+
+/**
+ * The models on their way that a row's loader could take, as picker options:
+ * every running download for a folder of the row's kind, but the row's own
+ * file. Picked, it is an ordinary unsaved change; a run of it is refused,
+ * loudly, until it has landed (`models_downloading`).
+ *
+ * Under one "Downloading" heading wearing the animated mark, which each
+ * carries so the field keeps it beside a pick.
+ */
+function comingOptions(spec, file) {
+  if (file === null) return [];
+  return tasksStore.runningDownloads
+    .filter((d) => spec.folders.has(d.directory) && !sameFile(d.file, file))
+    .map((d) => ({
+      value: d.file,
+      label: `${modelLabel(d.file)} (downloading)`,
+      name: modelLabel(d.file),
+      group: "Downloading",
+      groupIcon: "download",
+      groupDownloading: true,
+      groupNote: "runs once it has landed",
+    }));
+}
 
 /**
  * The shelf's kind offer on a model row (#1962), or null.
@@ -4754,7 +4800,12 @@ async function checkInstalled(key, { quiet = false } = {}) {
     // Still a row that needs something done, worded as a restart.
     const stale = modelsOf(PACK_OUTDATED);
     staleFiles.value = new Set(stale.map((model) => String(model.file)));
-    const missing = [...modelsOf("missing_models"), ...stale];
+    // On its way is still a row that cannot run: drawn with its download.
+    const missing = [
+      ...modelsOf("missing_models"),
+      ...stale,
+      ...modelsOf(MODELS_DOWNLOADING),
+    ];
     downloadableFiles.value = new Set(
       modelsOf("missing_models")
         .filter((model) => model.downloadable)
@@ -5337,6 +5388,11 @@ async function checkInstalled(key, { quiet = false } = {}) {
   margin: 0;
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-surface-warning));
+}
+
+/* On its way is not a fault: ink, with the mark's own accent beside it. */
+.wftab-warn.wftab-coming {
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .wftab-disclose > summary {
