@@ -6928,6 +6928,39 @@ describe("the GPU memory section", () => {
     expect(wrapper.find('[data-testid="wftab-gpu-exclusive"]').exists()).toBe(true);
   });
 
+  it("offers no reset for a workflow nothing has run", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ need_mb: null, measured_runs: 0, peaks: [], trend: null }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find('[data-testid="wftab-gpu-reset"]').exists()).toBe(false);
+  });
+
+  it("forgets the measured runs from Reset and shows the workflow unmeasured", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram() } }));
+    patchWorkflowCard.mockResolvedValue(
+      detail({ card: { vram: vram({ need_mb: null, measured_runs: 0, peaks: [], trend: null }) } }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    await wrapper.find('[data-testid="wftab-gpu-reset"]').trigger("click");
+    await flush(wrapper);
+    expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { forget_vram_peaks: true });
+    expect(wrapper.find('[data-testid="wftab-gpu-need"]').text()).toBe("Not measured yet");
+    expect(wrapper.find('[data-testid="wftab-gpu-reset"]').exists()).toBe(false);
+  });
+
+  it("names the image size a peak was measured at", async () => {
+    const peaks = [
+      { peak_mb: 9830, pixels: 1048576, outcome: "completed", at: "2026-10-20T10:00:00Z", used: true },
+    ];
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ peaks }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find(".wftab-peak").attributes("aria-label")).toBe(
+      "9.6 GB, 1.0 MP, completed, used for the need",
+    );
+  });
+
   it("writes run-alone through the card, and bands the day an out-of-memory streak turned it on", async () => {
     const at = "2026-10-14T09:00:00Z";
     getWorkflowCard.mockResolvedValue(

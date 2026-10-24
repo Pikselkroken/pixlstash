@@ -1642,8 +1642,10 @@ CREATE TABLE IF NOT EXISTS shelf_identity (
 # text encoder and VAE only, not LoRAs: every LoRA combination would otherwise
 # be a workflow never measured. ``outcome`` is ``completed``, ``failed``,
 # ``oom`` (``peak_mb`` is then the card's total) or ``aborted``, which the need
-# ignores. ``measured_by`` is ``torch_reserved`` or ``device_delta``. The 50
-# newest rows per workflow are kept.
+# ignores. ``measured_by`` is ``torch_reserved`` or ``device_delta``.
+# ``pixels`` is the size of the image the run worked on (``run_pixels``), null
+# where it could not be read from the graph. The 50 newest rows per workflow
+# are kept.
 _V2_WORKFLOW_VRAM_PEAK = """
 CREATE TABLE IF NOT EXISTS workflow_vram_peak (
     id               INTEGER PRIMARY KEY,
@@ -1654,7 +1656,8 @@ CREATE TABLE IF NOT EXISTS workflow_vram_peak (
     peak_mb          INTEGER NOT NULL,
     measured_by      TEXT NOT NULL,
     outcome          TEXT NOT NULL,
-    at               TEXT NOT NULL
+    at               TEXT NOT NULL,
+    pixels           INTEGER
 )
 """
 
@@ -2133,6 +2136,15 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
             "ALTER TABLE workflow_model_fix ADD COLUMN "
             "slot_kind TEXT NOT NULL DEFAULT 'checkpoint'"
         )
+
+    # The image size a VRAM peak was measured at, the same way. An older row
+    # has none, and a run of a known size does not take its need from it.
+    peak_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(workflow_vram_peak)").fetchall()
+    }
+    if "pixels" not in peak_columns:
+        conn.execute("ALTER TABLE workflow_vram_peak ADD COLUMN pixels INTEGER")
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped

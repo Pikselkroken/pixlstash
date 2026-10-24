@@ -2176,7 +2176,7 @@ PixlStash's own tasks appear as `light` leases (one per running GPU task, `worke
 
 `resources` sits beside the response's older `process` block, which it does not replace. `process` is this process's usage (`vram_used_gb`, `vram_total_gb`, `vram_percent`, null without a GPU), and the VRAM limit slider in Settings › Compute reads its upper bound from `process.vram_total_gb`.
 
-**Workflow cards** carry `vram: {need_mb, measured_runs, exclusive, exclusive_source, exclusive_at, trend, peaks}` (peaks on the detail read only); `PATCH /workflows/{id}` takes `exclusive`. The owner's `auto_exclusive_after_oom` rides `GET`/`PATCH /users/me/config`.
+**Workflow cards** carry `vram: {need_mb, measured_runs, exclusive, exclusive_source, exclusive_at, trend, peaks}` (peaks on the detail read only, each with the `pixels` it was measured at); `PATCH /workflows/{id}` takes `exclusive`, and `forget_vram_peaks: true`, the GPU memory section's Reset. The owner's `auto_exclusive_after_oom` rides `GET`/`PATCH /users/me/config`.
 
 **PixlStash's GPU.** `GET /compute/gpus` (local owner) lists each GPU with `used_by`, the one `selected` (`auto` or a UUID), the one `resolved` (in use now) and `auto_reason`; `PATCH /compute/gpu {gpu}` stores the choice and answers `restart_required: true`. The desktop restarts through the runtime-switch path; a headless install is restarted by its operator.
 
