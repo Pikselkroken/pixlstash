@@ -513,6 +513,92 @@ describe("the Edit tab with the Paint tools", () => {
     );
   });
 
+  it("puts Inpaint first for a selection, over a hand choice, and goes back after", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    const rows = () => wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+    const out = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Widen"));
+    await out.trigger("click");
+    expect(rows()[0]).toBe("Widen, Outpaint");
+    expect(wrapper.text()).toContain("What should change?");
+    paint.hasSelection.value = true;
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Fill, Inpaint");
+    expect(rows()[0]).toBe("Fill, Inpaint");
+    // The prompt box asks for what goes in the selection, and says how.
+    expect(wrapper.text()).toContain("What goes there?");
+    expect(wrapper.find("textarea").attributes("placeholder")).toContain("scarf");
+    paint.hasSelection.value = false;
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+    expect(rows()[0]).toBe("Widen, Outpaint");
+  });
+
+  it("keeps a card chosen while there is a selection, and the last one run on one", async () => {
+    const other = { id: "fill2", name: "Patch", type: "inpaint", type_label: "Inpaint" };
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT, other] });
+    const paint = fakePaint();
+    const wrapper = await mountPanel({ paint });
+    paint.hasSelection.value = true;
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Fill, Inpaint");
+    const patch = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Patch"));
+    await patch.trigger("click");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    // Chosen by hand: clearing the selection leaves it be.
+    paint.hasSelection.value = false;
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Patch, Inpaint");
+    const relight = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Relight"));
+    await relight.trigger("click");
+    paint.hasSelection.value = true;
+    await flush();
+    // The next selection goes to the inpaint workflow last run on one.
+    expect(checkedRow(wrapper)).toBe("Patch, Inpaint");
+  });
+
+  it("starts on an Inpaint card when the selection was drawn before the tab loaded", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const wrapper = await mountPanel({ paint: fakePaint([RECT]) });
+    expect(checkedRow(wrapper)).toBe("Fill, Inpaint");
+  });
+
+  it("keeps a card chosen with a selection up when the library list arrives late", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const wrapper = await mountPanel({ paint: fakePaint([RECT]) });
+    expect(checkedRow(wrapper)).toBe("Fill, Inpaint");
+    const relight = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Relight"));
+    await relight.trigger("click");
+    useLibrariesStore().libraries = [{ uuid: "lib-1", is_active: true }];
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+  });
+
+  it("shows how to write the prompt on request", async () => {
+    const wrapper = await mountPanel();
+    const toggle = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "How to write it");
+    const help = wrapper.find(".edit-help");
+    expect(toggle.attributes("aria-controls")).toBe(help.attributes("id"));
+    // `v-show`: not attached to a document, so read the style it sets.
+    expect(help.element.style.display).toBe("none");
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    expect(help.element.style.display).toBe("");
+    expect(help.text()).toContain("make the sky stormy");
+  });
+
   it("warns, and does not send a mask, where the workflow has none", async () => {
     const paint = fakePaint();
     const wrapper = await mountPanel({ paint });

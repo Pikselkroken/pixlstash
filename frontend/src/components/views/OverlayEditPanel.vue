@@ -172,7 +172,7 @@
             @keydown="onMenuKeydown"
           >
             <button
-              v-for="card in cards"
+              v-for="card in menuCards"
               :key="card.id"
               class="ctx-item edit-option"
               type="button"
@@ -199,20 +199,31 @@
           would change the whole picture. Choose an Inpaint workflow.
         </p>
 
-        <label
-          :for="instructionFieldId"
-          class="section-label section-label--on-dark edit-sec"
-        >
-          <span>What should change?</span>
-        </label>
+        <div class="section-label section-label--on-dark edit-sec">
+          <label :for="instructionFieldId">{{ promptHelp.label }}</label>
+          <button
+            class="edit-sec-act edit-sec-act--help"
+            type="button"
+            :aria-expanded="helpOpen ? 'true' : 'false'"
+            :aria-controls="helpId"
+            @click="helpOpen = !helpOpen"
+          >
+            <v-icon size="14">mdi-help-circle-outline</v-icon>
+            How to write it
+          </button>
+        </div>
         <textarea
           :id="instructionFieldId"
           v-model="instruction"
           class="edit-textarea"
           rows="4"
+          :placeholder="promptHelp.placeholder"
           :aria-describedby="shortcutHintId"
           @keydown="onInstructionKeydown"
         ></textarea>
+        <div v-show="helpOpen" :id="helpId" class="edit-help">
+          <p v-for="(tip, index) in promptHelp.tips" :key="index">{{ tip }}</p>
+        </div>
 
         <label class="edit-check">
           <input v-model="stack" type="checkbox" />
@@ -404,11 +415,43 @@ const refineRows = [
 ];
 
 const LAST_KEY_PREFIX = "pixlstash:editTabWorkflow:";
+// The last workflow run on a selection, which a new selection goes back to.
+const LAST_MASKED_KEY_PREFIX = "pixlstash:editTabMaskedWorkflow:";
+
+/**
+ * What the instruction box asks for. An inpaint run regenerates only the
+ * selection, so the prompt describes what belongs there; an edit runs the
+ * whole picture, where an edit model (Qwen Image Edit, Flux Kontext) follows
+ * an instruction and an ordinary checkpoint reads a description.
+ */
+const PROMPT_HELP = {
+  masked: {
+    label: "What goes there?",
+    placeholder: "A red knitted scarf, soft window light",
+    tips: [
+      "Describe what should be there, not the change: “a red knitted scarf”, not “add a scarf”.",
+      "Name the look so it blends in: lighting, material, style.",
+      "Leave out the rest of the picture; the workflow keeps it.",
+      "Left empty, the workflow's own prompt is used.",
+    ],
+  },
+  edit: {
+    label: "What should change?",
+    placeholder: "Make the sky stormy",
+    tips: [
+      "Say the change in plain words, one at a time: “make the sky stormy”, “turn the jacket red”.",
+      "Say what must stay if it matters: “keep her face the same”.",
+      "An ordinary checkpoint reads this as the whole picture, not a change: describe the finished picture instead.",
+      "To change only part of it, mark it with the tools beside the picture and choose an Inpaint workflow.",
+    ],
+  },
+};
 
 const workflowLabelId = useId();
 const pickerValueId = useId();
 const instructionFieldId = useId();
 const shortcutHintId = useId();
+const helpId = useId();
 
 const runDialog = useRunDialogStore();
 const libraries = useLibrariesStore();
@@ -427,6 +470,7 @@ const rememberedKey = ref("");
 // several pictures in a row. It is never filled from the picture's recipe.
 const instruction = ref("");
 const stack = ref(true);
+const helpOpen = ref(false);
 const submitting = ref(false);
 const submitError = ref("");
 /**
@@ -448,6 +492,19 @@ const chosenCard = computed(
 
 const hasSelection = computed(() => !!props.paint?.hasSelection.value);
 const usesMask = computed(() => MASK_TYPES.has(chosenCard.value?.type));
+const promptHelp = computed(() =>
+  hasSelection.value && usesMask.value ? PROMPT_HELP.masked : PROMPT_HELP.edit,
+);
+
+// With a selection the workflows that read it come first.
+const menuCards = computed(() =>
+  hasSelection.value
+    ? [
+        ...cards.value.filter((card) => MASK_TYPES.has(card.type)),
+        ...cards.value.filter((card) => !MASK_TYPES.has(card.type)),
+      ]
+    : cards.value,
+);
 
 // *Apply to*: this picture, or every one the grid's *Edit…* named. A hand
 // selection belongs to its picture, so it holds the choice on this one.
@@ -477,14 +534,37 @@ watch(
 // late library key below must not overrule.
 let choseByHand = false;
 
-// The first selection moves the tab onto a workflow that reads it, unless
-// the reader chose the card by hand.
-watch(hasSelection, (has) => {
-  if (!has || choseByHand || usesMask.value) return;
-  const masked = cards.value.find(
+// The card a selection moved the tab off, to go back to when it is cleared;
+// empty once the reader chooses a card themselves.
+let beforeSelection = "";
+
+/** The workflow a selection runs with: the last one run on one, else the first. */
+function maskedCard() {
+  const last = readRemembered(LAST_MASKED_KEY_PREFIX);
+  const usable = cards.value.filter(
     (card) => MASK_TYPES.has(card.type) && runsHere(card.id),
   );
-  if (masked) workflowId.value = masked.id;
+  return usable.find((card) => card.id === last) || usable[0] || null;
+}
+
+function moveToMasked() {
+  if (usesMask.value) return;
+  const masked = maskedCard();
+  if (!masked) return;
+  beforeSelection = workflowId.value;
+  workflowId.value = masked.id;
+}
+
+// A selection moves the tab onto a workflow that reads it, even off a card
+// chosen by hand before there was one: that choice was for the whole picture.
+// Clearing it goes back, unless the reader has chosen since.
+watch(hasSelection, (has) => {
+  if (has) {
+    moveToMasked();
+  } else if (beforeSelection) {
+    if (runsHere(beforeSelection)) workflowId.value = beforeSelection;
+    beforeSelection = "";
+  }
 });
 
 function choose(key) {
@@ -496,6 +576,7 @@ function choose(key) {
   }
   refocusPicker = true;
   choseByHand = true;
+  beforeSelection = "";
   workflowId.value = key;
 }
 
@@ -505,20 +586,20 @@ function onPickerAfterLeave() {
   pickerTriggerRef.value?.focus?.();
 }
 
-const storageKey = computed(
-  () => `${LAST_KEY_PREFIX}${libraries.activeLibrary?.uuid || ""}`,
-);
+const libraryKey = computed(() => libraries.activeLibrary?.uuid || "");
 
 // The library list can arrive after the cards did (a lightbox opened from a
 // deep link), which moves the key from "no library" to the real one. Read the
 // remembered card again under it, or the first run would be remembered under
 // one key and looked up under another. A library SWITCH reloads the page.
-watch(storageKey, () => {
+watch(libraryKey, () => {
   if (!loaded.value) return;
   rememberedKey.value = readRemembered();
   if (!choseByHand && runsHere(rememberedKey.value)) {
     workflowId.value = rememberedKey.value;
   }
+  // A card chosen by hand stays chosen, with a selection up or not.
+  if (hasSelection.value && !choseByHand) moveToMasked();
 });
 
 // The run belongs to the picture it started from (and the picture it made);
@@ -546,19 +627,26 @@ const runHeading = computed(() => {
   return "Last edit";
 });
 
-function readRemembered() {
+function readRemembered(prefix = LAST_KEY_PREFIX) {
   try {
-    return window.localStorage?.getItem(storageKey.value) || "";
+    return window.localStorage?.getItem(`${prefix}${libraryKey.value}`) || "";
   } catch (err) {
     console.warn("Could not read the Edit tab's last workflow:", err);
     return "";
   }
 }
 
-function remember(key) {
+/** The card just run; one run on a selection is also the next selection's. */
+function remember(key, masked) {
   rememberedKey.value = key;
   try {
-    window.localStorage?.setItem(storageKey.value, key);
+    window.localStorage?.setItem(`${LAST_KEY_PREFIX}${libraryKey.value}`, key);
+    if (masked) {
+      window.localStorage?.setItem(
+        `${LAST_MASKED_KEY_PREFIX}${libraryKey.value}`,
+        key,
+      );
+    }
   } catch (err) {
     console.warn("Could not remember the Edit tab's workflow:", err);
   }
@@ -588,6 +676,8 @@ async function loadCards() {
     workflowId.value = runsHere(rememberedKey.value)
       ? rememberedKey.value
       : (here.find((card) => card.type === "img2img") || here[0])?.id || "";
+    // Drawn before the tab was first shown.
+    if (hasSelection.value) moveToMasked();
     loaded.value = true;
   } catch (err) {
     loadError.value = errorMessage(err, "Could not read your workflows.");
@@ -813,7 +903,7 @@ async function submit() {
         : "Nothing was queued.";
       return;
     }
-    remember(workflowId.value);
+    remember(workflowId.value, hasSelection.value && usesMask.value);
     follow(id, card?.name, text, stack.value, before, pictureIds.length);
     // No picture ids: see the component's docstring.
     runDialog.started(prompts, []);
@@ -875,6 +965,12 @@ defineExpose({ submit });
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Room for the focus ring, which is drawn outside a full-width field and was
+     clipped to a top and bottom line by the scroll box. The negative margin
+     keeps the fields' edges where they were. */
+  --ring-room: calc(var(--focus-width) + var(--focus-offset));
+  padding: var(--ring-room);
+  margin: calc(-1 * var(--ring-room));
 }
 
 .edit-sec {
@@ -912,6 +1008,11 @@ defineExpose({ submit });
 .edit-sec-act:hover {
   background: rgba(var(--v-theme-on-dark-surface), 0.16);
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.edit-sec-act--help {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* Clear is what Escape does first, so it carries the selection's olive (the
@@ -1015,6 +1116,28 @@ defineExpose({ submit });
   resize: vertical;
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent;
+}
+
+.edit-textarea::placeholder {
+  color: rgba(var(--v-theme-on-dark-surface), 0.45);
+}
+
+.edit-help {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+.edit-help p {
+  margin: 0;
+}
+
+.edit-help p + p {
+  margin-top: var(--space-2);
 }
 
 .edit-note--lead {

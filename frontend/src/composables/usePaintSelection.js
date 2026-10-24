@@ -43,6 +43,15 @@ const PREVIEW_DELAY_MS = 120;
 const MIN_POINT_STEP = 0.002;
 // Tolerance gained by dragging the wand across the whole picture.
 const WAND_DRAG_RANGE = 255;
+// Grow, feather and fill holes until the owner moves one, as fractions of the
+// picture's shorter side with a floor, so a 512px and a 4000px picture both get
+// a mask that blends: a seam a little outside the edge, softened over about as
+// much, and a speckled wand pick closed. Capped at the sliders' ends.
+const REFINE_DEFAULTS = {
+  grow: { share: 0.01, floor: 4, max: 100 },
+  feather: { share: 0.01, floor: 4, max: 100 },
+  fill_holes: { share: 0.02, floor: 8, max: 200 },
+};
 
 function round(value) {
   return Math.round(value * 10000) / 10000;
@@ -68,6 +77,8 @@ export function usePaintSelection({ pictureId, dims }) {
   // Steps taken back, latest last, for redo; a new step forgets them.
   const undone = ref([]);
   const refine = reactive({ grow: 0, feather: 0, fill_holes: 0 });
+  // Once the owner sets one, the values are theirs and stop following the size.
+  let refineSet = false;
   // The gesture in progress, in fractions: `{tool, start, end}` or `{tool, points}`.
   const draft = ref(null);
   // The crop frame the owner is setting, `[left, top, width, height]`.
@@ -208,6 +219,7 @@ export function usePaintSelection({ pictureId, dims }) {
   }
 
   function setRefine(key, value) {
+    refineSet = true;
     refine[key] = Number(value);
   }
 
@@ -241,6 +253,18 @@ export function usePaintSelection({ pictureId, dims }) {
     draft.value = null;
     showMask.value = false;
   }
+
+  watch(
+    () => [dims.value?.naturalWidth, dims.value?.naturalHeight],
+    () => {
+      if (refineSet) return;
+      const side = shorterSide();
+      for (const [key, { share, floor, max }] of Object.entries(REFINE_DEFAULTS)) {
+        refine[key] = Math.min(max, Math.max(floor, Math.round(side * share)));
+      }
+    },
+    { immediate: true },
+  );
 
   // A hand selection belongs to the picture it was drawn on.
   watch(pictureId, () => {
