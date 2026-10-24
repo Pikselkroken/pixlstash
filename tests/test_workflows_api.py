@@ -709,15 +709,19 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_group_member")
         conn.execute("DELETE FROM workflow_group")
         conn.execute("DELETE FROM workflow_document")
-        conn.execute(
-            "DELETE FROM model WHERE filename IN (?, ?, ?, ?)",
-            (
-                _SHELF_FILENAME,
-                "add_detail.safetensors",
-                _REPLACEMENT_FILENAME,
-                _SECOND_REPLACEMENT,
-            ),
+        reseeded = (
+            _SHELF_FILENAME,
+            "add_detail.safetensors",
+            _REPLACEMENT_FILENAME,
+            _SECOND_REPLACEMENT,
         )
+        # Their copies first: a model row a copy still names will not go.
+        conn.execute(
+            "DELETE FROM model_file WHERE model_id IN "
+            "(SELECT id FROM model WHERE filename IN (?, ?, ?, ?))",
+            reseeded,
+        )
+        conn.execute("DELETE FROM model WHERE filename IN (?, ?, ?, ?)", reseeded)
         # Hashed, like a checkpoint the finder has already read: an unhashed
         # one holds back every digest judgement (see the digest tests below).
         conn.execute(
@@ -8227,12 +8231,30 @@ def _seed_runnable_card(server) -> int:
     module asserts. Returns that picture's id.
     """
     with server.hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM model_file WHERE model_id IN "
+            "(SELECT id FROM model WHERE sha256 = ?)",
+            (RUN_ADAPTER_DIGEST,),
+        )
         conn.execute("DELETE FROM model WHERE sha256 = ?", (RUN_ADAPTER_DIGEST,))
         conn.execute(
             # `kind` is NOT NULL for an adapter by CHECK constraint: every
             # producer supplies an algorithm, 'unknown' included.
             "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
             "VALUES ('adapter', 'unknown', ?, ?, 'scanned')",
+            (RUN_ADAPTER_FILENAME, RUN_ADAPTER_DIGEST),
+        )
+        # A present copy, as a shelf LoRA has: one with none cannot be fetched
+        # by its digest (`GET /adapters/{sha256}/file` answers 409), so a run
+        # through the digest loader would refuse it as missing.
+        conn.execute(
+            "INSERT OR IGNORE INTO model_folder (path, kind, movable) "
+            "VALUES ('/home/me/run-loras', 'reference', 'fixed')"
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "SELECT m.id, f.id, ?, 'present' FROM model m, model_folder f "
+            "WHERE m.sha256 = ? AND f.path = '/home/me/run-loras'",
             (RUN_ADAPTER_FILENAME, RUN_ADAPTER_DIGEST),
         )
         conn.execute(
@@ -23813,6 +23835,18 @@ def test_a_persons_row_is_left_out_of_every_read_however_the_graph_came_in(
             "VALUES ('adapter', 'unknown', 'style.safetensors', ?, 'scanned')",
             (STYLE_DIGEST,),
         )
+        # With a copy: the digest loader can fetch only a LoRA that has one.
+        conn.execute(
+            "INSERT OR IGNORE INTO model_folder (path, kind, movable) "
+            "VALUES ('/home/me/run-loras', 'reference', 'fixed')"
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "SELECT m.id, f.id, 'style.safetensors', 'present' "
+            "FROM model m, model_folder f "
+            "WHERE m.sha256 = ? AND f.path = '/home/me/run-loras'",
+            (STYLE_DIGEST,),
+        )
     try:
         r = env.owner.post(
             f"{API}/comfyui/workflows/import",
@@ -23837,6 +23871,11 @@ def test_a_persons_row_is_left_out_of_every_read_however_the_graph_came_in(
             )
     finally:
         with env.server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model_file WHERE model_id IN "
+                "(SELECT id FROM model WHERE sha256 = ?)",
+                (STYLE_DIGEST,),
+            )
             conn.execute("DELETE FROM model WHERE sha256 = ?", (STYLE_DIGEST,))
 
 
