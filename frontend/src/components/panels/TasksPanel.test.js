@@ -11,6 +11,7 @@
 
 import { afterEach, describe, it, expect, beforeEach, vi } from "vitest";
 import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
+import { h } from "vue";
 import { setActivePinia, createPinia } from "pinia";
 
 const getWorkflowChanges = vi.fn();
@@ -193,57 +194,58 @@ describe("what the task manager shows", () => {
   });
 
   // A row leaves with its run, and a focused Stop leaves with it: focus falls
-  // to <body>, out of the tab order. The panel has nowhere to put it, so it
-  // tells the host.
-  it("says so when the focused control leaves with its row", async () => {
+  // to <body>, out of the tab order. Every host is an inspector whose band
+  // holds the Tasks tab, so the panel hands the keyboard back to that tab.
+  function inInspector() {
     const tasksStore = useTasksStore();
     tasksStore.comfyuiRuns = [
       { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
     ];
-    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+    const wrapper = mount(
+      {
+        render: () =>
+          h("div", { class: "inspector" }, [
+            h("button", { class: "inspector-tab inspector-tab--active" }, "Tasks"),
+            h(TasksPanel),
+          ]),
+      },
+      { ...globalOpts, attachTo: document.body },
+    );
     const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
     stop.focus();
+    return { tasksStore, wrapper, stop, tab: wrapper.find(".inspector-tab").element };
+  }
 
+  it("hands focus to its tab when the focused control leaves with its row", async () => {
+    const { tasksStore, stop, tab } = inInspector();
     tasksStore.comfyuiRuns = [];
     // Chromium fires this as the button is removed; jsdom does not, so the
     // test fires it, before the render that removes the row.
     stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     await flushPromises();
     expect(stop.isConnected).toBe(false);
-    expect(wrapper.emitted("focus-escaped")).toHaveLength(1);
+    expect(document.activeElement).toBe(tab);
   });
 
-  it("says nothing when focus moves on inside the panel", async () => {
-    const tasksStore = useTasksStore();
-    tasksStore.comfyuiRuns = [
-      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
-    ];
-    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
-    wrapper.find('button[aria-label="Stop ComfyUI"]').element.focus();
-    wrapper.find('button[aria-label="Stop ComfyUI"]').element.blur();
+  it("leaves focus alone when the control is still there", async () => {
+    const { stop, tab } = inInspector();
+    stop.blur();
     await flushPromises();
-    expect(wrapper.emitted("focus-escaped")).toBeUndefined();
+    expect(document.activeElement).not.toBe(tab);
   });
 
   // The panel's own hand-off (a save's receipt line takes focus as its offer
   // leaves) is not focus lost.
-  it("says nothing when the row left but focus already went somewhere", async () => {
-    const tasksStore = useTasksStore();
-    tasksStore.comfyuiRuns = [
-      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
-    ];
-    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+  it("leaves focus alone when the row left but focus already went somewhere", async () => {
+    const { tasksStore, stop } = inInspector();
     const elsewhere = document.createElement("button");
     document.body.appendChild(elsewhere);
-    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
-    stop.focus();
-
     tasksStore.comfyuiRuns = [];
     stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     elsewhere.focus();
     await flushPromises();
     expect(stop.isConnected).toBe(false);
-    expect(wrapper.emitted("focus-escaped")).toBeUndefined();
+    expect(document.activeElement).toBe(elsewhere);
     elsewhere.remove();
   });
 

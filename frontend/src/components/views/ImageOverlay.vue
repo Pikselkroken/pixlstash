@@ -1061,7 +1061,6 @@
           <TasksPanel
             v-if="sidebarOpen && sidebarTab === 'tasks'"
             lightbox
-            @focus-escaped="focusSidebarTab"
           />
         </AppInspector>
 
@@ -1416,13 +1415,6 @@ const editTabShowsRun = computed(
 const sidebarStore = useSidebarStore();
 const tasksStore = useTasksStore();
 const tasksTabShown = computed(() => !isReadOnly.value);
-// A row's Stop or Cancel left with its run and dropped focus to <body>, out of
-// the tab order with no ring: the band's chosen tab is still there.
-function focusSidebarTab() {
-  const tab = document.querySelector(".overlay-sidebar .inspector-tab--active");
-  if (tab) tab.focus();
-  else overlayCanvasRef.value?.focus?.();
-}
 // A deep link to the Tasks tab (a notice's *Show*, `showTasksTab`): the rail
 // it opens is behind the lightbox, so the lightbox answers it as well.
 watch(

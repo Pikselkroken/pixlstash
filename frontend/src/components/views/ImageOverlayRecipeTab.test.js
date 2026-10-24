@@ -411,8 +411,19 @@ describe("the lightbox Tasks tab", () => {
   it("puts focus back on the tab when a row takes it away", async () => {
     const wrapper = await openOn(7, undefined, { attach: true });
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
-    document.body.focus();
-    tasksPanel(wrapper).vm.$emit("focus-escaped");
+    const tasks = useTasksStore();
+    tasks.comfyuiRuns = [
+      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
+    ];
+    await flush();
+    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
+    stop.focus();
+
+    tasks.comfyuiRuns = [];
+    // Chromium fires this as the button goes; jsdom does not.
+    stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await flush();
+    expect(stop.isConnected).toBe(false);
     expect(document.activeElement).toBe(
       wrapper.find(".inspector-tab--active").element,
     );

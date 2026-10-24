@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="root"
     class="tm"
     :class="{ 'tm--lightbox': lightbox }"
     @focusout="onFocusOut"
@@ -724,21 +725,24 @@ defineProps({
   // dark-surface inks rather than the theme's (`.tm--lightbox`).
   lightbox: { type: Boolean, default: false },
 });
-// Focus fell to <body> because the control holding it left with its row.
-const emit = defineEmits(["focus-escaped"]);
+const root = ref(null);
 
 // A row goes when its run does, and takes a focused Stop or Cancel with it;
 // focus then falls to <body>: the ring is gone and a keyboard user is out of
-// the tab order with nothing saying so.
-// Checked a tick later, after any hand-off of the panel's own (a save's
-// receipt line) has had its turn, and told to the host, which owns somewhere
-// to put it.
+// the tab order with nothing saying so. Every host is an inspector whose band
+// holds this tab, so the keyboard goes back to that tab. Checked a tick
+// later, after any hand-off of the panel's own (a save's receipt line) has
+// had its turn.
 function onFocusOut(event) {
   const left = event.target;
   nextTick(() => {
     if (left.isConnected) return;
     const now = document.activeElement;
-    if (!now || now === document.body) emit("focus-escaped");
+    if (now && now !== document.body) return;
+    root.value
+      ?.closest(".inspector")
+      ?.querySelector(".inspector-tab--active")
+      ?.focus();
   });
 }
 
