@@ -19434,6 +19434,208 @@ def test_an_unknown_stage_is_a_422(runnable):
     assert r.status_code == 422, r.text
 
 
+# --- an upscale added for one run, and Upscale… afterwards (#1868) -----------
+
+UPSCALER_DIGEST = hashlib.sha256(b"4x-UltraSharp").hexdigest()
+
+UPSCALE_OBJECT_INFO = {
+    "ImageScaleBy": {
+        "input": {
+            "required": {
+                "image": ["IMAGE"],
+                "upscale_method": [["lanczos"], {}],
+                "scale_by": ["FLOAT", {}],
+            }
+        },
+        "output": ["IMAGE"],
+    },
+    "UpscaleModelLoader": {
+        "input": {"required": {"model_name": [["4x-UltraSharp.pth"], {}]}},
+        "output": ["UPSCALE_MODEL"],
+    },
+    "ImageUpscaleWithModel": {
+        "input": {"required": {"upscale_model": ["UPSCALE_MODEL"], "image": ["IMAGE"]}},
+        "output": ["IMAGE"],
+    },
+}
+
+
+@pytest.fixture
+def upscalable(runnable):
+    """RUN_CARD with ComfyUI's upscale nodes and a 4x upscaler on the shelf."""
+    info = {**RUN_OBJECT_INFO, **UPSCALE_OBJECT_INFO}
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(info)), None),
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('upscaler', '4x-UltraSharp.pth', ?, 'scanned')",
+            (UPSCALER_DIGEST,),
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "SELECT m.id, f.id, '4x-UltraSharp.pth', 'present' "
+            "FROM model m, model_folder f "
+            "WHERE m.sha256 = ? AND f.path = '/home/me/run-loras'",
+            (UPSCALER_DIGEST,),
+        )
+    try:
+        yield runnable
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model_file WHERE model_id IN "
+                "(SELECT id FROM model WHERE sha256 = ?)",
+                (UPSCALER_DIGEST,),
+            )
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (UPSCALER_DIGEST,))
+
+
+def _fed(graph: dict, node_id: str, field: str = "images") -> dict:
+    return graph[graph[node_id]["inputs"][field][0]]
+
+
+def test_an_upscale_with_no_model_resizes_before_the_save(upscalable):
+    graph = _run(upscalable, workflow_id=RUN_WF, upscale={"factor": 1.5})
+    resize = _fed(graph, "4")
+    assert resize["class_type"] == "ImageScaleBy", graph
+    assert resize["inputs"]["image"] == ["3", 0]
+    assert resize["inputs"]["scale_by"] == 1.5
+
+
+def test_an_upscale_runs_the_shelfs_model_by_its_digest(upscalable):
+    graph = _run(
+        upscalable,
+        workflow_id=RUN_WF,
+        upscale={"factor": 2, "model_sha256": UPSCALER_DIGEST},
+    )
+    resize = _fed(graph, "4")
+    assert resize["inputs"]["scale_by"] == 0.5, graph
+    model = _fed(graph, graph["4"]["inputs"]["images"][0], "image")
+    assert model["class_type"] == "ImageUpscaleWithModel", graph
+    assert model["inputs"]["image"] == ["3", 0]
+    loader = graph[model["inputs"]["upscale_model"][0]]
+    assert loader["inputs"]["model_name"] == "4x-UltraSharp.pth", loader
+
+
+def test_a_run_without_the_upscale_adds_none(upscalable):
+    graph = _run(upscalable, workflow_id=RUN_WF)
+    assert graph["4"]["inputs"]["images"] == ["3", 0], graph
+
+
+def test_a_graph_with_its_own_upscale_is_left_alone(upscalable, monkeypatch):
+    """Its own row governs it; the added stage is for graphs with none."""
+    _upscaled_run(upscalable, monkeypatch, object_info=True)
+    graph = _run(upscalable, workflow_id=RUN_WF, upscale={"factor": 4})
+    assert graph["4"]["inputs"]["images"] == ["5", 0], graph
+    assert [n["class_type"] for n in graph.values()].count("ImageScaleBy") == 1
+
+
+def test_an_upscale_model_the_shelf_lacks_is_a_400(upscalable):
+    r = upscalable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": RUN_WF, "upscale": {"model_sha256": "0" * 64}},
+    )
+    assert r.status_code == 400, r.text
+    assert "not on the shelf" in r.json()["detail"]
+
+
+def test_an_upscale_factor_nobody_offered_is_a_422(upscalable):
+    r = upscalable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": RUN_WF, "upscale": {"factor": 3}},
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_upscale_stacks_each_result_on_its_picture(i2i):
+    first = _add_picture(i2i.server, i2i.tmp_path, "keep-1.png")
+    second = _add_picture(i2i.server, i2i.tmp_path, "keep-2.png")
+    del i2i.submitted[:]
+
+    r = i2i.owner.post(
+        f"{API}/workflows/upscale",
+        json={"picture_ids": [first, second], "upscale": {"factor": 2}},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["runs"] == 2, r.json()
+    uploaded = [_uploaded_id(u["name"]) for u in i2i.uploads]
+    assert uploaded == [str(first), str(second)], i2i.uploads
+    for submission, upload in zip(i2i.submitted, i2i.uploads):
+        graph = submission["graph"]
+        saves = [n for n in graph.values() if n["class_type"] == "SaveImage"]
+        assert len(saves) == 1, graph
+        resize = graph[saves[0]["inputs"]["images"][0]]
+        assert resize["inputs"]["scale_by"] == 2.0, graph
+        loader = graph[resize["inputs"]["image"][0]]
+        assert loader == {
+            "class_type": "LoadImage",
+            "inputs": {"image": upload["name"]},
+        }
+    # `_process_comfyui_outputs(server, url, prompt_id, outputs, stack, source)`.
+    stacked = [(args[4], args[5]) for args in i2i.outputs]
+    assert [source for _stack, source in stacked] == [first, second], stacked
+    assert all(stack for stack, _source in stacked), stacked
+
+
+def test_upscale_of_a_binned_picture_uploads_nothing(i2i):
+    kept = _add_picture(i2i.server, i2i.tmp_path, "kept.png")
+    binned = _add_picture(i2i.server, i2i.tmp_path, "binned.png")
+    _bin_picture(i2i.server, binned)
+    del i2i.submitted[:]
+
+    r = i2i.owner.post(f"{API}/workflows/upscale", json={"picture_ids": [kept, binned]})
+
+    assert r.status_code == 404, r.text
+    assert i2i.uploads == [] and i2i.submitted == []
+
+
+def test_upscale_preflight_says_which_were_upscaled_in_their_run(i2i, monkeypatch):
+    plain = _add_picture(i2i.server, i2i.tmp_path, "plain.png")
+    upscaled = _add_picture(i2i.server, i2i.tmp_path, "upscaled.png")
+
+    def sized(session):
+        for picture in session.exec(
+            select(Picture).where(Picture.id.in_([plain, upscaled]))
+        ):
+            picture.width, picture.height = 1024, 768
+            session.add(picture)
+        session.commit()
+
+    i2i.server.vault.db.run_task(sized, priority=DBPriority.IMMEDIATE)
+    graph = json.loads(json.dumps(RUN_DOCUMENT))
+    graph["5"] = {
+        "class_type": "ImageScaleBy",
+        "inputs": {"image": ["3", 0], "scale_by": 2},
+    }
+    graph["4"]["inputs"]["images"] = ["5", 0]
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            (json.loads(json.dumps(graph)), [])
+            if picture_id == upscaled
+            else (json.loads(json.dumps(RUN_DOCUMENT)), [])
+        ),
+    )
+
+    r = i2i.owner.post(
+        f"{API}/workflows/upscale/preflight",
+        json={"picture_ids": [plain, upscaled]},
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["pictures"] == [
+        {"picture_id": plain, "width": 1024, "height": 768, "upscaled": False},
+        {"picture_id": upscaled, "width": 1024, "height": 768, "upscaled": True},
+    ]
+    assert i2i.uploads == []
+
+
 def test_a_forgotten_loras_loader_is_skipped_when_asked():
     """The owner's request is the consent the automatic bypass does without."""
     graph = {

@@ -43,7 +43,10 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
-from pixlstash.services.comfyui_service import pixlstash_node_refusals
+from pixlstash.services.comfyui_service import (
+    SAVE_NODE_CLASSES,
+    pixlstash_node_refusals,
+)
 from pixlstash.services.model_downloads import digest_source, download_source
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
@@ -52,8 +55,16 @@ from pixlstash.services.workflow_hash import (
     asset_reference,
     is_link,
     normalized_filename,
+    reduce_api_graph,
+    structural_document,
 )
-from pixlstash.services.workflow_identity import CORE_ADDRESS_PREFIX, model_fix_kind
+from pixlstash.services.workflow_identity import (
+    CORE_ADDRESS_PREFIX,
+    UPSCALE,
+    intermediate_saves,
+    model_fix_kind,
+    special_groups,
+)
 from pixlstash.services.workflow_io import (
     WorkflowIO,
     api_graph,
@@ -1829,6 +1840,85 @@ def _close_adapter_rows(inputs: dict) -> None:
                 inputs.pop(f"{widget}{suffix(digest)}", None)
             else:
                 inputs[f"{widget}{suffix(digest)}"] = strength
+
+
+# What an added upscale scales by (#1868): the Run popup's stage row and the
+# Upscale… verb offer these and nothing else.
+UPSCALE_FACTORS = (1.5, 2.0, 4.0)
+# An upscale model's own factor, as its filename says it: `4x-UltraSharp`,
+# `RealESRGAN_x2`, `4xNMKD-Superscale`. # ponytail: read off the name, and a
+# name saying neither is taken as 4x, the usual one; read the scale off the
+# loaded model if that guess ever sends a picture out at the wrong size.
+_MODEL_SCALE_RE = re.compile(r"(?<![a-z0-9])([1-8])x|x([1-8])(?![0-9])")
+
+
+def upscale_model_scale(filename: str) -> int:
+    """How many times an upscale model enlarges, read off its *filename*."""
+    match = _MODEL_SCALE_RE.search(filename.lower())
+    return int(match.group(1) or match.group(2)) if match else 4
+
+
+def has_upscale(graph: dict) -> bool:
+    """Whether an API graph upscales already: the stage the Run popup draws."""
+    try:
+        return UPSCALE in special_groups(structural_document(graph))
+    except WorkflowGraphError as exc:
+        logger.warning("Cannot tell whether a graph upscales: %s", exc)
+        return False
+
+
+def add_upscale(graph: dict, factor: float, model: Optional[str]) -> list[str]:
+    """Upscale every picture *graph* saves by *factor*, in place (#1868).
+
+    Each save's ``images`` goes through *model* (``UpscaleModelLoader`` and
+    ``ImageUpscaleWithModel``), then a Lanczos resize to *factor*; with no
+    model, the resize alone. Saves of one picture share one chain. An
+    intermediate save (the picture before a second pass) keeps its 1x: only
+    the graph's results are upscaled. Nothing is added for a graph that saves
+    nothing.
+
+    Returns:
+        The ids of the saves now fed by the upscale.
+    """
+    staged = intermediate_saves(reduce_api_graph(graph))
+    saves = [
+        node_id
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+        and node.get("class_type") in SAVE_NODE_CLASSES
+        and is_link((node.get("inputs") or {}).get("images"))
+        and node_id not in staged
+    ]
+    next_id = max((int(k) for k in graph if str(k).isdigit()), default=0) + 1
+
+    def add(class_type: str, inputs: dict) -> list:
+        nonlocal next_id
+        node_id = str(next_id)
+        next_id += 1
+        graph[node_id] = {"class_type": class_type, "inputs": inputs}
+        return [node_id, 0]
+
+    loader = (
+        add("UpscaleModelLoader", {"model_name": model}) if saves and model else None
+    )
+    scale_by = factor / upscale_model_scale(model) if model else factor
+    chains: dict[tuple, list] = {}
+    for node_id in saves:
+        source = tuple(graph[node_id]["inputs"]["images"])
+        if source not in chains:
+            image = list(source)
+            if loader:
+                image = add(
+                    "ImageUpscaleWithModel", {"upscale_model": loader, "image": image}
+                )
+            if scale_by != 1:
+                image = add(
+                    "ImageScaleBy",
+                    {"image": image, "upscale_method": "lanczos", "scale_by": scale_by},
+                )
+            chains[source] = image
+        graph[node_id]["inputs"]["images"] = chains[source]
+    return saves
 
 
 def skip_requested_stages(

@@ -326,6 +326,7 @@ from pixlstash.services.workflow_library_service import (
     read_kept_picture_files,
     read_library_ids,
     read_picture_pixels,
+    read_picture_sizes,
     read_oldest_kept_by_pixel_sha,
     read_recipe_activity,
     read_variant_picture_counts,
@@ -1522,6 +1523,29 @@ class WorkflowLoraSummary(BaseModel):
 Stage = Literal["upscale", "face_detailer", "seed_variance", "intermediate_save"]
 
 
+class RunUpscale(BaseModel):
+    """An upscale a run adds before each save (#1868), on a graph with none.
+
+    PixlStash's own: *model* (an upscaler on the shelf, by digest), then a
+    Lanczos resize to *factor*; with no model, the resize alone. For this run
+    only, never saved into the workflow.
+    """
+
+    factor: float = 2.0
+    model_sha256: str | None = Field(None, min_length=64, max_length=64)
+
+    @field_validator("factor")
+    @classmethod
+    def _offered_factor(cls, value: float) -> float:
+        if value not in run_service.UPSCALE_FACTORS:
+            raise ValueError(
+                "factor is one of "
+                + ", ".join(f"{f:g}" for f in run_service.UPSCALE_FACTORS)
+                + "."
+            )
+        return value
+
+
 class RunLora(BaseModel):
     """One LoRA slot a run fills, addressed the way #1377 addresses a slot.
 
@@ -1811,6 +1835,9 @@ class RunRequest(BaseModel):
     # runs without them (#1849): the other half of `skip_stages`, so a stage
     # the default has switched off can be switched on for one run.
     keep_stages: list[Stage] = Field(default_factory=list, max_length=4)
+    # An upscale this run adds before each save (#1868). Only on a graph with
+    # no upscale stage of its own, which keeps its own row and is left alone.
+    upscale: RunUpscale | None = None
     values: list[RunValue] = Field(default_factory=list, max_length=MAX_DEFAULTS)
     # Samplers and schedulers this run swaps in for ones this ComfyUI does not
     # list (`missing_choices`), applied last so they win over `values`.
@@ -1945,6 +1972,38 @@ class RunRequest(BaseModel):
     # seed of the picture its graph was read from is "Clone picture", and any
     # other is named after its workflow.
     label: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
+
+
+class UpscaleRequest(BaseModel):
+    """``POST /workflows/upscale`` and its pre-flight (#1868)."""
+
+    picture_ids: list[Annotated[int, Field(le=MAX_PICTURE_ID)]] = Field(
+        min_length=1, max_length=MAX_RUN_PICTURES
+    )
+    upscale: RunUpscale = Field(default_factory=RunUpscale)
+
+    @field_validator("picture_ids")
+    @classmethod
+    def _once_each(cls, value: list[int]) -> list[int]:
+        return list(dict.fromkeys(value))
+
+
+class UpscalePicture(BaseModel):
+    """One picture an upscale would read."""
+
+    picture_id: int
+    width: int | None = None
+    height: int | None = None
+    upscaled: bool = Field(
+        False,
+        description="Whether the run that made the picture upscaled it already.",
+    )
+
+
+class UpscalePreflight(BaseModel):
+    """``POST /workflows/upscale/preflight``: what the upscale would start from."""
+
+    pictures: list[UpscalePicture]
 
 
 class SaveVerb(BaseModel):
@@ -3473,6 +3532,28 @@ def _shelf_digest(hub, kind: str):
         return rows[0][0] if len(rows) == 1 else None
 
     return digest_of
+
+
+def _shelf_upscaler(hub, sha256: str | None) -> str | None:
+    """The filename of the upscaler on the shelf with *sha256*, or ``None``.
+
+    Raises:
+        HTTPException: 400 when the shelf has no copy of it.
+    """
+    if sha256 is None:
+        return None
+    row = hub.fetchone(
+        "SELECT m.filename FROM model m "
+        "JOIN model_file f ON f.model_id = m.id AND f.state = 'present' "
+        "WHERE m.sha256 = ? AND m.file_kind = ? LIMIT 1",
+        (sha256.strip().lower(), FILE_UPSCALER),
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail="That upscale model is not on the shelf. Pick another one.",
+        )
+    return row[0]
 
 
 def _shelf_holds_digest(hub):
@@ -6773,6 +6854,13 @@ def create_router(server) -> APIRouter:
         uploads = {picture_id for picture_id, by_id in fed if not by_id}
         if masked and masked[0] in wanted:
             uploads.add(masked[0])
+        return _picture_files(wanted, uploads, masked)
+
+    def _picture_files(
+        wanted: list[int], uploads: set[int], masked: tuple[int, str] | None = None
+    ) -> dict[int, tuple[str, str]]:
+        """:func:`_upload_files` for pictures already named: every one of
+        *wanted* checked, ``(path, upload name)`` for each of *uploads*."""
         if not wanted:
             return {}
         kept = read_kept_picture_files(server.vault, wanted)
@@ -7621,9 +7709,19 @@ def create_router(server) -> APIRouter:
             # had when the request was made. Still before `judge`.
             # A graph being saved keeps every stage: which of them run is a
             # default stored beside it, not a node taken out of it.
+            # Asked before the stages are taken out: a graph whose own upscale
+            # is switched off for this run still has one, and keeps its row.
+            own_upscale = body.upscale is not None and run_service.has_upscale(graph)
             if not saving:
                 found += run_service.skip_requested_stages(
                     graph, body.skip_stages, object_info
+                )
+            # The upscale this run adds (#1868): per run, so never into a save.
+            if body.upscale is not None and not saving and not own_upscale:
+                run_service.add_upscale(
+                    graph,
+                    body.upscale.factor,
+                    _shelf_upscaler(hub, body.upscale.model_sha256),
                 )
             # Not on a saved recipe's own card: that graph already has exactly
             # the stages the recipe ran with. Nor a stage this run keeps.
@@ -8098,6 +8196,126 @@ def create_router(server) -> APIRouter:
             status="success", runs=len(prompts), groups=groups, prompts=prompts
         )
 
+    def _upscale_graph(upload_name: str, upscale: RunUpscale, model: str | None):
+        """The graph that upscales one uploaded picture: load, upscale, save.
+
+        The run stage's own nodes (:func:`run_service.add_upscale`) behind a
+        picture loader, so both ways in upscale alike.
+        """
+        graph = {
+            "1": {"class_type": "LoadImage", "inputs": {"image": upload_name}},
+            "2": {
+                "class_type": "SaveImage",
+                "inputs": {"filename_prefix": "PixlStash-upscale", "images": ["1", 0]},
+            },
+        }
+        run_service.add_upscale(graph, upscale.factor, model)
+        return graph
+
+    @router.post(
+        "/workflows/upscale/preflight",
+        summary="What an upscale of pictures would start from",
+        description=(
+            "Each picture's size and whether the run that made it upscaled it "
+            "already, so a second upscale is a choice rather than an accident. "
+            "Submits nothing."
+        ),
+        response_model=UpscalePreflight,
+    )
+    def preflight_upscale(request: Request, body: UpscaleRequest = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        sizes = read_picture_sizes(server.vault, body.picture_ids)
+        pictures = []
+        for picture_id in body.picture_ids:
+            width, height = sizes.get(picture_id, (None, None))
+            own = _embedded_graph(picture_id)
+            pictures.append(
+                UpscalePicture(
+                    picture_id=picture_id,
+                    width=width,
+                    height=height,
+                    upscaled=bool(own) and run_service.has_upscale(own),
+                )
+            )
+        return UpscalePreflight(pictures=pictures)
+
+    @router.post(
+        "/workflows/upscale",
+        summary="Upscale pictures",
+        description=(
+            "Upscales each picture in ComfyUI by upscale.factor, through the "
+            "shelf's upscale model upscale.model_sha256 and a Lanczos resize, "
+            "or the resize alone without one. Each result is stacked on top of "
+            "its picture, which stays behind it. One run per picture, followed "
+            "as any run is (GET /workflows/runs/{prompt_id})."
+        ),
+        response_model=RunResult,
+    )
+    def upscale_pictures(request: Request, body: UpscaleRequest = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        comfyui_url = _comfyui_url(_user(request))
+        object_info = _require_object_info(
+            _read_object_info(comfyui_url), "to upscale these pictures"
+        )
+        model = _shelf_upscaler(_hub(), body.upscale.model_sha256)
+        # Every picture checked before anything is uploaded or queued.
+        files = _picture_files(body.picture_ids, set(body.picture_ids))
+        pixels_of = read_picture_pixels(server.vault, body.picture_ids)
+        library = request.state.library_lease
+        label = f"Upscale {body.upscale.factor:g}x"
+        batches: dict[str | None, str] = {}
+        prompts: list[dict] = []
+        try:
+            for picture_id in body.picture_ids:
+                path, upload_name = files[picture_id]
+                uploaded = _upload_image_to_comfyui(comfyui_url, path, upload_name)
+                graph = _upscale_graph(uploaded, body.upscale, model)
+                _swap_in_shelf_loaders(request, "upscale", graph, object_info)
+                stack_id = stack_for_picture(server.vault, picture_id)
+                if stack_id:
+                    _tag_for_stack(graph, stack_id, picture_id)
+                poll_kwargs = {
+                    "view_context": None,
+                    "origin_generation": library.generation,
+                    "origin_library_uuid": library.library_uuid,
+                    "run_workflow_id": None,
+                    "run_workflow_version": None,
+                    "workflow_id": None,
+                    "lora_character_ids": [],
+                    "label": label,
+                    "vram_pixels": vram_history.run_pixels(
+                        graph, [pixels_of.get(picture_id)]
+                    ),
+                }
+                prompts.append(
+                    _queue_run(
+                        comfyui_url,
+                        graph,
+                        _extract_output_node_ids(graph, {}),
+                        stack_id,
+                        picture_id,
+                        poll_kwargs,
+                        batches,
+                    )
+                )
+        except Exception as exc:
+            if not prompts:
+                raise
+            # As `run_workflow`: the ones already queued are answered, not lost.
+            logger.exception(
+                "[workflows] Upscale stopped after %d of %d pictures: %s",
+                len(prompts),
+                len(body.picture_ids),
+                exc,
+            )
+            return RunResult(
+                status="partial",
+                runs=len(prompts),
+                prompts=prompts,
+                error=str(getattr(exc, "detail", None) or exc),
+            )
+        return RunResult(status="success", runs=len(prompts), prompts=prompts)
+
     @router.get(
         "/workflows/runs/{prompt_id}",
         summary="How a run ended",
@@ -8381,86 +8599,115 @@ def create_router(server) -> APIRouter:
                         "label": label,
                         "vram_pixels": pixels,
                     }
-                    run_id = new_run_id()
-                    vram_lease, model_set = _vram_lease(
-                        comfyui_url, instance, group.workflow_id, label, run_id, pixels
-                    )
-                    # Before it can end: an ending settles the row it finds.
-                    _log_queued(
-                        run_id,
-                        batches.setdefault(group.workflow_id, run_id),
-                        group.workflow_id,
-                        label,
-                        library.library_uuid,
-                    )
-                    if vram_lease.state is LeaseState.GRANTED:
-                        # The common case: room now, so submitted inline
-                        # exactly as before, and ComfyUI's validation answer
-                        # still reaches this response.
-                        try:
-                            prompt_id = _dispatch_run(
-                                comfyui_url,
-                                instance,
-                                output_node_ids,
-                                stack_id,
-                                source_id,
-                                run_id,
-                                vram_lease,
-                                model_set,
-                                poll_kwargs,
-                            )
-                        except BaseException as exc:
-                            vram_lease.release()
-                            # ComfyUI refused it (a 502 with its validation
-                            # answer) or it never got there: an ending, so
-                            # its Finished row is not left going forever.
-                            record_run_outcome(
-                                run_id,
-                                "failed",
-                                message=str(getattr(exc, "detail", None) or exc),
-                                run_id=run_id,
-                            )
-                            raise
-                        # None: ComfyUI took it but named no prompt, which
-                        # `_dispatch_run` has recorded as the run's failure.
-                        status = "queued" if prompt_id else "failed"
-                    else:
-                        # No room: held here, not in ComfyUI's queue, and sent
-                        # once the arbiter grants it (`_dispatch_held_run`).
-                        prompt_id = None
-                        status = "waiting"
-                        cancel = hold_run(
-                            run_id,
-                            comfyui_url,
-                            label=label,
-                            workflow_id=group.workflow_id,
-                            library_uuid=library.library_uuid,
-                        )
-                        threading.Thread(
-                            target=_dispatch_held_run,
-                            args=(
-                                comfyui_url,
-                                instance,
-                                output_node_ids,
-                                stack_id,
-                                source_id,
-                                run_id,
-                                vram_lease,
-                                model_set,
-                                poll_kwargs,
-                                cancel,
-                            ),
-                            name=f"held-run-{run_id}",
-                            daemon=True,
-                        ).start()
                     prompts.append(
-                        {
-                            "workflow_id": group.workflow_id,
-                            "run_id": run_id,
-                            "prompt_id": prompt_id,
-                            "status": status,
-                        }
+                        _queue_run(
+                            comfyui_url,
+                            instance,
+                            output_node_ids,
+                            stack_id,
+                            source_id,
+                            poll_kwargs,
+                            batches,
+                        )
                     )
+
+    def _queue_run(
+        comfyui_url: str,
+        instance: dict,
+        output_node_ids,
+        stack_id,
+        source_id,
+        poll_kwargs: dict,
+        batches: dict,
+    ) -> dict:
+        """Queue one run: submitted now where the GPU has room, else held.
+
+        Answers its ``{workflow_id, run_id, prompt_id, status}``. *batches* is
+        the request's first run id by workflow, for the Tasks tab's Finished
+        row (``run_log``).
+        """
+        workflow_id = poll_kwargs["workflow_id"]
+        label = poll_kwargs["label"]
+        pixels = poll_kwargs["vram_pixels"]
+        library_uuid = poll_kwargs["origin_library_uuid"]
+        run_id = new_run_id()
+        vram_lease, model_set = _vram_lease(
+            comfyui_url, instance, workflow_id, label, run_id, pixels
+        )
+        # Before it can end: an ending settles the row it finds.
+        _log_queued(
+            run_id,
+            batches.setdefault(workflow_id, run_id),
+            workflow_id,
+            label,
+            library_uuid,
+        )
+        if vram_lease.state is LeaseState.GRANTED:
+            # The common case: room now, so submitted inline
+            # exactly as before, and ComfyUI's validation answer
+            # still reaches this response.
+            try:
+                prompt_id = _dispatch_run(
+                    comfyui_url,
+                    instance,
+                    output_node_ids,
+                    stack_id,
+                    source_id,
+                    run_id,
+                    vram_lease,
+                    model_set,
+                    poll_kwargs,
+                )
+            except BaseException as exc:
+                vram_lease.release()
+                # ComfyUI refused it (a 502 with its validation
+                # answer) or it never got there: an ending, so
+                # its Finished row is not left going forever.
+                record_run_outcome(
+                    run_id,
+                    "failed",
+                    message=str(getattr(exc, "detail", None) or exc),
+                    run_id=run_id,
+                )
+                raise
+            # None: ComfyUI took it but named no prompt, which
+            # `_dispatch_run` has recorded as the run's failure.
+            status = "queued" if prompt_id else "failed"
+        else:
+            # No room: held here, not in ComfyUI's queue, and sent
+            # once the arbiter grants it (`_dispatch_held_run`).
+            prompt_id = None
+            status = "waiting"
+            cancel = hold_run(
+                run_id,
+                comfyui_url,
+                label=label,
+                workflow_id=workflow_id,
+                library_uuid=library_uuid,
+            )
+            threading.Thread(
+                target=_dispatch_held_run,
+                args=(
+                    comfyui_url,
+                    instance,
+                    output_node_ids,
+                    stack_id,
+                    source_id,
+                    run_id,
+                    vram_lease,
+                    model_set,
+                    poll_kwargs,
+                    cancel,
+                ),
+                name=f"held-run-{run_id}",
+                daemon=True,
+            ).start()
+        return {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "prompt_id": prompt_id,
+            "status": status,
+        }
 
     def _log_queued(run_id, batch_id, workflow_id, label, library_uuid) -> None:
         """Note a run in the run log as it is queued. Never fails the run: the

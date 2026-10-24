@@ -803,6 +803,8 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/workflows/runs                                                        | workflows       | Clear the finished runs                                       |
 | GET    | /api/v1/workflows/runs/{prompt_id}                                            | workflows       | How a run ended                                               |
 | DELETE | /api/v1/workflows/runs/{run_id}                                               | workflows       | Dismiss a finished run                                        |
+| POST   | /api/v1/workflows/upscale                                                     | workflows       | Upscale pictures                                              |
+| POST   | /api/v1/workflows/upscale/preflight                                           | workflows       | What an upscale of pictures would start from                  |
 | GET    | /api/v1/workflows/{workflow_id}                                               | workflows       | One workflow                                                  |
 | PATCH  | /api/v1/workflows/{workflow_id}                                               | workflows       | Edit a workflow                                               |
 | DELETE | /api/v1/workflows/{workflow_id}                                               | workflows       | Delete a manual workflow                                      |
