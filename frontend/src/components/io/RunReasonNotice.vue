@@ -72,17 +72,29 @@
           Edit LoRAs…
         </AppButton>
         <!-- A pack PixlStash knows (#2054). The ellipsis is honest: the press
-             asks first, in place, rather than installing. -->
+             asks first, in place, rather than installing. A long pack name is
+             cut short where the column is narrow (the Edit tab, #2094), so the
+             tip says it whole. Not the button's own `tooltip`, which would
+             describe it with the words it is already named by. -->
         <template v-else-if="read.fix === FIX_INSTALL_PACK && offering">
-          <AppButton
+          <Tooltip
             v-for="pack in packs"
             :key="pack.id"
-            size="sm"
-            :on-dark="onDark"
-            @click="ask(pack)"
+            :text="installLabel(pack)"
+            :describe="false"
           >
-            Install {{ pack.name || pack.id }}…
-          </AppButton>
+            <template #activator="{ props: tip }">
+              <AppButton
+                v-bind="tip"
+                class="rrn-install"
+                size="sm"
+                :on-dark="onDark"
+                @click="ask(pack)"
+              >
+                {{ installLabel(pack) }}
+              </AppButton>
+            </template>
+          </Tooltip>
         </template>
       </div>
       <!-- Inline, not a dialog over the Run popup: the warning is about the
@@ -167,6 +179,7 @@ import {
 } from "../../utils/runReasons";
 import AppButton from "../widgets/AppButton.vue";
 import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   /**
@@ -242,6 +255,10 @@ function stopPolling() {
   clearTimeout(pollTimer);
   pollTimer = null;
   pollRun += 1;
+}
+
+function installLabel(pack) {
+  return `Install ${pack.name || pack.id}…`;
 }
 
 function ask(pack) {
@@ -360,6 +377,18 @@ onBeforeUnmount(stopPolling);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
+}
+
+/* As `.rund-trigger-add` in RunDialog: the button may shrink below its label,
+   and the label ends in an ellipsis rather than leaving the column. */
+.rrn-install {
+  min-width: 0;
+}
+
+.rrn-install :deep(.app-btn__label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 </style>

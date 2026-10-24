@@ -335,6 +335,13 @@ describe("a node pack PixlStash can install (#2054)", () => {
             template:
               "<button :data-loading=\"loading\" :disabled=\"disabled\" @click=\"$emit('click')\"><slot /></button>",
           },
+          // The Install button sits in a tip's activator slot, which the
+          // unregistered Vuetify tooltip would not draw.
+          Tooltip: {
+            name: "Tooltip",
+            props: ["text", "describe"],
+            template: "<slot name='activator' :props='{}' />",
+          },
         },
       },
     });
@@ -347,6 +354,13 @@ describe("a node pack PixlStash can install (#2054)", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+  });
+
+  it("says the whole pack name in a tip, since the label may be cut short (#2094)", () => {
+    const tip = mountInstall().findComponent({ name: "Tooltip" });
+    expect(tip.props("text")).toBe("Install ComfyUI-Inpaint-CropAndStitch…");
+    // The label already names the button with these words.
+    expect(tip.props("describe")).toBe(false);
   });
 
   it("asks before installing, and Cancel installs nothing", async () => {

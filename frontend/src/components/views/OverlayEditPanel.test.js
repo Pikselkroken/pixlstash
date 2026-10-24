@@ -55,7 +55,9 @@ async function mountPanel(extra = {}) {
       stubs: {
         AppButton: { template: "<button class='run' @click=\"$emit('click')\"><slot /></button>" },
         "v-icon": true,
-        Tooltip: true,
+        // Draws a slot-form tip's control (the notice's Install button) and
+        // nothing of the tip itself.
+        Tooltip: { template: "<slot name='activator' :props='{}' />" },
         ModelDownloadButton: {
           props: ["file"],
           template: "<i class='dl'>{{ file }}</i>",
