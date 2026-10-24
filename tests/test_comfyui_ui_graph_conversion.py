@@ -1933,3 +1933,55 @@ class TestPrimitiveNode:
         prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
         assert prompt is None
         assert any("across a subgraph boundary" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# Node packs' editor-only nodes, and legacy group nodes
+# ---------------------------------------------------------------------------
+
+
+class TestPackEditorNodes:
+    def test_a_virtual_pack_node_is_dropped(self, simple_editor_graph):
+        graph = deepcopy(simple_editor_graph)
+        graph["nodes"].append(
+            _node(50, "Fast Groups Muter (rgthree)", widgets=[None, None])
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        assert "50" not in prompt
+
+    def test_a_server_class_of_the_same_name_is_not_dropped(self, simple_editor_graph):
+        graph = deepcopy(simple_editor_graph)
+        graph["nodes"].append(_node(50, "Fast Groups Muter (rgthree)", widgets=[3]))
+        info = {
+            **OBJECT_INFO,
+            "Fast Groups Muter (rgthree)": {
+                "input": {"required": {"n": ["INT", {}]}},
+                "input_order": {"required": ["n"]},
+            },
+        }
+        prompt, problems = convert_ui_graph_to_api(graph, info)
+        assert problems == []
+        assert prompt["50"]["inputs"] == {"n": 3}
+
+    def test_a_legacy_group_node_is_named_as_one_once(self, simple_editor_graph):
+        """Refused for what it is, and once: the node itself and the wire out
+        of it give the same sentence."""
+        graph = deepcopy(simple_editor_graph)
+        graph["nodes"].append(
+            _node(
+                50,
+                "workflow>MAKE_BASIC_PIPE",
+                outputs=[{"name": "CLIP", "type": "CLIP", "links": [9]}],
+            )
+        )
+        graph["links"].append([9, 50, 0, 6, 0, "CLIP"])
+        graph["nodes"][1]["inputs"][0]["link"] = 9
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        group = [p for p in problems if "legacy group node" in p]
+        assert group == [
+            "'workflow>MAKE_BASIC_PIPE' is a legacy group node, which PixlStash "
+            "cannot expand: ungroup it in ComfyUI and save the workflow again"
+        ]
+        assert not any("no node class" in p for p in problems)

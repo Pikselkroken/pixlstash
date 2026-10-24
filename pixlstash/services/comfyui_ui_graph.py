@@ -180,6 +180,32 @@ _EDITOR_WIDGETS = {
 # so they are dropped rather than refused.
 _ANNOTATION_CLASSES = frozenset({"Note", "MarkdownNote"})
 
+# Node packs' editor-only nodes (`isVirtualNode`, no server class): toggles,
+# labels and bookmarks that act on the canvas, never on a run. Read from
+# rgthree-comfy 1.0.2605082257 (`web/comfyui/`) and comfy-mtb 0.5.4
+# (`web/note_plus.js`). Not rgthree's Random Unmuter, which unmutes a node when
+# the graph is queued. Dropped only while ComfyUI has no class of the name, and
+# a wire from one into a real node is still refused by `_resolve`.
+_VIRTUAL_PACK_CLASSES = frozenset(
+    {
+        "Fast Groups Muter (rgthree)",
+        "Fast Groups Bypasser (rgthree)",
+        "Fast Muter (rgthree)",
+        "Fast Bypasser (rgthree)",
+        "Fast Actions Button (rgthree)",
+        "Label (rgthree)",
+        "Bookmark (rgthree)",
+        "Node Collector (rgthree)",
+        "Mute / Bypass Repeater (rgthree)",
+        "Mute / Bypass Relay (rgthree)",
+        "Note Plus (mtb)",
+    }
+)
+
+# The editor's legacy group nodes, saved as `workflow>NAME` and expanded by the
+# editor before it queues. PixlStash does not expand them.
+_GROUP_NODE_PREFIX = "workflow>"
+
 # Drawn links. `UI_PASSTHROUGH_CLASSES` is the repo's own list of what is
 # "present in the UI graph, absent from the executed API graph" and is imported
 # rather than restated: a second, smaller copy here read `Reroute` only, so a
@@ -366,6 +392,16 @@ def _control_by_name(name: str, type_field, options: dict) -> bool:
         and options.get("control_after_generate") is None
         and name in _SEED_NAMES
     )
+
+
+def _no_class(node_class: str) -> str:
+    """Why a node of a class this ComfyUI does not have cannot be converted."""
+    if node_class.startswith(_GROUP_NODE_PREFIX):
+        return (
+            f"{node_class!r} is a legacy group node, which PixlStash cannot "
+            "expand: ungroup it in ComfyUI and save the workflow again"
+        )
+    return f"this ComfyUI has no node class {node_class!r}"
 
 
 def _node_class(node: dict) -> str:
@@ -754,7 +790,7 @@ class _Converter:
         if mode == _MODE_BYPASSED or node_class in UI_PASSTHROUGH_CLASSES:
             return self._chase_through(node, origin_slot, depth, want_type)
         if node_class not in self.object_info:
-            self.problems.append(f"this ComfyUI has no node class {node_class!r}")
+            self.problems.append(_no_class(node_class))
             return None
         return [str(origin_id), origin_slot]
 
@@ -1199,6 +1235,11 @@ class _Converter:
             node_class = _node_class(node)
             if node_class in _ANNOTATION_CLASSES:
                 continue
+            if (
+                node_class in _VIRTUAL_PACK_CLASSES
+                and node_class not in self.object_info
+            ):
+                continue
             if node_class == _PRIMITIVE_NODE and node_class not in self.object_info:
                 # Its value travels with the wires `_resolve` reads.
                 continue
@@ -1207,7 +1248,7 @@ class _Converter:
             if node_class in UI_PASSTHROUGH_CLASSES:
                 continue
             if node_class not in self.object_info:
-                self.problems.append(f"this ComfyUI has no node class {node_class!r}")
+                self.problems.append(_no_class(node_class))
                 continue
             inputs = self._node_inputs(node, node_class)
             if inputs is None:
