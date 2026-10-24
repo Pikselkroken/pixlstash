@@ -587,13 +587,37 @@ describe("the lightbox Edit tab", () => {
       wrapper.find(".overlay-shell").classes().includes("chrome-hidden");
     // Past the 500 ms guard that follows opening the lightbox.
     const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+    try {
+      await wrapper.findAll(".inspector-tab")[2].trigger("click");
+      await wrapper.find(".overlay-canvas").trigger("click");
+      expect(shellHidden()).toBe(false);
+      // On another tab the same click still hides it.
+      await wrapper.findAll(".inspector-tab")[0].trigger("click");
+      await wrapper.find(".overlay-canvas").trigger("click");
+      expect(shellHidden()).toBe(true);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("keeps the chrome on a canvas tap while the Edit tab is open", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    wrapper.vm.isMobile = true;
+    const shellHidden = () =>
+      wrapper.find(".overlay-shell").classes().includes("chrome-hidden");
+    const tap = async () => {
+      const canvas = wrapper.find(".overlay-canvas");
+      await canvas.trigger("touchstart", {
+        touches: [{ clientX: 10, clientY: 10 }],
+      });
+      await canvas.trigger("touchend");
+    };
     await wrapper.findAll(".inspector-tab")[2].trigger("click");
-    await wrapper.find(".overlay-canvas").trigger("click");
+    await tap();
     expect(shellHidden()).toBe(false);
-    // On another tab the same click still hides it.
+    // On another tab the same tap still hides it.
     await wrapper.findAll(".inspector-tab")[0].trigger("click");
-    await wrapper.find(".overlay-canvas").trigger("click");
-    now.mockRestore();
+    await tap();
     expect(shellHidden()).toBe(true);
   });
 

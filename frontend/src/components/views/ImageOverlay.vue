@@ -3167,9 +3167,9 @@ function handleOverlayClick(event) {
     handleUserActivity();
     return;
   }
-  // The Edit tab's tools live in the chrome. A click that reaches here while
-  // they are out is a selection gesture that ended past the input layer (or a
-  // Hand-tool press), never a wish to hide the toolbox mid-edit.
+  // The Edit tab's tools live in the chrome. While they are out, any click
+  // that gets past the paint input layer (a Hand-tool press, a stroke the
+  // layer did not take) must not hide the toolbox mid-edit; Space still can.
   if (paintActive.value) {
     handleUserActivity();
     return;
