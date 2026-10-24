@@ -749,7 +749,9 @@ async function addSelectedTemplates() {
   const drafts = added.filter((entry) => entry.draft).length;
   let text =
     added.length === 1 ? "Added 1 workflow." : `Added ${added.length} workflows.`;
-  if (drafts && shipped) {
+  // Only when every one is: ComfyUI can come back between the list and the
+  // Add, and then some convert and run.
+  if (drafts && shipped && drafts === added.length) {
     text +=
       added.length === 1
         ? " It is a draft: once ComfyUI runs, Finish in ComfyUI makes it runnable."
