@@ -300,6 +300,28 @@ export async function getRunOutcome(runId) {
 }
 
 /**
+ * Dismiss one finished run, by the `id` `GET /workers/progress` lists it under
+ * in `finished`, and with it the changes its workflow kept from it (#2050).
+ *
+ * @param {string} runId
+ * @returns {Promise<{cleared: number, workflow_id: ?string}>}
+ */
+export async function dismissFinishedRun(runId) {
+  return unwrap(
+    apiClient.delete(`/workflows/runs/${encodeURIComponent(runId)}`),
+  );
+}
+
+/**
+ * Clear the finished runs, keeping any whose changes can still be saved.
+ *
+ * @returns {Promise<{cleared: number, workflow_id: null}>}
+ */
+export async function clearFinishedRuns() {
+  return unwrap(apiClient.delete("/workflows/runs"));
+}
+
+/**
  * This card as a ComfyUI file somebody else can open (v1.12 B8).
  *
  * Scrubbed by the server - prompts and seeds blanked, recipe LoRA slots

@@ -101,6 +101,7 @@ from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS
 from pixlstash.hub.workflow_group_writes import (
     LORA_ADDRESS_PREFIX,
     RAN,
+    RAN_BY,
     STAGE_ADDRESS_PREFIX,
     WAITED,
     STAGE_OFF,
@@ -174,6 +175,7 @@ from pixlstash.services.comfyui_service import (
     PIXLSTASH_PICTURE_LOADER,
     _extract_output_node_ids,
     RUN_CLIENT_ID,
+    RUN_LABEL_FALLBACK,
     _emit_comfyui_failure_progress,
     _process_comfyui_outputs,
     _submit_comfyui_prompt,
@@ -185,12 +187,18 @@ from pixlstash.services.comfyui_service import (
     follow_run,
     hold_run,
     new_run_id,
+    on_run_ended,
     record_run_outcome,
     run_outcome,
     swap_pixlstash_savers,
     unfed_picture_loaders,
 )
-from pixlstash.services import vram_history, workflow_bindings, workflow_inbox
+from pixlstash.services import (
+    run_log,
+    vram_history,
+    workflow_bindings,
+    workflow_inbox,
+)
 from pixlstash.resources import comfyui_tenant
 from pixlstash.resources.arbiter import LeaseKind, LeaseState, Tenant, arbiter
 from pixlstash.services.model_icons import MAX_ICON_BYTES, IconRefused, store_icon
@@ -1935,6 +1943,18 @@ class SaveVerb(BaseModel):
         None,
         description=(
             "Why the verb is not offered, as every surface prints it. Null when it is."
+        ),
+    )
+
+
+class RunsCleared(BaseModel):
+    """``DELETE /workflows/runs`` and ``DELETE /workflows/runs/{run_id}``."""
+
+    cleared: int = Field(description="How many finished runs were forgotten.")
+    workflow_id: str | None = Field(
+        None,
+        description=(
+            "The workflow whose kept changes went with the run, null when none did."
         ),
     )
 
@@ -4265,6 +4285,9 @@ def create_router(server) -> APIRouter:
     router = APIRouter(tags=["workflows"])
 
     _hub = functools.partial(require_hub, server)
+
+    # Every run's ending, into this server's run log (`services/run_log.py`).
+    on_run_ended(lambda outcome: run_log.ended(_hub(), outcome))
 
     # ── The workflows (#1623) ───────────────────────────────────────────────
     # The grid is `/workflows` itself, one entry per workflow. The payload is
@@ -8028,7 +8051,7 @@ def create_router(server) -> APIRouter:
                 prompts=prompts,
                 error=str(getattr(exc, "detail", None) or exc),
             )
-        _keep_run_changes(asked, groups)
+        _keep_run_changes(asked, groups, prompts)
         return RunResult(
             status="success", runs=len(prompts), groups=groups, prompts=prompts
         )
@@ -8061,6 +8084,46 @@ def create_router(server) -> APIRouter:
                 detail="No run with that prompt id is being followed.",
             )
         return outcome
+
+    @router.delete(
+        "/workflows/runs",
+        summary="Clear the finished runs",
+        description=(
+            "Forget the runs of this library that have ended, as the Tasks "
+            "tab's Finished group lists them (`GET /workers/progress`, "
+            "`finished`). A run whose changes can still be saved is kept: "
+            "only its own `DELETE /workflows/runs/{run_id}` throws them away."
+        ),
+        response_model=RunsCleared,
+    )
+    def clear_finished_runs(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        return RunsCleared(
+            cleared=run_log.forget_finished(
+                _hub(), request.state.library_lease.library_uuid
+            )
+        )
+
+    @router.delete(
+        "/workflows/runs/{run_id}",
+        summary="Dismiss a finished run",
+        description=(
+            "Forget one finished run, by the `id` the Finished group lists it "
+            "under, and with it the changes its workflow kept from it, which "
+            "can then no longer be saved (each picture's recipe still holds "
+            "them). `workflow_id` names that workflow, null when the run kept "
+            "none. A run already forgotten clears nothing."
+        ),
+        response_model=RunsCleared,
+    )
+    def dismiss_run(request: Request, run_id: str):
+        server.auth.ensure_secure_when_required(request)
+        gone, workflow_id = run_log.forget(
+            _hub(), run_id, request.state.library_lease.library_uuid
+        )
+        if workflow_id is not None:
+            _announce(request, [workflow_id], "changed")
+        return RunsCleared(cleared=1 if gone else 0, workflow_id=workflow_id)
 
     def _upload_planned(plan: Plan, picture_id: int) -> str:
         """Upload one of ``plan.files`` to ComfyUI, answering the name it loads by.
@@ -8127,6 +8190,9 @@ def create_router(server) -> APIRouter:
         for card, graph, swapped in plan.loader_swaps:
             _record_loader_swaps(card, graph, swapped)
         saved_over = workflow_versions.saved_over_ids(_hub())
+        # The batch each workflow's runs are, for the Tasks tab's Finished
+        # row: the first run's id, by workflow (`run_log`).
+        batches: dict[str | None, str] = {}
         # What a run nobody named is called: its workflow, as the grid shows it
         # (a generated name needs the models, `Krea 2: Text to Image`).
         names = (
@@ -8254,6 +8320,14 @@ def create_router(server) -> APIRouter:
                     vram_lease, model_set = _vram_lease(
                         comfyui_url, instance, group.workflow_id, label, run_id
                     )
+                    # Before it can end: an ending settles the row it finds.
+                    _log_queued(
+                        run_id,
+                        batches.setdefault(group.workflow_id, run_id),
+                        group.workflow_id,
+                        label,
+                        library.library_uuid,
+                    )
                     if vram_lease.state is LeaseState.GRANTED:
                         # The common case: room now, so submitted inline
                         # exactly as before, and ComfyUI's validation answer
@@ -8270,8 +8344,17 @@ def create_router(server) -> APIRouter:
                                 model_set,
                                 poll_kwargs,
                             )
-                        except BaseException:
+                        except BaseException as exc:
                             vram_lease.release()
+                            # ComfyUI refused it (a 502 with its validation
+                            # answer) or it never got there: an ending, so
+                            # its Finished row is not left going forever.
+                            record_run_outcome(
+                                run_id,
+                                "failed",
+                                message=str(getattr(exc, "detail", None) or exc),
+                                run_id=run_id,
+                            )
                             raise
                         # None: ComfyUI took it but named no prompt, which
                         # `_dispatch_run` has recorded as the run's failure.
@@ -8313,6 +8396,26 @@ def create_router(server) -> APIRouter:
                             "status": status,
                         }
                     )
+
+    def _log_queued(run_id, batch_id, workflow_id, label, library_uuid) -> None:
+        """Note a run in the run log as it is queued. Never fails the run: the
+        whole cost is its Finished row, which is logged."""
+        try:
+            run_log.queued(
+                _hub(),
+                run_id,
+                batch_id,
+                workflow_id,
+                label or RUN_LABEL_FALLBACK,
+                library_uuid,
+            )
+        except Exception:
+            logger.exception(
+                "[workflows] Run %s of %s could not be noted in the run log, so "
+                "the Tasks tab will not list it under Finished.",
+                run_id,
+                workflow_id,
+            )
 
     def _vram_lease(
         comfyui_url: str, graph: dict, workflow_id: str | None, label, run_id: str
@@ -11858,7 +11961,9 @@ def create_router(server) -> APIRouter:
             values=changes.values,
         )
 
-    def _keep_run_changes(asked: RunRequest, groups: list[RunGroup]) -> None:
+    def _keep_run_changes(
+        asked: RunRequest, groups: list[RunGroup], prompts: list[dict]
+    ) -> None:
         """Keep what a run of a workflow changed, so it can still be saved.
 
         Until the next run of that workflow, or a save: a run that changed
@@ -11884,6 +11989,10 @@ def create_router(server) -> APIRouter:
         workflow, not a set of changes to it: it keeps none, and it is still
         the next run of each workflow in *groups*, so what an earlier run
         kept for one goes.
+
+        The set names the batch of runs it was made with (``RAN_BY``, the
+        first of *prompts* of the workflow), so the Tasks tab's Finished row
+        of that batch is the one that offers it (#2050).
         """
         hub = _hub()
         if asked.workflow_id is None:
@@ -12001,6 +12110,14 @@ def create_router(server) -> APIRouter:
                     WAITED: seen.model_dump()
                     if seen is not None and not stale
                     else None,
+                    RAN_BY: next(
+                        (
+                            p["run_id"]
+                            for p in prompts
+                            if p["workflow_id"] == asked.workflow_id
+                        ),
+                        None,
+                    ),
                 }
                 if changes.count()
                 else None,

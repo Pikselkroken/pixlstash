@@ -68,6 +68,54 @@ export const useTasksStore = defineStore("tasks", () => {
   // [{ run_id, prompt_id, label, workflow_id, status: "waiting" | "queued" |
   // "running", percent }]. A `waiting` run has no prompt_id yet.
   const comfyuiRuns = ref([]);
+  // The runs that ended, newest first, as the last poll listed them
+  // (`finished`, #2050): [{ id, workflow_id, label, ended_at, status,
+  // message, made, picture_ids, offer }]. `offer` marks the one whose changes
+  // from the workflow can still be saved.
+  const finishedRuns = ref([]);
+  // Which Finished rows are open, by id. A run with changes opens by itself,
+  // once, when its offer arrives; one the first poll already listed with it
+  // (a reload, a second tab) comes back folded. An offer can arrive a poll
+  // after its run (a run that ended before its request was answered), so it
+  // is the offer that is remembered. In the store so a tab switch keeps it.
+  const finishedOpen = ref({});
+  // ponytail: grows by one id per offer for the life of the page.
+  const offersSeen = new Set();
+  let finishedPolled = false;
+
+  /**
+   * Take the poll's `finished`, opening the offers that arrived since the
+   * last. `null` (the server could not read them) keeps what is shown.
+   */
+  function noteFinished(list) {
+    if (!Array.isArray(list)) return;
+    const opened = { ...finishedOpen.value };
+    for (const run of list) {
+      if (!run.offer || offersSeen.has(run.id)) continue;
+      offersSeen.add(run.id);
+      if (finishedPolled) opened[run.id] = true;
+    }
+    finishedPolled = true;
+    finishedOpen.value = opened;
+    finishedRuns.value = list;
+  }
+
+  function toggleFinished(id) {
+    finishedOpen.value = { ...finishedOpen.value, [id]: !finishedOpen.value[id] };
+  }
+
+  /** A workflow's run set was saved: no run of it offers it any more. */
+  function dropOffer(workflowId) {
+    finishedRuns.value = finishedRuns.value.map((run) =>
+      run.workflow_id === workflowId ? { ...run, offer: false } : run,
+    );
+  }
+
+  /** Take dismissed or cleared runs off the list before the next poll does. */
+  function forgetFinished(ids) {
+    const gone = new Set(ids);
+    finishedRuns.value = finishedRuns.value.filter((run) => !gone.has(run.id));
+  }
   // The GPU's state as the poll reports it (`resources`), or null when the
   // backend does not send it (an older server, or a read-only session).
   const resources = ref(null);
@@ -607,6 +655,7 @@ export const useTasksStore = defineStore("tasks", () => {
       const workers = progress?.workers || {};
       systemUsage.value = progress?.process || progress?.system || null;
       comfyuiRuns.value = Array.isArray(progress?.runs) ? progress.runs : [];
+      noteFinished(progress?.finished);
       noteDownloads(
         Array.isArray(progress?.downloads) ? progress.downloads : [],
       );
@@ -719,6 +768,12 @@ export const useTasksStore = defineStore("tasks", () => {
     // comfyui runs
     comfyuiRuns,
     abortComfyuiRuns,
+    finishedRuns,
+    finishedOpen,
+    noteFinished,
+    toggleFinished,
+    forgetFinished,
+    dropOffer,
     // model downloads
     modelDownloads,
     runningDownloadFiles,

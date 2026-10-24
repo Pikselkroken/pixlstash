@@ -1679,6 +1679,31 @@ CREATE TABLE IF NOT EXISTS user_vram_preference (
 )
 """
 
+# The runs that ended, for the Tasks tab's Finished group (#2050): one row per
+# run PixlStash queued (``run_id``, ``run-<hex>``), grouped into the batch one
+# ``POST /workflows/run`` made of one workflow (``batch_id``, its first run's
+# id). Written as the run is queued and settled where every ending is recorded
+# (``comfyui_service.record_run_outcome``), so what a run made outlives a
+# restart; the outcomes themselves are in memory only. ``status`` is
+# ``queued``, ``completed`` or ``failed``; ``picture_ids`` a JSON list, ids in
+# ``library_uuid``'s vault. The newest 10 batches of the last 24 hours are
+# kept, and a batch a workflow's run set names (``workflow_change.changes``'
+# ``run_id``) until that set goes (``services/run_log.py``).
+_V2_WORKFLOW_RUN_LOG = """
+CREATE TABLE IF NOT EXISTS workflow_run_log (
+    run_id        TEXT PRIMARY KEY,
+    batch_id      TEXT NOT NULL,
+    workflow_id   TEXT,
+    label         TEXT NOT NULL,
+    library_uuid  TEXT,
+    status        TEXT NOT NULL,
+    message       TEXT,
+    picture_ids   TEXT NOT NULL DEFAULT '[]',
+    queued_at     TEXT NOT NULL,
+    ended_at      TEXT
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1711,6 +1736,9 @@ _V2_WORKFLOW_INDEXES = (
     # "The newest peaks of this workflow" - every run's admission.
     "CREATE INDEX IF NOT EXISTS ix_workflow_vram_peak_by_wf "
     "ON workflow_vram_peak(workflow_id, at)",
+    # "The runs of this batch" - every Finished row, and a dismiss.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_run_log_batch "
+    "ON workflow_run_log(batch_id)",
 )
 
 _V2_WORKFLOW_TABLES = (
@@ -1770,6 +1798,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_VRAM_PEAK,
     _V2_WORKFLOW_VRAM_POLICY,
     _V2_USER_VRAM_PREFERENCE,
+    _V2_WORKFLOW_RUN_LOG,
     *_V2_WORKFLOW_INDEXES,
 )
 

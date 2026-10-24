@@ -148,6 +148,17 @@ _run_ids: dict[str, str] = {}
 # Held runs' cancel events, by run id: set by an abort or a lease cancel, and
 # the run then never reaches ComfyUI. Same lock.
 _held_cancels: dict[str, threading.Event] = {}
+# Told of every ending, outside the lock, with what ``run_outcome`` would
+# answer: the run log (``services/run_log.py``) keeps it past a restart. One,
+# set by the workflows routes for the server they serve (``on_run_ended``).
+_ending_listener = None
+
+
+def on_run_ended(listener) -> None:
+    """Have *listener* told of every run's ending from now on, in place of
+    whatever was told before: ``listener(outcome)``, outside the lock."""
+    global _ending_listener
+    _ending_listener = listener
 
 
 def new_run_id() -> str:
@@ -181,7 +192,9 @@ def record_run_outcome(
 
     An ending also takes the run out of the runs in flight (``live_runs``):
     every ending is recorded here before it is announced, so a tab that reads
-    the runs on hearing of one never finds it still listed.
+    the runs on hearing of one never finds it still listed. It is also
+    written to the run log (``on_run_ended``) before it is announced, so the
+    Finished row a tab reads on hearing of it is there.
     """
     with _run_outcomes_lock:
         _record_run_outcome_locked(
@@ -193,6 +206,21 @@ def record_run_outcome(
             library_uuid,
             code,
             run_id,
+        )
+        outcome = dict(_run_outcomes[prompt_id])
+    listener = _ending_listener
+    if listener is None or status in ("running", "waiting"):
+        return
+    try:
+        listener(outcome)
+    except Exception:
+        # The ending is recorded and the run is over; what is lost is its
+        # Finished row past a restart, never the run.
+        logger.exception(
+            "Run %s ended %s, but the run log could not be told, so the Tasks "
+            "tab's Finished group may not show it.",
+            outcome.get("run_id") or prompt_id,
+            status,
         )
 
 

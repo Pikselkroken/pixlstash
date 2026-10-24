@@ -173,6 +173,7 @@ import pixlstash.routes.comfyui as comfyui_module
 from pixlstash.services import (
     comfyui_recipe_service,
     comfyui_service,
+    run_log,
     saved_recipe_service,
     workflow_bindings,
     workflow_inbox,
@@ -265,6 +266,9 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/run"),
     ("POST", "/api/v1/workflows/run/preflight"),
     ("POST", "/api/v1/workflows/run/opening"),
+    # The Finished group (#2050): the owner forgetting their own runs.
+    ("DELETE", "/api/v1/workflows/runs"),
+    ("DELETE", "/api/v1/workflows/runs/{run_id}"),
     # The file gestures (v1.12 B8). Each resolves the card's graph out of the
     # whole library the way the run route does, and write a file.
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
@@ -6574,6 +6578,9 @@ _EVERY_WORKFLOW_ROUTE = (
     # How a run ended (#1839). The owner's answer is a 404 here, since nobody
     # queued this prompt: reached, which is all the positive control asks.
     ("GET", "/workflows/runs/{prompt_id}", "/workflows/runs/gate-probe", None),
+    # The Finished group (#2050): forgetting nothing is still reached.
+    ("DELETE", "/workflows/runs", "/workflows/runs", None),
+    ("DELETE", "/workflows/runs/{run_id}", "/workflows/runs/gate-probe", None),
     (
         "GET",
         "/workflows/{workflow_id}/lora-chain",
@@ -20857,6 +20864,133 @@ def test_a_run_keeps_what_it_changed_until_the_next_run_or_a_save(saving):
     listed = saving.owner.get(f"{API}/workflows/{saving.manual}/versions").json()
     assert listed["versions"][0]["reason"] == "saved from a run"
     assert _changes(saving, saving.manual)["ran"] is None
+
+
+def test_a_finished_run_is_listed_and_carries_the_offer_to_save_it(saving):
+    """The Tasks tab's Finished group (#2050): a batch is listed once every
+    run of it has ended, with what it made, and the batch the workflow's run
+    set was made with is the one that offers it. Its dismiss drops that set
+    too, so every tab and a reload agree; Clear keeps it.
+
+    Wrong if the batch is listed while a run of it is still going, if the
+    offer is on a batch the set was not made with, or if Clear throws away
+    changes that can still be saved.
+    """
+    progress = f"{API}/workers/progress"
+
+    def finished(client=saving.owner) -> dict:
+        r = client.get(progress)
+        assert r.status_code == 200, r.text
+        return {batch["id"]: batch for batch in r.json()["finished"]}
+
+    def run(count=1, **changes) -> list[dict]:
+        r = saving.owner.post(
+            f"{API}/workflows/run",
+            json={"workflow_id": saving.manual, "count": count, **changes},
+        )
+        assert r.status_code == 200, r.text
+        return r.json()["prompts"]
+
+    first, second = run(count=2, **SKIP_FIVE)
+    batch = first["run_id"]
+    assert batch not in finished()
+    comfyui_service.record_run_outcome(
+        first["prompt_id"], "completed", picture_ids=[saving.picture_id]
+    )
+    assert batch not in finished(), "listed with a run of it still going"
+    comfyui_service.record_run_outcome(second["prompt_id"], "completed")
+    listed = finished()[batch]
+    assert {k: listed[k] for k in ("workflow_id", "status", "made", "offer")} == {
+        "workflow_id": saving.manual,
+        "status": "completed",
+        "made": 1,
+        "offer": True,
+    }
+    assert listed["picture_ids"] == [saving.picture_id]
+    assert listed["ended_at"]
+    # The owner's, as the runs in flight are.
+    scoped = bearer_client(
+        saving.server,
+        mint_read_token(
+            saving.owner,
+            "finished runs scoped",
+            resource_type="character",
+            resource_id=saving.env.character_id,
+        ),
+    )
+    assert finished(scoped) == {}
+
+    # A run that changed nothing is a receipt; the next run of the workflow
+    # took the offer from the batch before it.
+    (plain,) = run()
+    comfyui_service.record_run_outcome(plain["prompt_id"], "failed", message="Boom")
+    now = finished()
+    assert (now[plain["run_id"]]["offer"], now[batch]["offer"]) == (False, False)
+    assert now[plain["run_id"]]["message"] == "Boom"
+    assert _changes(saving, saving.manual)["ran"] is None
+
+    (offered,) = run(**SKIP_FIVE)
+    comfyui_service.record_run_outcome(offered["prompt_id"], "completed")
+    assert finished()[offered["run_id"]]["offer"] is True
+
+    # Clear keeps the batch that can still be saved, and forgets the rest.
+    # A completed run stays completed: a failure recorded after it does not
+    # turn it into a run that made nothing.
+    comfyui_service.record_run_outcome(offered["prompt_id"], "failed", message="late")
+    assert finished()[offered["run_id"]]["status"] == "completed"
+
+    # A run ComfyUI refuses is an ending too, with ComfyUI's answer.
+    def refuse(*_args, **_kwargs):
+        raise HTTPException(status_code=502, detail="KSampler: bad input")
+
+    fake = workflows_routes._submit_comfyui_prompt
+    saving.monkeypatch.setattr(workflows_routes, "_submit_comfyui_prompt", refuse)
+    r = saving.owner.post(f"{API}/workflows/run", json={"workflow_id": saving.manual})
+    assert r.status_code == 502, r.text
+    saving.monkeypatch.setattr(workflows_routes, "_submit_comfyui_prompt", fake)
+    (refused,) = [
+        b for b in finished().values() if b["message"] == "KSampler: bad input"
+    ]
+    assert (refused["status"], refused["made"]) == ("failed", 0)
+
+    # Clear keeps the batch that can still be saved, and forgets the rest.
+    # By identity: the module's other tests leave runs of their own.
+    mine = {batch, plain["run_id"], offered["run_id"], refused["id"]}
+    r = saving.owner.delete(f"{API}/workflows/runs")
+    assert r.status_code == 200, r.text
+    assert r.json()["cleared"] >= 3
+    assert set(finished()) & mine == {offered["run_id"]}
+
+    # Another library's dismiss of it clears nothing, nor its set.
+    assert run_log.forget(saving.server.hub, offered["run_id"], "another-library") == (
+        0,
+        None,
+    )
+    assert _changes(saving, saving.manual)["ran"] is not None
+    assert _changes(saving, saving.manual)["ran"] is not None
+
+    # Its own dismiss forgets it, and what the workflow kept from it.
+    r = saving.owner.delete(f"{API}/workflows/runs/{offered['run_id']}")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"cleared": 1, "workflow_id": saving.manual}
+    assert offered["run_id"] not in finished()
+    assert _changes(saving, saving.manual)["ran"] is None
+    r = saving.owner.delete(f"{API}/workflows/runs/{offered['run_id']}")
+    assert r.json() == {"cleared": 0, "workflow_id": None}
+
+    # A run queued before a restart that never ended was lost with it.
+    (lost,) = run()
+    assert lost["run_id"] not in finished()
+    saving.monkeypatch.setattr(run_log, "_STARTED", "9999")
+    gone = finished()[lost["run_id"]]
+    assert (gone["status"], gone["message"]) == ("failed", run_log.LOST_MESSAGE)
+    # A day later it is gone; a batch with an offer is not.
+    (kept,) = run(**SKIP_FIVE)
+    with saving.server.hub.transaction() as conn:
+        conn.execute("UPDATE workflow_run_log SET queued_at = '2000-01-01'")
+    now = finished()
+    assert lost["run_id"] not in now
+    assert now[kept["run_id"]]["offer"] is True
 
 
 @pytest.fixture

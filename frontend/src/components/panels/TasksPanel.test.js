@@ -16,12 +16,25 @@ import { setActivePinia, createPinia } from "pinia";
 const getWorkflowChanges = vi.fn();
 const saveWorkflow = vi.fn();
 const saveWorkflowAsNew = vi.fn();
+const dismissFinishedRun = vi.fn();
+const clearFinishedRuns = vi.fn();
 // The rest of the module is the Workflows store's, which the panel only reads.
 vi.mock("../../api/workflows", async (original) => ({
   ...(await original()),
   getWorkflowChanges: (...args) => getWorkflowChanges(...args),
   saveWorkflow: (...args) => saveWorkflow(...args),
   saveWorkflowAsNew: (...args) => saveWorkflowAsNew(...args),
+  dismissFinishedRun: (...args) => dismissFinishedRun(...args),
+  clearFinishedRuns: (...args) => clearFinishedRuns(...args),
+}));
+// Where a run's picture opens: the screen the panel is on.
+const nav = vi.hoisted(() => ({
+  route: { name: "all-pictures", query: { set: "4" } },
+  push: null,
+}));
+vi.mock("vue-router", () => ({
+  useRoute: () => nav.route,
+  useRouter: () => ({ push: (...args) => nav.push(...args) }),
 }));
 const readOnly = vi.hoisted(() => ({ ref: null }));
 vi.mock("../../utils/apiClient", async (original) => {
@@ -63,6 +76,10 @@ beforeEach(() => {
   getWorkflowChanges.mockReset();
   saveWorkflow.mockReset();
   saveWorkflowAsNew.mockReset();
+  dismissFinishedRun.mockReset();
+  clearFinishedRuns.mockReset();
+  nav.route = { name: "all-pictures", query: { set: "4" } };
+  nav.push = vi.fn();
 });
 
 describe("the tab the hosts declare", () => {
@@ -269,12 +286,19 @@ describe("the offer to save what a run changed", () => {
     text: "Checkpoint, 1 LoRA removed, Steps.",
     promptIds: ["p-1"],
   };
-  const completed = {
-    plugin: "ComfyUI",
-    status: "completed",
-    run_id: "comfyui-p-1",
+  /** One finished run, as the poll's `finished` lists it. */
+  const finishedRun = (overrides = {}) => ({
+    id: `run-${WF}`,
     workflow_id: WF,
-  };
+    label: record.name,
+    ended_at: new Date().toISOString(),
+    status: "completed",
+    message: null,
+    made: 2,
+    picture_ids: [11, 12],
+    offer: true,
+    ...overrides,
+  });
   const offer = (wrapper, id = WF) => wrapper.find(`[data-offer="${id}"]`);
   const button = (wrapper, text) =>
     wrapper.findAll("button").find((b) => b.text().trim() === text);
@@ -286,11 +310,22 @@ describe("the offer to save what a run changed", () => {
     return wrapper;
   }
 
+  /**
+   * The poll lists *run* as finished, after a poll that did not: it landed
+   * while the app was open, so a run with an offer opens by itself.
+   */
+  function lands(run) {
+    const tasks = useTasksStore();
+    if (!tasks.finishedRuns.length) tasks.noteFinished([]);
+    tasks.noteFinished([...tasks.finishedRuns, run]);
+  }
+
   /** A changed run of a workflow, queued from the popup and finished. */
   function ranAndFinished(workflowId = WF, name = record.name) {
     const runDialog = useRunDialogStore();
-    runDialog.ranWith(workflowId, { ...record, name });
-    runDialog.runEvent({ ...completed, workflow_id: workflowId });
+    const id = `run-${workflowId}`;
+    runDialog.ranWith(workflowId, { ...record, name, runIds: [id] });
+    lands(finishedRun({ id, workflow_id: workflowId, label: name }));
     return runDialog;
   }
   const doneLine = (wrapper) => wrapper.find('[data-testid="tm-offer-done"]');
@@ -316,26 +351,37 @@ describe("the offer to save what a run changed", () => {
   });
 
   it("asks nothing and offers nothing where no run changed anything", async () => {
+    lands(finishedRun({ offer: false }));
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).not.toHaveBeenCalled();
-    expect(wrapper.find('[data-testid="tm-offers"]').exists()).toBe(false);
-    expect(textOf(wrapper)).toContain("No active tasks");
+    expect(offer(wrapper).exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-finished-pill"]').exists()).toBe(false);
+    // A receipt: its count, and opened, when it finished.
+    expect(textOf(wrapper.find('[data-testid="tm-finished-run"]'))).toContain(
+      "Portrait, soft window light 2",
+    );
+    await wrapper.find('[data-testid="tm-finished-caret"]').trigger("click");
+    expect(textOf(wrapper)).toContain("Finished just now.");
   });
 
   it("waits for the run's pictures, then says what it changed in the band's words", async () => {
     const runDialog = useRunDialogStore();
-    runDialog.ranWith(WF, record);
+    runDialog.ranWith(WF, { ...record, runIds: [`run-${WF}`] });
+    useTasksStore().noteFinished([]);
     const wrapper = await mountPanel();
     // Queued, not finished: nothing to decide yet.
     expect(getWorkflowChanges).not.toHaveBeenCalled();
     expect(offer(wrapper).exists()).toBe(false);
 
-    runDialog.runEvent(completed);
+    lands(finishedRun());
     await flushPromises();
     expect(getWorkflowChanges).toHaveBeenCalledWith(WF);
+    // Opened by itself, once, as it landed: its pictures, when, and what.
     expect(textOf(offer(wrapper))).toContain(
-      "Ran with 3 changes from the workflow: Checkpoint, 1 LoRA removed, Steps.",
+      "Ran just now with 3 changes from the workflow: Checkpoint, 1 LoRA removed, Steps.",
     );
+    expect(wrapper.findAll('[data-testid="tm-finished-tile"]')).toHaveLength(2);
+    expect(wrapper.find('[data-testid="tm-finished-pill"]').text()).toBe("3 changes");
     expect(textOf(offer(wrapper))).toContain("Portrait, soft window light");
     expect(button(wrapper, "Save")).toBeTruthy();
     expect(button(wrapper, "Save as new…")).toBeTruthy();
@@ -350,7 +396,7 @@ describe("the offer to save what a run changed", () => {
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).toHaveBeenCalledWith(WF);
     expect(offer(wrapper).exists()).toBe(false);
-    expect(textOf(wrapper)).toContain("No active tasks");
+    expect(wrapper.find('[data-testid="tm-finished-pill"]').exists()).toBe(false);
   });
 
   it("offers what it could read when one workflow's answer does not come", async () => {
@@ -366,24 +412,33 @@ describe("the offer to save what a run changed", () => {
     warn.mockRestore();
   });
 
-  it("offers the selected workflow's from the server alone after a reload, with a count", async () => {
+  it("comes back folded after a reload, and opened reads with a count", async () => {
     const workflows = useWorkflowsStore();
     workflows.cards = [{ id: WF, name: "Portrait, soft window light" }];
-    workflows.selectedKeys = [WF];
+    // The first poll already lists it: nothing landed while the app was open.
+    useTasksStore().noteFinished([finishedRun({ label: "Krea 2: Text to Image" })]);
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).toHaveBeenCalledWith(WF);
+    expect(offer(wrapper).find(".tm-detail").exists()).toBe(false);
+    // Folded, the pill is what says the changes are still unsaved.
+    expect(wrapper.find('[data-testid="tm-finished-pill"]').text()).toBe("3 changes");
+    await wrapper.find('[data-testid="tm-finished-caret"]').trigger("click");
     // The labels were the popup's: width and height apart, no Size, no names.
-    expect(textOf(offer(wrapper))).toContain("Ran with 3 changes from the workflow.");
+    expect(textOf(offer(wrapper))).toContain("Ran just now with 3 changes from the workflow.");
     expect(textOf(offer(wrapper))).not.toContain("Checkpoint");
-    expect(textOf(offer(wrapper))).toContain("Portrait, soft window light");
+    expect(offer(wrapper).attributes("aria-label")).toContain(
+      "Portrait, soft window light",
+    );
   });
 
-  it("does not offer a selected workflow whose run is still out", async () => {
-    const workflows = useWorkflowsStore();
-    workflows.selectedKeys = [WF];
-    useRunDialogStore().ranWith(WF, record);
+  it("words an offer from the record only of the run it is", async () => {
+    const runDialog = useRunDialogStore();
+    // The popup's record is of a later run of the workflow.
+    runDialog.ranWith(WF, { ...record, runIds: ["run-later"] });
+    lands(finishedRun());
     const wrapper = await mountPanel();
-    expect(offer(wrapper).exists()).toBe(false);
+    expect(textOf(offer(wrapper))).toContain("Ran just now with 3 changes from the workflow.");
+    expect(textOf(offer(wrapper))).not.toContain("Checkpoint");
   });
 
   it("saves exactly what the run was made with, as a save from a run", async () => {
@@ -412,8 +467,6 @@ describe("the offer to save what a run changed", () => {
   it("does not redraw an offer from an answer asked before the save", async () => {
     ranAndFinished();
     const workflows = useWorkflowsStore();
-    // Selected as well, so it is still asked about once its record is gone.
-    workflows.selectedKeys = [WF];
     const wrapper = await mountPanel();
     const answer = [];
     getWorkflowChanges.mockImplementation(
@@ -424,10 +477,8 @@ describe("the offer to save what a run changed", () => {
     await flushPromises();
     await button(wrapper, "Save").trigger("click");
     await flushPromises();
-    expect(answer).toHaveLength(2);
-    // The asking made after the save is answered first, the one before it last.
-    answer[1](state({ ran: null, ran_save: null }));
-    await flushPromises();
+    // Nothing is asked after the save: the run no longer offers anything.
+    expect(answer).toHaveLength(1);
     answer[0](state());
     await flushPromises();
     expect(offer(wrapper).exists()).toBe(false);
@@ -876,10 +927,172 @@ describe("the offer to save what a run changed", () => {
   it("offers nothing, and asks nothing, in a read-only session", async () => {
     readOnly.ref.value = true;
     ranAndFinished();
-    useWorkflowsStore().selectedKeys = [WF];
     const wrapper = await mountPanel();
     expect(getWorkflowChanges).not.toHaveBeenCalled();
     expect(offer(wrapper).exists()).toBe(false);
+  });
+});
+
+// ── The Finished group (#2050) ───────────────────────────────────────────────
+
+describe("the Finished group", () => {
+  const WF = `auto:${"c".repeat(64)}`;
+  const RAN = { models: [], loras: [], skip_loras: [{ node_id: "8", field: "lora_name" }], stages: {}, values: [] };
+  const run = (overrides = {}) => ({
+    id: "run-a",
+    workflow_id: WF,
+    label: "Portrait SDXL",
+    ended_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+    status: "completed",
+    message: null,
+    made: 4,
+    picture_ids: [21, 22, 23],
+    offer: false,
+    ...overrides,
+  });
+  const rows = (wrapper) => wrapper.findAll('[data-testid="tm-finished-run"]');
+  const within = (row, testid) => row.find(`[data-testid="${testid}"]`);
+
+  async function mountWith(list, { landed = false } = {}) {
+    const tasks = useTasksStore();
+    if (landed) tasks.noteFinished([]);
+    tasks.noteFinished(list);
+    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+    await flushPromises();
+    return wrapper;
+  }
+
+  beforeEach(() => {
+    getWorkflowChanges.mockResolvedValue({
+      workflow_id: WF,
+      version: 2,
+      ran: RAN,
+      ran_save: { open: true, reason: null },
+    });
+    dismissFinishedRun.mockResolvedValue({ cleared: 1, workflow_id: null });
+    clearFinishedRuns.mockResolvedValue({ cleared: 1, workflow_id: null });
+  });
+
+  it("lists each finished run on one line, with what it made, and the panel is not idle", async () => {
+    const wrapper = await mountWith([run(), run({ id: "run-b", label: "Inpaint fill", made: 1 })]);
+    expect(rows(wrapper).map((row) => textOf(row).trim())).toEqual([
+      "Portrait SDXL 4",
+      "Inpaint fill 1",
+    ]);
+    expect(rows(wrapper)[0].find(".tm-mark").attributes("data-state")).toBe("done");
+    expect(textOf(wrapper)).not.toContain("No active tasks");
+    // Folded until asked, then when it ran and the pictures it still has.
+    await within(rows(wrapper)[0], "tm-finished-caret").trigger("click");
+    expect(textOf(rows(wrapper)[0])).toContain("Finished 2h ago.");
+    expect(within(rows(wrapper)[0], "tm-finished-tile").exists()).toBe(true);
+    expect(rows(wrapper)[0].findAll('[data-testid="tm-finished-tile"]')).toHaveLength(3);
+  });
+
+  it("says a failed run failed, and why, with a mark of its own", async () => {
+    const wrapper = await mountWith([
+      run({ status: "failed", message: "KSampler: out of memory", made: 0, picture_ids: [] }),
+    ]);
+    expect(rows(wrapper)[0].find(".tm-mark").attributes("data-state")).toBe("failed");
+    await within(rows(wrapper)[0], "tm-finished-caret").trigger("click");
+    expect(textOf(rows(wrapper)[0])).toContain("Failed 2h ago: KSampler: out of memory");
+    expect(within(rows(wrapper)[0], "tm-finished-tile").exists()).toBe(false);
+  });
+
+  it("opens a run with changes by itself once as it lands, and never one already listed", async () => {
+    const tasks = useTasksStore();
+    const wrapper = await mountWith([run({ id: "run-old", offer: true })]);
+    // Listed by the first poll: a reload, so it comes back folded.
+    expect(wrapper.find(".tm-detail").exists()).toBe(false);
+    tasks.noteFinished([run({ id: "run-new", offer: true }), ...tasks.finishedRuns]);
+    tasks.noteFinished([run({ id: "run-plain" }), ...tasks.finishedRuns]);
+    await flushPromises();
+    expect(wrapper.findAll(".tm-detail")).toHaveLength(1);
+    expect(rows(wrapper)[1].find(".tm-detail").exists()).toBe(true);
+    // Folded by hand, it stays folded on the next poll.
+    await within(rows(wrapper)[1], "tm-finished-caret").trigger("click");
+    tasks.noteFinished([...tasks.finishedRuns]);
+    await flushPromises();
+    expect(wrapper.find(".tm-detail").exists()).toBe(false);
+  });
+
+  it("opens a run whose offer arrives a poll after it, and keeps the rows through a failed read", async () => {
+    const tasks = useTasksStore();
+    const wrapper = await mountWith([], { landed: true });
+    // It ended before its request was answered: listed first without the offer.
+    tasks.noteFinished([run()]);
+    await flushPromises();
+    expect(wrapper.find(".tm-detail").exists()).toBe(false);
+    tasks.noteFinished([run({ offer: true })]);
+    await flushPromises();
+    expect(wrapper.find(".tm-detail").exists()).toBe(true);
+    // The server could not read them: what is shown stays.
+    tasks.noteFinished(null);
+    await flushPromises();
+    expect(rows(wrapper)).toHaveLength(1);
+  });
+
+  it("opens a tile's picture in the lightbox of the grid behind the panel", async () => {
+    const wrapper = await mountWith([run()]);
+    await within(rows(wrapper)[0], "tm-finished-caret").trigger("click");
+    await within(rows(wrapper)[0], "tm-finished-tile").trigger("click");
+    expect(nav.push).toHaveBeenCalledWith({ query: { set: "4", overlay: "21" } });
+  });
+
+  it("asks the Workflows view to open it there, which parks its place first", async () => {
+    nav.route = { name: "workflows", query: {} };
+    const workflows = useWorkflowsStore();
+    const wrapper = await mountWith([run()]);
+    await within(rows(wrapper)[0], "tm-finished-caret").trigger("click");
+    await within(rows(wrapper)[0], "tm-finished-tile").trigger("click");
+    expect(workflows.pictureToOpen).toBe(21);
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("dismisses a run with changes on the server, which takes its offer with it", async () => {
+    dismissFinishedRun.mockResolvedValue({ cleared: 1, workflow_id: WF });
+    const runDialog = useRunDialogStore();
+    runDialog.ranWith(WF, { name: "Portrait SDXL", count: 1, text: "Steps.", runIds: ["run-a"] });
+    const wrapper = await mountWith([run({ offer: true }), run({ id: "run-b", label: "Inpaint fill" })]);
+    const dismiss = within(rows(wrapper)[0], "tm-finished-dismiss");
+    expect(dismiss.attributes("aria-label")).toBe(
+      "Dismiss what the run of Portrait SDXL changed",
+    );
+    await dismiss.trigger("click");
+    await flushPromises();
+    expect(dismissFinishedRun).toHaveBeenCalledWith("run-a");
+    expect(rows(wrapper).map((row) => row.attributes("data-run"))).toEqual(["run-b"]);
+    expect(runDialog.ranChanges[WF]).toBeUndefined();
+    // The keyboard goes to the row that took its place.
+    expect(document.activeElement).toBe(
+      within(rows(wrapper)[0], "tm-finished-caret").element,
+    );
+  });
+
+  it("keeps a run whose dismiss is refused, and says so", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    dismissFinishedRun.mockRejectedValue(new Error("Network Error"));
+    const wrapper = await mountWith([run()]);
+    await within(rows(wrapper)[0], "tm-finished-dismiss").trigger("click");
+    await flushPromises();
+    expect(rows(wrapper)).toHaveLength(1);
+    expect(useNoticeStore().notices).toMatchObject([
+      { level: "error", text: "The run of Portrait SDXL could not be dismissed." },
+    ]);
+    warn.mockRestore();
+  });
+
+  it("clears every run but those with unsaved changes", async () => {
+    const wrapper = await mountWith([
+      run({ id: "run-a", offer: true }),
+      run({ id: "run-b", label: "Inpaint fill" }),
+      run({ id: "run-c", label: "Flux upscale" }),
+    ]);
+    await wrapper.find('[data-testid="tm-finished-clear"]').trigger("click");
+    await flushPromises();
+    expect(clearFinishedRuns).toHaveBeenCalledTimes(1);
+    expect(dismissFinishedRun).not.toHaveBeenCalled();
+    expect(rows(wrapper).map((row) => row.attributes("data-run"))).toEqual(["run-a"]);
+    expect(within(rows(wrapper)[0], "tm-finished-pill").text()).toBe("1 change");
   });
 });
 

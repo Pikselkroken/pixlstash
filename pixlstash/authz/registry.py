@@ -2064,6 +2064,17 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="How a run the owner started ended: ComfyUI's error text and the ids of the pictures it added, whichever part of the library they landed in; owner only",
     ),
+    # The Tasks tab's Finished group (#2050): forgetting the owner's own
+    # finished runs, and with one of them the changes its workflow kept from
+    # it. A run id names no library object a token could be scoped to.
+    ("DELETE", "/api/v1/workflows/runs"): RoutePolicy(
+        _OWNER,
+        justification="Forget the owner's finished runs, keeping any whose changes can still be saved; DELETE blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/workflows/runs/{run_id}"): RoutePolicy(
+        _OWNER,
+        justification="Forget one finished run and the changes its workflow kept from it; DELETE blocked for READ tokens; owner only",
+    ),
     # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
     # OWNER_ONLY throughout, and a decision rather than a default. A saved
     # recipe holds the owner's prompt and names the models they run, and the
