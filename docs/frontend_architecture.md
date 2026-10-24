@@ -2687,7 +2687,12 @@ can no longer see.
     read off the waiting pick (a missing row whose pick is the offer's
     `likely` one), never remembered, so it survives a reload; any other pick
     is *Edited*. Save uses it, and a reset keeps it taken back until the card
-    is selected again. The pre-flight names a file as the graph spells it and
+    is selected again. The pick is not made for a missing file that is
+    `downloadable` or downloading (`useTasksStore.runningDownloadFiles`) when
+    the card is selected: the download is the owner's fix. When a download
+    lands, a row still holding the automatic pick for that file drops it
+    (while the changes can be edited), so the workflow loads the file it
+    asked for; an owner's own pick stays (#2061). The pre-flight names a file as the graph spells it and
     the recipe may spell it another way, so `missingByAddress` gives a
     missing file to the row naming it, else to the first row of its kind
     without one, and it is the graph's spelling the server is asked about. A
