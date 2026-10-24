@@ -1833,3 +1833,103 @@ class TestCustomWidgetTypes:
         prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
         assert prompt is None
         assert any("options for it do not account" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# The deprecated PrimitiveNode writes its value into what it is wired to
+# ---------------------------------------------------------------------------
+
+
+def _primitive(value, *, node_id=9, mode=0, properties=None, links=(1,)):
+    node = _node(
+        node_id,
+        "PrimitiveNode",
+        mode=mode,
+        outputs=[{"name": "STRING", "type": "STRING", "links": list(links)}],
+        widgets=[value],
+    )
+    if properties is not None:
+        node["properties"] = properties
+    return node
+
+
+def _encoder(node_id=6, stale="the encoder's own stale text"):
+    return _node(
+        node_id,
+        "CLIPTextEncode",
+        inputs=[
+            {"name": "clip", "type": "CLIP", "link": None},
+            {"name": "text", "type": "STRING", "link": 1, "widget": {"name": "text"}},
+        ],
+        widgets=[stale],
+    )
+
+
+class TestPrimitiveNode:
+    def test_its_value_lands_on_the_widget_and_it_is_not_sent(self):
+        graph = _graph(
+            [_primitive("a cat in a hat"), _encoder()], [[1, 9, 0, 6, 1, "STRING"]]
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        # The primitive's value, not the stale copy the encoder keeps.
+        assert prompt["6"]["inputs"]["text"] == "a cat in a hat"
+        assert "9" not in prompt
+
+    def test_an_unwired_primitive_is_dropped(self):
+        graph = _graph([_primitive("unused", links=()), _encoder()], [])
+        graph["nodes"][1]["inputs"][1]["link"] = None
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        assert prompt["6"]["inputs"]["text"] == "the encoder's own stale text"
+        assert "9" not in prompt
+
+    def test_one_behind_a_reroute_is_refused(self):
+        """The editor fills only the widgets the primitive is wired to; behind
+        a reroute the target keeps its own value, which this does not guess."""
+        reroute = _node(
+            7,
+            "Reroute",
+            inputs=[{"name": "", "type": "*", "link": 2}],
+            outputs=[{"name": "", "type": "STRING", "links": [1]}],
+        )
+        graph = _graph(
+            [_primitive("a cat", links=(2,)), reroute, _encoder()],
+            [[2, 9, 0, 7, 0, "STRING"], [1, 7, 0, 6, 1, "STRING"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("through a reroute" in p for p in problems)
+
+    def test_a_muted_primitive_is_refused(self):
+        graph = _graph(
+            [_primitive("a cat", mode=2), _encoder()], [[1, 9, 0, 6, 1, "STRING"]]
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("muted or bypassed" in p for p in problems)
+
+    def test_a_value_of_the_wrong_type_is_refused(self):
+        graph = _graph([_primitive(12), _encoder()], [[1, 9, 0, 6, 1, "STRING"]])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("takes a STRING" in p for p in problems)
+
+    def test_a_value_the_editor_rewrites_is_refused(self):
+        primitive = _primitive(
+            "out/%date:yyyy%", properties={"Run widget replace on values": True}
+        )
+        graph = _graph([primitive, _encoder()], [[1, 9, 0, 6, 1, "STRING"]])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("text replacements" in p for p in problems)
+
+    def test_one_across_a_subgraph_boundary_is_refused(self):
+        # As inlined: the encoder sits inside instance 5, the primitive outside.
+        graph = _graph(
+            [_primitive("a cat"), _encoder(node_id="5:6")],
+            [[1, 9, 0, "5:6", 1, "STRING"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("across a subgraph boundary" in p for p in problems)

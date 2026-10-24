@@ -661,6 +661,30 @@ def _index_links(workflow: dict) -> dict[object, tuple[object, int]]:
     return links
 
 
+# The editor's deprecated `PrimitiveNode`: no server class, one widget whose
+# value the editor writes into every widget it is wired to before it queues
+# the graph (frontend `extensions/core/widgetInputs.ts`, through
+# `widgetValuePropagation.ts`). With "Run widget replace on values" set it
+# first expands `%date%`-style patterns, which only the editor can do.
+_PRIMITIVE_NODE = "PrimitiveNode"
+_TEXT_REPLACEMENT = "Run widget replace on values"
+
+
+class _Literal:
+    """A wire that carries a value rather than a node's output."""
+
+    __slots__ = ("value", "origin")
+
+    def __init__(self, value, origin):
+        self.value = value
+        self.origin = origin
+
+
+def _subgraph_prefix(node_id) -> str:
+    """``"75"`` for an inlined ``"75:61"``; empty at the top level."""
+    return str(node_id).rpartition(":")[0]
+
+
 class _Converter:
     """One conversion. Holds the graph's indexes so the link chase is cheap."""
 
@@ -693,8 +717,13 @@ class _Converter:
             if name:
                 self.set_nodes.setdefault(name, []).append(node)
 
-    def _resolve(self, link_id, depth: int = 0, want_type=None) -> list | None:
+    def _resolve(
+        self, link_id, depth: int = 0, want_type=None
+    ) -> list | _Literal | None:
         """``[node_id, slot]`` for a wire, chasing reroutes and bypasses.
+
+        A wire straight from a ``PrimitiveNode`` is its value instead, as a
+        :class:`_Literal` (:meth:`_primitive_value`).
 
         A muted node breaks the wire, which is what muting means; ComfyUI then
         refuses the prompt for a missing required input, exactly as it does for
@@ -716,6 +745,8 @@ class _Converter:
             return None
         mode = node.get("mode") or 0
         node_class = _node_class(node)
+        if node_class == _PRIMITIVE_NODE and node_class not in self.object_info:
+            return self._primitive_value(node, depth)
         if mode == _MODE_MUTED:
             return None
         if node_class == _GET_NODE:
@@ -726,6 +757,69 @@ class _Converter:
             self.problems.append(f"this ComfyUI has no node class {node_class!r}")
             return None
         return [str(origin_id), origin_slot]
+
+    def _primitive_value(self, node: dict, depth: int) -> _Literal | None:
+        """What a ``PrimitiveNode`` writes into the widget it is wired to.
+
+        Its first widget value; a seed primitive's control after it is not
+        sent. **Only a direct wire.** The editor fills the widgets the
+        primitive's own links end at and follows nothing further, so a
+        primitive behind a reroute, a bypassed node or a Get/Set pair leaves
+        the widget's own value - which this does not try to second-guess.
+        """
+        where = f"{_PRIMITIVE_NODE} (node {node.get('id')})"
+        values = node.get("widgets_values")
+        if depth:
+            self.problems.append(
+                f"{where} reaches a widget through a reroute or a bypassed "
+                "node, and the editor only fills the widgets it is wired to "
+                "directly"
+            )
+        elif (node.get("mode") or 0) in (_MODE_MUTED, _MODE_BYPASSED):
+            self.problems.append(
+                f"{where} is muted or bypassed, so which value its widgets "
+                "get cannot be read"
+            )
+        elif not isinstance(values, list) or not values:
+            self.problems.append(f"{where} has no value to give")
+        elif (
+            (node.get("properties") or {}).get(_TEXT_REPLACEMENT)
+            and isinstance(values[0], str)
+            and "%" in values[0]
+        ):
+            self.problems.append(
+                f"{where} has its value rewritten by the editor's text "
+                "replacements (such as %date%) when queued, which PixlStash "
+                "cannot do"
+            )
+        else:
+            return _Literal(values[0], node.get("id"))
+        return None
+
+    def _literal_input(
+        self, literal: _Literal, node: dict, name: str, type_field, where: str
+    ):
+        """A primitive's value for *name*, checked, or None when refused.
+
+        The value wins over the stale copy in the node's own
+        ``widgets_values``, because it is what the editor sends.
+        """
+        if _subgraph_prefix(literal.origin) != _subgraph_prefix(node.get("id")):
+            # Into or out of a subgraph the editor fills a promoted widget,
+            # and which one is sent is not something this reads.
+            self.problems.append(
+                f"{where} has its {name!r} fed by a {_PRIMITIVE_NODE} across a "
+                "subgraph boundary, so which value is sent cannot be read"
+            )
+            return None
+        holds = _TYPE_HOLDS.get(type_field) if isinstance(type_field, str) else None
+        if holds is not None and not holds(literal.value):
+            self.problems.append(
+                f"{where} has {literal.value!r} from a {_PRIMITIVE_NODE} where "
+                f"its {name!r} input takes a {type_field}"
+            )
+            return None
+        return _prompt_value(literal.value)
 
     def _chase_through(
         self, node: dict, origin_slot, depth: int, want_type=None
@@ -933,6 +1027,17 @@ class _Converter:
                         f"{where} has its {name!r} input wired to something "
                         "that does not run"
                     )
+                elif isinstance(resolved, _Literal):
+                    if not is_widget:
+                        self.problems.append(
+                            f"{where} has its {name!r} socket fed by a "
+                            f"{_PRIMITIVE_NODE}, which only fills widgets"
+                        )
+                        return None
+                    value = self._literal_input(resolved, node, name, type_field, where)
+                    if value is None:
+                        return None
+                    inputs[name] = value
                 elif resolved is not None:
                     inputs[name] = resolved
                 # A widget input that has been wired up still holds its slot in
@@ -1024,6 +1129,10 @@ class _Converter:
             if name in declared_names:
                 continue
             resolved = self._resolve(link, want_type=input_types.get(name))
+            if isinstance(resolved, _Literal):
+                resolved = self._literal_input(resolved, node, name, None, where)
+                if resolved is None:
+                    return None
             if resolved is not None:
                 inputs[name] = resolved
         if by_name:
@@ -1090,6 +1199,9 @@ class _Converter:
             node_class = _node_class(node)
             if node_class in _ANNOTATION_CLASSES:
                 continue
+            if node_class == _PRIMITIVE_NODE and node_class not in self.object_info:
+                # Its value travels with the wires `_resolve` reads.
+                continue
             if (node.get("mode") or 0) in (_MODE_MUTED, _MODE_BYPASSED):
                 continue
             if node_class in UI_PASSTHROUGH_CLASSES:
@@ -1135,9 +1247,6 @@ def convert_ui_graph_to_api(workflow, object_info) -> tuple[dict | None, list[st
     # Subgraphs are expanded first, into the ordinary editor graph the
     # converter reads (`_Inliner`); a definition missing from the file, or
     # values that cannot be matched to inputs, is refused by name.
-    # ponytail: the deprecated `PrimitiveNode` is still refused, as an
-    # undeclared class ("this ComfyUI has no node class 'PrimitiveNode'"),
-    # which is true and is the reason a reader gets.
     try:
         workflow, problems = inline_subgraphs(workflow)
         if problems:
