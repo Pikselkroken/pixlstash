@@ -92,8 +92,8 @@
           This installs third-party code ({{ install.pack.id }}
           {{ install.pack.version }}, from the Comfy Registry) into your
           ComfyUI, where it runs with ComfyUI's full access. ComfyUI restarts
-          afterwards; anything it is running is not interrupted. Want a
-          different version? Install it yourself from ComfyUI Manager.
+          afterwards if it is idle; a job it is running is never interrupted.
+          Want a different version? Install it yourself from ComfyUI Manager.
         </p>
         <div class="rrn-acts">
           <AppButton

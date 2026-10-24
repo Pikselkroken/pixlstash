@@ -222,6 +222,9 @@ export async function installComfyuiPack() {
   return unwrap(apiClient.post(comfyUrl("/pack/install")));
 }
 
+// The server's 180 s wait on Manager, plus its probes and the restart.
+const INSTALL_TIMEOUT_MS = 240000;
+
 /**
  * Have the saved ComfyUI's ComfyUI-Manager install a node pack PixlStash knows
  * (a `packs` entry on a `missing_nodes` reason), at the version PixlStash pins.
@@ -231,13 +234,20 @@ export async function installComfyuiPack() {
  * person has to restart it (`detail` says why). Rejects 409 when Manager is
  * missing, refuses or already lists the pack, 404 for a pack not on the list.
  *
+ * Past the client's default timeout: the server waits up to three minutes for
+ * Manager to finish, so the request may well outlast the usual 60 s.
+ *
  * @param {string} packId - the pack's `id`.
  * @returns {Promise<{pack: string, version: string, manager: ("v3"|"v4"),
  *   restart: ("requested"|"manual"), detail: ?string}>}
  */
 export async function installNodePack(packId) {
   return unwrap(
-    apiClient.post(comfyUrl(`/node-packs/${encodeURIComponent(packId)}/install`)),
+    apiClient.post(
+      comfyUrl(`/node-packs/${encodeURIComponent(packId)}/install`),
+      null,
+      { timeout: INSTALL_TIMEOUT_MS },
+    ),
   );
 }
 

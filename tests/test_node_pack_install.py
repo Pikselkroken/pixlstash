@@ -34,12 +34,17 @@ class _FakeManager:
         self.installs = installs
         self.queue = {"queue_running": [], "queue_pending": []}
         self.status = {"is_processing": False, "in_progress_count": 0}
+        # ComfyUI does not offer the pack's nodes unless a test says it does.
+        self.object_info = {}
         p = "v2/" if manager == "v4" else ""
         routes = {
             f"GET {p}customnode/installed": lambda: (200, self.installed),
             f"POST {p}manager/queue/start": 200,
             f"GET {p}manager/queue/status": lambda: (200, self.status),
             "GET queue": lambda: (200, self.queue),
+            "GET object_info": lambda: (
+                (200, self.object_info) if self.object_info is not None else 503
+            ),
             f"POST {'v2/' if manager == 'v4' else ''}manager/reboot": 200,
         }
         if manager == "v4":
@@ -94,11 +99,6 @@ class _FakeManager:
 
 @pytest.fixture
 def comfy(monkeypatch):
-    # ComfyUI does not offer the pack's nodes unless a test says it does.
-    monkeypatch.setattr(
-        node_pack_install_service, "fetch_object_info", lambda base_url: {}
-    )
-
     def at(manager="v3", **kwargs):
         fake = _FakeManager(manager, **kwargs)
         monkeypatch.setattr(node_pack_install_service.requests, "request", fake.request)
@@ -196,13 +196,9 @@ def test_a_pack_manager_already_lists_is_never_touched(comfy, folder):
     assert fake.queued == []
 
 
-def test_a_pack_already_loading_is_said_to_be_so(comfy, monkeypatch):
+def test_a_pack_already_loading_is_said_to_be_so(comfy):
     fake = comfy("v3", installed={PACK: {"ver": "3.0.11", "cnr_id": PACK}})
-    monkeypatch.setattr(
-        node_pack_install_service,
-        "fetch_object_info",
-        lambda base_url: {"InpaintCropImproved": {}, "InpaintStitchImproved": {}},
-    )
+    fake.object_info = {"InpaintCropImproved": {}, "InpaintStitchImproved": {}}
     with pytest.raises(node_pack_install_service.PackInstallRefused) as refused:
         node_pack_install_service.install(URL, PACK)
     assert "already installed and loaded" in str(refused.value)
@@ -270,21 +266,17 @@ def test_only_a_listed_id_installs_and_nothing_else_reaches_comfyui(comfy, pack_
     assert fake.calls == []
 
 
-def test_loaded_needs_every_class_and_reads_unreachable_as_not_yet(monkeypatch):
-    offered = {}
-
-    def object_info(base_url):
-        if offered is None:
-            raise RuntimeError("connection refused")
-        return offered
-
-    monkeypatch.setattr(node_pack_install_service, "fetch_object_info", object_info)
-    offered.update(InpaintCropImproved={})
+def test_loaded_needs_every_class_and_reads_unreachable_as_not_yet(comfy):
+    fake = comfy("v3")
+    fake.object_info = {"InpaintCropImproved": {}}
     assert node_pack_install_service.loaded(URL, PACK) is False
-    offered.update(InpaintStitchImproved={})
+    fake.object_info["InpaintStitchImproved"] = {}
     assert node_pack_install_service.loaded(URL, PACK) is True
-    offered = None
+    fake.object_info = None
     assert node_pack_install_service.loaded(URL, PACK) is False
+    # Pinned, proxy-free and redirect-free like every install call: the fake
+    # asserts all three on each request it answers.
+    assert fake.asked("GET", "object_info")
 
 
 def test_the_refusal_names_the_pack_that_provides_the_missing_nodes():

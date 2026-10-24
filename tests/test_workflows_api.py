@@ -3257,6 +3257,7 @@ class _FakeComfyForInstall:
     def __init__(self, custom_nodes: Path, reboot: dict):
         self.custom_nodes = custom_nodes
         self.reboot = reboot  # {"POST v2/manager/reboot": status, ...}
+        self.queue = {"queue_running": [], "queue_pending": []}
         self.asked: list[str] = []
 
     def get(self, url, **kwargs):
@@ -3271,6 +3272,8 @@ class _FakeComfyForInstall:
         assert kwargs.get("allow_redirects") is False
         key = f"{method} {urlsplit(url).path.lstrip('/')}"
         self.asked.append(key)
+        if key == "GET queue":
+            return _http_answer(200, self.queue)
         return _http_answer(self.reboot.get(key, 404), None)
 
 
@@ -3319,6 +3322,18 @@ def test_installing_copies_the_nodes_and_trashes_an_older_copy(install_env):
     assert not (target / "tests").exists(), "the pack's own tests are not installed"
     assert unrelated.is_dir(), "another node pack must never be touched"
     assert fake.asked[-1] == "POST v2/manager/reboot"
+
+
+def test_installing_the_nodes_never_restarts_a_busy_comfyui(install_env):
+    """A restart kills what ComfyUI is running; the nodes wait for the person."""
+    fake = install_env.with_comfy({"POST v2/manager/reboot": 200})
+    fake.queue["queue_running"] = [[0, "a-running-prompt"]]
+    result = comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert (result["restart"], result["detail"]) == (
+        "manual",
+        "ComfyUI is busy, so restart ComfyUI yourself.",
+    )
+    assert not [key for key in fake.asked if key.endswith("manager/reboot")]
 
 
 def test_without_comfyui_manager_the_restart_is_left_to_the_person(install_env):

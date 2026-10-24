@@ -25,7 +25,9 @@ class NodePack:
 # A code constant rather than data, so that adding a pack or moving a pin is a
 # change that goes through code review: each entry is third-party code PixlStash
 # offers to install. The version is a Comfy Registry release, never `latest` or
-# `nightly`, which would move under the review.
+# `nightly`, which would move under the review. Manager downloads the
+# registry's archive itself and nothing here checks its bytes, so the pin rests
+# on the Comfy Registry not replacing a version once it is published.
 KNOWN_PACKS: tuple[NodePack, ...] = (
     NodePack(
         id="comfyui-inpaint-cropandstitch",

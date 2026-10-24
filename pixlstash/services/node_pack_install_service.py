@@ -4,7 +4,7 @@ A pre-flight that finds a workflow's nodes missing names the pack that provides
 them (:func:`~pixlstash.services.node_packs.packs_for`). This asks the saved
 ComfyUI's Manager to install that pack at its pinned version, waits for Manager
 to finish, and restarts ComfyUI only when nothing is running or queued on it
-(#2054).
+(:func:`~pixlstash.services.comfyui_pack_service.restart_comfyui`, #2054).
 
 **Manager does the work, never PixlStash.** A ComfyUI with no Manager, or one
 that refuses, gets instructions instead; nothing is copied into
@@ -33,7 +33,6 @@ import requests
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import comfyui_link_service, node_packs
 from pixlstash.services.comfyui_pack_service import restart_comfyui
-from pixlstash.services.comfyui_recipe_service import fetch_object_info
 
 logger = get_logger(__name__)
 
@@ -62,7 +61,12 @@ def _yourself(pack: node_packs.NodePack) -> str:
 
 
 def _call(
-    method: str, pinned: str, path: str, *, body: Optional[dict] = None
+    method: str,
+    pinned: str,
+    path: str,
+    *,
+    body: Optional[dict] = None,
+    timeout: float = 10,
 ) -> Optional[requests.Response]:
     """One request to the pinned ComfyUI, or ``None`` when it did not answer.
 
@@ -74,7 +78,7 @@ def _call(
             method,
             f"{pinned}{path}",
             json=body,
-            timeout=10,
+            timeout=timeout,
             allow_redirects=False,
             proxies=comfyui_link_service.NO_PROXY,
         )
@@ -261,21 +265,6 @@ def _wait_for_manager(pinned: str, manager: str) -> None:
         time.sleep(POLL_EVERY_S)
 
 
-def _comfyui_busy(pinned: str) -> Optional[str]:
-    """Why ComfyUI must not restart now, or ``None`` when its queue is empty."""
-    answer = _call("GET", pinned, "queue")
-    try:
-        queue = answer.json() if answer is not None else None
-    except ValueError:
-        queue = None
-    if not isinstance(queue, dict):
-        logger.info("ComfyUI's queue at %s could not be read; not restarting.", pinned)
-        return "ComfyUI did not say whether it is busy"
-    if queue.get("queue_running") or queue.get("queue_pending"):
-        return "ComfyUI is busy"
-    return None
-
-
 def install(comfyui_url: Optional[str], pack_id: str) -> dict:
     """Install a known pack through the saved ComfyUI's Manager, then restart it.
 
@@ -334,7 +323,7 @@ def install(comfyui_url: Optional[str], pack_id: str) -> dict:
             f"why. {_yourself(pack)}"
         )
 
-    problem = _comfyui_busy(pinned) or restart_comfyui(pinned)
+    problem = restart_comfyui(pinned)
     if problem:
         logger.info("ComfyUI was not restarted for %s: %s", pack.id, problem)
     return {
@@ -373,10 +362,17 @@ def loaded(comfyui_url: Optional[str], pack_id: str) -> bool:
 
 
 def _offers(pinned: str, pack: node_packs.NodePack) -> bool:
-    """Whether ComfyUI's ``object_info`` lists every class of *pack*."""
+    """Whether ComfyUI's ``object_info`` lists every class of *pack*.
+
+    Asked the way every other call here is (pinned, no proxy, no redirect),
+    with the longer timeout the whole map can take to build.
+    """
+    answer = _call("GET", pinned, "object_info", timeout=60)
     try:
-        object_info = fetch_object_info(pinned.rstrip("/"))
-    except RuntimeError as exc:
-        logger.debug("ComfyUI not answering yet for %s: %s", pack.id, exc)
+        object_info = answer.json() if answer is not None else None
+    except ValueError as exc:
+        logger.info("ComfyUI's object_info at %s was not JSON: %s", pinned, exc)
+        object_info = None
+    if not isinstance(object_info, dict) or answer.status_code != 200:
         return False
     return all(name in object_info for name in pack.classes)
