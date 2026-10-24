@@ -7082,8 +7082,18 @@ unchanged by the tab's existence.
   New workflow set picker (`WorkflowTemplatePicker`) and a set's template offer
   strip (`ModelSetSlotsPanel`, "Not on your shelf: …") do the same: their files
   come from the committed list the download reads, so every `https:` file there
-  is fetchable by its name. **Not built:** the design's *Download the missing*, all
-  at once.
+  is fetchable by its name.
+- **The card menu** (right-click, the Menu key, Shift+F10; the file-manager
+  rule: right-clicking an unselected card selects it alone) has everything the
+  pill does, Add and Clear selection, and *Download missing models*, the
+  design's *Download the missing* all at once: each file of the selection that
+  is missing and `downloadable`, once by name and less any already
+  downloading, through `downloadModels` (`composables/useModelDownloads.js`,
+  which the one-file `ModelDownloadButton` uses too). Refused with the reason
+  when there is none, and in a read-only session. Mine's card menu and `⋯`
+  carry the same row; there the view asks the run pre-flight (cached) of each
+  selected non-draft workflow, as the Workflow tab does, and downloads what
+  `downloadableInPreflight` reads off the answer.
 
 ---
 
