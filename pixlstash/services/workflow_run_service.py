@@ -48,7 +48,11 @@ from pixlstash.services.comfyui_service import (
     pixlstash_node_refusals,
 )
 from pixlstash.services import node_packs
-from pixlstash.services.model_downloads import digest_source, download_source
+from pixlstash.services.model_downloads import (
+    digest_source,
+    download_source,
+    running_download,
+)
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
     SECRET_FIELD_RE,
@@ -97,6 +101,10 @@ MISSING_MODELS = "missing_models"
 # a pack from before its `shelf` widget (#1923): a restart, not an install, is
 # the fix.
 PACK_OUTDATED = "pack_outdated"
+# A model the graph names that PixlStash is downloading right now
+# (`POST /model-downloads`): a run would fail on it inside ComfyUI, or go
+# without a LoRA the owner picked, so it is refused until the file has landed.
+MODELS_DOWNLOADING = "models_downloading"
 A1111 = "a1111"
 PICTURE_INPUT_UNFILLED = "picture_input_unfilled"
 NO_LORA_LOADER = "no_lora_loader"
@@ -692,6 +700,16 @@ def judge(
     ]
     if digest_present is not None:
         models += missing_digest_models(graph, digest_present)
+    downloading = []
+    for model in models:
+        live = running_download(model["file"], model.get("sha256"))
+        if live is not None:
+            model["percent"] = live["percent"]
+            downloading.append(model)
+    if downloading:
+        # Ahead of the missing ones: it is not missing, only not here yet.
+        reasons.append(Reason(MODELS_DOWNLOADING, {"models": downloading}))
+        models = [model for model in models if model not in downloading]
     for model in models:
         # Only where it is true: `POST /model-downloads` can fetch it, because
         # the template list links a file of this name. For a digest, only
@@ -874,6 +892,23 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
     bypassed: list[dict] = []
     for node_id, missing in missing_by_node.items():
         item = missing[0]
+        on_its_way = [
+            str(entry.get("value"))
+            for entry in missing
+            if running_download(str(entry.get("value"))) is not None
+        ]
+        if on_its_way:
+            # The owner put it in and PixlStash is fetching it: a run without
+            # it would be quietly not the run they asked for. Left in, it is
+            # `judge`'s MODELS_DOWNLOADING, which refuses until it lands.
+            logger.info(
+                "Node %s (%s) keeps its refusal rather than being bypassed: "
+                "%s is still downloading.",
+                node_id,
+                item.get("class_type"),
+                ", ".join(on_its_way),
+            )
+            continue
         if any(item.get("value") == FORGOTTEN_MODEL for item in missing):
             # The hub lost this reference's NAME; the file itself may well be
             # installed. :func:`resolve_references` puts the token in on
@@ -1972,7 +2007,8 @@ def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> boo
     the owner would expect: installing a file is a trip away from the keyboard,
     so queueing the rest of a mixed batch would leave them re-running the same
     gesture afterwards to catch the ones that were skipped. Restarting ComfyUI
-    for an out-of-date pack (``pack_outdated``) is the same trip.
+    for an out-of-date pack (``pack_outdated``) is the same trip, and so is
+    waiting for a download to land (``models_downloading``).
 
     **An uninspectable ComfyUI blocks unless the owner has consented**, which is
     the whole of the ``allow_unchecked`` rule: without it nothing at all is
@@ -1984,7 +2020,7 @@ def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> boo
     """
     unchecked = (COMFYUI_UNREACHABLE, COMFYUI_NOT_CONFIGURED)
     return any(
-        reason.code in (MISSING_MODELS, PACK_OUTDATED)
+        reason.code in (MISSING_MODELS, PACK_OUTDATED, MODELS_DOWNLOADING)
         or (reason.code in unchecked and not allow_unchecked)
         for reason in reasons
     )

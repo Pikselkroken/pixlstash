@@ -155,6 +155,28 @@ export const useTasksStore = defineStore("tasks", () => {
       ),
   );
 
+  /** The downloads still on their way, as the last poll listed them. */
+  const runningDownloads = computed(() =>
+    modelDownloads.value.filter((d) => d.status === "running"),
+  );
+
+  /**
+   * The running download of *file* (by its own name, any case, as the server
+   * matches it) or of *sha256*, or null. What a workflow row or a set member
+   * asks to say it is on its way rather than missing.
+   */
+  function runningDownload({ file = "", sha256 = "" } = {}) {
+    const name = String(file).split(/[\\/]/).pop().toLowerCase();
+    const digest = String(sha256 || "").toLowerCase();
+    return (
+      runningDownloads.value.find(
+        (d) =>
+          (name && String(d.file).toLowerCase() === name) ||
+          (digest && d.sha256 === digest),
+      ) ?? null
+    );
+  }
+
   function noteDownloads(list) {
     modelDownloads.value = list;
     const notices = useNoticeStore();
@@ -778,6 +800,8 @@ export const useTasksStore = defineStore("tasks", () => {
     // model downloads
     modelDownloads,
     runningDownloadFiles,
+    runningDownloads,
+    runningDownload,
     downloadsLanded,
     downloadStarted,
     cancelDownload,

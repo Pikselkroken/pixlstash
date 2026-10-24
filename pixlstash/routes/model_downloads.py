@@ -55,6 +55,17 @@ class ModelDownloadResponse(BaseModel):
     percent: float = 0
     error: Optional[str] = None
     model_id: Optional[int] = None
+    sha256: Optional[str] = Field(
+        default=None,
+        description=(
+            "The digest the template list records for its link, None where it "
+            "has none: a set can hold the file by it before it lands."
+        ),
+    )
+    directory: Optional[str] = Field(
+        default=None, description="The ComfyUI models folder it is for."
+    )
+    slot: str = Field(default="other", description="The set slot it would fill.")
 
 
 class ModelDownloadCancelResponse(BaseModel):

@@ -32,6 +32,8 @@ from pixlstash.services.model_folder_scanner import ModelFolderScanner
 from pixlstash.services.model_mover import PARTIAL_SUFFIX, SHELF_IO_LOCK
 from pixlstash.services.workflow_run_service import (
     MISSING_MODELS,
+    MODELS_DOWNLOADING,
+    blocks_batch,
     bypass_missing_loras,
     judge,
     missing_digest_models,
@@ -175,6 +177,12 @@ def test_a_download_lands_in_the_marked_folder_and_is_registered(
             hub, "SDXL\\Style.safetensors", on_arrived=arrived.append
         )
         done = _wait(entry["id"])
+    # What a workflow row or a set slot offers it under while it is on its way.
+    assert (entry["directory"], entry["slot"], entry["sha256"]) == (
+        "loras",
+        "lora",
+        None,
+    )
     assert done["status"] == STATUS_DONE, done
     assert (done["received"], done["total"], done["percent"]) == (
         len(adapter_bytes),
@@ -542,6 +550,114 @@ def test_a_bypassed_lora_the_list_links_is_marked_downloadable():
         "my_own_lora.safetensors": None,
     }
     assert graph["4"]["inputs"]["model"] == ["1", 0]
+
+
+def _running(file, sha256=None):
+    """A download in flight, 43% in, as the registry holds one."""
+    entry = {
+        "id": f"dl-{file}",
+        "file": file,
+        "status": "running",
+        "received": 43,
+        "total": 100,
+        "sha256": sha256,
+        "ended_at": None,
+    }
+    model_downloads._downloads[entry["id"]] = entry
+    return entry
+
+
+def test_a_model_still_downloading_refuses_the_run_until_it_lands():
+    """Wrong if a model on its way is reported missing (and offered again for
+    download), if a run naming it would go ahead, or if it stays refused once
+    the download has ended. By name in any case, and by digest."""
+    graph = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "SDXL/Hunyuan_3D_v2.1.safetensors"},
+        },
+        "2": {"class_type": "PixlStashVAELoader", "inputs": {"vae_sha256": _QWEN_VAE}},
+        "3": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "my_own_lora.safetensors"},
+        },
+        "4": {"class_type": "SaveImage", "inputs": {}},
+    }
+    object_info = {
+        "CheckpointLoaderSimple": {
+            "input": {"required": {"ckpt_name": [["other.safetensors"], {}]}}
+        },
+        "LoraLoader": {
+            "input": {"required": {"lora_name": [["other.safetensors"], {}]}}
+        },
+        "PixlStashVAELoader": {"input": {"required": {}}},
+        "SaveImage": {"input": {"required": {}}},
+    }
+    _running("hunyuan_3D_V2.1.safetensors")
+    _running("renamed_vae.safetensors", sha256=_QWEN_VAE)
+    reasons, _ = judge(graph, object_info, None, digest_present=lambda d: False)
+    by_code = {r.code: r.detail["models"] for r in reasons}
+    assert by_code[MODELS_DOWNLOADING] == [
+        {
+            "file": "SDXL/Hunyuan_3D_v2.1.safetensors",
+            "folder": "checkpoints",
+            "percent": 43.0,
+        },
+        {
+            "file": "qwen_image_vae.safetensors",
+            "folder": "vae",
+            "sha256": _QWEN_VAE,
+            "percent": 43.0,
+        },
+    ]
+    assert by_code[MISSING_MODELS] == [
+        {"file": "my_own_lora.safetensors", "folder": "loras"}
+    ]
+    assert blocks_batch([r for r in reasons if r.code == MODELS_DOWNLOADING])
+
+    for entry in model_downloads._downloads.values():
+        entry["status"] = STATUS_DONE
+    reasons, _ = judge(graph, object_info, None, digest_present=lambda d: False)
+    assert MODELS_DOWNLOADING not in {r.code for r in reasons}
+    assert (
+        len(next(r for r in reasons if r.code == MISSING_MODELS).detail["models"]) == 3
+    )
+
+
+def test_a_lora_still_downloading_is_not_bypassed():
+    """Wrong if the run quietly goes without a LoRA the owner put in and is
+    fetching: it keeps its loader, and the pre-flight refuses on it."""
+    lora_spec = {
+        "input": {
+            "required": {"model": ["MODEL"], "lora_name": [["other.safetensors"], {}]}
+        },
+        "output": ["MODEL"],
+    }
+    object_info = {
+        "CheckpointLoaderSimple": {"input": {"required": {}}, "output": ["MODEL"]},
+        "LoraLoader": lora_spec,
+        "KSampler": {"input": {"required": {"model": ["MODEL"]}}, "output": []},
+    }
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "Coming.safetensors", "model": ["1", 0]},
+        },
+        "3": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "gone.safetensors", "model": ["2", 0]},
+        },
+        "4": {"class_type": "KSampler", "inputs": {"model": ["3", 0]}},
+    }
+    _running("coming.safetensors")
+    bypassed = bypass_missing_loras(graph, object_info)
+    assert [entry["file"] for entry in bypassed] == ["gone.safetensors"]
+    assert graph["4"]["inputs"]["model"] == ["2", 0]
+    reasons, _ = judge(graph, object_info, None)
+    assert [r.detail["models"] for r in reasons if r.code == MODELS_DOWNLOADING] == [
+        [{"file": "Coming.safetensors", "folder": "loras", "percent": 43.0}]
+    ]
 
 
 def test_a_body_of_unknown_length_is_refused(hub, target, adapter_bytes, linked):

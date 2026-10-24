@@ -56,7 +56,7 @@ from pixlstash.services.model_folder_scanner import (
     SHELF_MODEL_SUFFIXES,
     ModelFolderScanner,
 )
-from pixlstash.services.workflow_templates import load_templates
+from pixlstash.services.workflow_templates import directory_slot, load_templates
 from pixlstash.services.model_mover import (
     PARTIAL_SUFFIX,
     SHELF_IO_LOCK,
@@ -229,6 +229,12 @@ def start_download(
         "error": None,
         "model_id": None,
         "ended_at": None,
+        # What a workflow or a set can name it by while it is still on its way:
+        # the digest the list records (None for a gated link), the ComfyUI
+        # folder it is for, and the set slot that folder fills.
+        "sha256": source.get("sha256"),
+        "directory": source.get("directory"),
+        "slot": directory_slot(source.get("directory")),
     }
     with _lock:
         # Case folded: on macOS and Windows two spellings are one partial file.
@@ -296,6 +302,27 @@ def live_downloads() -> list[dict]:
         ]:
             del _downloads[key]
         return [_public(d) for d in _downloads.values()]
+
+
+def running_download(file: str, sha256: Optional[str] = None) -> Optional[dict]:
+    """The running download of *file* or of *sha256*, or None.
+
+    *file* by its own name, case folded and without the loader's subfolder, as
+    :func:`download_source` reads it; *sha256* where the list recorded one. A
+    run that names a model still on its way is refused rather than submitted
+    (``workflow_run_service.MODELS_DOWNLOADING``).
+    """
+    name = os.path.basename((file or "").replace("\\", "/")).casefold()
+    digest = (sha256 or "").strip().lower()
+    with _lock:
+        for entry in _downloads.values():
+            if entry["status"] != STATUS_RUNNING:
+                continue
+            if (name and entry["file"].casefold() == name) or (
+                digest and entry.get("sha256") == digest
+            ):
+                return _public(entry)
+    return None
 
 
 def _public(entry: dict) -> dict:

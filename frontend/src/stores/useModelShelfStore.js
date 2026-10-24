@@ -3152,8 +3152,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Undo takes all of them back out.
    *
    * @param {Object} set
-   * @param {Array<{model_id: number, slot: string, sha256: string, name: string}>}
-   *   added - in the order they went in.
+   * @param {Array<{model_id: ?number, slot: string, sha256: string, name: string}>}
+   *   added - in the order they went in; `model_id` null for a model still
+   *   downloading, which goes back in by its digest.
    * @param {string} noun - the slot's plural, e.g. "LoRAs".
    */
   function announceAdded(set, added, noun) {
@@ -3171,7 +3172,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       () =>
         addToHandMadeSet(
           set,
-          added.map(({ model_id, slot }) => ({ model_id, slot })),
+          // One still downloading has no shelf id yet: by its digest.
+          added.map(({ model_id, slot, sha256, name }) =>
+            model_id == null
+              ? { sha256, slot, label: name }
+              : { model_id, slot },
+          ),
         ),
     );
   }
