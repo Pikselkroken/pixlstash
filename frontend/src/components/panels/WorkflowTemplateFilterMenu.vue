@@ -131,6 +131,11 @@
                 :checked="store.filters[sub].includes(option.id)"
                 @change="store.toggleFilter(sub, option.id)"
               />
+              <PixlstashIcon
+                v-if="option.pixlstash"
+                :size="14"
+                data-testid="wtf-option-pixlstash"
+              />
               <span class="fm-check-label">{{ option.label }}</span>
               <span v-if="option.count != null" class="fm-n">{{
                 option.count
@@ -173,6 +178,7 @@ import {
 } from "../../stores/useWorkflowTemplatesStore";
 import NameFilterField from "../widgets/NameFilterField.vue";
 import OptionRows from "../widgets/OptionRows.vue";
+import PixlstashIcon from "../widgets/PixlstashIcon.vue";
 
 const props = defineProps({
   // The v-menu keeps its content mounted, so a closed menu says so here and

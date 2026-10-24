@@ -64,10 +64,18 @@
     </div>
 
     <!-- Where it comes from, top-start as a workflow card's origin badge is:
-         nothing on this tab may read as the owner's own work. -->
+         nothing on this tab may read as the owner's own work. PixlStash's own
+         pack gets its own mark rather than the puzzle piece. The tip says
+         what the label stands for; the card's name says the source too. -->
     <div class="wf-card__start">
-      <span class="wf-card__badge">
+      <span class="wf-card__badge wtc__source" data-testid="template-source-badge">
+        <Tooltip :text="sourceTip" activator="parent" :describe="false" />
         <ComfyuiIcon v-if="template.source === 'builtin'" :size="12" />
+        <PixlstashIcon
+          v-else-if="ours"
+          :size="12"
+          data-testid="template-source-pixlstash"
+        />
         <v-icon v-else size="12">{{
           template.source === "pack" ? "mdi-puzzle-outline" : "mdi-crown"
         }}</v-icon>
@@ -88,11 +96,13 @@ import { VIcon } from "vuetify/components";
 
 import { templateThumbnailUrl } from "../../api/comfyui";
 import {
+  isPixlstashPack,
   missingCount,
   templateFileLetter,
   templateReadiness,
 } from "../../stores/useWorkflowTemplatesStore";
 import ComfyuiIcon from "./ComfyuiIcon.vue";
+import PixlstashIcon from "./PixlstashIcon.vue";
 import Tooltip from "./Tooltip.vue";
 
 // Marks drawn before "+N": what fits the strip at the grid's 240px floor.
@@ -144,10 +154,24 @@ const partnerText = computed(() =>
   [...(props.template.providers ?? []), "Runs with credits"].join(" · "),
 );
 
+const ours = computed(() => isPixlstashPack(props.template));
+
 const sourceText = computed(() => {
   if (props.template.source === "builtin") return "ComfyUI";
+  if (ours.value) return "PixlStash";
   if (props.template.source === "pack") return props.template.module;
   return "Partner API";
+});
+
+const sourceTip = computed(() => {
+  if (props.template.source === "builtin") return "Comes with ComfyUI";
+  if (ours.value) {
+    return "From the ComfyUI-PixlStash nodes, PixlStash's own pack for ComfyUI";
+  }
+  if (props.template.source === "pack") {
+    return `From the ${props.template.module} node pack`;
+  }
+  return "Runs on Comfy's paid API";
 });
 
 const accessibleName = computed(() =>
@@ -228,6 +252,12 @@ const accessibleName = computed(() =>
 
 .wf-card__start > .wf-card__badge {
   position: static;
+}
+
+/* Hoverable for its tip. A click on it still bubbles to the grid row that
+   selects the card. */
+.wtc__source {
+  pointer-events: auto;
 }
 
 .wf-card__mark-more {

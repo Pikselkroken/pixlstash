@@ -13,6 +13,7 @@ vi.mock("../api/comfyui", () => ({
 }));
 
 import {
+  isPixlstashPack,
   templateFileLetter,
   templateReadiness,
   useWorkflowTemplatesStore,
@@ -98,6 +99,46 @@ describe("which templates could run here", () => {
     expect(templateFileLetter(file("ae.safetensors", true, "vae"))).toBe("V");
     expect(templateFileLetter(file("x.safetensors", true, "loras"))).toBe("L");
     expect(templateFileLetter(file("x.pth", true, "sams"))).toBe("S");
+  });
+});
+
+describe("PixlStash's own pack", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setActivePinia(createPinia());
+  });
+
+  const pack = (module) => ({ key: `${module}/x`, module, source: "pack" });
+
+  it("is recognised by every folder name it installs under, and only those", () => {
+    // A git clone, the registry or Manager, a GitHub zip.
+    for (const module of ["ComfyUI-PixlStash", "comfyui-pixlstash", "ComfyUI-PixlStash-main"]) {
+      expect(isPixlstashPack(pack(module))).toBe(true);
+    }
+    // Another pack whose name only starts the same is not ours.
+    expect(isPixlstashPack(pack("ComfyUI-PixlStashFoo"))).toBe(false);
+    expect(isPixlstashPack(pack("WanVideoWrapper"))).toBe(false);
+    // A built-in that happens to share the name is not a pack.
+    expect(isPixlstashPack({ ...pack("ComfyUI-PixlStash"), source: "builtin" })).toBe(false);
+  });
+
+  it("is named PixlStash and listed first among the packs, under its own id", () => {
+    const store = useWorkflowTemplatesStore();
+    store.templates = [
+      pack("Alpha"),
+      pack("ComfyUI-PixlStash"),
+      { ...pack("ComfyUI-PixlStash"), key: "ComfyUI-PixlStash/y" },
+      pack("Zeta"),
+    ];
+    expect(
+      store.filterOptions.category.map((o) => [o.id, o.label, o.count, o.pixlstash]),
+    ).toEqual([
+      ["extension-ComfyUI-PixlStash", "PixlStash", 2, true],
+      ["extension-Alpha", "Alpha", 1, false],
+      ["extension-Zeta", "Zeta", 1, false],
+    ]);
+    store.setFilters({ category: ["extension-ComfyUI-PixlStash"] });
+    expect(store.filterChips.map((chip) => chip.value)).toContain("PixlStash");
   });
 });
 

@@ -82,7 +82,47 @@ describe("a template card", () => {
     expect(wrapper.find('[data-testid="template-source"]').text()).toBe(
       "WanVideoWrapper",
     );
+    expect(wrapper.find('[data-testid="template-source-pixlstash"]').exists()).toBe(false);
     expect(state(wrapper)).toBe("Pack not loaded");
+  });
+
+  it("gives PixlStash's own pack its own mark and name, not the folder's", () => {
+    for (const module of ["ComfyUI-PixlStash", "comfyui-pixlstash", "ComfyUI-PixlStash-main"]) {
+      const wrapper = mountCard({
+        ...BASE,
+        key: `${module}/x`,
+        module,
+        source: "pack",
+        files: [],
+      });
+      expect(wrapper.find('[data-testid="template-source"]').text()).toBe("PixlStash");
+      expect(wrapper.find('[data-testid="template-source-pixlstash"]').exists()).toBe(true);
+      // No puzzle piece beside it.
+      expect(wrapper.find('[data-testid="template-source-badge"]').text()).toBe(
+        "PixlStash",
+      );
+      expect(wrapper.find("article").attributes("aria-label")).toContain(
+        "PixlStash template",
+      );
+    }
+  });
+
+  it("says where each source comes from in the badge's tip", () => {
+    const tip = (template) =>
+      mountCard(template)
+        .find('[data-testid="template-source-badge"] tooltip-stub')
+        .attributes("text");
+    const pack = { ...BASE, source: "pack", files: [] };
+    expect(tip(BASE)).toBe("Comes with ComfyUI");
+    expect(tip({ ...pack, module: "ComfyUI-PixlStash" })).toBe(
+      "From the ComfyUI-PixlStash nodes, PixlStash's own pack for ComfyUI",
+    );
+    expect(tip({ ...pack, module: "WanVideoWrapper" })).toBe(
+      "From the WanVideoWrapper node pack",
+    );
+    expect(tip({ ...BASE, source: "partner", files: [] })).toBe(
+      "Runs on Comfy's paid API",
+    );
   });
 
   it("says a partner template runs on Comfy's API, and draws no picture it has not got", () => {

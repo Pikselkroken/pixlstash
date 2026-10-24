@@ -54,4 +54,27 @@ describe("WorkflowTemplateFilterMenu", () => {
     expect(store.filters.category).toEqual(["Video Tools"]);
     wrapper.unmount();
   });
+
+  it("draws the PixlStash mark on its own pack's row only", async () => {
+    const store = useWorkflowTemplatesStore();
+    store.templates = [
+      { key: "Alpha/a", source: "pack", module: "Alpha" },
+      { key: "ComfyUI-PixlStash/b", source: "pack", module: "ComfyUI-PixlStash" },
+    ];
+    const wrapper = mount(WorkflowTemplateFilterMenu, {
+      props: { open: true },
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+      attachTo: document.body,
+    });
+    await wrapper.find('[data-kind="category"]').trigger("click");
+    await flushPromises();
+    const rows = wrapper
+      .find('[data-testid="wtf-sub-category"]')
+      .findAll('[data-testid="wtf-option"]');
+    expect(rows.map((row) => row.text())).toEqual(["PixlStash1", "Alpha1"]);
+    expect(
+      rows.map((row) => row.find('[data-testid="wtf-option-pixlstash"]').exists()),
+    ).toEqual([true, false]);
+    wrapper.unmount();
+  });
 });
