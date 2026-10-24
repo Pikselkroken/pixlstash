@@ -2277,9 +2277,9 @@ describe("the body it sends", () => {
       expect(wrapper.find("[data-testid=rund-added-upscale]").exists()).toBe(false);
     });
 
-    it("is not offered on an Upscaler, which already is the upscale", async () => {
+    it.each(["upscale", "video"])("is not offered on a %s workflow", async (type) => {
       getWorkflowCard.mockResolvedValue({
-        card: card({ type: "upscale", specials: [], default_recipe: { stages: {} } }),
+        card: card({ type, specials: [], default_recipe: { stages: {} } }),
       });
       const wrapper = await mountRun({ kind: "card", workflowId: KEY });
       expect(wrapper.find("fieldset").exists()).toBe(false);

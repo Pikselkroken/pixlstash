@@ -1874,8 +1874,9 @@ def add_upscale(graph: dict, factor: float, model: Optional[str]) -> list[str]:
     ``ImageUpscaleWithModel``), then a Lanczos resize to *factor*; with no
     model, the resize alone. Saves of one picture share one chain. An
     intermediate save (the picture before a second pass) keeps its 1x: only
-    the graph's results are upscaled. Nothing is added for a graph that saves
-    nothing.
+    the graph's results are upscaled. A video save is left alone: a model pass
+    over every frame is not what the stage offers. Nothing is added for a graph
+    that saves no picture.
 
     Returns:
         The ids of the saves now fed by the upscale.
@@ -1886,6 +1887,7 @@ def add_upscale(graph: dict, factor: float, model: Optional[str]) -> list[str]:
         for node_id, node in graph.items()
         if isinstance(node, dict)
         and node.get("class_type") in SAVE_NODE_CLASSES
+        and node.get("class_type") not in VIDEO_SAVE_CLASSES
         and is_link((node.get("inputs") or {}).get("images"))
         and node_id not in staged
     ]

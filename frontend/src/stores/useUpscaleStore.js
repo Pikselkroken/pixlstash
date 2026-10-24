@@ -28,7 +28,10 @@ export const useUpscaleStore = defineStore("upscale", () => {
   const remembered = load();
   /** 1.5, 2 or 4. */
   const factor = ref(remembered.factor);
-  /** The SHA-256 of the shelf upscaler last used; null is the Lanczos resize. */
+  /**
+   * The SHA-256 of the shelf upscaler last picked, "" for the Lanczos resize
+   * picked by hand, null for no pick yet (the shelf's first, see `model`).
+   */
   const chosen = ref(remembered.model ?? null);
   /** The upscalers on the shelf, `[{sha256, name}]`; null until read. */
   const models = ref(null);

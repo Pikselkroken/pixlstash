@@ -143,6 +143,5 @@ async function submit() {
 
 .upd-icon {
   flex: none;
-  margin-top: 1px;
 }
 </style>

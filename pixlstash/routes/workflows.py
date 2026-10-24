@@ -7718,11 +7718,21 @@ def create_router(server) -> APIRouter:
                 )
             # The upscale this run adds (#1868): per run, so never into a save.
             if body.upscale is not None and not saving and not own_upscale:
-                run_service.add_upscale(
+                if not run_service.add_upscale(
                     graph,
                     body.upscale.factor,
                     _shelf_upscaler(hub, body.upscale.model_sha256),
-                )
+                ):
+                    # Asked for and impossible: never a run that quietly comes
+                    # out at 1x.
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "This workflow saves no picture PixlStash can "
+                            "upscale (a video, or a saver it does not know), "
+                            "so it cannot add an upscale. Run it without one."
+                        ),
+                    )
             # Not on a saved recipe's own card: that graph already has exactly
             # the stages the recipe ran with. Nor a stage this run keeps.
             off = [

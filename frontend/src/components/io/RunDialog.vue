@@ -2246,13 +2246,14 @@ const upscale = useUpscaleStore();
 /**
  * The upscale this run adds (#1868): offered on every workflow whose graph has
  * no upscale of its own, which keeps its own row above, and never on an
- * Upscaler, which already is the upscale. Off by default, for this run only.
+ * Upscaler, which already is the upscale, nor on a video, whose frames it does
+ * not upscale. Off by default, for this run only.
  */
 const addedUpscaleOffered = computed(
   () =>
     Boolean(card.value) &&
     !(card.value.specials || []).includes("upscale") &&
-    card.value.type !== "upscale",
+    !["upscale", "video"].includes(card.value.type),
 );
 const addedUpscale = ref(false);
 

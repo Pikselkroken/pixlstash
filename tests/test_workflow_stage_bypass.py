@@ -538,6 +538,15 @@ def test_two_saves_of_one_picture_share_one_upscale():
     assert [n["class_type"] for n in graph.values()].count("UpscaleModelLoader") == 1
 
 
+def test_a_video_save_is_left_alone():
+    graph = _base()
+    graph["9"]["class_type"] = "VHS_VideoCombine"
+    before = copy.deepcopy(graph)
+
+    assert add_upscale(graph, 2.0, "4x-UltraSharp.pth") == []
+    assert graph == before
+
+
 def test_a_graph_that_saves_nothing_gets_nothing():
     graph = _base()
     del graph["9"]

@@ -10054,7 +10054,9 @@ are skipped and before the shelf loader swap and `judge`, through
 the intermediate saves, reads `UpscaleModelLoader` -> `ImageUpscaleWithModel`
 -> `ImageScaleBy` (Lanczos, to the factor over the model's own, read off its
 filename and 4 when the name says nothing), or the resize alone with no model.
-Saves of one picture share one chain. The model is named by its shelf digest
+Saves of one picture share one chain. A video save is left alone, and a
+run asked to upscale a graph with no picture save to upscale is a 400 rather
+than a run that comes out at 1x. The model is named by its shelf digest
 and loaded by filename, so a file this ComfyUI lacks is swapped to the pack's
 loader as any graph's is. A graph with an upscale of its own
 (`has_upscale`, the stage the Run popup draws) is left alone, and nothing is

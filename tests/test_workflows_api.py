@@ -6731,6 +6731,13 @@ _EVERY_WORKFLOW_ROUTE = (
         {"workflow_id": BUSY_WF},
     ),
     ("POST", "/workflows/run", "/workflows/run", {"workflow_id": BUSY_WF}),
+    ("POST", "/workflows/upscale", "/workflows/upscale", {"picture_ids": [1]}),
+    (
+        "POST",
+        "/workflows/upscale/preflight",
+        "/workflows/upscale/preflight",
+        {"picture_ids": [1]},
+    ),
     (
         "POST",
         "/workflows/run/opening",
@@ -19532,6 +19539,28 @@ def test_a_graph_with_its_own_upscale_is_left_alone(upscalable, monkeypatch):
     graph = _run(upscalable, workflow_id=RUN_WF, upscale={"factor": 4})
     assert graph["4"]["inputs"]["images"] == ["5", 0], graph
     assert [n["class_type"] for n in graph.values()].count("ImageScaleBy") == 1
+
+
+def test_an_upscale_a_graph_cannot_take_is_refused_not_dropped(upscalable, monkeypatch):
+    """A run asked to upscale never comes out at 1x without a word."""
+    video = json.loads(json.dumps(RUN_DOCUMENT))
+    video["4"]["class_type"] = "VHS_VideoCombine"
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(video)),
+            [],
+        ),
+    )
+    del upscalable.submitted[:]
+    r = upscalable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": RUN_WF, "upscale": {"factor": 2}},
+    )
+    assert r.status_code == 400, r.text
+    assert "saves no picture" in r.json()["detail"]
+    assert upscalable.submitted == []
 
 
 def test_an_upscale_model_the_shelf_lacks_is_a_400(upscalable):
