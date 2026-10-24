@@ -372,8 +372,10 @@ function onKeyDown(event) {
   box-shadow: 0 0 0 2px rgb(var(--v-theme-background));
 }
 
-/* The shipped copy's mark: a disconnected glyph in the error hue, on the
-   strip's ground so it reads apart from the mark beneath. */
+/* The shipped copy's mark: a disconnected glyph in the error fill, on the
+   strip's ground so it reads apart from the mark beneath. The fill, not
+   `surface-error`: the owner's call, since the dark theme's lifted value reads
+   amber at this size. */
 .wtp-link-off {
   position: absolute;
   right: 0;
@@ -381,7 +383,7 @@ function onKeyDown(event) {
   display: inline-flex;
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-background));
-  color: rgb(var(--v-theme-surface-error));
+  color: rgb(var(--v-theme-error));
 }
 
 .wtp-link-menu {
