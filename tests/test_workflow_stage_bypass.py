@@ -21,7 +21,10 @@ from pixlstash.services.workflow_identity import (
 )
 from pixlstash.services.workflow_run_service import (
     STAGE_NOT_SKIPPABLE,
+    add_upscale,
+    has_upscale,
     skip_requested_stages,
+    upscale_model_scale,
 )
 
 OBJECT_INFO = json.loads(
@@ -463,3 +466,107 @@ def test_an_intermediate_save_cannot_be_skipped_unasked_without_comfyui():
     assert [(r.code, r.detail["stage"]) for r in reasons] == [
         (STAGE_NOT_SKIPPABLE, INTERMEDIATE_SAVE)
     ]
+
+
+# --- an upscale added for one run (#1868) -----------------------------------
+
+
+def test_an_added_upscale_runs_the_model_then_resizes_to_the_factor():
+    graph = _base()
+
+    assert add_upscale(graph, 2.0, "4x-UltraSharp.pth") == ["9"]
+
+    scale = graph["9"]["inputs"]["images"]
+    resize = graph[scale[0]]
+    assert resize["class_type"] == "ImageScaleBy"
+    assert resize["inputs"]["upscale_method"] == "lanczos"
+    # A 4x model, then halved: 2x in all.
+    assert resize["inputs"]["scale_by"] == 0.5
+    upscale = graph[resize["inputs"]["image"][0]]
+    assert upscale["class_type"] == "ImageUpscaleWithModel"
+    assert upscale["inputs"]["image"] == ["8", 0]
+    loader = graph[upscale["inputs"]["upscale_model"][0]]
+    assert loader == {
+        "class_type": "UpscaleModelLoader",
+        "inputs": {"model_name": "4x-UltraSharp.pth"},
+    }
+    assert has_upscale(graph)
+    assert not has_upscale(_base())
+
+
+def test_an_added_upscale_with_no_model_is_a_resize_alone():
+    graph = _base()
+
+    add_upscale(graph, 1.5, None)
+
+    resize = graph[graph["9"]["inputs"]["images"][0]]
+    assert resize == {
+        "class_type": "ImageScaleBy",
+        "inputs": {"image": ["8", 0], "upscale_method": "lanczos", "scale_by": 1.5},
+    }
+    assert len(graph) == len(_base()) + 1
+
+
+def test_a_model_of_the_asked_factor_needs_no_resize():
+    graph = _base()
+
+    add_upscale(graph, 2.0, "RealESRGAN_x2.pth")
+
+    upscale = graph[graph["9"]["inputs"]["images"][0]]
+    assert upscale["class_type"] == "ImageUpscaleWithModel"
+    assert not any(n["class_type"] == "ImageScaleBy" for n in graph.values())
+
+
+def test_an_intermediate_save_keeps_its_one_x():
+    """Only the graph's result is upscaled; the picture before the second
+    pass is saved as it was."""
+    graph = _two_pass_saving_the_first()
+
+    assert add_upscale(graph, 2.0, None) == ["9"]
+
+    assert graph["41"]["inputs"]["images"] == ["40", 0]
+    assert graph["9"]["inputs"]["images"] != ["8", 0]
+
+
+def test_two_saves_of_one_picture_share_one_upscale():
+    graph = _base()
+    graph["10"] = copy.deepcopy(graph["9"])
+
+    assert sorted(add_upscale(graph, 4.0, "4xNMKD-Superscale.pth")) == ["10", "9"]
+
+    assert graph["9"]["inputs"]["images"] == graph["10"]["inputs"]["images"]
+    assert [n["class_type"] for n in graph.values()].count("UpscaleModelLoader") == 1
+
+
+def test_a_video_save_is_left_alone():
+    graph = _base()
+    graph["9"]["class_type"] = "VHS_VideoCombine"
+    before = copy.deepcopy(graph)
+
+    assert add_upscale(graph, 2.0, "4x-UltraSharp.pth") == []
+    assert graph == before
+
+
+def test_a_graph_that_saves_nothing_gets_nothing():
+    graph = _base()
+    del graph["9"]
+    before = copy.deepcopy(graph)
+
+    assert add_upscale(graph, 2.0, "4x-UltraSharp.pth") == []
+    assert graph == before
+
+
+@pytest.mark.parametrize(
+    "name, scale",
+    [
+        ("4x-UltraSharp.pth", 4),
+        ("RealESRGAN_x2.pth", 2),
+        ("RealESRGAN_x4plus.pth", 4),
+        ("4xNMKD-Superscale.pth", 4),
+        ("1x-ITF-SkinDiffDetail-Lite-v1.pth", 1),
+        ("2X_foolhardy.pth", 2),
+        ("ultrasharp.pth", 4),
+    ],
+)
+def test_a_models_factor_is_read_off_its_name(name, scale):
+    assert upscale_model_scale(name) == scale

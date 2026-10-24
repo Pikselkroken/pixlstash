@@ -803,6 +803,8 @@ Public guest scoring and shared-link endpoints.
 | DELETE | /api/v1/workflows/runs                                                        | workflows       | Clear the finished runs                                       |
 | GET    | /api/v1/workflows/runs/{prompt_id}                                            | workflows       | How a run ended                                               |
 | DELETE | /api/v1/workflows/runs/{run_id}                                               | workflows       | Dismiss a finished run                                        |
+| POST   | /api/v1/workflows/upscale                                                     | workflows       | Upscale pictures                                              |
+| POST   | /api/v1/workflows/upscale/preflight                                           | workflows       | What an upscale of pictures would start from                  |
 | GET    | /api/v1/workflows/{workflow_id}                                               | workflows       | One workflow                                                  |
 | PATCH  | /api/v1/workflows/{workflow_id}                                               | workflows       | Edit a workflow                                               |
 | DELETE | /api/v1/workflows/{workflow_id}                                               | workflows       | Delete a manual workflow                                      |
@@ -10041,6 +10043,34 @@ It blocks the card, `allow_unchecked` included, and **never falls back to a
 full run**: the owner asked for a run without the stage. With ComfyUI
 unreachable a graph holding the stage is refused the same way; one without it
 has nothing to skip.
+
+#### Adding an upscale (#1868)
+
+The other way round from a skipped stage: `RunRequest.upscale`
+(`{factor, model_sha256}`, a factor of 1.5, 2 or 4) adds PixlStash's own
+upscale to a run of a graph that has none. `_plan` applies it after the stages
+are skipped and before the shelf loader swap and `judge`, through
+`workflow_run_service.add_upscale`: every save whose `images` is linked, less
+the intermediate saves, reads `UpscaleModelLoader` -> `ImageUpscaleWithModel`
+-> `ImageScaleBy` (Lanczos, to the factor over the model's own, read off its
+filename and 4 when the name says nothing), or the resize alone with no model.
+Saves of one picture share one chain. A video save is left alone, and a
+run asked to upscale a graph with no picture save to upscale is a 400 rather
+than a run that comes out at 1x. The model is named by its shelf digest
+and loaded by filename, so a file this ComfyUI lacks is swapped to the pack's
+loader as any graph's is. A graph with an upscale of its own
+(`has_upscale`, the stage the Run popup draws) is left alone, and nothing is
+added to a save over the workflow: the upscale is per run. The added nodes are
+all in the `UPSCALE` group, so the run's pictures keep the workflow's core and
+file on it as before.
+
+`POST /workflows/upscale` is the same nodes behind a `LoadImage`: one run per
+picture, each uploaded as a run's inputs are (`_picture_files`, every picture
+checked before anything is uploaded), stacked on its picture
+(`_tag_for_stack`, the result becomes the stack's top) and queued through
+`_queue_run`, the run route's own lease, run log and dispatch, so it is
+followed and listed like any run. `POST /workflows/upscale/preflight` answers
+each picture's size and whether its own embedded graph upscaled it already.
 
 #### The repair registry: judge, repair, judge again (#1463)
 

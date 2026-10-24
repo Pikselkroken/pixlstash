@@ -2078,9 +2078,12 @@ describe("the body it sends", () => {
       }),
     });
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    expect(wrapper.find("fieldset").findAll("label").map((l) => l.text())).toEqual([
-      "Seed variance",
-    ]);
+    expect(
+      wrapper
+        .find("fieldset")
+        .findAll("label")
+        .map((l) => l.text().replace(/\s+/g, " ")),
+    ).toEqual(["Seed variance", "Upscale · added for this run"]);
     await wrapper.vm.setStage("seed_variance", false);
     await wrapper.vm.submit();
     await flushPromises();
@@ -2192,12 +2195,95 @@ describe("the body it sends", () => {
     expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("skip_stages");
   });
 
-  it("draws no Stages fieldset when the workflow has no optional stage", async () => {
-    getWorkflowCard.mockResolvedValue({
-      card: card({ specials: [], default_recipe: { stages: {} } }),
+  describe("an upscale added for this run (#1868)", () => {
+    const UPSCALER = "a".repeat(64);
+    beforeEach(() => {
+      window.localStorage.removeItem("pixlstash:upscale");
+      listAdapters.mockImplementation(async ({ fileKind } = {}) =>
+        fileKind === "upscaler"
+          ? [{ sha256: UPSCALER, filename: "4x-UltraSharp.pth" }]
+          : [],
+      );
     });
-    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    expect(wrapper.find("fieldset").exists()).toBe(false);
+    const labels = (wrapper) =>
+      wrapper
+        .find("fieldset")
+        .findAll("label")
+        .map((l) => l.text().replace(/\s+/g, " "));
+
+    it("is offered, off, on a workflow with no upscale of its own", async () => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({ specials: [], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(labels(wrapper)).toEqual(["Upscale · added for this run"]);
+      expect(wrapper.find("[data-testid=rund-added-upscale]").element.checked).toBe(
+        false,
+      );
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("upscale");
+    });
+
+    it("sends the remembered factor and the shelf's model once ticked", async () => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({ specials: [], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      await wrapper.find("[data-testid=rund-added-upscale]").setValue(true);
+      await flushPromises();
+      // The form makes 832 × 1216; the default factor is 2.
+      expect(wrapper.find("[data-testid=upscale-target]").text()).toBe(
+        "→ 1664 × 2432",
+      );
+      await wrapper.findAll(".seg__opt").at(2).trigger("click");
+      expect(wrapper.find("[data-testid=upscale-target]").text()).toBe(
+        "→ 3328 × 4864",
+      );
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0].upscale).toEqual({
+        factor: 4,
+        model_sha256: UPSCALER,
+      });
+      expect(JSON.parse(window.localStorage.getItem("pixlstash:upscale"))).toEqual(
+        { factor: 4, model: null },
+      );
+    });
+
+    it("says it only resizes when the shelf has no upscaler", async () => {
+      listAdapters.mockResolvedValue([]);
+      getWorkflowCard.mockResolvedValue({
+        card: card({ specials: [], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      await wrapper.find("[data-testid=rund-added-upscale]").setValue(true);
+      await flushPromises();
+      expect(wrapper.find("[data-testid=upscale-no-model]").exists()).toBe(true);
+      await wrapper.vm.submit();
+      await flushPromises();
+      expect(runWorkflowCard.mock.calls[0][0].upscale).toEqual({
+        factor: 2,
+        model_sha256: null,
+      });
+    });
+
+    it("leaves a graph with its own upscale its own row only", async () => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({ specials: ["upscale"], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(labels(wrapper)).toEqual(["Upscale"]);
+      expect(wrapper.find("[data-testid=rund-added-upscale]").exists()).toBe(false);
+    });
+
+    it.each(["upscale", "video"])("is not offered on a %s workflow", async (type) => {
+      getWorkflowCard.mockResolvedValue({
+        card: card({ type, specials: [], default_recipe: { stages: {} } }),
+      });
+      const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+      expect(wrapper.find("fieldset").exists()).toBe(false);
+    });
   });
 
   it("puts a stage turned off back on from its reset chip", async () => {
@@ -2999,7 +3085,7 @@ describe("the pictures a workflow takes", () => {
     // ones they came from".
     preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "graph" })]));
     const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowId: KEY });
-    expect(wrapper.find(".rund-box").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Stack new pictures");
   });
 
   it("shows the slot a refused run found empty, and says to look there", async () => {

@@ -192,6 +192,20 @@
             />
           </v-menu>
         </div>
+        <!-- Upscale… (#1868): the keepers picked after a run, upscaled and
+             stacked on top of themselves. Pictures only: a video has no
+             picture loader to go behind. -->
+        <AppBarButton
+          v-if="canUpscale"
+          class="upscale-btn"
+          shape="round"
+          icon="arrow-expand-all"
+          data-testid="selection-upscale"
+          :tooltip="`Upscale the ${selectedCount === 1 ? 'selected picture' : `${selectedCount} selected pictures`}`"
+          @click="upscale.openFor(props.selectedImageIds)"
+        >
+          <span class="bar-btn-apply-label">Upscale…</span>
+        </AppBarButton>
         <AppBarButton
           v-if="
             selectedCount > 0 &&
@@ -241,6 +255,7 @@ import { withRef } from "../../utils/withRef.js";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
+import { useUpscaleStore } from "../../stores/useUpscaleStore";
 import SelectionMenu from "./SelectionMenu.vue";
 import TbTagPanel from "./TbTagPanel.vue";
 import PluginParametersUI from "../widgets/PluginParametersUI.vue";
@@ -318,6 +333,17 @@ const emit = defineEmits([
   "edit-pictures",
   "compare-pictures",
 ]);
+
+const upscale = useUpscaleStore();
+const canUpscale = computed(
+  () =>
+    props.selectedCount > 0 &&
+    props.comfyuiConfigured &&
+    !isScrapheapView.value &&
+    !isReadOnly.value &&
+    props.selectedMediaSupport?.hasImages === true &&
+    props.selectedMediaSupport?.hasVideos !== true,
+);
 
 const isScrapheapView = computed(() => {
   const scrapheapId = String(

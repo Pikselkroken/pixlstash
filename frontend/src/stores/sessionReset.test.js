@@ -62,6 +62,8 @@ import { useWorkflowTemplatesStore } from "./useWorkflowTemplatesStore";
 import { useRunDialogStore } from "./useRunDialogStore";
 import { useFilterStore } from "./useFilterStore";
 import { useFavouritesStore } from "./useFavouritesStore";
+import { useUpscaleStore } from "./useUpscaleStore";
+import { useNewBatchStore } from "./useNewBatchStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -192,6 +194,26 @@ const STORES = [
       s.context = { character_id: 3 };
     },
     isEmpty: (s) => !s.source && !s.makeMore && !s.context.character_id,
+  },
+  {
+    // Upscale… (#1868): the shelf's upscalers, and the pictures its dialog
+    // was opened on.
+    name: "useUpscaleStore",
+    use: useUpscaleStore,
+    seed: (s) => {
+      s.models = [{ sha256: "a".repeat(64), name: "4x-UltraSharp" }];
+      s.openFor([11, 12]);
+    },
+    isEmpty: (s) => s.models === null && s.pictureIds === null,
+  },
+  {
+    // The last run's pictures, marked New on the grid (#1868).
+    name: "useNewBatchStore",
+    use: useNewBatchStore,
+    seed: (s) => {
+      s.ids = new Set([11, 12]);
+    },
+    isEmpty: (s) => !s.isNew(11) && !s.isNew(12),
   },
   {
     // Owner-only hub rows: the next credential may be a share token that

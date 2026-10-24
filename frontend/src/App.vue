@@ -23,6 +23,7 @@ import { useSidebarStore } from "./stores/useSidebarStore";
 import { useWorkflowTemplatesStore } from "./stores/useWorkflowTemplatesStore";
 import { useUserPrefsStore } from "./stores/useUserPrefsStore";
 import { useRunDialogStore } from "./stores/useRunDialogStore";
+import { useUpscaleStore } from "./stores/useUpscaleStore";
 import { useFolderMappingStore } from "./stores/useFolderMappingStore";
 import { useProjectStore } from "./stores/useProjectStore";
 import { useWsStore } from "./stores/useWsStore";
@@ -116,6 +117,10 @@ const RunDialog = defineAsyncComponent(
 const MakeMoreDialog = defineAsyncComponent(
   () => import("./components/io/MakeMoreDialog.vue"),
 );
+// Upscale… (#1868), opened from the selection pill and the lightbox.
+const UpscaleDialog = defineAsyncComponent(
+  () => import("./components/io/UpscaleDialog.vue"),
+);
 
 // --- Stores ---
 const selectionStore = useSelectionStore();
@@ -125,6 +130,7 @@ const sidebarStore = useSidebarStore();
 const workflowTemplatesStore = useWorkflowTemplatesStore();
 const userPrefsStore = useUserPrefsStore();
 const runDialogStore = useRunDialogStore();
+const upscaleStore = useUpscaleStore();
 const projectStore = useProjectStore();
 const wsStore = useWsStore();
 const reviewSessionsStore = useReviewSessionsStore();
@@ -977,6 +983,7 @@ defineExpose({
         @run="onRunStarted"
         @open-settings="openSettingsDialog"
       />
+      <UpscaleDialog v-if="upscaleStore.pictureIds" />
       <ReviewSessionsOverlay
         v-if="reviewSessionsStore.overlayOpen"
         :inert="librarySwitchOverlayOpen"

@@ -2060,6 +2060,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Build the graph a run would submit and hold it for the owner's ComfyUI to open; resolves a graph from the whole library and may upload its pictures to ComfyUI; POST blocked for READ tokens; owner only",
     ),
+    # Upscale… (#1868): the pictures named go to the owner's ComfyUI, and the
+    # results are stacked on them; owner only, as a run is.
+    ("POST", "/api/v1/workflows/upscale"): RoutePolicy(
+        _OWNER,
+        justification="Upscale pictures in the owner's ComfyUI, uploading them and stacking each result on its picture; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/workflows/upscale/preflight"): RoutePolicy(
+        _OWNER,
+        justification="Dry run of the above: each picture's size and whether its own run upscaled it; submits nothing; owner only",
+    ),
     ("GET", "/api/v1/workflows/runs/{prompt_id}"): RoutePolicy(
         _OWNER,
         justification="How a run the owner started ended: ComfyUI's error text and the ids of the pictures it added, whichever part of the library they landed in; owner only",

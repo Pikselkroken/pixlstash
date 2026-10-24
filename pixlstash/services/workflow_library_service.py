@@ -610,12 +610,14 @@ def read_kept_picture_files(
     return vault.db.run_immediate_read_task(kept_picture_files, picture_ids)
 
 
-def picture_pixels(session: Session, picture_ids: list[int]) -> dict[int, int]:
-    """``{picture_id: width * height}`` for the ones whose size is known."""
+def picture_sizes(
+    session: Session, picture_ids: list[int]
+) -> dict[int, tuple[int, int]]:
+    """``{picture_id: (width, height)}`` for the ones whose size is known."""
     if not picture_ids:
         return {}
     return {
-        picture_id: width * height
+        picture_id: (width, height)
         for picture_id, width, height in session.exec(
             select(Picture.id, Picture.width, Picture.height).where(
                 Picture.id.in_(picture_ids)
@@ -623,6 +625,21 @@ def picture_pixels(session: Session, picture_ids: list[int]) -> dict[int, int]:
         ).all()
         if width and height
     }
+
+
+def picture_pixels(session: Session, picture_ids: list[int]) -> dict[int, int]:
+    """``{picture_id: width * height}`` for the ones whose size is known."""
+    return {
+        picture_id: width * height
+        for picture_id, (width, height) in picture_sizes(session, picture_ids).items()
+    }
+
+
+def read_picture_sizes(vault, picture_ids: list[int]) -> dict[int, tuple[int, int]]:
+    """:func:`picture_sizes` in its own read task; no read when empty."""
+    if not picture_ids:
+        return {}
+    return vault.db.run_immediate_read_task(picture_sizes, picture_ids)
 
 
 def read_picture_pixels(vault, picture_ids: list[int]) -> dict[int, int]:
