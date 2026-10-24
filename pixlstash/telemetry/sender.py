@@ -39,14 +39,11 @@ TELEMETRY_ENDPOINT = "https://t.pixlstash.dev/v1/ping"
 #: reason: a snapshot restore must not change how often an install reports.
 SEND_STATE_FILENAME = "telemetry-state.json"
 
-#: One ping per day. Docker installs would otherwise report on every restart.
-SEND_INTERVAL_SECONDS = 24 * 60 * 60
-
 #: Short and unretried. The measurement is not worth holding a thread open.
 REQUEST_TIMEOUT_SECONDS = 10
 
 #: How often the loop wakes to ask whether a ping is due. Well under a day, so a
-#: long-running container sends promptly after the 24h window opens rather than
+#: long-running container sends promptly once a new UTC day starts rather than
 #: waiting for the next restart. ``is_due`` enforces the actual spacing.
 CHECK_INTERVAL_SECONDS = 60 * 60
 
@@ -113,8 +110,21 @@ def _write_last_attempt(server_config_path: str, when: float) -> bool:
     return True
 
 
+def _utc_day(timestamp: float):
+    """The UTC calendar date of a POSIX timestamp."""
+    return datetime.fromtimestamp(timestamp, timezone.utc).date()
+
+
 def is_due(server_config_path: str, now: float | None = None) -> bool:
-    """True if a ping is due, i.e. none was attempted in the last 24 hours."""
+    """True if a ping is due, i.e. none was attempted yet on this UTC day.
+
+    One per UTC calendar day, not one per 24 hours, because the Worker counts
+    installs per UTC day. A rolling 24 hours drops a day whenever the app runs
+    earlier than it did the day before: a desktop opened at 19:00 after pinging
+    at 20:00 yesterday is not due until 20:00, and if it is closed by then the
+    install is counted as not having run. That undercounted daily desktop users
+    by roughly a tenth to a third of their days.
+    """
     moment = now if now is not None else datetime.now(timezone.utc).timestamp()
     last = _read_last_attempt(server_config_path)
     if last is None:
@@ -128,7 +138,7 @@ def is_due(server_config_path: str, now: float | None = None) -> bool:
             moment,
         )
         return True
-    return (moment - last) >= SEND_INTERVAL_SECONDS
+    return _utc_day(moment) > _utc_day(last)
 
 
 def send_install_ping(

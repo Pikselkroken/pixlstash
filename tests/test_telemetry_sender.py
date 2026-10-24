@@ -7,6 +7,8 @@ a day, and must never raise into the caller no matter what the network does.
 
 import json
 import os
+import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -97,14 +99,59 @@ def test_does_not_send_twice_within_a_day(config_path, monkeypatch):
     )
 
 
-def test_is_due_after_the_interval(config_path):
-    sender._write_last_attempt(config_path, 1_000_000.0)
+def _utc(text):
+    """A POSIX timestamp for an ISO time in UTC."""
+    return datetime.fromisoformat(text).replace(tzinfo=timezone.utc).timestamp()
 
-    assert sender.is_due(config_path, now=1_000_000.0 + 3600) is False
-    assert (
-        sender.is_due(config_path, now=1_000_000.0 + sender.SEND_INTERVAL_SECONDS)
-        is True
-    )
+
+def test_is_not_due_again_on_the_same_utc_day(config_path):
+    sender._write_last_attempt(config_path, _utc("2026-10-20T00:05:00"))
+
+    assert sender.is_due(config_path, now=_utc("2026-10-20T23:55:00")) is False
+
+
+def test_is_due_on_the_next_utc_day_even_earlier_than_yesterday(config_path):
+    # The desktop case a rolling 24 hours dropped: pinged at 20:00, opened at
+    # 19:00 the next day and closed before 20:00. That day it ran, so it counts.
+    sender._write_last_attempt(config_path, _utc("2026-10-20T20:00:00"))
+
+    assert sender.is_due(config_path, now=_utc("2026-10-21T19:00:00")) is True
+
+
+def test_is_due_just_after_utc_midnight(config_path):
+    sender._write_last_attempt(config_path, _utc("2026-10-20T23:59:00"))
+
+    assert sender.is_due(config_path, now=_utc("2026-10-21T00:01:00")) is True
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="needs time.tzset (POSIX)")
+def test_the_day_is_the_utc_day_not_the_local_one(config_path, monkeypatch):
+    # UTC+14: 08:00 and 11:00 UTC on the 20th are 22:00 on the 20th and 01:00 on
+    # the 21st locally. The Worker counts UTC days, so this is still one day and
+    # a second ping would be a repeat; a local-date rule would send it.
+    monkeypatch.setenv("TZ", "Pacific/Kiritimati")
+    time.tzset()
+    try:
+        sender._write_last_attempt(config_path, _utc("2026-10-20T08:00:00"))
+        assert sender.is_due(config_path, now=_utc("2026-10-20T11:00:00")) is False
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
+def test_a_daily_desktop_user_is_counted_every_day_it_runs(config_path):
+    # One short session a day, each opening an hour earlier than the last: the
+    # schedule that made a rolling 24 hours skip days. The hourly loop checks at
+    # the start of each session and once more an hour in.
+    pinged_days = set()
+    for day in range(1, 8):
+        start = _utc(f"2026-10-{day:02d}T20:00:00") - day * 3600
+        for moment in (start, start + 3600):
+            if sender.is_due(config_path, now=moment):
+                sender._write_last_attempt(config_path, moment)
+                pinged_days.add(day)
+
+    assert pinged_days == set(range(1, 8))
 
 
 def test_is_due_when_nothing_was_ever_sent(config_path):
