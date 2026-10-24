@@ -23,6 +23,7 @@ function make() {
 beforeEach(() => {
   vi.useFakeTimers();
   pictureId.value = 7;
+  dims.value = { naturalWidth: 2000, naturalHeight: 1000 };
   renderPictureMask.mockReset().mockResolvedValue(new Blob(["png"]));
   globalThis.URL.createObjectURL = vi.fn(() => "blob:mask");
   globalThis.URL.revokeObjectURL = vi.fn();
@@ -156,6 +157,21 @@ describe("usePaintSelection", () => {
     expect(paint.hasSelection.value).toBe(false);
   });
 
+  it("starts grow, feather and fill holes from the picture's size until one is set", async () => {
+    const paint = make();
+    // 1% / 1% / 2% of the shorter side, 1000px here.
+    expect({ ...paint.refine }).toEqual({ grow: 10, feather: 10, fill_holes: 20 });
+    dims.value = { naturalWidth: 300, naturalHeight: 200 };
+    await nextTick();
+    // A small picture gets the floors, not a 2px seam.
+    expect({ ...paint.refine }).toEqual({ grow: 4, feather: 4, fill_holes: 8 });
+    paint.setRefine("feather", 30);
+    dims.value = { naturalWidth: 20000, naturalHeight: 16000 };
+    await nextTick();
+    // The owner's values stay theirs on the next picture.
+    expect({ ...paint.refine }).toEqual({ grow: 4, feather: 30, fill_holes: 8 });
+  });
+
   it("asks the server for the mask a moment after the last change", async () => {
     const paint = make();
     paint.setTool("wand");
@@ -167,7 +183,7 @@ describe("usePaintSelection", () => {
     expect(renderPictureMask).toHaveBeenCalledTimes(1);
     const [id, body] = renderPictureMask.mock.calls[0];
     expect(id).toBe(7);
-    expect(body).toMatchObject({ version: 1, refine: { grow: 6, feather: 0, fill_holes: 0 } });
+    expect(body).toMatchObject({ version: 1, refine: { grow: 6, feather: 10, fill_holes: 20 } });
     expect(paint.maskUrl.value).toBe("blob:mask");
     // A failed render shows no mask rather than the last selection's.
     renderPictureMask.mockRejectedValueOnce(new Error("offline"));
