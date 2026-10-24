@@ -1916,6 +1916,14 @@ class TestPrimitiveNode:
         assert prompt is None
         assert any("takes a STRING" in p for p in problems)
 
+    def test_one_with_no_value_is_refused_and_says_so(self):
+        """Refused by name: a None value would otherwise end the conversion
+        with no problem recorded."""
+        graph = _graph([_primitive(None), _encoder()], [[1, 9, 0, 6, 1, "STRING"]])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("has no value to give" in p for p in problems)
+
     def test_a_value_the_editor_rewrites_is_refused(self):
         primitive = _primitive(
             "out/%date:yyyy%", properties={"Run widget replace on values": True}

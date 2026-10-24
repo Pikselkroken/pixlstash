@@ -831,7 +831,7 @@ class _Converter:
                 f"{where} is muted or bypassed, so which value its widgets "
                 "get cannot be read"
             )
-        elif not isinstance(values, list) or not values:
+        elif not isinstance(values, list) or not values or values[0] is None:
             self.problems.append(f"{where} has no value to give")
         elif (
             (node.get("properties") or {}).get(_TEXT_REPLACEMENT)
