@@ -2037,9 +2037,9 @@ def _process_comfyui_outputs(
     moment ComfyUI's history gives the run's final status - not after the
     outputs are imported, which holds no GPU memory - and the run's measured
     peak is written with how it ended (``services/vram_history.py``). A run
-    that ran out of GPU memory fails with ``code`` ``vram_oom`` and, when the
-    owner's setting allows, makes its workflow run alone from now on. It is
-    not retried.
+    that ran out of GPU memory fails with ``code`` ``vram_oom`` and, once the
+    workflow's newest ``vram_history.OOM_STREAK`` runs all did and the owner's
+    setting allows, makes it run alone from now on. It is not retried.
 
     *workflow_id* is the workflow the run was of, manual or automatic; it
     travels on the ending's event so a failure is shown on that workflow.

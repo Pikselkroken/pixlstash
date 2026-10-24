@@ -154,10 +154,18 @@ def need_mb(hub, workflow_id: str | None, model_set: str | None = None) -> int |
 
 
 def ran_out_in_a_row(hub, workflow_id: str | None) -> bool:
-    """Whether the newest ``OOM_STREAK`` recorded runs all ran out of memory."""
+    """Whether the newest ``OOM_STREAK`` recorded runs all ran out of memory.
+
+    A stopped run says nothing about memory, so it neither counts nor breaks
+    the streak. A run with no GPU to measure writes no row and is not counted.
+    """
     if not workflow_id:
         return False
-    rows = _peaks(hub, [workflow_id]).get(workflow_id, [])[:OOM_STREAK]
+    rows = [
+        row
+        for row in _peaks(hub, [workflow_id]).get(workflow_id, [])
+        if row["outcome"] != "aborted"
+    ][:OOM_STREAK]
     return len(rows) == OOM_STREAK and all(row["outcome"] == "oom" for row in rows)
 
 

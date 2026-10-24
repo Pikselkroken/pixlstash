@@ -14230,20 +14230,28 @@ class _NoPeak:
 
 
 @pytest.mark.parametrize(
-    ("allowed", "earlier_ooms", "alone"),
-    [(True, 2, True), (False, 2, False), (True, 1, False)],
+    ("allowed", "earlier", "alone"),
+    [
+        (True, ["oom", "oom"], True),
+        (False, ["oom", "oom"], False),
+        (True, ["oom"], False),
+        # Oldest first: a finished run between them breaks the streak, a
+        # stopped one does not.
+        (True, ["oom", "completed", "oom"], False),
+        (True, ["oom", "aborted", "oom"], True),
+    ],
 )
 def test_a_run_out_of_memory_fails_once_and_runs_alone_after_a_streak(
-    held, allowed, earlier_ooms, alone
+    held, allowed, earlier, alone
 ):
     """No retry; the peak is the card; "runs alone" only once the newest three
     runs all ran out of memory, and only if the owner allows."""
     server = held.runnable.server
     owner_id = server._user.id
     vram_history.set_auto_exclusive_after_oom(server.hub, owner_id, allowed)
-    for _ in range(earlier_ooms):
+    for outcome in earlier:
         vram_history.record_peak(
-            server.hub, RUN_WF, "x", "Test GPU", 24576, 24576, "torch_reserved", "oom"
+            server.hub, RUN_WF, "x", "Test GPU", 24576, 6000, "torch_reserved", outcome
         )
     lease = held.arbiter.request(
         Tenant.COMFYUI, "ComfyUI 'Krea'", need_mb=1000, workflow_id=RUN_WF
@@ -14284,8 +14292,12 @@ def test_a_run_out_of_memory_fails_once_and_runs_alone_after_a_streak(
         )
         assert (row["peak_mb"], row["outcome"]) == (24576, "oom")
         # Recorded, but not a need: a card's total plus headroom fits nowhere,
-        # and the next run would wait for ever.
-        assert vram_history.need_mb(server.hub, RUN_WF) is None
+        # and the next run would wait for ever. Only a finished run is one.
+        assert vram_history.need_mb(server.hub, RUN_WF) == (
+            int(6000 * vram_history.COMFYUI_PEAK_MARGIN)
+            if "completed" in earlier
+            else None
+        )
         policy = vram_history.policy(server.hub, RUN_WF)
         warned = [e for e in events if e.get("code") == "vram_oom_exclusive"]
         if alone:

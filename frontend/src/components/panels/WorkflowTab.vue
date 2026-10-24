@@ -930,21 +930,21 @@
           <span class="wftab-note wftab-quiet" data-testid="wftab-gpu-basis">
             {{ gpuBasis }}
           </span>
-          <span class="wftab-gpu-alone">
-            <span class="wftab-gpu-tip" tabindex="0"
-              ><Tooltip :text="RUN_ALONE_TIP" activator="parent" />Run alone</span
-            >
+          <!-- A label, so its text flips the switch too, and the tip opens on
+               the switch's focus as well as on hover. -->
+          <label class="wftab-gpu-alone">
+            <Tooltip :text="RUN_ALONE_TIP" activator="parent" />
+            <span class="wftab-gpu-tip">Run alone</span>
             <button
               type="button"
               role="switch"
               class="wftab-switch"
               :aria-checked="String(Boolean(gpu.exclusive))"
               :disabled="busy === 'exclusive'"
-              aria-label="Run alone on the GPU"
               data-testid="wftab-gpu-exclusive"
               @click="setExclusive(!gpu.exclusive)"
             ></button>
-          </span>
+          </label>
         </div>
         <!-- Only while the backend has it on after running out of memory:
              switching it off clears it, switching it on by hand never shows
@@ -4912,6 +4912,7 @@ async function checkInstalled(key, { quiet = false } = {}) {
 
 .wftab-gpu-alone {
   font-size: var(--text-xs);
+  cursor: pointer;
 }
 
 .wftab-gpu-tip {
@@ -5001,6 +5002,7 @@ async function checkInstalled(key, { quiet = false } = {}) {
   border-radius: 0 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px);
   background: rgba(var(--v-theme-warning), 0.08);
   font-size: var(--text-2xs);
+  overflow: hidden;
 }
 
 .wftab-gpu-warn > span {
