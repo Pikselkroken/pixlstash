@@ -2044,6 +2044,68 @@ describe("Mine | Templates", () => {
     expect(wrapper.emitted("open-settings")).toEqual([["comfyui"]]);
   });
 
+  it("lists the shipped templates when ComfyUI does not answer, and adds drafts", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: false,
+      detail: "Nothing is answering for templates at http://127.0.0.1:8188.",
+      templates: TEMPLATES,
+    });
+    addTemplates.mockResolvedValue({
+      added: [{ module: "default", name: "ready", workflow_id: "c", draft: true }],
+      failed: [],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    expect(wrapper.find('[data-testid="wtp-unreachable"]').exists()).toBe(false);
+    // Partner templates are hidden by default, shipped or not.
+    expect(wrapper.findAll('[data-testid="template-card"]').length).toBe(
+      TEMPLATES.filter((t) => t.source !== "partner").length,
+    );
+    const source = wrapper.find('[data-testid="wtp-source"]');
+    expect(source.attributes("aria-label")).toContain("PixlStash ships");
+    expect(source.find(".wtp-link-off").text()).toContain("mdi-close-thick");
+    expect(source.find(".wtp-link-dot").exists()).toBe(false);
+
+    await wrapper.find('[data-testid="template-card"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="wtp-add"]').trigger("click");
+    await flush();
+    await flush();
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    expect(JSON.stringify(useNoticeStore().$state)).toContain(
+      "It is a draft: once ComfyUI runs, Finish in ComfyUI makes it runnable.",
+    );
+  });
+
+  it("words a shipped Add by its drafts only when every one is a draft", async () => {
+    listTemplates.mockResolvedValue({
+      comfyui_url: "http://127.0.0.1:8188",
+      reachable: false,
+      templates: TEMPLATES,
+    });
+    addTemplates.mockResolvedValue({
+      added: [
+        { module: "default", name: "ready", workflow_id: "c", draft: true },
+        { module: "default", name: "other", workflow_id: "d", draft: false },
+      ],
+      failed: [],
+    });
+    const wrapper = await grid();
+    await wrapper.find('[data-testid="wfv-tab-templates"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="template-card"]').trigger("click");
+    await flush();
+    await wrapper.find('[data-testid="wtp-add"]').trigger("click");
+    await flush();
+    await flush();
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const said = JSON.stringify(useNoticeStore().$state);
+    expect(said).toContain("1 of them are drafts");
+    expect(said).not.toContain("They are drafts");
+  });
+
   it("adds the selection, then lands on Mine with what was made selected", async () => {
     listTemplates.mockResolvedValue({
       comfyui_url: "http://127.0.0.1:8188",

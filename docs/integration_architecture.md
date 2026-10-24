@@ -1504,8 +1504,10 @@ the workflow the picture's own variant is in. `workflow_key` and
 
 **Templates from the owner's ComfyUI, and drafts (#2000).** The Workflows
 view's Templates tab reads `GET /comfyui/templates` (`listTemplates`):
-`{comfyui_url, reachable, detail, templates}`, always 200, `reachable: false`
-with `detail` being the tab's empty state. Each template is `{key, module,
+`{comfyui_url, reachable, detail, templates}`, always 200. `reachable: false`
+with `detail` means no ComfyUI answered, and `templates` is then the copy
+PixlStash ships (built-ins that download files; no packs); only an empty list
+is the tab's empty state. Each template is `{key, module,
 name, source: builtin|pack|partner, pack_loaded, title, description,
 category, media_type, tags, model_names, date, usage, size, tutorial_url,
 providers, thumbnail, files: [{name, directory, url, present, downloadable}]}`,
@@ -1524,8 +1526,10 @@ picture is `GET /comfyui/templates/thumbnail?module=&name=`, built by
 `templateThumbnailUrl` and never as a raw path. `POST /comfyui/templates/add`
 takes `{templates: [{module, name}]}` (1 to 50) and answers `{added:
 [{module, name, workflow_id, title, draft, problems}], failed: [{module,
-name, detail}]}`, announcing the new workflows as `imported` like an import;
-a 503 when ComfyUI does not list its nodes, and then nothing is stored.
+name, detail}]}`, announcing the new workflows as `imported` like an import.
+When ComfyUI does not list its nodes (it is down, the shipped list) each is
+stored as a draft whose `problems` say so; it converts on the next run or open
+with ComfyUI answering.
 A stored template that did not convert is a **draft**: `WorkflowCard.draft`
 on the grid and detail reads, until ComfyUI saves it. The client offers no
 Run on one and offers *Open in ComfyUI* as the way to finish it; the server

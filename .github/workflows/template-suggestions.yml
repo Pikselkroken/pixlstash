@@ -61,5 +61,6 @@ jobs:
           body-path: ${{ runner.temp }}/template-summary.md
           add-paths: |
             pixlstash/data/workflow_templates.json
+            pixlstash/data/workflow_templates_index.json
             pixlstash/data/workflow_templates
           delete-branch: true

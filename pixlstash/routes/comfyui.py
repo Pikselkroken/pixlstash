@@ -356,7 +356,9 @@ def store_manual_workflow(
     )
 
 
-def keep_template_thumbnail(hub, comfyui_url: str, template, workflow_id: str) -> None:
+def keep_template_thumbnail(
+    hub, comfyui_url: Optional[str], template, workflow_id: str
+) -> None:
     """Make *template*'s picture the new workflow's thumbnail, unpinned.
 
     Unpinned, so the workflow's own pictures replace it once there are any. A
@@ -1971,8 +1973,9 @@ class ComfyUITemplateAdded(BaseModel):
     title: str
     draft: bool = Field(
         description=(
-            "PixlStash could not convert it, so it is a draft until it is "
-            "opened in ComfyUI and saved there."
+            "PixlStash could not convert it, so it is a draft until it "
+            "converts on a run or open with ComfyUI answering, or is opened "
+            "in ComfyUI and saved there."
         )
     )
     problems: list[str] = Field(
@@ -2479,38 +2482,50 @@ def create_router(server) -> APIRouter:
     # ── Templates from the owner's ComfyUI (#2000) ──────────────────────────
 
     def _template_listing(request: Request, *, refresh: bool = False):
-        """``(comfyui_url, listing)``, or the 503 that says ComfyUI did not answer."""
+        """``(comfyui_url, listing, detail)``.
+
+        With no ComfyUI answering, the listing is the copy PixlStash ships
+        and *detail* says why; otherwise *detail* is ``None``.
+        """
         comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
         # Only to say which packs loaded, so the minute-old map is enough.
         object_info = _read_object_info(comfyui_url, cached=True)[0]
         try:
+            # No map means ComfyUI may have stopped since its listing was
+            # kept, so it is asked again rather than trusted for ten minutes:
+            # a kept listing would send every graph and picture read to an
+            # address nothing answers on.
             listing = comfyui_templates.read_listing(
-                comfyui_url, object_info, refresh=refresh
+                comfyui_url, object_info, refresh=refresh or object_info is None
             )
         except comfyui_templates.TemplatesUnavailable as exc:
             logger.info(
-                "[comfyui] No templates from ComfyUI at %s: %s", comfyui_url, exc
+                "[comfyui] No templates from ComfyUI at %s, so the shipped "
+                "ones are listed: %s",
+                comfyui_url,
+                exc,
             )
-            raise HTTPException(
-                status_code=503,
-                detail=f"Nothing is answering for templates at {comfyui_url}.",
-            ) from exc
-        return comfyui_url, listing
+            return (
+                comfyui_url,
+                comfyui_templates.bundled_listing(),
+                f"Nothing is answering for templates at {comfyui_url}.",
+            )
+        return comfyui_url, listing, None
 
     def _listed_template(request: Request, module: str, name: str):
-        """``(comfyui_url, template)`` for one the list holds, else a 404.
+        """``(base_url, template)`` for one the list holds, else a 404.
 
-        Only a listed template is fetched, so a name is never a path the
-        caller made up.
+        *base_url* is ``None`` for the shipped copy. Only a listed template
+        is fetched, so a name is never a path the caller made up.
         """
-        comfyui_url, listing = _template_listing(request)
+        comfyui_url, listing, _detail = _template_listing(request)
         template = listing.find(module, name)
         if template is None:
             raise HTTPException(
                 status_code=404,
                 detail="Your ComfyUI does not list that template.",
             )
-        return comfyui_url, template
+        return (None if listing.bundled else comfyui_url), template
 
     @router.get(
         "/comfyui/templates",
@@ -2522,8 +2537,10 @@ def create_router(server) -> APIRouter:
             "name (`properties.models`, subgraphs included) and whether the "
             "shelf holds each, matched by file name. Read live from ComfyUI "
             "and kept for ten minutes per address; `refresh` reads it again. "
-            "Always 200: `reachable` false and `detail` say why there is no "
-            "list. Nothing is stored."
+            "Always 200. With no ComfyUI answering, `reachable` is false, "
+            "`detail` says why, and the list is the copy of ComfyUI's own "
+            "templates PixlStash ships (those that download files). Nothing "
+            "is stored."
         ),
         response_model=ComfyUITemplateList,
     )
@@ -2531,20 +2548,13 @@ def create_router(server) -> APIRouter:
         request: Request,
         refresh: bool = Query(False, description="Read ComfyUI again now."),
     ):
-        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
-        try:
-            comfyui_url, listing = _template_listing(request, refresh=refresh)
-        except HTTPException as exc:
-            return {
-                "comfyui_url": comfyui_url,
-                "reachable": False,
-                "detail": exc.detail,
-            }
+        comfyui_url, listing, detail = _template_listing(request, refresh=refresh)
         hub = getattr(server, "hub", None)
         present = comfyui_templates.present_file_names(hub) if hub else set()
         return {
             "comfyui_url": comfyui_url,
-            "reachable": True,
+            "reachable": detail is None,
+            "detail": detail,
             "templates": [
                 {
                     "key": template.key,
@@ -2587,7 +2597,8 @@ def create_router(server) -> APIRouter:
         description=(
             "The picture ComfyUI serves for one template "
             "`GET /comfyui/templates` lists, passed through so the app never "
-            "asks ComfyUI itself. 404 when there is none."
+            "asks ComfyUI itself; for a shipped one, the picture ComfyUI's "
+            "template repository on GitHub serves. 404 when there is none."
         ),
         response_class=Response,
         responses={
@@ -2622,46 +2633,34 @@ def create_router(server) -> APIRouter:
         summary="Make workflows of ComfyUI templates",
         description=(
             "Stores each template as a new manual workflow named after it, "
-            "read from the owner's ComfyUI now. Where PixlStash can convert "
-            "its editor graph against ComfyUI's node list it is stored with "
-            "that conversion and runs like any imported workflow. Where it "
-            "cannot, it is a **draft** (`draft`, with the converter's "
-            "`problems`): Run refuses it until it is opened in ComfyUI and "
-            "saved there. A template that cannot be read is named in "
-            "`failed`; the rest are still stored."
+            "read from the owner's ComfyUI now, or from the copy PixlStash "
+            "ships while none answers. Where PixlStash can convert its editor "
+            "graph against ComfyUI's node list it is stored with that "
+            "conversion and runs like any imported workflow. Where it cannot, "
+            "or ComfyUI did not list its nodes, it is a **draft** (`draft`, "
+            "with the converter's `problems`), converted the next time it is "
+            "run or opened with ComfyUI answering. A template that cannot be "
+            "read is named in `failed`; the rest are still stored."
         ),
         response_model=ComfyUITemplatesAddResponse,
-        responses={
-            503: {
-                "description": (
-                    "ComfyUI is not answering, or did not list its nodes; or no "
-                    "hub is attached. Nothing is stored."
-                )
-            }
-        },
+        responses={503: {"description": "No hub is attached. Nothing is stored."}},
     )
     def add_comfyui_templates(
         request: Request, payload: ComfyUITemplatesAddRequest = Body(...)
     ):
         hub = require_hub(server, "The workflow library is not open.")
-        comfyui_url, listing = _template_listing(request)
-        # Fresh, not the minute-old map: whether it runs is decided here. Without
-        # it nothing could convert, and every template would be stored as a
-        # draft that a ComfyUI answering a moment later could have run.
+        comfyui_url, listing, _detail = _template_listing(request)
+        base_url = None if listing.bundled else comfyui_url
+        # Fresh, not the minute-old map: whether it runs is decided here.
+        # Without it each is a draft, which converts the next time it is run
+        # or opened with ComfyUI answering (`converted_manual_document`).
         object_info, error = _read_object_info(comfyui_url)
         if object_info is None:
             logger.info(
-                "[comfyui] Templates not added: ComfyUI at %s did not list its "
-                "nodes: %s",
+                "[comfyui] ComfyUI at %s did not list its nodes, so templates "
+                "are added as drafts: %s",
                 comfyui_url,
                 error,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"ComfyUI at {comfyui_url} did not say which nodes it has, "
-                    "so nothing was added. Try again once it answers."
-                ),
             )
         added, failed = [], []
         for ref in payload.templates:
@@ -2676,8 +2675,15 @@ def create_router(server) -> APIRouter:
                 )
                 continue
             try:
-                graph = comfyui_templates.fetch_graph(comfyui_url, template)
-                converted, problems = convert_ui_graph_to_api(graph, object_info)
+                graph = comfyui_templates.fetch_graph(base_url, template)
+                if object_info is None:
+                    converted = None
+                    problems = [
+                        f"ComfyUI at {comfyui_url} was not answering, so it "
+                        "is a draft until it is opened with ComfyUI running."
+                    ]
+                else:
+                    converted, problems = convert_ui_graph_to_api(graph, object_info)
                 draft = converted is None
                 workflow_id = store_manual_workflow(
                     hub,
@@ -2721,7 +2727,7 @@ def create_router(server) -> APIRouter:
                     }
                 )
                 continue
-            keep_template_thumbnail(hub, comfyui_url, template, workflow_id)
+            keep_template_thumbnail(hub, base_url, template, workflow_id)
             logger.info(
                 "Stored template %s as %s workflow %s.",
                 template.key,

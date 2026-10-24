@@ -720,6 +720,8 @@ watch(
  * on Mine with what was made selected, so the next look is at it.
  */
 async function addSelectedTemplates() {
+  // Read before the Add: what it was added from decides what a draft means.
+  const shipped = !templates.reachable;
   const body = await templates.add();
   if (!body) {
     if (templates.error) notices.push({ level: "error", text: templates.error });
@@ -747,7 +749,14 @@ async function addSelectedTemplates() {
   const drafts = added.filter((entry) => entry.draft).length;
   let text =
     added.length === 1 ? "Added 1 workflow." : `Added ${added.length} workflows.`;
-  if (drafts && added.length === 1) {
+  // Only when every one is: ComfyUI can come back between the list and the
+  // Add, and then some convert and run.
+  if (drafts && shipped && drafts === added.length) {
+    text +=
+      added.length === 1
+        ? " It is a draft: once ComfyUI runs, Finish in ComfyUI makes it runnable."
+        : " They are drafts: once ComfyUI runs, Finish in ComfyUI makes each runnable.";
+  } else if (drafts && added.length === 1) {
     text += " It is a draft: open it in ComfyUI and save it to finish it.";
   } else if (drafts) {
     text += ` ${drafts} of them are drafts: open each in ComfyUI and save it to finish it.`;
