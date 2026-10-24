@@ -4982,7 +4982,7 @@ def test_a_conversion_never_lands_on_the_version_after_the_one_it_converted(
         workflow_env.server, tmp_path, monkeypatch, "sampler.json", RUN_EDITOR_GRAPH
     )
     newer = json.loads(json.dumps(RUN_EDITOR_GRAPH))
-    newer["nodes"][1]["widgets_values"] = [123, 40, 7.0]
+    newer["nodes"][1]["widgets_values"] = [123, "randomize", 40, 7.0]
 
     def a_save_lands_meanwhile():
         with hub.transaction() as conn:
@@ -9235,7 +9235,8 @@ RUN_EDITOR_GRAPH = {
             "mode": 0,
             "inputs": [],
             "outputs": [],
-            "widgets_values": [123, 20, 7.0],
+            # The seed's control slot, as the editor saves every seed.
+            "widgets_values": [123, "randomize", 20, 7.0],
         },
         {
             "id": 4,
@@ -9284,7 +9285,8 @@ def test_a_picture_whose_only_graph_is_the_editors_is_still_a_source(runnable):
     assert len(runnable.submitted) == 1, runnable.submitted
     graph = runnable.submitted[0]["graph"]
     # The rebuild, read off `/object_info` rather than guessed: the widget
-    # array `[123, 20, 7.0]` lands on seed, steps and cfg in that order.
+    # array `[123, "randomize", 20, 7.0]` lands on seed, steps and cfg, the
+    # seed's control slot skipped.
     assert set(graph) == {"1", "3", "4"}, graph
     assert graph["3"]["class_type"] == "KSampler"
     assert graph["3"]["inputs"]["steps"] == 20
