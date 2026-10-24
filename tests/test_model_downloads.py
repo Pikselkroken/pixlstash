@@ -2,10 +2,14 @@
 
 import contextlib
 import gzip
+import hashlib
+import importlib.util
+import json
 import os
 import sqlite3
 import threading
 import time
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -19,6 +23,7 @@ from pixlstash.services.model_downloads import (
     STATUS_FAILED,
     DownloadRefused,
     cancel_download,
+    digest_source,
     download_source,
     live_downloads,
     start_download,
@@ -29,6 +34,7 @@ from pixlstash.services.workflow_run_service import (
     MISSING_MODELS,
     bypass_missing_loras,
     judge,
+    missing_digest_models,
 )
 from tests.test_downloads_intake import _register, write_adapter
 
@@ -98,11 +104,11 @@ def no_downloads_left():
 def linked(monkeypatch):
     """Point every file name at *url*, in the ComfyUI folder *directory*."""
 
-    def link(url, directory="loras"):
+    def link(url, directory="loras", sha256=None):
         monkeypatch.setattr(
             model_downloads,
             "download_source",
-            lambda file: {"url": url, "directory": directory},
+            lambda file: {"url": url, "directory": directory, "sha256": sha256},
         )
 
     return link
@@ -183,6 +189,25 @@ def test_a_download_lands_in_the_marked_folder_and_is_registered(
         (chosen_id, "loras/SDXL/Style.safetensors"),
     )
     assert row is not None and arrived == [row["model_id"]] == [done["model_id"]]
+
+
+def test_a_download_that_is_not_the_listed_file_is_refused(
+    hub, target, adapter_bytes, linked
+):
+    """Wrong if a body whose digest is not the one the list records lands on
+    the shelf: a loader asking for the listed digest would stay missing."""
+    chosen, chosen_id = target
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, sha256="0" * 64)
+        refused = _wait(start_download(hub, "other.safetensors")["id"])
+        linked(url, sha256=hashlib.sha256(adapter_bytes).hexdigest())
+        kept = _wait(start_download(hub, "listed.safetensors")["id"])
+    assert refused["status"] == STATUS_FAILED, refused
+    assert "not the file the template list names" in refused["error"]
+    assert not (chosen / "loras" / "other.safetensors").exists()
+    assert not (chosen / "loras" / ("other.safetensors" + PARTIAL_SUFFIX)).exists()
+    assert kept["status"] == STATUS_DONE, kept
+    assert (chosen / "loras" / "listed.safetensors").read_bytes() == adapter_bytes
 
 
 def test_without_the_comfyui_subfolder_the_file_goes_at_the_top(
@@ -359,6 +384,125 @@ def test_a_missing_model_the_list_links_is_marked_downloadable():
         },
         {"file": "my_own_lora.safetensors", "folder": "loras"},
     ]
+
+
+# The Qwen VAE's digest, as the template list records it for its link.
+_QWEN_VAE = "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
+_ON_SHELF = "b" * 64
+_UNLISTED = "c" * 64
+
+
+def test_a_model_a_digest_loader_names_and_the_shelf_lacks_is_missing():
+    """By the listed name and offered, or by its digest when the list has none.
+
+    Wrong if a digest the shelf holds is reported, if an emptied adapter row
+    counts, if a missing one is not reported at all (it would only fail inside
+    ComfyUI), or if a caller that gives no shelf check sees a change.
+    """
+    graph = {
+        "1": {"class_type": "PixlStashVAELoader", "inputs": {"vae_sha256": _QWEN_VAE}},
+        "2": {
+            "class_type": "PixlStashCLIPLoader",
+            "inputs": {"clip_sha256": _ON_SHELF, "type": "qwen_image"},
+        },
+        "3": {
+            "class_type": "PixlStashMultiAdapterLoader",
+            "inputs": {"adapter_sha256": _UNLISTED.upper(), "adapter_sha256_2": ""},
+        },
+        "4": {"class_type": "SaveImage", "inputs": {}},
+    }
+    object_info = {
+        cls: {"input": {"required": {}}}
+        for cls in (
+            "PixlStashVAELoader",
+            "PixlStashCLIPLoader",
+            "PixlStashMultiAdapterLoader",
+            "SaveImage",
+        )
+    }
+    reasons, _ = judge(
+        graph, object_info, None, digest_present=lambda d: d == _ON_SHELF
+    )
+    missing = next(r for r in reasons if r.code == MISSING_MODELS).detail["models"]
+    assert missing == [
+        {
+            "file": "qwen_image_vae.safetensors",
+            "folder": "vae",
+            "sha256": _QWEN_VAE,
+            "downloadable": True,
+        },
+        {"file": _UNLISTED, "folder": "loras", "sha256": _UNLISTED},
+    ]
+    reasons, _ = judge(graph, object_info, None)
+    assert all(r.code != MISSING_MODELS for r in reasons)
+
+
+def test_every_digest_a_built_in_names_can_be_downloaded():
+    """Each model the shipped workflows load by digest is a file the template
+    list links under that digest, so a machine without it is offered it."""
+    folder = os.path.join(
+        os.path.dirname(model_downloads.__file__),
+        "..",
+        "data",
+        "comfyui-workflows",
+        "built-in",
+    )
+    seen = 0
+    for name in sorted(os.listdir(folder)):
+        with open(os.path.join(folder, name), encoding="utf-8") as handle:
+            graph = json.load(handle)
+        for model in missing_digest_models(graph, lambda _digest: False):
+            seen += 1
+            source = digest_source(model["sha256"])
+            assert source is not None, (name, model)
+            assert download_source(source["name"])["url"] == source["url"], name
+    assert seen >= 5
+
+
+def test_the_list_build_asks_every_link_and_keeps_a_digest_only_when_unreachable(
+    monkeypatch,
+):
+    """Wrong if a link the old list holds is not asked again: a file
+    re-uploaded under it would keep a digest every download is then refused
+    against. Wrong too if one unreachable link loses its known digest."""
+    spec = importlib.util.spec_from_file_location(
+        "build_template_suggestions",
+        os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "build_template_suggestions.py"
+        ),
+    )
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    hf = "https://huggingface.co/"
+    asked = []
+
+    def sha256_of(url):
+        asked.append(url)
+        if url.endswith("down"):
+            raise urllib.error.URLError("offline")
+        return {hf + "moved": "1" * 64}.get(url)
+
+    monkeypatch.setattr(build, "_sha256_of", sha256_of)
+
+    def files(*pairs):
+        return {"templates": [{"files": [dict(url=u, **d) for u, d in pairs]}]}
+
+    document = files(
+        (hf + "moved", {}), (hf + "down", {}), (hf + "moved", {}), (hf + "gated", {})
+    )
+    old = files(
+        (hf + "moved", {"sha256": "0" * 64}),
+        (hf + "down", {"sha256": "2" * 64}),
+        (hf + "gated", {"sha256": "3" * 64}),
+    )
+    build.add_digests(document, old)
+    assert [f.get("sha256") for f in document["templates"][0]["files"]] == [
+        "1" * 64,
+        "2" * 64,
+        "1" * 64,
+        None,
+    ]
+    assert sorted(asked) == [hf + "down", hf + "gated", hf + "moved"]
 
 
 def test_a_bypassed_lora_the_list_links_is_marked_downloadable():

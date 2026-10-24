@@ -107,19 +107,51 @@ def _sources() -> dict[str, dict]:
             if name and isinstance(url, str) and url.startswith("https://"):
                 found.setdefault(
                     name.casefold(),
-                    {"url": url, "directory": entry.get("directory")},
+                    {
+                        "url": url,
+                        "directory": entry.get("directory"),
+                        "sha256": entry.get("sha256"),
+                    },
                 )
     return found
 
 
 def download_source(file: str) -> Optional[dict]:
-    """Where *file* can be downloaded from, ``{url, directory}``, or None.
+    """Where *file* can be downloaded from, ``{url, directory, sha256}``, or None.
+
+    ``sha256`` is the digest the list records for the link, or None.
 
     By the file's own name, case folded and without the subfolder a loader may
     put in front of it: the list names files the way ComfyUI's loaders do.
     """
     name = os.path.basename((file or "").replace("\\", "/"))
     return _sources().get(name.casefold()) if name else None
+
+
+def digest_source(sha256: str) -> Optional[dict]:
+    """The file the template list links under *sha256*, or None.
+
+    ``{name, url, directory}``, for a loader that names its model by digest
+    alone (ComfyUI-PixlStash's): the list records the digest Hugging Face
+    states for each link (``scripts/build_template_suggestions.py``).
+    """
+    digest = (sha256 or "").strip().lower()
+    for template in load_templates().get("templates") or []:
+        for entry in template.get("files") or []:
+            url = entry.get("url")
+            if (
+                digest
+                and entry.get("sha256") == digest
+                and entry.get("name")
+                and isinstance(url, str)
+                and url.startswith("https://")
+            ):
+                return {
+                    "name": entry["name"],
+                    "url": url,
+                    "directory": entry.get("directory"),
+                }
+    return None
 
 
 def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
@@ -211,7 +243,15 @@ def start_download(
         _downloads[entry["id"]] = entry
     thread = threading.Thread(
         target=_run,
-        args=(hub, entry, url, int(folder["id"]), relpath, on_arrived),
+        args=(
+            hub,
+            entry,
+            url,
+            int(folder["id"]),
+            relpath,
+            on_arrived,
+            source.get("sha256"),
+        ),
         name=f"model-download-{entry['id'][:8]}",
         daemon=True,
     )
@@ -280,12 +320,22 @@ def _run(
     folder_id: int,
     relpath: str,
     on_arrived: Optional[Callable[[int], None]],
+    expected: Optional[str] = None,
 ) -> None:
     target = entry["_target"]
     partial = target + PARTIAL_SUFFIX
     cancel = entry["_cancel"]
     try:
         digest = _fetch(url, partial, entry, cancel)
+        # The file the list names, or nothing: another file under the same
+        # link would land on the shelf and leave a loader that asks for the
+        # listed digest still missing, with nothing said.
+        if expected and digest != expected:
+            raise ValueError(
+                f"{entry['file']} arrived, but it is not the file the template "
+                f"list names (its SHA-256 is {digest}, the list says "
+                f"{expected}), so it was removed again."
+            )
         model_id = _publish(hub, partial, entry, folder_id, relpath, digest)
     except _Cancelled:
         discard_partial(partial)

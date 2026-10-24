@@ -3437,6 +3437,26 @@ def _shelf_digest(hub, kind: str):
     return digest_of
 
 
+def _shelf_holds_digest(hub):
+    """A SHA-256 -> whether the shelf has a copy of it present.
+
+    :func:`_shelf_digest`'s rule from the other side, for a loader that names
+    its file by digest alone: without a present copy it has nothing to fetch.
+    """
+
+    def present(digest: str) -> bool:
+        return (
+            hub.fetchone(
+                "SELECT 1 FROM model m JOIN model_file f ON f.model_id = m.id "
+                "AND f.state = 'present' WHERE m.sha256 = ? LIMIT 1",
+                (digest,),
+            )
+            is not None
+        )
+
+    return present
+
+
 def _shelf_checkpoint(hub):
     """A ``ckpt_name`` -> the shelf row of that checkpoint, or ``None``.
 
@@ -7676,6 +7696,7 @@ def create_router(server) -> APIRouter:
                 object_info_error,
                 wants_lora=bool(body.loras),
                 lora_slots=slots_in_graph,
+                digest_present=_shelf_holds_digest(hub),
                 **node_policy,
             )
             if object_info is not None and not found and not opening:
@@ -7700,6 +7721,7 @@ def create_router(server) -> APIRouter:
                         object_info_error,
                         wants_lora=bool(body.loras),
                         lora_slots=slots_in_graph,
+                        digest_present=_shelf_holds_digest(hub),
                         **node_policy,
                     )
             if stale_pack:

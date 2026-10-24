@@ -44,7 +44,7 @@ from pixlstash.services.comfyui_recipe_service import (
     unchecked_preflight,
 )
 from pixlstash.services.comfyui_service import pixlstash_node_refusals
-from pixlstash.services.model_downloads import download_source
+from pixlstash.services.model_downloads import digest_source, download_source
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
     SECRET_FIELD_RE,
@@ -156,6 +156,21 @@ TEXT_NODE_CLASSES = {
 # any spelling). A literal cannot expand them, so a text holding anything in
 # square brackets keeps its refusal; core ComfyUI gives brackets no meaning.
 WAS_TOKEN_RE = re.compile(r"\[[^\[\]]*\]")
+
+# The ComfyUI-PixlStash loaders that name their file by SHA-256 alone, as the
+# ComfyUI folder each loads from, and the widgets holding a digest. No file
+# name is in the graph, so the pre-flight's own name check never sees them: a
+# digest the shelf has no copy of is found by :func:`missing_digest_models`.
+DIGEST_LOADER_FOLDERS = {
+    "PixlStashVAELoader": "vae",
+    "PixlStashCLIPLoader": "text_encoders",
+    "PixlStashAdapterLoader": "loras",
+    "PixlStashMultiAdapterLoader": "loras",
+    "PixlStashControlNetLoader": "controlnet",
+    "PixlStashUpscaleModelLoader": "upscale_models",
+}
+DIGEST_WIDGET_RE = re.compile(r"sha256(_\d+)?$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
@@ -332,6 +347,43 @@ FROM_FILE = "file"
 FROM_EDIT = "edit"
 FROM_PICTURE = "picture"
 FROM_INSTANCE = "instance"
+
+
+def missing_digest_models(
+    graph: dict, digest_present: Callable[[str], bool]
+) -> list[dict]:
+    """Every model a digest loader names that the shelf has no copy of.
+
+    ``[{file, folder, sha256}]``, once per digest. ``file`` is the name the
+    template list links that digest under (:func:`digest_source`), so the owner
+    reads a model and ``POST /model-downloads`` can fetch it; the digest itself
+    where the list has none. A row left empty, or wired, is no model.
+    """
+    found: dict[str, dict] = {}
+    for node in graph.values():
+        if not isinstance(node, dict):
+            continue
+        folder = DIGEST_LOADER_FOLDERS.get(node.get("class_type"))
+        if folder is None:
+            continue
+        for widget, value in (node.get("inputs") or {}).items():
+            if not DIGEST_WIDGET_RE.search(str(widget)) or not isinstance(value, str):
+                continue
+            digest = value.strip().lower()
+            if not _SHA256_RE.match(digest) or digest in found:
+                continue
+            if digest_present(digest):
+                continue
+            source = digest_source(digest)
+            # The folder the download puts it in, which is the one said: the
+            # loader finds it by digest wherever it lands.
+            placed = download_source(source["name"]) if source else None
+            found[digest] = {
+                "file": source["name"] if source else digest,
+                "folder": (placed or source or {}).get("directory") or folder,
+                "sha256": digest,
+            }
+    return list(found.values())
 
 
 def model_folder(class_type: str, field_name: str) -> Optional[str]:
@@ -564,6 +616,7 @@ def judge(
     picture_loader: bool = False,
     from_file: bool = False,
     shelf_uuid: Optional[str] = None,
+    digest_present: Optional[Callable[[str], bool]] = None,
 ) -> tuple[list[Reason], dict]:
     """Every reason this graph would not run, and the pre-flight behind them.
 
@@ -581,6 +634,11 @@ def judge(
     what the ComfyUI-PixlStash node policy needs to know about this run (#1521, see
     :func:`~pixlstash.services.comfyui_service.pixlstash_node_refusals`); the
     defaults refuse.
+
+    ``digest_present`` says whether the shelf has a copy of a SHA-256: given,
+    a model a ComfyUI-PixlStash loader names by digest alone and the shelf
+    lacks is a missing model too (:func:`missing_digest_models`), which the
+    loader would otherwise only fail on inside ComfyUI.
 
     Returns:
         ``(reasons, preflight)``. ``reasons`` empty means it would run.
@@ -615,10 +673,18 @@ def judge(
         for item in preflight.get("missing_models") or []
         if item
     ]
+    if digest_present is not None:
+        models += missing_digest_models(graph, digest_present)
     for model in models:
         # Only where it is true: `POST /model-downloads` can fetch it, because
-        # the template list links a file of this name.
-        if download_source(model["file"]) is not None:
+        # the template list links a file of this name. For a digest, only
+        # where that name's link is the one listed under the digest: a fetch
+        # of another file of the name would leave the loader still missing.
+        source = download_source(model["file"])
+        if source is not None and (
+            "sha256" not in model
+            or source["url"] == (digest_source(model["sha256"]) or {}).get("url")
+        ):
             model["downloadable"] = True
     if models:
         reasons.append(Reason(MISSING_MODELS, {"models": models}))
