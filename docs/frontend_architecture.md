@@ -7040,6 +7040,10 @@ unchanged by the tab's existence.
   a connected dot, so nothing on the tab reads as the owner's own work while
   the chips keep the room: its tooltip names the address, and a click opens a
   small panel with the address and *Read the templates again* (`refresh`).
+  With no ComfyUI answering the list is the copy PixlStash ships
+  (`reachable: false` with templates), drawn the same way: the dot takes the
+  `warning` fill and the panel says these are the shipped templates and that
+  node-pack ones appear once ComfyUI answers.
 - **Readiness is one function** (`templateReadiness`): `partner`, else
   `pack_not_loaded` when the server says the pack's nodes did not load, else
   `ready` when the shelf holds every file the loaders name (by file name, the
@@ -7049,12 +7053,16 @@ unchanged by the tab's existence.
 - **`WorkflowTemplatesPanel.vue`** draws the cards (`WorkflowTemplateCard.vue`,
   on the workflow card's frame and the Mine grid's column arithmetic, handed in
   as props), the click / Ctrl / Shift / keyboard selection and the pill, or the
-  empty state when ComfyUI does not answer ("Templates come from your ComfyUI",
-  with *ComfyUI settings…*). There is no fallback list.
+  empty state when ComfyUI does not answer and nothing shipped is listed
+  either ("Templates come from your ComfyUI", with *ComfyUI settings…*). While
+  it does not answer the tab re-reads every 10 s, so the live list replaces the
+  shipped one by itself.
 - **Add** (pill or inspector, the inspector asking through `requestAdd`) posts
   `POST /comfyui/templates/add`, re-reads Mine, switches to it and selects what
   was made. A template the server could convert is an ordinary workflow at once;
-  one it could not is a **draft** (`WorkflowCard.draft`).
+  one it could not is a **draft** (`WorkflowCard.draft`). An Add from the
+  shipped list is always a draft, and its notice says it converts the first
+  time it runs.
 - **A draft** is drawn hatched in Mine with *Finish in ComfyUI…* where Run would
   be (`openWorkflowInComfyui`), and the facts row leads with "Draft · from a
   template". Run is refused for it in the pill, the context menu and the

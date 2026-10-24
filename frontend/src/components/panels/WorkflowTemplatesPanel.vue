@@ -2,36 +2,45 @@
   <div class="wtp" role="tabpanel" aria-labelledby="wfv-tab-templates">
     <!-- Where the list comes from, first on the strip: none of it is the
          owner's own work until it is added. A ComfyUI mark with a connected
-         dot, so the strip keeps its room for the chips; the address and the
-         re-read are one hover and one click away. -->
-    <div v-if="store.reachable && store.loaded" class="wtp-strip">
+         dot (a warning one for the shipped copy), so the strip keeps its room
+         for the chips; the address and the re-read are one hover and one
+         click away. -->
+    <div v-if="listed && store.loaded" class="wtp-strip">
       <v-menu location="bottom start" :close-on-content-click="false">
         <template #activator="{ props: menuProps }">
           <button
             v-bind="menuProps"
             type="button"
             class="wtp-link"
-            :aria-label="`Templates from your ComfyUI at ${store.comfyuiUrl}`"
+            :aria-label="sourceLabel"
             data-testid="wtp-source"
           >
             <ComfyuiIcon :size="16" />
-            <span class="wtp-link-dot" aria-hidden="true"></span>
-            <Tooltip
-              :text="`Templates from your ComfyUI at ${store.comfyuiUrl}`"
-              activator="parent"
-              :describe="false"
-            />
+            <span
+              class="wtp-link-dot"
+              :class="{ 'wtp-link-dot--shipped': !store.reachable }"
+              aria-hidden="true"
+            ></span>
+            <Tooltip :text="sourceLabel" activator="parent" :describe="false" />
           </button>
         </template>
         <div class="tbm wtp-link-menu" data-testid="wtp-link-menu">
           <div class="tbm-header">
             <ComfyuiIcon :size="16" />
-            <span class="tbm-title">Connected to ComfyUI</span>
+            <span class="tbm-title">{{
+              store.reachable ? "Connected to ComfyUI" : "ComfyUI is not answering"
+            }}</span>
           </div>
           <div class="tbm-section">
-            <p class="wtp-link-text">
+            <p v-if="store.reachable" class="wtp-link-text">
               Templates are read from your ComfyUI at
               <span class="wtp-url">{{ store.comfyuiUrl }}</span>
+            </p>
+            <p v-else class="wtp-link-text" data-testid="wtp-shipped">
+              Nothing is answering at
+              <span class="wtp-url">{{ store.comfyuiUrl }}</span>, so these are
+              the templates PixlStash ships: ComfyUI's own that download files.
+              Node-pack templates appear once it answers.
             </p>
             <AppButton
               size="sm"
@@ -61,7 +70,7 @@
     <!-- No ComfyUI answering: the tab is still a tab, and says where its list
          would come from. Mine is unaffected. -->
     <div
-      v-if="store.loaded && !store.reachable"
+      v-if="store.loaded && !listed"
       class="wtp-empty"
       data-testid="wtp-unreachable"
     >
@@ -92,7 +101,7 @@
     </p>
 
     <div
-      v-if="store.reachable"
+      v-if="listed"
       ref="scrollEl"
       class="wtp-scroll"
       tabindex="-1"
@@ -190,6 +199,14 @@ const props = defineProps({
 const emit = defineEmits(["add", "open-settings"]);
 
 const store = useWorkflowTemplatesStore();
+// With no ComfyUI answering the list is the copy PixlStash ships, shown the
+// same way; only an empty one is the unreachable state.
+const listed = computed(() => store.reachable || store.templates.length > 0);
+const sourceLabel = computed(() =>
+  store.reachable
+    ? `Templates from your ComfyUI at ${store.comfyuiUrl}`
+    : `ComfyUI is not answering at ${store.comfyuiUrl}: the templates PixlStash ships`,
+);
 const gridEl = ref(null);
 const scrollEl = ref(null);
 const columns = ref(1);
@@ -350,6 +367,10 @@ function onKeyDown(event) {
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-success));
   box-shadow: 0 0 0 2px rgb(var(--v-theme-background));
+}
+
+.wtp-link-dot--shipped {
+  background: rgb(var(--v-theme-warning));
 }
 
 .wtp-link-menu {

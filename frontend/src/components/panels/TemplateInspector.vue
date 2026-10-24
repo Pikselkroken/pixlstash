@@ -45,10 +45,17 @@
           }}</v-icon>
           <div>
             <p class="tpli-source-head">{{ sourceText }}</p>
-            <p class="tpli-quiet">
+            <p v-if="templates.reachable" class="tpli-quiet">
               Graph and preview downloaded from your ComfyUI at
               <span class="tpli-mono">{{ templates.comfyuiUrl }}</span>. Nothing
               is stored until you add it.
+            </p>
+            <p v-else class="tpli-quiet" data-testid="tpli-shipped">
+              Nothing is answering at
+              <span class="tpli-mono">{{ templates.comfyuiUrl }}</span>, so the
+              graph is the copy PixlStash ships and the preview comes from
+              ComfyUI's template repository. Added now, it converts the first
+              time it runs.
             </p>
             <p v-if="template.pack_loaded === false" class="tpli-warn">
               ComfyUI did not load this pack's nodes, so it cannot run yet.
