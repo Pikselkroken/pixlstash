@@ -319,10 +319,12 @@ function stepRow(kind, step) {
    menu-row height, then they scroll. */
 .wtf-scroll {
   max-height: calc(var(--control-h-bar) * 8);
-  /* Room for a row's focus ring, which reaches --space-2 past it. */
-  margin: calc(var(--space-2) * -1);
-  padding: var(--space-2);
-  overflow-y: auto;
+  /* Room for a row's focus ring, which reaches --space-2 past it. The rows
+     bleed --space-3 sideways (.fm-check), so the list bleeds with them; at
+     --space-2 it scrolled sideways by the overhang. Labels ellipsise. */
+  margin: calc(var(--space-2) * -1) calc(var(--space-3) * -1);
+  padding: var(--space-2) var(--space-3);
+  overflow: hidden auto;
   scrollbar-width: thin;
 }
 </style>
