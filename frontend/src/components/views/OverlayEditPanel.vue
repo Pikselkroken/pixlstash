@@ -185,6 +185,16 @@
                 >{{ card.name || "Untitled workflow"
                 }}{{ fillInPopup.has(card.id) ? "…" : "" }}</span
               >
+              <!-- Listed though it cannot run yet: a model download away. -->
+              <span v-if="missing.has(card.id)" class="edit-missing">
+                <Tooltip
+                  :text="missingTip(card.id)"
+                  activator="parent"
+                  :describe="false"
+                />
+                <v-icon size="14" aria-hidden="true">mdi-alert-outline</v-icon>
+                <span class="visually-hidden">, {{ missingTip(card.id) }}</span>
+              </span>
               <span class="visually-hidden">, </span>
               <span class="edit-kind">{{ card.type_label }}</span>
             </button>
@@ -194,6 +204,13 @@
             </p>
           </div>
         </v-menu>
+        <!-- The Run popup's notice: each missing file, with its download
+             where the server can fetch it. Run waits for them. -->
+        <RunReasonNotice
+          v-if="chosenMissing"
+          class="edit-missing-notice"
+          :reason="chosenMissing"
+        />
         <p v-if="hasSelection && chosenCard && !usesMask" class="edit-note">
           {{ chosenCard.type_label }} workflows do not use a mask, so this
           would change the whole picture. Choose an Inpaint workflow.
@@ -307,6 +324,7 @@
           size="sm"
           block
           :loading="submitting"
+          :disabled="!!chosenMissing"
           @click="submit"
         >
           <v-icon v-if="!submitting" size="16">mdi-play</v-icon>
@@ -341,7 +359,10 @@
  *
  * **Only cards that would run.** Each edit card is pre-flighted against the
  * open picture, the same question Run asks, and one that answers with a reason
- * is dropped: a missing node or model, a UI-format file. A card whose only
+ * is dropped: a missing node, a UI-format file. A card whose only reason is
+ * missing models (#2055) is listed with a warning glyph, since a download
+ * fixes it: chosen, it shows the Run popup's notice with each file's download,
+ * Run waits, and a download landing asks those cards again. A card whose only
  * reason is an open picture input (a reference beside the open picture) is
  * listed with an ellipsis and never becomes the tab's card: an instruction
  * alone cannot run it, so choosing it opens the Run popup, which can fill it. A node the server replaces (a seed node) or a LoRA it bypasses is not
@@ -360,6 +381,7 @@
  */
 import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
+import RunReasonNotice from "../io/RunReasonNotice.vue";
 import AppButton from "../widgets/AppButton.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -371,8 +393,10 @@ import {
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { errorMessage } from "../../utils/apiError";
 import {
+  MISSING_MODELS,
   PICTURE_INPUT_UNFILLED,
   UNCHECKED_CODES,
   readReason,
@@ -455,12 +479,16 @@ const helpId = useId();
 
 const runDialog = useRunDialogStore();
 const libraries = useLibrariesStore();
+const tasksStore = useTasksStore();
 
 const cards = ref([]);
 // Edit cards the pre-flight turned away, so the empty state can say so.
 const unrunnable = ref(0);
 // Cards that run once the Run popup fills their other picture inputs.
 const fillInPopup = ref(new Set());
+// Cards that run once their models are downloaded: id -> the missing_models
+// reason, as RunReasonNotice reads it.
+const missing = ref(new Map());
 const loaded = ref(false);
 const loading = ref(false);
 const loadError = ref("");
@@ -489,6 +517,15 @@ let refocusPicker = false;
 const chosenCard = computed(
   () => cards.value.find((card) => card.id === workflowId.value) || null,
 );
+
+const chosenMissing = computed(
+  () => missing.value.get(workflowId.value) || null,
+);
+
+function missingTip(key) {
+  const count = missing.value.get(key)?.models?.length || 0;
+  return `${count} ${count === 1 ? "model" : "models"} missing`;
+}
 
 const hasSelection = computed(() => !!props.paint?.hasSelection.value);
 const usesMask = computed(() => MASK_TYPES.has(chosenCard.value?.type));
@@ -667,15 +704,23 @@ async function loadCards() {
     fillInPopup.value = new Set(
       edits.filter((_, index) => runs[index] === FILL).map((card) => card.id),
     );
+    missing.value = new Map(
+      edits.flatMap((card, index) =>
+        runs[index]?.code === MISSING_MODELS ? [[card.id, runs[index]]] : [],
+      ),
+    );
     unrunnable.value = edits.length - cards.value.length;
     rememberedKey.value = readRemembered();
     // The last one used from this tab, else the first Image to Image card in
     // the grid's own order, else whatever edit card comes first - of the
-    // cards the open picture alone can run.
+    // cards the open picture alone can run. With none, the first a download
+    // would fix, so its notice is on screen rather than behind the picker.
     const here = cards.value.filter((card) => runsHere(card.id));
     workflowId.value = runsHere(rememberedKey.value)
       ? rememberedKey.value
-      : (here.find((card) => card.type === "img2img") || here[0])?.id || "";
+      : (here.find((card) => card.type === "img2img") || here[0])?.id ||
+        missing.value.keys().next().value ||
+        "";
     // Drawn before the tab was first shown.
     if (hasSelection.value) moveToMasked();
     loaded.value = true;
@@ -691,13 +736,17 @@ const FILL = "fill";
 /** A listed card the open picture alone can run. */
 function runsHere(key) {
   return (
-    !fillInPopup.value.has(key) && cards.value.some((card) => card.id === key)
+    !fillInPopup.value.has(key) &&
+    !missing.value.has(key) &&
+    cards.value.some((card) => card.id === key)
   );
 }
 
 /**
  * True when the card runs on the open picture, `FILL` when the pre-flight's
- * only objection is a picture input the Run popup can fill, false otherwise.
+ * only objection is a picture input the Run popup can fill, the
+ * `missing_models` reason when missing models are its only objection, false
+ * otherwise.
  */
 async function wouldRun(card) {
   const id = Number(props.pictureId);
@@ -711,9 +760,16 @@ async function wouldRun(card) {
       .flatMap((group) => group.reasons || [])
       .filter((reason) => !UNCHECKED_CODES.includes(reason.code));
     if (!reasons.length) return true;
-    return reasons.every((reason) => reason.code === PICTURE_INPUT_UNFILLED)
-      ? FILL
-      : false;
+    if (reasons.every((reason) => reason.code === PICTURE_INPUT_UNFILLED)) {
+      return FILL;
+    }
+    if (reasons.every((reason) => reason.code === MISSING_MODELS)) {
+      return {
+        code: MISSING_MODELS,
+        models: reasons.flatMap((reason) => reason.models || []),
+      };
+    }
+    return false;
   } catch (err) {
     console.warn(`Could not pre-flight ${card.id} for the Edit tab:`, err);
     return true;
@@ -726,6 +782,34 @@ watch(
     if (active) void loadCards();
   },
   { immediate: true },
+);
+
+// A model just downloaded may be one a listed card is waiting for: ask those
+// cards again, so Run turns on without a reload. Only the newest ask is kept,
+// since two downloads can land a moment apart.
+let recheckAsk = 0;
+watch(
+  () => tasksStore.downloadsLanded,
+  async () => {
+    const keys = [...missing.value.keys()];
+    if (!keys.length) return;
+    const ask = ++recheckAsk;
+    const runs = await Promise.all(keys.map((id) => wouldRun({ id })));
+    if (ask !== recheckAsk) return;
+    const still = new Map(missing.value);
+    const fill = new Set(fillInPopup.value);
+    keys.forEach((key, index) => {
+      const verdict = runs[index];
+      if (verdict?.code === MISSING_MODELS) {
+        still.set(key, verdict);
+        return;
+      }
+      still.delete(key);
+      if (verdict === FILL) fill.add(key);
+    });
+    missing.value = still;
+    fillInPopup.value = fill;
+  },
 );
 
 /**
@@ -859,7 +943,7 @@ function onMoreOptions(key = workflowId.value, edit = false) {
 
 async function submit() {
   const id = Number(props.pictureId);
-  if (submitting.value || !workflowId.value) return;
+  if (submitting.value || !workflowId.value || chosenMissing.value) return;
   if (!Number.isFinite(id) || id <= 0) return;
   submitting.value = true;
   submitError.value = "";
@@ -1093,6 +1177,26 @@ defineExpose({ submit });
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
   white-space: nowrap;
+}
+
+/* The missing-model flag, in the dark surface's warning hue. */
+.edit-missing {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-dark-surface-warning));
+}
+
+/* RunReasonNotice in the on-dark skin, as AppButton's on-dark does it (its
+   download button included). Under `.edit-pane` to outrank its own border. */
+.edit-pane .edit-missing-notice {
+  margin-top: var(--space-3);
+  border-color: rgba(var(--v-theme-on-dark-surface), 0.2);
+  border-left-color: rgb(var(--v-theme-dark-surface-error));
+  color: rgb(var(--v-theme-on-dark-surface));
+  --v-theme-on-surface: var(--v-theme-on-dark-surface);
+  --v-theme-surface-error: var(--v-theme-dark-surface-error);
+  --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
+  --focus-stroke: rgb(var(--v-theme-on-dark-surface));
 }
 
 .edit-option[aria-checked="true"] {

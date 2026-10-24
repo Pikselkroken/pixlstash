@@ -28,6 +28,7 @@ vi.mock("../../utils/apiClient", () => ({
 import OverlayEditPanel from "./OverlayEditPanel.vue";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 enableAutoUnmount(afterEach);
 
@@ -51,6 +52,10 @@ async function mountPanel(extra = {}) {
         AppButton: { template: "<button class='run' @click=\"$emit('click')\"><slot /></button>" },
         "v-icon": true,
         Tooltip: true,
+        ModelDownloadButton: {
+          props: ["file"],
+          template: "<i class='dl'>{{ file }}</i>",
+        },
         // Renders the field and the menu side by side, so the rows can be
         // read and clicked without Vuetify's overlay.
         "v-menu": {
@@ -112,12 +117,16 @@ describe("the Edit tab", () => {
   });
 
   it("leaves out an edit card the pre-flight says cannot run", async () => {
+    // A missing model alongside another reason: a download would not fix it.
     preflightWorkflowRun.mockImplementation(async ({ target }) => ({
       groups: [
         {
           reasons:
             target === "i2i"
-              ? [{ code: "missing_models", models: [] }]
+              ? [
+                  { code: "missing_models", models: [{ file: "a.safetensors" }] },
+                  { code: "missing_nodes", nodes: ["Foo"] },
+                ]
               : [],
         },
       ],
@@ -130,6 +139,78 @@ describe("the Edit tab", () => {
       picture_ids: [7],
       target: "i2i",
     });
+  });
+
+  it("lists a card missing only models, flagged, with Run held", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "out"
+              ? [
+                  {
+                    code: "missing_models",
+                    models: [
+                      { file: "fill.safetensors", folder: "unet", downloadable: true },
+                      { file: "mine.safetensors", folder: "vae" },
+                    ],
+                  },
+                ]
+              : [],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    const rows = wrapper.findAll("[role=menuitemradio]");
+    expect(rows.map((row) => row.text())).toEqual([
+      "Widen, 2 models missing, Outpaint",
+      "Relight, Image to Image",
+    ]);
+    // Not the default while a runnable card is there.
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(wrapper.find(".edit-missing-notice").exists()).toBe(false);
+
+    await rows[0].trigger("click");
+    const notice = wrapper.find(".edit-missing-notice");
+    expect(notice.text()).toContain("2 models are missing.");
+    // A download only where the server can fetch the file.
+    expect(notice.findAll(".dl").map((dl) => dl.text())).toEqual([
+      "fill.safetensors",
+    ]);
+    expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
+    // Nor through Ctrl+Enter, which calls submit directly.
+    await wrapper.vm.submit();
+    expect(runWorkflowCard).not.toHaveBeenCalled();
+  });
+
+  it("asks again when a download lands, and turns Run on", async () => {
+    let present = false;
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "i2i" && !present
+              ? [{ code: "missing_models", models: [{ file: "a.safetensors" }] }]
+              : [],
+        },
+      ],
+    }));
+    listWorkflowCards.mockResolvedValue({ cards: [CARDS[3]] });
+    const wrapper = await mountPanel();
+    // The only card, so chosen though it cannot run yet.
+    expect(checkedRow(wrapper)).toContain("1 model missing");
+    expect(wrapper.find("button.run").attributes("disabled")).toBeDefined();
+
+    present = true;
+    useTasksStore().downloadsLanded += 1;
+    await flush();
+    await flush();
+    expect(wrapper.find(".edit-missing-notice").exists()).toBe(false);
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    expect(wrapper.find("button.run").attributes("disabled")).toBeUndefined();
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard).toHaveBeenCalled();
   });
 
   it("sends a card missing only a picture straight to the Run popup", async () => {
