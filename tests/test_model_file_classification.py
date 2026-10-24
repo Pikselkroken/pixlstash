@@ -195,10 +195,29 @@ class TestFileClassification:
         assert info is not None
         assert info.file_kind == FILE_VAE
 
+    def test_a_wan_layout_vae_is_a_vae_in_any_folder(self, tmp_path):
+        # Wan's video VAE, and the Qwen Image ones built on it, name their
+        # first convolutions `conv1` (the Qwen Image 2.1 VAE's real shapes).
+        folder = tmp_path / "Downloads"
+        folder.mkdir()
+        path = _write_safetensors(
+            folder / "qwen_image_2.1_vae_bf16.safetensors",
+            {
+                "encoder.conv1.weight": _tensor([96, 3, 3, 3, 3]),
+                "decoder.conv1.weight": _tensor([384, 16, 3, 3, 3]),
+                "conv1.weight": _tensor([32, 32, 1, 1, 1]),
+            },
+        )
+        info = describe_adapter(path)
+        assert info is not None
+        assert info.file_kind == FILE_VAE
+
     @pytest.mark.parametrize(
         "names",
         [
             ["decoder.conv_in.weight"],  # one half only
+            ["decoder.conv1.weight", "conv1.weight"],  # one half, Wan's layout
+            ["encoder.conv_in.weight", "decoder.conv1.weight"],  # two layouts
             [
                 "first_stage_model.encoder.conv_in.weight",  # baked into a checkpoint
                 "first_stage_model.decoder.conv_in.weight",
