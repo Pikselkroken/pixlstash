@@ -26,8 +26,10 @@ ones) is left out.
 **Each file's SHA-256** where Hugging Face states it (``X-Linked-Etag`` on the
 file's ``resolve`` link, which is the LFS object's digest), so a loader that
 names a model by digest alone (ComfyUI-PixlStash's) can be offered the same
-download. Read once per link: a link the previous list already holds keeps its
-digest, so a weekly run asks only about new links. A gated file has none.
+download. Every link is asked again on every run, since a file re-uploaded
+under the same link has a new digest and a download is checked against the
+listed one; a link Hugging Face cannot be reached for keeps the digest the
+previous list had. A gated file has none.
 
 **The graphs are kept too**, one minified file per template in
 ``pixlstash/data/workflow_templates/``, so a workflow can be made from one with
@@ -82,10 +84,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _sha256_of(url: str) -> str | None:
-    """The file's SHA-256 as Hugging Face states it, or None.
+    """The file's SHA-256 as Hugging Face states it, or None where it states none.
 
     The digest is on the answer that redirects to the file's storage, after
     any rename redirect within Hugging Face; nothing past that host is asked.
+
+    Raises:
+        OSError: Hugging Face could not be reached, so nothing is known.
     """
     opener = urllib.request.build_opener(_NoRedirect)
     for _hop in range(5):
@@ -95,9 +100,6 @@ def _sha256_of(url: str) -> str | None:
             )
         except urllib.error.HTTPError as exc:
             response = exc
-        except OSError as exc:
-            print(f"No SHA-256 for {url}: {exc}")
-            return None
         etag = (response.headers.get("X-Linked-Etag") or "").strip('"')
         if _SHA256.match(etag):
             return etag
@@ -110,22 +112,30 @@ def _sha256_of(url: str) -> str | None:
 
 
 def add_digests(document: dict, old: dict) -> None:
-    """Give each file of *document* its ``sha256``, reusing *old*'s by link."""
+    """Give each file of *document* its ``sha256``, asked of every link once.
+
+    *old*'s digest for a link stands only where the link cannot be reached.
+    """
     known = {
         entry["url"]: entry["sha256"]
         for template in old.get("templates") or []
         for entry in template.get("files") or []
         if entry.get("url") and entry.get("sha256")
     }
+    asked: dict[str, str | None] = {}
     for template in document["templates"]:
         for entry in template["files"]:
             url = entry["url"]
             if urllib.parse.urlsplit(url).hostname != DIGEST_HOST:
                 continue
-            if url not in known:
-                known[url] = _sha256_of(url)
-            if known[url]:
-                entry["sha256"] = known[url]
+            if url not in asked:
+                try:
+                    asked[url] = _sha256_of(url)
+                except OSError as exc:
+                    print(f"Could not ask {url} for its SHA-256, kept: {exc}")
+                    asked[url] = known.get(url)
+            if asked[url]:
+                entry["sha256"] = asked[url]
 
 
 def _fetch_wheel(version: str | None) -> tuple[bytes, str]:

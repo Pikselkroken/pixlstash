@@ -11117,8 +11117,9 @@ an address of its choosing.
   present copy is a `missing_models` entry (`missing_digest_models`) carrying
   `sha256`, named by `model_downloads.digest_source`: the template list
   records each link's SHA-256 as Hugging Face states it (`X-Linked-Etag`, read
-  by `scripts/build_template_suggestions.py`, kept per link across weekly
-  runs; a gated file has none). It is `downloadable` only where the link
+  by `scripts/build_template_suggestions.py`, asked again on every run so a
+  re-uploaded file's new digest is picked up, the old one kept only for a link
+  that cannot be reached; a gated file has none). It is `downloadable` only where the link
   `download_source` would fetch for that name is the one listed under the
   digest. **Every download whose link has a listed digest is checked against
   it** before it is published: another file under the same link (a re-upload

@@ -3,11 +3,13 @@
 import contextlib
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
 import sqlite3
 import threading
 import time
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -455,6 +457,52 @@ def test_every_digest_a_built_in_names_can_be_downloaded():
             assert source is not None, (name, model)
             assert download_source(source["name"])["url"] == source["url"], name
     assert seen >= 5
+
+
+def test_the_list_build_asks_every_link_and_keeps_a_digest_only_when_unreachable(
+    monkeypatch,
+):
+    """Wrong if a link the old list holds is not asked again: a file
+    re-uploaded under it would keep a digest every download is then refused
+    against. Wrong too if one unreachable link loses its known digest."""
+    spec = importlib.util.spec_from_file_location(
+        "build_template_suggestions",
+        os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "build_template_suggestions.py"
+        ),
+    )
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    hf = "https://huggingface.co/"
+    asked = []
+
+    def sha256_of(url):
+        asked.append(url)
+        if url.endswith("down"):
+            raise urllib.error.URLError("offline")
+        return {hf + "moved": "1" * 64}.get(url)
+
+    monkeypatch.setattr(build, "_sha256_of", sha256_of)
+
+    def files(*pairs):
+        return {"templates": [{"files": [dict(url=u, **d) for u, d in pairs]}]}
+
+    document = files(
+        (hf + "moved", {}), (hf + "down", {}), (hf + "moved", {}), (hf + "gated", {})
+    )
+    old = files(
+        (hf + "moved", {"sha256": "0" * 64}),
+        (hf + "down", {"sha256": "2" * 64}),
+        (hf + "gated", {"sha256": "3" * 64}),
+    )
+    build.add_digests(document, old)
+    assert [f.get("sha256") for f in document["templates"][0]["files"]] == [
+        "1" * 64,
+        "2" * 64,
+        "1" * 64,
+        None,
+    ]
+    assert sorted(asked) == [hf + "down", hf + "gated", hf + "moved"]
 
 
 def test_a_bypassed_lora_the_list_links_is_marked_downloadable():

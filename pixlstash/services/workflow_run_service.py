@@ -375,9 +375,12 @@ def missing_digest_models(
             if digest_present(digest):
                 continue
             source = digest_source(digest)
+            # The folder the download puts it in, which is the one said: the
+            # loader finds it by digest wherever it lands.
+            placed = download_source(source["name"]) if source else None
             found[digest] = {
                 "file": source["name"] if source else digest,
-                "folder": (source or {}).get("directory") or folder,
+                "folder": (placed or source or {}).get("directory") or folder,
                 "sha256": digest,
             }
     return list(found.values())
