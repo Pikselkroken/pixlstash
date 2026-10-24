@@ -3167,6 +3167,13 @@ function handleOverlayClick(event) {
     handleUserActivity();
     return;
   }
+  // The Edit tab's tools live in the chrome. While they are out, any click
+  // that gets past the paint input layer (a Hand-tool press, a stroke the
+  // layer did not take) must not hide the toolbox mid-edit; Space still can.
+  if (paintActive.value) {
+    handleUserActivity();
+    return;
+  }
   chromeHidden.value = true;
 }
 
@@ -4234,7 +4241,8 @@ function onTouchEnd(event) {
       handleUserActivity();
       return;
     }
-    if (chromeHidden.value) {
+    // As a click: the Edit tab keeps its chrome.
+    if (chromeHidden.value || paintActive.value) {
       handleUserActivity();
     } else {
       chromeHidden.value = true;
