@@ -1648,7 +1648,51 @@ def _model_links(graph: dict, object_info: dict) -> list[dict]:
                         "source": (value[0], value[1]),
                     }
                 )
-    return links
+    return _without_prompt_free_clips(graph, links, object_info)
+
+
+def _without_prompt_free_clips(
+    graph: dict, links: list[dict], object_info: dict
+) -> list[dict]:
+    """*links* without the CLIP chains that condition nothing.
+
+    A language model loaded as a CLIP to rewrite the prompt (Qwen-Image-2.1's
+    prompt enhancer, read by ``TextGenerate``) hands on text, not
+    conditioning: no LoRA is for it, and counting it as a second text encoder
+    refused every graph carrying one. A chain that reaches a node ComfyUI
+    cannot type is kept, since that node may be the encoder.
+    """
+    readers: dict[str, list[str]] = {}
+    for link in links:
+        if link["type"] == "CLIP":
+            readers.setdefault(str(link["source"][0]), []).append(link["node_id"])
+    dropped: set[str] = set()
+    for root, _ in _sources(links, "CLIP"):
+        reached, pending, conditions = {str(root)}, [str(root)], False
+        while pending and not conditions:
+            for reader in readers.get(pending.pop(), []):
+                if reader in reached:
+                    continue
+                reached.add(reader)
+                class_type = (graph.get(reader) or {}).get("class_type")
+                outputs = (object_info.get(class_type) or {}).get("output")
+                if not isinstance(outputs, list) or "CONDITIONING" in outputs:
+                    conditions = True
+                    break
+                pending.append(reader)
+        if not conditions:
+            logger.info(
+                "Node %s hands its CLIP to no text encoder (only %s), so no LoRA "
+                "is for it.",
+                root,
+                sorted(reached - {str(root)}),
+            )
+            dropped |= reached
+    return [
+        link
+        for link in links
+        if link["type"] != "CLIP" or str(link["source"][0]) not in dropped
+    ]
 
 
 def _declared_input_type(node_spec: dict | None, field: str) -> str | None:

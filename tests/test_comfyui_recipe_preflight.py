@@ -1208,6 +1208,34 @@ class TestLoraInsertion:
         with pytest.raises(LookupError, match="2 text encoders .* for 1 model,"):
             plan_lora_insertion(graph, self.INFO)
 
+    def test_a_prompt_enhancer_clip_is_not_a_second_text_encoder(self):
+        """Qwen-Image-2.1's enhancer LLM writes the prompt; the LoRA skips it."""
+        graph = {
+            "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": "q.gguf"}},
+            "2": {"class_type": "DualCLIPLoader", "inputs": {}},
+            "3": {"class_type": "DualCLIPLoader", "inputs": {}},
+            "4": {"class_type": "TextGenerate", "inputs": {"clip": ["3", 0]}},
+            "5": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {"clip": ["2", 0], "text": ["4", 0]},
+            },
+            "6": {
+                "class_type": "KSampler",
+                "inputs": {"model": ["1", 0], "positive": ["5", 0]},
+            },
+        }
+        info = {**self.INFO, "TextGenerate": {"output": ["STRING"]}}
+        plan = plan_lora_insertion(graph, info)
+        assert plan["clip"]["node_id"] == "2"
+        assert [(r["node_id"], r["field"]) for r in plan["rewires"]] == [
+            ("5", "clip"),
+            ("6", "model"),
+        ]
+        # A reader ComfyUI cannot type may be an encoder: still refused.
+        del info["TextGenerate"], graph["5"]["inputs"]["text"]
+        with pytest.raises(LookupError, match="2 text encoders"):
+            plan_lora_insertion(graph, info)
+
     def test_a_copy_that_diverged_refuses_the_whole_plan_untouched(self):
         """Every splice is checked before the first is made."""
         graph = self._pipeline_copies(9, 20)
