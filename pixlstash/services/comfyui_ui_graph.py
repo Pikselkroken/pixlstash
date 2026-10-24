@@ -1181,9 +1181,14 @@ class _Converter:
                 continue
             resolved = self._resolve(link, want_type=input_types.get(name))
             if isinstance(resolved, _Literal):
-                resolved = self._literal_input(resolved, node, name, None, where)
-                if resolved is None:
-                    return None
+                # The editor writes a primitive's value only into a widget the
+                # node has, and a name `/object_info` does not declare has
+                # none: it sends nothing for this socket.
+                self.problems.append(
+                    f"{where} has its {name!r} fed by a {_PRIMITIVE_NODE}, but "
+                    "this ComfyUI's node has no such widget for it to fill"
+                )
+                return None
             if resolved is not None:
                 inputs[name] = resolved
         if by_name:

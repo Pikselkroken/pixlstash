@@ -1935,6 +1935,17 @@ class TestPrimitiveNode:
         assert prompt is None
         assert any("across a subgraph boundary" in p for p in problems)
 
+    def test_one_feeding_a_socket_the_node_does_not_declare_is_refused(self):
+        """The editor fills only a widget the node has; an undeclared name has
+        none, so it sends nothing there rather than the primitive's value."""
+        encoder = _encoder()
+        encoder["inputs"][1].update(name="test-gone", widget={"name": "test-gone"})
+        encoder["widgets_values"] = ["the encoder's own stale text"]
+        graph = _graph([_primitive("a cat"), encoder], [[1, 9, 0, 6, 1, "STRING"]])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("no such widget for it to fill" in p for p in problems)
+
 
 # ---------------------------------------------------------------------------
 # Node packs' editor-only nodes, and legacy group nodes
