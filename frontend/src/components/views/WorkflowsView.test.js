@@ -2067,7 +2067,7 @@ describe("Mine | Templates", () => {
     await flush();
     const { useNoticeStore } = await import("../../stores/useNoticeStore");
     expect(JSON.stringify(useNoticeStore().$state)).toContain(
-      "ComfyUI is not answering, so it converts the first time it runs.",
+      "It is a draft: once ComfyUI runs, Finish in ComfyUI makes it runnable.",
     );
   });
 

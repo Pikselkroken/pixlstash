@@ -2666,7 +2666,7 @@ def create_router(server) -> APIRouter:
                     converted = None
                     problems = [
                         f"ComfyUI at {comfyui_url} was not answering, so it "
-                        "converts the first time it runs."
+                        "is a draft until it is opened with ComfyUI running."
                     ]
                 else:
                     converted, problems = convert_ui_graph_to_api(graph, object_info)

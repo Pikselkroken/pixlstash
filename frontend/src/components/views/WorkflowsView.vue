@@ -743,8 +743,8 @@ async function addSelectedTemplates() {
   if (drafts && shipped) {
     text +=
       added.length === 1
-        ? " ComfyUI is not answering, so it converts the first time it runs."
-        : " ComfyUI is not answering, so they convert the first time each runs.";
+        ? " It is a draft: once ComfyUI runs, Finish in ComfyUI makes it runnable."
+        : " They are drafts: once ComfyUI runs, Finish in ComfyUI makes each runnable.";
   } else if (drafts && added.length === 1) {
     text += " It is a draft: open it in ComfyUI and save it to finish it.";
   } else if (drafts) {

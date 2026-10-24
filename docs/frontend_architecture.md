@@ -7061,8 +7061,9 @@ unchanged by the tab's existence.
   `POST /comfyui/templates/add`, re-reads Mine, switches to it and selects what
   was made. A template the server could convert is an ordinary workflow at once;
   one it could not is a **draft** (`WorkflowCard.draft`). An Add from the
-  shipped list is always a draft, and its notice says it converts the first
-  time it runs.
+  shipped list is always a draft, and its notice says *Finish in ComfyUI*
+  makes it runnable once ComfyUI runs (the pack's `drafts=true` read converts
+  it).
 - **A draft** is drawn hatched in Mine with *Finish in ComfyUI…* where Run would
   be (`openWorkflowInComfyui`), and the facts row leads with "Draft · from a
   template". Run is refused for it in the pill, the context menu and the
