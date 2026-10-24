@@ -918,7 +918,7 @@ watch(
       </SettingsRow>
       <SettingsRow
         label="Run a workflow alone after it runs out of memory"
-        sub='Marks it "Runs alone" so it gets the whole GPU next time. You can turn it off per workflow.'
+        sub='Once its last 3 runs ran out of memory, marks it "Runs alone" so it gets the whole GPU. You can turn it off per workflow.'
       >
         <v-switch
           :model-value="autoExclusive"

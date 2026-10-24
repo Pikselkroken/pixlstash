@@ -114,15 +114,6 @@ const globalOpts = {
   global: {
     stubs: {
       "v-icon": true,
-      // The GPU memory section's run-alone switch: a button that emits what a
-      // Vuetify switch emits, so a test can flip it without the Vuetify defaults.
-      "v-switch": {
-        name: "v-switch",
-        props: ["modelValue", "label", "disabled"],
-        emits: ["update:modelValue"],
-        template:
-          "<button type='button' role='switch' :aria-checked=\"String(!!modelValue)\" @click=\"$emit('update:modelValue', !modelValue)\">{{ label }}</button>",
-      },
       "v-menu": {
         template: "<div><slot name='activator' :props='{}'/><slot/></div>",
       },
@@ -6878,19 +6869,53 @@ describe("the GPU memory section", () => {
     await settle(wrapper);
   };
 
-  it("says what the workflow needs, on what it rests, and draws the peaks, the oom one as an error", async () => {
+  it("says what the workflow needs, on what it rests, and draws the peaks oldest first, the oom one as an error", async () => {
     getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram() } }));
     const { wrapper } = await mountWith([KEY]);
     await openWorkflowTab(wrapper);
-    expect(wrapper.find('[data-testid="wftab-gpu-need"]').text()).toBe("Needs about 9.6 GB");
-    expect(wrapper.find('[data-testid="wftab-gpu-basis"]').text()).toBe(
-      "Based on last 2 of 12 runs, trend rising",
+    expect(wrapper.find('[data-testid="wftab-gpu-need"]').text()).toBe("9.6 GB");
+    expect(wrapper.find('[data-testid="wftab-gpu-basis"]').text()).toBe("2 of 12 runs · rising");
+    // Oldest to newest, so the oom run (the oldest) comes first and the newest
+    // peak, one the need is taken from, ends the line.
+    const bars = wrapper.findAll(".wftab-peak");
+    expect(bars.map((bar) => bar.classes("wftab-peak--oom"))).toEqual([true, false, false]);
+    expect(bars.map((bar) => bar.classes("wftab-peak--used"))).toEqual([false, true, true]);
+    expect(bars[2].attributes("aria-label")).toBe("9.6 GB, completed, used for the need");
+  });
+
+  it("draws only the newest 16 peaks", async () => {
+    const peaks = Array.from({ length: 20 }, (_, i) => ({
+      peak_mb: 1024 * (i + 1),
+      outcome: "completed",
+      at: "2026-10-20T10:00:00Z",
+      used: i < 5,
+    }));
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ peaks }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    const bars = wrapper.findAll(".wftab-peak");
+    expect(bars).toHaveLength(16);
+    // The last bar is the newest peak (the first on the wire); 17-20 GB are
+    // the oldest four and are left out.
+    expect(bars[15].attributes("aria-label")).toMatch(/^1\.0 GB,/);
+    expect(bars[0].attributes("aria-label")).toMatch(/^16\.0 GB,/);
+  });
+
+  it("says one run in the singular", async () => {
+    getWorkflowCard.mockResolvedValue(
+      detail({
+        card: {
+          vram: vram({
+            measured_runs: 1,
+            trend: null,
+            peaks: [{ peak_mb: 9000, outcome: "completed", at: "2026-10-20T10:00:00Z", used: true }],
+          }),
+        },
+      }),
     );
-    // Solid bars are the ones the need is taken from; the oom run is red, and
-    // is not one of the used ones.
-    expect(wrapper.findAll(".wftab-peak--used")).toHaveLength(2);
-    expect(wrapper.findAll(".wftab-peak--oom")).toHaveLength(1);
-    expect(wrapper.find(".wftab-peak--oom").classes("wftab-peak--used")).toBe(false);
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    expect(wrapper.find('[data-testid="wftab-gpu-basis"]').text()).toBe("1 of 1 run");
   });
 
   it("says not measured, and draws no bars, for a workflow nothing has run", async () => {
@@ -6899,10 +6924,11 @@ describe("the GPU memory section", () => {
     await openWorkflowTab(wrapper);
     expect(wrapper.find('[data-testid="wftab-gpu-need"]').text()).toBe("Not measured yet");
     expect(wrapper.find('[data-testid="wftab-gpu-peaks"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="wftab-gpu-basis"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="wftab-gpu-basis"]').text()).toBe("No runs yet");
+    expect(wrapper.find('[data-testid="wftab-gpu-exclusive"]').exists()).toBe(true);
   });
 
-  it("writes run-alone through the card, and says the day an out-of-memory run turned it on", async () => {
+  it("writes run-alone through the card, and bands the day an out-of-memory streak turned it on", async () => {
     const at = "2026-10-14T09:00:00Z";
     getWorkflowCard.mockResolvedValue(
       detail({ card: { vram: vram({ exclusive: true, exclusive_source: "oom", exclusive_at: at }) } }),
@@ -6911,16 +6937,31 @@ describe("the GPU memory section", () => {
     const { wrapper } = await mountWith([KEY]);
     await openWorkflowTab(wrapper);
     const day = new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-    expect(wrapper.find('[data-testid="wftab-gpu-oom"]').text()).toContain(
-      `Turned on after it ran out of memory on ${day}.`,
+    expect(wrapper.find('[data-testid="wftab-gpu-oom"]').text()).toBe(
+      `Switched on ${day} after running out of memory`,
     );
+    const toggle = wrapper.find('[data-testid="wftab-gpu-exclusive"]');
+    expect(toggle.attributes("aria-checked")).toBe("true");
 
-    await wrapper.find('[data-testid="wftab-gpu-exclusive"]').trigger("click");
+    await toggle.trigger("click");
     await flush(wrapper);
     expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { exclusive: false });
+    expect(wrapper.find('[data-testid="wftab-gpu-oom"]').exists()).toBe(false);
   });
 
-  it("does not say an out-of-memory day for a switch the owner turned on", async () => {
+  it("turns run-alone on from the switch", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram() } }));
+    patchWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ exclusive: true, exclusive_source: "owner" }) } }));
+    const { wrapper } = await mountWith([KEY]);
+    await openWorkflowTab(wrapper);
+    const toggle = wrapper.find('[data-testid="wftab-gpu-exclusive"]');
+    expect(toggle.attributes("aria-checked")).toBe("false");
+    await toggle.trigger("click");
+    await flush(wrapper);
+    expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { exclusive: true });
+  });
+
+  it("does not band an out-of-memory day for a switch the owner turned on", async () => {
     getWorkflowCard.mockResolvedValue(detail({ card: { vram: vram({ exclusive: true, exclusive_source: "owner", exclusive_at: "2026-10-14T09:00:00Z" }) } }));
     const { wrapper } = await mountWith([KEY]);
     await openWorkflowTab(wrapper);

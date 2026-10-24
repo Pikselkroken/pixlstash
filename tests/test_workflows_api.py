@@ -14258,14 +14258,30 @@ class _NoPeak:
         return None
 
 
-@pytest.mark.parametrize("allowed", [True, False])
-def test_a_run_out_of_memory_fails_once_and_runs_alone_after_when_allowed(
-    held, allowed
+@pytest.mark.parametrize(
+    ("allowed", "earlier", "alone"),
+    [
+        (True, ["oom", "oom"], True),
+        (False, ["oom", "oom"], False),
+        (True, ["oom"], False),
+        # Oldest first: a finished run between them breaks the streak, a
+        # stopped one does not.
+        (True, ["oom", "completed", "oom"], False),
+        (True, ["oom", "aborted", "oom"], True),
+    ],
+)
+def test_a_run_out_of_memory_fails_once_and_runs_alone_after_a_streak(
+    held, allowed, earlier, alone
 ):
-    """No retry; the peak is the card; "runs alone" only if the owner allows."""
+    """No retry; the peak is the card; "runs alone" only once the newest three
+    runs all ran out of memory, and only if the owner allows."""
     server = held.runnable.server
     owner_id = server._user.id
     vram_history.set_auto_exclusive_after_oom(server.hub, owner_id, allowed)
+    for outcome in earlier:
+        vram_history.record_peak(
+            server.hub, RUN_WF, "x", "Test GPU", 24576, 6000, "torch_reserved", outcome
+        )
     lease = held.arbiter.request(
         Tenant.COMFYUI, "ComfyUI 'Krea'", need_mb=1000, workflow_id=RUN_WF
     )
@@ -14299,21 +14315,27 @@ def test_a_run_out_of_memory_fails_once_and_runs_alone_after_when_allowed(
         outcome = comfyui_service.run_outcome("prompt-oom")
         assert (outcome["status"], outcome["code"]) == ("failed", "vram_oom")
         row = server.hub.fetchone(
-            "SELECT peak_mb, outcome FROM workflow_vram_peak WHERE workflow_id = ?",
+            "SELECT peak_mb, outcome FROM workflow_vram_peak WHERE workflow_id = ? "
+            "ORDER BY id DESC LIMIT 1",
             (RUN_WF,),
         )
         assert (row["peak_mb"], row["outcome"]) == (24576, "oom")
         # Recorded, but not a need: a card's total plus headroom fits nowhere,
-        # and the next run would wait for ever.
-        assert vram_history.need_mb(server.hub, RUN_WF) is None
+        # and the next run would wait for ever. Only a finished run is one.
+        assert vram_history.need_mb(server.hub, RUN_WF) == (
+            int(6000 * vram_history.COMFYUI_PEAK_MARGIN)
+            if "completed" in earlier
+            else None
+        )
         policy = vram_history.policy(server.hub, RUN_WF)
         warned = [e for e in events if e.get("code") == "vram_oom_exclusive"]
-        if allowed:
+        if alone:
             assert policy is not None and policy["source"] == "oom"
             assert warned and warned[0]["workflow_id"] == RUN_WF
-            assert "run alone from now on" in outcome["message"]
+            assert "3 runs in a row and now runs alone" in outcome["message"]
         else:
             assert policy is None and not warned
+            assert "runs alone" not in outcome["message"]
     finally:
         vram_history.set_auto_exclusive_after_oom(server.hub, owner_id, True)
         vram_history.set_exclusive(server.hub, RUN_WF, False, "owner")

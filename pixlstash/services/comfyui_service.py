@@ -2065,9 +2065,9 @@ def _process_comfyui_outputs(
     moment ComfyUI's history gives the run's final status - not after the
     outputs are imported, which holds no GPU memory - and the run's measured
     peak is written with how it ended (``services/vram_history.py``). A run
-    that ran out of GPU memory fails with ``code`` ``vram_oom`` and, when the
-    owner's setting allows, makes its workflow run alone from now on. It is
-    not retried.
+    that ran out of GPU memory fails with ``code`` ``vram_oom`` and, once the
+    workflow's newest ``vram_history.OOM_STREAK`` runs all did and the owner's
+    setting allows, makes it run alone from now on. It is not retried.
 
     *workflow_id* is the workflow the run was of, manual or automatic; it
     travels on the ending's event so a failure is shown on that workflow.
@@ -2190,16 +2190,25 @@ def _process_comfyui_outputs(
         )
 
     def mark_alone_after_oom() -> str:
-        """Make the workflow run alone when the owner allows; the sentence to show."""
+        """Make the workflow run alone once its newest runs all ran out of
+        memory and the owner allows; the sentence to show. Called after the
+        run's peak is written, so the streak counts this run."""
         name = f"ComfyUI '{label}'" if label else "This ComfyUI run"
         user = getattr(server, "_user", None)
         try:
             allowed = workflow_id and vram_history.auto_exclusive_after_oom(
                 server.hub, getattr(user, "id", None)
             )
-            if allowed and vram_history.policy(server.hub, workflow_id) is None:
+            if (
+                allowed
+                and vram_history.policy(server.hub, workflow_id) is None
+                and vram_history.ran_out_in_a_row(server.hub, workflow_id)
+            ):
                 vram_history.set_exclusive(server.hub, workflow_id, True, "oom")
-                text = f"{name} ran out of GPU memory. It will run alone from now on."
+                text = (
+                    f"{label or 'This workflow'} ran out of GPU memory "
+                    f"{vram_history.OOM_STREAK} runs in a row and now runs alone."
+                )
                 arbiter().warn(
                     vram_lease,
                     "vram_oom_exclusive",

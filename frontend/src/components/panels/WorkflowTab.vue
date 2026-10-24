@@ -885,74 +885,79 @@
         </template>
       </section>
 
-      <!-- GPU memory (VRAM orchestration): what this workflow's runs measured
-           on the GPU, the need taken from them, and the run-alone switch. Read
-           from the detail, so it waits for it like the rest of the panel. -->
+      <!-- GPU memory (VRAM orchestration) as two lines: the label beside a
+           sparkline of the newest peaks and the need, then what the need rests
+           on beside the run-alone switch. Read from the detail, so it waits
+           for it like the rest of the panel. -->
       <section
         v-if="gpu"
         class="wftab-panel"
         data-testid="wftab-gpu"
       >
-        <div class="wftab-sec-head">
+        <div class="wftab-gpu-line">
           <span class="section-label" role="heading" aria-level="3">GPU memory</span>
+          <span class="wftab-gpu-answer">
+            <span
+              v-if="gpuBars.length"
+              class="wftab-peaks"
+              role="list"
+              aria-label="Measured peaks, oldest to newest"
+              data-testid="wftab-gpu-peaks"
+            >
+              <span
+                v-for="(bar, index) in gpuBars"
+                :key="index"
+                role="listitem"
+                class="wftab-peak"
+                :class="{
+                  'wftab-peak--used': bar.used,
+                  'wftab-peak--oom': bar.outcome === 'oom',
+                }"
+                :style="{ height: `${bar.pct}%` }"
+                :aria-label="peakLabel(bar)"
+                ><Tooltip :text="peakLabel(bar)" activator="parent"
+              /></span>
+            </span>
+            <span
+              :class="gpu.need_mb == null ? 'wftab-note wftab-quiet' : 'wftab-gpu-need'"
+              data-testid="wftab-gpu-need"
+            >
+              {{ gpu.need_mb == null ? "Not measured yet" : formatGb(gpu.need_mb) }}
+            </span>
+          </span>
         </div>
-        <p class="wftab-sublabel" data-testid="wftab-gpu-need">
-          {{ gpu.need_mb == null ? "Not measured yet" : `Needs about ${formatGb(gpu.need_mb)}` }}
-        </p>
+        <div class="wftab-gpu-line">
+          <span class="wftab-note wftab-quiet" data-testid="wftab-gpu-basis">
+            {{ gpuBasis }}
+          </span>
+          <!-- A label, so its text flips the switch too, and the tip opens on
+               the switch's focus as well as on hover. -->
+          <label class="wftab-gpu-alone">
+            <Tooltip :text="RUN_ALONE_TIP" activator="parent" />
+            <span class="wftab-gpu-tip">Run alone</span>
+            <button
+              type="button"
+              role="switch"
+              class="wftab-switch"
+              :aria-checked="String(Boolean(gpu.exclusive))"
+              :disabled="busy === 'exclusive'"
+              data-testid="wftab-gpu-exclusive"
+              @click="setExclusive(!gpu.exclusive)"
+            ></button>
+          </label>
+        </div>
+        <!-- Only while the backend has it on after running out of memory:
+             switching it off clears it, switching it on by hand never shows
+             it. Never wraps. -->
         <p
-          v-if="gpuUsed && gpu.measured_runs"
-          class="wftab-note wftab-quiet"
-          data-testid="wftab-gpu-basis"
+          v-if="gpu.exclusive && gpu.exclusive_source === 'oom' && gpu.exclusive_at"
+          class="wftab-gpu-warn"
+          data-testid="wftab-gpu-oom"
         >
-          Based on last {{ gpuUsed }} of {{ gpu.measured_runs }} runs{{
-            gpu.trend ? `, trend ${trendWord(gpu.trend)}` : ""
-          }}
+          <Tooltip text="Its last 3 runs ran out of GPU memory." activator="parent" />
+          <v-icon size="12">mdi-alert-outline</v-icon>
+          <span>Switched on {{ dayMonth(gpu.exclusive_at) }} after running out of memory</span>
         </p>
-        <div
-          v-if="gpuBars.length"
-          class="wftab-peaks"
-          role="list"
-          aria-label="Measured peaks, newest first"
-          data-testid="wftab-gpu-peaks"
-        >
-          <div
-            v-for="(bar, index) in gpuBars"
-            :key="index"
-            role="listitem"
-            class="wftab-peak"
-            :class="{
-              'wftab-peak--used': bar.used,
-              'wftab-peak--oom': bar.outcome === 'oom',
-            }"
-            :style="{ height: `${Math.max(bar.pct, 6)}%` }"
-            :aria-label="peakLabel(bar)"
-          ></div>
-        </div>
-        <v-switch
-          :model-value="Boolean(gpu.exclusive)"
-          :disabled="busy === 'exclusive'"
-          color="primary"
-          density="compact"
-          hide-details
-          label="Run alone on the GPU"
-          data-testid="wftab-gpu-exclusive"
-          @update:model-value="setExclusive"
-        />
-        <template v-if="gpu.exclusive">
-          <p
-            v-if="gpu.exclusive_source === 'oom' && gpu.exclusive_at"
-            class="wftab-note wftab-quiet"
-            data-testid="wftab-gpu-oom"
-          >
-            Turned on after it ran out of memory on {{ dayMonth(gpu.exclusive_at) }}.
-            While it runs, PixlStash moves its own work off the GPU. ComfyUI keeps
-            its cache: the run reuses it.
-          </p>
-          <p v-else class="wftab-note wftab-quiet">
-            While it runs, PixlStash moves its own work off the GPU. ComfyUI keeps
-            its cache: the run reuses it.
-          </p>
-        </template>
       </section>
 
       <!-- Each parameter is set each run (asked for by the Run form) or fixed
@@ -1401,7 +1406,7 @@ import {
   watch,
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { VIcon, VMenu, VSwitch } from "vuetify/components";
+import { VIcon, VMenu } from "vuetify/components";
 
 import {
   discardWorkflowChanges,
@@ -4429,14 +4434,26 @@ function togglePin(row) {
 
 /** This workflow's GPU memory from the detail read, or null before it lands. */
 const gpu = computed(() => detail.value?.card?.vram ?? null);
-/** The peaks as bars, newest first, scaled to the tallest. */
-const gpuBars = computed(() => peakBars(gpu.value?.peaks));
-/** How many of the peaks the need is taken from (the solid bars). */
-const gpuUsed = computed(
-  () => (gpu.value?.peaks ?? []).filter((peak) => peak.used).length,
+/** The newest peaks as the sparkline's bars, oldest to newest, scaled to the
+ * tallest of them, so the ones the need is taken from end the line. */
+const gpuBars = computed(() =>
+  peakBars((gpu.value?.peaks ?? []).slice(0, SPARK_PEAKS)).reverse(),
 );
+/** What the need rests on: "5 of 20 runs · steady". */
+const gpuBasis = computed(() => {
+  const peaks = gpu.value?.peaks ?? [];
+  const runs = gpu.value?.measured_runs ?? 0;
+  const used = peaks.filter((peak) => peak.used).length;
+  if (!used || !runs) return peaks.length ? "No run finished yet" : "No runs yet";
+  const trend = gpu.value.trend ? ` · ${trendWord(gpu.value.trend)}` : "";
+  return `${used} of ${runs} ${runs === 1 ? "run" : "runs"}${trend}`;
+});
 
 const TREND_WORDS = { rising: "rising", falling: "falling", flat: "steady" };
+/** How many of the newest peaks the sparkline draws. */
+const SPARK_PEAKS = 16;
+const RUN_ALONE_TIP =
+  "While it runs, PixlStash moves its own work off the GPU. ComfyUI keeps its cache: the run reuses it.";
 
 function trendWord(trend) {
   return TREND_WORDS[trend] ?? trend;
@@ -4895,21 +4912,56 @@ async function checkInstalled(key, { quiet = false } = {}) {
   background: rgb(var(--v-theme-divider));
 }
 
-/* The last measured peaks, newest first. The ones the need is taken from are
-   solid; an out-of-memory run is the error colour. */
+/* The GPU memory panel's two lines: a label or basis on the left, the
+   answer or the switch on the right. */
+.wftab-gpu-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-h-sm);
+}
+
+.wftab-gpu-answer,
+.wftab-gpu-alone {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  white-space: nowrap;
+}
+
+.wftab-gpu-need {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.wftab-gpu-alone {
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.wftab-gpu-tip {
+  cursor: help;
+  border-radius: var(--radius-sm);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The newest peaks, oldest to newest: a glyph, not a chart. The ones the need
+   is taken from are solid; an out-of-memory run is the error colour. */
 .wftab-peaks {
   display: flex;
   align-items: flex-end;
   gap: var(--space-1);
-  height: var(--space-8);
-  margin: var(--space-2) 0;
+  height: 14px;
 }
 
+/* Square: the smallest radius token is wider than the bar. */
 .wftab-peak {
-  flex: 1;
-  max-width: var(--space-5);
-  min-width: var(--space-2);
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  width: 3px;
+  min-height: var(--space-1);
   background: rgba(var(--v-theme-on-surface), 0.22);
 }
 
@@ -4919,6 +4971,70 @@ async function checkInstalled(key, { quiet = false } = {}) {
 
 .wftab-peak--oom {
   background: rgb(var(--v-theme-error));
+}
+
+/* The design system's Switch: olive track when on. */
+.wftab-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-input-background));
+  box-shadow: inset 0 0 0 1px rgb(var(--v-theme-border));
+  cursor: pointer;
+}
+
+.wftab-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  transition: left var(--dur-1) var(--ease-standard);
+}
+
+.wftab-switch[aria-checked="true"] {
+  background: rgb(var(--v-theme-primary));
+  box-shadow: none;
+}
+
+.wftab-switch[aria-checked="true"]::after {
+  left: 15px;
+  background: rgb(var(--v-theme-on-primary));
+}
+
+.wftab-switch:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* Run alone switched on after running out of memory: a band across the
+   panel's bottom edge in the notice's status vocabulary, a step smaller so
+   the sentence stays on one line. */
+.wftab-gpu-warn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
+  padding: var(--space-2) var(--space-4);
+  white-space: nowrap;
+  border-top: 1px solid rgba(var(--v-theme-warning), 0.5);
+  border-radius: 0 0 calc(var(--radius-md) - 1px) calc(var(--radius-md) - 1px);
+  background: rgba(var(--v-theme-warning), 0.08);
+  font-size: var(--text-2xs);
+  overflow: hidden;
+}
+
+.wftab-gpu-warn > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wftab-sublabel {

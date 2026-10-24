@@ -6,8 +6,8 @@ of its newest five peaks, times ``COMFYUI_PEAK_MARGIN``; with no peak yet it is
 unmeasured, and runs with the other heavy tenants kept off the card (D2).
 
 A workflow can also run **alone** (``workflow_vram_policy``): set by the owner,
-or after a run ran out of memory when the owner's ``auto_exclusive_after_oom``
-allows it.
+or once its newest ``OOM_STREAK`` runs all ran out of memory when the owner's
+``auto_exclusive_after_oom`` allows it.
 
 Tables in ``hub/schema.py``: ``workflow_vram_peak``, ``workflow_vram_policy``,
 ``user_vram_preference``.
@@ -29,6 +29,8 @@ COMFYUI_PEAK_MARGIN = 1.1
 NEED_WINDOW = 5
 #: How many peaks are kept per workflow.
 KEPT_PEAKS = 50
+#: How many runs in a row must run out of memory before one runs alone.
+OOM_STREAK = 3
 #: Below this many measured runs there is no trend.
 TREND_MIN_RUNS = 10
 #: A mean that moved this much between two windows of five is a trend.
@@ -149,6 +151,22 @@ def need_mb(hub, workflow_id: str | None, model_set: str | None = None) -> int |
     if not rows:
         return None
     return int(max(row["peak_mb"] for row in rows) * COMFYUI_PEAK_MARGIN)
+
+
+def ran_out_in_a_row(hub, workflow_id: str | None) -> bool:
+    """Whether the newest ``OOM_STREAK`` recorded runs all ran out of memory.
+
+    A stopped run says nothing about memory, so it neither counts nor breaks
+    the streak. A run with no GPU to measure writes no row and is not counted.
+    """
+    if not workflow_id:
+        return False
+    rows = [
+        row
+        for row in _peaks(hub, [workflow_id]).get(workflow_id, [])
+        if row["outcome"] != "aborted"
+    ][:OOM_STREAK]
+    return len(rows) == OOM_STREAK and all(row["outcome"] == "oom" for row in rows)
 
 
 def policy(hub, workflow_id: str | None) -> dict | None:
