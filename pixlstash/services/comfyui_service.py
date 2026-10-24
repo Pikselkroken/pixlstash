@@ -2057,6 +2057,7 @@ def _process_comfyui_outputs(
     lora_character_ids: list[int] | None = None,
     vram_lease=None,
     vram_model_set: str | None = None,
+    vram_pixels: int | None = None,
     label: str | None = None,
 ) -> None:
     """Poll ComfyUI for a prompt's outputs, import them, and say how it ended.
@@ -2064,7 +2065,8 @@ def _process_comfyui_outputs(
     *vram_lease* is the run's lease from the VRAM arbiter. It is released the
     moment ComfyUI's history gives the run's final status - not after the
     outputs are imported, which holds no GPU memory - and the run's measured
-    peak is written with how it ended (``services/vram_history.py``). A run
+    peak is written with how it ended and *vram_pixels*, the size of the image
+    it worked on (``services/vram_history.py``). A run
     that ran out of GPU memory fails with ``code`` ``vram_oom`` and, once the
     workflow's newest ``vram_history.OOM_STREAK`` runs all did and the owner's
     setting allows, makes it run alone from now on. It is not retried.
@@ -2187,6 +2189,7 @@ def _process_comfyui_outputs(
             peak,
             "torch_reserved",
             outcome,
+            vram_pixels,
         )
 
     def mark_alone_after_oom() -> str:

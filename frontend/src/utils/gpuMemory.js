@@ -147,14 +147,15 @@ export function deviceVramBar(device, holders = []) {
  * scaled to the tallest of them. The ones the need is taken from are `used`;
  * an out-of-memory run is `oom`.
  *
- * @param {Array<{peak_mb: number, outcome: string, used?: boolean}>} peaks
- * @returns {Array<{peak_mb: number, outcome: string, used: boolean, pct: number}>}
+ * @param {Array<{peak_mb: number, pixels?: number, outcome: string, used?: boolean}>} peaks
+ * @returns {Array<{peak_mb: number, pixels: ?number, outcome: string, used: boolean, pct: number}>}
  */
 export function peakBars(peaks) {
   const list = Array.isArray(peaks) ? peaks : [];
   const tallest = Math.max(1, ...list.map((peak) => nonNegative(peak.peak_mb)));
   return list.map((peak) => ({
     peak_mb: nonNegative(peak.peak_mb),
+    pixels: peak.pixels ?? null,
     outcome: peak.outcome,
     used: Boolean(peak.used),
     pct: (nonNegative(peak.peak_mb) / tallest) * 100,

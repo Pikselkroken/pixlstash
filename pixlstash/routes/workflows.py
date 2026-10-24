@@ -325,6 +325,7 @@ from pixlstash.services.workflow_library_service import (
     read_instance_hashes,
     read_kept_picture_files,
     read_library_ids,
+    read_picture_pixels,
     read_oldest_kept_by_pixel_sha,
     read_recipe_activity,
     read_variant_picture_counts,
@@ -977,6 +978,9 @@ class WorkflowVramPeak(BaseModel):
     """One measured run of a workflow, newest first."""
 
     peak_mb: int
+    pixels: int | None = Field(
+        None, description="The size of the image the run worked on, when known."
+    )
     outcome: Literal["completed", "failed", "oom", "aborted"]
     at: str
     used: bool = Field(
@@ -990,9 +994,10 @@ class WorkflowVram(BaseModel):
     need_mb: int | None = Field(
         None,
         description=(
-            "The largest of the newest five peaks, with 10 % headroom; null "
-            "when the workflow was never measured (its runs then keep other "
-            "heavy work off the GPU)."
+            "What a run like the newest needs: the largest of the newest five "
+            "peaks measured at about its image size, with 10 % headroom; null "
+            "when never measured there (its runs then keep other heavy work "
+            "off the GPU)."
         ),
     )
     measured_runs: int = 0
@@ -1222,6 +1227,13 @@ class WorkflowCardEdit(BaseModel):
         description=(
             "Run alone on the GPU. true sets it as the owner's choice; false "
             "or null clears it, including one set after an out-of-memory run."
+        ),
+    )
+    forget_vram_peaks: bool | None = Field(
+        None,
+        description=(
+            "true forgets every GPU peak measured for it, so its next run is "
+            "measured again. Leaves running alone as it is."
         ),
     )
     thumbnail_pinned: bool | None = Field(
@@ -4955,6 +4967,8 @@ def create_router(server) -> APIRouter:
             vram_history.set_exclusive(
                 hub, workflow_id, bool(changes.pop("exclusive")), "owner"
             )
+        if changes.pop("forget_vram_peaks", None):
+            vram_history.forget_peaks(hub, workflow_id)
         if "hidden" in changes and changes["hidden"] is None:
             # The column is NOT NULL and has no "unset" state: a null there is
             # a caller meaning "not hidden", which the hub is told plainly
@@ -8213,6 +8227,21 @@ def create_router(server) -> APIRouter:
         uploaded = {
             picture_id: _upload_planned(plan, picture_id) for picture_id in order
         }
+        # How large each picture put in is: what a run's VRAM need is sized by.
+        pixels_of = read_picture_pixels(
+            server.vault,
+            sorted(
+                {
+                    picture_id
+                    for _graph, group, feeds in plan.submittable
+                    for picture_id in [
+                        *group.picture_ids,
+                        *(feed.picture_id for feed in feeds),
+                    ]
+                    if picture_id is not None
+                }
+            ),
+        )
         # Here, not in `_plan`: a preflight submits nothing, and the graphs
         # are final.
         for card, graph, swapped in plan.loader_swaps:
@@ -8327,12 +8356,19 @@ def create_router(server) -> APIRouter:
                             filled[loader]["inputs"][PICTURE_LOADER_LIBRARY] = (
                                 _library_uuid() or ""
                             )
+                fed_pixels = [
+                    pixels_of.get(
+                        feed.picture_id if feed.picture_id is not None else selected
+                    )
+                    for feed in feeds
+                ]
                 for _ in range(body.count):
                     instance = deepcopy(filled)
                     if body.seed_mode == "fixed":
                         apply_seeds(instance, seed_targets, body.seed)
                     elif body.seed_mode == "new":
                         apply_seeds(instance, seed_targets, None)
+                    pixels = vram_history.run_pixels(instance, fed_pixels)
                     library = request.state.library_lease
                     poll_kwargs = {
                         "view_context": destination,
@@ -8343,10 +8379,11 @@ def create_router(server) -> APIRouter:
                         "workflow_id": group.workflow_id,
                         "lora_character_ids": lora_character_ids,
                         "label": label,
+                        "vram_pixels": pixels,
                     }
                     run_id = new_run_id()
                     vram_lease, model_set = _vram_lease(
-                        comfyui_url, instance, group.workflow_id, label, run_id
+                        comfyui_url, instance, group.workflow_id, label, run_id, pixels
                     )
                     # Before it can end: an ending settles the row it finds.
                     _log_queued(
@@ -8446,19 +8483,25 @@ def create_router(server) -> APIRouter:
             )
 
     def _vram_lease(
-        comfyui_url: str, graph: dict, workflow_id: str | None, label, run_id: str
+        comfyui_url: str,
+        graph: dict,
+        workflow_id: str | None,
+        label,
+        run_id: str,
+        pixels: int | None,
     ):
         """Ask the VRAM arbiter for one run's memory; ``(lease, model_set)``.
 
         A workflow that runs alone asks for the card to itself. One measured
-        before asks for the largest of its newest peaks with headroom; one
-        never measured keeps the other heavy tenants off the card without
-        asking anyone to free memory (D2), and is measured by this run.
+        before at about this run's image size (*pixels*) asks for the largest
+        of those newest peaks with headroom; one never measured there keeps
+        the other heavy tenants off the card without asking anyone to free
+        memory (D2), and is measured by this run.
         """
         hub = _hub()
         model_set = vram_history.model_set_of(graph)
         runs_alone = vram_history.policy(hub, workflow_id) is not None
-        need = vram_history.need_mb(hub, workflow_id, model_set)
+        need = vram_history.need_mb(hub, workflow_id, model_set, pixels)
         comfyui_tenant.probe(RUN_CLIENT_ID, comfyui_url)
         name = f"ComfyUI '{label}'" if label else "ComfyUI run"
         lease = arbiter().request(

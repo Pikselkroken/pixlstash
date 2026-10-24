@@ -927,8 +927,23 @@
           </span>
         </div>
         <div class="wftab-gpu-line">
-          <span class="wftab-note wftab-quiet" data-testid="wftab-gpu-basis">
-            {{ gpuBasis }}
+          <span class="wftab-gpu-answer">
+            <span class="wftab-note wftab-quiet" data-testid="wftab-gpu-basis">
+              {{ gpuBasis }}
+            </span>
+            <!-- Forgets the measured peaks: what a run on a picture far
+                 larger than usual leaves every later run waiting for. -->
+            <AppButton
+              v-if="gpu.peaks?.length"
+              size="sm"
+              variant="ghost"
+              tooltip="Forget the measured runs. The next run is measured again."
+              :loading="busy === 'gpu-reset'"
+              data-testid="wftab-gpu-reset"
+              @click="resetGpu"
+            >
+              Reset
+            </AppButton>
           </span>
           <!-- A label, so its text flips the switch too, and the tip opens on
                the switch's focus as well as on hover. -->
@@ -4473,7 +4488,23 @@ function peakLabel(bar) {
     oom: "ran out of GPU memory",
     aborted: "stopped",
   }[bar.outcome] ?? bar.outcome;
-  return `${formatGb(bar.peak_mb)}, ${outcome}${bar.used ? ", used for the need" : ""}`;
+  const size = bar.pixels ? `, ${(bar.pixels / 1e6).toFixed(1)} MP` : "";
+  return `${formatGb(bar.peak_mb)}${size}, ${outcome}${bar.used ? ", used for the need" : ""}`;
+}
+
+/** Forget the measured peaks: the GPU memory section's Reset. */
+function resetGpu() {
+  const key = selectedKey.value;
+  if (!key || !detail.value) return;
+  return queueWrite("gpu-reset", async () => {
+    try {
+      const body = await patchWorkflowCard(key, { forget_vram_peaks: true });
+      if (stillOn(key)) detail.value = body;
+      await store.refetch();
+    } catch (err) {
+      fail(err, "Could not reset the GPU memory.");
+    }
+  });
 }
 
 /** Run alone on the GPU: the switch in the GPU memory section. */

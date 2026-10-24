@@ -105,10 +105,11 @@ describe("deviceVramBar", () => {
 describe("peakBars", () => {
   it("scales to the tallest peak and keeps the used and oom flags", () => {
     const bars = peakBars([
-      { peak_mb: 8192, outcome: "completed", used: true },
+      { peak_mb: 8192, pixels: 1048576, outcome: "completed", used: true },
       { peak_mb: 4096, outcome: "oom", used: false },
     ]);
     expect(bars.map((b) => b.pct)).toEqual([100, 50]);
+    expect(bars.map((b) => b.pixels)).toEqual([1048576, null]);
     expect(bars.map((b) => b.used)).toEqual([true, false]);
     expect(bars[1].outcome).toBe("oom");
   });

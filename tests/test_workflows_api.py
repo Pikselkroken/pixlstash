@@ -11141,6 +11141,34 @@ def test_a_lone_picture_input_takes_the_selection_with_nothing_in_the_body(i2i):
     assert _inputs_of(r.json())[_label_of(i2i.graph, "5")]["fill"] == "selection"
 
 
+def test_a_run_is_sized_by_the_picture_it_is_fed(i2i, monkeypatch):
+    """The VRAM need of an image-to-image run is read at the picture's size."""
+    subject = _add_picture(i2i.server, i2i.tmp_path, "large.png")
+
+    def size(session):
+        picture = session.get(Picture, subject)
+        picture.width, picture.height = 6000, 4000
+        session.add(picture)
+        session.commit()
+
+    i2i.server.vault.db.run_task(size, priority=DBPriority.IMMEDIATE)
+    seen = []
+    real = vram_history.run_pixels
+    monkeypatch.setattr(
+        vram_history,
+        "run_pixels",
+        lambda graph, input_pixels=(): (
+            seen.append(list(input_pixels)) or real(graph, input_pixels)
+        ),
+    )
+    r = i2i.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_WF}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert seen and 6000 * 4000 in seen[0], seen
+
+
 def test_a_run_held_for_comfyui_has_the_picture_the_run_would_load(i2i):
     """Open in ComfyUI from a run over a picture: the picture is uploaded as a
     run uploads it, and the graph that opens loads it. Only the first of a
@@ -14206,6 +14234,121 @@ def test_an_out_of_memory_run_is_not_counted_as_measured(held):
             )
 
 
+def _insert_peaks(hub, rows):
+    """``(peak_mb, pixels, at)`` rows of RUN_WF, completed, one model set."""
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_vram_peak (workflow_id, model_set, "
+            "device_name, device_total_mb, peak_mb, measured_by, outcome, at, "
+            "pixels) VALUES (?, 'x', 'Test GPU', 24576, ?, 'torch_reserved', "
+            "'completed', ?, ?)",
+            [(RUN_WF, peak, at, pixels) for peak, pixels, at in rows],
+        )
+
+
+def _forget_run_wf_peaks(hub):
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,))
+
+
+def test_a_runs_image_size_is_read_from_its_graph_and_its_pictures():
+    graph = {
+        "1": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 1024, "height": 1024, "batch_size": 2},
+        },
+        # Wired from another node: not a size that can be read.
+        "2": {"class_type": "ImageScale", "inputs": {"width": ["9", 0], "height": 8}},
+        # A text encoder's size is conditioning, not an image.
+        "3": {
+            "class_type": "CLIPTextEncodeSDXL",
+            "inputs": {"width": 8192, "height": 8192},
+        },
+    }
+    assert vram_history.run_pixels(graph) == 2 * 1024 * 1024
+    # A size wired from a primitive is read through the link, both sides.
+    graph["9"] = {"class_type": "PrimitiveInt", "inputs": {"value": 4096}}
+    graph["2"]["inputs"]["height"] = ["9", 0]
+    assert vram_history.run_pixels(graph) == 4096 * 4096
+    del graph["9"]
+    assert vram_history.run_pixels(graph, [None, 4096 * 4096]) == 4096 * 4096
+    assert (
+        vram_history.run_pixels({"1": {"class_type": "KSampler", "inputs": {}}}) is None
+    )
+
+
+def test_a_run_takes_its_need_from_runs_of_about_its_size(held):
+    """One run on a very large picture must not set what a small one waits for."""
+    hub = held.runnable.server.hub
+    small, large = 1000 * 1000, 4000 * 4000
+    _insert_peaks(
+        hub,
+        [
+            (8000, small, "2026-10-01"),
+            (22000, large, "2026-10-02"),
+            # Measured before sizes were recorded: no size, so never a sized need.
+            (23000, None, "2026-10-03"),
+        ],
+    )
+    try:
+        margin = vram_history.COMFYUI_PEAK_MARGIN
+        assert vram_history.need_mb(hub, RUN_WF, "x", small) == int(8000 * margin)
+        assert vram_history.need_mb(hub, RUN_WF, "x", large) == int(22000 * margin)
+        # Within the band, a larger run is scaled up to its size, never down.
+        assert vram_history.need_mb(hub, RUN_WF, "x", 1_200_000) == int(
+            8000 * 1.2 * margin
+        )
+        assert vram_history.need_mb(hub, RUN_WF, "x", 800_000) == int(8000 * margin)
+        # Between the two: never measured there, so measured by this run.
+        assert vram_history.need_mb(hub, RUN_WF, "x", 2000 * 2000) is None
+        # A run whose size cannot be read takes every peak, as before, but
+        # never asks for more than the card the peak was measured on.
+        assert vram_history.need_mb(hub, RUN_WF, "x") == 24576
+    finally:
+        _forget_run_wf_peaks(hub)
+
+
+def test_a_run_asks_for_the_need_of_its_size_and_records_it(held):
+    hub = held.runnable.server.hub
+    small = 1024 * 1024
+    _insert_peaks(hub, [(8000, small, "2026-10-01"), (22000, 16 * small, "2026-10-02")])
+    held.runnable.monkeypatch.setattr(
+        vram_history, "run_pixels", lambda graph, input_pixels=(): small
+    )
+    try:
+        r = held.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+        assert r.status_code == 200, r.text
+        assert _until(lambda: held.polled)
+        assert held.polled[0]["vram_pixels"] == small
+        lease = held.polled[0]["vram_lease"]
+        assert (lease.need_mb, lease.alone) == (
+            int(8000 * vram_history.COMFYUI_PEAK_MARGIN),
+            False,
+        )
+    finally:
+        _forget_run_wf_peaks(hub)
+
+
+def test_reset_forgets_the_measured_peaks_and_leaves_run_alone(held):
+    hub = held.runnable.server.hub
+    _insert_peaks(hub, [(22000, 4096 * 4096, "2026-10-01")])
+    vram_history.set_exclusive(hub, RUN_WF, True, "owner")
+    try:
+        r = held.owner.patch(
+            f"{API}/workflows/{RUN_WF}", json={"forget_vram_peaks": True}
+        )
+        assert r.status_code == 200, r.text
+        vram = r.json()["card"]["vram"]
+        assert (vram["need_mb"], vram["measured_runs"], vram["peaks"]) == (None, 0, [])
+        assert vram["exclusive"] is True
+        assert not hub.fetchall(
+            "SELECT 1 FROM workflow_vram_peak WHERE workflow_id = ?", (RUN_WF,)
+        )
+    finally:
+        vram_history.set_exclusive(hub, RUN_WF, False, "owner")
+        _forget_run_wf_peaks(hub)
+
+
 class _Peak:
     def __init__(self, *args, **kwargs):
         pass
@@ -14235,14 +14378,20 @@ def test_a_run_with_no_outputs_records_its_peak_as_failed(held):
             None,
             workflow_id=RUN_WF,
             vram_lease=lease,
+            vram_pixels=1024 * 1024,
             label="Krea",
         )
         assert lease.state is LeaseState.RELEASED
         row = server.hub.fetchone(
-            "SELECT peak_mb, outcome FROM workflow_vram_peak WHERE workflow_id = ?",
+            "SELECT peak_mb, outcome, pixels FROM workflow_vram_peak "
+            "WHERE workflow_id = ?",
             (RUN_WF,),
         )
-        assert (row["peak_mb"], row["outcome"]) == (5000, "failed")
+        assert (row["peak_mb"], row["outcome"], row["pixels"]) == (
+            5000,
+            "failed",
+            1024 * 1024,
+        )
     finally:
         with server.hub.transaction() as conn:
             conn.execute(

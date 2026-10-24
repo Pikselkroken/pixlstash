@@ -5,8 +5,10 @@
 - The Tasks tab shows a memory bar for each GPU: what PixlStash, ComfyUI and
   other apps hold, and what is free. PixlStash's own work is one folded
   "PixlStash processing" row.
-- PixlStash learns how much memory each workflow needs from its runs. The
-  workflow card shows it, and the Workflow tab shows the measured runs and a
+- PixlStash learns how much memory each workflow needs from its runs, at the
+  image size each run worked on, so one run on a very large picture does not
+  hold back the small ones after it. The workflow card shows it, and the
+  Workflow tab shows the measured runs, a Reset that forgets them, and a
   "Run alone" switch. A workflow whose last 3 runs all ran out of memory runs
   alone from then on, with a notice that can turn it off; you can turn that
   off altogether in Settings › Compute.
