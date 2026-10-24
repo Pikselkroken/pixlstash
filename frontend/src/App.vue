@@ -950,7 +950,8 @@ defineExpose({
              both became a popup in F5, so `/workflows` is the one branch left
              ahead of the stats panel. -->
         <!-- The Workflows view's Templates tab (#2000) has its own: a template
-             is not a workflow yet, so nothing of the Workflow tab applies. -->
+             is not a workflow yet, so nothing of the Workflow tab applies.
+             It offers the Tasks tab all the same. -->
         <TemplateInspector
           v-if="isWorkflowsView && workflowTemplatesStore.shown"
         />

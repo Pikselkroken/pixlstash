@@ -23,6 +23,7 @@ vi.mock("../../api/modelDownloads", () => ({
 import { startModelDownload } from "../../api/modelDownloads";
 import TemplateInspector from "./TemplateInspector.vue";
 import { sessionContext } from "../../utils/apiClient";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 
 enableAutoUnmount(afterEach);
@@ -136,6 +137,35 @@ describe("the template inspector", () => {
     expect(wrapper.text()).toContain(
       "Runs with credits on Comfy's partner API nodes through Example Co",
     );
+  });
+
+  // A run started on Mine is still going when the reader moves over here, and
+  // this rail is the only one on the screen.
+  it("offers Tasks last, with the task manager in place of the template", async () => {
+    const { wrapper } = mounted(["default/krea"]);
+    const band = wrapper.findAll("button.inspector-tab");
+    // The stubbed icon prints its name ahead of the label.
+    expect(band.map((t) => t.text().replace(/^mdi-\S+ /, ""))).toEqual([
+      "Template",
+      "Tasks",
+    ]);
+
+    await band[1].trigger("click");
+    expect(wrapper.text()).toContain("No active tasks");
+    expect(wrapper.find('[data-testid="tpli-title"]').exists()).toBe(false);
+    // Add acts on the template, so it goes with it.
+    expect(wrapper.find('[data-testid="tpli-add"]').exists()).toBe(false);
+
+    await wrapper.findAll("button.inspector-tab")[0].trigger("click");
+    expect(wrapper.find('[data-testid="tpli-add"]').exists()).toBe(true);
+  });
+
+  it("follows the store's deep link onto the Tasks tab", async () => {
+    const { wrapper } = mounted(["default/krea"]);
+    expect(wrapper.text()).not.toContain("No active tasks");
+    useSidebarStore().showTasksTab();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain("No active tasks");
   });
 
   it("offers nothing to add with nothing selected", () => {
