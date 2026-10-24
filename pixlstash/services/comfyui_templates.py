@@ -39,6 +39,7 @@ thumbnails are not shipped (ComfyUI's media packages are hundreds of MB), so
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -77,6 +78,8 @@ MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024
 _DATA = Path(__file__).resolve().parent.parent / "data"
 BUNDLED_INDEX_PATH = _DATA / "workflow_templates_index.json"
 BUNDLED_GRAPHS = _DATA / "workflow_templates"
+# The names the build script writes a graph for; anything else ships none.
+_SHIPPED_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")
 # ComfyUI's template repository, which serves each thumbnail on its own.
 # ponytail: `main`, not the shipped release (its tags version another package);
 # a template renamed since has no picture until the weekly refresh catches up.
@@ -464,8 +467,9 @@ def read_listing(
 
 
 def _bundled_graph_path(name: str) -> Path:
-    # A name that is not one file name in the folder is no file of it.
-    return BUNDLED_GRAPHS / f"{name}.json" if Path(name).name == name else Path()
+    # The build script's own rule (`_SAFE_NAME`), so a name that could leave
+    # the folder or not be a file name at all is no file of it.
+    return BUNDLED_GRAPHS / f"{name}.json" if _SHIPPED_NAME.match(name) else Path()
 
 
 @lru_cache(maxsize=1)

@@ -25206,6 +25206,8 @@ def test_every_shipped_template_has_its_graph_and_files():
         listed = comfyui_templates.bundled_listing().templates
         assert len(listed) > 100
         assert all(t.files and t.module == "default" for t in listed)
+        for name in ("..", ".hidden", "a/b", "a\\b", "a\x00b", ""):
+            assert comfyui_templates._bundled_graph_path(name) == Path(), name
     finally:
         comfyui_templates._bundled_templates.cache_clear()
 
