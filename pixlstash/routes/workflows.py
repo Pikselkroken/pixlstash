@@ -239,6 +239,11 @@ from pixlstash.services.model_shelf_service import (
     propose_companions,
     recipe_asset_index,
     shelf_uuid,
+    VIA_BASE_MODEL,
+    VIA_CHECKPOINT,
+    VIA_DECLARED,
+    VIA_FAMILY,
+    VIA_GROUPED,
 )
 from pixlstash.services.comfyui_link_service import locate
 from pixlstash.services.workflow_events import announce_changed_workflows
@@ -2974,6 +2979,21 @@ class ModelFixCandidate(BaseModel):
             "picks it for the owner to save."
         ),
     )
+    base_model: str | None = Field(
+        None,
+        description="A checkpoint's known base model (`SwapModel.base_model`).",
+    )
+    verdict: Literal["likely", "maybe", "unknown", "unlikely"] | None = Field(
+        None,
+        description=(
+            "How likely it is to run the workflow in the missing one's place. "
+            "A checkpoint against `replacing_base_model`: the same base model, "
+            "the same family, a base model never read, another base model; "
+            "null when nothing says what the missing one was. A VAE or text "
+            "encoder by its `via`: grouped, checkpoint or base_model is "
+            "likely, family maybe, declared unknown."
+        ),
+    )
 
 
 class MisfiledCopy(BaseModel):
@@ -3019,7 +3039,17 @@ class ModelSwapOptions(BaseModel):
             "Only with `?replacing=` a checkpoint: true when `replacements` "
             "were held to the missing one's base model, false when nothing "
             "said which it was, or no loadable checkpoint has it, and every "
-            "loadable checkpoint is offered."
+            "loadable checkpoint is offered. With `grouped`, nothing is held "
+            "back, and it says whether it would have been."
+        ),
+    )
+    replacing_base_model: str | None = Field(
+        None,
+        description=(
+            "Only with `?replacing=` a checkpoint: the base model a "
+            "replacement should share (the shelf's for the missing file, else "
+            "the one its LoRAs and ControlNets agree on), which each "
+            "candidate's `verdict` is read against. Null when nothing says."
         ),
     )
     refile: MisfiledCopy | None = Field(
@@ -3053,6 +3083,17 @@ class ModelSwapOptions(BaseModel):
         ),
     )
 
+
+# A companion's `via` as the verdict a "Replace with…" picker files it under:
+# the owner's set or a run with it is evidence, a family is a likeness, and a
+# fitting file layout says nothing.
+_VIA_VERDICTS = {
+    VIA_GROUPED: "likely",
+    VIA_CHECKPOINT: "likely",
+    VIA_BASE_MODEL: "likely",
+    VIA_FAMILY: "maybe",
+    VIA_DECLARED: "unknown",
+}
 
 # Ceiling on one clone's swap map. A graph names a handful of model files; the
 # bound is here so a hand-made request cannot post an unbounded map.
@@ -10461,12 +10502,23 @@ def create_router(server) -> APIRouter:
         """*base_model* as two spellings of one base model compare, or None."""
         return (base_model or "").strip().casefold() or None
 
+    def _checkpoint_verdict(base_model: str | None, wanted: str | None) -> str | None:
+        """How a checkpoint of *base_model* fits in place of one of *wanted*."""
+        if wanted is None:
+            return None
+        if _base_key(base_model) is None:
+            return "unknown"
+        if _base_key(base_model) == _base_key(wanted):
+            return "likely"
+        family = family_of(base_model)
+        return "maybe" if family and family == family_of(wanted) else "unlikely"
+
     def _replaced_base_model(
         graph: dict, models: dict[int, SwapModel], index: tuple, wanted: str
     ) -> str | None:
-        """The base model a checkpoint replacing *wanted* should share (``_base_key``).
+        """The base model a checkpoint replacing *wanted* should share, as labelled.
 
-        The shelf's own for the file, where the shelf still holds it; else the
+        Compared through ``_base_key``. The shelf's own for the file, where the shelf still holds it; else the
         one base model the graph's LoRAs and ControlNets agree on, since they
         are what a replacement of another base model would not match, when the
         graph loads only this one base model. None when neither says, or they
@@ -10485,18 +10537,21 @@ def create_router(server) -> APIRouter:
             None,
         )
         if _base_key(own):
-            return _base_key(own)
+            return own.strip()
         if sum(slot.kind in BASE_MODEL_KINDS for slot in slots) > 1:
             # ponytail: which LoRAs feed which base model is the lane walk's
             # (`lora-chain`); a graph with two says nothing here instead.
             return None
+        # One spelling per base model, keyed as two spellings compare.
         adapters = {
-            _base_key(slot.model.base_model)
+            _base_key(slot.model.base_model): slot.model.base_model.strip()
             for slot in slots
-            if slot.kind in ("lora", "controlnet") and slot.model is not None
-        } - {None}
+            if slot.kind in ("lora", "controlnet")
+            and slot.model is not None
+            and _base_key(slot.model.base_model)
+        }
         if len(adapters) == 1:
-            return adapters.pop()
+            return next(iter(adapters.values()))
         if adapters:
             logger.info(
                 "Offering every checkpoint in place of %s: its LoRAs and "
@@ -10515,7 +10570,8 @@ def create_router(server) -> APIRouter:
         replacing: str,
         kind: str | None,
         cached: bool = False,
-    ) -> tuple[list[ModelFixCandidate], str | None, bool | None]:
+        grouped: bool = False,
+    ) -> tuple[list[ModelFixCandidate], str | None, bool | None, str | None]:
         """What the Workflow tab may offer in place of *replacing*.
 
         Read off the graph a run submits, with the owner's fixes applied, so a
@@ -10534,7 +10590,9 @@ def create_router(server) -> APIRouter:
           instead, as when nothing says which it was, and the answer says it
           is not narrowed. A missing checkpoint with nothing to pick is a
           dead end, and the base model of a file that is gone is often a
-          guess off its LoRAs that the owner cannot correct.
+          guess off its LoRAs that the owner cannot correct. With *grouped*
+          every loadable one is offered regardless, each with its
+          ``verdict``, for a picker that files them under headings.
         * **The loader can load it**: listed by every loader naming the file,
           by the rule the rewrite writes it with (:func:`listed_as`), when
           ComfyUI answers; of the same file type when it cannot be asked. A
@@ -10552,9 +10610,10 @@ def create_router(server) -> APIRouter:
         the pick the Workflow tab makes of it.
 
         Returns:
-            ``(candidates, reason, narrowed)``, *reason* set only when there
-            are none, *narrowed* whether a checkpoint's were held to a base
-            model (None for any other kind).
+            ``(candidates, reason, narrowed, base_model)``, *reason* set only
+            when there are none, *narrowed* whether a checkpoint's were held
+            to a base model (None for any other kind), *base_model* the label
+            a checkpoint's verdicts were read against.
 
         Raises:
             HTTPException: 409 when the graph loads *replacing* in no slot a
@@ -10620,10 +10679,15 @@ def create_router(server) -> APIRouter:
                 key=lambda m: (m.display_name or m.filename).lower(),
             )
             for m in shelf:
-                same = base_model is None or _base_key(m.base_model) == base_model
+                verdict = _checkpoint_verdict(m.base_model, base_model)
+                same = grouped or verdict in (None, "likely")
                 (candidates if same else wider).append(
                     ModelFixCandidate(
-                        id=m.id, filename=m.filename, display_name=m.display_name
+                        id=m.id,
+                        filename=m.filename,
+                        display_name=m.display_name,
+                        base_model=m.base_model,
+                        verdict=verdict,
                     )
                 )
         else:
@@ -10649,12 +10713,13 @@ def create_router(server) -> APIRouter:
                         filename=entry["filename"],
                         display_name=entry["display_name"],
                         via=entry["via"],
+                        verdict=_VIA_VERDICTS.get(entry["via"]),
                     )
                     for entry in propose_companions(_hub(), base.id, index)[kind]
                     if entry["id"] not in hidden
                 ]
             elif likely is None:
-                return [], "no_checkpoint", None
+                return [], "no_checkpoint", None, None
         if likely is not None:
             # First, whatever else says it goes with the workflow: the file
             # the graph asks for, renamed, is the likeliest of all.
@@ -10666,6 +10731,15 @@ def create_router(server) -> APIRouter:
                         id=likely.id,
                         filename=likely.filename,
                         display_name=likely.display_name,
+                        base_model=likely.base_model
+                        if kind == FILE_CHECKPOINT
+                        else None,
+                        # Named like the missing file: a companion's likeliest.
+                        verdict=(
+                            _checkpoint_verdict(likely.base_model, base_model)
+                            if kind == FILE_CHECKPOINT
+                            else "likely"
+                        ),
                     )
                 ).model_copy(update={"likely": True}),
                 *(c for c in candidates if c.id != likely.id),
@@ -10676,7 +10750,7 @@ def create_router(server) -> APIRouter:
         ]
         narrowed = base_model is not None if kind == FILE_CHECKPOINT else None
         if not candidates and not wider:
-            return [], "none_go_with_it", narrowed
+            return [], "none_go_with_it", narrowed, base_model
         if cached:
             # The inspector's ask, once per model row of every workflow it
             # selects: what each loader lists comes from the map already
@@ -10749,8 +10823,11 @@ def create_router(server) -> APIRouter:
             return candidates
 
         found = loadable(candidates, object_info)
+        if grouped and narrowed:
+            # Nothing was held back, so narrowed says whether it would be.
+            narrowed = any(c.verdict == "likely" for c in found)
         if found:
-            return found, None, narrowed
+            return found, None, narrowed, base_model
         if wider:
             logger.info(
                 "No loadable checkpoint of base model %s to replace %s with: "
@@ -10761,15 +10838,15 @@ def create_router(server) -> APIRouter:
             candidates, narrowed = wider, False
             found = loadable(candidates, object_info, log=False)
             if found:
-                return found, None, narrowed
+                return found, None, narrowed, base_model
         pack = [cls for cls, _widgets in run_service.PIXLSTASH_SWAP_LOADERS.values()]
         if object_info is not None and any(cls not in object_info for cls in pack):
             # Would installing ComfyUI-PixlStash make one loadable in EVERY
             # loader naming the file? Asked by the same filter, pack declared.
             with_pack = {**{cls: {} for cls in pack}, **object_info}
             if loadable(candidates, with_pack, log=False):
-                return [], "needs_pixlstash_nodes", narrowed
-        return [], "none_loadable", narrowed
+                return [], "needs_pixlstash_nodes", narrowed, base_model
+        return [], "none_loadable", narrowed, base_model
 
     @router.get(
         "/workflows/{workflow_id}/model-swap",
@@ -10802,6 +10879,15 @@ def create_router(server) -> APIRouter:
                 "With replacing: read what each loader lists from ComfyUI's "
                 "object_info as last read, up to a minute ago, instead of "
                 "reading it again. For a screen that asks on every selection."
+            ),
+        ),
+        grouped: bool = Query(
+            False,
+            description=(
+                "With replacing a checkpoint: offer every checkpoint the "
+                "loader can load, each with its `verdict`, rather than only "
+                "those of the missing one's base model. For a picker that "
+                "files them under headings."
             ),
         ),
     ):
@@ -10844,6 +10930,7 @@ def create_router(server) -> APIRouter:
                 options.replacements,
                 options.replacements_reason,
                 options.replacements_narrowed,
+                options.replacing_base_model,
             ) = _fix_replacements(
                 request,
                 card,
@@ -10853,6 +10940,7 @@ def create_router(server) -> APIRouter:
                 replacing,
                 slot_kind,
                 cached=cached,
+                grouped=grouped,
             )
             if slot_kind in OFFERED_KINDS and not any(
                 c.likely for c in options.replacements or []
@@ -11175,8 +11263,10 @@ def create_router(server) -> APIRouter:
             bases_found[0] if bases_found else None,
         )
         old_base = (
-            _replaced_base_model(
-                graph, models, index, normalized_filename(base.filename)
+            _base_key(
+                _replaced_base_model(
+                    graph, models, index, normalized_filename(base.filename)
+                )
             )
             if base is not None
             else None

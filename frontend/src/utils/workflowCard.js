@@ -658,6 +658,116 @@ export function replacementLabel(model) {
 }
 
 /**
+ * The groups a missing model's candidates are filed under, by `verdict`, in
+ * the order the picker lists them: heading, mark and tone, and the note the
+ * heading carries (`target` is the base model the missing one was).
+ */
+export const REPLACEMENT_VERDICTS = {
+  likely: {
+    heading: "Likely to work",
+    icon: "check-circle-outline",
+    tone: "success",
+    note: (target) =>
+      target ? `${target}, like the missing one` : "goes with this workflow",
+  },
+  maybe: {
+    heading: "Might work",
+    icon: "minus-circle-outline",
+    tone: "warning",
+    note: (target) => (target ? "same family, another base model" : "same family"),
+  },
+  unknown: {
+    heading: "Not known",
+    icon: "help-circle-outline",
+    tone: "info",
+    note: (target) =>
+      target ? "its base model was never read" : "nothing has run with it",
+  },
+  unlikely: {
+    heading: "Unlikely to work",
+    icon: "close-circle-outline",
+    tone: "error",
+    note: () => "another base model",
+  },
+};
+
+/**
+ * What a picked candidate's verdict says under the field, in the same words
+ * as its group; "" for one with none.
+ */
+export function verdictLine(candidate, target) {
+  const base = candidate?.base_model;
+  const loader = candidate?.loader ? " Runs through PixlStash's loader." : "";
+  switch (candidate?.verdict) {
+    case "likely":
+      return target
+        ? `${target}, like the missing one.${loader}`
+        : `Goes with this workflow.${loader}`;
+    case "maybe":
+      return target
+        ? `${base}: the same family as ${target}, another base model.${loader}`
+        : `The same family.${loader}`;
+    case "unknown":
+      return target
+        ? `Its base model was never read.${loader}`
+        : `Nothing has run with it.${loader}`;
+    case "unlikely":
+      return `${base}, not ${target}: LoRAs made for ${target} will not load on it.${loader}`;
+    default:
+      return "";
+  }
+}
+
+/**
+ * A missing model's candidates as picker options filed under their verdicts
+ * (`REPLACEMENT_VERDICTS`), each with its base model as a chip; options in
+ * the order the server sent them within a group. `label(candidate)` names a
+ * row. Candidates without a verdict are left as they are, ungrouped, first.
+ *
+ * @param {Array<Object>} candidates
+ * @param {?string} target the base model the missing one was
+ * @param {function(Object): string} label
+ * @returns {Array<Object>}
+ */
+export function verdictOptions(candidates, target, label) {
+  const order = Object.keys(REPLACEMENT_VERDICTS);
+  return [...candidates]
+    .sort(
+      (a, b) =>
+        order.indexOf(a.verdict ?? "") - order.indexOf(b.verdict ?? ""),
+    )
+    .map((candidate) => {
+      const verdict = REPLACEMENT_VERDICTS[candidate.verdict];
+      const chips = [];
+      const chipDetails = {};
+      if (target) chips.push(candidate.base_model || "base not read");
+      if (candidate.via === "declared") {
+        chips.push("untested");
+        chipDetails.untested =
+          "Only its file layout fits; nothing has run with it.";
+      }
+      if (candidate.loader) {
+        chips.push("PixlStash loader");
+        chipDetails["PixlStash loader"] =
+          "This loader cannot load it, so a run loads it through PixlStash's.";
+      }
+      return {
+        value: candidate.filename,
+        label: label(candidate),
+        chips,
+        chipDetails,
+        ...(verdict && {
+          group: verdict.heading,
+          groupIcon: verdict.icon,
+          groupTone: verdict.tone,
+          groupNote: verdict.note(target),
+          quiet: candidate.verdict === "unlikely",
+        }),
+      };
+    });
+}
+
+/**
  * A "Replace with…" picker's options for a `model-swap` answer's
  * `replacements`; none at all when there is nothing to offer.
  *

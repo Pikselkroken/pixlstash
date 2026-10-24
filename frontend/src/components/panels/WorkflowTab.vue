@@ -290,6 +290,20 @@
                   }}</span
                 >{{ missingNote(row.missing, row.kind) }}
               </p>
+              <p
+                v-if="row.target"
+                class="wftab-note wftab-quiet"
+                data-testid="wftab-missing-base"
+              >
+                It is a <b class="wftab-strong">{{ row.target }}</b> checkpoint,
+                {{
+                  row.likelyCount === 0
+                    ? "and nothing on your shelf is."
+                    : row.likelyCount === 1
+                      ? "and so is 1 on your shelf."
+                      : `and so are ${row.likelyCount} on your shelf.`
+                }}
+              </p>
               <!-- What to do about it, in as few words: the why of an
                    unmatched list is the mark's tooltip. A stale file is
                    never downloadable, so it reads as a pick. -->
@@ -333,10 +347,41 @@
               :label="row.name"
               hide-label
               :options="row.options"
+              :placeholder="row.grouped ? `${row.savedLabel} (missing)` : ''"
               :disabled="!canEdit"
               :data-testid="`wftab-pick-${row.kind}`"
               @update:model-value="(file) => pickModel(row, file)"
-            />
+            >
+              <template v-if="row.grouped" #head>
+                <span data-testid="wftab-replacing"
+                  >Replacing <b class="wftab-strong">{{ row.savedLabel }}</b
+                  >{{ row.target ? ` · ${row.target}` : "" }}</span
+                >
+                <span
+                  v-if="row.target && !row.likelyCount"
+                  class="wftab-none-likely"
+                  data-testid="wftab-none-likely"
+                  ><v-icon
+                    size="16"
+                    class="wftab-tone--info"
+                    aria-hidden="true"
+                    >mdi-information-outline</v-icon
+                  >Nothing on your shelf is {{ row.target }}.</span
+                >
+              </template>
+            </AppSelect>
+            <p
+              v-if="row.verdictLine"
+              class="wftab-verdict"
+              data-testid="wftab-verdict"
+            >
+              <v-icon
+                size="14"
+                :class="`wftab-tone--${row.verdictTone}`"
+                aria-hidden="true"
+                >{{ `mdi-${row.verdictIcon}` }}</v-icon
+              ><span>{{ row.verdictLine }}</span>
+            </p>
             <span v-else class="wftab-value"
               ><Tooltip v-if="row.file" :text="row.file" activator="parent" />{{
                 row.savedLabel
@@ -1419,6 +1464,9 @@ import {
   outputCount,
   replacementLabel,
   UNMATCHED_REPLACEMENTS_TEXT,
+  REPLACEMENT_VERDICTS,
+  verdictLine,
+  verdictOptions,
 } from "../../utils/workflowCard";
 import {
   choicesFor,
@@ -1911,6 +1959,11 @@ function settable(model) {
   return !String(model.address ?? "").endsWith("/checkpoint_id");
 }
 
+/** A candidate's name alone, for a row whose chips say the rest. */
+function shownName(model) {
+  return model.display_name || modelLabel(fileName(model.filename));
+}
+
 /** A candidate as a picker option names it: never a bare filename. */
 function candidateLabel(model) {
   return replacementLabel({
@@ -2000,6 +2053,14 @@ const modelRows = computed(() => {
       (candidate) => !sameFile(candidate.filename, file),
     );
     const pick = canPick ? modelPick(waiting.value, model.address) : null;
+    // A missing file's candidates filed under how likely each is to run it,
+    // where the server gave them a verdict; the file itself is no option.
+    const grouped =
+      Boolean(gone) && candidates.some((candidate) => candidate.verdict);
+    const target = grouped ? answer?.replacing_base_model || "" : "";
+    const picked = pick
+      ? candidates.find((candidate) => candidate.filename === pick)
+      : null;
     const savedLabel =
       canPick && file !== model.filename
         ? modelLabel(fileName(file))
@@ -2029,9 +2090,22 @@ const modelRows = computed(() => {
       unmatched:
         model.kind === "checkpoint" &&
         candidates.length > 0 &&
+        !(grouped && target) &&
         answer?.replacements_narrowed === false,
-      options:
-        candidates.length || pick
+      grouped,
+      target,
+      likelyCount: candidates.filter((c) => c.verdict === "likely").length,
+      verdictLine: grouped ? verdictLine(picked, target) : "",
+      verdictTone: REPLACEMENT_VERDICTS[picked?.verdict]?.tone ?? "",
+      verdictIcon: REPLACEMENT_VERDICTS[picked?.verdict]?.icon ?? "",
+      options: grouped
+        ? [
+            ...verdictOptions(candidates, target, shownName),
+            ...(pick && !picked
+              ? [{ value: pick, label: modelLabel(fileName(pick)) }]
+              : []),
+          ]
+        : candidates.length || pick
           ? [
               // A missing file is no choice: said, or it reads as picked.
               { value: "", label: gone ? `${savedLabel} (missing)` : savedLabel },
@@ -2144,6 +2218,19 @@ async function fileOffered(row, changes) {
 }
 
 /**
+ * The `model-swap?replacing=` read for one row's file. A missing checkpoint's
+ * is `grouped`: every checkpoint its loader can load, each with a verdict.
+ */
+function swapAsk(kind, file, missing) {
+  return {
+    replacing: file,
+    slotKind: kind,
+    cached: true,
+    ...(kind === "checkpoint" && missing && { grouped: true }),
+  };
+}
+
+/**
  * Ask a missing row's offer again and, with *pick*, pick its likely match as
  * the tab does on selection. Answers with the file picked, or "".
  */
@@ -2151,11 +2238,10 @@ async function rereadCopy(key, row, pick) {
   const ask = `${row.kind}:${row.file}`;
   let answer;
   try {
-    answer = await readModelSwap(key, {
-      replacing: row.file,
-      slotKind: row.kind,
-      cached: true,
-    });
+    answer = await readModelSwap(
+      key,
+      swapAsk(row.kind, row.file, Boolean(row.missing)),
+    );
   } catch (err) {
     console.warn(`[workflows] could not read replacements for ${row.file}`, err);
     return "";
@@ -4640,12 +4726,15 @@ async function checkInstalled(key, { quiet = false } = {}) {
     ...new Map(
       modelRows.value
         .filter((row) => row.settable && row.file)
-        .map((row) => [`${row.kind}:${row.file}`, [row.kind, row.file]]),
+        .map((row) => [
+          `${row.kind}:${row.file}`,
+          [row.kind, row.file, Boolean(row.missing)],
+        ]),
     ).values(),
   ];
   const results = await Promise.allSettled(
-    asks.map(([kind, file]) =>
-      readModelSwap(key, { replacing: file, slotKind: kind, cached: true }),
+    asks.map(([kind, file, missing]) =>
+      readModelSwap(key, swapAsk(kind, file, missing)),
     ),
   );
   if (check !== installedCheck || !stillOn(key)) return;
@@ -5032,6 +5121,40 @@ async function checkInstalled(key, { quiet = false } = {}) {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+
+.wftab-strong {
+  font-weight: var(--weight-medium);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+/* A picked candidate's verdict, in its group's words: the hue on the mark. */
+.wftab-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+.wftab-none-likely {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+}
+.wftab-tone--success {
+  color: rgb(var(--v-theme-surface-success));
+}
+.wftab-tone--warning {
+  color: rgb(var(--v-theme-surface-warning));
+}
+.wftab-tone--error {
+  color: rgb(var(--v-theme-surface-error));
+}
+.wftab-tone--info {
+  color: rgb(var(--v-theme-surface-info));
 }
 
 .wftab-warn {
