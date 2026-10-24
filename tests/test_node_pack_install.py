@@ -259,6 +259,19 @@ def test_a_manager_still_installing_at_the_ceiling_is_left_to_finish(
     assert not fake.asked("POST", "manager/reboot")
 
 
+def test_a_queue_status_manager_never_answers_is_not_read_as_busy(comfy, monkeypatch):
+    fake = comfy("v3", **{"GET manager/queue/status": 404})
+    clock = iter(range(0, 10_000, 60))
+    monkeypatch.setattr(
+        node_pack_install_service.time, "monotonic", lambda: next(clock)
+    )
+    with pytest.raises(node_pack_install_service.PackInstallRefused) as refused:
+        node_pack_install_service.install(URL, PACK)
+    assert "could not read ComfyUI-Manager's queue" in str(refused.value)
+    assert "still installing" not in str(refused.value)
+    assert not fake.asked("POST", "manager/reboot")
+
+
 @pytest.mark.parametrize(
     "pack_id",
     [

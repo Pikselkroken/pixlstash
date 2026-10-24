@@ -241,33 +241,50 @@ def _queue_install(pinned: str, manager: str, pack: node_packs.NodePack) -> None
 
 
 def _wait_for_manager(pinned: str, manager: str) -> None:
-    """Return once Manager's queue is idle; refuse after the ceiling."""
+    """Return once Manager's queue is idle; refuse after the ceiling.
+
+    A status Manager does not answer, or answers in another shape, is not read
+    as busy: at the ceiling the refusal says which of the two it was.
+    """
     deadline = time.monotonic() + INSTALL_TIMEOUT_S
     while True:
         answer = _call("GET", pinned, f"{_PREFIX[manager]}manager/queue/status")
         try:
-            status = answer.json() if answer is not None else {}
+            status = (
+                answer.json()
+                if answer is not None and answer.status_code == 200
+                else None
+            )
         except ValueError as exc:
             logger.info("Manager's queue status at %s was not JSON: %s", pinned, exc)
-            status = {}
+            status = None
+        readable = isinstance(status, dict) and "is_processing" in status
         if (
-            isinstance(status, dict)
-            and status.get("is_processing") is False
+            readable
+            and status["is_processing"] is False
             and not status.get("in_progress_count")
             and not status.get("pending_count")
         ):
             return
         if time.monotonic() >= deadline:
             logger.warning(
-                "ComfyUI-Manager (%s) at %s was still busy after %ss: %s",
+                "ComfyUI-Manager (%s) at %s was not idle after %ss; last status "
+                "HTTP %s: %s",
                 manager,
                 pinned,
                 INSTALL_TIMEOUT_S,
+                getattr(answer, "status_code", None),
                 status,
             )
+            if readable:
+                raise PackInstallRefused(
+                    "ComfyUI-Manager is still installing; restart ComfyUI once it "
+                    "has finished."
+                )
             raise PackInstallRefused(
-                "ComfyUI-Manager is still installing; restart ComfyUI once it "
-                "has finished."
+                "PixlStash could not read ComfyUI-Manager's queue, so it does not "
+                "know whether the install finished. Check in ComfyUI Manager, then "
+                "restart ComfyUI."
             )
         time.sleep(POLL_EVERY_S)
 
