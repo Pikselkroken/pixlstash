@@ -7,6 +7,7 @@ import { setActivePinia, createPinia } from "pinia";
 
 import WorkflowTemplatesPanel from "./WorkflowTemplatesPanel.vue";
 import { startModelDownload } from "../../api/modelDownloads";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 
 const listTemplates = vi.fn();
@@ -183,6 +184,30 @@ describe("WorkflowTemplatesPanel card menu", () => {
     await download.trigger("click");
     await flushPromises();
     expect(startModelDownload).not.toHaveBeenCalled();
+  });
+
+  it("leaves out a file already downloading, and says so when that is all", async () => {
+    const wrapper = await mounted(["default/b"]);
+    useTasksStore().downloadStarted({
+      id: "s",
+      file: "shared.safetensors",
+      status: "running",
+    });
+    await row(wrapper, "default/b").trigger("contextmenu");
+    const download = menuRow(wrapper, "download-missing");
+    expect(download.attributes("aria-disabled")).toBe("true");
+    expect(download.find(".tip").attributes("data-text")).toBe(
+      "Already downloading: the Tasks tab shows how far",
+    );
+  });
+
+  it("reads the list again, without asking ComfyUI, when a download lands", async () => {
+    await mounted();
+    expect(listTemplates).toHaveBeenCalledTimes(1);
+    useTasksStore().downloadsLanded += 1;
+    await flushPromises();
+    expect(listTemplates).toHaveBeenCalledTimes(2);
+    expect(listTemplates).toHaveBeenLastCalledWith({ refresh: false });
   });
 
   it("opens from the Menu key and Shift+F10 on the cursor card", async () => {

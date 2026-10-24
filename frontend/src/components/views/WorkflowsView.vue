@@ -1675,8 +1675,19 @@ function useSetOnSelected() {
  * node list), and download every file PixlStash knows where to get. A draft
  * has no graph to ask about.
  */
+// A second press while the checks run would start the same files twice.
+let checkingMissing = false;
 async function downloadMissingSelected() {
-  const cards = store.selectedCards.filter((card) => !card.draft);
+  if (checkingMissing) return;
+  checkingMissing = true;
+  try {
+    await downloadMissingOf(store.selectedCards.filter((card) => !card.draft));
+  } finally {
+    checkingMissing = false;
+  }
+}
+
+async function downloadMissingOf(cards) {
   const files = [];
   let unasked = 0;
   for (const card of cards) {
@@ -1698,6 +1709,12 @@ async function downloadMissingSelected() {
         : "Could not check what these workflows are missing.",
     );
     return;
+  }
+  if (unasked) {
+    notices.push({
+      level: "warning",
+      text: `Could not check what ${unasked} of these ${cards.length} workflows are missing.`,
+    });
   }
   if (!files.length) {
     notices.push({

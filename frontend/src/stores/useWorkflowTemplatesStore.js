@@ -264,14 +264,16 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
    * (the server keeps no failed read); concurrent calls share one read, except
    * that a re-read asked for during a plain read is made once that one lands
    * rather than answered with a list ComfyUI was not asked for again.
+   * `shelf` reads it again without asking ComfyUI: the server matches each
+   * file against the shelf per request, so a model that arrived shows.
    */
-  async function fetchTemplates({ refresh = false } = {}) {
+  async function fetchTemplates({ refresh = false, shelf = false } = {}) {
     if (inflight) {
       if (!refresh || inflightRefresh) return inflight;
       await inflight;
       return fetchTemplates({ refresh: true });
     }
-    if (loaded.value && reachable.value && !refresh) return undefined;
+    if (loaded.value && reachable.value && !refresh && !shelf) return undefined;
     loading.value = true;
     error.value = "";
     const mine = generation;

@@ -7077,7 +7077,10 @@ unchanged by the tab's existence.
   pill does, Add and Clear selection, and *Download missing models*: each file
   of the selection the server marks `downloadable`, once by name, through
   `downloadModels` (`composables/useModelDownloads.js`, which the one-file
-  `ModelDownloadButton` uses too). Refused with the reason when there is none.
+  `ModelDownloadButton` uses too), less any already downloading. Refused with
+  the reason when there is none. A landed download (`downloadsLanded`) reads
+  the list again with `fetchTemplates({shelf: true})`, which does not make the
+  server ask ComfyUI, so the cards' shelf match catches up.
   Mine's card menu and `⋯` carry the same row; there the view asks the run
   pre-flight (cached) of each selected non-draft workflow, as the Workflow tab
   does, and downloads what `downloadableInPreflight` reads off the answer.

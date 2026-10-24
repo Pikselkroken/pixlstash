@@ -25056,6 +25056,34 @@ def test_the_template_list_reads_the_owners_comfyui(
     assert pack["pack_loaded"] is True
 
 
+@pytest.mark.parametrize(
+    ("name", "linked", "expected"),
+    [
+        ("missing-linked.safetensors", True, True),
+        ("missing-unlinked.safetensors", False, False),
+        ("on-shelf.safetensors", True, False),
+    ],
+)
+def test_a_template_file_is_downloadable_only_missing_and_linked(
+    monkeypatch, name, linked, expected
+):
+    """What the card menu's Download missing models may send.
+
+    Wrong if a file PixlStash has no link for is offered (the POST would 404),
+    or one already on the shelf is (it would 409).
+    """
+    monkeypatch.setattr(
+        comfyui_module,
+        "download_source",
+        lambda file: (
+            {"url": "https://example.com/m", "directory": None} if linked else None
+        ),
+    )
+    item = SimpleNamespace(name=name, directory="vae", url=None)
+    entry = comfyui_module._template_file(item, {"on-shelf.safetensors"})
+    assert entry["downloadable"] is expected
+
+
 def test_the_template_list_says_when_comfyui_does_not_answer(
     workflow_env, comfyui_templates_served
 ):

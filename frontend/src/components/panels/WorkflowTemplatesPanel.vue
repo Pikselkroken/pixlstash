@@ -231,7 +231,11 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { useContextMenuAt } from "../../composables/useContextMenuAt";
-import { downloadModels } from "../../composables/useModelDownloads";
+import {
+  downloadModels,
+  modelBaseName,
+} from "../../composables/useModelDownloads";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -251,6 +255,7 @@ const props = defineProps({
 const emit = defineEmits(["add", "open-settings"]);
 
 const store = useWorkflowTemplatesStore();
+const tasksStore = useTasksStore();
 const gridEl = ref(null);
 const scrollEl = ref(null);
 const columns = ref(1);
@@ -278,16 +283,28 @@ const addLabel = computed(() => {
 
 const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
 
-/** The selection's missing files PixlStash knows where to get. */
+/**
+ * The selection's missing files PixlStash knows where to get, less those
+ * already downloading.
+ */
 const downloadFiles = computed(() => [
   ...new Set(
     store.selectedTemplates.flatMap((template) =>
       (template.files ?? [])
         .filter((file) => file.downloadable)
-        .map((file) => file.name),
+        .map((file) => file.name)
+        .filter((name) => !tasksStore.runningDownloadFiles.has(modelBaseName(name))),
     ),
   ),
 ]);
+
+// A model just downloaded may be one a card says is missing.
+watch(
+  () => tasksStore.downloadsLanded,
+  () => {
+    if (store.reachable) void store.fetchTemplates({ shelf: true });
+  },
+);
 const downloadLabel = computed(() => {
   const n = downloadFiles.value.length;
   if (!n) return "Download missing models";
@@ -295,10 +312,11 @@ const downloadLabel = computed(() => {
 });
 const downloadTitle = computed(() => {
   if (downloadFiles.value.length) return downloadFiles.value.join(", ");
-  const lacking = store.selectedTemplates.some((t) =>
-    (t.files ?? []).some((file) => !file.present),
-  );
-  return lacking
+  const files = store.selectedTemplates.flatMap((t) => t.files ?? []);
+  if (files.some((file) => file.downloadable)) {
+    return "Already downloading: the Tasks tab shows how far";
+  }
+  return files.some((file) => !file.present)
     ? "PixlStash does not know where to get the files missing from your shelf"
     : "Every file they load is on your shelf";
 });
