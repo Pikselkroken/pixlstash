@@ -1598,6 +1598,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _LOOPBACK,
         justification="Writes code (the ComfyUI-PixlStash nodes) into a ComfyUI custom_nodes folder on this machine, trashes an older copy and restarts ComfyUI: the host-shell class, loopback only (§16.3)",
     ),
+    ("POST", "/api/v1/comfyui/node-packs/{pack_id}/install"): RoutePolicy(
+        _LOOPBACK,
+        justification="Has ComfyUI-Manager install third-party code (a pack from node_packs.KNOWN_PACKS, at its pinned version) into the saved ComfyUI and restarts it: the host-shell class, loopback only (§16.3, #2054)",
+    ),
+    ("GET", "/api/v1/comfyui/node-packs/{pack_id}"): RoutePolicy(
+        _OWNER,
+        justification="Whether the saved ComfyUI lists a known pack's node classes; no per-object data; owner only",
+    ),
     ("POST", "/api/v1/comfyui/probe"): RoutePolicy(
         _OWNER,
         justification="Makes this server fetch an address the owner names; the same reach comfyui_url already has; owner only",

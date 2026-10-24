@@ -7,6 +7,13 @@
     <div v-else-if="loadError" class="edit-note">{{ loadError }}</div>
 
     <div v-else-if="!cards.length" class="edit-empty">
+      <RunReasonNotice
+        v-if="packReason"
+        class="edit-missing-notice edit-pack-notice"
+        :reason="packReason"
+        on-dark
+        @retry="reloadCards"
+      />
       <p v-if="unrunnable" class="edit-empty-lead">
         None of your edit workflows can run as they stand. Open one in
         Workflows and press Run… to see why.
@@ -31,6 +38,15 @@
 
     <template v-else>
       <div class="edit-scroll">
+        <!-- Workflows dropped for nodes a known pack provides (#2054): the
+             install would bring them back, so the tab offers it. -->
+        <RunReasonNotice
+          v-if="packReason"
+          class="edit-missing-notice edit-pack-notice"
+          :reason="packReason"
+          on-dark
+          @retry="reloadCards"
+        />
         <!-- Where the edit goes (Paint tools, the toolbox beside the
              filmstrip). Without a selection the whole picture changes. -->
         <template v-if="paint">
@@ -400,6 +416,7 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { errorMessage } from "../../utils/apiError";
 import {
   MISSING_MODELS,
+  MISSING_NODES,
   PICTURE_INPUT_UNFILLED,
   UNCHECKED_CODES,
   readReason,
@@ -492,6 +509,9 @@ const fillInPopup = ref(new Set());
 // Cards that run once their models are downloaded: id -> the missing_models
 // reason, as RunReasonNotice reads it.
 const missing = ref(new Map());
+// One missing_nodes reason for every card dropped only for nodes a known pack
+// provides, its packs merged by id; null when there is none.
+const packReason = ref(null);
 const loaded = ref(false);
 const loading = ref(false);
 const loadError = ref("");
@@ -709,7 +729,10 @@ async function loadCards() {
     const edits = all.filter((card) => EDIT_TYPES.has(card.type));
     const landed = tasksStore.downloadsLanded;
     const runs = await Promise.all(edits.map(wouldRun));
-    cards.value = edits.filter((_, index) => runs[index]);
+    cards.value = edits.filter((_, index) => listed(runs[index]));
+    packReason.value = mergedPackReason(
+      runs.filter((run) => run?.code === MISSING_NODES),
+    );
     fillInPopup.value = new Set(
       edits.filter((_, index) => runs[index] === FILL).map((card) => card.id),
     );
@@ -736,6 +759,31 @@ async function loadCards() {
 }
 
 const FILL = "fill";
+
+/** Whether a `wouldRun` answer keeps the card in the picker. */
+function listed(run) {
+  return Boolean(run) && run.code !== MISSING_NODES;
+}
+
+/** The pack reasons of dropped cards as one, each pack and node named once. */
+function mergedPackReason(reasons) {
+  if (!reasons.length) return null;
+  const packs = new Map();
+  for (const pack of reasons.flatMap((reason) => reason.packs)) {
+    packs.set(pack.id, pack);
+  }
+  return {
+    code: MISSING_NODES,
+    nodes: [...new Set(reasons.flatMap((reason) => reason.nodes))],
+    packs: [...packs.values()],
+  };
+}
+
+/** Read the cards again, once the install's nodes have loaded. */
+function reloadCards() {
+  loaded.value = false;
+  void loadCards();
+}
 
 /**
  * The card the tab falls back to: the first Image to Image card in the grid's
@@ -764,8 +812,9 @@ function runsHere(key) {
 /**
  * True when the card runs on the open picture, `FILL` when the pre-flight's
  * only objection is a picture input the Run popup can fill, the
- * `missing_models` reason when missing models are its only objection, false
- * otherwise.
+ * `missing_models` reason when missing models are its only objection, a
+ * `missing_nodes` reason when its only objection is nodes a known pack
+ * provides (the card is dropped, but the pack is offered), false otherwise.
  */
 async function wouldRun(card) {
   try {
@@ -797,7 +846,23 @@ async function verdict(key) {
       models: reasons.flatMap((reason) => reason.models || []),
     };
   }
+  // Only when the packs cover every missing node: installing them must make
+  // the card runnable, or offering the install here would be a false promise.
+  if (reasons.every(packFixes)) {
+    return {
+      code: MISSING_NODES,
+      nodes: reasons.flatMap((reason) => reason.nodes || []),
+      packs: reasons.flatMap((reason) => reason.packs),
+    };
+  }
   return false;
+}
+
+/** A `missing_nodes` reason whose every node a known pack provides. */
+function packFixes(reason) {
+  if (reason.code !== MISSING_NODES || !reason.packs?.length) return false;
+  const covered = new Set(reason.packs.flatMap((pack) => pack.nodes || []));
+  return (reason.nodes || []).every((node) => covered.has(node));
 }
 
 watch(
@@ -832,6 +897,7 @@ async function recheckMissing() {
   const still = new Map(missing.value);
   const fill = new Set(fillInPopup.value);
   const dropped = new Set();
+  const packs = packReason.value ? [packReason.value] : [];
   keys.forEach((key, index) => {
     const answer = runs[index];
     if (answer === NO_ANSWER) return;
@@ -842,10 +908,16 @@ async function recheckMissing() {
     still.delete(key);
     if (answer === FILL) fill.add(key);
     // Another reason now, which a fresh read would have dropped the card for.
-    if (answer === false) dropped.add(key);
+    if (!listed(answer)) dropped.add(key);
+    // A fresh read would also offer the pack that would bring it back.
+    if (answer?.code === MISSING_NODES) packs.push(answer);
   });
   missing.value = still;
   fillInPopup.value = fill;
+  // Only when the re-check found one: a notice mid-install keeps its reason.
+  if (packs.length > (packReason.value ? 1 : 0)) {
+    packReason.value = mergedPackReason(packs);
+  }
   if (dropped.size) {
     cards.value = cards.value.filter((card) => !dropped.has(card.id));
     unrunnable.value += dropped.size;
@@ -1238,6 +1310,12 @@ defineExpose({ submit });
   --v-theme-surface-error: var(--v-theme-dark-surface-error);
   --hover-wash: rgba(var(--v-theme-on-dark-surface), 0.16);
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
+}
+
+/* At the top of the list or the empty state, so the space goes below it. */
+.edit-pane .edit-pack-notice {
+  margin-top: 0;
+  margin-bottom: var(--space-4);
 }
 
 .edit-option[aria-checked="true"] {

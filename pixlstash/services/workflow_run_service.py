@@ -47,6 +47,7 @@ from pixlstash.services.comfyui_service import (
     SAVE_NODE_CLASSES,
     pixlstash_node_refusals,
 )
+from pixlstash.services import node_packs
 from pixlstash.services.model_downloads import digest_source, download_source
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
@@ -675,7 +676,12 @@ def judge(
 
     classes = preflight.get("missing_node_classes") or []
     if classes:
-        reasons.append(Reason(MISSING_NODES, {"nodes": list(classes)}))
+        detail: dict[str, Any] = {"nodes": list(classes)}
+        # A pack PixlStash can have ComfyUI-Manager install (#2054).
+        packs = node_packs.packs_for(classes)
+        if packs:
+            detail["packs"] = packs
+        reasons.append(Reason(MISSING_NODES, detail))
     models = [
         {
             "file": str(item.get("value")),

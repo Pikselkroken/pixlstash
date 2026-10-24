@@ -845,7 +845,16 @@ Seven rules the client must not re-derive:
    `comfyui_unreachable`, `ui_format: {file_name, detail?, problems?}` (an editor-format
    file the server could not convert: `detail` is the converter's first sentence,
    `problems` all of them, ComfyUI not answering being its own sentence),
-   `missing_nodes: {nodes}`,
+   `missing_nodes: {nodes, packs?}` (`packs`, present only when non-empty, is
+   `[{id, name, version, nodes}]`: a node pack PixlStash can have
+   ComfyUI-Manager install, from the backend's `node_packs.KNOWN_PACKS`, and
+   which of `nodes` it provides. `POST /api/v1/comfyui/node-packs/{id}/install`
+   installs it, loopback callers only, and answers `{pack, version, manager:
+   "v3"|"v4", restart: "requested"|"manual", detail}`, 404 for an id not on the
+   list and 409 with the sentence to show when Manager is missing, refuses,
+   already lists the pack or does not finish; `GET
+   /api/v1/comfyui/node-packs/{id}` answers `{loaded}` for the wait while
+   ComfyUI restarts, #2054),
    `missing_models: {models: [{file, folder, sha256?, downloadable?}]}` (read off the graph with
    the owner's model fixes applied; where a fix's replacement is missing too,
    `file` is the replacement and never the original it stands in for; `sha256`

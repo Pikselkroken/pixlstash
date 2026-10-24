@@ -48,6 +48,7 @@ from pixlstash.authz.policy import (
 )
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.route_inventory import api_endpoint_set
+from pixlstash.services import node_pack_install_service
 from tests.authz_guard import no_spa_fallback  # noqa: F401
 from tests.network_vectors import LAN_IPV4, PRIVATE_10_IPV4
 
@@ -87,6 +88,7 @@ _LOOPBACK_ROUTE_KEYS = {
     ("POST", "/api/v1/pictures/export/folder"),
     ("POST", "/api/v1/test-hooks/ws-event"),
     ("POST", "/api/v1/comfyui/pack/install"),
+    ("POST", "/api/v1/comfyui/node-packs/{pack_id}/install"),
 }
 
 
@@ -485,6 +487,10 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
     folder a rescan walks and registers the files it finds by the names a
     workflow reports missing, which is ``rescan``'s authority narrowed to those
     files. It takes filenames, not a host path.
+    66 = 57 + 9 with ``POST /comfyui/node-packs/{pack_id}/install`` (#2054): it
+    has ComfyUI-Manager install third-party code (a pack from
+    ``node_packs.KNOWN_PACKS`` at its pinned version) into the saved ComfyUI and
+    restarts it, the host-shell class, so loopback only.
 
     Arithmetic, not judgement."""
     loopback = {
@@ -498,7 +504,7 @@ def test_host_capability_tier_split_is_49_local_7_loopback():
         if rp.policy is AccessPolicy.LOCAL_OWNER_ONLY
     }
     assert loopback == _LOOPBACK_ROUTE_KEYS, loopback
-    assert len(loopback) == 8, sorted(loopback)
+    assert len(loopback) == 9, sorted(loopback)
     assert len(local) == 57, sorted(local)
 
 
@@ -1038,6 +1044,45 @@ def test_loopback_owner_only_public_403():
             r = owner.post(_OPEN_LOCATION, headers=_xff("8.8.8.8"))
             assert _is_loopback_403(r), (
                 f"public owner must be 403'd on the red line; got {r.status_code}: {r.text}"
+            )
+
+
+# ---- comfyui/node-packs install - third-party code into ComfyUI (#2054) ----
+
+_NODE_PACK_INSTALL = f"{API}/comfyui/node-packs/comfyui-inpaint-cropandstitch/install"
+
+
+def test_node_pack_install_is_loopback_only_even_with_flag_on(monkeypatch):
+    """Both directions on one server: a loopback owner reaches the install (the
+    positive control, which also proves the route resolves), and an owner on
+    the LAN, Tailscale or the internet is 403'd before the service is asked."""
+    asked = []
+
+    def install(comfyui_url, pack_id):
+        asked.append(pack_id)
+        return {
+            "pack": pack_id,
+            "version": "3.0.11",
+            "manager": "v3",
+            "restart": "requested",
+            "detail": None,
+        }
+
+    monkeypatch.setattr(node_pack_install_service, "install", install)
+    with _owner_env() as env:
+        server, owner = env["server"], env["owner"]
+        with _enforcing(server), _remote_host_ops(server, True):
+            r = owner.post(_NODE_PACK_INSTALL)
+            assert r.status_code == 200, r.text
+            assert asked == ["comfyui-inpaint-cropandstitch"]
+            for ip in (LAN_IPV4, PRIVATE_10_IPV4, "100.64.0.5", "8.8.8.8"):
+                r = owner.post(_NODE_PACK_INSTALL, headers=_xff(ip))
+                assert _is_loopback_403(r), (
+                    f"{ip} must be 403'd on the node-pack install even with "
+                    f"allow_remote_host_ops=true; got {r.status_code}: {r.text}"
+                )
+            assert asked == ["comfyui-inpaint-cropandstitch"], (
+                "a refused caller must never reach the install"
             )
 
 

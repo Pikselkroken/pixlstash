@@ -132,6 +132,7 @@ from pixlstash.services import (
     comfyui_link_service,
     comfyui_pack_service,
     comfyui_templates,
+    node_pack_install_service,
 )
 from pixlstash.services.model_downloads import download_source
 from pixlstash.services.model_icons import IconRefused, store_icon
@@ -1816,6 +1817,22 @@ class ComfyUIPackInstallResponse(BaseModel):
     detail: Optional[str] = None
 
 
+class ComfyUINodePackInstallResponse(BaseModel):
+    """Which pack ComfyUI-Manager installed, and how ComfyUI restarts."""
+
+    pack: str
+    version: str
+    manager: str
+    restart: str
+    detail: Optional[str] = None
+
+
+class ComfyUINodePackResponse(BaseModel):
+    """Whether ComfyUI offers every node of a known pack."""
+
+    loaded: bool
+
+
 class ComfyUIAbortResponse(BaseModel):
     """Result of aborting the active ComfyUI run."""
 
@@ -2377,6 +2394,48 @@ def create_router(server) -> APIRouter:
             return comfyui_pack_service.install(saved)
         except comfyui_pack_service.PackInstallRefused as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post(
+        "/comfyui/node-packs/{pack_id}/install",
+        summary="Have ComfyUI-Manager install a node pack PixlStash knows",
+        description=(
+            "Asks the saved ComfyUI's ComfyUI-Manager to install one pack from "
+            "PixlStash's own short list, at the version pinned there, then "
+            "restarts ComfyUI if nothing is running or queued on it. Nothing "
+            "but the id comes from the caller. `restart` is `requested`, or "
+            "`manual` with `detail` saying why. 404 for a pack not on the list; "
+            "409 when Manager is missing, refuses, already lists the pack or "
+            "does not finish."
+        ),
+        response_model=ComfyUINodePackInstallResponse,
+    )
+    def install_node_pack(pack_id: str, request: Request):
+        user = server.auth.get_user_for_request(request)
+        saved = getattr(user, "comfyui_url", None) if user else None
+        try:
+            return node_pack_install_service.install(saved, pack_id)
+        except node_pack_install_service.UnknownPack as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except node_pack_install_service.PackInstallRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.get(
+        "/comfyui/node-packs/{pack_id}",
+        summary="Whether ComfyUI offers a known node pack's nodes",
+        description=(
+            "`loaded` is true once the saved ComfyUI lists every node class of "
+            "the pack; false while it does not, or does not answer (as while it "
+            "restarts). 404 for a pack not on PixlStash's list."
+        ),
+        response_model=ComfyUINodePackResponse,
+    )
+    def get_node_pack(pack_id: str, request: Request):
+        user = server.auth.get_user_for_request(request)
+        saved = getattr(user, "comfyui_url", None) if user else None
+        try:
+            return {"loaded": node_pack_install_service.loaded(saved, pack_id)}
+        except node_pack_install_service.UnknownPack as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.delete(
         "/comfyui/link",

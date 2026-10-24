@@ -136,14 +136,47 @@ def _plausible_custom_nodes(folder: Path) -> bool:
     return source is None or not source.resolve().is_relative_to(folder)
 
 
-def _restart_comfyui(pinned_url: str) -> Optional[str]:
+def _comfyui_busy(pinned_url: str) -> Optional[str]:
+    """Why ComfyUI must not restart now, or ``None`` when its queue is empty."""
+    try:
+        response = requests.request(
+            "GET",
+            f"{pinned_url}queue",
+            timeout=10,
+            allow_redirects=False,
+            proxies=comfyui_link_service.NO_PROXY,
+        )
+        queue = response.json() if response.status_code == 200 else None
+    except (requests.RequestException, ValueError) as exc:
+        logger.info("ComfyUI's queue at %s could not be read: %s", pinned_url, exc)
+        queue = None
+    if not isinstance(queue, dict):
+        return "ComfyUI did not say whether it is busy"
+    if queue.get("queue_running") or queue.get("queue_pending"):
+        return "ComfyUI is busy"
+    return None
+
+
+def restart_comfyui(pinned_url: str) -> Optional[str]:
     """Ask ComfyUI-Manager to restart ComfyUI; ``None`` on success, else why not.
 
-    Manager 4 serves ``POST /v2/manager/reboot`` (refusing form posts, so the
-    body is JSON); older Managers ``GET /manager/reboot``. ComfyUI itself has no
-    restart route.
+    **Only when ComfyUI's queue is empty**: a restart kills whatever it is
+    running, so a busy queue, or one that cannot be read, leaves the restart to
+    the person. The check is made right before the reboot; a prompt submitted in
+    the moment between the two is the remaining window.
+
+    Manager 4 serves ``POST /v2/manager/reboot`` and Manager 3.40 and later
+    ``POST /manager/reboot`` (both refusing form posts, so the body is JSON);
+    older Managers ``GET /manager/reboot``. ComfyUI itself has no restart route.
     """
-    attempts = (("POST", "v2/manager/reboot"), ("GET", "manager/reboot"))
+    busy = _comfyui_busy(pinned_url)
+    if busy:
+        return busy
+    attempts = (
+        ("POST", "v2/manager/reboot"),
+        ("POST", "manager/reboot"),
+        ("GET", "manager/reboot"),
+    )
     last = "ComfyUI-Manager is not installed"
     for method, path in attempts:
         try:
@@ -263,7 +296,7 @@ def install(comfyui_url: Optional[str]) -> dict:
         replaced or "nothing",
     )
 
-    problem = _restart_comfyui(pinned)
+    problem = restart_comfyui(pinned)
     if problem:
         logger.info("ComfyUI was not restarted for the new nodes: %s", problem)
     return {

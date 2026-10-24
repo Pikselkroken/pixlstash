@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   BLOCKS_BATCH,
+  FIX_INSTALL_PACK,
   LORAS_BYPASSED,
   LORAS_SKIPPED,
   PICTURE_INPUT_UNFILLED,
@@ -125,6 +126,42 @@ describe("missing_nodes names our own pack", () => {
       "This ComfyUI does not have the nodes rgthreeSeed, KSamplerAdvanced.",
     );
     expect(read.text).not.toContain("PixlStash");
+  });
+});
+
+describe("missing_nodes offers a pack PixlStash knows (#2054)", () => {
+  const packs = [
+    {
+      id: "comfyui-inpaint-cropandstitch",
+      name: "ComfyUI-Inpaint-CropAndStitch",
+      version: "3.0.11",
+      nodes: ["InpaintCropImproved", "InpaintStitchImproved"],
+    },
+  ];
+
+  it("names the pack and offers to install it", () => {
+    const read = readReason({
+      code: "missing_nodes",
+      nodes: ["InpaintCropImproved", "InpaintStitchImproved"],
+      packs,
+    });
+    expect(read.text).toBe(
+      "This ComfyUI does not have the nodes InpaintCropImproved, " +
+        "InpaintStitchImproved, from ComfyUI-Inpaint-CropAndStitch.",
+    );
+    expect(read.fix).toBe(FIX_INSTALL_PACK);
+    expect(read.blocking).toBe(true);
+  });
+
+  it("offers nothing without a pack", () => {
+    const read = readReason({
+      code: "missing_nodes",
+      nodes: ["InpaintCropImproved"],
+    });
+    expect(read.text).toBe(
+      "This ComfyUI does not have the node InpaintCropImproved.",
+    );
+    expect(read.fix).toBe(null);
   });
 });
 

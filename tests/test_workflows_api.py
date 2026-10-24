@@ -3263,6 +3263,7 @@ class _FakeComfyForInstall:
     def __init__(self, custom_nodes: Path, reboot: dict):
         self.custom_nodes = custom_nodes
         self.reboot = reboot  # {"POST v2/manager/reboot": status, ...}
+        self.queue = {"queue_running": [], "queue_pending": []}
         self.asked: list[str] = []
 
     def get(self, url, **kwargs):
@@ -3277,6 +3278,8 @@ class _FakeComfyForInstall:
         assert kwargs.get("allow_redirects") is False
         key = f"{method} {urlsplit(url).path.lstrip('/')}"
         self.asked.append(key)
+        if key == "GET queue":
+            return _http_answer(200, self.queue)
         return _http_answer(self.reboot.get(key, 404), None)
 
 
@@ -3327,13 +3330,29 @@ def test_installing_copies_the_nodes_and_trashes_an_older_copy(install_env):
     assert fake.asked[-1] == "POST v2/manager/reboot"
 
 
+def test_installing_the_nodes_never_restarts_a_busy_comfyui(install_env):
+    """A restart kills what ComfyUI is running; the nodes wait for the person."""
+    fake = install_env.with_comfy({"POST v2/manager/reboot": 200})
+    fake.queue["queue_running"] = [[0, "a-running-prompt"]]
+    result = comfyui_pack_service.install("http://127.0.0.1:18188/")
+    assert (result["restart"], result["detail"]) == (
+        "manual",
+        "ComfyUI is busy, so restart ComfyUI yourself.",
+    )
+    assert not [key for key in fake.asked if key.endswith("manager/reboot")]
+
+
 def test_without_comfyui_manager_the_restart_is_left_to_the_person(install_env):
     fake = install_env.with_comfy({})
     result = comfyui_pack_service.install("http://127.0.0.1:18188/")
     assert result["restart"] == "manual"
     assert "restart ComfyUI yourself" in result["detail"]
-    # The new route first, then the older Managers' one.
-    assert fake.asked[-2:] == ["POST v2/manager/reboot", "GET manager/reboot"]
+    # Manager 4's route first, then 3.40's POST, then the older Managers' GET.
+    assert fake.asked[-3:] == [
+        "POST v2/manager/reboot",
+        "POST manager/reboot",
+        "GET manager/reboot",
+    ]
 
 
 def test_a_failed_move_to_the_trash_installs_nothing_and_deletes_nothing(
@@ -3502,6 +3521,33 @@ def test_the_install_route_is_loopback_only_and_refuses_with_409(workflow_env):
     r = workflow_env.owner.post(path)
     assert r.status_code == 409, r.text
     assert "No ComfyUI address" in r.json()["detail"]
+
+
+def test_the_node_pack_routes_know_only_the_listed_packs(workflow_env):
+    install = f"{API}/comfyui/node-packs/{{pack_id}}/install"
+    check = f"{API}/comfyui/node-packs/{{pack_id}}"
+    assert ROUTE_POLICIES[("POST", install)].policy is AccessPolicy.LOOPBACK_OWNER_ONLY
+    assert ROUTE_POLICIES[("GET", check)].policy is AccessPolicy.OWNER_ONLY
+    known = "comfyui-inpaint-cropandstitch"
+    assert_real_route(
+        workflow_env.server.api, "POST", install.format(pack_id=known), install
+    )
+    assert_real_route(
+        workflow_env.server.api, "GET", check.format(pack_id=known), check
+    )
+    for unknown in ("not-a-pack", f"{known}@nightly", known.upper()):
+        r = workflow_env.owner.post(install.format(pack_id=unknown))
+        assert r.status_code == 404, r.text
+        r = workflow_env.owner.get(check.format(pack_id=unknown))
+        assert r.status_code == 404, r.text
+    # No ComfyUI address saved: a refusal the notice can show, not a 500.
+    workflow_env.owner.patch(f"{API}/users/me/config", json={"comfyui_url": None})
+    r = workflow_env.owner.post(install.format(pack_id=known))
+    assert r.status_code == 409, r.text
+    assert "No ComfyUI address" in r.json()["detail"]
+    r = workflow_env.owner.get(check.format(pack_id=known))
+    assert r.status_code == 200, r.text
+    assert r.json() == {"loaded": False}
 
 
 def test_the_link_reply_offers_the_install_only_for_this_computer(
@@ -9390,6 +9436,13 @@ def test_a_missing_node_pack_is_reported_by_name(runnable):
         for node in reason["nodes"]
     ]
     assert nodes == ["LoraLoader"], payload
+    # No pack PixlStash knows provides it, so nothing offers an install.
+    assert not [
+        reason
+        for group in payload["groups"]
+        for reason in group["reasons"]
+        if "packs" in reason
+    ], payload
 
 
 def test_a_model_this_comfyui_does_not_have_names_the_file_and_the_folder(runnable):

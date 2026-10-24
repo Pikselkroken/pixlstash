@@ -19,6 +19,10 @@ vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/thumb/${id}`,
 }));
 vi.mock("../../api/stacks", () => ({ listStackPictures: vi.fn(async () => []) }));
+vi.mock("../../api/comfyui", () => ({
+  getNodePack: vi.fn(),
+  installNodePack: vi.fn(),
+}));
 const push = vi.fn();
 vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
 vi.mock("../../utils/apiClient", () => ({
@@ -87,6 +91,97 @@ beforeEach(async () => {
 });
 
 describe("the Edit tab", () => {
+  describe("a card dropped for nodes a known pack provides (#2054)", () => {
+    const CROP = {
+      id: "comfyui-inpaint-cropandstitch",
+      name: "ComfyUI-Inpaint-CropAndStitch",
+      version: "3.0.11",
+      nodes: ["InpaintCropImproved", "InpaintStitchImproved"],
+    };
+    const needsPack = {
+      code: "missing_nodes",
+      nodes: ["InpaintCropImproved", "InpaintStitchImproved"],
+      packs: [CROP],
+    };
+
+    function refuse(byCard) {
+      preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+        groups: [{ reasons: byCard[target] || [] }],
+      }));
+    }
+
+    it("stays out of the picker, and the tab offers the pack once", async () => {
+      refuse({ i2i: [needsPack], out: [needsPack] });
+      listWorkflowCards.mockResolvedValue({
+        cards: [...CARDS, { id: "i2", name: "Fill", type: "inpaint", type_label: "Inpaint" }],
+      });
+      const wrapper = await mountPanel();
+      const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+      expect(rows).toEqual(["Fill, Inpaint"]);
+      const offers = wrapper
+        .findAll("button")
+        .filter((b) => b.text() === "Install ComfyUI-Inpaint-CropAndStitch…");
+      expect(offers).toHaveLength(1);
+    });
+
+    it("is offered in the empty state too, and Retry reads the cards again", async () => {
+      refuse({ i2i: [needsPack], out: [needsPack] });
+      const wrapper = await mountPanel();
+      expect(wrapper.find("[role=menu]").exists()).toBe(false);
+      const notice = wrapper.findComponent({ name: "RunReasonNotice" });
+      expect(notice.exists()).toBe(true);
+      expect(wrapper.text()).toContain("from ComfyUI-Inpaint-CropAndStitch");
+      expect(listWorkflowCards).toHaveBeenCalledTimes(1);
+      refuse({});
+      notice.vm.$emit("retry");
+      await flush();
+      await flush();
+      expect(listWorkflowCards).toHaveBeenCalledTimes(2);
+      const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+      expect(rows).toEqual(["Widen, Outpaint", "Relight, Image to Image"]);
+      expect(wrapper.findComponent({ name: "RunReasonNotice" }).exists()).toBe(false);
+    });
+
+    it("is offered when a re-check after a download turns one up", async () => {
+      let after = false;
+      preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+        groups: [
+          {
+            reasons:
+              target === "out"
+                ? []
+                : after
+                  ? [needsPack]
+                  : [{ code: "missing_models", models: [{ file: "a.safetensors" }] }],
+          },
+        ],
+      }));
+      const wrapper = await mountPanel();
+      expect(wrapper.text()).not.toContain("CropAndStitch");
+      after = true;
+      useTasksStore().downloadsLanded += 1;
+      await flush();
+      await flush();
+      const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+      expect(rows).toEqual(["Widen, Outpaint"]);
+      const offers = wrapper
+        .findAll("button")
+        .filter((b) => b.text() === "Install ComfyUI-Inpaint-CropAndStitch…");
+      expect(offers).toHaveLength(1);
+    });
+
+    it("is not offered when the card also fails for something else", async () => {
+      refuse({
+        i2i: [needsPack, { code: "no_save_node" }],
+        out: [{ ...needsPack, nodes: [...needsPack.nodes, "SomeOtherNode"] }],
+      });
+      const wrapper = await mountPanel();
+      expect(wrapper.findComponent({ name: "RunReasonNotice" }).exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("CropAndStitch");
+      expect(wrapper.text()).toContain("None of your edit workflows can run");
+    });
+  });
+
   it("opens the chosen workflow in the Workflows view", async () => {
     const wrapper = await mountPanel();
     const out = wrapper

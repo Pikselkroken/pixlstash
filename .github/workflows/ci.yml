@@ -560,6 +560,7 @@ jobs:
           tests/test_model_unload_race.py
           tests/test_mps_device_check.py
           tests/test_mps_memory_and_providers.py
+          tests/test_node_pack_install.py
           tests/test_ocr_text.py
           tests/test_openapi_response_schemas.py
           tests/test_operation_log.py
