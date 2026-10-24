@@ -59,20 +59,19 @@
     }
   },
   "7": {
-    "class_type": "CLIPLoader",
+    "class_type": "PixlStashCLIPLoader",
     "inputs": {
-      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
-      "type": "flux2",
-      "device": "default"
+      "clip_sha256": "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
+      "type": "flux2"
     },
     "_meta": {
       "title": "CLIPLoader"
     }
   },
   "8": {
-    "class_type": "VAELoader",
+    "class_type": "PixlStashVAELoader",
     "inputs": {
-      "vae_name": "flux2-vae.safetensors"
+      "vae_sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5"
     },
     "_meta": {
       "title": "VAELoader"

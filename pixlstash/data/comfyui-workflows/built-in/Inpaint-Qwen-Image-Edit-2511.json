@@ -59,14 +59,17 @@
     }
   },
   "4": {
-    "class_type": "LoraLoaderModelOnly",
+    "class_type": "PixlStashAdapterLoader",
     "inputs": {
+      "adapter_kind": "— Any —",
+      "base_model": "(loading…)",
+      "adapter_sha256": "22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f",
+      "strength_model": 1.0,
+      "strength_clip": 1.0,
       "model": [
         "3",
         0
-      ],
-      "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
-      "strength_model": 1.0
+      ]
     },
     "_meta": {
       "title": "LoraLoaderModelOnly"
@@ -99,20 +102,19 @@
     }
   },
   "7": {
-    "class_type": "CLIPLoader",
+    "class_type": "PixlStashCLIPLoader",
     "inputs": {
-      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
-      "type": "qwen_image",
-      "device": "default"
+      "clip_sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4",
+      "type": "qwen_image"
     },
     "_meta": {
       "title": "CLIPLoader"
     }
   },
   "8": {
-    "class_type": "VAELoader",
+    "class_type": "PixlStashVAELoader",
     "inputs": {
-      "vae_name": "qwen_image_vae.safetensors"
+      "vae_sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
     },
     "_meta": {
       "title": "VAELoader"

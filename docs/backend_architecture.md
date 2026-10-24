@@ -11110,6 +11110,20 @@ the ComfyUI folder it belongs in. `POST /model-downloads {file}` fetches it;
 **the request names a file, never a URL**, so no client can point the server at
 an address of its choosing.
 
+- **A model named by digest alone.** ComfyUI-PixlStash's VAE, CLIP, adapter,
+  ControlNet and upscale loaders hold a SHA-256 and no file name, so the
+  pre-flight's name check never sees them. `judge` is handed the shelf's
+  presence check (`routes/workflows._shelf_holds_digest`). A digest with no
+  present copy is a `missing_models` entry (`missing_digest_models`) carrying
+  `sha256`, named by `model_downloads.digest_source`: the template list
+  records each link's SHA-256 as Hugging Face states it (`X-Linked-Etag`, read
+  by `scripts/build_template_suggestions.py`, kept per link across weekly
+  runs; a gated file has none). It is `downloadable` only where the link
+  `download_source` would fetch for that name is the one listed under the
+  digest, so the fetched file is the one the loader asks for. Such a missing
+  model refuses the run rather than failing inside ComfyUI, a LoRA included:
+  only a LoRA named by file is bypassed.
+
 - **Where it lands.** The download folder: `model_folder.is_download_target`,
   at most one by `ux_model_folder_single_download_target`, set through
   `PATCH /model-folders/{id}` `{"is_download_target": true}` (a `user` folder or

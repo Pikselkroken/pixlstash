@@ -843,9 +843,12 @@ Seven rules the client must not re-derive:
    file the server could not convert: `detail` is the converter's first sentence,
    `problems` all of them, ComfyUI not answering being its own sentence),
    `missing_nodes: {nodes}`,
-   `missing_models: {models: [{file, folder, downloadable?}]}` (read off the graph with
+   `missing_models: {models: [{file, folder, sha256?, downloadable?}]}` (read off the graph with
    the owner's model fixes applied; where a fix's replacement is missing too,
-   `file` is the replacement and never the original it stands in for;
+   `file` is the replacement and never the original it stands in for; `sha256`
+   marks a model a ComfyUI-PixlStash loader names by digest alone and the shelf
+   has no copy of, `file` then being the name the template list links it under,
+   or the digest where it has none;
    `downloadable: true`, present only when true, means `POST
    /api/v1/model-downloads {file}` can fetch it, which the Workflow tab and the
    Run popup offer as a download icon beside the name. The download's row is

@@ -2,6 +2,7 @@
 
 import contextlib
 import gzip
+import json
 import os
 import sqlite3
 import threading
@@ -19,6 +20,7 @@ from pixlstash.services.model_downloads import (
     STATUS_FAILED,
     DownloadRefused,
     cancel_download,
+    digest_source,
     download_source,
     live_downloads,
     start_download,
@@ -29,6 +31,7 @@ from pixlstash.services.workflow_run_service import (
     MISSING_MODELS,
     bypass_missing_loras,
     judge,
+    missing_digest_models,
 )
 from tests.test_downloads_intake import _register, write_adapter
 
@@ -359,6 +362,79 @@ def test_a_missing_model_the_list_links_is_marked_downloadable():
         },
         {"file": "my_own_lora.safetensors", "folder": "loras"},
     ]
+
+
+# The Qwen VAE's digest, as the template list records it for its link.
+_QWEN_VAE = "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
+_ON_SHELF = "b" * 64
+_UNLISTED = "c" * 64
+
+
+def test_a_model_a_digest_loader_names_and_the_shelf_lacks_is_missing():
+    """By the listed name and offered, or by its digest when the list has none.
+
+    Wrong if a digest the shelf holds is reported, if an emptied adapter row
+    counts, if a missing one is not reported at all (it would only fail inside
+    ComfyUI), or if a caller that gives no shelf check sees a change.
+    """
+    graph = {
+        "1": {"class_type": "PixlStashVAELoader", "inputs": {"vae_sha256": _QWEN_VAE}},
+        "2": {
+            "class_type": "PixlStashCLIPLoader",
+            "inputs": {"clip_sha256": _ON_SHELF, "type": "qwen_image"},
+        },
+        "3": {
+            "class_type": "PixlStashMultiAdapterLoader",
+            "inputs": {"adapter_sha256": _UNLISTED.upper(), "adapter_sha256_2": ""},
+        },
+        "4": {"class_type": "SaveImage", "inputs": {}},
+    }
+    object_info = {
+        cls: {"input": {"required": {}}}
+        for cls in (
+            "PixlStashVAELoader",
+            "PixlStashCLIPLoader",
+            "PixlStashMultiAdapterLoader",
+            "SaveImage",
+        )
+    }
+    reasons, _ = judge(
+        graph, object_info, None, digest_present=lambda d: d == _ON_SHELF
+    )
+    missing = next(r for r in reasons if r.code == MISSING_MODELS).detail["models"]
+    assert missing == [
+        {
+            "file": "qwen_image_vae.safetensors",
+            "folder": "vae",
+            "sha256": _QWEN_VAE,
+            "downloadable": True,
+        },
+        {"file": _UNLISTED, "folder": "loras", "sha256": _UNLISTED},
+    ]
+    reasons, _ = judge(graph, object_info, None)
+    assert all(r.code != MISSING_MODELS for r in reasons)
+
+
+def test_every_digest_a_built_in_names_can_be_downloaded():
+    """Each model the shipped workflows load by digest is a file the template
+    list links under that digest, so a machine without it is offered it."""
+    folder = os.path.join(
+        os.path.dirname(model_downloads.__file__),
+        "..",
+        "data",
+        "comfyui-workflows",
+        "built-in",
+    )
+    seen = 0
+    for name in sorted(os.listdir(folder)):
+        with open(os.path.join(folder, name), encoding="utf-8") as handle:
+            graph = json.load(handle)
+        for model in missing_digest_models(graph, lambda _digest: False):
+            seen += 1
+            source = digest_source(model["sha256"])
+            assert source is not None, (name, model)
+            assert download_source(source["name"])["url"] == source["url"], name
+    assert seen >= 5
 
 
 def test_a_bypassed_lora_the_list_links_is_marked_downloadable():

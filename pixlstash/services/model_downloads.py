@@ -122,6 +122,32 @@ def download_source(file: str) -> Optional[dict]:
     return _sources().get(name.casefold()) if name else None
 
 
+def digest_source(sha256: str) -> Optional[dict]:
+    """The file the template list links under *sha256*, or None.
+
+    ``{name, url, directory}``, for a loader that names its model by digest
+    alone (ComfyUI-PixlStash's): the list records the digest Hugging Face
+    states for each link (``scripts/build_template_suggestions.py``).
+    """
+    digest = (sha256 or "").strip().lower()
+    for template in load_templates().get("templates") or []:
+        for entry in template.get("files") or []:
+            url = entry.get("url")
+            if (
+                digest
+                and entry.get("sha256") == digest
+                and entry.get("name")
+                and isinstance(url, str)
+                and url.startswith("https://")
+            ):
+                return {
+                    "name": entry["name"],
+                    "url": url,
+                    "directory": entry.get("directory"),
+                }
+    return None
+
+
 def _relpath(folder_path: str, file: str, comfyui_folder: Optional[str]) -> str:
     """Where *file* goes inside the download folder, relative to it."""
     name = file.replace("\\", "/").strip().strip("/")
