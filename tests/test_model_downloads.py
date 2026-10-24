@@ -183,6 +183,9 @@ def test_a_download_lands_in_the_marked_folder_and_is_registered(
         "lora",
         None,
     )
+    # By its own name, never the loader's subfolder it was asked under: what
+    # `running_download` and the client's `runningDownload` compare a name to.
+    assert entry["file"] == done["file"] == "Style.safetensors"
     assert done["status"] == STATUS_DONE, done
     assert (done["received"], done["total"], done["percent"]) == (
         len(adapter_bytes),
