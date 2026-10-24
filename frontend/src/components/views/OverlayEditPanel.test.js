@@ -565,6 +565,12 @@ describe("the Edit tab with the Paint tools", () => {
     expect(checkedRow(wrapper)).toBe("Patch, Inpaint");
   });
 
+  it("starts on an Inpaint card when the selection was drawn before the tab loaded", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [...CARDS, INPAINT] });
+    const wrapper = await mountPanel({ paint: fakePaint([RECT]) });
+    expect(checkedRow(wrapper)).toBe("Fill, Inpaint");
+  });
+
   it("shows how to write the prompt on request", async () => {
     const wrapper = await mountPanel();
     const toggle = wrapper

@@ -1125,7 +1125,7 @@ defineExpose({ submit });
   margin-top: var(--space-3);
   padding: var(--space-3);
   border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-dark-surface), 0.06);
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
