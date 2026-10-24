@@ -20992,6 +20992,28 @@ def test_a_finished_run_is_listed_and_carries_the_offer_to_save_it(saving):
     assert lost["run_id"] not in now
     assert now[kept["run_id"]]["offer"] is True
 
+    # A run still going in this process is kept however long it has run, or
+    # its ending would find no row; one lost with a restart ages out.
+    hub, library = saving.server.hub, saving.server.vault.library_uuid
+
+    def held(run_id) -> bool:
+        return bool(
+            hub.fetchone("SELECT 1 FROM workflow_run_log WHERE run_id = ?", (run_id,))
+        )
+
+    saving.monkeypatch.setattr(run_log, "_STARTED", "1999")
+    run_log.queued(hub, "run-long", "run-long", saving.manual, "Long", library)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_run_log SET queued_at = '2000-01-01' "
+            "WHERE run_id = 'run-long'"
+        )
+    run_log.queued(hub, "run-prune-1", "run-prune-1", None, "Prune", library)
+    assert held("run-long"), "a run still going was pruned"
+    saving.monkeypatch.setattr(run_log, "_STARTED", "9999")
+    run_log.queued(hub, "run-prune-2", "run-prune-2", None, "Prune", library)
+    assert not held("run-long"), "a run lost with a restart never ages out"
+
 
 @pytest.fixture
 def sampled(saving):

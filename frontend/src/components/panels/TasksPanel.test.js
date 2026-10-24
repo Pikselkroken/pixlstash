@@ -1081,6 +1081,24 @@ describe("the Finished group", () => {
     warn.mockRestore();
   });
 
+  it("does not clear while a save is out, which keeps the keyboard where it is", async () => {
+    saveWorkflow.mockImplementation(() => new Promise(() => {}));
+    const wrapper = await mountWith([run({ offer: true }), run({ id: "run-b" })], {
+      landed: true,
+    });
+    const save = wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Save");
+    await save.trigger("click");
+    await flushPromises();
+    const clear = wrapper.find('[data-testid="tm-finished-clear"]');
+    expect(clear.attributes("disabled")).toBeDefined();
+    await clear.trigger("click");
+    await flushPromises();
+    expect(clearFinishedRuns).not.toHaveBeenCalled();
+    expect(rows(wrapper)).toHaveLength(2);
+  });
+
   it("clears every run but those with unsaved changes", async () => {
     const wrapper = await mountWith([
       run({ id: "run-a", offer: true }),

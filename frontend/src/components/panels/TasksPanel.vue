@@ -403,7 +403,7 @@
           type="button"
           data-testid="tm-finished-clear"
           aria-label="Clear the finished runs. Runs with unsaved changes stay."
-          :disabled="Boolean(dismissing)"
+          :disabled="Boolean(dismissing) || Boolean(busy)"
           @click="clearFinished"
         >
           Clear
@@ -1034,7 +1034,8 @@ async function dismiss(run) {
 
 /** The group's Clear: every finished run but those with unsaved changes. */
 async function clearFinished() {
-  if (dismissing.value) return;
+  // A save out keeps the keyboard where it is: Clear would move it.
+  if (dismissing.value || busy.value) return;
   dismissing.value = "clear";
   try {
     await clearFinishedRuns();

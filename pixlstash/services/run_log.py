@@ -256,8 +256,10 @@ def _run_sets(rows) -> list[tuple[str, str, int | None]]:
 
 def _prune(conn) -> None:
     """Drop the batches no longer shown: past the newest :data:`KEPT_BATCHES`,
-    or older than :data:`KEPT_FOR`, unless a run set names it. A batch still
-    going is the newest, and one queued in the last day is never dropped."""
+    or older than :data:`KEPT_FOR`, unless a run set names it. A batch with a
+    run still going in this process is never dropped, however long it has
+    run: its ending would find no row. One whose run was lost with a restart
+    never ends, so it ages out like any other."""
     keep = {
         batch_id
         for _wf, batch_id, _base in _run_sets(
@@ -267,13 +269,14 @@ def _prune(conn) -> None:
     cutoff = (datetime.now(timezone.utc) - KEPT_FOR).isoformat()
     rows = conn.execute(
         "SELECT batch_id, MAX(COALESCE(ended_at, queued_at)) AS at, "
-        "SUM(ended_at IS NULL) AS going FROM workflow_run_log "
-        "GROUP BY batch_id ORDER BY at DESC"
+        "SUM(ended_at IS NULL AND queued_at >= ?) AS going "
+        "FROM workflow_run_log GROUP BY batch_id ORDER BY at DESC",
+        (_STARTED,),
     ).fetchall()
     shown = 0
     gone = []
     for batch_id, at, going in rows:
-        if batch_id in keep or (going and at >= cutoff):
+        if batch_id in keep or going:
             continue
         if at >= cutoff and shown < KEPT_BATCHES:
             shown += 1

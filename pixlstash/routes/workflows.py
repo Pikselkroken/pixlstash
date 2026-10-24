@@ -1950,7 +1950,13 @@ class SaveVerb(BaseModel):
 class RunsCleared(BaseModel):
     """``DELETE /workflows/runs`` and ``DELETE /workflows/runs/{run_id}``."""
 
-    cleared: int = Field(description="How many finished runs were forgotten.")
+    cleared: int = Field(
+        description=(
+            "How many finished runs were forgotten, counted as the Finished "
+            "group lists them: one per workflow per `POST /workflows/run`, "
+            "however many pictures it was asked for."
+        )
+    )
     workflow_id: str | None = Field(
         None,
         description=(
