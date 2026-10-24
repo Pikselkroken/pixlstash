@@ -772,7 +772,7 @@ describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
     expect(useNoticeStore().notices).toHaveLength(0);
   });
 
-  it("warns once that a workflow now runs alone after it ran out of memory, with Undo", async () => {
+  it("warns once that a workflow now runs alone after it ran out of memory, with Turn off", async () => {
     connect();
     receive({
       type: "resource_lease",
@@ -786,16 +786,16 @@ describe("useUpdatesSocket: the GPU queue's resource_lease event", () => {
       run_id: "run-3",
       workflow_id: "auto:portrait",
       code: "vram_oom_exclusive",
-      text: "ComfyUI 'Portrait upscale ×4' ran out of GPU memory. It will run alone from now on.",
+      text: "Portrait upscale ×4 ran out of GPU memory 3 runs in a row and now runs alone.",
     });
 
     const noticeStore = useNoticeStore();
     const [notice] = noticeStore.notices;
     expect(notice.level).toBe("warning");
-    expect(notice.text).toContain("It will run alone from now on.");
-    expect(notice.action.label).toBe("Undo");
+    expect(notice.text).toContain("now runs alone.");
+    expect(notice.action.label).toBe("Turn off");
 
-    // Undo turns the switch back off, for that workflow only.
+    // Turn off turns the switch back off, for that workflow only.
     noticeStore.invokeAction(notice.id);
     await vi.waitFor(() =>
       expect(patchWorkflowCard).toHaveBeenCalledWith("auto:portrait", { exclusive: false }),

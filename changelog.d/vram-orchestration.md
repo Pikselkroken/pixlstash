@@ -7,8 +7,9 @@
   "PixlStash processing" row.
 - PixlStash learns how much memory each workflow needs from its runs. The
   workflow card shows it, and the Workflow tab shows the measured runs and a
-  "Run alone on the GPU" switch. A workflow that runs out of memory runs alone
-  from then on; you can turn that off in Settings › Compute.
+  "Run alone" switch. A workflow whose last 3 runs all ran out of memory runs
+  alone from then on, with a notice that can turn it off; you can turn that
+  off altogether in Settings › Compute.
 - PixlStash steps aside for ComfyUI: it pauses its own GPU work and unloads its
   models when a run needs the room, and nothing it was doing is lost.
 - Settings › Compute lets you pick which GPU PixlStash uses on a machine with

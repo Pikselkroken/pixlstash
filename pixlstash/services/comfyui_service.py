@@ -2162,16 +2162,25 @@ def _process_comfyui_outputs(
         )
 
     def mark_alone_after_oom() -> str:
-        """Make the workflow run alone when the owner allows; the sentence to show."""
+        """Make the workflow run alone once its newest runs all ran out of
+        memory and the owner allows; the sentence to show. Called after the
+        run's peak is written, so the streak counts this run."""
         name = f"ComfyUI '{label}'" if label else "This ComfyUI run"
         user = getattr(server, "_user", None)
         try:
             allowed = workflow_id and vram_history.auto_exclusive_after_oom(
                 server.hub, getattr(user, "id", None)
             )
-            if allowed and vram_history.policy(server.hub, workflow_id) is None:
+            if (
+                allowed
+                and vram_history.policy(server.hub, workflow_id) is None
+                and vram_history.ran_out_in_a_row(server.hub, workflow_id)
+            ):
                 vram_history.set_exclusive(server.hub, workflow_id, True, "oom")
-                text = f"{name} ran out of GPU memory. It will run alone from now on."
+                text = (
+                    f"{label or 'This workflow'} ran out of GPU memory "
+                    f"{vram_history.OOM_STREAK} runs in a row and now runs alone."
+                )
                 arbiter().warn(
                     vram_lease,
                     "vram_oom_exclusive",

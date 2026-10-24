@@ -474,15 +474,15 @@ export function useUpdatesSocket({
           payload.code === "vram_oom_exclusive" &&
           payload.workflow_id
         ) {
-          // The backend switched the workflow to run alone after an out-of-
-          // memory run; Undo turns that back off.
+          // The backend switched the workflow to run alone after it ran out
+          // of memory several runs in a row; Turn off switches that back off.
           const workflowId = payload.workflow_id;
           noticeStore.push({
             level: "warning",
-            text: payload.text || "A ComfyUI run ran out of GPU memory. It will run alone from now on.",
+            text: payload.text || "A workflow ran out of GPU memory several runs in a row and now runs alone.",
             key: `resource-lease-exclusive-${workflowId}`,
             action: {
-              label: "Undo",
+              label: "Turn off",
               handler: async () => {
                 // The notice can outlive a switch to a read-only session.
                 if (isReadOnly.value) return;
