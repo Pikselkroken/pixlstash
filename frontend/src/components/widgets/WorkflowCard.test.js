@@ -1640,10 +1640,26 @@ describe("the GPU need pill", () => {
     expect(pill(w).element.parentElement.classList.contains("wf-card__cover")).toBe(true);
   });
 
-  it("says Not measured while the need is unknown, not zero", () => {
+  it("draws no pill while the need is unknown, rather than a label or zero", () => {
     const w = mountCard({ ...BARE, vram: vram({ need_mb: null, measured_runs: 0 }) });
-    expect(pill(w).text()).toContain("Not measured");
-    expect(pill(w).text()).not.toContain("0.0 GB");
+    expect(pill(w).exists()).toBe(false);
+    const empty = mountCard({
+      ...BARE,
+      picture_count: 0,
+      covers: [],
+      vram: vram({ need_mb: null, measured_runs: 0 }),
+    });
+    expect(empty.find(".wf-card__cover--empty").exists()).toBe(true);
+    expect(pill(empty).exists()).toBe(false);
+  });
+
+  it("keeps the lock, with no figure, for an unmeasured workflow that runs alone", () => {
+    const w = mountCard({
+      ...BARE,
+      vram: vram({ need_mb: null, measured_runs: 0, exclusive: true }),
+    });
+    expect(w.find('[data-testid="wf-card-need-lock"]').exists()).toBe(true);
+    expect(pill(w).text()).not.toMatch(/GB|measured/i);
   });
 
   it("adds a lock inside the pill when the workflow runs alone", () => {
