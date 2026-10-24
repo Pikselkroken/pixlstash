@@ -168,8 +168,18 @@ _GGUF_HEAD_RE = re.compile(r"^(?:i?q|tq)\d+$", re.IGNORECASE | re.ASCII)
 _GGUF_LEVELS = frozenset({"k", "s", "m", "l", "xs", "xl", "xxs", "nl", "0", "1"})
 
 # Popped only when a real quant token is popped with them. On their own they
-# are somebody's model name.
-_QUANT_MODIFIERS = frozenset({"scaled", "awq", "gptq", "fast"})
+# are somebody's model name. `mixed` (`fp4_mixed`), `convrot` (`int8_convrot`)
+# and Kijai's `KJ` (`fp8_e4m3fn_scaled_KJ`) are ComfyUI template spellings
+# (#2061).
+_QUANT_MODIFIERS = frozenset(
+    {"scaled", "awq", "gptq", "fast", "mixed", "convrot", "kj"}
+)
+
+# A version written after the precision (`…-bf16-1.0`, `…-int8-bf16-v2`). It
+# stays in the name: only the precision before it is read.
+_QUANT_TRAILING_VERSION_RE = re.compile(
+    r"^(?:v\d+(?:\.\d+)?|\d+\.\d+)$", re.IGNORECASE | re.ASCII
+)
 
 # Spellings that are not already the canonical id. The safetensors header
 # names a dtype (`f16`, `f8_e4m3`, `i32`); a filename names a precision
@@ -203,7 +213,12 @@ _QUANT_TOKENS = {
         *("fp32", "fp16", "bf16", "fp8", "nvfp4", "mxfp4", "fp4", "nf4"),
         *("int8", "int4", "f32", "f16", "f8", "i8", "i4"),
     )
-} | {"e4m3": "fp8_e4m3", "e4m3fn": "fp8_e4m3", "e5m2": "fp8_e5m2"}
+} | {
+    "e4m3": "fp8_e4m3",
+    "e4m3fn": "fp8_e4m3",
+    "e5m2": "fp8_e5m2",
+    "fp8mixed": "fp8",
+}
 
 
 def canonical_quant(raw: str | None) -> str | None:
@@ -268,11 +283,23 @@ def _split_quant(tokens: list[str]) -> tuple[list[str], str | None]:
             return tokens[:-width], "_".join(t.casefold() for t in tokens[-width:])
 
     kept = list(tokens)
+    version = (
+        [kept.pop()]
+        if len(kept) > 1 and _QUANT_TRAILING_VERSION_RE.match(kept[-1])
+        else []
+    )
     popped: list[str] = []
-    while kept and (
-        kept[-1].casefold() in _QUANT_TOKENS or kept[-1].casefold() in _QUANT_MODIFIERS
-    ):
-        popped.append(kept.pop())
+    while kept:
+        last = kept[-1].casefold()
+        head, _, tail = kept[-1].rpartition(".")
+        if last in _QUANT_TOKENS or last in _QUANT_MODIFIERS:
+            popped.append(kept.pop())
+        elif head and tail.casefold() in _QUANT_TOKENS:
+            # `…_t2i.int8_convrot`: a dot, not a separator, before the quant.
+            kept[-1] = head
+            popped.append(tail)
+        else:
+            break
     # The guard the whole safety of this rests on. `scaled` and `fast` are
     # ordinary tokens in real model names, and may only be eaten when a genuine
     # quant token was eaten with them: without this,
@@ -283,7 +310,7 @@ def _split_quant(tokens: list[str]) -> tuple[list[str], str | None]:
     )
     if quant is None:
         return list(tokens), None
-    return kept, quant
+    return kept + version, quant
 
 
 def quant_from_filename(filename: str) -> str | None:

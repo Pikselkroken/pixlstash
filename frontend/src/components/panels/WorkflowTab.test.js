@@ -1943,6 +1943,81 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
     ).toBe("t5xxl_fp8 (missing)");
   });
 
+  it("leaves a missing file that can be downloaded, or is, to its download", async () => {
+    // #2061: the download is the owner's fix; a renamed copy is a guess, and
+    // picking it on every selection fights the download.
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        text_encoder: [{ id: 5, filename: "t5-xxl_fp8.safetensors", likely: true }],
+      }),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    for (const [extra, running] of [
+      [{ downloadable: true }, false],
+      [{}, true],
+    ]) {
+      setWorkflowChanges.mockClear();
+      useTasksStore().modelDownloads = running
+        ? [{ id: "d1", file: "t5xxl_fp8.safetensors", status: "running" }]
+        : [];
+      preflightWorkflowRun.mockResolvedValue(
+        missing({ file: "t5/t5xxl_fp8.safetensors", folder: "text_encoders", ...extra }),
+      );
+      const { wrapper } = await mountWith([KEY], [withSupport]);
+      await settle(wrapper);
+      expect(setWorkflowChanges).not.toHaveBeenCalled();
+      expect(row(wrapper, "text_encoder").text()).toContain("Text encoder missing");
+      wrapper.unmount();
+    }
+  });
+
+  it("drops the automatic pick when its file's download lands, not the owner's", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missing({ file: "t5/t5xxl_fp8.safetensors", folder: "text_encoders" }),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        text_encoder: [
+          { id: 4, filename: "t5xxl_fp16.safetensors" },
+          { id: 5, filename: "t5-xxl_fp8.safetensors", likely: true },
+        ],
+      }),
+    );
+    const tasks = useTasksStore();
+    const land = async (wrapper) => {
+      tasks.modelDownloads = [
+        { id: "d1", file: "t5xxl_fp8.safetensors", status: "done" },
+      ];
+      tasks.downloadsLanded += 1;
+      await settle(wrapper);
+    };
+
+    // The tab's own pick goes: the workflow loads the file it asked for.
+    let { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+    expect(setWorkflowChanges).toHaveBeenCalledTimes(1);
+    await land(wrapper);
+    expect(setWorkflowChanges).toHaveBeenCalledTimes(2);
+    expect(setWorkflowChanges.mock.calls[1][1].models ?? []).toEqual([]);
+    wrapper.unmount();
+
+    // The owner's own pick stays.
+    waitingOnServer = null;
+    ({ wrapper } = await mountWith([KEY], [withSupport]));
+    await settle(wrapper);
+    await row(wrapper, "text_encoder")
+      .find('[data-testid="wftab-pick-text_encoder"] select')
+      .setValue("t5xxl_fp16.safetensors");
+    await settle(wrapper);
+    const calls = setWorkflowChanges.mock.calls.length;
+    expect(waitingOnServer.models[0].filename).toBe("t5xxl_fp16.safetensors");
+    await land(wrapper);
+    expect(setWorkflowChanges).toHaveBeenCalledTimes(calls);
+    expect(waitingOnServer.models[0].filename).toBe("t5xxl_fp16.safetensors");
+    wrapper.unmount();
+  });
+
   it("files the missing file's misfiled shelf copy and picks it, in one choice", async () => {
     // #1962 after #1966: the copy is on the shelf as Unclassified, so nothing
     // offers it until it is filed as a text encoder.

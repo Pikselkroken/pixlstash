@@ -4607,13 +4607,30 @@ watch(
   (key) => checkInstalled(key),
   { immediate: true },
 );
-// A model just downloaded may be one these rows say is missing.
+// A model just downloaded may be one these rows say is missing. A row still
+// holding the tab's automatic pick for it drops the pick, so the workflow
+// loads the file it asked for rather than keeping the stand-in (#2061).
 watch(
   () => tasksStore.downloadsLanded,
   () => {
-    if (detail.value && selectedKey.value) {
-      void checkInstalled(selectedKey.value, { quiet: true });
+    if (!detail.value || !selectedKey.value) return;
+    const landed = new Set(
+      tasksStore.modelDownloads
+        .filter((download) => download.status === "done")
+        .map((download) => download.file),
+    );
+    const stale = modelRows.value.filter(
+      (row) => row.fix && landed.has(fileName(row.missing)),
+    );
+    if (stale.length && canEdit.value) {
+      edit((set) =>
+        stale.reduce(
+          (next, row) => withModel(next, row.address, "", row.file),
+          set,
+        ),
+      );
     }
+    void checkInstalled(selectedKey.value, { quiet: true });
   },
 );
 
@@ -4621,7 +4638,9 @@ watch(
  * Pick the shelf's likely match for each missing file (`likely`: the same
  * file under another name), as unsaved changes the owner saves or takes back.
  * Once per selection, when the offers are in and the changes can be edited:
- * a match taken back stays taken back until the card is selected again.
+ * a match taken back stays taken back until the card is selected again. Not
+ * for a file that can be downloaded or is downloading: the download is the
+ * owner's fix, and a renamed copy only a guess (#2061).
  */
 let prefilled = null;
 watch(
@@ -4632,7 +4651,14 @@ watch(
     if (!Object.keys(replacementsByFile.value).length) return;
     prefilled = key;
     const picks = modelRows.value
-      .filter((row) => row.settable && row.missing && !row.pick)
+      .filter(
+        (row) =>
+          row.settable &&
+          row.missing &&
+          !row.pick &&
+          !downloadableFiles.value.has(row.missing) &&
+          !tasksStore.runningDownloadFiles.has(fileName(row.missing)),
+      )
       .map((row) => [
         row,
         replacementsByFile.value[`${row.kind}:${row.file}`]?.replacements?.find(
