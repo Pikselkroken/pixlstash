@@ -2666,7 +2666,19 @@ can no longer see.
     measure it. **A missing file is a row
     that needs a pick**: its warning and the file's name stay above the field
     until one is made, and the picker's first option, the file itself, reads
-    `<name> (missing)` so it is never taken for a pick. Where the offer marks one `likely` (the missing file
+    `<name> (missing)` so it is never taken for a pick. **Where the candidates
+    carry a `verdict`** (a missing checkpoint is asked `grouped=true`, so every
+    one its loader can load comes back; a VAE or text encoder has one from
+    `via`) the picker is `AppSelect`'s listbox instead, filed by
+    `verdictOptions` under *Likely to work*, *Might work*, *Not known* and
+    *Unlikely to work*, each heading a status-hued mark and a note, each row its
+    base model as a chip (`base not read` where none was) and the *Unlikely*
+    names in secondary ink. The missing file is then no option: the field reads
+    `<name> (missing)` as a placeholder and the list opens on a *Replacing
+    `<name>` · `<base model>`* caption, which says so when nothing on the shelf
+    has that base model. A line above the field counts the likely ones; once
+    picked, the group's mark stays beside the value and a line under the field
+    says the verdict in words (`verdictLine`). Where the offer marks one `likely` (the missing file
     under another name on the shelf), the tab makes that pick itself, once per
     selection, as an unsaved change like any other. Such a row says so: *Fixed*
     for *Edited*, `Corrected: <saved>` for `Saved:`, behind a focusable

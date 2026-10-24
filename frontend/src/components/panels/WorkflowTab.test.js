@@ -1392,6 +1392,7 @@ describe("a checkpoint that will not load", () => {
       replacing: "SDXL/realvisXL_v5_fp8.safetensors",
       slotKind: "checkpoint",
       cached: true,
+      grouped: true,
     });
     expect(textOf(wrapper)).toContain("Checkpoint missing");
     const picker = wrapper.find('[data-testid="wftab-pick-checkpoint"] select');
@@ -1415,6 +1416,97 @@ describe("a checkpoint that will not load", () => {
     expect(textOf(wrapper)).not.toContain("Checkpoint missing");
     expect(wrapper.find('[data-testid="wftab-saved"]').text()).toContain(
       "Saved: realvisXL_v5_fp8",
+    );
+  });
+
+  it("files a missing checkpoint's candidates under how likely each is to work", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    const candidates = [
+      { id: 8, filename: "flux1-dev.safetensors", base_model: "FLUX.1 dev", verdict: "unlikely" },
+      { id: 9, filename: "merge.safetensors", base_model: null, verdict: "unknown" },
+      { id: 7, filename: "realvisXL_v5_bf16.safetensors", display_name: "RealVis 5", base_model: "SDXL 1.0", verdict: "likely", loader: "PixlStashCheckpointLoader" },
+      { id: 6, filename: "pony.safetensors", base_model: "Pony Diffusion V6 XL", verdict: "maybe" },
+    ];
+    readModelSwap.mockReset().mockImplementation((_key, { slotKind } = {}) =>
+      Promise.resolve({
+        replacements: slotKind === "checkpoint" ? candidates : [],
+        replacements_reason: null,
+        replacements_narrowed: slotKind === "checkpoint" ? true : null,
+        replacing_base_model: slotKind === "checkpoint" ? "SDXL 1.0" : null,
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+
+    expect(wrapper.find('[data-testid="wftab-missing-base"]').text()).toContain(
+      "It is a SDXL 1.0 checkpoint, and so is 1 on your shelf.",
+    );
+    const field = wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="combobox"]');
+    // The missing file is what the field reads, never an option.
+    expect(field.text()).toContain("realvisXL_v5_fp8 (missing)");
+    // The picker stands in for the saved value's text, never beside it.
+    expect(wrapper.find('[data-testid="wftab-row-checkpoint"] .wftab-value').exists()).toBe(false);
+    await field.trigger("click");
+    const list = wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="listbox"]');
+    expect(list.find('[data-testid="wftab-replacing"]').text()).toBe(
+      "Replacing realvisXL_v5_fp8 · SDXL 1.0",
+    );
+    expect(list.find('[data-testid="wftab-none-likely"]').exists()).toBe(false);
+    const headings = list.findAll(".app-select__group .section-label").map((h) => h.text());
+    expect(headings).toEqual(["Likely to work", "Might work", "Not known", "Unlikely to work"]);
+    const options = list.findAll('[role="option"]');
+    expect(options.map((o) => o.attributes("aria-label"))).toEqual([
+      "RealVis 5, SDXL 1.0, PixlStash loader (This loader cannot load it, so a run loads it through PixlStash's.)",
+      "pony, Pony Diffusion V6 XL",
+      "merge, base not read",
+      "flux1-dev, FLUX.1 dev",
+    ]);
+    expect(options.some((o) => o.text().includes("missing"))).toBe(false);
+    expect(options[3].classes()).toContain("app-select__option--quiet");
+
+    // A poor pick is allowed, and says what it is.
+    await options[3].trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowChanges.mock.calls.at(-1)[1].models).toEqual([
+      { address: "core:n1/ckpt_name/ckpt_name", filename: "flux1-dev.safetensors" },
+    ]);
+    expect(wrapper.find('[data-testid="wftab-verdict"]').text()).toBe(
+      "FLUX.1 dev, not SDXL 1.0: LoRAs made for SDXL 1.0 will not load on it.",
+    );
+    expect(
+      wrapper.find('[data-testid="wftab-pick-checkpoint"] .app-select__mark').classes(),
+    ).toContain("app-select__tone--error");
+  });
+
+  it("says at the top of the list when nothing on the shelf is the missing one's base model", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap.mockReset().mockImplementation((_key, { slotKind } = {}) =>
+      Promise.resolve({
+        replacements:
+          slotKind === "checkpoint"
+            ? [{ id: 8, filename: "flux1-dev.safetensors", base_model: "FLUX.1 dev", verdict: "unlikely" }]
+            : [],
+        replacements_reason: null,
+        replacements_narrowed: slotKind === "checkpoint" ? false : null,
+        replacing_base_model: slotKind === "checkpoint" ? "SDXL 1.0" : null,
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-missing-base"]').text()).toContain(
+      "and nothing on your shelf is.",
+    );
+    // The headings say it; the "every one is listed" mark is not needed.
+    expect(wrapper.find('[data-testid="wftab-replace-unmatched"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="combobox"]').trigger("click");
+    expect(wrapper.find('[data-testid="wftab-none-likely"]').text()).toBe(
+      "Nothing on your shelf is SDXL 1.0.",
     );
   });
 
@@ -2104,6 +2196,54 @@ describe("a VAE or text encoder row (#1596, #1850)", () => {
     expect(
       row(wrapper, "vae").find('[data-testid="wftab-missing-file"]').text(),
     ).toBe("sdxl_vae_fp8 is not in ComfyUI.");
+  });
+
+  it("files a missing VAE's candidates by their evidence, with no base model to name", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missing({ file: "SDXL/sdxl_vae_fp8.safetensors", folder: "vae" }),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        vae: [
+          { id: 4, filename: "fits.safetensors", via: "declared", verdict: "unknown" },
+          { id: 3, filename: "sdxl_vae_bf16.safetensors", via: "checkpoint", verdict: "likely" },
+        ],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+    // A checkpoint's grouped read only: a VAE's verdicts come from `via`.
+    expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+      replacing: "SDXL/sdxl_vae_fp8.safetensors",
+      slotKind: "vae",
+      cached: true,
+    });
+    const field = row(wrapper, "vae").find('[role="combobox"]');
+    expect(field.text()).toContain("sdxl_vae_fp8 (missing)");
+    await field.trigger("click");
+    const list = row(wrapper, "vae").find('[role="listbox"]');
+    expect(list.find('[data-testid="wftab-replacing"]').text()).toBe(
+      "Replacing sdxl_vae_fp8",
+    );
+    expect(list.find('[data-testid="wftab-none-likely"]').exists()).toBe(false);
+    expect(
+      list.findAll(".app-select__group").map((h) => h.text().replace(/\s+/g, " ")),
+    ).toEqual([
+      "Likely to work, goes with this workflow",
+      "Not known, nothing has run with it",
+    ]);
+    expect(list.findAll('[role="option"]').map((o) => o.attributes("aria-label"))).toEqual([
+      "sdxl_vae_bf16",
+      "fits, untested (Only its file layout fits; nothing has run with it.)",
+    ]);
+    // The caption is the field's description, not a child of the listbox's.
+    expect(field.attributes("aria-describedby")).toBe(
+      list.find(".app-select__head").attributes("id"),
+    );
+    expect(row(wrapper, "vae").find('[data-testid="wftab-missing-base"]').exists()).toBe(
+      false,
+    );
   });
 
   it("still reads the pickers when ComfyUI cannot be asked what is missing", async () => {
