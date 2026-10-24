@@ -790,8 +790,9 @@
                 the selection
               </li>
               <li>
-                Two inpaint workflows come with PixlStash, Qwen Image Edit 2511
-                and FLUX.2 Klein 9B, and your own inpaint workflows work too
+                Three inpaint workflows come with PixlStash, Qwen Image 2.1, Qwen
+                Image Edit 2511 and FLUX.2 Klein 9B, and your own inpaint
+                workflows work too
               </li>
               <li>
                 A <strong>Templates</strong> tab: every ComfyUI template, what
@@ -841,9 +842,10 @@
               what changed. You can keep browsing while it runs.
             </p>
             <p>
-              Two inpaint workflows come with PixlStash:
+              Three inpaint workflows come with PixlStash:
+              <strong>Qwen Image 2.1</strong>,
               <strong>Qwen Image Edit 2511</strong> and
-              <strong>FLUX.2 Klein 9B</strong>. Both cut the selection out with
+              <strong>FLUX.2 Klein 9B</strong>. Each cuts the selection out with
               some context around it, edit it at full resolution and stitch it
               back into the untouched picture. If their models are not on your
               shelf yet, the Edit tab offers to download them.
@@ -869,6 +871,32 @@
               same selection runs through a MOSS-Image inpaint workflow instead.
               With several pictures selected in the grid, <strong>Edit…</strong>
               applies one edit to all of them.
+            </p>
+          </div>
+        </article>
+      </section>
+
+      <section class="section-grid">
+        <article class="update-card update-card--video">
+          <video
+            class="zoomable-video"
+            src="assets/InpaintBoth.mp4"
+            autoplay
+            loop
+            muted
+            playsinline
+            preload="metadata"
+          ></video>
+          <div class="update-card-body">
+            <h2>One edit after another</h2>
+            <p>
+              Drag a rectangle over the gnome's wooden rod and write "the wooden
+              rod has an axe head so that it is a proper axe". Only the rod
+              changes; the picture around it, down to the grass, is the
+              original's. Then circle another gnome's mouth and ask for blue
+              lipstick. Each edit is a new picture in the original's stack, so
+              the next one can start while the last is still running, and the
+              before/after slider shows exactly what each one changed.
             </p>
           </div>
         </article>
@@ -1033,8 +1061,8 @@
             Opening a library with 1.13 updates its database, and workflow sets
             you already have pick up the models their checkpoint's pictures
             used, marked New. Update the ComfyUI-PixlStash nodes from Settings ›
-            ComfyUI as well. The two inpaint workflows that come with PixlStash
-            also need the ComfyUI-Inpaint-CropAndStitch nodes in your ComfyUI.
+            ComfyUI as well. The inpaint workflows that come with PixlStash also
+            need the ComfyUI-Inpaint-CropAndStitch nodes in your ComfyUI.
             Back up the library folder first by copying it somewhere safe while
             PixlStash is stopped. See the
             <a href="upgrade.html">upgrade guide</a> for the steps for your
