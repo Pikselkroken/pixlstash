@@ -376,6 +376,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
 # templated owner-class GET that no prefix covers.
 READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/adapters/",
+    # Whether the owner's ComfyUI offers a known node pack (#2054): it makes
+    # this server read the owner's ComfyUI.
+    "/api/v1/comfyui/node-packs/",
     "/api/v1/dedup/",
     "/api/v1/model-folders/",
     "/api/v1/model-icons/",

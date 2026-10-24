@@ -136,14 +136,18 @@ def _plausible_custom_nodes(folder: Path) -> bool:
     return source is None or not source.resolve().is_relative_to(folder)
 
 
-def _restart_comfyui(pinned_url: str) -> Optional[str]:
+def restart_comfyui(pinned_url: str) -> Optional[str]:
     """Ask ComfyUI-Manager to restart ComfyUI; ``None`` on success, else why not.
 
-    Manager 4 serves ``POST /v2/manager/reboot`` (refusing form posts, so the
-    body is JSON); older Managers ``GET /manager/reboot``. ComfyUI itself has no
-    restart route.
+    Manager 4 serves ``POST /v2/manager/reboot`` and Manager 3.40 and later
+    ``POST /manager/reboot`` (both refusing form posts, so the body is JSON);
+    older Managers ``GET /manager/reboot``. ComfyUI itself has no restart route.
     """
-    attempts = (("POST", "v2/manager/reboot"), ("GET", "manager/reboot"))
+    attempts = (
+        ("POST", "v2/manager/reboot"),
+        ("POST", "manager/reboot"),
+        ("GET", "manager/reboot"),
+    )
     last = "ComfyUI-Manager is not installed"
     for method, path in attempts:
         try:
@@ -263,7 +267,7 @@ def install(comfyui_url: Optional[str]) -> dict:
         replaced or "nothing",
     )
 
-    problem = _restart_comfyui(pinned)
+    problem = restart_comfyui(pinned)
     if problem:
         logger.info("ComfyUI was not restarted for the new nodes: %s", problem)
     return {
