@@ -4,10 +4,10 @@ Every run PixlStash submits is measured (``comfyui_tenant.PeakSampler``) and
 its peak written here with how it ended and the size of the image it worked
 on (``run_pixels``). A run's **need** is the largest of the newest five peaks
 measured at about its size (within ``SIZE_BAND``), each scaled up to it, times
-``COMFYUI_PEAK_MARGIN``: one run on a very large picture does not set what a
-small one waits for. With no such peak the run is unmeasured, and runs with the
-other heavy tenants kept off the card (D2). ``forget_peaks`` is the owner's
-reset.
+``COMFYUI_PEAK_MARGIN`` where the card had room for it (``_need``): one run on
+a very large picture does not set what a small one waits for. With no such
+peak the run is unmeasured, and runs with the other heavy tenants kept off
+the card (D2). ``forget_peaks`` is the owner's reset.
 
 A workflow can also run **alone** (``workflow_vram_policy``): set by the owner,
 or once its newest ``OOM_STREAK`` runs all ran out of memory when the owner's
@@ -24,6 +24,7 @@ import json
 from datetime import datetime, timezone
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources.arbiter import safety_margin_mb
 
 logger = get_logger(__name__)
 
@@ -223,21 +224,31 @@ def _need_rows(rows: list, model_set: str | None, pixels: int | None = None) -> 
 
 
 def _need(rows: list, pixels: int | None) -> int | None:
-    """The need from *rows*: each peak scaled up to *pixels*, never down, and
-    never past the card it was measured on, which no run could be granted."""
+    """The need from *rows*: the largest peak, each scaled up to *pixels* and
+    never down, with ``COMFYUI_PEAK_MARGIN`` while the card has room for it.
+
+    The margin never lifts a need past the card's *ceiling*, its total less
+    the arbiter's safety margin (what an otherwise empty card grants), divided
+    by the margin: a peak that high is taken to have filled the card, since
+    ComfyUI keeps models resident while there is room, so it is what the run
+    completed in and asks for no more (#2081). Nor does a need pass the
+    ceiling itself, which leaves it waiting for ever.
+    """
     if not rows:
         return None
-    return max(
-        min(
-            int(
-                row["peak_mb"]
-                * max(1.0, pixels / row["pixels"] if pixels else 1.0)
-                * COMFYUI_PEAK_MARGIN
-            ),
-            max(row["device_total_mb"], row["peak_mb"]),
-        )
-        for row in rows
-    )
+    needs = []
+    for row in rows:
+        peak = row["peak_mb"] * max(1.0, pixels / row["pixels"] if pixels else 1.0)
+        ceiling = row["device_total_mb"] - safety_margin_mb(row["device_total_mb"])
+        if ceiling <= 0:
+            # A card whose size was not read: nothing to cap by.
+            needs.append(int(peak * COMFYUI_PEAK_MARGIN))
+            continue
+        # ponytail: "filled the card" is read off the card's size, not the
+        # room the run actually had; record that per run if it misjudges.
+        headroom = min(peak * COMFYUI_PEAK_MARGIN, ceiling / COMFYUI_PEAK_MARGIN)
+        needs.append(int(min(max(peak, headroom), ceiling)))
+    return max(needs)
 
 
 def need_mb(

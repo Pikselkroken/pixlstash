@@ -78,7 +78,13 @@ from pixlstash.db_models.saved_recipe import SavedRecipe
 from pixlstash.event_types import EventType
 from pixlstash.resources import arbiter as arbiter_module
 from pixlstash.resources import comfyui_tenant
-from pixlstash.resources.arbiter import LeaseKind, LeaseState, ResourceArbiter, Tenant
+from pixlstash.resources.arbiter import (
+    LeaseKind,
+    LeaseState,
+    ResourceArbiter,
+    Tenant,
+    safety_margin_mb,
+)
 from pixlstash.resources.ledger import DeviceReading
 from pixlstash.hub.workflow_card_reads import (
     AUTO_STACK_PREFIX,
@@ -14293,7 +14299,8 @@ def test_a_run_takes_its_need_from_runs_of_about_its_size(held):
     try:
         margin = vram_history.COMFYUI_PEAK_MARGIN
         assert vram_history.need_mb(hub, RUN_WF, "x", small) == int(8000 * margin)
-        assert vram_history.need_mb(hub, RUN_WF, "x", large) == int(22000 * margin)
+        # 22000 is past ceiling / margin on a 24 GB card: no margin.
+        assert vram_history.need_mb(hub, RUN_WF, "x", large) == 22000
         # Within the band, a larger run is scaled up to its size, never down.
         assert vram_history.need_mb(hub, RUN_WF, "x", 1_200_000) == int(
             8000 * 1.2 * margin
@@ -14301,9 +14308,43 @@ def test_a_run_takes_its_need_from_runs_of_about_its_size(held):
         assert vram_history.need_mb(hub, RUN_WF, "x", 800_000) == int(8000 * margin)
         # Between the two: never measured there, so measured by this run.
         assert vram_history.need_mb(hub, RUN_WF, "x", 2000 * 2000) is None
-        # A run whose size cannot be read takes every peak, as before, but
-        # never asks for more than the card the peak was measured on.
-        assert vram_history.need_mb(hub, RUN_WF, "x") == 24576
+        # A run whose size cannot be read takes every peak, as before. 23000
+        # is past ceiling / margin, so it filled the card and is what the run
+        # completed in.
+        assert vram_history.need_mb(hub, RUN_WF, "x") == 23000
+    finally:
+        _forget_run_wf_peaks(hub)
+
+
+def test_a_peak_that_filled_the_card_asks_for_what_the_card_can_grant(held):
+    """#2081: the margin never lifts a need past ceiling / margin, a need
+    never passes the ceiling, and a larger peak never needs less."""
+    hub = held.runnable.server.hub
+    total = 24576
+    ceiling = total - safety_margin_mb(total)
+    margin = vram_history.COMFYUI_PEAK_MARGIN
+
+    def need_of(peak, device_total=total):
+        rows = [{"peak_mb": peak, "pixels": None, "device_total_mb": device_total}]
+        return vram_history._need(rows, None)
+
+    # Room for the margin: it is added.
+    assert need_of(18000) == int(18000 * margin)
+    # Near the ceiling the headroom stops at ceiling / margin ...
+    assert need_of(20000) == int(ceiling / margin)
+    # ... and a peak above that is the need itself, without margin ...
+    assert need_of(22000) == 22000
+    # ... up to the ceiling, never past it.
+    assert need_of(total - 100) == ceiling
+    needs = [need_of(peak) for peak in range(15000, total + 1, 50)]
+    assert needs == sorted(needs), "a larger peak asked for less"
+    # A card whose size was not read caps nothing, and never goes negative.
+    assert need_of(5000, device_total=0) == int(5000 * margin)
+    # Through the hub and onto the card.
+    _insert_peaks(hub, [(total - 100, None, "2026-10-01")])
+    try:
+        assert vram_history.need_mb(hub, RUN_WF, "x") == ceiling
+        assert vram_history.card_vram(hub, [RUN_WF])[RUN_WF]["need_mb"] == ceiling
     finally:
         _forget_run_wf_peaks(hub)
 
