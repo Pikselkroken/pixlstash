@@ -99,6 +99,15 @@
         border: 1px solid var(--border);
       }
 
+      .shot video {
+        width: 100%;
+        height: auto;
+        border-radius: 14px;
+        display: block;
+        margin-bottom: 14px;
+        border: 1px solid var(--border);
+      }
+
       .shot-image-btn {
         display: block;
         width: 100%;
@@ -441,8 +450,8 @@
             <h3>Inpaint in the picture viewer</h3>
             <p>
               Mark an area with the Edit tab's paint tools and an inpaint
-              workflow redraws only that. Two come with PixlStash, Qwen Image
-              Edit 2511 and FLUX.2 Klein 9B, or use your own.
+              workflow redraws only that. Three come with PixlStash, Qwen Image
+              2.1, Qwen Image Edit 2511 and FLUX.2 Klein 9B, or use your own.
             </p>
           </div>
           <div class="feature-card">
@@ -465,6 +474,53 @@
         <p style="margin-top: 20px">
           <a href="whatsnew.html">See it all in What's New →</a>
         </p>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Inpainting</h2>
+          <p class="section-subtitle">
+            Mark part of a picture in the Edit tab, say what goes there, and an
+            inpaint workflow redraws only that part. Three come with PixlStash,
+            Qwen Image 2.1, Qwen Image Edit 2511 and FLUX.2 Klein 9B, and your own inpaint
+            workflows show up in the same list.
+          </p>
+        </div>
+        <div class="shot-grid">
+          <div class="shot">
+            <div class="shot-label"><h4>Paint a selection</h4></div>
+            <video
+             
+              src="assets/Inpainting.mp4"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <p>
+              Rectangle, ellipse, lasso, brush, eraser and colour wand, then
+              grow, feather or fill the holes. A before/after slider shows
+              what changed.
+            </p>
+          </div>
+          <div class="shot">
+            <div class="shot-label"><h4>One edit after another</h4></div>
+            <video
+              src="assets/InpaintBoth.mp4"
+              autoplay
+              loop
+              muted
+              playsinline
+              preload="metadata"
+            ></video>
+            <p>
+              An axe head for one gnome, blue lipstick for another. Each edit
+              is a new picture in the original's stack, so the next one can
+              start while the last is still running.
+            </p>
+          </div>
+        </div>
       </section>
 
       <section class="section">
