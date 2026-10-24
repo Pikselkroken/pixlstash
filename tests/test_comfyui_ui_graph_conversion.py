@@ -1645,3 +1645,94 @@ class TestSeedControlByName:
         prompt, problems = convert_ui_graph_to_api(graph, SEED_OBJECT_INFO)
         assert problems == []
         assert prompt["1"]["inputs"] == {"noise_seed": 7, "steps": 20}
+
+
+# ---------------------------------------------------------------------------
+# Widgets the editor adds that `/object_info` does not declare
+# ---------------------------------------------------------------------------
+
+EDITOR_WIDGET_OBJECT_INFO = {
+    # The Browse button the pack's JS appends saves a `null` slot.
+    "PixlStashPictureLoader": {
+        "input": {"required": {"picture_ids": ["STRING", {}]}},
+        "input_order": {"required": ["picture_ids"]},
+    },
+    # The text a run sends back is drawn as a widget, and older frontends
+    # saved it.
+    "GetImageSize": {
+        "input": {"required": {"image": ["IMAGE", {}]}},
+        "input_order": {"required": ["image"]},
+    },
+    # The player, then the upload button: both after the declared picker.
+    "LoadAudio": {
+        "input": {"required": {"audio": [["a.mp3"], {"audio_upload": True}]}},
+        "input_order": {"required": ["audio"]},
+    },
+    # The upload button goes after EVERY declared widget, not after its
+    # picker: the editor adds it outside `input_order`.
+    "LoadImageMask": {
+        "input": {
+            "required": {
+                "image": [["a.png"], {"image_upload": True}],
+                "channel": [["alpha", "red", "image"], {}],
+            }
+        },
+        "input_order": {"required": ["image", "channel"]},
+    },
+}
+
+
+class TestWidgetsTheEditorAdds:
+    def test_a_trailing_button_slot_is_consumed(self):
+        graph = _graph([_node(1, "PixlStashPictureLoader", widgets=["7", None])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"picture_ids": "7"}
+
+    def test_a_file_without_the_button_slot_still_converts(self):
+        graph = _graph([_node(1, "PixlStashPictureLoader", widgets=["7"])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"picture_ids": "7"}
+
+    def test_a_button_slot_holding_a_value_is_refused(self):
+        """A STRING sitting where the button's `null` belongs: the layout is
+        not the one in the table, so the node is not read through it."""
+        graph = _graph(
+            [_node(1, "PixlStashPictureLoader", widgets=["7", "library"])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("keeps a widget of its own" in p for p in problems)
+
+    def test_one_value_past_the_table_is_still_refused(self):
+        graph = _graph(
+            [_node(1, "PixlStashPictureLoader", widgets=["7", None, None])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("carries 3 widget values" in p for p in problems)
+
+    def test_a_display_slot_takes_any_value_and_sends_none(self):
+        graph = _graph(
+            [_node(1, "GetImageSize", widgets=["width: 64, height: 64"])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {}
+
+    def test_the_audio_player_and_upload_button_are_consumed(self):
+        graph = _graph([_node(1, "LoadAudio", widgets=["a.mp3", None, None])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"audio": "a.mp3"}
+
+    def test_the_upload_button_comes_after_every_declared_widget(self):
+        """Read as "after its picker", `channel` would get the button's
+        "image" and the run would mask by the wrong channel."""
+        graph = _graph(
+            [_node(1, "LoadImageMask", widgets=["a.png", "red", "image"])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"image": "a.png", "channel": "red"}

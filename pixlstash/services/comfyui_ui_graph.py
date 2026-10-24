@@ -49,21 +49,105 @@ logger = logging.getLogger(__name__)
 # not a string is a combo.
 _WIDGET_TYPES = frozenset({"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"})
 
-# Options that make the editor draw a SECOND widget right after the one they
-# belong to: the seed's control-after-generate row, and the upload button on a
-# file picker. Each consumes a slot of `widgets_values` that no API input takes.
-_EXTRA_WIDGET_OPTIONS = (
-    "control_after_generate",
-    "image_upload",
-    "audio_upload",
-    "video_upload",
-    "file_upload",
-)
-
 # The INT inputs the editor gives a control widget by name, declared or not,
 # and the values that control can hold (frontend `scripts/widgets.ts`).
 _SEED_NAMES = ("seed", "noise_seed")
 _CONTROL_VALUES = frozenset({"fixed", "increment", "decrement", "randomize"})
+
+# The options that give a file picker the editor's upload button. **The button
+# is not drawn after its picker.** The editor adds an `upload` input to the
+# definition it builds, outside `input_order`, so the button comes after every
+# declared widget: for the first REQUIRED combo with one of these (frontend
+# `extensions/core/uploadImage.ts`, `isMediaUploadComboInput`), or a required
+# `audio` with `audio_upload` (`uploadAudio.ts`). One `upload` key, so one
+# button at most.
+_MEDIA_UPLOAD_OPTIONS = ("image_upload", "video_upload", "animated_image_upload")
+
+
+def _empty(value) -> bool:
+    """A button's slot, or a DOM widget's with no value of its own."""
+    return value is None
+
+
+def _anything(value) -> bool:
+    """A display's slot: a preview, a player, the text a run wrote."""
+    return True
+
+
+def _upload_value(value) -> bool:
+    """The upload button's slot: ``"image"`` for a picture, empty for audio."""
+    return value is None or isinstance(value, str)
+
+
+# Widgets the editor gives a class beyond what `/object_info` declares. An
+# extension adds each when the node is made, after the declared widgets, so
+# each takes a trailing slot of `widgets_values` that no API input reads, in
+# this order, before the upload button. Each slot is OPTIONAL - a file saved
+# before the widget existed, or since the editor stopped saving it, has fewer
+# values - and CHECKED: an `_empty` slot holding a value means the file is laid
+# out some other way, and the node is refused rather than shifted. A layout is
+# only as good as the version it was read from, which each group names.
+_EDITOR_WIDGETS = {
+    # ComfyUI frontend 1.55.18, `extensions/core/`. A text preview and its
+    # Markdown switch (`textPreviewWidgets.ts`); older frontends saved three.
+    "PreviewAny": (_anything, _anything, _anything),
+    "SaveText": (_anything, _anything, _anything),
+    # The audio player (`uploadAudio.ts`).
+    **dict.fromkeys(
+        (
+            "LoadAudio",
+            "SaveAudio",
+            "PreviewAudio",
+            "SaveAudioMP3",
+            "SaveAudioOpus",
+            "SaveAudioAdvanced",
+        ),
+        (_anything,),
+    ),
+    # The 3D preview (`saveMesh.ts`).
+    "SaveGLB": (_anything,),
+    # The text a run sends back (`useNodeProgressText.ts`), on the classes
+    # whose server code sends it (`send_progress_text` in ComfyUI 0.42).
+    **dict.fromkeys(
+        (
+            "GetImageSize",
+            "GetLatentSize",
+            "GetAudioLatentSize",
+            "GetMeshInfo",
+            "DecimateMesh",
+            "RemeshMesh",
+            "UnwrapMesh",
+            "GetSplatCount",
+            "StartLoop",
+            "LoopProgress",
+        ),
+        (_anything,),
+    ),
+    # KJNodes 1.4.0, `web/js/jsnodes.js`: the "Update inputs" button.
+    **dict.fromkeys(
+        (
+            "ConditioningMultiCombine",
+            "ImageBatchMulti",
+            "ImageAddMulti",
+            "CrossFadeImagesMulti",
+            "TransitionImagesMulti",
+            "ImageConcatMulti",
+            "MaskBatchMulti",
+            "JoinStringMulti",
+        ),
+        (_empty,),
+    ),
+    # ComfyUI-PixlStash 9aeb116, `web/js/combo_widgets.js`: the Browse
+    # buttons, and the shelf rows and pictures beside them.
+    "PixlStashPictureLoader": (_empty,),
+    "PixlStashAdapterLoader": (_empty, _empty),
+    "PixlStashMultiAdapterLoader": (_empty,),
+    "PixlStashVAELoader": (_empty,),
+    "PixlStashCLIPLoader": (_empty, _empty),
+    "PixlStashControlNetLoader": (_empty,),
+    "PixlStashUpscaleModelLoader": (_empty,),
+    "PixlStashCheckpointLoader": (_empty,),
+}
 
 # Editor furniture. These carry no class on the server and nothing a run needs,
 # so they are dropped rather than refused.
@@ -214,7 +298,21 @@ def _is_widget(type_field, options: dict) -> bool:
 
 
 def _extra_widget_slots(options: dict) -> int:
-    return sum(1 for option in _EXTRA_WIDGET_OPTIONS if options.get(option))
+    """The declared control widget the editor draws right after its input."""
+    return 1 if options.get("control_after_generate") else 0
+
+
+def _has_upload_button(declared: list) -> bool:
+    """Whether the editor adds its upload button to this class."""
+    for name, type_field, options, required in declared:
+        if not required:
+            continue
+        is_combo = isinstance(type_field, list) or type_field == "COMBO"
+        if is_combo and any(options.get(o) is True for o in _MEDIA_UPLOAD_OPTIONS):
+            return True
+        if name == "audio" and options.get("audio_upload") is True:
+            return True
+    return False
 
 
 def _control_by_name(name: str, type_field, options: dict) -> bool:
@@ -728,6 +826,7 @@ class _Converter:
         a rebuild from a disagreement is not the rebuild it claims to be.
         """
         declared = list(_declared_inputs(self.object_info[node_class]))
+        upload = _has_upload_button(declared)
         connected = self._connected_inputs(node)
         # The editor's own slot types, which is what ComfyUI hands a bypassed
         # node upstream when it picks the wire to splice.
@@ -872,6 +971,20 @@ class _Converter:
             if unknown or missing:
                 return None
             return inputs
+        trailing = list(_EDITOR_WIDGETS.get(node_class, ()))
+        if upload:
+            trailing.append(_upload_value)
+        for holds in trailing:
+            if consumed >= len(positional):
+                break
+            if not holds(positional[consumed]):
+                self.problems.append(
+                    f"{where} has {positional[consumed]!r} where the editor keeps "
+                    "a widget of its own, so its widget values do not line up "
+                    "with the node this ComfyUI has"
+                )
+                return None
+            consumed += 1
         if consumed < len(positional):
             # More values than this node has widgets: one was removed or
             # moved, and which one cannot be told.
