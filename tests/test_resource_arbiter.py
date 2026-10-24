@@ -272,6 +272,143 @@ def test_exclusive_blocks_light_while_granted_or_waiting():
     light.release()
 
 
+def test_a_slow_read_never_overwrites_a_newer_one():
+    """The arbiter thread's pass can read the card, stall, and store late.
+
+    Stored over a newer reading, the stale one makes the next request wait on
+    memory that was already freed (a CI flake of the test above).
+    """
+    arb, fake, _ = make(used_mb=23000, thread=False)
+    read_taken, go = threading.Event(), threading.Event()
+    devices = fake.devices
+
+    def stalled_devices(max_age_s=1.0):
+        reading = devices(max_age_s)
+        if threading.current_thread().name == "slow-pass":
+            read_taken.set()
+            go.wait(5)
+        return reading
+
+    fake.devices = stalled_devices
+    slow = threading.Thread(target=arb._refresh, name="slow-pass")
+    slow.start()
+    try:
+        assert read_taken.wait(5)
+        fake.used_mb = 0
+        arb._refresh()
+    finally:
+        go.set()
+        slow.join(5)
+    assert arb._devices[0].used_mb == 0
+
+
+def test_a_cached_read_never_outranks_a_fresh_one_started_before_it():
+    """A cached read can return a sample older than a fresh read in flight."""
+    arb, fake, _ = make(used_mb=23000, thread=False)
+    started, go = threading.Event(), threading.Event()
+    devices = fake.devices
+
+    def fresh_read_in_flight(max_age_s=1.0):
+        if threading.current_thread().name == "fresh-read":
+            started.set()
+            go.wait(5)  # the card is sampled after the cached read lands
+        return devices(max_age_s)
+
+    fake.devices = fresh_read_in_flight
+    fresh = threading.Thread(target=arb._refresh, name="fresh-read")
+    fresh.start()
+    try:
+        assert started.wait(5)
+        arb._refresh(cached=True)  # the ledger's cache: still 23 GB
+        assert arb._devices[0].used_mb == 23000
+        fake.used_mb = 0
+    finally:
+        go.set()
+        fresh.join(5)
+    assert arb._devices[0].used_mb == 0
+
+
+def test_a_stalled_ledger_read_still_stores_the_tenants_it_read_after():
+    """Tenants are read after the card: a read stalled on the card reads them last."""
+    arb, fake, _ = make(thread=False)
+    comfy = FakeComfy(usage=5000)
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    started, go = threading.Event(), threading.Event()
+    devices = fake.devices
+
+    def stalled_devices(max_age_s=1.0):
+        if threading.current_thread().name == "stalled-read":
+            started.set()
+            go.wait(5)
+        return devices(max_age_s)
+
+    fake.devices = stalled_devices
+    stalled = threading.Thread(target=arb._refresh, name="stalled-read")
+    stalled.start()
+    try:
+        assert started.wait(5)
+        arb._refresh(cached=True)
+        assert arb._probe_state[Tenant.COMFYUI]["usage"] == 5000
+        comfy.usage = 0
+    finally:
+        go.set()
+        stalled.join(5)
+    assert arb._probe_state[Tenant.COMFYUI]["usage"] == 0
+
+
+def test_a_cached_read_that_stalls_never_stores_over_a_fresh_one():
+    """The cached pass samples 23 GB, stalls, and the fresh 0 must survive it."""
+    arb, fake, _ = make(used_mb=23000, thread=False)
+    sampled, go = threading.Event(), threading.Event()
+    ram = arb._ram
+
+    def stalled_ram():
+        if threading.current_thread().name == "cached-read":
+            sampled.set()
+            go.wait(5)
+        return ram()
+
+    arb._ram = stalled_ram
+    cached = threading.Thread(
+        target=arb._refresh, kwargs={"cached": True}, name="cached-read"
+    )
+    cached.start()
+    try:
+        assert sampled.wait(5)
+        fake.used_mb = 0
+        arb._refresh()
+    finally:
+        go.set()
+        cached.join(5)
+    assert arb._devices[0].used_mb == 0
+
+
+def test_a_stalled_tenant_read_never_stores_over_a_newer_one():
+    """The stalled pass reads ComfyUI at 5000 MB, then a newer pass reads 0."""
+    arb, _fake, _ = make(thread=False)
+    sampled, go = threading.Event(), threading.Event()
+
+    class StallingComfy(FakeComfy):
+        def idle(self):  # the last thing a pass asks a tenant
+            if threading.current_thread().name == "stalled-read":
+                sampled.set()
+                go.wait(5)
+            return super().idle()
+
+    comfy = StallingComfy(usage=5000)
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    stalled = threading.Thread(target=arb._refresh, name="stalled-read")
+    stalled.start()
+    try:
+        assert sampled.wait(5)
+        comfy.usage = 0
+        arb._refresh()
+    finally:
+        go.set()
+        stalled.join(5)
+    assert arb._probe_state[Tenant.COMFYUI]["usage"] == 0
+
+
 def test_urgent_light_is_fit_checked_only():
     arb, _fake, _ = make(used_mb=23000)
     exclusive = arb.request(
