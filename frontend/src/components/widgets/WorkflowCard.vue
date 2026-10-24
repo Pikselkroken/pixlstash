@@ -75,12 +75,12 @@
         <v-icon size="12">mdi-star</v-icon>{{ card.rating.toFixed(1) }}
       </span>
       <span
-        v-if="card.vram"
+        v-if="card.vram && (card.vram.need_mb != null || card.vram.exclusive)"
         class="wf-card__badge wf-card__badge--need"
         data-testid="wf-card-need"
         aria-hidden="true"
       >
-        <v-icon size="12">mdi-memory</v-icon>{{ needLabel(card.vram.need_mb) }}
+        <v-icon size="12">mdi-memory</v-icon>{{ formatGb(card.vram.need_mb) }}
         <v-icon
           v-if="card.vram.exclusive"
           size="12"
@@ -100,12 +100,12 @@
         >No {{ outputNoun(card) }}s yet</span
       >
       <span
-        v-if="card.vram"
+        v-if="card.vram && (card.vram.need_mb != null || card.vram.exclusive)"
         class="wf-card__badge wf-card__badge--need"
         data-testid="wf-card-need"
         aria-hidden="true"
       >
-        <v-icon size="12">mdi-memory</v-icon>{{ needLabel(card.vram.need_mb) }}
+        <v-icon size="12">mdi-memory</v-icon>{{ formatGb(card.vram.need_mb) }}
         <v-icon
           v-if="card.vram.exclusive"
           size="12"
@@ -271,7 +271,7 @@ import { VIcon } from "vuetify/components";
 import { workflowCoverUrl } from "../../api/workflows";
 import { openWorkflowInComfyui } from "../../composables/useComfyuiOpen";
 import { quantBadge } from "../../utils/modelShelf";
-import { needLabel } from "../../utils/gpuMemory";
+import { formatGb } from "../../utils/gpuMemory";
 import {
   cardAccessibleName,
   baseModels,

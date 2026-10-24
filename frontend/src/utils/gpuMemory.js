@@ -27,17 +27,6 @@ export function formatGb(mb) {
 }
 
 /**
- * A workflow's need as the card and the Workflow tab say it: the figure, or
- * "Not measured" while no run has been measured yet (`need_mb` null).
- *
- * @param {number|null|undefined} needMb
- * @returns {string}
- */
-export function needLabel(needMb) {
-  return needMb == null ? "Not measured" : formatGb(needMb);
-}
-
-/**
  * A ComfyUI run id with the `comfyui-` prefix the plugin events carry taken
  * off, so an event's id and a POST's answer compare as equal. "" for none.
  *

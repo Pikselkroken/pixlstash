@@ -1519,7 +1519,7 @@ Load-bearing behaviours:
 
 #### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
 
-**GPU need pill.** The cover's free bottom-left corner carries `card.vram.need_mb` as the same scrim pill as the other three corners (a 12 px `mdi-memory` glyph and the figure), with a lock when the workflow runs alone and "Not measured" when it has no peak yet; an empty cover wears it too. The Workflow tab's *GPU memory* section draws the peaks (the five the need rests on solid, an out-of-memory run red), the need, the trend and the *Run alone on the GPU* switch (`PATCH /workflows/{id}` `exclusive`), saying when the backend turned it on after running out of memory.
+**GPU need pill.** The cover's free bottom-left corner carries `card.vram.need_mb` as the same scrim pill as the other three corners (a 12 px `mdi-memory` glyph and the figure), with a lock when the workflow runs alone; a workflow with no peak yet has no pill at all (only the lock, if it runs alone); an empty cover wears it too. The Workflow tab's *GPU memory* section draws the peaks (the five the need rests on solid, an out-of-memory run red), the need, the trend and the *Run alone on the GPU* switch (`PATCH /workflows/{id}` `exclusive`), saying when the backend turned it on after running out of memory.
 
 The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a, below). In this code a `workflow_recipe` / structural hash is a **variant**; a user's Recipe is a **saved recipe**.
 

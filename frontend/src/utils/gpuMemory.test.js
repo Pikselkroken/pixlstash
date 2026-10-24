@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   deviceVramBar,
   formatGb,
-  needLabel,
   normalizeRunId,
   peakBars,
   requestOnBar,
@@ -22,16 +21,16 @@ const CARD = {
   budget_mb: 8192,
 };
 
-describe("formatGb and needLabel", () => {
+describe("formatGb", () => {
   it("prints a figure in GB at one decimal", () => {
     expect(formatGb(9800)).toBe("9.6 GB");
     expect(formatGb(14950)).toBe("14.6 GB");
   });
 
-  it("says not measured for a need with no figure, and never 0 B", () => {
-    expect(needLabel(null)).toBe("Not measured");
-    expect(needLabel(undefined)).toBe("Not measured");
-    expect(needLabel(0)).toBe("0.0 GB");
+  it("has no figure for a need nobody measured, and never 0 B", () => {
+    expect(formatGb(null)).toBe("");
+    expect(formatGb(undefined)).toBe("");
+    expect(formatGb(0)).toBe("0.0 GB");
   });
 });
 
