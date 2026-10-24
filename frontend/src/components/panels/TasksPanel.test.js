@@ -192,6 +192,61 @@ describe("what the task manager shows", () => {
     expect(abortRun).toHaveBeenCalledTimes(1);
   });
 
+  // A row leaves with its run, and a focused Stop leaves with it: focus falls
+  // to <body>, out of the tab order. The panel has nowhere to put it, so it
+  // tells the host.
+  it("says so when the focused control leaves with its row", async () => {
+    const tasksStore = useTasksStore();
+    tasksStore.comfyuiRuns = [
+      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
+    ];
+    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
+    stop.focus();
+
+    tasksStore.comfyuiRuns = [];
+    // Chromium fires this as the button is removed; jsdom does not, so the
+    // test fires it, before the render that removes the row.
+    stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await flushPromises();
+    expect(stop.isConnected).toBe(false);
+    expect(wrapper.emitted("focus-escaped")).toHaveLength(1);
+  });
+
+  it("says nothing when focus moves on inside the panel", async () => {
+    const tasksStore = useTasksStore();
+    tasksStore.comfyuiRuns = [
+      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
+    ];
+    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+    wrapper.find('button[aria-label="Stop ComfyUI"]').element.focus();
+    wrapper.find('button[aria-label="Stop ComfyUI"]').element.blur();
+    await flushPromises();
+    expect(wrapper.emitted("focus-escaped")).toBeUndefined();
+  });
+
+  // The panel's own hand-off (a save's receipt line takes focus as its offer
+  // leaves) is not focus lost.
+  it("says nothing when the row left but focus already went somewhere", async () => {
+    const tasksStore = useTasksStore();
+    tasksStore.comfyuiRuns = [
+      { prompt_id: "p-1", label: "Night market", status: "running", percent: 40 },
+    ];
+    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    const stop = wrapper.find('button[aria-label="Stop ComfyUI"]').element;
+    stop.focus();
+
+    tasksStore.comfyuiRuns = [];
+    stop.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    elsewhere.focus();
+    await flushPromises();
+    expect(stop.isConnected).toBe(false);
+    expect(wrapper.emitted("focus-escaped")).toBeUndefined();
+    elsewhere.remove();
+  });
+
   it("shows a queued run as a row with no figure, and no pulse", () => {
     const tasksStore = useTasksStore();
     tasksStore.comfyuiRuns = [
@@ -304,8 +359,12 @@ describe("the offer to save what a run changed", () => {
     wrapper.findAll("button").find((b) => b.text().trim() === text);
   const refusal = (status, detail) => ({ response: { status, data: { detail } } });
 
-  async function mountPanel() {
-    const wrapper = mount(TasksPanel, { ...globalOpts, attachTo: document.body });
+  async function mountPanel(props = {}) {
+    const wrapper = mount(TasksPanel, {
+      ...globalOpts,
+      props,
+      attachTo: document.body,
+    });
     await flushPromises();
     return wrapper;
   }
@@ -387,6 +446,30 @@ describe("the offer to save what a run changed", () => {
     expect(button(wrapper, "Save as new…")).toBeTruthy();
     // The panel is not empty with an offer in it.
     expect(textOf(wrapper)).not.toContain("No active tasks");
+  });
+
+  // The lightbox's pane is dark in both themes (#2056). The rows take the dark
+  // inks from the root's class; the offer's buttons are AppButtons, which carry
+  // their own theme inks and have to be told.
+  it("takes the dark-surface inks in the lightbox, buttons included", async () => {
+    ranAndFinished();
+    const wrapper = await mountPanel({ lightbox: true });
+    expect(wrapper.classes()).toContain("tm--lightbox");
+    const verbs = offer(wrapper).findAll(".app-btn");
+    expect(verbs.length).toBe(2);
+    for (const verb of verbs) expect(verb.classes()).toContain("app-btn--on-dark");
+
+    await button(wrapper, "Save as new…").trigger("click");
+    const named = offer(wrapper).findAll(".app-btn");
+    expect(named.length).toBe(2);
+    for (const verb of named) expect(verb.classes()).toContain("app-btn--on-dark");
+  });
+
+  it("keeps the theme's inks in a rail", async () => {
+    ranAndFinished();
+    const wrapper = await mountPanel();
+    expect(wrapper.classes()).not.toContain("tm--lightbox");
+    expect(offer(wrapper).find(".app-btn--on-dark").exists()).toBe(false);
   });
 
   it("draws nothing the server does not hold, whatever this tab remembers", async () => {
