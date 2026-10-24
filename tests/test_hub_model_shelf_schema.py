@@ -1208,6 +1208,39 @@ class TestComponentRoleBackfill:
         assert [kinds[qwen], kinds[bundled]] == ["text_encoder", "checkpoint"]
         assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
 
+    def test_a_data_v23_hub_refiles_a_wan_layout_vae(self, hub, tmp_path):
+        # Data version 24: Wan's VAE layout, which the Qwen Image VAEs share,
+        # names its first convolutions `conv1`, which step 19 did not know,
+        # so one downloaded into a flat folder stayed `unknown`. One half of
+        # it, and a `checkpoint` the owner set, are left as they are.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 23")
+        folder_id = add_folder(hub, str(tmp_path))
+
+        def shelved(name, tensors, file_kind="unknown"):
+            header = {t: {"dtype": "BF16", "shape": [1]} for t in tensors}
+            blob = json.dumps(header).encode()
+            (tmp_path / name).write_bytes(struct.pack("<Q", len(blob)) + blob)
+            model_id = add_model(hub, file_kind=file_kind, sha256=name, kind=None)
+            add_file(hub, model_id, folder_id, name)
+            return model_id
+
+        wan = ["encoder.conv1.weight", "decoder.conv1.weight", "conv1.weight"]
+        vae = shelved("qwen_image_2.1_vae_bf16.safetensors", wan)
+        half = shelved("decoder_only.safetensors", ["decoder.conv1.weight"])
+        corrected = shelved("owner_says_checkpoint.safetensors", wan, "checkpoint")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        kinds = dict(hub.execute("SELECT id, file_kind FROM model").fetchall())
+        assert [kinds[vae], kinds[half], kinds[corrected]] == [
+            "vae",
+            "unknown",
+            "checkpoint",
+        ]
+        assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
+
     def test_a_fresh_hub_records_the_backfill_as_done(self, hub):
         apply_migrations(hub)
 

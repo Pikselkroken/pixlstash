@@ -120,10 +120,15 @@ _CONTROLNET_RE = re.compile(
 )
 
 # The first convolution of an autoencoder's two halves, at the top level of the
-# file: SD, SDXL, FLUX and SD3.5 VAEs carry them, and so does SeedVR2's 3D one.
-# Both, so a decoder-only or encoder-only file is not taken for a whole VAE. A
-# checkpoint bakes its VAE in under `first_stage_model.`, which never matches.
-_VAE_TENSORS = frozenset(("encoder.conv_in.weight", "decoder.conv_in.weight"))
+# file, one pair per layout: SD, SDXL, FLUX and SD3.5 VAEs (and SeedVR2's 3D
+# one) name it `conv_in`, Wan's video VAE and the Qwen Image ones built on it
+# `conv1`. Both halves, so a decoder-only or encoder-only file is not taken for
+# a whole VAE. A checkpoint bakes its VAE in under `first_stage_model.`, which
+# never matches.
+_VAE_LAYOUTS = (
+    frozenset(("encoder.conv_in.weight", "decoder.conv_in.weight")),
+    frozenset(("encoder.conv1.weight", "decoder.conv1.weight")),
+)
 
 # What a directory NAMES the files inside it, normalised by `_normalise_folder`.
 #
@@ -131,7 +136,7 @@ _VAE_TENSORS = frozenset(("encoder.conv_in.weight", "decoder.conv_in.weight"))
 # `models/clip`) and the launchers that front it mirror the layout, so the role
 # is sitting in the path of nearly every file on a real shelf. That is a better
 # signal than anything the header carries here: a text encoder, and a VAE whose
-# layout `_VAE_TENSORS` does not know, are ordinary tensor bundles with no
+# layout `_VAE_LAYOUTS` does not know, are ordinary tensor bundles with no
 # marker to find, and their parameter counts
 # straddle the checkpoint threshold from both sides.
 #
@@ -412,7 +417,8 @@ def has_controlnet_markers(tensor_names) -> bool:
 
 def has_vae_markers(tensor_names) -> bool:
     """Return whether *tensor_names* hold both halves of an autoencoder."""
-    return _VAE_TENSORS.issubset(tensor_names)
+    names = set(tensor_names)
+    return any(layout <= names for layout in _VAE_LAYOUTS)
 
 
 def count_parameters(header: dict) -> int:
@@ -640,8 +646,8 @@ def classify_model_file(
        downloaded there from clearing the checkpoint threshold.
     2. **The directory**, when it names a role. A text encoder of a layout
        :func:`has_text_encoder_markers` does not know (a T5 of another width) carries no
-       marker to find, nor does a VAE of a layout :data:`_VAE_TENSORS` does not
-       know (a Wan one), so the layout the user (or their launcher) already
+       marker to find, nor does a VAE of a layout :data:`_VAE_LAYOUTS` does not
+       know, so the layout the user (or their launcher) already
        maintains is the best evidence there is. It outranks the parameter count
        because the parameter count is *wrong* for both: they sit either side of
        a threshold that was only ever meant to separate adapters from base

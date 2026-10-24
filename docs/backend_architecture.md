@@ -10926,8 +10926,11 @@ answer:
   shelved there, and the `.pth` ones arrive with the next scan. A
   `.safetensors` VAE is told by its tensors the way a ControlNet is
   (`has_vae_markers`: a top-level `encoder.conv_in.weight` and
-  `decoder.conv_in.weight`), so one downloaded into a flat folder is a VAE
-  rather than `unknown`; hub data version 19 re-files those. A `.safetensors`
+  `decoder.conv_in.weight`, or `encoder.conv1.weight` and
+  `decoder.conv1.weight` in Wan's layout, which the Qwen Image VAEs share), so
+  one downloaded into a flat folder is a VAE rather than `unknown`; hub data
+  version 19 re-files those, and data version 24 does it again for Wan's
+  layout. A `.safetensors`
   text encoder is told by its top-level token table (`has_text_encoder_markers`):
   CLIP-L/H/G or XXL T5/UMT5, by the rule `family_from_header` names it by, or
   a language model's `model.embed_tokens.weight` (Qwen 2.5-VL, Gemma, Llama,
