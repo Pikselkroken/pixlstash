@@ -24975,7 +24975,7 @@ def _card(owner, workflow_id):
 
 
 def test_the_template_list_reads_the_owners_comfyui(
-    workflow_env, comfyui_templates_served, monkeypatch
+    workflow_env, comfyui_templates_served
 ):
     """Built-ins, partner and pack templates, each with what it downloads.
 
@@ -24984,13 +24984,6 @@ def test_the_template_list_reads_the_owners_comfyui(
     template's graph is read at all.
     """
     hub = workflow_env.server.hub
-    # PixlStash's own list links every name, the shelf's file included: only
-    # the missing one may be offered for download.
-    monkeypatch.setattr(
-        comfyui_module,
-        "download_source",
-        lambda file: {"url": "https://example.com/model", "directory": "vae"},
-    )
     model_id = hub.fetchone(
         "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
     )[0]
@@ -25029,12 +25022,9 @@ def test_the_template_list_reads_the_owners_comfyui(
         1234,
     )
     assert example["thumbnail"] is True
-    assert {
-        (f["name"], f["directory"], f["present"], f["downloadable"])
-        for f in example["files"]
-    } == {
-        (_SHELF_FILENAME.upper(), "diffusion_models", True, False),
-        (_TEMPLATE_SUBGRAPH_VAE, "vae", False, True),
+    assert {(f["name"], f["directory"], f["present"]) for f in example["files"]} == {
+        (_SHELF_FILENAME.upper(), "diffusion_models", True),
+        (_TEMPLATE_SUBGRAPH_VAE, "vae", False),
     }
     assert listed["default/api_example"]["source"] == "partner"
     assert listed["default/api_example"]["files"] == []
@@ -25056,32 +25046,29 @@ def test_the_template_list_reads_the_owners_comfyui(
     assert pack["pack_loaded"] is True
 
 
-@pytest.mark.parametrize(
-    ("name", "linked", "expected"),
-    [
-        ("missing-linked.safetensors", True, True),
-        ("missing-unlinked.safetensors", False, False),
-        ("on-shelf.safetensors", True, False),
-    ],
-)
-def test_a_template_file_is_downloadable_only_missing_and_linked(
-    monkeypatch, name, linked, expected
+def test_a_template_file_is_downloadable_only_where_the_server_can_fetch_it(
+    workflow_env, comfyui_templates_served, monkeypatch
 ):
-    """What the card menu's Download missing models may send.
+    """`downloadable` is `POST /model-downloads`' own lookup, by the file's name.
 
-    Wrong if a file PixlStash has no link for is offered (the POST would 404),
-    or one already on the shelf is (it would 409).
+    Wrong if a file is offered for download from its template's `url` alone: a
+    pack's link is not one the server will fetch.
     """
     monkeypatch.setattr(
         comfyui_module,
         "download_source",
-        lambda file: (
-            {"url": "https://example.com/m", "directory": None} if linked else None
+        lambda name: (
+            {"url": "https://example.com/vae"}
+            if name == _TEMPLATE_SUBGRAPH_VAE
+            else None
         ),
     )
-    item = SimpleNamespace(name=name, directory="vae", url=None)
-    entry = comfyui_module._template_file(item, {"on-shelf.safetensors"})
-    assert entry["downloadable"] is expected
+    body = _templates(workflow_env.owner)
+    example = next(t for t in body["templates"] if t["key"] == "default/image_example")
+    assert {f["name"]: f["downloadable"] for f in example["files"]} == {
+        _SHELF_FILENAME.upper(): False,
+        _TEMPLATE_SUBGRAPH_VAE: True,
+    }
 
 
 def test_the_template_list_says_when_comfyui_does_not_answer(

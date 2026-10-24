@@ -7072,20 +7072,26 @@ unchanged by the tab's existence.
   template". Run is refused for it in the pill, the context menu and the
   Workflow tab, with the reason; *Open in ComfyUI* stays, since saving it there
   is what finishes it.
+- **A missing file** the server can fetch (`downloadable`) gets the run's own
+  `ModelDownloadButton` in the inspector's row, so the download lands in the
+  Tasks tab the same way before the template is added as after; any other
+  missing file links to where its template says to get it (`https:` only), as
+  does every one in a read-only session, which cannot download. The shelf's
+  New workflow set picker (`WorkflowTemplatePicker`) and a set's template offer
+  strip (`ModelSetSlotsPanel`, "Not on your shelf: …") do the same: their files
+  come from the committed list the download reads, so every `https:` file there
+  is fetchable by its name.
 - **The card menu** (right-click, the Menu key, Shift+F10; the file-manager
   rule: right-clicking an unselected card selects it alone) has everything the
-  pill does, Add and Clear selection, and *Download missing models*: each file
-  of the selection the server marks `downloadable`, once by name, through
-  `downloadModels` (`composables/useModelDownloads.js`, which the one-file
-  `ModelDownloadButton` uses too), less any already downloading. Refused with
-  the reason when there is none. A landed download (`downloadsLanded`) reads
-  the list again with `fetchTemplates({shelf: true})`, which does not make the
-  server ask ComfyUI, so the cards' shelf match catches up.
-  Mine's card menu and `⋯` carry the same row; there the view asks the run
-  pre-flight (cached) of each selected non-draft workflow, as the Workflow tab
-  does, and downloads what `downloadableInPreflight` reads off the answer.
-- **Not built:** a download button in the template inspector. A missing file's
-  row there links to where its template says to get it (`https:` only).
+  pill does, Add and Clear selection, and *Download missing models*, the
+  design's *Download the missing* all at once: each file of the selection that
+  is missing and `downloadable`, once by name and less any already
+  downloading, through `downloadModels` (`composables/useModelDownloads.js`,
+  which the one-file `ModelDownloadButton` uses too). Refused with the reason
+  when there is none, and in a read-only session. Mine's card menu and `⋯`
+  carry the same row; there the view asks the run pre-flight (cached) of each
+  selected non-draft workflow, as the Workflow tab does, and downloads what
+  `downloadableInPreflight` reads off the answer.
 
 ---
 

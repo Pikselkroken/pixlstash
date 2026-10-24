@@ -186,8 +186,10 @@
             ><strong>{{ offerLead }}</strong>
             <span class="mss__offernote">{{ offerNote }}</span></span
           >
-          <!-- A template's files the shelf lacks (#1999): where to get each,
-               https only, as the template picker links them. -->
+          <!-- A template's files the shelf lacks (#1999), downloaded in the
+               app as a run's missing model is: the committed template list
+               is the download's own source. A read-only session cannot
+               download, so it keeps the https link. -->
           <span
             v-if="set.offer.downloads?.length"
             class="mss__offernote"
@@ -195,8 +197,11 @@
             >Not on your shelf:
             <template v-for="(file, i) in set.offer.downloads" :key="file.sha256"
               >{{ i ? ", " : ""
-              }}<a
-                v-if="/^https:\/\//.test(file.url)"
+              }}<template v-if="/^https:\/\//.test(file.url) && !isReadOnly"
+                >{{ file.name
+                }}<ModelDownloadButton :file="file.name" @click.stop /></template
+              ><a
+                v-else-if="/^https:\/\//.test(file.url)"
                 class="mss__dl"
                 :href="file.url"
                 target="_blank"
@@ -456,6 +461,7 @@
 import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { isReadOnly } from "../../utils/apiClient";
 import { modelFileTitle, quantBadge } from "../../utils/modelShelf";
 import { memberVerdictOf, memberVerdictText } from "../../utils/setVerdicts";
 import {
@@ -470,6 +476,7 @@ import {
 } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
+import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import VerdictIcon from "../widgets/VerdictIcon.vue";

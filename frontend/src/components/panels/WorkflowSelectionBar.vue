@@ -215,6 +215,7 @@ import AppBarButton from "../widgets/AppBarButton.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useComfyuiOpen } from "../../composables/useComfyuiOpen";
+import { isReadOnly } from "../../utils/apiClient";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import {
   favouriteVerb,
@@ -638,8 +639,11 @@ const useSetTitle = computed(() =>
  * workflow lacks and PixlStash knows where to get. The view asks; the card
  * alone cannot name a missing file. A draft has no graph to ask about.
  */
-const downloadable = computed(() => cards.value.some((card) => !card.draft));
+const downloadable = computed(
+  () => !isReadOnly.value && cards.value.some((card) => !card.draft),
+);
 const downloadTitle = computed(() => {
+  if (isReadOnly.value) return "This session cannot download models";
   if (!downloadable.value) {
     return "A draft has no graph to check yet: open it in ComfyUI and save it";
   }

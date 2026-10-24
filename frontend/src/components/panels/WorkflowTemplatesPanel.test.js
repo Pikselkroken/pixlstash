@@ -8,6 +8,7 @@ import { setActivePinia, createPinia } from "pinia";
 import WorkflowTemplatesPanel from "./WorkflowTemplatesPanel.vue";
 import { startModelDownload } from "../../api/modelDownloads";
 import { useTasksStore } from "../../stores/useTasksStore";
+import { sessionContext } from "../../utils/apiClient";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
 
 const listTemplates = vi.fn();
@@ -75,6 +76,7 @@ describe("WorkflowTemplatesPanel card menu", () => {
     downloadable: false,
     ...extra,
   });
+  // `downloadable` is the server's lookup by name, present or not.
   const TEMPLATES = [
     {
       key: "default/a",
@@ -82,7 +84,7 @@ describe("WorkflowTemplatesPanel card menu", () => {
       files: [
         file("shared.safetensors", { downloadable: true }),
         file("only-a.safetensors", { downloadable: true }),
-        file("on-shelf.safetensors", { present: true }),
+        file("on-shelf.safetensors", { present: true, downloadable: true }),
       ],
     },
     {
@@ -97,7 +99,7 @@ describe("WorkflowTemplatesPanel card menu", () => {
     {
       key: "default/d",
       title: "D",
-      files: [file("on-shelf.safetensors", { present: true })],
+      files: [file("on-shelf.safetensors", { present: true, downloadable: true })],
     },
   ];
 
@@ -201,13 +203,19 @@ describe("WorkflowTemplatesPanel card menu", () => {
     );
   });
 
-  it("reads the list again, without asking ComfyUI, when a download lands", async () => {
-    await mounted();
-    expect(listTemplates).toHaveBeenCalledTimes(1);
-    useTasksStore().downloadsLanded += 1;
-    await flushPromises();
-    expect(listTemplates).toHaveBeenCalledTimes(2);
-    expect(listTemplates).toHaveBeenLastCalledWith({ refresh: false });
+  it("offers no download in a read-only session, saying why", async () => {
+    sessionContext.value = { scope: "READ" };
+    try {
+      const wrapper = await mounted(["default/a"]);
+      await row(wrapper, "default/a").trigger("contextmenu");
+      const download = menuRow(wrapper, "download-missing");
+      expect(download.attributes("aria-disabled")).toBe("true");
+      expect(download.find(".tip").attributes("data-text")).toBe(
+        "This session cannot download models",
+      );
+    } finally {
+      sessionContext.value = null;
+    }
   });
 
   it("opens from the Menu key and Shift+F10 on the cursor card", async () => {

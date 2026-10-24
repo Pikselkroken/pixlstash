@@ -71,7 +71,6 @@ from pixlstash.services.comfyui_ui_graph import (
     convert_ui_graph_to_api,
     is_ui_graph,
 )
-from pixlstash.services.model_downloads import download_source
 from pixlstash.services.model_shelf_service import (
     adapter_digest_index,
     fetch_character_names,
@@ -134,6 +133,7 @@ from pixlstash.services import (
     comfyui_pack_service,
     comfyui_templates,
 )
+from pixlstash.services.model_downloads import download_source
 from pixlstash.services.model_icons import IconRefused, store_icon
 from pixlstash.services.workflow_library_service import read_library_ids
 
@@ -354,18 +354,6 @@ def store_manual_workflow(
         api_document=api_document,
         record=record,
     )
-
-
-def _template_file(item, present: set[str]) -> dict:
-    """One of a template's files as ``GET /comfyui/templates`` lists it."""
-    on_shelf = normalized_filename(item.name) in present
-    return {
-        "name": item.name,
-        "directory": item.directory,
-        "url": item.url,
-        "present": on_shelf,
-        "downloadable": not on_shelf and download_source(item.name) is not None,
-    }
 
 
 def keep_template_thumbnail(hub, comfyui_url: str, template, workflow_id: str) -> None:
@@ -1886,8 +1874,9 @@ class ComfyUITemplateFile(BaseModel):
     downloadable: bool = Field(
         False,
         description=(
-            "`POST /model-downloads` can fetch a file of this name: PixlStash's "
-            "own template list links it. Only ever true for a missing file."
+            "`POST /model-downloads` can fetch it by this name: the committed "
+            "template list links a file of the name. A pack's own file may "
+            "have a `url` and still not be downloadable."
         ),
     )
 
@@ -2577,7 +2566,16 @@ def create_router(server) -> APIRouter:
                     "providers": template.providers,
                     "thumbnail": template.module != comfyui_templates.BUILTIN_MODULE
                     or template.thumbnail_ext is not None,
-                    "files": [_template_file(item, present) for item in template.files],
+                    "files": [
+                        {
+                            "name": item.name,
+                            "directory": item.directory,
+                            "url": item.url,
+                            "present": normalized_filename(item.name) in present,
+                            "downloadable": download_source(item.name) is not None,
+                        }
+                        for item in template.files
+                    ],
                 }
                 for template in listing.templates
             ],

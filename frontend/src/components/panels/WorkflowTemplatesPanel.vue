@@ -237,6 +237,7 @@ import {
 } from "../../composables/useModelDownloads";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowTemplatesStore } from "../../stores/useWorkflowTemplatesStore";
+import { isReadOnly } from "../../utils/apiClient";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -285,26 +286,20 @@ const { contextOpen, contextAt, openContextMenu } = useContextMenuAt();
 
 /**
  * The selection's missing files PixlStash knows where to get, less those
- * already downloading.
+ * already downloading. None in a read-only session, which cannot download.
+ * A landed one leaves by itself: `models_arrived` re-reads the list.
  */
-const downloadFiles = computed(() => [
-  ...new Set(
-    store.selectedTemplates.flatMap((template) =>
-      (template.files ?? [])
-        .filter((file) => file.downloadable)
-        .map((file) => file.name)
-        .filter((name) => !tasksStore.runningDownloadFiles.has(modelBaseName(name))),
-    ),
-  ),
-]);
-
-// A model just downloaded may be one a card says is missing.
-watch(
-  () => tasksStore.downloadsLanded,
-  () => {
-    if (store.reachable) void store.fetchTemplates({ shelf: true });
-  },
-);
+const downloadFiles = computed(() => {
+  if (isReadOnly.value) return [];
+  const names = store.selectedTemplates.flatMap((template) =>
+    (template.files ?? [])
+      .filter((file) => !file.present && file.downloadable)
+      .map((file) => file.name),
+  );
+  return [...new Set(names)].filter(
+    (name) => !tasksStore.runningDownloadFiles.has(modelBaseName(name)),
+  );
+});
 const downloadLabel = computed(() => {
   const n = downloadFiles.value.length;
   if (!n) return "Download missing models";
@@ -312,11 +307,14 @@ const downloadLabel = computed(() => {
 });
 const downloadTitle = computed(() => {
   if (downloadFiles.value.length) return downloadFiles.value.join(", ");
-  const files = store.selectedTemplates.flatMap((t) => t.files ?? []);
+  if (isReadOnly.value) return "This session cannot download models";
+  const files = store.selectedTemplates
+    .flatMap((t) => t.files ?? [])
+    .filter((file) => !file.present);
   if (files.some((file) => file.downloadable)) {
     return "Already downloading: the Tasks tab shows how far";
   }
-  return files.some((file) => !file.present)
+  return files.length
     ? "PixlStash does not know where to get the files missing from your shelf"
     : "Every file they load is on your shelf";
 });

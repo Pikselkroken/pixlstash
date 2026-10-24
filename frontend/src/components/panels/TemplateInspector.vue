@@ -91,8 +91,13 @@
                 {{ file.present ? "on your shelf" : "not on your shelf" }}
               </span>
             </span>
+            <ModelDownloadButton
+              v-if="!file.present && file.downloadable && !isReadOnly"
+              class="tpli-dl"
+              :file="file.name"
+            />
             <a
-              v-if="!file.present && downloadable(file.url)"
+              v-else-if="!file.present && downloadable(file.url)"
               class="tpli-link"
               :href="file.url"
               target="_blank"
@@ -143,14 +148,18 @@
  * loaders name, each marked as on the shelf or not. Add is the pill's verb
  * too; both ask the view (`requestAdd`), which lands on Mine afterwards.
  *
- * The design's *Download the missing* is the card menu's, not here. A missing
- * file links to where its template says to get it.
+ * A missing file PixlStash can fetch (`downloadable`) gets the run's own
+ * download button, so it lands in the Tasks tab the same way before the
+ * template is added as after; any other one links to where its template says
+ * to get it, as does every one in a read-only session, which cannot download.
+ * The design's *Download the missing*, all at once, is not here.
  */
 import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { templateThumbnailUrl } from "../../api/comfyui";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { isReadOnly } from "../../utils/apiClient";
 import {
   missingCount,
   templateFileLetter,
@@ -160,6 +169,7 @@ import { formatModelSize } from "../../utils/modelShelf";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
+import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
 const TABS = [{ value: "template", label: "Template" }];
@@ -330,6 +340,11 @@ function downloadable(url) {
 .tpli-file-meta {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The row's gap spaces it; its own margin is for a line of text. */
+.tpli-file .tpli-dl {
+  margin-left: 0;
 }
 
 .tpli-link {

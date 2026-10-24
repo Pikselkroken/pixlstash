@@ -195,6 +195,14 @@
                         aria-label="On your shelf"
                         >mdi-check</v-icon
                       >
+                      <!-- The template list is the download's own source, so
+                           a file it links is one the server can fetch. A
+                           read-only session cannot, and keeps the link. -->
+                      <ModelDownloadButton
+                        v-else-if="/^https:\/\//.test(file.url) && !isReadOnly"
+                        class="wtp__dlbtn"
+                        :file="file.name"
+                      />
                       <a
                         v-else-if="/^https:\/\//.test(file.url)"
                         class="wtp__dl"
@@ -277,9 +285,11 @@
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { isReadOnly } from "../../utils/apiClient";
 import { formatModelSize } from "../../utils/modelShelf";
 import { templateName } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
+import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Segmented from "../widgets/Segmented.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -794,6 +804,11 @@ const entries = computed(() => {
   color: inherit;
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* Its own margin is for a line of text; here it starts the cell. */
+.wtp__files .wtp__dlbtn {
+  margin-left: 0;
 }
 
 .wtp__variant {
