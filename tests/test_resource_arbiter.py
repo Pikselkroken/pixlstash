@@ -272,6 +272,62 @@ def test_exclusive_blocks_light_while_granted_or_waiting():
     light.release()
 
 
+def test_a_slow_read_never_overwrites_a_newer_one():
+    """The arbiter thread's pass can read the card, stall, and store late.
+
+    Stored over a newer reading, the stale one makes the next request wait on
+    memory that was already freed (a CI flake of the test above).
+    """
+    arb, fake, _ = make(used_mb=23000, thread=False)
+    read_taken, go = threading.Event(), threading.Event()
+    devices = fake.devices
+
+    def stalled_devices(max_age_s=1.0):
+        reading = devices(max_age_s)
+        if threading.current_thread().name == "slow-pass":
+            read_taken.set()
+            go.wait(5)
+        return reading
+
+    fake.devices = stalled_devices
+    slow = threading.Thread(target=arb._refresh, name="slow-pass")
+    slow.start()
+    try:
+        assert read_taken.wait(5)
+        fake.used_mb = 0
+        arb._refresh()
+    finally:
+        go.set()
+        slow.join(5)
+    assert arb._devices[0].used_mb == 0
+
+
+def test_a_cached_read_never_outranks_a_fresh_one_started_before_it():
+    """A cached read can return a sample older than a fresh read in flight."""
+    arb, fake, _ = make(used_mb=23000, thread=False)
+    started, go = threading.Event(), threading.Event()
+    devices = fake.devices
+
+    def fresh_read_in_flight(max_age_s=1.0):
+        if threading.current_thread().name == "fresh-read":
+            started.set()
+            go.wait(5)  # the card is sampled after the cached read lands
+        return devices(max_age_s)
+
+    fake.devices = fresh_read_in_flight
+    fresh = threading.Thread(target=arb._refresh, name="fresh-read")
+    fresh.start()
+    try:
+        assert started.wait(5)
+        arb._refresh(cached=True)  # the ledger's cache: still 23 GB
+        assert arb._devices[0].used_mb == 23000
+        fake.used_mb = 0
+    finally:
+        go.set()
+        fresh.join(5)
+    assert arb._devices[0].used_mb == 0
+
+
 def test_urgent_light_is_fit_checked_only():
     arb, _fake, _ = make(used_mb=23000)
     exclusive = arb.request(

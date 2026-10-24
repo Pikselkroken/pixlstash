@@ -229,6 +229,11 @@ class ResourceArbiter:
         self._devices: list[DeviceReading] = []
         self._ram_now = {"total_mb": 0, "available_mb": 0}
         self._pixlstash_usage: int | None = None
+        # Each _refresh numbers its read before taking it, so a slow pass on
+        # the arbiter thread cannot store its reading over a newer fresh one.
+        self._reads = itertools.count(1)
+        self._stored_read = 0
+        self._stored_probe_read = 0
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._reclaiming = False
@@ -653,6 +658,8 @@ class ResourceArbiter:
         *probes* False keeps the tenants' last reading: ``try_light`` runs on
         the single GPU worker, which must not wait on ComfyUI's HTTP API.
         """
+        with self._lock:
+            read = next(self._reads)
         devices = self._ledger.devices(max_age_s=1.0 if cached else 0.0)
         usage = self._usage()
         try:
@@ -690,12 +697,19 @@ class ResourceArbiter:
                     "idle": False,
                 }
         with self._lock:
-            self._devices = devices
-            self._pixlstash_usage = usage
-            self._ram_now = ram_now
-            for tenant, state in states.items():
-                if tenant in self._probes:
-                    self._probe_state[tenant] = state
+            if read > self._stored_read:
+                # A cached read can hand back a sample older than a fresh read
+                # that started before it, so it never outranks one.
+                if not cached:
+                    self._stored_read = read
+                self._devices = devices
+                self._pixlstash_usage = usage
+                self._ram_now = ram_now
+            if probes and read > self._stored_probe_read:
+                self._stored_probe_read = read
+                for tenant, state in states.items():
+                    if tenant in self._probes:
+                        self._probe_state[tenant] = state
 
     def _tenant_usage_locked(self, tenant: Tenant, device: str) -> int | None:
         if tenant is Tenant.PIXLSTASH:
