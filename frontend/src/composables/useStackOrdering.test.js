@@ -135,6 +135,15 @@ describe("useStackOrdering: an open stack's layout under a sort", () => {
     expect(badges(stack)).toEqual([1]);
   });
 
+  it("keeps a tile the members list does not know, at the end of the run", async () => {
+    // The lightbox's filmstrip puts such a tile last too.
+    listStackPictures.mockResolvedValueOnce([member(3, 1), member(1, 0)]);
+    const stack = openOnDateSort(member(2, 1, { stackCount: 3 }), []);
+    await stack.toggleStackExpand(member(2, 1, { stackCount: 3 }));
+    expect(ids(stack)).toEqual([100, 1, 3, 2, 101]);
+    expect(badges(stack)).toEqual([1]);
+  });
+
   it("takes the tile's place in the stack from the members list", async () => {
     // The tile still says it is the cover; the members list knows a newer
     // picture took that place.
