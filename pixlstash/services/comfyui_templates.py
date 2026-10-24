@@ -44,7 +44,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -472,20 +471,35 @@ def _bundled_graph_path(name: str) -> Path:
     return BUNDLED_GRAPHS / f"{name}.json" if _SHIPPED_NAME.match(name) else Path()
 
 
-@lru_cache(maxsize=1)
+# The shipped templates, once every file of them has read. A read that failed
+# anywhere is answered but not kept, so the next request tries again rather
+# than a passing failure (a file held open on Windows) lasting until a restart.
+_bundled: Optional[tuple[Template, ...]] = None
+
+
+def forget_bundled() -> None:
+    """Drop the kept shipped templates. For tests, which change the files."""
+    global _bundled
+    _bundled = None
+
+
 def _bundled_templates() -> tuple[Template, ...]:
     """The built-ins PixlStash ships a graph for, files read off each graph."""
+    global _bundled
+    if _bundled is not None:
+        return _bundled
     try:
         index = json.loads(BUNDLED_INDEX_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         logger.error(
             "The template catalogue PixlStash ships (%s) will not read, so no "
-            "templates are listed without ComfyUI: %s",
+            "templates are listed without ComfyUI; the next request tries "
+            "again: %s",
             BUNDLED_INDEX_PATH,
             exc,
         )
         return ()
-    kept = []
+    kept, complete = [], True
     for template in _builtin_templates(index):
         path = _bundled_graph_path(template.name)
         if not path.is_file():
@@ -493,10 +507,18 @@ def _bundled_templates() -> tuple[Template, ...]:
         try:
             template.files = template_files(json.loads(path.read_text("utf-8")))
         except (OSError, ValueError) as exc:
-            logger.warning("Shipped template graph %s will not read: %s", path, exc)
+            logger.warning(
+                "Shipped template graph %s will not read, so it is left out "
+                "until a later request reads it: %s",
+                path,
+                exc,
+            )
+            complete = False
             continue
         kept.append(template)
     logger.info("Read %d shipped templates from %s.", len(kept), BUNDLED_GRAPHS)
+    if complete:
+        _bundled = tuple(kept)
     return tuple(kept)
 
 

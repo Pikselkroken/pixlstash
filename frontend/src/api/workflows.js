@@ -355,21 +355,24 @@ export async function duplicateWorkflow(workflowId, version) {
  * @param {string} workflowId
  * `cached` (with `replacing`) is for a screen that asks on every selection:
  * what each loader lists is read from ComfyUI's node list as the server last
- * read it, up to a minute ago.
+ * read it, up to a minute ago. `grouped` (with `replacing` a checkpoint) offers
+ * every checkpoint the loader can load, each with a `verdict`, rather than only
+ * those of the missing one's base model.
  *
  * @param {{checkpointId?: number, replacing?: string, slotKind?: string,
- *   cached?: boolean}} [options]
+ *   cached?: boolean, grouped?: boolean}} [options]
  * @returns {Promise<Object>}
  */
 export async function readModelSwap(
   workflowId,
-  { checkpointId, replacing, slotKind, cached = false } = {},
+  { checkpointId, replacing, slotKind, cached = false, grouped = false } = {},
 ) {
   const params = {};
   if (checkpointId != null) params.checkpoint_id = checkpointId;
   if (replacing != null) params.replacing = replacing;
   if (slotKind != null) params.slot_kind = slotKind;
   if (cached) params.cached = true;
+  if (grouped) params.grouped = true;
   return unwrap(apiClient.get(wf(workflowId, "/model-swap"), { params }));
 }
 

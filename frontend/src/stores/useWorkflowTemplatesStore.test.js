@@ -288,6 +288,36 @@ describe("the Templates tab's list", () => {
     expect(listTemplates).toHaveBeenLastCalledWith({ refresh: true });
   });
 
+  it("re-reads a list it holds when a model arrives, without asking ComfyUI", async () => {
+    // Never read: the tab reads it when it is shown.
+    await useWorkflowTemplatesStore().onModelsArrived();
+    expect(listTemplates).not.toHaveBeenCalled();
+    const store = await loaded();
+    await store.onModelsArrived();
+    expect(listTemplates.mock.calls).toEqual([[{ refresh: false }], [{ refresh: false }]]);
+  });
+
+  it("re-reads after a read already out, which may predate the arrival", async () => {
+    let land;
+    listTemplates.mockReturnValueOnce(new Promise((resolve) => (land = resolve)));
+    listTemplates.mockResolvedValue({ templates: [] });
+    const store = useWorkflowTemplatesStore();
+    const first = store.fetchTemplates();
+    const again = store.fetchTemplates({ reread: true });
+    land({ templates: [] });
+    await Promise.all([first, again]);
+    expect(listTemplates.mock.calls).toEqual([[{ refresh: false }], [{ refresh: false }]]);
+  });
+
+  it("keeps the list it has when a re-read finds ComfyUI silent", async () => {
+    const store = await loaded();
+    const before = store.templates;
+    listTemplates.mockResolvedValue({ reachable: false, detail: "refused" });
+    await store.onModelsArrived();
+    expect(store.templates).toBe(before);
+    expect(store.reachable).toBe(true);
+  });
+
   it("asks again on a plain read while ComfyUI did not answer", async () => {
     listTemplates.mockResolvedValue({ reachable: false, detail: "refused" });
     const store = useWorkflowTemplatesStore();

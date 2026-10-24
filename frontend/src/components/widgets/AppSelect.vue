@@ -44,15 +44,27 @@
         :aria-expanded="String(open)"
         :aria-controls="listId"
         :aria-activedescendant="open ? optionId(activeIndex) : undefined"
+        :aria-describedby="open && $slots.head ? `${listId}-head` : undefined"
         :aria-disabled="disabled || undefined"
         @click="toggle"
         @keydown="onComboKeydown"
       >
         <!-- The value is spoken whole, the name and every chip with commas
              between; the field draws only the first chip. -->
-        <span class="visually-hidden">{{ current ? optionSpoken(current) : "" }}</span>
+        <span class="visually-hidden">{{
+          current ? optionSpoken(current) : placeholder
+        }}</span>
+        <!-- The picked row's group mark stays with it (`groupIcon`). -->
+        <v-icon
+          v-if="current?.groupIcon"
+          size="16"
+          class="app-select__mark"
+          :class="toneClass(current.groupTone)"
+          aria-hidden="true"
+          >{{ `mdi-${current.groupIcon}` }}</v-icon
+        >
         <span class="app-select__value" aria-hidden="true">{{
-          optionName(current)
+          current ? optionName(current) : placeholder
         }}</span>
         <ChipRow
           v-if="current?.chips?.length"
@@ -73,6 +85,17 @@
         :aria-label="label || undefined"
         @mousedown.prevent
       >
+        <!-- Words over the rows that are not a row: what the list is for.
+             Hidden from the listbox, which owns only options, and spoken as
+             the field's description instead. -->
+        <div
+          v-if="$slots.head"
+          :id="`${listId}-head`"
+          class="app-select__head"
+          aria-hidden="true"
+        >
+          <slot name="head" />
+        </div>
         <!-- One group per heading, so a screen reader hears which rows are
              the stack and which the rest of the library. -->
         <template v-for="(section, s) in sections" :key="s">
@@ -84,16 +107,31 @@
             <div
               v-if="section.group"
               :id="`${listId}-g${s}`"
-              class="ctx-label section-label"
+              class="ctx-label app-select__group"
             >
-              {{ section.group }}
+              <v-icon
+                v-if="section.icon"
+                size="16"
+                :class="toneClass(section.tone)"
+                aria-hidden="true"
+                >{{ `mdi-${section.icon}` }}</v-icon
+              >
+              <span class="section-label">{{ section.group }}</span>
+              <!-- The comma is heard, not seen: the group's name is read off
+                   these spans, which would otherwise run together. -->
+              <span v-if="section.note" class="app-select__group-note"
+                ><span class="visually-hidden">, </span>{{ section.note }}</span
+              >
             </div>
             <div
               v-for="{ opt, i } in section.rows"
               :id="optionId(i)"
               :key="String(opt.value)"
               class="ctx-item app-select__option"
-              :class="{ 'app-select__option--active': i === activeIndex }"
+              :class="{
+                'app-select__option--active': i === activeIndex,
+                'app-select__option--quiet': opt.quiet,
+              }"
               role="option"
               :aria-selected="String(isCurrent(opt))"
               :aria-label="optionSpoken(opt)"
@@ -150,8 +188,14 @@ const props = defineProps({
   // `name` and `chips` (a second line of chips under the name) and `group`
   // (a heading over each run of options sharing it), plus `chipDetails`
   // ({chip: what it stands for}, hovered and spoken); any option with `chips`
-  // turns the field into a listbox that can draw them.
+  // turns the field into a listbox that can draw them. A group's first option
+  // may give its heading a mark and a note (`groupIcon`, an mdi name without
+  // the prefix; `groupTone`, success|warning|error|info; `groupNote`), and the
+  // mark stays beside the value once picked. `quiet` draws a name in
+  // secondary ink.
   options: { type: Array, default: () => [] },
+  // What a listbox field reads while its value is none of the options.
+  placeholder: { type: String, default: "" },
   compact: { type: Boolean, default: false },
   // Keep `label` as the accessible name only, for a row whose text already
   // says what the select decides.
@@ -170,7 +214,8 @@ const normalizedOptions = computed(() =>
 
 const rich = computed(
   () =>
-    !props.multiple && normalizedOptions.value.some((o) => o.chips?.length),
+    !props.multiple &&
+    normalizedOptions.value.some((o) => o.chips?.length || o.groupIcon),
 );
 const current = computed(() =>
   normalizedOptions.value.find((o) => isCurrent(o)),
@@ -182,7 +227,14 @@ const sections = computed(() => {
   normalizedOptions.value.forEach((opt, i) => {
     const last = out[out.length - 1];
     if (last && last.group === opt.group) last.rows.push({ opt, i });
-    else out.push({ group: opt.group, rows: [{ opt, i }] });
+    else
+      out.push({
+        group: opt.group,
+        icon: opt.groupIcon,
+        tone: opt.groupTone,
+        note: opt.groupNote,
+        rows: [{ opt, i }],
+      });
   });
   return out;
 });
@@ -196,6 +248,11 @@ const activeIndex = ref(-1);
 
 function isCurrent(opt) {
   return String(opt.value) === String(props.modelValue);
+}
+
+/** The status hue a group mark takes; the words beside it stay ink. */
+function toneClass(tone) {
+  return tone ? `app-select__tone--${tone}` : "";
 }
 
 function optionName(opt) {
@@ -569,6 +626,48 @@ function toggleValue(value, checked) {
   flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
+}
+.app-select__option--quiet .app-select__name {
+  opacity: var(--opacity-text-secondary);
+}
+/* The heading the design draws: mark, label in ink, a note in secondary. */
+.app-select__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.app-select__group .section-label {
+  color: rgb(var(--v-theme-on-surface));
+}
+.app-select__group-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  opacity: var(--opacity-text-secondary);
+}
+.app-select__head {
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+}
+.app-select__mark {
+  flex-shrink: 0;
+}
+.app-select__tone--success {
+  color: rgb(var(--v-theme-surface-success));
+}
+.app-select__tone--warning {
+  color: rgb(var(--v-theme-surface-warning));
+}
+.app-select__tone--error {
+  color: rgb(var(--v-theme-surface-error));
+}
+.app-select__tone--info {
+  color: rgb(var(--v-theme-surface-info));
 }
 .app-select__name {
   overflow: hidden;

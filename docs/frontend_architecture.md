@@ -275,7 +275,7 @@ Sub-components that manage independent data (e.g. `AccountSection`, `SmartScoreS
 **Adaptive poll.** `App.vue` calls `tasksStore.startPolling()` on mount (and `stopPolling()` on unmount) so the indicators are live app-wide, not only while the Tasks tab is open. The store self-throttles: paused while `document.hidden`, ~2 s when the Tasks tab is open or work is active, ~5 s when merely idle-watching. `setTasksTabOpen` **counts mounted panels rather than holding a flag**, because the Tasks panel is shared: with a boolean, one host unmounting would drop the cadence back to idle under another host still showing it. Share / read-only sessions skip the fetch (the endpoint is owner-only). This is the only always-on background poll in the app.
 
 **Consumers (deny nothing, just read):**
-- `panels/TasksPanel.vue` renders the **Tasks tab**'s active rows purely from `tasksStore.activeEntries` — backend workers as a throughput sparkline + rate inside the fold, ComfyUI runs as a progress bar + abort — under a VRAM bar per GPU, with a *Running* group (header *VRAM*; the folded *PixlStash processing* row; a pulsing olive dot) and a *Waiting for the GPU* group (header *Needs*; a bare amber hourglass, the backend's `waiting_reason.text` as the tooltip, icon actions in place of the figure on hover or focus). State is told by shape and colour, never colour alone. For those it owns only the canvas drawing and label formatting, and never fetches or polls; its one read of its own is for the offer to save what a run changed (below). It exports `tasksTabFor(tasksStore)`, the tab descriptor its hosts declare — one function so the two cannot drift on the wording or on when the light comes on — and sets the store's fast cadence (`setTasksTabOpen`) for as long as it is mounted — which is exactly while the tab is on screen, since an inspector unmounts its body when the rail collapses. **Three inspectors offer the tab, last in their band**: `StatsSidebar` (everywhere the grid's rail is shown), `WorkflowTab` (`/workflows`) and `ModelsRail` (`/models`), which the descriptor marks `busy` while `hasActiveTasks`, pulsing the tab. The image overlay's inspector deliberately does not: it is one picture's pane, laid over that picture. **A deep link to the tab goes through `sidebarStore.showTasksTab()`**, a counter every host watches (it opens all three rails' flags, unpersisted): it used to be `statsSidebarRef.value.focusTasksTab()`, which reached nothing on `/workflows` — the one screen a run is usually started from, and so the one screen the "Started N runs" toast's *Show* silently did nothing on.
+- `panels/TasksPanel.vue` renders the **Tasks tab**'s active rows purely from `tasksStore.activeEntries` — backend workers as a throughput sparkline + rate inside the fold, ComfyUI runs as a progress bar + abort — under a VRAM bar per GPU, with a *Running* group (header *VRAM*; the folded *PixlStash processing* row; a pulsing olive dot) and a *Waiting for the GPU* group (header *Needs*; a bare amber hourglass, the backend's `waiting_reason.text` as the tooltip, icon actions in place of the figure on hover or focus). State is told by shape and colour, never colour alone. For those it owns only the canvas drawing and label formatting, and never fetches or polls; its one read of its own is for the offer to save what a run changed (below). It exports `tasksTabFor(tasksStore)`, the tab descriptor its hosts declare — one function so the two cannot drift on the wording or on when the light comes on — and sets the store's fast cadence (`setTasksTabOpen`) for as long as it is mounted — which is exactly while the tab is on screen, since an inspector unmounts its body when the rail collapses. **Four inspectors offer the tab, last in their band**: `StatsSidebar` (everywhere the grid's rail is shown), `WorkflowTab` (`/workflows`), `TemplateInspector` (`/workflows` while its Templates tab is shown) and `ModelsRail` (`/models`), which the descriptor marks `busy` while `hasActiveTasks`, pulsing the tab. The image overlay's inspector deliberately does not: it is one picture's pane, laid over that picture. **A deep link to the tab goes through `sidebarStore.showTasksTab()`**, a counter every host watches (it opens all three rails' flags, unpersisted; the two `/workflows` inspectors share one): it used to be `statsSidebarRef.value.focusTasksTab()`, which reached nothing on `/workflows` — the one screen a run is usually started from, and so the one screen the "Started N runs" toast's *Show* silently did nothing on.
 - The **right-rail toggle** (`TbGlobalActions`, on every screen's bar) pulses its whole icon in `accent` when `hasActiveTasks`, so background work is visible even with the rail collapsed. One glyph everywhere, `mdi-dock-right`, with open as its pressed state (`active` + `aria-pressed`), and a fixed name per screen given by the host's `rail-name`: *Stats and tasks* (Library), *Inspector* (Workflows), *Models and tasks* (Models), *Stats* elsewhere. While tasks run the name is prefixed with their count (`3 tasks running · Models and tasks`).
 - **A failed run is told once, as a notice, on whatever view is up** (`App.vue`'s `wsPluginProgress` watcher): an error, or a passing `info` for a run somebody stopped. No view draws a banner for it. **What stays is the failure on the workflow**: `useRunDialogStore.failures`, under "When a run fails" in the `useGridComfyuiRuns.js` section.
 
@@ -2666,7 +2666,19 @@ can no longer see.
     measure it. **A missing file is a row
     that needs a pick**: its warning and the file's name stay above the field
     until one is made, and the picker's first option, the file itself, reads
-    `<name> (missing)` so it is never taken for a pick. Where the offer marks one `likely` (the missing file
+    `<name> (missing)` so it is never taken for a pick. **Where the candidates
+    carry a `verdict`** (a missing checkpoint is asked `grouped=true`, so every
+    one its loader can load comes back; a VAE or text encoder has one from
+    `via`) the picker is `AppSelect`'s listbox instead, filed by
+    `verdictOptions` under *Likely to work*, *Might work*, *Not known* and
+    *Unlikely to work*, each heading a status-hued mark and a note, each row its
+    base model as a chip (`base not read` where none was) and the *Unlikely*
+    names in secondary ink. The missing file is then no option: the field reads
+    `<name> (missing)` as a placeholder and the list opens on a *Replacing
+    `<name>` · `<base model>`* caption, which says so when nothing on the shelf
+    has that base model. A line above the field counts the likely ones; once
+    picked, the group's mark stays beside the value and a line under the field
+    says the verdict in words (`verdictLine`). Where the offer marks one `likely` (the missing file
     under another name on the shelf), the tab makes that pick itself, once per
     selection, as an unsaved change like any other. Such a row says so: *Fixed*
     for *Edited*, `Corrected: <saved>` for `Saved:`, behind a focusable
@@ -7012,7 +7024,9 @@ answer the same question inside the surface that raised it.
 arrival, as the model shelf's Shelf | Training runs). Which tab is shown is
 `useWorkflowTemplatesStore.shown`, not view state, because the right rail is
 `App.vue`'s: it mounts `TemplateInspector.vue` in place of `WorkflowTab` while
-it is true. A `?workflow=` or `?topology=` link always lands on Mine. Mine is
+it is true; its band is *Template* and the shared *Tasks* (§4.4), so a run
+started on Mine can be watched from here. A `?workflow=` or `?topology=` link
+always lands on Mine. Mine is
 unchanged by the tab's existence.
 
 - **The list is read live and lazily**: `GET /comfyui/templates` the first time
@@ -7070,9 +7084,16 @@ unchanged by the tab's existence.
   template". Run is refused for it in the pill, the context menu and the
   Workflow tab, with the reason; *Open in ComfyUI* stays, since saving it there
   is what finishes it.
-- **Not built:** the design's *Download the missing* button. The app has no
-  model download path yet (#1866); a missing file's row in the inspector links
-  to where its template says to get it (`https:` only).
+- **A missing file** the server can fetch (`downloadable`) gets the run's own
+  `ModelDownloadButton` in the inspector's row, so the download lands in the
+  Tasks tab the same way before the template is added as after; any other
+  missing file links to where its template says to get it (`https:` only), as
+  does every one in a read-only session, which cannot download. The shelf's
+  New workflow set picker (`WorkflowTemplatePicker`) and a set's template offer
+  strip (`ModelSetSlotsPanel`, "Not on your shelf: …") do the same: their files
+  come from the committed list the download reads, so every `https:` file there
+  is fetchable by its name. **Not built:** the design's *Download the missing*, all
+  at once.
 
 ---
 

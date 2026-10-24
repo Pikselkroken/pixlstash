@@ -17170,6 +17170,93 @@ def test_a_missing_checkpoint_is_offered_its_own_base_model_first(cloneable):
             conn.execute("DELETE FROM model WHERE id = ?", (sdxl_id,))
 
 
+def test_a_grouped_offer_files_every_checkpoint_under_a_verdict(cloneable):
+    """``grouped`` holds nothing back and says how each would fit instead.
+
+    Read against the missing one's base model: the same is likely, the same
+    family maybe, one never read unknown, another family unlikely.
+    """
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        sdxl_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance, base_model) "
+            "VALUES ('checkpoint', ?, 'scanned', 'sdxl')",
+            (_REPLACEMENT_FILENAME,),
+        ).lastrowid
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0] += [
+        CLONE_CHECKPOINT,
+        _REPLACEMENT_FILENAME,
+    ]
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    def offered(**params):
+        return cloneable.owner.get(
+            f"{API}/workflows/{RUN_WF}/model-swap",
+            params={"replacing": _SHELF_FILENAME, **params},
+        ).json()
+
+    def set_base(filename, value):
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model = ? WHERE filename = ?",
+                (value, filename),
+            )
+
+    def verdicts(body):
+        return {c["filename"]: c["verdict"] for c in body["replacements"]}
+
+    (krea_base,) = hub.fetchone(
+        "SELECT base_model FROM model WHERE filename = ?", (CLONE_CHECKPOINT,)
+    )
+    try:
+        # Nothing says what the missing one was: no verdicts to give.
+        body = offered(grouped="true")
+        assert body["replacing_base_model"] is None
+        assert set(verdicts(body).values()) == {None}
+        set_base(_SHELF_FILENAME, "SDXL 1.0")
+        # Ungrouped, the other base model is held back, as before.
+        assert [c["filename"] for c in offered()["replacements"]] == [
+            _REPLACEMENT_FILENAME
+        ]
+        body = offered(grouped="true")
+        assert body["replacing_base_model"] == "SDXL 1.0"
+        assert body["replacements_narrowed"] is True
+        assert verdicts(body) == {
+            _REPLACEMENT_FILENAME: "likely",
+            CLONE_CHECKPOINT: "unlikely",
+        }
+        by_name = {c["filename"]: c for c in body["replacements"]}
+        assert by_name[_REPLACEMENT_FILENAME]["base_model"] == "SDXL 1.0"
+        set_base(CLONE_CHECKPOINT, None)
+        assert verdicts(offered(grouped="true"))[CLONE_CHECKPOINT] == "unknown"
+        set_base(CLONE_CHECKPOINT, "Pony Diffusion V6 XL")
+        assert verdicts(offered(grouped="true"))[CLONE_CHECKPOINT] == "maybe"
+        set_base(CLONE_CHECKPOINT, "FLUX.1 dev")
+        assert verdicts(offered(grouped="true"))[CLONE_CHECKPOINT] == "unlikely"
+        # Nothing likely loadable: still every one, and not narrowed.
+        info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].remove(
+            _REPLACEMENT_FILENAME
+        )
+        body = offered(grouped="true")
+        assert verdicts(body) == {CLONE_CHECKPOINT: "unlikely"}
+        assert body["replacements_narrowed"] is False
+        # Nor with nothing loadable at all.
+        info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].remove(
+            CLONE_CHECKPOINT
+        )
+        body = offered(grouped="true")
+        assert body["replacements_reason"] == "none_loadable"
+        assert body["replacements_narrowed"] is False
+    finally:
+        set_base(_SHELF_FILENAME, None)
+        set_base(CLONE_CHECKPOINT, krea_base)
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (sdxl_id,))
+
+
 def test_an_empty_checkpoints_folder_says_the_checkpoint_is_missing(cloneable):
     """ComfyUI listing no checkpoints at all is not "cannot tell".
 
@@ -24839,7 +24926,7 @@ def comfyui_templates_served(workflow_env, monkeypatch, tmp_path):
     index.write_text(json.dumps(_TEMPLATE_INDEX))
     monkeypatch.setattr(comfyui_templates, "BUNDLED_GRAPHS", graphs)
     monkeypatch.setattr(comfyui_templates, "BUNDLED_INDEX_PATH", index)
-    comfyui_templates._bundled_templates.cache_clear()
+    comfyui_templates.forget_bundled()
     github = comfyui_templates.BUNDLED_THUMBNAILS_URL
 
     served = {
@@ -24882,7 +24969,7 @@ def comfyui_templates_served(workflow_env, monkeypatch, tmp_path):
         yield state
     finally:
         comfyui_templates.forget_listings()
-        comfyui_templates._bundled_templates.cache_clear()
+        comfyui_templates.forget_bundled()
 
 
 def _templates(owner, **params):
@@ -24978,6 +25065,31 @@ def test_the_template_list_reads_the_owners_comfyui(
     assert pack["pack_loaded"] is True
 
 
+def test_a_template_file_is_downloadable_only_where_the_server_can_fetch_it(
+    workflow_env, comfyui_templates_served, monkeypatch
+):
+    """`downloadable` is `POST /model-downloads`' own lookup, by the file's name.
+
+    Wrong if a file is offered for download from its template's `url` alone: a
+    pack's link is not one the server will fetch.
+    """
+    monkeypatch.setattr(
+        comfyui_module,
+        "download_source",
+        lambda name: (
+            {"url": "https://example.com/vae"}
+            if name == _TEMPLATE_SUBGRAPH_VAE
+            else None
+        ),
+    )
+    body = _templates(workflow_env.owner)
+    example = next(t for t in body["templates"] if t["key"] == "default/image_example")
+    assert {f["name"]: f["downloadable"] for f in example["files"]} == {
+        _SHELF_FILENAME.upper(): False,
+        _TEMPLATE_SUBGRAPH_VAE: True,
+    }
+
+
 def test_the_template_list_is_the_shipped_copy_when_comfyui_does_not_answer(
     workflow_env, comfyui_templates_served
 ):
@@ -25010,6 +25122,21 @@ def test_the_template_list_is_the_shipped_copy_when_comfyui_does_not_answer(
     assert r.content == b"RIFF-from-github"
     assert comfyui_templates_served.github == [("/image_example-1.webp", None)]
     assert "/templates/image_example-1.webp" not in comfyui_templates_served.asked
+
+
+def test_a_shipped_catalogue_that_will_not_read_is_read_again_next_time(
+    workflow_env, comfyui_templates_served
+):
+    """Wrong if one failed read empties the shipped list until a restart."""
+    from pixlstash.services import comfyui_templates
+
+    comfyui_templates_served.served.clear()
+    good = comfyui_templates.BUNDLED_INDEX_PATH.read_text()
+    comfyui_templates.BUNDLED_INDEX_PATH.write_text("{not json")
+    assert _templates(workflow_env.owner, refresh="true")["templates"] == []
+    comfyui_templates.BUNDLED_INDEX_PATH.write_text(good)
+    (template,) = _templates(workflow_env.owner, refresh="true")["templates"]
+    assert template["key"] == "default/image_example"
 
 
 def test_a_template_thumbnail_is_fetched_only_for_a_listed_template(
@@ -25201,7 +25328,7 @@ def test_every_shipped_template_has_its_graph_and_files():
     """
     from pixlstash.services import comfyui_templates
 
-    comfyui_templates._bundled_templates.cache_clear()
+    comfyui_templates.forget_bundled()
     try:
         listed = comfyui_templates.bundled_listing().templates
         assert len(listed) > 100
@@ -25209,7 +25336,7 @@ def test_every_shipped_template_has_its_graph_and_files():
         for name in ("..", ".hidden", "a/b", "a\\b", "a\x00b", ""):
             assert comfyui_templates._bundled_graph_path(name) == Path(), name
     finally:
-        comfyui_templates._bundled_templates.cache_clear()
+        comfyui_templates.forget_bundled()
 
 
 # A WebP by its magic bytes, which is all the icon store checks.

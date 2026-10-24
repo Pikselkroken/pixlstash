@@ -71,6 +71,7 @@ import { useTasksStore } from "../stores/useTasksStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
+import { useWorkflowTemplatesStore } from "../stores/useWorkflowTemplatesStore";
 // The real ones: the apiClient mock below spreads `importOriginal`, so a test
 // can drive an actual session transition rather than a stand-in for one.
 import { API_BASE_URL, notifySessionReset } from "../utils/apiClient";
@@ -690,6 +691,13 @@ describe("useUpdatesSocket: models_arrived", () => {
     expect(arrived).toHaveBeenCalledTimes(1);
     // The ids go along: they are what says an arrival completed a template.
     expect(arrived).toHaveBeenCalledWith([4]);
+  });
+
+  it("has the Templates tab re-read which of its files are on the shelf", () => {
+    connect();
+    const reread = vi.spyOn(useWorkflowTemplatesStore(), "onModelsArrived");
+    receive({ type: "models_arrived", model_ids: [4] });
+    expect(reread).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -133,6 +133,7 @@ from pixlstash.services import (
     comfyui_pack_service,
     comfyui_templates,
 )
+from pixlstash.services.model_downloads import download_source
 from pixlstash.services.model_icons import IconRefused, store_icon
 from pixlstash.services.workflow_library_service import read_library_ids
 
@@ -1872,6 +1873,14 @@ class ComfyUITemplateFile(BaseModel):
             "does not count."
         )
     )
+    downloadable: bool = Field(
+        False,
+        description=(
+            "`POST /model-downloads` can fetch it by this name: the committed "
+            "template list links a file of the name. A pack's own file may "
+            "have a `url` and still not be downloadable."
+        ),
+    )
 
 
 class ComfyUITemplate(BaseModel):
@@ -2569,6 +2578,7 @@ def create_router(server) -> APIRouter:
                             "directory": item.directory,
                             "url": item.url,
                             "present": normalized_filename(item.name) in present,
+                            "downloadable": download_source(item.name) is not None,
                         }
                         for item in template.files
                     ],

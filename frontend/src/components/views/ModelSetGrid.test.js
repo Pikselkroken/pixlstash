@@ -88,6 +88,10 @@ vi.mock("../../api/workflows", async (importOriginal) => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
 }));
 
+vi.mock("../../api/modelDownloads", () => ({
+  startModelDownload: vi.fn(),
+  cancelModelDownload: vi.fn(),
+}));
 vi.mock("../../api/modelIcons", () => ({
   setModelIcon: vi.fn(),
   clearModelIcons: vi.fn(),
@@ -95,6 +99,7 @@ vi.mock("../../api/modelIcons", () => ({
 }));
 
 import ModelSetGrid from "./ModelSetGrid.vue";
+import { startModelDownload } from "../../api/modelDownloads";
 import WorkflowSetChooser from "../panels/WorkflowSetChooser.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
@@ -3188,9 +3193,12 @@ describe("hand-made sets (#1520)", () => {
       expect(strip.text()).toContain("The one on your shelf is dashed below.");
       expect(strip.text()).toContain("Other templates built around it: RealVis Edit.");
       const downloads = strip.find('[data-testid="offer-downloads"]');
-      // Only an https page is a link; a file with none is named, not linked.
-      expect(downloads.findAll("a").map((a) => a.attributes("href"))).toEqual([
-        VAE.url,
+      // A file the template list links is downloaded in the app, as a run's
+      // missing model is; one with no link is only named.
+      expect(downloads.find("a").exists()).toBe(false);
+      const buttons = downloads.findAll('[data-testid="model-download"]');
+      expect(buttons.map((b) => b.attributes("aria-label"))).toEqual([
+        `Download ${VAE.name}`,
       ]);
       expect(downloads.text()).toContain("te.bin");
       expect(strip.text()).toContain("Add to set");
@@ -3199,6 +3207,17 @@ describe("hand-made sets (#1520)", () => {
       // An offered ghost is added, never "restored".
       expect(ghost.text()).toContain("Add");
       expect(ghost.text()).not.toContain("Restore");
+    });
+
+    it("downloads an offered file in the app, without moving the cursor", async () => {
+      startModelDownload.mockResolvedValue({ id: "d1", file: VAE.name });
+      const { wrapper, store } = await mountOffer();
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+      await strip.find('[data-testid="model-download"]').trigger("click");
+      expect(startModelDownload).toHaveBeenCalledWith(VAE.name);
+      expect(strip.classes()).not.toContain("mss__offer--cur");
     });
 
     it("keeps the downloads out with the models on Stop asking", async () => {
@@ -3252,8 +3271,10 @@ describe("hand-made sets (#1520)", () => {
       store.toggleSet("hand:10");
       await wrapper.vm.$nextTick();
       const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+      // The file's own download button aside: it fetches, it does not add.
       const labels = strip
         .findAllComponents({ name: "AppButton" })
+        .filter((button) => button.attributes("data-testid") !== "model-download")
         .map((button) => button.text());
       expect(labels).toEqual(["Stop asking"]);
       expect(strip.attributes("aria-label")).not.toContain("Enter adds");
