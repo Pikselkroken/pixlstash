@@ -47,7 +47,32 @@ logger = logging.getLogger(__name__)
 # Input types whose value is a widget in the editor rather than a wire. A combo
 # declares its options as a list in place of a type name, so anything that is
 # not a string is a combo.
-_WIDGET_TYPES = frozenset({"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"})
+#
+# Besides the built-in five, the custom widgets the editor draws for a type
+# and queues as saved (frontend `scripts/widgets.ts`, no `serializeValue`): a
+# colour's hex string, a canvas's boxes. The frontend registers more; an input
+# of a type not listed is read as a socket, so a file that saved a value for it
+# is refused for carrying one more value than its inputs account for.
+_WIDGET_TYPES = frozenset(
+    {"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO", "COLOR", "BOUNDING_BOXES"}
+)
+
+# A widget the editor still queues but no longer saves, with the value it is
+# made with: ImageCompare's slider (`useImageCompareWidget.ts` sets
+# `widget.serialize = false`). It takes no slot; a file saved before that has
+# one, which `_EDITOR_WIDGETS` accounts for.
+_UNSAVED_WIDGETS = {"IMAGECOMPARE": ("", "")}
+
+# Widgets whose value the editor makes when the graph is queued, by rendering
+# its 3D view (`load3d.ts`, `load3dPreviewExtensions.ts`) or taking a webcam
+# frame (`webcamCapture.ts`). Nothing in the file is what would be sent.
+_RENDERED_WIDGET_TYPES = frozenset({"LOAD_3D", "WEBCAM"})
+
+# ComfyUI's CustomCombo keeps its options as string widgets after the choice
+# and a hidden `index`, and the editor queues `index` as the choice's place
+# among them, which the server returns as its INDEX output
+# (`extensions/core/customWidgets.ts`, `comfy_extras/nodes_logic.py`).
+_CUSTOM_COMBO = "CustomCombo"
 
 # The INT inputs the editor gives a control widget by name, declared or not,
 # and the values that control can hold (frontend `scripts/widgets.ts`).
@@ -106,6 +131,8 @@ _EDITOR_WIDGETS = {
     ),
     # The 3D preview (`saveMesh.ts`).
     "SaveGLB": (_anything,),
+    # The slider, from before the editor stopped saving it (`_UNSAVED_WIDGETS`).
+    "ImageCompare": (_anything,),
     # The text a run sends back (`useNodeProgressText.ts`), on the classes
     # whose server code sends it (`send_progress_text` in ComfyUI 0.42).
     **dict.fromkeys(
@@ -180,6 +207,8 @@ _TYPE_HOLDS = {
     ),
     "STRING": lambda value: isinstance(value, str),
     "BOOLEAN": lambda value: isinstance(value, bool),
+    "COLOR": lambda value: isinstance(value, str),
+    "BOUNDING_BOXES": lambda value: isinstance(value, list),
 }
 
 # Node.mode in the editor graph: 2 is muted, 4 is bypassed. Neither runs.
@@ -300,6 +329,15 @@ def _is_widget(type_field, options: dict) -> bool:
 def _extra_widget_slots(options: dict) -> int:
     """The declared control widget the editor draws right after its input."""
     return 1 if options.get("control_after_generate") else 0
+
+
+def _prompt_value(value):
+    """A widget value as the editor queues it.
+
+    A list is wrapped, because a bare list in a prompt is a wire; ComfyUI
+    unwraps it before the node runs (frontend ``utils/executionUtil.ts``).
+    """
+    return {"__value__": value} if isinstance(value, list) else value
 
 
 def _has_upload_button(declared: list) -> bool:
@@ -808,6 +846,33 @@ class _Converter:
                 return None
         return 1
 
+    def _custom_combo_index(
+        self, positional: list, consumed: int, inputs: dict, where
+    ) -> int | None:
+        """CustomCombo's queued ``index``, from the options after its choice.
+
+        What the editor sends: the first option equal to the choice, or -1
+        (``findIndex``). The saved ``index`` is not trusted, as the editor does
+        not send it either. Anything but a number there and strings after it
+        is a layout this does not know, and refused.
+        """
+        saved_index, *choices = positional[consumed:] or [None]
+        if not (
+            saved_index is None
+            or (isinstance(saved_index, int) and not isinstance(saved_index, bool))
+        ) or not all(isinstance(choice, str) for choice in choices):
+            self.problems.append(
+                f"{where} carries widget values the editor's options for it do "
+                "not account for, so its widget values do not line up with the "
+                "node this ComfyUI has"
+            )
+            return None
+        chosen = inputs.get("choice")
+        if not isinstance(chosen, str):
+            # Wired in: the editor still reads its own widget's value.
+            chosen = positional[0] if positional else None
+        return choices.index(chosen) if chosen in choices else -1
+
     def _connected_inputs(self, node: dict) -> dict[str, object]:
         return {
             str(entry.get("name")): entry["link"]
@@ -890,13 +955,23 @@ class _Converter:
                     )
                     return None
                 continue
+            if isinstance(type_field, str) and type_field in _RENDERED_WIDGET_TYPES:
+                self.problems.append(
+                    f"{where} gets its {name!r} from the ComfyUI editor when the "
+                    "workflow is queued (a render of its 3D view, or a webcam "
+                    "frame), which PixlStash cannot make"
+                )
+                return None
+            if isinstance(type_field, str) and type_field in _UNSAVED_WIDGETS:
+                inputs[name] = _prompt_value(list(_UNSAVED_WIDGETS[type_field]))
+                continue
             if not is_widget:
                 continue
             if by_name:
                 if name in overrides:
-                    inputs[name] = overrides[name]
+                    inputs[name] = _prompt_value(overrides[name])
                 elif name in widget_values:
-                    inputs[name] = widget_values[name]
+                    inputs[name] = _prompt_value(widget_values[name])
                 if type_field == _DYNAMIC_COMBO and not self._expand_dynamic(
                     declared, index, name, options, inputs.get(name), where
                 ):
@@ -917,7 +992,7 @@ class _Converter:
                         "with the node this ComfyUI has"
                     )
                     return None
-                inputs[name] = value
+                inputs[name] = _prompt_value(value)
             else:
                 # Past the end of the file's values: a widget this ComfyUI's
                 # node gained after the file was saved. ComfyUI loads such a
@@ -926,7 +1001,7 @@ class _Converter:
                 if default is _NO_DEFAULT:
                     undefaulted.append(name)
                 else:
-                    inputs[name] = default
+                    inputs[name] = _prompt_value(default)
             consumed += 1 + _extra_widget_slots(options)
             control = self._control_slot_by_name(
                 positional, consumed, name, type_field, options, where
@@ -971,6 +1046,12 @@ class _Converter:
             if unknown or missing:
                 return None
             return inputs
+        if node_class == _CUSTOM_COMBO:
+            chosen_at = self._custom_combo_index(positional, consumed, inputs, where)
+            if chosen_at is None:
+                return None
+            inputs["index"] = chosen_at
+            consumed = len(positional)
         trailing = list(_EDITOR_WIDGETS.get(node_class, ()))
         if upload:
             trailing.append(_upload_value)

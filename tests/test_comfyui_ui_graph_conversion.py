@@ -1736,3 +1736,100 @@ class TestWidgetsTheEditorAdds:
         prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
         assert problems == []
         assert prompt["1"]["inputs"] == {"image": "a.png", "channel": "red"}
+
+
+# ---------------------------------------------------------------------------
+# Custom widget types: sent as saved, sent unsaved, or made at queue time
+# ---------------------------------------------------------------------------
+
+CUSTOM_WIDGET_OBJECT_INFO = {
+    "ColorToRGBInt": {
+        "input": {"required": {"color": ["COLOR", {"default": "#ffffff"}]}},
+        "input_order": {"required": ["color"]},
+    },
+    "CreateBoundingBoxes": {
+        "input": {
+            "required": {
+                "width": ["INT", {}],
+                "editor_state": ["BOUNDING_BOXES", {"default": []}],
+            }
+        },
+        "input_order": {"required": ["width", "editor_state"]},
+    },
+    "ImageCompare": {
+        "input": {
+            "required": {"compare_view": ["IMAGECOMPARE", {}]},
+            "optional": {"image_a": ["IMAGE", {}]},
+        },
+        "input_order": {"required": ["compare_view"], "optional": ["image_a"]},
+    },
+    "Preview3DAdvanced": {
+        "input": {
+            "required": {"viewport_state": ["LOAD_3D", {}], "width": ["INT", {}]}
+        },
+        "input_order": {"required": ["viewport_state", "width"]},
+    },
+    "CustomCombo": {
+        "input": {"required": {"choice": ["COMBO", {"options": []}]}},
+        "input_order": {"required": ["choice"]},
+    },
+}
+
+
+class TestCustomWidgetTypes:
+    def test_a_colour_is_a_widget_and_its_value_is_sent(self):
+        graph = _graph([_node(1, "ColorToRGBInt", widgets=["#0a9299"])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"color": "#0a9299"}
+
+    def test_a_number_in_a_colour_slot_is_refused(self):
+        graph = _graph([_node(1, "ColorToRGBInt", widgets=[3])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("takes a COLOR" in p for p in problems)
+
+    def test_a_list_value_is_wrapped_so_it_is_not_read_as_a_wire(self):
+        boxes = [{"x": 0, "y": 0, "width": 8, "height": 8}]
+        graph = _graph([_node(1, "CreateBoundingBoxes", widgets=[64, boxes])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {
+            "width": 64,
+            "editor_state": {"__value__": boxes},
+        }
+
+    def test_an_unsaved_widget_is_sent_with_the_value_it_is_made_with(self):
+        """`compare_view` is required: without it ComfyUI refuses the run."""
+        graph = _graph([_node(1, "ImageCompare", widgets=[])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"compare_view": {"__value__": ["", ""]}}
+
+    def test_a_file_from_when_it_was_saved_still_converts(self):
+        saved = {"before": "/api/view?a", "after": "/api/view?b"}
+        graph = _graph([_node(1, "ImageCompare", widgets=[saved])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"compare_view": {"__value__": ["", ""]}}
+
+    def test_a_value_rendered_at_queue_time_is_refused(self):
+        graph = _graph([_node(1, "Preview3DAdvanced", widgets=["", 1024])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("'viewport_state' from the ComfyUI editor" in p for p in problems)
+
+    def test_custom_combo_sends_the_choices_place_among_its_options(self):
+        # The saved index is stale (0); the editor queues where the choice is.
+        values = ["SFX", 0, "Music", "Instrument", "SFX", ""]
+        graph = _graph([_node(1, "CustomCombo", widgets=values)], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"choice": "SFX", "index": 2}
+
+    def test_custom_combo_with_a_non_string_option_is_refused(self):
+        values = ["SFX", 0, "Music", 5, ""]
+        graph = _graph([_node(1, "CustomCombo", widgets=values)], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("options for it do not account" in p for p in problems)
