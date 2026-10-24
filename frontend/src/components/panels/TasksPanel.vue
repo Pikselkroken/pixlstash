@@ -1745,22 +1745,33 @@ const tmSystemItems = computed(() => {
   color: rgba(var(--v-theme-on-surface), 0.6);
 }
 
+/* The figure and its actions share one cell, the hidden one keeping its
+   space, so the row is the same size at rest and on hover. */
+.tm-figure:has(> .tm-acts) {
+  display: grid;
+  align-items: center;
+  justify-items: end;
+}
+
+.tm-figure:has(> .tm-acts) > * {
+  grid-area: 1 / 1;
+}
+
 .tm-acts {
-  display: none;
+  display: inline-flex;
+  visibility: hidden;
   justify-content: flex-end;
   gap: var(--space-1);
 }
 
 .tm-row:hover .tm-acts,
 .tm-row:focus-within .tm-acts {
-  display: inline-flex;
+  visibility: visible;
 }
 
-.tm-row--run:hover .tm-fig-text,
-.tm-row--run:focus-within .tm-fig-text,
-.tm-row--waiting:hover .tm-fig-text,
-.tm-row--waiting:focus-within .tm-fig-text {
-  display: none;
+.tm-row:hover .tm-figure:has(> .tm-acts) > .tm-fig-text,
+.tm-row:focus-within .tm-figure:has(> .tm-acts) > .tm-fig-text {
+  visibility: hidden;
 }
 
 .tm-act,
