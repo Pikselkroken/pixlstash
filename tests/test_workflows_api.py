@@ -14266,9 +14266,9 @@ def test_a_runs_image_size_is_read_from_its_graph_and_its_pictures():
         },
     }
     assert vram_history.run_pixels(graph) == 2 * 1024 * 1024
-    # A size wired from a primitive is read through the link.
+    # A size wired from a primitive is read through the link, both sides.
     graph["9"] = {"class_type": "PrimitiveInt", "inputs": {"value": 4096}}
-    graph["2"]["inputs"]["height"] = 4096
+    graph["2"]["inputs"]["height"] = ["9", 0]
     assert vram_history.run_pixels(graph) == 4096 * 4096
     del graph["9"]
     assert vram_history.run_pixels(graph, [None, 4096 * 4096]) == 4096 * 4096
