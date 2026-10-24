@@ -7060,9 +7060,16 @@ unchanged by the tab's existence.
   template". Run is refused for it in the pill, the context menu and the
   Workflow tab, with the reason; *Open in ComfyUI* stays, since saving it there
   is what finishes it.
-- **Not built:** the design's *Download the missing* button. The app has no
-  model download path yet (#1866); a missing file's row in the inspector links
-  to where its template says to get it (`https:` only).
+- **A missing file** the server can fetch (`downloadable`) gets the run's own
+  `ModelDownloadButton` in the inspector's row, so the download lands in the
+  Tasks tab the same way before the template is added as after; any other
+  missing file links to where its template says to get it (`https:` only), as
+  does every one in a read-only session, which cannot download. The shelf's
+  New workflow set picker (`WorkflowTemplatePicker`) and a set's template offer
+  strip (`ModelSetSlotsPanel`, "Not on your shelf: …") do the same: their files
+  come from the committed list the download reads, so every `https:` file there
+  is fetchable by its name. **Not built:** the design's *Download the missing*, all
+  at once.
 
 ---
 

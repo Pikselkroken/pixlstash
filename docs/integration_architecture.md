@@ -1502,9 +1502,15 @@ view's Templates tab reads `GET /comfyui/templates` (`listTemplates`):
 with `detail` being the tab's empty state. Each template is `{key, module,
 name, source: builtin|pack|partner, pack_loaded, title, description,
 category, media_type, tags, model_names, date, usage, size, tutorial_url,
-providers, thumbnail, files: [{name, directory, url, present}]}`, `providers`
-being who a partner template's API nodes call, from ComfyUI's `logos`; a
-partner card wears ComfyUI's own "Partner API" crown badge. Readiness (ready,
+providers, thumbnail, files: [{name, directory, url, present, downloadable}]}`,
+`providers` being who a partner template's API nodes call, from ComfyUI's
+`logos`; a partner card wears ComfyUI's own "Partner API" crown badge.
+`downloadable` is `POST /model-downloads`' own lookup by name (the committed
+template list), so a pack file with a `url` can still be false. `present` is
+worked out on every read, and a `models_arrived` re-reads the list the tab
+holds (`onModelsArrived`) without `refresh` (so ComfyUI is asked again only
+once the server's ten-minute listing has lapsed), keeping the list it has if
+ComfyUI does not answer. Readiness (ready,
 missing, partner, pack not loaded) is the client's reading of `source`,
 `pack_loaded` and `present`, and the server sends no sizes per file. Its
 picture is `GET /comfyui/templates/thumbnail?module=&name=`, built by

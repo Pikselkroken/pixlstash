@@ -21,6 +21,7 @@ import { useTasksStore } from "../stores/useTasksStore";
 import { useWorkflowsStore } from "../stores/useWorkflowsStore";
 import { patchWorkflowCard } from "../api/workflows";
 import { useModelShelfStore } from "../stores/useModelShelfStore";
+import { useWorkflowTemplatesStore } from "../stores/useWorkflowTemplatesStore";
 import {
   isFullRestoreRequestInFlight,
   prepareForFullRestoreTransition,
@@ -564,6 +565,8 @@ export function useUpdatesSocket({
         modelShelfStore.onModelsArrived(
           Array.isArray(payload.model_ids) ? payload.model_ids : [],
         );
+        // A template's files are marked on the shelf or not as of its read.
+        useWorkflowTemplatesStore().onModelsArrived();
       } else if (payload?.type === "snapshot_created" && !isReadOnly.value) {
         snapshotsStore.onSnapshotCreated();
       } else if (payload?.type === "snapshot_deleted" && !isReadOnly.value) {

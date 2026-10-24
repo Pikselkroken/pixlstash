@@ -264,14 +264,18 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
    * (the server keeps no failed read); concurrent calls share one read, except
    * that a re-read asked for during a plain read is made once that one lands
    * rather than answered with a list ComfyUI was not asked for again.
+   * `reread` reads it again without `refresh`, for the files' `present`, which
+   * the server works out on every read: after any read in flight, since that
+   * one may have left before the change, and keeping the list it has if
+   * ComfyUI does not answer or the read fails.
    */
-  async function fetchTemplates({ refresh = false } = {}) {
+  async function fetchTemplates({ refresh = false, reread = false } = {}) {
     if (inflight) {
-      if (!refresh || inflightRefresh) return inflight;
+      if (!reread && (!refresh || inflightRefresh)) return inflight;
       await inflight;
-      return fetchTemplates({ refresh: true });
+      return fetchTemplates({ refresh, reread });
     }
-    if (loaded.value && reachable.value && !refresh) return undefined;
+    if (loaded.value && reachable.value && !refresh && !reread) return undefined;
     loading.value = true;
     error.value = "";
     const mine = generation;
@@ -280,6 +284,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
       try {
         const body = await listTemplates({ refresh });
         if (mine !== generation) return;
+        if (reread && body?.reachable === false) return;
         templates.value = Array.isArray(body?.templates) ? body.templates : [];
         reachable.value = body?.reachable !== false;
         comfyuiUrl.value = body?.comfyui_url ?? "";
@@ -289,7 +294,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
         selectedKeys.value = selectedKeys.value.filter((key) => keys.has(key));
       } catch (err) {
         console.warn("[templates] could not read the template list", err);
-        if (mine === generation) {
+        if (mine === generation && !reread) {
           error.value = errorMessage(err, "Could not read the templates.");
         }
       } finally {
@@ -302,6 +307,11 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     })();
     inflight = read;
     return read;
+  }
+
+  /** Models reached the shelf: a list already read re-reads what is present. */
+  function onModelsArrived() {
+    return loaded.value ? fetchTemplates({ reread: true }) : undefined;
   }
 
   const partnerCount = computed(
@@ -548,6 +558,7 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
     activeFilterCount,
     filterOfLabel,
     fetchTemplates,
+    onModelsArrived,
     setFilters,
     toggleFilter,
     clearFilters,
