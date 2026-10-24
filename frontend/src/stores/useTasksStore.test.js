@@ -570,5 +570,9 @@ describe("runningDownload", () => {
     expect(store.runningDownload({ file: "shared.safetensors", slot: "vae" })).toBe(null);
     expect(store.runningDownload({ sha256: sha.toUpperCase(), slot: "vae" })?.id).toBe("1");
     expect(store.runningDownload({ file: "done.safetensors" })).toBe(null);
+    // Asked for by another digest: another file, though named the same.
+    expect(
+      store.runningDownload({ file: "shared.safetensors", sha256: "b".repeat(64) }),
+    ).toBe(null);
   });
 });

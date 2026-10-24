@@ -320,7 +320,8 @@ def running_download(
     checkpoint being fetched is not on its way. Compared by the set slot each
     folder fills (:func:`directory_slot`), so ``unet`` and
     ``diffusion_models``, or ``clip`` and ``text_encoders``, are one kind. A
-    digest names one file wherever it goes, so it is matched alone.
+    digest names one file wherever it goes, so it is matched alone, and two
+    known digests that differ are two files whatever their names.
     """
     name = os.path.basename((file or "").replace("\\", "/")).casefold()
     digest = (sha256 or "").strip().lower()
@@ -332,7 +333,13 @@ def running_download(
             if digest and entry.get("sha256") == digest:
                 return _public(entry)
             same_kind = kind is None or entry.get("slot") in (None, kind)
-            if name and same_kind and entry["file"].casefold() == name:
+            other_file = bool(digest and entry.get("sha256"))
+            if (
+                name
+                and same_kind
+                and not other_file
+                and entry["file"].casefold() == name
+            ):
                 return _public(entry)
     return None
 

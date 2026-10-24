@@ -168,6 +168,7 @@ export const useTasksStore = defineStore("tasks", () => {
    * *slot*, the set slot the asker's kind fills, keeps a name match to a
    * download of that kind, as the server's `running_download` does with a
    * folder: a VAE named like a checkpoint being fetched is not on its way.
+   * Nor is a file asked for by a digest the download does not have.
    */
   function runningDownload({ file = "", sha256 = "", slot = "" } = {}) {
     const name = String(file).split(/[\\/]/).pop().toLowerCase();
@@ -178,6 +179,8 @@ export const useTasksStore = defineStore("tasks", () => {
           (digest && d.sha256 === digest) ||
           (name &&
             (!slot || !d.slot || d.slot === slot) &&
+            // Two known digests that differ are two files, named alike or not.
+            !(digest && d.sha256) &&
             String(d.file).toLowerCase() === name),
       ) ?? null
     );

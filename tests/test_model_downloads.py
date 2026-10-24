@@ -700,6 +700,31 @@ def test_a_lora_named_like_a_checkpoint_on_its_way_is_not_on_its_way():
     )
 
 
+def test_a_digest_another_download_shares_a_name_with_is_still_missing():
+    """Wrong if a VAE asked for by one digest reads as on its way while a file
+    of the same name but another digest downloads: that download will not
+    satisfy the loader, so it must stay missing and offered."""
+    _running("qwen_image_vae.safetensors", sha256="e" * 64, slot="vae")
+    graph = {
+        "1": {"class_type": "PixlStashVAELoader", "inputs": {"vae_sha256": _QWEN_VAE}},
+        "2": {"class_type": "SaveImage", "inputs": {}},
+    }
+    object_info = {
+        cls: {"input": {"required": {}}} for cls in ("PixlStashVAELoader", "SaveImage")
+    }
+    reasons, _ = judge(graph, object_info, None, digest_present=lambda d: False)
+    assert MODELS_DOWNLOADING not in {r.code for r in reasons}
+    assert [
+        m["sha256"]
+        for m in next(r for r in reasons if r.code == MISSING_MODELS).detail["models"]
+    ] == [_QWEN_VAE]
+    # A download with no listed digest still matches by its name.
+    model_downloads._downloads.clear()
+    _running("qwen_image_vae.safetensors", slot="vae")
+    reasons, _ = judge(graph, object_info, None, digest_present=lambda d: False)
+    assert MODELS_DOWNLOADING in {r.code for r in reasons}
+
+
 def test_a_listed_digest_is_kept_lowercase(hub, target, adapter_bytes, linked):
     """Wrong if a digest the list spells in capitals is stored as spelled:
     every digest it is compared with (a loader's, a set member's) is lowercase."""
