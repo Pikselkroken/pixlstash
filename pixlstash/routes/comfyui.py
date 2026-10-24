@@ -2491,8 +2491,12 @@ def create_router(server) -> APIRouter:
         # Only to say which packs loaded, so the minute-old map is enough.
         object_info = _read_object_info(comfyui_url, cached=True)[0]
         try:
+            # No map means ComfyUI may have stopped since its listing was
+            # kept, so it is asked again rather than trusted for ten minutes:
+            # a kept listing would send every graph and picture read to an
+            # address nothing answers on.
             listing = comfyui_templates.read_listing(
-                comfyui_url, object_info, refresh=refresh
+                comfyui_url, object_info, refresh=refresh or object_info is None
             )
         except comfyui_templates.TemplatesUnavailable as exc:
             logger.info(

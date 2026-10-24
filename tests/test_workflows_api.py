@@ -25320,6 +25320,22 @@ def test_a_template_added_with_no_comfyui_is_a_draft_of_the_shipped_graph(
     assert r.json()["editor"]["definitions"] == _TEMPLATE_GRAPH["definitions"]
 
 
+def test_a_comfyui_that_stopped_since_its_list_was_kept_gets_the_shipped_copy(
+    workflow_env, comfyui_templates_served
+):
+    """Wrong if the list kept from a live ComfyUI is still used once it stops:
+    every Add would then fail, reading graphs from an address nothing answers.
+    """
+    owner = workflow_env.owner
+    assert _templates(owner)["reachable"] is True
+    comfyui_templates_served.served.clear()
+    comfyui_templates_served.object_info = None
+    assert _templates(owner)["reachable"] is False
+    (added,) = _add_templates(owner, ("default", "image_example"))["added"]
+    assert added["draft"] is True
+    assert comfyui_templates_served.github == [("/image_example-1.webp", None)]
+
+
 def test_every_shipped_template_has_its_graph_and_files():
     """The committed catalogue and graphs agree (scripts/build_template_suggestions.py).
 
