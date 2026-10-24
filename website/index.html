@@ -671,7 +671,7 @@
 
       <div class="page-hero">
         <a class="launch-pill" href="whatsnew.html"
-          ><span>New</span> PixlStash 1.12: Workflows and Recipes →</a
+          ><span>New</span> PixlStash 1.13: Inpainting and model downloads →</a
         >
         <h1>A desktop image manager for creators</h1>
         <p>
@@ -704,20 +704,18 @@
       <section class="launch">
         <div class="launch-head">
           <div>
-            <span class="launch-kicker"
-              >PixlStash 1.12 · our biggest release yet</span
-            >
-            <h2>Pick a person,<br />type a prompt,<br />press Run</h2>
+            <span class="launch-kicker">PixlStash 1.13 · inpainting and downloads</span>
+            <h2>Mark what to change,<br />say what goes there,<br />press Run</h2>
             <p class="launch-lead">
-              PixlStash now makes pictures as well as keeping them. <span class="nowrap">Right-click</span>
-              a person, choose Create with LoRA, and type what you want to see.
-              PixlStash picks a workflow for their LoRA, runs it in your
-              ComfyUI, and files the new pictures back under that person.
+              The picture viewer has paint tools now. Mark a part of a picture,
+              describe the change, and an inpaint workflow redraws only that
+              part. Three inpaint workflows come with PixlStash, and your own
+              inpaint workflows run there too.
             </p>
           </div>
           <div class="launch-video">
             <video
-              src="assets/WorkflowClementine.mp4"
+              src="assets/InpaintBoth.mp4"
               autoplay
               loop
               muted
@@ -727,54 +725,52 @@
         </div>
         <div class="launch-grid">
           <div class="launch-tile">
-            <video
-              src="assets/WorkflowsMultipleLoRAs.mp4"
-              autoplay
-              loop
-              muted
-              playsinline
-              preload="metadata"
-            ></video>
-            <h3>Two people, one picture</h3>
+            <img
+              src="assets/TemplateDownloads.jpg"
+              alt="The Templates tab: ComfyUI template cards marked Ready to run or with how many files are missing"
+              loading="lazy"
+            />
+            <h3>Every ComfyUI template</h3>
             <p>
-              Pick two people in the Run window, describe them both, and get one
-              picture with both of them in it.
+              A Templates tab lists what your ComfyUI offers, which files each
+              needs and which you have. Add one and it loads from your library
+              and shelf, and saves back to PixlStash.
             </p>
           </div>
           <div class="launch-tile">
             <img
-              src="assets/Workflows.jpg"
-              alt="The Workflows screen: a grid of workflow cards, each covered with the pictures it made"
+              src="assets/ModelDownload.jpg"
+              alt="The Tasks tab downloading a 19 GB checkpoint, with a progress bar and a cancel button"
               loading="lazy"
             />
-            <h3>Your workflows are a library</h3>
+            <h3>Missing models, downloaded</h3>
             <p>
-              Every workflow your pictures were made with becomes a card you can
-              run again, and every picture shows the recipe that made it.
+              One press downloads a model a workflow is missing, into the folder
+              you set in Settings › Models, and puts it on your shelf. No
+              browser download to move afterwards.
             </p>
           </div>
           <div class="launch-tile">
             <img
-              src="assets/ConnectComfyUI.jpg"
-              alt="PixlStash's Connect ComfyUI dialog: ComfyUI reached, PixlStash nodes installed, the two apps linked"
+              src="assets/WaitingForGPU.png"
+              alt="The Tasks tab with a ComfyUI run waiting for the GPU, showing what it needs and what is free"
               loading="lazy"
             />
-            <h3>One click installs our ComfyUI nodes</h3>
+            <h3>Runs wait for the GPU</h3>
             <p>
-              Settings › ComfyUI finds the ComfyUI on your computer, installs
-              the PixlStash nodes, restarts it and links the two apps. The nodes
-              are how ComfyUI reads your library and sends new pictures back.
+              A run that does not fit waits for GPU memory instead of running
+              out of it, and PixlStash unloads its own models to make room.
             </p>
           </div>
         </div>
         <div class="launch-foot">
           <p>
-            Workflows are brand new, so treat them as a preview and tell us what
-            breaks. Next up is 2.0: training a LoRA from your library, inside
-            PixlStash.
+            New to workflows? 1.12 turned the ComfyUI workflows behind your
+            pictures into a library you can run. Next up is 2.0: training a LoRA
+            from your library, inside PixlStash.
           </p>
           <a class="btn btn-primary" href="whatsnew.html"
-            >See everything in 1.12</a
+            >See everything in 1.13</a
           >
         </div>
       </section>
