@@ -241,8 +241,9 @@ def _need(rows: list, pixels: int | None) -> int | None:
         peak = row["peak_mb"] * max(1.0, pixels / row["pixels"] if pixels else 1.0)
         ceiling = row["device_total_mb"] - safety_margin_mb(row["device_total_mb"])
         if ceiling <= 0:
-            # A card whose size was not read: nothing to cap by.
-            needs.append(int(peak * COMFYUI_PEAK_MARGIN))
+            # A card whose size was not read: no ceiling to judge the margin
+            # by, so the need is the peak the run completed in.
+            needs.append(int(peak))
             continue
         # ponytail: "filled the card" is read off the card's size, not the
         # room the run actually had; record that per run if it misjudges.

@@ -14338,8 +14338,8 @@ def test_a_peak_that_filled_the_card_asks_for_what_the_card_can_grant(held):
     assert need_of(total - 100) == ceiling
     needs = [need_of(peak) for peak in range(15000, total + 1, 50)]
     assert needs == sorted(needs), "a larger peak asked for less"
-    # A card whose size was not read caps nothing, and never goes negative.
-    assert need_of(5000, device_total=0) == int(5000 * margin)
+    # A card whose size was not read: the peak itself, never negative.
+    assert need_of(5000, device_total=0) == 5000
     # Through the hub and onto the card.
     _insert_peaks(hub, [(total - 100, None, "2026-10-01")])
     try:
