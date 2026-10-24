@@ -392,6 +392,29 @@
             </Tooltip>
           </template>
 
+          <!-- Upscale… (#1868): this picture, by the factor and model the Run
+               popup's added upscale remembers, stacked on top of it. -->
+          <Tooltip
+            v-if="canUpscaleCurrent"
+            location="bottom"
+            :text="upscaleTitle"
+            :describe="false"
+          >
+            <template #activator="{ props: upscaleTipProps }">
+              <button
+                v-bind="upscaleTipProps"
+                class="overlay-icon-btn"
+                type="button"
+                data-testid="overlay-upscale"
+                :aria-label="upscaleTitle"
+                @click.stop="upscale.openFor([image.id])"
+                :class="{ hidden: chromeHidden }"
+              >
+                <v-icon size="24">mdi-arrow-expand-all</v-icon>
+              </button>
+            </template>
+          </Tooltip>
+
           <!-- Compare two pictures Ctrl-clicked in the filmstrip. Shown greyed
                until there are two: the tip says how to pick them. -->
           <button
@@ -1147,6 +1170,7 @@ import { listProjects } from "../../api/projects";
 import { useGenStackPrefsStore } from "../../stores/useGenStackPrefsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useUpscaleStore } from "../../stores/useUpscaleStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useProjectStore } from "../../stores/useProjectStore";
@@ -1388,6 +1412,15 @@ const editTabShown = computed(
     !!image.value?.id &&
     !isSupportedVideoFile(getOverlayFormat(image.value)),
 );
+// Upscale… on this picture (#1868): where the Edit tab can run, a picture.
+const upscale = useUpscaleStore();
+const canUpscaleCurrent = computed(() => editTabShown.value);
+const upscaleTitle = computed(() => {
+  // Before the shelf is read the model is not known: the verb alone.
+  if (upscale.models === null) return "Upscale…";
+  const how = upscale.model?.name || "a Lanczos resize";
+  return `Upscale ${upscale.factor}× with ${how}`;
+});
 // Whether a run the Edit tab started is still going. While that tab is on
 // screen its own bar reports the run, so the lightbox's ComfyUI bar would be a
 // second copy. A run from the grid's menus still gets the lightbox bar.

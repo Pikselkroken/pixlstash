@@ -611,6 +611,7 @@
                   isThumbnailReady(img.id) &&
                   img.thumbnail &&
                   (getOpenStackPlace(img) ||
+                    newBatch.isNew(img.id) ||
                     (gridStore.showProblemIcon && hasPenalisedTags(img)) ||
                     img.reference_folder_id ||
                     lockedSetsStore.isLocked(img.id) ||
@@ -618,6 +619,14 @@
                 "
                 class="thumbnail-top-left-badges"
               >
+                <!-- Made by the last run (#1868), until the next one ends: the
+                     batch to pick the keepers from. -->
+                <span
+                  v-if="newBatch.isNew(img.id)"
+                  class="new-run-chip"
+                  data-testid="new-run-chip"
+                  ><Tooltip text="Made by your last run" activator="parent" />New</span
+                >
                 <!-- Every picture of an open stack carries its place, so the
                      order is visible before anyone hovers: the signal that the
                      order exists and can be changed. -->
@@ -1255,6 +1264,7 @@ import { useTasksStore } from "../../stores/useTasksStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useLockedSetsStore } from "../../stores/useLockedSetsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useNewBatchStore } from "../../stores/useNewBatchStore";
 import { useScrapheapRetentionStore } from "../../stores/useScrapheapRetentionStore";
 import {
   GHOST_PENDING,
@@ -5864,6 +5874,15 @@ onUnmounted(() => {
   runDialogStore.close();
   runDialogStore.context = {};
 });
+
+// "Select them" on the last run's notice (#1868).
+const newBatch = useNewBatchStore();
+watch(
+  () => newBatch.selectAsk,
+  () => {
+    selectedImageIds.value = [...newBatch.ids];
+  },
+);
 
 // The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context
 // they describe: the sentence is about THIS selection in THIS view, and it

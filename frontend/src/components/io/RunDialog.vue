@@ -722,8 +722,12 @@
 
         <!-- The workflow's optional stages (#1623), each ticked as its
              default recipe has it. One switched off is sent as `skip_stages`,
-             one switched on as `keep_stages`. -->
-        <fieldset v-if="stageRows.length" class="rund-f rund-f--4 rund-stages">
+             one switched on as `keep_stages`. A workflow with no upscale of
+             its own gets one added for this run (#1868), sent as `upscale`. -->
+        <fieldset
+          v-if="stageRows.length || addedUpscaleOffered"
+          class="rund-f rund-f--4 rund-stages"
+        >
           <legend class="rund-l">Stages</legend>
           <div
             v-for="stage in stageRows"
@@ -749,6 +753,35 @@
               :value="stageDefault(stage.name) ? 'on' : 'off'"
               :label="stage.label.toLowerCase()"
               @reset="setStage(stage.name, stageDefault(stage.name))"
+            />
+          </div>
+          <div
+            v-if="addedUpscaleOffered"
+            class="rund-f rund-check rund-added-upscale"
+          >
+            <input
+              :id="`${stageId}-added-upscale`"
+              class="rund-box"
+              type="checkbox"
+              data-testid="rund-added-upscale"
+              :checked="addedUpscale"
+              :disabled="submitting"
+              @change="setAddedUpscale($event.target.checked)"
+            />
+            <label :for="`${stageId}-added-upscale`"
+              >Upscale<span class="rund-quiet"> · added for this run</span></label
+            >
+            <RunResetChip
+              v-if="addedUpscale"
+              value="off"
+              label="upscale"
+              @reset="setAddedUpscale(false)"
+            />
+            <UpscaleChoice
+              v-if="addedUpscale"
+              class="rund-upscale-choice"
+              :size="outputSize"
+              :disabled="submitting"
             />
           </div>
         </fieldset>
@@ -1243,6 +1276,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useFavouritesStore, favouritesFirst } from "../../stores/useFavouritesStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useUpscaleStore } from "../../stores/useUpscaleStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
@@ -1297,6 +1331,7 @@ import PicturePicker from "../widgets/PicturePicker.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import RunReasonNotice from "./RunReasonNotice.vue";
 import RunResetChip from "./RunResetChip.vue";
+import UpscaleChoice from "./UpscaleChoice.vue";
 
 const props = defineProps({
   /**
@@ -2204,7 +2239,37 @@ async function setStage(name, on) {
 
 function clearStages() {
   for (const name of Object.keys(stageChoice)) delete stageChoice[name];
+  addedUpscale.value = false;
 }
+
+const upscale = useUpscaleStore();
+/**
+ * The upscale this run adds (#1868): offered on every workflow whose graph has
+ * no upscale of its own, which keeps its own row above, and never on an
+ * Upscaler, which already is the upscale. Off by default, for this run only.
+ */
+const addedUpscaleOffered = computed(
+  () =>
+    Boolean(card.value) &&
+    !(card.value.specials || []).includes("upscale") &&
+    card.value.type !== "upscale",
+);
+const addedUpscale = ref(false);
+
+async function setAddedUpscale(on) {
+  addedUpscale.value = on;
+  // The answer changes: the upscale model may be one this ComfyUI lacks.
+  await runPreflight();
+}
+
+/** What the run makes, before the upscale: the form's width and height. */
+const outputSize = computed(() => {
+  const [width, height] = SIZE_INPUTS.map((name) => {
+    const field = byInput.value[name];
+    return field ? Number(currentValue(field)) : NaN;
+  });
+  return width > 0 && height > 0 ? { width, height } : null;
+});
 
 /** The stages of a set of changes switched *on* or off, as a run names them. */
 function stagesSet(changes, on) {
@@ -4154,6 +4219,9 @@ function runBody() {
   const on = stagesSet(runChanges.value, true);
   if (off.length) body.skip_stages = off;
   if (on.length) body.keep_stages = on;
+  if (addedUpscale.value && addedUpscaleOffered.value) {
+    body.upscale = upscale.body();
+  }
   // The model rows, by the default recipe's loader address (#1623).
   if (runModels.value.length) body.models = runModels.value;
   if (choiceFixes.value.length) {
@@ -5672,6 +5740,15 @@ button.rund-in-tile.rund-in-tile--off {
 
 .rund-check label {
   cursor: pointer;
+}
+
+/* The added upscale's factor and model wrap onto a line of their own. */
+.rund-added-upscale {
+  flex-wrap: wrap;
+}
+
+.rund-upscale-choice {
+  flex-basis: 100%;
 }
 
 .rund-box {

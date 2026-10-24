@@ -284,6 +284,34 @@ export async function runWorkflowCard(body) {
 }
 
 /**
+ * Upscale pictures (#1868): each one is upscaled in ComfyUI and the result
+ * stacked on top of it. One run per picture, followed as `runWorkflowCard`'s
+ * are.
+ *
+ * @param {number[]} pictureIds
+ * @param {{factor: number, model_sha256: ?string}} upscale
+ * @returns {Promise<{status: string, runs: number, prompts: Array<Object>}>}
+ */
+export async function upscalePictures(pictureIds, upscale) {
+  return unwrap(
+    apiClient.post("/workflows/upscale", { picture_ids: pictureIds, upscale }),
+  );
+}
+
+/**
+ * What `upscalePictures` would start from: each picture's size, and whether
+ * the run that made it upscaled it already. Submits nothing.
+ *
+ * @param {number[]} pictureIds
+ * @returns {Promise<{pictures: Array<{picture_id: number, width: ?number, height: ?number, upscaled: boolean}>}>}
+ */
+export async function preflightUpscale(pictureIds) {
+  return unwrap(
+    apiClient.post("/workflows/upscale/preflight", { picture_ids: pictureIds }),
+  );
+}
+
+/**
  * How one run `runWorkflowCard` queued stands: `waiting` (held by PixlStash
  * for GPU memory), `running`, `completed` or `failed`, with the message the app
  * shows. Takes the run's `run_id` or its `prompt_id`, which is null while the
