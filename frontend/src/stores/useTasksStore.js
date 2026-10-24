@@ -164,15 +164,21 @@ export const useTasksStore = defineStore("tasks", () => {
    * The running download of *file* (by its own name, any case, as the server
    * matches it) or of *sha256*, or null. What a workflow row or a set member
    * asks to say it is on its way rather than missing.
+   *
+   * *slot*, the set slot the asker's kind fills, keeps a name match to a
+   * download of that kind, as the server's `running_download` does with a
+   * folder: a VAE named like a checkpoint being fetched is not on its way.
    */
-  function runningDownload({ file = "", sha256 = "" } = {}) {
+  function runningDownload({ file = "", sha256 = "", slot = "" } = {}) {
     const name = String(file).split(/[\\/]/).pop().toLowerCase();
     const digest = String(sha256 || "").toLowerCase();
     return (
       runningDownloads.value.find(
         (d) =>
-          (name && String(d.file).toLowerCase() === name) ||
-          (digest && d.sha256 === digest),
+          (digest && d.sha256 === digest) ||
+          (name &&
+            (!slot || !d.slot || d.slot === slot) &&
+            String(d.file).toLowerCase() === name),
       ) ?? null
     );
   }

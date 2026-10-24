@@ -702,7 +702,9 @@ def judge(
         models += missing_digest_models(graph, digest_present)
     downloading = []
     for model in models:
-        live = running_download(model["file"], model.get("sha256"))
+        live = running_download(
+            model["file"], model.get("sha256"), folder=model.get("folder")
+        )
         if live is not None:
             model["percent"] = live["percent"]
             downloading.append(model)
@@ -895,7 +897,7 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
         on_its_way = [
             str(entry.get("value"))
             for entry in missing
-            if running_download(str(entry.get("value"))) is not None
+            if running_download(str(entry.get("value")), folder="loras") is not None
         ]
         if on_its_way:
             # The owner put it in and PixlStash is fetching it: a run without

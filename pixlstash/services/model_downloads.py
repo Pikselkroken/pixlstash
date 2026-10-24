@@ -232,7 +232,8 @@ def start_download(
         # What a workflow or a set can name it by while it is still on its way:
         # the digest the list records (None for a gated link), the ComfyUI
         # folder it is for, and the set slot that folder fills.
-        "sha256": source.get("sha256"),
+        # Lowercased as every digest compared against it is.
+        "sha256": (source.get("sha256") or "").lower() or None,
         "directory": source.get("directory"),
         "slot": directory_slot(source.get("directory")),
     }
@@ -304,23 +305,34 @@ def live_downloads() -> list[dict]:
         return [_public(d) for d in _downloads.values()]
 
 
-def running_download(file: str, sha256: Optional[str] = None) -> Optional[dict]:
+def running_download(
+    file: str, sha256: Optional[str] = None, folder: Optional[str] = None
+) -> Optional[dict]:
     """The running download of *file* or of *sha256*, or None.
 
     *file* by its own name, case folded and without the loader's subfolder, as
     :func:`download_source` reads it; *sha256* where the list recorded one. A
     run that names a model still on its way is refused rather than submitted
     (``workflow_run_service.MODELS_DOWNLOADING``).
+
+    *folder*, the ComfyUI folder the caller's loader reads, keeps a name match
+    to a download of the same kind: a LoRA that shares its file name with a
+    checkpoint being fetched is not on its way. Compared by the set slot each
+    folder fills (:func:`directory_slot`), so ``unet`` and
+    ``diffusion_models``, or ``clip`` and ``text_encoders``, are one kind. A
+    digest names one file wherever it goes, so it is matched alone.
     """
     name = os.path.basename((file or "").replace("\\", "/")).casefold()
     digest = (sha256 or "").strip().lower()
+    kind = directory_slot(folder) if folder else None
     with _lock:
         for entry in _downloads.values():
             if entry["status"] != STATUS_RUNNING:
                 continue
-            if (name and entry["file"].casefold() == name) or (
-                digest and entry.get("sha256") == digest
-            ):
+            if digest and entry.get("sha256") == digest:
+                return _public(entry)
+            same_kind = kind is None or entry.get("slot") in (None, kind)
+            if name and same_kind and entry["file"].casefold() == name:
                 return _public(entry)
     return None
 

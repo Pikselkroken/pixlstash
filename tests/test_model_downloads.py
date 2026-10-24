@@ -552,7 +552,7 @@ def test_a_bypassed_lora_the_list_links_is_marked_downloadable():
     assert graph["4"]["inputs"]["model"] == ["1", 0]
 
 
-def _running(file, sha256=None):
+def _running(file, sha256=None, slot=None):
     """A download in flight, 43% in, as the registry holds one."""
     entry = {
         "id": f"dl-{file}",
@@ -561,6 +561,7 @@ def _running(file, sha256=None):
         "received": 43,
         "total": 100,
         "sha256": sha256,
+        "slot": slot,
         "ended_at": None,
     }
     model_downloads._downloads[entry["id"]] = entry
@@ -593,8 +594,9 @@ def test_a_model_still_downloading_refuses_the_run_until_it_lands():
         "PixlStashVAELoader": {"input": {"required": {}}},
         "SaveImage": {"input": {"required": {}}},
     }
-    _running("hunyuan_3D_V2.1.safetensors")
-    _running("renamed_vae.safetensors", sha256=_QWEN_VAE)
+    _running("hunyuan_3D_V2.1.safetensors", slot="checkpoint")
+    # By digest, though the list files it under another kind's slot.
+    _running("renamed_vae.safetensors", sha256=_QWEN_VAE, slot="other")
     reasons, _ = judge(graph, object_info, None, digest_present=lambda d: False)
     by_code = {r.code: r.detail["models"] for r in reasons}
     assert by_code[MODELS_DOWNLOADING] == [
@@ -650,7 +652,7 @@ def test_a_lora_still_downloading_is_not_bypassed():
         },
         "4": {"class_type": "KSampler", "inputs": {"model": ["3", 0]}},
     }
-    _running("coming.safetensors")
+    _running("coming.safetensors", slot="lora")
     bypassed = bypass_missing_loras(graph, object_info)
     assert [entry["file"] for entry in bypassed] == ["gone.safetensors"]
     assert graph["4"]["inputs"]["model"] == ["2", 0]
@@ -658,6 +660,51 @@ def test_a_lora_still_downloading_is_not_bypassed():
     assert [r.detail["models"] for r in reasons if r.code == MODELS_DOWNLOADING] == [
         [{"file": "Coming.safetensors", "folder": "loras", "percent": 43.0}]
     ]
+
+
+def test_a_lora_named_like_a_checkpoint_on_its_way_is_not_on_its_way():
+    """Wrong if a checkpoint download keeps a LoRA of the same file name from
+    being bypassed, or refuses its run as downloading: nothing fetches it."""
+    lora_spec = {
+        "input": {
+            "required": {"model": ["MODEL"], "lora_name": [["other.safetensors"], {}]}
+        },
+        "output": ["MODEL"],
+    }
+    object_info = {
+        "CheckpointLoaderSimple": {"input": {"required": {}}, "output": ["MODEL"]},
+        "LoraLoader": lora_spec,
+        "KSampler": {"input": {"required": {"model": ["MODEL"]}}, "output": []},
+    }
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "Shared.safetensors", "model": ["1", 0]},
+        },
+        "3": {"class_type": "KSampler", "inputs": {"model": ["2", 0]}},
+    }
+    _running("shared.safetensors", slot="checkpoint")
+    assert [e["file"] for e in bypass_missing_loras(graph, object_info)] == [
+        "Shared.safetensors"
+    ]
+    assert (
+        model_downloads.running_download("Shared.safetensors", folder="loras") is None
+    )
+    # The kind it is: a diffusion model's folder is a checkpoint's slot too.
+    assert model_downloads.running_download(
+        "Shared.safetensors", folder="diffusion_models"
+    )
+
+
+def test_a_listed_digest_is_kept_lowercase(hub, target, adapter_bytes, linked):
+    """Wrong if a digest the list spells in capitals is stored as spelled:
+    every digest it is compared with (a loader's, a set member's) is lowercase."""
+    with serve_bytes(adapter_bytes) as url:
+        linked(url, sha256="AB" * 32)
+        entry = start_download(hub, "upper.safetensors")
+        assert entry["sha256"] == "ab" * 32
+        _wait(entry["id"])
 
 
 def test_a_body_of_unknown_length_is_refused(hub, target, adapter_bytes, linked):

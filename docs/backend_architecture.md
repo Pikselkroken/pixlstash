@@ -11200,7 +11200,8 @@ an address of its choosing.
   download with a digest as `{sha256, slot, label}` and the member resolves
   when the file registers; the Workflow tab offers a download of a row's folder
   as a pick. `judge` moves any missing model `running_download` matches (by
-  name, case folded, or by digest) out of `missing_models` into
+  name, case folded, to a download of the same kind, the slot each folder
+  fills; or by digest, lowercased, alone) out of `missing_models` into
   `models_downloading` with its `percent`, which blocks the batch like a
   missing model, and `bypass_missing_loras` leaves a LoRA on its way in the
   graph, so the run is refused rather than quietly made without it.

@@ -1894,7 +1894,7 @@ const PACK_OUTDATED_TEXT = "Restart ComfyUI";
  */
 function missingNote(file, kind) {
   if (!preflightAnswered.value) return "";
-  if (tasksStore.runningDownload({ file }))
+  if (tasksStore.runningDownload({ file, slot: kind }))
     return " is still downloading. It runs once it has finished.";
   if (staleFiles.value.has(file))
     return ` is on your model shelf, but the ComfyUI-PixlStash running in ComfyUI is out of date and cannot load it. ${PACK_OUTDATED_ACTION}`;
@@ -2087,7 +2087,10 @@ const modelRows = computed(() => {
       !candidates.some((candidate) => candidate.filename === pick) &&
       !coming.some((option) => option.value === pick);
     // The row's own file on its way: said so, not "missing".
-    const goneComing = gone ? tasksStore.runningDownload({ file: gone }) : null;
+    // A row's kind is its set slot's id (checkpoint, vae, text_encoder).
+    const goneComing = gone
+      ? tasksStore.runningDownload({ file: gone, slot: model.kind })
+      : null;
     // A missing file's candidates filed under how likely each is to run it,
     // where the server gave them a verdict; the file itself is no option.
     const grouped =
