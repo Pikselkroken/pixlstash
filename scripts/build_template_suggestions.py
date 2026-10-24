@@ -28,6 +28,11 @@ ones) is left out.
 no ComfyUI reachable (#2000). One file each, so the weekly PR's file list says
 which graphs changed. A name that is not a plain file name is skipped.
 
+**And the catalogue itself**, ComfyUI's ``index.json`` as the wheel holds it
+(minified), in ``pixlstash/data/workflow_templates_index.json``: what the
+Templates tab lists while no ComfyUI is answering, read by the same code that
+reads a live ComfyUI's (#2000).
+
 **The weekly refresh** (``.github/workflows/template-suggestions.yml``) runs
 this with ``--summary``, which writes the PR body: the templates added,
 removed, whose files changed and whose graph changed.
@@ -59,6 +64,8 @@ OUTPUT = Path(__file__).resolve().parent.parent / (
 )
 # The graphs, beside the list: ``workflow_templates/<name>.json``.
 GRAPHS = OUTPUT.with_suffix("")
+# ComfyUI's catalogue, beside the list: ``workflow_templates_index.json``.
+INDEX_SUFFIX = "_index.json"
 # A template name as a file name: the package is not ours, so a name that could
 # leave the folder (a slash, a leading dot) is not written.
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")
@@ -113,8 +120,9 @@ def _kind(category_type: str, tags: list[str]) -> str:
     return category_type or "image"
 
 
-def build(wheel: bytes, version: str) -> tuple[dict, dict[str, str]]:
-    """The list, and each kept template's graph minified, by name."""
+def build(wheel: bytes, version: str) -> tuple[dict, dict[str, str], str]:
+    """The list, each kept template's graph minified by name, and the
+    catalogue minified."""
     templates: dict[str, dict] = {}
     graphs: dict[str, str] = {}
     with zipfile.ZipFile(io.BytesIO(wheel)) as archive:
@@ -157,7 +165,8 @@ def build(wheel: bytes, version: str) -> tuple[dict, dict[str, str]]:
         "version": version,
         "templates": sorted(templates.values(), key=lambda t: t["name"]),
     }
-    return document, graphs
+    catalogue = json.dumps(index, separators=(",", ":"), ensure_ascii=False)
+    return document, graphs, catalogue + "\n"
 
 
 def _read_graphs(folder: Path) -> dict[str, str]:
@@ -235,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         version = args.version or args.wheel.name.split("-")[1]
     else:
         data, version = _fetch_wheel(args.version)
-    document, graphs = build(data, version)
+    document, graphs, catalogue = build(data, version)
     folder = args.output.with_suffix("")
     try:
         old = json.loads(args.output.read_text(encoding="utf-8"))
@@ -245,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
     args.output.write_text(
         json.dumps(document, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+    folder.with_name(folder.name + INDEX_SUFFIX).write_text(catalogue, encoding="utf-8")
     folder.mkdir(exist_ok=True)
     for name in old_graphs.keys() - graphs.keys():
         (folder / f"{name}.json").unlink()

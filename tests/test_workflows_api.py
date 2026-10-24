@@ -24818,15 +24818,29 @@ class _Served:
 
 
 @pytest.fixture
-def comfyui_templates_served(workflow_env, monkeypatch):
+def comfyui_templates_served(workflow_env, monkeypatch, tmp_path):
     """A ComfyUI serving _TEMPLATE_INDEX, one pack and their graphs.
 
     Every path the service asks for is recorded, so a test can show a path
     was never asked for. By default ComfyUI lists only the saver, so an
     added template does not convert and is a draft; ``.object_info`` set to
     _EDITOR_OBJECT_INFO lets it convert, and to None makes ComfyUI not answer.
+
+    The shipped copy is _TEMPLATE_INDEX with image_example's graph alone, and
+    GitHub serves its thumbnail: ``.github`` records what was asked of it,
+    with the proxies it was asked through.
     """
     from pixlstash.services import comfyui_templates
+
+    graphs = tmp_path / "workflow_templates"
+    graphs.mkdir()
+    (graphs / "image_example.json").write_text(json.dumps(_TEMPLATE_GRAPH))
+    index = tmp_path / "workflow_templates_index.json"
+    index.write_text(json.dumps(_TEMPLATE_INDEX))
+    monkeypatch.setattr(comfyui_templates, "BUNDLED_GRAPHS", graphs)
+    monkeypatch.setattr(comfyui_templates, "BUNDLED_INDEX_PATH", index)
+    comfyui_templates._bundled_templates.cache_clear()
+    github = comfyui_templates.BUNDLED_THUMBNAILS_URL
 
     served = {
         "/templates/index.json": _TEMPLATE_INDEX,
@@ -24839,9 +24853,13 @@ def comfyui_templates_served(workflow_env, monkeypatch):
         asked=[],
         served=served,
         object_info={"SaveImage": _EDITOR_OBJECT_INFO["SaveImage"]},
+        github=[],
     )
 
-    def get(url, *, max_bytes):
+    def get(url, *, max_bytes, proxies=comfyui_templates.NO_PROXY):
+        if url.startswith(github):
+            state.github.append((url[len(github) :], proxies))
+            return _Served(b"RIFF-from-github")
         assert url.startswith(_TEMPLATE_URL), url
         path = url[len(_TEMPLATE_URL) :]
         state.asked.append(path)
@@ -24864,6 +24882,7 @@ def comfyui_templates_served(workflow_env, monkeypatch):
         yield state
     finally:
         comfyui_templates.forget_listings()
+        comfyui_templates._bundled_templates.cache_clear()
 
 
 def _templates(owner, **params):
@@ -24959,15 +24978,38 @@ def test_the_template_list_reads_the_owners_comfyui(
     assert pack["pack_loaded"] is True
 
 
-def test_the_template_list_says_when_comfyui_does_not_answer(
+def test_the_template_list_is_the_shipped_copy_when_comfyui_does_not_answer(
     workflow_env, comfyui_templates_served
 ):
-    """No list, and the address it asked: the Templates tab's empty state."""
+    """The built-ins PixlStash ships a graph for, read as ComfyUI's are, and
+    the address that did not answer.
+
+    Wrong if the list is empty, if the subgraph's file is missing (the shipped
+    graph was not read), if the partner template is listed though no graph of
+    it ships, or if its thumbnail comes from anywhere but GitHub, or through
+    the no-proxy setting meant for the owner's own ComfyUI.
+    """
     comfyui_templates_served.served.clear()
-    body = _templates(workflow_env.owner, refresh="true")
+    owner = workflow_env.owner
+    body = _templates(owner, refresh="true")
     assert body["reachable"] is False
-    assert body["templates"] == []
     assert _TEMPLATE_URL in body["detail"]
+    (template,) = body["templates"]
+    assert template["key"] == "default/image_example"
+    assert template["categories"] == ["Image", "Product & Ads"]
+    assert template["thumbnail"] is True
+    assert {f["name"] for f in template["files"]} == {
+        _SHELF_FILENAME.upper(),
+        _TEMPLATE_SUBGRAPH_VAE,
+    }
+    r = owner.get(
+        f"{API}/comfyui/templates/thumbnail",
+        params={"module": "default", "name": "image_example"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.content == b"RIFF-from-github"
+    assert comfyui_templates_served.github == [("/image_example-1.webp", None)]
+    assert "/templates/image_example-1.webp" not in comfyui_templates_served.asked
 
 
 def test_a_template_thumbnail_is_fetched_only_for_a_listed_template(
@@ -25125,24 +25167,47 @@ def test_a_draft_comfyui_can_now_convert_opens_as_any_workflow(
     assert _card(owner, workflow_id)["draft"] is False
 
 
-def test_templates_are_not_added_while_comfyui_does_not_list_its_nodes(
+def test_a_template_added_with_no_comfyui_is_a_draft_of_the_shipped_graph(
     workflow_env, comfyui_templates_served
 ):
-    """A 503 and nothing stored: without ComfyUI's nodes nothing could convert,
-    and every template would become a draft that never needed to be one."""
+    """Stored from the shipped graph as a draft that says why, with GitHub's
+    thumbnail; it converts once ComfyUI answers (the test above).
+
+    Wrong if the Add is refused, if ComfyUI is asked for the graph, or if the
+    workflow is not the template's graph.
+    """
+    comfyui_templates_served.served.clear()
     comfyui_templates_served.object_info = None
-    before = workflow_env.server.hub.fetchone("SELECT COUNT(*) FROM workflow_document")[
-        0
-    ]
-    r = workflow_env.owner.post(
-        f"{API}/comfyui/templates/add",
-        json={"templates": [{"module": "default", "name": "image_example"}]},
+    owner = workflow_env.owner
+    (added,) = _add_templates(owner, ("default", "image_example"))["added"]
+    assert added["draft"] is True
+    assert _TEMPLATE_URL in added["problems"][0]
+    assert "/templates/image_example.json" not in comfyui_templates_served.asked
+    assert comfyui_templates_served.github == [("/image_example-1.webp", None)]
+    card = _card(owner, added["workflow_id"])
+    assert card["draft"] is True
+    r = owner.get(
+        f"{API}/workflows/{added['workflow_id']}/graph", params={"drafts": "true"}
     )
-    assert r.status_code == 503, r.text
-    assert (
-        workflow_env.server.hub.fetchone("SELECT COUNT(*) FROM workflow_document")[0]
-        == before
-    )
+    assert r.status_code == 200, r.text
+    assert r.json()["editor"]["definitions"] == _TEMPLATE_GRAPH["definitions"]
+
+
+def test_every_shipped_template_has_its_graph_and_files():
+    """The committed catalogue and graphs agree (scripts/build_template_suggestions.py).
+
+    Wrong if nothing would be listed without ComfyUI, or a listed template's
+    graph names no file: the shipped graphs are the ones that download files.
+    """
+    from pixlstash.services import comfyui_templates
+
+    comfyui_templates._bundled_templates.cache_clear()
+    try:
+        listed = comfyui_templates.bundled_listing().templates
+        assert len(listed) > 100
+        assert all(t.files and t.module == "default" for t in listed)
+    finally:
+        comfyui_templates._bundled_templates.cache_clear()
 
 
 # A WebP by its magic bytes, which is all the icon store checks.

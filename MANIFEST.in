@@ -10,5 +10,6 @@ recursive-include pixlstash/data/anchors *.npy
 recursive-include pixlstash/data/comfyui-workflows/built-in *.json
 recursive-include pixlstash/data/scalar-assets *
 include pixlstash/data/workflow_templates.json
+include pixlstash/data/workflow_templates_index.json
 recursive-include pixlstash/data/workflow_templates *.json
 recursive-include pixlstash/data/comfyui-pack *

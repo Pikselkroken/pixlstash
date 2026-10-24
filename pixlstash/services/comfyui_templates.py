@@ -25,14 +25,26 @@ level or inside ``definitions.subgraphs``, which is where most templates keep
 their loaders. The graphs are small and local, so the listing reads them all,
 a few at a time, and keeps the answer per ComfyUI address for
 :data:`LISTING_TTL_S`.
+
+**With no ComfyUI answering, the copy PixlStash ships is listed instead**
+(:func:`bundled_listing`): the same ``index.json`` and graphs, from the same
+wheel ComfyUI installs them from (``scripts/build_template_suggestions.py``),
+read by the same code. It is the built-ins that download files, as of the
+committed release; packs and partner templates need the install. Their
+thumbnails are not shipped (ComfyUI's media packages are hundreds of MB), so
+:data:`BUNDLED_THUMBNAILS_URL` serves each one. Every function that takes a
+*base_url* reads the shipped copy for ``None``.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 
@@ -61,6 +73,16 @@ TIMEOUT_S = 10
 # Larger than any template ComfyUI ships (the largest is well under 1 MB).
 MAX_GRAPH_BYTES = 8 * 1024 * 1024
 MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024
+
+_DATA = Path(__file__).resolve().parent.parent / "data"
+BUNDLED_INDEX_PATH = _DATA / "workflow_templates_index.json"
+BUNDLED_GRAPHS = _DATA / "workflow_templates"
+# ComfyUI's template repository, which serves each thumbnail on its own.
+# ponytail: `main`, not the shipped release (its tags version another package);
+# a template renamed since has no picture until the weekly refresh catches up.
+BUNDLED_THUMBNAILS_URL = (
+    "https://raw.githubusercontent.com/Comfy-Org/workflow_templates/main/templates"
+)
 
 # What a thumbnail extension is served as. ComfyUI answers them all as
 # `application/octet-stream`, which an `<img>` would still draw but a
@@ -125,6 +147,8 @@ class Listing:
 
     templates: list[Template]
     read_at: float
+    # The copy PixlStash ships, listed because no ComfyUI answered.
+    bundled: bool = False
 
     def find(self, module: str, name: str) -> Optional[Template]:
         return next(
@@ -143,10 +167,13 @@ def forget_listings() -> None:
         _listings.clear()
 
 
-def _get(url: str, *, max_bytes: int) -> requests.Response:
-    """GET *url* from ComfyUI, refusing a body past *max_bytes* as it arrives."""
+def _get(url: str, *, max_bytes: int, proxies=NO_PROXY) -> requests.Response:
+    """GET *url* from ComfyUI, refusing a body past *max_bytes* as it arrives.
+
+    *proxies* ``None`` is the system's, for a URL that is not the owner's ComfyUI.
+    """
     with requests.get(
-        url, timeout=TIMEOUT_S, allow_redirects=False, proxies=NO_PROXY, stream=True
+        url, timeout=TIMEOUT_S, allow_redirects=False, proxies=proxies, stream=True
     ) as response:
         if response.status_code != 200:
             raise requests.HTTPError(f"ComfyUI answered HTTP {response.status_code}")
@@ -436,36 +463,84 @@ def read_listing(
     return listing
 
 
-def fetch_graph(base_url: str, template: Template) -> dict:
-    """One template's graph, read now.
+def _bundled_graph_path(name: str) -> Path:
+    # A name that is not one file name in the folder is no file of it.
+    return BUNDLED_GRAPHS / f"{name}.json" if Path(name).name == name else Path()
+
+
+@lru_cache(maxsize=1)
+def _bundled_templates() -> tuple[Template, ...]:
+    """The built-ins PixlStash ships a graph for, files read off each graph."""
+    try:
+        index = json.loads(BUNDLED_INDEX_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.error(
+            "The template catalogue PixlStash ships (%s) will not read, so no "
+            "templates are listed without ComfyUI: %s",
+            BUNDLED_INDEX_PATH,
+            exc,
+        )
+        return ()
+    kept = []
+    for template in _builtin_templates(index):
+        path = _bundled_graph_path(template.name)
+        if not path.is_file():
+            continue
+        try:
+            template.files = template_files(json.loads(path.read_text("utf-8")))
+        except (OSError, ValueError) as exc:
+            logger.warning("Shipped template graph %s will not read: %s", path, exc)
+            continue
+        kept.append(template)
+    logger.info("Read %d shipped templates from %s.", len(kept), BUNDLED_GRAPHS)
+    return tuple(kept)
+
+
+def bundled_listing() -> Listing:
+    """The templates PixlStash ships, for when no ComfyUI answers."""
+    return Listing(list(_bundled_templates()), time.monotonic(), bundled=True)
+
+
+def fetch_graph(base_url: Optional[str], template: Template) -> dict:
+    """One template's graph, read now; the shipped copy for *base_url* ``None``.
 
     Raises:
         TemplatesUnavailable: It could not be read, or is not a JSON object.
     """
     try:
-        graph = _get_json(graph_url(base_url, template.module, template.name))
-    except (requests.RequestException, ValueError) as exc:
+        if base_url is None:
+            path = _bundled_graph_path(template.name)
+            graph = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            graph = _get_json(graph_url(base_url, template.module, template.name))
+    except (OSError, requests.RequestException, ValueError) as exc:
         raise TemplatesUnavailable(str(exc)) from exc
     if not isinstance(graph, dict):
         raise TemplatesUnavailable(f"it is {type(graph).__name__}, not a workflow")
     return graph
 
 
-def fetch_thumbnail(base_url: str, template: Template) -> tuple[bytes, str]:
+def fetch_thumbnail(base_url: Optional[str], template: Template) -> tuple[bytes, str]:
     """One template's picture and its media type.
 
-    A built-in's is ``{name}-1.{mediaSubtype}``; a pack's sits beside its
-    graph under a name ComfyUI's own browser guesses at, so the usual picture
-    extensions are tried in turn.
+    A built-in's is ``{name}-1.{mediaSubtype}``, from
+    :data:`BUNDLED_THUMBNAILS_URL` for *base_url* ``None``; a pack's sits
+    beside its graph under a name ComfyUI's own browser guesses at, so the
+    usual picture extensions are tried in turn.
 
     Raises:
-        LookupError: ComfyUI serves no picture for it.
+        LookupError: No picture is served for it.
     """
+    proxies = NO_PROXY
     if template.module == BUILTIN_MODULE:
         if template.thumbnail_ext is None:
             raise LookupError(f"{template.key} has no thumbnail")
         ext = template.thumbnail_ext.lower()
-        candidates = [(f"{base_url}/templates/{_segment(template.name)}-1.{ext}", ext)]
+        if base_url is None:
+            stem, proxies = BUNDLED_THUMBNAILS_URL, None
+        else:
+            stem = f"{base_url}/templates"
+        candidates = [(f"{stem}/{_segment(template.name)}-1.{ext}", ext)]
     else:
         stem = (
             f"{base_url}/api/workflow_templates/"
@@ -474,12 +549,12 @@ def fetch_thumbnail(base_url: str, template: Template) -> tuple[bytes, str]:
         candidates = [(f"{stem}.{ext}", ext) for ext in ("jpg", "png", "webp")]
     for url, ext in candidates:
         try:
-            response = _get(url, max_bytes=MAX_THUMBNAIL_BYTES)
+            response = _get(url, max_bytes=MAX_THUMBNAIL_BYTES, proxies=proxies)
         except requests.RequestException as exc:
             logger.debug("No thumbnail at %s: %s", url, exc)
             continue
         return response.content, THUMBNAIL_TYPES[ext]
-    raise LookupError(f"ComfyUI serves no thumbnail for {template.key}")
+    raise LookupError(f"No thumbnail is served for {template.key}")
 
 
 def present_file_names(hub) -> set[str]:
