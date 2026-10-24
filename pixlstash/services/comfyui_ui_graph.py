@@ -17,8 +17,15 @@ Recipe tab is for.
 at.** ``/object_info`` is the same map the frontend builds its widgets from: it
 names every input of every installed class, in declaration order, and marks the
 ones that carry an extra frontend-only widget (``control_after_generate`` after
-a seed, the upload button after a file picker). With it in hand the positional
+a seed, the upload button on a file picker). With it in hand the positional
 ``widgets_values`` array maps onto named inputs the way the editor maps it.
+
+What the map does not say is read from the frontend's own source (ComfyUI
+frontend 1.55.18) into small rules here: the widgets an extension adds to a
+class by name (``_EDITOR_WIDGETS``), the control a seed gets by its name, the
+custom widget types, and the deprecated ``PrimitiveNode``, which the editor
+resolves into the widgets it feeds. Each rule carries a guard, so a file laid
+out some other way is still refused rather than read shifted.
 
 **The safety property is that this refuses rather than approximates.** Every
 node must be a class this ComfyUI declares, and its widget values must be
@@ -47,22 +54,171 @@ logger = logging.getLogger(__name__)
 # Input types whose value is a widget in the editor rather than a wire. A combo
 # declares its options as a list in place of a type name, so anything that is
 # not a string is a combo.
-_WIDGET_TYPES = frozenset({"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"})
-
-# Options that make the editor draw a SECOND widget right after the one they
-# belong to: the seed's control-after-generate row, and the upload button on a
-# file picker. Each consumes a slot of `widgets_values` that no API input takes.
-_EXTRA_WIDGET_OPTIONS = (
-    "control_after_generate",
-    "image_upload",
-    "audio_upload",
-    "video_upload",
-    "file_upload",
+#
+# Besides the built-in five, the custom widgets the editor draws for a type
+# and queues as saved (frontend `scripts/widgets.ts`, no `serializeValue`): a
+# colour's hex string, a canvas's boxes. The frontend registers more; an input
+# of a type not listed is read as a socket, so a file that saved a value for it
+# is refused for carrying one more value than its inputs account for.
+_WIDGET_TYPES = frozenset(
+    {"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO", "COLOR", "BOUNDING_BOXES"}
 )
+
+# A widget the editor still queues but no longer saves, with the value it is
+# made with: ImageCompare's slider (`useImageCompareWidget.ts` sets
+# `widget.serialize = false`). It takes no slot; a file saved before that has
+# one, which `_EDITOR_WIDGETS` accounts for.
+_UNSAVED_WIDGETS = {"IMAGECOMPARE": ("", "")}
+
+# Widgets whose value the editor makes when the graph is queued, by rendering
+# its 3D view (`load3d.ts`, `load3dPreviewExtensions.ts`) or taking a webcam
+# frame (`webcamCapture.ts`). Nothing in the file is what would be sent.
+_RENDERED_WIDGET_TYPES = frozenset({"LOAD_3D", "WEBCAM"})
+
+# ComfyUI's CustomCombo keeps its options as string widgets after the choice
+# and a hidden `index`, and the editor queues `index` as the choice's place
+# among them, which the server returns as its INDEX output
+# (`extensions/core/customWidgets.ts`, `comfy_extras/nodes_logic.py`).
+_CUSTOM_COMBO = "CustomCombo"
+
+# The INT inputs the editor gives a control widget by name, declared or not,
+# and the values that control can hold (frontend `scripts/widgets.ts`).
+_SEED_NAMES = ("seed", "noise_seed")
+_CONTROL_VALUES = frozenset({"fixed", "increment", "decrement", "randomize"})
+
+# The options that give a file picker the editor's upload button. **The button
+# is not drawn after its picker.** The editor adds an `upload` input to the
+# definition it builds, outside `input_order`, so the button comes after every
+# declared widget: for the first REQUIRED combo with one of these (frontend
+# `extensions/core/uploadImage.ts`, `isMediaUploadComboInput`), or a required
+# `audio` with `audio_upload` (`uploadAudio.ts`). One `upload` key, so one
+# button at most.
+_MEDIA_UPLOAD_OPTIONS = ("image_upload", "video_upload", "animated_image_upload")
+
+
+def _empty(value) -> bool:
+    """A button's slot."""
+    return value is None
+
+
+def _blank(value) -> bool:
+    """A DOM widget's slot with no value of its own: ``None`` from older
+    frontends, ``""`` from 1.55."""
+    return value is None or value == ""
+
+
+def _anything(value) -> bool:
+    """A display's slot: a preview, a player, the text a run wrote."""
+    return True
+
+
+def _upload_value(value) -> bool:
+    """The upload button's slot: the picture/video button is made with the
+    value ``"image"`` (``useImageUploadWidget.ts``), the audio one with ``""``."""
+    return value in (None, "", "image")
+
+
+# Widgets the editor gives a class beyond what `/object_info` declares. An
+# extension adds each when the node is made, after the declared widgets, so
+# each takes a trailing slot of `widgets_values` that no API input reads, in
+# this order, before the upload button. Each slot is OPTIONAL - a file saved
+# before the widget existed, or since the editor stopped saving it, has fewer
+# values - and CHECKED: an `_empty` or `_blank` slot holding a value means the
+# file is laid out some other way, and the node is refused rather than shifted. A layout is
+# only as good as the version it was read from, which each group names.
+_EDITOR_WIDGETS = {
+    # ComfyUI frontend 1.55.18, `extensions/core/`. A text preview and its
+    # Markdown switch (`textPreviewWidgets.ts`); older frontends saved three.
+    "PreviewAny": (_anything, _anything, _anything),
+    "SaveText": (_anything, _anything, _anything),
+    # The audio player (`uploadAudio.ts`).
+    **dict.fromkeys(
+        (
+            "LoadAudio",
+            "SaveAudio",
+            "PreviewAudio",
+            "SaveAudioMP3",
+            "SaveAudioOpus",
+            "SaveAudioAdvanced",
+        ),
+        (_anything,),
+    ),
+    # The 3D preview (`saveMesh.ts`).
+    "SaveGLB": (_anything,),
+    # The slider, from before the editor stopped saving it (`_UNSAVED_WIDGETS`).
+    "ImageCompare": (_anything,),
+    # The text a run sends back (`useNodeProgressText.ts`), on the classes
+    # whose server code sends it (`send_progress_text` in ComfyUI 0.42).
+    **dict.fromkeys(
+        (
+            "GetImageSize",
+            "GetLatentSize",
+            "GetAudioLatentSize",
+            "GetMeshInfo",
+            "DecimateMesh",
+            "RemeshMesh",
+            "UnwrapMesh",
+            "GetSplatCount",
+            "StartLoop",
+            "LoopProgress",
+        ),
+        (_anything,),
+    ),
+    # KJNodes 1.4.0, `web/js/jsnodes.js`: the "Update inputs" button.
+    **dict.fromkeys(
+        (
+            "ConditioningMultiCombine",
+            "ImageBatchMulti",
+            "ImageAddMulti",
+            "CrossFadeImagesMulti",
+            "TransitionImagesMulti",
+            "ImageConcatMulti",
+            "MaskBatchMulti",
+            "JoinStringMulti",
+        ),
+        (_empty,),
+    ),
+    # ComfyUI-PixlStash 9aeb116, `web/js/combo_widgets.js`: the Browse
+    # buttons, and the shelf rows and pictures beside them (DOM widgets).
+    "PixlStashPictureLoader": (_empty,),
+    "PixlStashAdapterLoader": (_empty, _blank),
+    "PixlStashMultiAdapterLoader": (_blank,),
+    "PixlStashVAELoader": (_blank,),
+    "PixlStashCLIPLoader": (_blank, _blank),
+    "PixlStashControlNetLoader": (_blank,),
+    "PixlStashUpscaleModelLoader": (_blank,),
+    "PixlStashCheckpointLoader": (_blank,),
+}
 
 # Editor furniture. These carry no class on the server and nothing a run needs,
 # so they are dropped rather than refused.
 _ANNOTATION_CLASSES = frozenset({"Note", "MarkdownNote"})
+
+# Node packs' editor-only nodes (`isVirtualNode`, no server class): toggles,
+# labels and bookmarks that act on the canvas, never on a run. Read from
+# rgthree-comfy 1.0.2605082257 (`web/comfyui/`) and comfy-mtb 0.5.4
+# (`web/note_plus.js`). Not rgthree's Random Unmuter, which unmutes a node when
+# the graph is queued. Dropped only while ComfyUI has no class of the name, and
+# a wire from one into a real node is still refused by `_resolve`.
+_VIRTUAL_PACK_CLASSES = frozenset(
+    {
+        "Fast Groups Muter (rgthree)",
+        "Fast Groups Bypasser (rgthree)",
+        "Fast Muter (rgthree)",
+        "Fast Bypasser (rgthree)",
+        "Fast Actions Button (rgthree)",
+        "Label (rgthree)",
+        "Bookmark (rgthree)",
+        "Node Collector (rgthree)",
+        "Mute / Bypass Repeater (rgthree)",
+        "Mute / Bypass Relay (rgthree)",
+        "Note Plus (mtb)",
+    }
+)
+
+# The editor's legacy group nodes, saved as `workflow>NAME` and expanded by the
+# editor before it queues. PixlStash does not expand them.
+_GROUP_NODE_PREFIX = "workflow>"
 
 # Drawn links. `UI_PASSTHROUGH_CLASSES` is the repo's own list of what is
 # "present in the UI graph, absent from the executed API graph" and is imported
@@ -91,6 +247,8 @@ _TYPE_HOLDS = {
     ),
     "STRING": lambda value: isinstance(value, str),
     "BOOLEAN": lambda value: isinstance(value, bool),
+    "COLOR": lambda value: isinstance(value, str),
+    "BOUNDING_BOXES": lambda value: isinstance(value, list),
 }
 
 # Node.mode in the editor graph: 2 is muted, 4 is bypassed. Neither runs.
@@ -209,7 +367,56 @@ def _is_widget(type_field, options: dict) -> bool:
 
 
 def _extra_widget_slots(options: dict) -> int:
-    return sum(1 for option in _EXTRA_WIDGET_OPTIONS if options.get(option))
+    """The declared control widget the editor draws right after its input."""
+    return 1 if options.get("control_after_generate") else 0
+
+
+def _prompt_value(value):
+    """A widget value as the editor queues it.
+
+    A list is wrapped, because a bare list in a prompt is a wire; ComfyUI
+    unwraps it before the node runs (frontend ``utils/executionUtil.ts``).
+    """
+    return {"__value__": value} if isinstance(value, list) else value
+
+
+def _has_upload_button(declared: list) -> bool:
+    """Whether the editor adds its upload button to this class."""
+    for name, type_field, options, required in declared:
+        if not required:
+            continue
+        is_combo = isinstance(type_field, list) or type_field == "COMBO"
+        if is_combo and any(options.get(o) is True for o in _MEDIA_UPLOAD_OPTIONS):
+            return True
+        if name == "audio" and options.get("audio_upload") is True:
+            return True
+    return False
+
+
+def _control_by_name(name: str, type_field, options: dict) -> bool:
+    """Whether the editor gives this input a control widget by its name alone.
+
+    An INT named ``seed`` or ``noise_seed`` gets one when it does not
+    declare ``control_after_generate`` at all (frontend ``useIntWidget.ts``:
+    ``control_after_generate ?? name in ['seed', 'noise_seed']``). A declared
+    value decides on its own: ``True`` is counted by
+    :func:`_extra_widget_slots`, ``False`` means no control.
+    """
+    return (
+        type_field == "INT"
+        and options.get("control_after_generate") is None
+        and name in _SEED_NAMES
+    )
+
+
+def _no_class(node_class: str) -> str:
+    """Why a node of a class this ComfyUI does not have cannot be converted."""
+    if node_class.startswith(_GROUP_NODE_PREFIX):
+        return (
+            f"{node_class!r} is a legacy group node, which PixlStash cannot "
+            "expand: ungroup it in ComfyUI and save the workflow again"
+        )
+    return f"this ComfyUI has no node class {node_class!r}"
 
 
 def _node_class(node: dict) -> str:
@@ -505,6 +712,30 @@ def _index_links(workflow: dict) -> dict[object, tuple[object, int]]:
     return links
 
 
+# The editor's deprecated `PrimitiveNode`: no server class, one widget whose
+# value the editor writes into every widget it is wired to before it queues
+# the graph (frontend `extensions/core/widgetInputs.ts`, through
+# `widgetValuePropagation.ts`). With "Run widget replace on values" set it
+# first expands `%date%`-style patterns, which only the editor can do.
+_PRIMITIVE_NODE = "PrimitiveNode"
+_TEXT_REPLACEMENT = "Run widget replace on values"
+
+
+class _Literal:
+    """A wire that carries a value rather than a node's output."""
+
+    __slots__ = ("value", "origin")
+
+    def __init__(self, value, origin):
+        self.value = value
+        self.origin = origin
+
+
+def _subgraph_prefix(node_id) -> str:
+    """``"75"`` for an inlined ``"75:61"``; empty at the top level."""
+    return str(node_id).rpartition(":")[0]
+
+
 class _Converter:
     """One conversion. Holds the graph's indexes so the link chase is cheap."""
 
@@ -537,8 +768,13 @@ class _Converter:
             if name:
                 self.set_nodes.setdefault(name, []).append(node)
 
-    def _resolve(self, link_id, depth: int = 0, want_type=None) -> list | None:
+    def _resolve(
+        self, link_id, depth: int = 0, want_type=None
+    ) -> list | _Literal | None:
         """``[node_id, slot]`` for a wire, chasing reroutes and bypasses.
+
+        A wire straight from a ``PrimitiveNode`` is its value instead, as a
+        :class:`_Literal` (:meth:`_primitive_value`).
 
         A muted node breaks the wire, which is what muting means; ComfyUI then
         refuses the prompt for a missing required input, exactly as it does for
@@ -560,6 +796,8 @@ class _Converter:
             return None
         mode = node.get("mode") or 0
         node_class = _node_class(node)
+        if node_class == _PRIMITIVE_NODE and node_class not in self.object_info:
+            return self._primitive_value(node, depth)
         if mode == _MODE_MUTED:
             return None
         if node_class == _GET_NODE:
@@ -567,9 +805,72 @@ class _Converter:
         if mode == _MODE_BYPASSED or node_class in UI_PASSTHROUGH_CLASSES:
             return self._chase_through(node, origin_slot, depth, want_type)
         if node_class not in self.object_info:
-            self.problems.append(f"this ComfyUI has no node class {node_class!r}")
+            self.problems.append(_no_class(node_class))
             return None
         return [str(origin_id), origin_slot]
+
+    def _primitive_value(self, node: dict, depth: int) -> _Literal | None:
+        """What a ``PrimitiveNode`` writes into the widget it is wired to.
+
+        Its first widget value; a seed primitive's control after it is not
+        sent. **Only a direct wire.** The editor fills the widgets the
+        primitive's own links end at and follows nothing further, so behind a
+        reroute, a bypassed node or a Get/Set pair the target would keep its
+        own value. That is refused rather than second-guessed.
+        """
+        where = f"{_PRIMITIVE_NODE} (node {node.get('id')})"
+        values = node.get("widgets_values")
+        if depth:
+            self.problems.append(
+                f"{where} reaches a widget through a reroute or a bypassed "
+                "node, and the editor only fills the widgets it is wired to "
+                "directly"
+            )
+        elif (node.get("mode") or 0) in (_MODE_MUTED, _MODE_BYPASSED):
+            self.problems.append(
+                f"{where} is muted or bypassed, so which value its widgets "
+                "get cannot be read"
+            )
+        elif not isinstance(values, list) or not values or values[0] is None:
+            self.problems.append(f"{where} has no value to give")
+        elif (
+            (node.get("properties") or {}).get(_TEXT_REPLACEMENT)
+            and isinstance(values[0], str)
+            and "%" in values[0]
+        ):
+            self.problems.append(
+                f"{where} has its value rewritten by the editor's text "
+                "replacements (such as %date%) when queued, which PixlStash "
+                "cannot do"
+            )
+        else:
+            return _Literal(values[0], node.get("id"))
+        return None
+
+    def _literal_input(
+        self, literal: _Literal, node: dict, name: str, type_field, where: str
+    ):
+        """A primitive's value for *name*, checked, or None when refused.
+
+        The value wins over the stale copy in the node's own
+        ``widgets_values``, because it is what the editor sends.
+        """
+        if _subgraph_prefix(literal.origin) != _subgraph_prefix(node.get("id")):
+            # Into or out of a subgraph the editor fills a promoted widget,
+            # and which one is sent is not something this reads.
+            self.problems.append(
+                f"{where} has its {name!r} fed by a {_PRIMITIVE_NODE} across a "
+                "subgraph boundary, so which value is sent cannot be read"
+            )
+            return None
+        holds = _TYPE_HOLDS.get(type_field) if isinstance(type_field, str) else None
+        if holds is not None and not holds(literal.value):
+            self.problems.append(
+                f"{where} has {literal.value!r} from a {_PRIMITIVE_NODE} where "
+                f"its {name!r} input takes a {type_field}"
+            )
+            return None
+        return _prompt_value(literal.value)
 
     def _chase_through(
         self, node: dict, origin_slot, depth: int, want_type=None
@@ -666,6 +967,57 @@ class _Converter:
         declared[index + 1 : index + 1] = nested
         return True
 
+    def _control_slot_by_name(
+        self, positional: list, at: int, name: str, type_field, options: dict, where
+    ) -> int | None:
+        """The slot of the control widget a seed gets by name: 1, 0, or None.
+
+        **Checked, because it was inferred.** A file saved by a frontend
+        without the name rule has the next widget's value here, and taking
+        that as a control would shift every value after it. So the slot must
+        hold a control value, or the node is refused as misaligned. A file that
+        ends before the slot has nothing to check.
+        """
+        if not _control_by_name(name, type_field, options):
+            return 0
+        if at < len(positional):
+            value = positional[at]
+            if not (isinstance(value, str) and value in _CONTROL_VALUES):
+                self.problems.append(
+                    f"{where} has {value!r} where the editor keeps the control "
+                    f"for its {name!r}, so its widget values do not line up "
+                    "with the node this ComfyUI has"
+                )
+                return None
+        return 1
+
+    def _custom_combo_index(
+        self, positional: list, consumed: int, inputs: dict, where
+    ) -> int | None:
+        """CustomCombo's queued ``index``, from the options after its choice.
+
+        What the editor sends: the first option equal to the choice, or -1
+        (``findIndex``). The saved ``index`` is not trusted, as the editor does
+        not send it either. Anything but a number there and strings after it
+        is a layout this does not know, and refused.
+        """
+        saved_index, *choices = positional[consumed:] or [None]
+        if not (
+            saved_index is None
+            or (isinstance(saved_index, int) and not isinstance(saved_index, bool))
+        ) or not all(isinstance(choice, str) for choice in choices):
+            self.problems.append(
+                f"{where} carries widget values the editor's options for it do "
+                "not account for, so its widget values do not line up with the "
+                "node this ComfyUI has"
+            )
+            return None
+        chosen = inputs.get("choice")
+        if not isinstance(chosen, str):
+            # Wired in: the editor still reads its own widget's value.
+            chosen = positional[0] if positional else None
+        return choices.index(chosen) if chosen in choices else -1
+
     def _connected_inputs(self, node: dict) -> dict[str, object]:
         return {
             str(entry.get("name")): entry["link"]
@@ -684,6 +1036,7 @@ class _Converter:
         a rebuild from a disagreement is not the rebuild it claims to be.
         """
         declared = list(_declared_inputs(self.object_info[node_class]))
+        upload = _has_upload_button(declared)
         connected = self._connected_inputs(node)
         # The editor's own slot types, which is what ComfyUI hands a bypassed
         # node upstream when it picks the wire to splice.
@@ -725,6 +1078,17 @@ class _Converter:
                         f"{where} has its {name!r} input wired to something "
                         "that does not run"
                     )
+                elif isinstance(resolved, _Literal):
+                    if not is_widget:
+                        self.problems.append(
+                            f"{where} has its {name!r} socket fed by a "
+                            f"{_PRIMITIVE_NODE}, which only fills widgets"
+                        )
+                        return None
+                    value = self._literal_input(resolved, node, name, type_field, where)
+                    if value is None:
+                        return None
+                    inputs[name] = value
                 elif resolved is not None:
                     inputs[name] = resolved
                 # A widget input that has been wired up still holds its slot in
@@ -732,6 +1096,12 @@ class _Converter:
                 # socket.
                 if is_widget and not by_name:
                     consumed += 1 + _extra_widget_slots(options)
+                    control = self._control_slot_by_name(
+                        positional, consumed, name, type_field, options, where
+                    )
+                    if control is None:
+                        return None
+                    consumed += control
                 if type_field == _DYNAMIC_COMBO:
                     # Which option is chosen decides which inputs follow, and
                     # a wire does not say.
@@ -741,13 +1111,23 @@ class _Converter:
                     )
                     return None
                 continue
+            if isinstance(type_field, str) and type_field in _RENDERED_WIDGET_TYPES:
+                self.problems.append(
+                    f"{where} gets its {name!r} from the ComfyUI editor when the "
+                    "workflow is queued (a render of its 3D view, or a webcam "
+                    "frame), which PixlStash cannot make"
+                )
+                return None
+            if isinstance(type_field, str) and type_field in _UNSAVED_WIDGETS:
+                inputs[name] = _prompt_value(list(_UNSAVED_WIDGETS[type_field]))
+                continue
             if not is_widget:
                 continue
             if by_name:
                 if name in overrides:
-                    inputs[name] = overrides[name]
+                    inputs[name] = _prompt_value(overrides[name])
                 elif name in widget_values:
-                    inputs[name] = widget_values[name]
+                    inputs[name] = _prompt_value(widget_values[name])
                 if type_field == _DYNAMIC_COMBO and not self._expand_dynamic(
                     declared, index, name, options, inputs.get(name), where
                 ):
@@ -768,7 +1148,7 @@ class _Converter:
                         "with the node this ComfyUI has"
                     )
                     return None
-                inputs[name] = value
+                inputs[name] = _prompt_value(value)
             else:
                 # Past the end of the file's values: a widget this ComfyUI's
                 # node gained after the file was saved. ComfyUI loads such a
@@ -777,8 +1157,14 @@ class _Converter:
                 if default is _NO_DEFAULT:
                     undefaulted.append(name)
                 else:
-                    inputs[name] = default
+                    inputs[name] = _prompt_value(default)
             consumed += 1 + _extra_widget_slots(options)
+            control = self._control_slot_by_name(
+                positional, consumed, name, type_field, options, where
+            )
+            if control is None:
+                return None
+            consumed += control
             if type_field == _DYNAMIC_COMBO and not self._expand_dynamic(
                 declared, index, name, options, inputs.get(name), where
             ):
@@ -794,6 +1180,15 @@ class _Converter:
             if name in declared_names:
                 continue
             resolved = self._resolve(link, want_type=input_types.get(name))
+            if isinstance(resolved, _Literal):
+                # The editor writes a primitive's value only into a widget the
+                # node has, and a name `/object_info` does not declare has
+                # none: it sends nothing for this socket.
+                self.problems.append(
+                    f"{where} has its {name!r} fed by a {_PRIMITIVE_NODE}, but "
+                    "this ComfyUI's node has no such widget for it to fill"
+                )
+                return None
             if resolved is not None:
                 inputs[name] = resolved
         if by_name:
@@ -816,6 +1211,26 @@ class _Converter:
             if unknown or missing:
                 return None
             return inputs
+        if node_class == _CUSTOM_COMBO:
+            chosen_at = self._custom_combo_index(positional, consumed, inputs, where)
+            if chosen_at is None:
+                return None
+            inputs["index"] = chosen_at
+            consumed = len(positional)
+        trailing = list(_EDITOR_WIDGETS.get(node_class, ()))
+        if upload:
+            trailing.append(_upload_value)
+        for holds in trailing:
+            if consumed >= len(positional):
+                break
+            if not holds(positional[consumed]):
+                self.problems.append(
+                    f"{where} has {positional[consumed]!r} where the editor keeps "
+                    "a widget of its own, so its widget values do not line up "
+                    "with the node this ComfyUI has"
+                )
+                return None
+            consumed += 1
         if consumed < len(positional):
             # More values than this node has widgets: one was removed or
             # moved, and which one cannot be told.
@@ -840,12 +1255,20 @@ class _Converter:
             node_class = _node_class(node)
             if node_class in _ANNOTATION_CLASSES:
                 continue
+            if (
+                node_class in _VIRTUAL_PACK_CLASSES
+                and node_class not in self.object_info
+            ):
+                continue
+            if node_class == _PRIMITIVE_NODE and node_class not in self.object_info:
+                # Its value travels with the wires `_resolve` reads.
+                continue
             if (node.get("mode") or 0) in (_MODE_MUTED, _MODE_BYPASSED):
                 continue
             if node_class in UI_PASSTHROUGH_CLASSES:
                 continue
             if node_class not in self.object_info:
-                self.problems.append(f"this ComfyUI has no node class {node_class!r}")
+                self.problems.append(_no_class(node_class))
                 continue
             inputs = self._node_inputs(node, node_class)
             if inputs is None:
@@ -885,9 +1308,6 @@ def convert_ui_graph_to_api(workflow, object_info) -> tuple[dict | None, list[st
     # Subgraphs are expanded first, into the ordinary editor graph the
     # converter reads (`_Inliner`); a definition missing from the file, or
     # values that cannot be matched to inputs, is refused by name.
-    # ponytail: the deprecated `PrimitiveNode` is still refused, as an
-    # undeclared class ("this ComfyUI has no node class 'PrimitiveNode'"),
-    # which is true and is the reason a reader gets.
     try:
         workflow, problems = inline_subgraphs(workflow)
         if problems:

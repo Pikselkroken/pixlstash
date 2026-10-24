@@ -7082,6 +7082,15 @@ unchanged by the tab's existence.
   either ("Templates come from your ComfyUI", with *ComfyUI settings…*). While
   it does not answer the tab re-reads every 10 s, so the live list replaces the
   shipped one by itself.
+- **The source badge** names where a template comes from (ComfyUI, a pack's
+  folder, Partner API) and says so again in its tooltip. **PixlStash's own pack**
+  (`isPixlstashPack`: a `pack` whose folder is `ComfyUI-PixlStash`, any case, or
+  the zip's `-main`) gets the PixlStash mark (`PixlstashIcon.vue`, the logo as a
+  `currentColor` mask, as the Tasks panel draws it) and the label *PixlStash*,
+  and its Category row is labelled *PixlStash* with the mark, first among the
+  packs. Its id stays ComfyUI's `extension-<module>`, so remembered filters keep
+  matching. The badge is hoverable but takes no tab stop: the grid's rows are a
+  roving tab order, and the card's accessible name already carries the source.
 - **Add** (pill or inspector, the inspector asking through `requestAdd`) posts
   `POST /comfyui/templates/add`, re-reads Mine, switches to it and selects what
   was made. A template the server could convert is an ordinary workflow at once;

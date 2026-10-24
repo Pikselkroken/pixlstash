@@ -6,11 +6,12 @@ ComfyUI accepts it, and it makes a different picture than the one the reader
 asked to make again. So every refusal case below is a case where a plausible
 guess exists and is deliberately not made.
 
-Measured separately against the 15 editor/API workflow pairs shipped by
-comfyui-multigpu: 8 converted, 8 byte-identical to the API half, 0 wrong, 7
-refused. The refusals are node packs the machine did not have installed, the
-deprecated ``PrimitiveNode``, and two classes whose widget arrays this does not
-account for - each named in the report rather than papered over.
+Measured separately, before #2043, against the 15 editor/API workflow pairs
+shipped by comfyui-multigpu: 8 converted, 8 byte-identical to the API half, 0
+wrong, 7 refused. The refusals are node packs the machine did not have installed, the
+deprecated ``PrimitiveNode`` (resolved since #2043), and two classes whose
+widget arrays this does not account for - each named in the report rather than
+papered over.
 """
 
 from copy import deepcopy
@@ -1592,3 +1593,444 @@ class TestWidgetsAddedSinceTheFileWasSaved:
         prompt, problems = convert_ui_graph_to_api(graph, GROWN_OBJECT_INFO)
         assert prompt is None
         assert any("carries 3 widget values" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# A seed gets its control widget by name, declared or not
+# ---------------------------------------------------------------------------
+
+SEED_OBJECT_INFO = {
+    # A pack sampler that never declares `control_after_generate`: the editor
+    # still draws the control after `seed`, because of the name.
+    "PackSampler": {
+        "input": {"required": {"seed": ["INT", {}], "steps": ["INT", {}]}},
+        "input_order": {"required": ["seed", "steps"]},
+    },
+    # Declared off: no control, name or not.
+    "NoControl": {
+        "input": {
+            "required": {
+                "noise_seed": ["INT", {"control_after_generate": False}],
+                "steps": ["INT", {}],
+            }
+        },
+        "input_order": {"required": ["noise_seed", "steps"]},
+    },
+}
+
+
+class TestSeedControlByName:
+    def test_an_undeclared_seed_control_is_consumed(self):
+        graph = _graph([_node(1, "PackSampler", widgets=[7, "randomize", 20])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, SEED_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"seed": 7, "steps": 20}
+
+    def test_a_number_where_the_control_should_be_is_refused(self):
+        """A file saved without the name rule: `steps` sits in the slot, and
+        taking it for a control would shift every value after it."""
+        graph = _graph([_node(1, "PackSampler", widgets=[7, 20])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, SEED_OBJECT_INFO)
+        assert prompt is None
+        assert any("control for its 'seed'" in p for p in problems)
+
+    def test_a_declared_control_is_not_counted_twice(self, simple_editor_graph):
+        # KSampler declares the flag on `seed`; one slot, not two.
+        prompt, problems = convert_ui_graph_to_api(simple_editor_graph, OBJECT_INFO)
+        assert problems == []
+        assert prompt["3"]["inputs"]["steps"] == 20
+        assert prompt["3"]["inputs"]["cfg"] == 7.5
+
+    def test_a_control_declared_off_takes_no_slot(self):
+        graph = _graph([_node(1, "NoControl", widgets=[7, 20])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, SEED_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"noise_seed": 7, "steps": 20}
+
+
+# ---------------------------------------------------------------------------
+# Widgets the editor adds that `/object_info` does not declare
+# ---------------------------------------------------------------------------
+
+EDITOR_WIDGET_OBJECT_INFO = {
+    # The Browse button the pack's JS appends saves a `null` slot.
+    "PixlStashPictureLoader": {
+        "input": {"required": {"picture_ids": ["STRING", {}]}},
+        "input_order": {"required": ["picture_ids"]},
+    },
+    # The text a run sends back is drawn as a widget, and older frontends
+    # saved it.
+    "GetImageSize": {
+        "input": {"required": {"image": ["IMAGE", {}]}},
+        "input_order": {"required": ["image"]},
+    },
+    # The player, then the upload button: both after the declared picker.
+    "LoadAudio": {
+        "input": {"required": {"audio": [["a.mp3"], {"audio_upload": True}]}},
+        "input_order": {"required": ["audio"]},
+    },
+    # The upload button goes after EVERY declared widget, not after its
+    # picker: the editor adds it outside `input_order`.
+    "LoadImageMask": {
+        "input": {
+            "required": {
+                "image": [["a.png"], {"image_upload": True}],
+                "channel": [["alpha", "red", "image"], {}],
+            }
+        },
+        "input_order": {"required": ["image", "channel"]},
+    },
+}
+
+
+class TestWidgetsTheEditorAdds:
+    def test_a_trailing_button_slot_is_consumed(self):
+        graph = _graph([_node(1, "PixlStashPictureLoader", widgets=["7", None])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"picture_ids": "7"}
+
+    def test_a_file_without_the_button_slot_still_converts(self):
+        graph = _graph([_node(1, "PixlStashPictureLoader", widgets=["7"])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"picture_ids": "7"}
+
+    def test_a_button_slot_holding_a_value_is_refused(self):
+        """A STRING sitting where the button's `null` belongs: the layout is
+        not the one in the table, so the node is not read through it."""
+        graph = _graph(
+            [_node(1, "PixlStashPictureLoader", widgets=["7", "library"])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("keeps a widget of its own" in p for p in problems)
+
+    def test_one_value_past_the_table_is_still_refused(self):
+        graph = _graph(
+            [_node(1, "PixlStashPictureLoader", widgets=["7", None, None])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("carries 3 widget values" in p for p in problems)
+
+    def test_a_display_slot_takes_any_value_and_sends_none(self):
+        graph = _graph(
+            [_node(1, "GetImageSize", widgets=["width: 64, height: 64"])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {}
+
+    def test_the_audio_player_and_upload_button_are_consumed(self):
+        graph = _graph([_node(1, "LoadAudio", widgets=["a.mp3", None, None])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"audio": "a.mp3"}
+
+    def test_the_upload_button_comes_after_every_declared_widget(self):
+        """Read as "after its picker", `channel` would get the button's
+        "image" and the run would mask by the wrong channel."""
+        graph = _graph(
+            [_node(1, "LoadImageMask", widgets=["a.png", "red", "image"])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, EDITOR_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"image": "a.png", "channel": "red"}
+
+
+# ---------------------------------------------------------------------------
+# Custom widget types: sent as saved, sent unsaved, or made at queue time
+# ---------------------------------------------------------------------------
+
+CUSTOM_WIDGET_OBJECT_INFO = {
+    "ColorToRGBInt": {
+        "input": {"required": {"color": ["COLOR", {"default": "#ffffff"}]}},
+        "input_order": {"required": ["color"]},
+    },
+    "CreateBoundingBoxes": {
+        "input": {
+            "required": {
+                "width": ["INT", {}],
+                "editor_state": ["BOUNDING_BOXES", {"default": []}],
+            }
+        },
+        "input_order": {"required": ["width", "editor_state"]},
+    },
+    "ImageCompare": {
+        "input": {
+            "required": {"compare_view": ["IMAGECOMPARE", {}]},
+            "optional": {"image_a": ["IMAGE", {}]},
+        },
+        "input_order": {"required": ["compare_view"], "optional": ["image_a"]},
+    },
+    "Preview3DAdvanced": {
+        "input": {
+            "required": {"viewport_state": ["LOAD_3D", {}], "width": ["INT", {}]}
+        },
+        "input_order": {"required": ["viewport_state", "width"]},
+    },
+    "CustomCombo": {
+        "input": {"required": {"choice": ["COMBO", {"options": []}]}},
+        "input_order": {"required": ["choice"]},
+    },
+}
+
+
+class TestCustomWidgetTypes:
+    def test_a_colour_is_a_widget_and_its_value_is_sent(self):
+        graph = _graph([_node(1, "ColorToRGBInt", widgets=["#0a9299"])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"color": "#0a9299"}
+
+    def test_a_number_in_a_colour_slot_is_refused(self):
+        graph = _graph([_node(1, "ColorToRGBInt", widgets=[3])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("takes a COLOR" in p for p in problems)
+
+    def test_a_list_value_is_wrapped_so_it_is_not_read_as_a_wire(self):
+        boxes = [{"x": 0, "y": 0, "width": 8, "height": 8}]
+        graph = _graph([_node(1, "CreateBoundingBoxes", widgets=[64, boxes])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {
+            "width": 64,
+            "editor_state": {"__value__": boxes},
+        }
+
+    def test_an_unsaved_widget_is_sent_with_the_value_it_is_made_with(self):
+        """`compare_view` is required: without it ComfyUI refuses the run."""
+        graph = _graph([_node(1, "ImageCompare", widgets=[])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"compare_view": {"__value__": ["", ""]}}
+
+    def test_a_file_from_when_it_was_saved_still_converts(self):
+        saved = {"before": "/api/view?a", "after": "/api/view?b"}
+        graph = _graph([_node(1, "ImageCompare", widgets=[saved])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"compare_view": {"__value__": ["", ""]}}
+
+    def test_a_value_rendered_at_queue_time_is_refused(self):
+        graph = _graph([_node(1, "Preview3DAdvanced", widgets=["", 1024])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("'viewport_state' from the ComfyUI editor" in p for p in problems)
+
+    def test_custom_combo_sends_the_choices_place_among_its_options(self):
+        # The saved index is stale (0); the editor queues where the choice is.
+        values = ["SFX", 0, "Music", "Instrument", "SFX", ""]
+        graph = _graph([_node(1, "CustomCombo", widgets=values)], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"choice": "SFX", "index": 2}
+
+    def test_custom_combo_with_a_non_string_option_is_refused(self):
+        values = ["SFX", 0, "Music", 5, ""]
+        graph = _graph([_node(1, "CustomCombo", widgets=values)], [])
+        prompt, problems = convert_ui_graph_to_api(graph, CUSTOM_WIDGET_OBJECT_INFO)
+        assert prompt is None
+        assert any("options for it do not account" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# The deprecated PrimitiveNode writes its value into what it is wired to
+# ---------------------------------------------------------------------------
+
+
+def _primitive(value, *, node_id=9, mode=0, properties=None, links=(1,)):
+    node = _node(
+        node_id,
+        "PrimitiveNode",
+        mode=mode,
+        outputs=[{"name": "STRING", "type": "STRING", "links": list(links)}],
+        widgets=[value],
+    )
+    if properties is not None:
+        node["properties"] = properties
+    return node
+
+
+def _encoder(node_id=6, stale="the encoder's own stale text"):
+    return _node(
+        node_id,
+        "CLIPTextEncode",
+        inputs=[
+            {"name": "clip", "type": "CLIP", "link": None},
+            {"name": "text", "type": "STRING", "link": 1, "widget": {"name": "text"}},
+        ],
+        widgets=[stale],
+    )
+
+
+class TestPrimitiveNode:
+    def test_its_value_lands_on_the_widget_and_it_is_not_sent(self):
+        graph = _graph(
+            [_primitive("a cat in a hat"), _encoder()], [[1, 9, 0, 6, 1, "STRING"]]
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        # The primitive's value, not the stale copy the encoder keeps.
+        assert prompt["6"]["inputs"]["text"] == "a cat in a hat"
+        assert "9" not in prompt
+
+    def test_an_unwired_primitive_is_dropped(self):
+        graph = _graph([_primitive("unused", links=()), _encoder()], [])
+        graph["nodes"][1]["inputs"][1]["link"] = None
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        assert prompt["6"]["inputs"]["text"] == "the encoder's own stale text"
+        assert "9" not in prompt
+
+    def test_one_behind_a_reroute_is_refused(self):
+        """The editor fills only the widgets the primitive is wired to; behind
+        a reroute the target keeps its own value, which this does not guess."""
+        reroute = _node(
+            7,
+            "Reroute",
+            inputs=[{"name": "", "type": "*", "link": 2}],
+            outputs=[{"name": "", "type": "STRING", "links": [1]}],
+        )
+        graph = _graph(
+            [_primitive("a cat", links=(2,)), reroute, _encoder()],
+            [[2, 9, 0, 7, 0, "STRING"], [1, 7, 0, 6, 1, "STRING"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("through a reroute" in p for p in problems)
+
+    def test_a_muted_primitive_is_refused(self):
+        graph = _graph(
+            [_primitive("a cat", mode=2), _encoder()], [[1, 9, 0, 6, 1, "STRING"]]
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("muted or bypassed" in p for p in problems)
+
+    def test_a_value_of_the_wrong_type_is_refused(self):
+        graph = _graph([_primitive(12), _encoder()], [[1, 9, 0, 6, 1, "STRING"]])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("takes a STRING" in p for p in problems)
+
+    def test_one_with_no_value_is_refused_and_says_so(self):
+        """Refused by name: a None value would otherwise end the conversion
+        with no problem recorded."""
+        graph = _graph([_primitive(None), _encoder()], [[1, 9, 0, 6, 1, "STRING"]])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("has no value to give" in p for p in problems)
+
+    def test_a_value_the_editor_rewrites_is_refused(self):
+        primitive = _primitive(
+            "out/%date:yyyy%", properties={"Run widget replace on values": True}
+        )
+        graph = _graph([primitive, _encoder()], [[1, 9, 0, 6, 1, "STRING"]])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("text replacements" in p for p in problems)
+
+    def test_one_across_a_subgraph_boundary_is_refused(self):
+        # As inlined: the encoder sits inside instance 5, the primitive outside.
+        graph = _graph(
+            [_primitive("a cat"), _encoder(node_id="5:6")],
+            [[1, 9, 0, "5:6", 1, "STRING"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("across a subgraph boundary" in p for p in problems)
+
+    def test_one_feeding_a_socket_the_node_does_not_declare_is_refused(self):
+        """The editor fills only a widget the node has; an undeclared name has
+        none, so it sends nothing there rather than the primitive's value."""
+        encoder = _encoder()
+        encoder["inputs"][1].update(name="test-gone", widget={"name": "test-gone"})
+        encoder["widgets_values"] = ["the encoder's own stale text"]
+        graph = _graph([_primitive("a cat"), encoder], [[1, 9, 0, 6, 1, "STRING"]])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert any("no such widget for it to fill" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# Node packs' editor-only nodes, and legacy group nodes
+# ---------------------------------------------------------------------------
+
+
+class TestPackEditorNodes:
+    def test_a_virtual_pack_node_is_dropped(self, simple_editor_graph):
+        graph = deepcopy(simple_editor_graph)
+        graph["nodes"].append(
+            _node(50, "Fast Groups Muter (rgthree)", widgets=[None, None])
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        assert "50" not in prompt
+
+    def test_a_server_class_of_the_same_name_is_not_dropped(self, simple_editor_graph):
+        graph = deepcopy(simple_editor_graph)
+        graph["nodes"].append(_node(50, "Fast Groups Muter (rgthree)", widgets=[3]))
+        info = {
+            **OBJECT_INFO,
+            "Fast Groups Muter (rgthree)": {
+                "input": {"required": {"n": ["INT", {}]}},
+                "input_order": {"required": ["n"]},
+            },
+        }
+        prompt, problems = convert_ui_graph_to_api(graph, info)
+        assert problems == []
+        assert prompt["50"]["inputs"] == {"n": 3}
+
+    def test_a_legacy_group_node_is_named_as_one_once(self, simple_editor_graph):
+        """Refused for what it is, and once: the node itself and the wire out
+        of it give the same sentence."""
+        graph = deepcopy(simple_editor_graph)
+        graph["nodes"].append(
+            _node(
+                50,
+                "workflow>MAKE_BASIC_PIPE",
+                outputs=[{"name": "CLIP", "type": "CLIP", "links": [9]}],
+            )
+        )
+        graph["links"].append([9, 50, 0, 6, 0, "CLIP"])
+        graph["nodes"][1]["inputs"][0]["link"] = 9
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        group = [p for p in problems if "legacy group node" in p]
+        assert group == [
+            "'workflow>MAKE_BASIC_PIPE' is a legacy group node, which PixlStash "
+            "cannot expand: ungroup it in ComfyUI and save the workflow again"
+        ]
+        assert not any("no node class" in p for p in problems)
+
+
+class TestPackDomWidgetSlots:
+    INFO = {
+        "PixlStashVAELoader": {
+            "input": {"required": {"vae_sha256": ["STRING", {}]}},
+            "input_order": {"required": ["vae_sha256"]},
+        },
+    }
+
+    @pytest.mark.parametrize("saved", [None, ""])
+    def test_a_shelf_row_saves_null_or_empty_by_frontend_version(self, saved):
+        graph = _graph([_node(1, "PixlStashVAELoader", widgets=["abc", saved])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, self.INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"vae_sha256": "abc"}
+
+    def test_a_shelf_row_holding_text_is_refused(self):
+        graph = _graph([_node(1, "PixlStashVAELoader", widgets=["abc", "vae"])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, self.INFO)
+        assert prompt is None
+        assert any("keeps a widget of its own" in p for p in problems)
+
+
+def test_an_upload_slot_holding_anything_but_the_buttons_value_is_refused():
+    graph = _graph([_node(1, "LoadImage", widgets=["a.png", "b.png"])], [])
+    prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+    assert prompt is None
+    assert any("keeps a widget of its own" in p for p in problems)

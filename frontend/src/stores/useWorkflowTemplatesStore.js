@@ -61,6 +61,30 @@ export const RUNS_ON_LABELS = {
   api: "External or Remote API",
 };
 
+// The folder names the ComfyUI-PixlStash pack installs under: a git clone, the
+// registry or Manager, a GitHub zip. Whole names, so another pack whose name
+// merely starts the same is not taken for ours. The backend's
+// `comfyui_pack_service._is_pack` recognises the pack by its files instead,
+// which is not reachable from here.
+const PIXLSTASH_PACK_MODULES = new Set(["comfyui-pixlstash", "comfyui-pixlstash-main"]);
+
+function isPixlstashModule(module) {
+  return PIXLSTASH_PACK_MODULES.has(String(module ?? "").toLowerCase());
+}
+
+/** Whether *template* comes from PixlStash's own node pack for ComfyUI. */
+export function isPixlstashPack(template) {
+  return template?.source === "pack" && isPixlstashModule(template.module);
+}
+
+/** Whether a category id is the PixlStash pack's own. */
+export function isPixlstashCategory(id) {
+  return (
+    String(id).startsWith(PACK_CATEGORY_PREFIX) &&
+    isPixlstashModule(String(id).slice(PACK_CATEGORY_PREFIX.length))
+  );
+}
+
 function inCategory(template, id) {
   if (id === PARTNER_CATEGORY) return template.source === "partner";
   if (id.startsWith(PACK_CATEGORY_PREFIX)) {
@@ -71,6 +95,7 @@ function inCategory(template, id) {
 
 function categoryLabel(id) {
   if (id === PARTNER_CATEGORY) return "Partner Nodes";
+  if (isPixlstashCategory(id)) return "PixlStash";
   return id.startsWith(PACK_CATEGORY_PREFIX) ? id.slice(PACK_CATEGORY_PREFIX.length) : id;
 }
 
@@ -362,7 +387,8 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
   /**
    * Each filter's rows with how many templates it holds: categories in the
    * order ComfyUI lists them, then Partner Nodes and the packs by name, as
-   * its own list has them; models and use cases by name.
+   * its own list has them, PixlStash's own pack first among those; models
+   * and use cases by name.
    */
   const filterOptions = computed(() => {
     const list = templates.value;
@@ -371,7 +397,9 @@ export const useWorkflowTemplatesStore = defineStore("workflowTemplates", () => 
       list.filter((t) => t.source === "pack"),
       (t) => [PACK_CATEGORY_PREFIX + t.module],
       categoryLabel,
-    ).sort(byName);
+    )
+      .map((option) => ({ ...option, pixlstash: isPixlstashCategory(option.id) }))
+      .sort((a, b) => Number(b.pixlstash) - Number(a.pixlstash) || byName(a, b));
     return {
       category: [
         ...counted(list, (t) => t.categories ?? []),
