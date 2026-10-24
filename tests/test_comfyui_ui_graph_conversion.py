@@ -1592,3 +1592,56 @@ class TestWidgetsAddedSinceTheFileWasSaved:
         prompt, problems = convert_ui_graph_to_api(graph, GROWN_OBJECT_INFO)
         assert prompt is None
         assert any("carries 3 widget values" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# A seed gets its control widget by name, declared or not
+# ---------------------------------------------------------------------------
+
+SEED_OBJECT_INFO = {
+    # A pack sampler that never declares `control_after_generate`: the editor
+    # still draws the control after `seed`, because of the name.
+    "PackSampler": {
+        "input": {"required": {"seed": ["INT", {}], "steps": ["INT", {}]}},
+        "input_order": {"required": ["seed", "steps"]},
+    },
+    # Declared off: no control, name or not.
+    "NoControl": {
+        "input": {
+            "required": {
+                "noise_seed": ["INT", {"control_after_generate": False}],
+                "steps": ["INT", {}],
+            }
+        },
+        "input_order": {"required": ["noise_seed", "steps"]},
+    },
+}
+
+
+class TestSeedControlByName:
+    def test_an_undeclared_seed_control_is_consumed(self):
+        graph = _graph([_node(1, "PackSampler", widgets=[7, "randomize", 20])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, SEED_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"seed": 7, "steps": 20}
+
+    def test_a_number_where_the_control_should_be_is_refused(self):
+        """A file saved without the name rule: `steps` sits in the slot, and
+        taking it for a control would shift every value after it."""
+        graph = _graph([_node(1, "PackSampler", widgets=[7, 20])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, SEED_OBJECT_INFO)
+        assert prompt is None
+        assert any("control for its 'seed'" in p for p in problems)
+
+    def test_a_declared_control_is_not_counted_twice(self, simple_editor_graph):
+        # KSampler declares the flag on `seed`; one slot, not two.
+        prompt, problems = convert_ui_graph_to_api(simple_editor_graph, OBJECT_INFO)
+        assert problems == []
+        assert prompt["3"]["inputs"]["steps"] == 20
+        assert prompt["3"]["inputs"]["cfg"] == 7.5
+
+    def test_a_control_declared_off_takes_no_slot(self):
+        graph = _graph([_node(1, "NoControl", widgets=[7, 20])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, SEED_OBJECT_INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"noise_seed": 7, "steps": 20}

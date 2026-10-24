@@ -60,6 +60,11 @@ _EXTRA_WIDGET_OPTIONS = (
     "file_upload",
 )
 
+# The INT inputs the editor gives a control widget by name, declared or not,
+# and the values that control can hold (frontend `scripts/widgets.ts`).
+_SEED_NAMES = ("seed", "noise_seed")
+_CONTROL_VALUES = frozenset({"fixed", "increment", "decrement", "randomize"})
+
 # Editor furniture. These carry no class on the server and nothing a run needs,
 # so they are dropped rather than refused.
 _ANNOTATION_CLASSES = frozenset({"Note", "MarkdownNote"})
@@ -210,6 +215,21 @@ def _is_widget(type_field, options: dict) -> bool:
 
 def _extra_widget_slots(options: dict) -> int:
     return sum(1 for option in _EXTRA_WIDGET_OPTIONS if options.get(option))
+
+
+def _control_by_name(name: str, type_field, options: dict) -> bool:
+    """Whether the editor gives this input a control widget by its name alone.
+
+    An INT named ``seed`` or ``noise_seed`` gets one whether or not it
+    declares ``control_after_generate``; only a declared ``False`` turns it
+    off (frontend ``useIntWidget.ts``: ``control_after_generate ?? name in
+    ['seed', 'noise_seed']``).
+    """
+    return (
+        type_field == "INT"
+        and options.get("control_after_generate") is None
+        and name in _SEED_NAMES
+    )
 
 
 def _node_class(node: dict) -> str:
@@ -666,6 +686,30 @@ class _Converter:
         declared[index + 1 : index + 1] = nested
         return True
 
+    def _control_slot_by_name(
+        self, positional: list, at: int, name: str, type_field, options: dict, where
+    ) -> int | None:
+        """The slot of the control widget a seed gets by name: 1, 0, or None.
+
+        **Checked, because it was inferred.** A file saved by a frontend
+        without the name rule has the next widget's value here, and taking
+        that as a control would shift every value after it. So the slot must
+        hold a control value, or the node is refused as misaligned. A file that
+        ends before the slot has nothing to check.
+        """
+        if not _control_by_name(name, type_field, options):
+            return 0
+        if at < len(positional):
+            value = positional[at]
+            if not (isinstance(value, str) and value in _CONTROL_VALUES):
+                self.problems.append(
+                    f"{where} has {value!r} where the editor keeps the control "
+                    f"for its {name!r}, so its widget values do not line up "
+                    "with the node this ComfyUI has"
+                )
+                return None
+        return 1
+
     def _connected_inputs(self, node: dict) -> dict[str, object]:
         return {
             str(entry.get("name")): entry["link"]
@@ -732,6 +776,12 @@ class _Converter:
                 # socket.
                 if is_widget and not by_name:
                     consumed += 1 + _extra_widget_slots(options)
+                    control = self._control_slot_by_name(
+                        positional, consumed, name, type_field, options, where
+                    )
+                    if control is None:
+                        return None
+                    consumed += control
                 if type_field == _DYNAMIC_COMBO:
                     # Which option is chosen decides which inputs follow, and
                     # a wire does not say.
@@ -779,6 +829,12 @@ class _Converter:
                 else:
                     inputs[name] = default
             consumed += 1 + _extra_widget_slots(options)
+            control = self._control_slot_by_name(
+                positional, consumed, name, type_field, options, where
+            )
+            if control is None:
+                return None
+            consumed += control
             if type_field == _DYNAMIC_COMBO and not self._expand_dynamic(
                 declared, index, name, options, inputs.get(name), where
             ):
