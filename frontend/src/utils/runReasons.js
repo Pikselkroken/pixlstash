@@ -38,6 +38,9 @@ export const PACK_OUTDATED_ACTION = "Restart ComfyUI, or update the pack.";
 /** A model file the graph names that this machine does not have. */
 export const MISSING_MODELS = "missing_models";
 
+/** Node classes this ComfyUI lacks; `packs` names a pack PixlStash can install. */
+export const MISSING_NODES = "missing_nodes";
+
 /**
  * Installing a file, or restarting ComfyUI, is a trip away from the keyboard,
  * so either stops the batch.
@@ -130,6 +133,7 @@ export const MISSING_CHOICES = "missing_choices";
 export const FIX_SETTINGS = "settings";
 export const FIX_DROP_LORA = "drop-lora";
 export const FIX_EDIT_LORAS = "edit-loras";
+export const FIX_INSTALL_PACK = "install-pack";
 
 function names(list, key) {
   return (list || [])
@@ -331,14 +335,19 @@ export function readReason(reason) {
         `This ComfyUI does not have ${values}. Set another in the workflow's Parameters.`,
       );
     }
-    case "missing_nodes": {
+    case MISSING_NODES: {
       const nodes = names(reason.nodes, "name");
       const ours = nodes.filter((n) => n.startsWith(PIXLSTASH_NODE_PREFIX));
       const others = nodes.filter((n) => !ours.includes(n));
       const sentences = [];
+      // A pack PixlStash can have ComfyUI-Manager install (#2054).
+      const packs = (reason.packs || []).filter((pack) => pack?.id);
       if (others.length) {
+        const from = packs.length
+          ? `, from ${packs.map((pack) => pack.name || pack.id).join(", ")}`
+          : "";
         sentences.push(
-          `This ComfyUI does not have ${others.length === 1 ? "the node" : "the nodes"} ${others.join(", ")}.`,
+          `This ComfyUI does not have ${others.length === 1 ? "the node" : "the nodes"} ${others.join(", ")}${from}.`,
         );
       }
       if (ours.length) {
@@ -346,7 +355,7 @@ export function readReason(reason) {
           `${ours.join(", ")} ${ours.length === 1 ? "comes" : "come"} from the ComfyUI-PixlStash node pack, which this ComfyUI does not have. ${PIXLSTASH_PACK_INSTALL}`,
         );
       }
-      return read(sentences.join(" "));
+      return read(sentences.join(" "), packs.length ? FIX_INSTALL_PACK : null);
     }
     case "no_lora_loader":
       // Fires only for a LoRA addressed to a slot (`loras`), so taking it out

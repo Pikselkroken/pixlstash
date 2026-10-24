@@ -222,6 +222,38 @@ export async function installComfyuiPack() {
   return unwrap(apiClient.post(comfyUrl("/pack/install")));
 }
 
+/**
+ * Have the saved ComfyUI's ComfyUI-Manager install a node pack PixlStash knows
+ * (a `packs` entry on a `missing_nodes` reason), at the version PixlStash pins.
+ * Owner-only, local caller only (403 from another computer).
+ *
+ * `restart` is `"requested"` when ComfyUI is restarting, `"manual"` when the
+ * person has to restart it (`detail` says why). Rejects 409 when Manager is
+ * missing, refuses or already lists the pack, 404 for a pack not on the list.
+ *
+ * @param {string} packId - the pack's `id`.
+ * @returns {Promise<{pack: string, version: string, manager: ("v3"|"v4"),
+ *   restart: ("requested"|"manual"), detail: ?string}>}
+ */
+export async function installNodePack(packId) {
+  return unwrap(
+    apiClient.post(comfyUrl(`/node-packs/${encodeURIComponent(packId)}/install`)),
+  );
+}
+
+/**
+ * Whether the saved ComfyUI offers every node of a known pack. `loaded` is
+ * false while ComfyUI does not answer, as while it restarts.
+ *
+ * @param {string} packId - the pack's `id`.
+ * @returns {Promise<{loaded: boolean}>}
+ */
+export async function getNodePack(packId) {
+  return unwrap(
+    apiClient.get(comfyUrl(`/node-packs/${encodeURIComponent(packId)}`)),
+  );
+}
+
 // ── Templates from the owner's ComfyUI (#2000) ──────────────────────────────
 
 /**

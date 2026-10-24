@@ -8,14 +8,20 @@
 // jsdom does not apply, so `rrn--notice` is as far as a unit test reaches;
 // which colour that class resolves to is `docs/design/notice-surface.md`.
 
-import { describe, it, expect, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
 
 vi.mock("vuetify/components", async (importOriginal) => ({
   ...(await importOriginal()),
   VIcon: { name: "VIcon", template: "<i><slot /></i>" },
 }));
 
+vi.mock("../../api/comfyui", () => ({
+  installNodePack: vi.fn(),
+  getNodePack: vi.fn(),
+}));
+
+import { getNodePack, installNodePack } from "../../api/comfyui";
 import RunReasonNotice from "./RunReasonNotice.vue";
 
 function mountNotice(reason, subject = "Cinematic portrait") {
@@ -301,5 +307,138 @@ describe("a LoRA the owner removed, and one that cannot be removed", () => {
     );
     expect(said.match(/cannot be switched off/g)).toHaveLength(1);
     expect(rail(wrapper)).not.toContain("rrn--notice");
+  });
+});
+
+describe("a node pack PixlStash can install (#2054)", () => {
+  const reason = {
+    code: "missing_nodes",
+    nodes: ["InpaintCropImproved", "InpaintStitchImproved"],
+    packs: [
+      {
+        id: "comfyui-inpaint-cropandstitch",
+        name: "ComfyUI-Inpaint-CropAndStitch",
+        version: "3.0.11",
+        nodes: ["InpaintCropImproved", "InpaintStitchImproved"],
+      },
+    ],
+  };
+
+  function mountInstall() {
+    return mount(RunReasonNotice, {
+      props: { reason, subject: "Inpaint" },
+      global: {
+        stubs: {
+          AppButton: {
+            props: ["loading", "disabled"],
+            emits: ["click"],
+            template:
+              "<button :data-loading=\"loading\" :disabled=\"disabled\" @click=\"$emit('click')\"><slot /></button>",
+          },
+        },
+      },
+    });
+  }
+
+  function button(wrapper, label) {
+    return wrapper.findAll("button").find((b) => b.text().startsWith(label));
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("asks before installing, and Cancel installs nothing", async () => {
+    const wrapper = mountInstall();
+    await button(wrapper, "Install ComfyUI-Inpaint-CropAndStitch…").trigger("click");
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain("This installs third-party code (comfyui-inpaint-cropandstitch 3.0.11");
+    expect(said).toContain("Install it yourself from ComfyUI Manager.");
+    expect(installNodePack).not.toHaveBeenCalled();
+    await button(wrapper, "Cancel").trigger("click");
+    expect(button(wrapper, "Install and restart")).toBeUndefined();
+    expect(installNodePack).not.toHaveBeenCalled();
+  });
+
+  it("installs once, waits for the nodes, then asks the parent again once", async () => {
+    vi.useFakeTimers();
+    installNodePack.mockResolvedValue({ restart: "requested", detail: null });
+    getNodePack
+      .mockRejectedValueOnce(new Error("ComfyUI restarting"))
+      .mockResolvedValueOnce({ loaded: false })
+      .mockResolvedValue({ loaded: true });
+    const wrapper = mountInstall();
+    await button(wrapper, "Install ComfyUI-Inpaint-CropAndStitch…").trigger("click");
+    await button(wrapper, "Install and restart").trigger("click");
+    await flushPromises();
+    expect(installNodePack).toHaveBeenCalledTimes(1);
+    expect(installNodePack).toHaveBeenCalledWith("comfyui-inpaint-cropandstitch");
+    expect(wrapper.text()).toContain("Restarting ComfyUI…");
+    for (let tick = 0; tick < 3; tick += 1) {
+      await vi.advanceTimersByTimeAsync(3000);
+    }
+    expect(getNodePack).toHaveBeenCalledTimes(3);
+    expect(wrapper.emitted("retry")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(getNodePack).toHaveBeenCalledTimes(3);
+    expect(wrapper.emitted("retry")).toHaveLength(1);
+  });
+
+  it("stops asking once it unmounts", async () => {
+    vi.useFakeTimers();
+    installNodePack.mockResolvedValue({ restart: "requested", detail: null });
+    getNodePack.mockResolvedValue({ loaded: false });
+    const wrapper = mountInstall();
+    await button(wrapper, "Install ComfyUI-Inpaint-CropAndStitch…").trigger("click");
+    await button(wrapper, "Install and restart").trigger("click");
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(getNodePack).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(getNodePack).toHaveBeenCalledTimes(1);
+  });
+
+  it("says why ComfyUI was not restarted, and offers Retry", async () => {
+    installNodePack.mockResolvedValue({
+      restart: "manual",
+      detail: "ComfyUI is busy, so restart it yourself once its queue is empty.",
+    });
+    const wrapper = mountInstall();
+    await button(wrapper, "Install ComfyUI-Inpaint-CropAndStitch…").trigger("click");
+    await button(wrapper, "Install and restart").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("ComfyUI is busy, so restart it yourself");
+    expect(getNodePack).not.toHaveBeenCalled();
+    await button(wrapper, "Retry").trigger("click");
+    expect(wrapper.emitted("retry")).toHaveLength(1);
+  });
+
+  it("shows the server's refusal and offers the install again", async () => {
+    installNodePack.mockRejectedValue({
+      response: {
+        status: 409,
+        data: { detail: "ComfyUI-Manager is not installed in this ComfyUI." },
+      },
+    });
+    const wrapper = mountInstall();
+    await button(wrapper, "Install ComfyUI-Inpaint-CropAndStitch…").trigger("click");
+    await button(wrapper, "Install and restart").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("ComfyUI-Manager is not installed in this ComfyUI.");
+    expect(button(wrapper, "Install ComfyUI-Inpaint-CropAndStitch…")).toBeTruthy();
+  });
+
+  it("says where to install from when this is not the computer PixlStash runs on", async () => {
+    installNodePack.mockRejectedValue({
+      response: { status: 403, data: { detail: "restricted to loopback" } },
+    });
+    const wrapper = mountInstall();
+    await button(wrapper, "Install ComfyUI-Inpaint-CropAndStitch…").trigger("click");
+    await button(wrapper, "Install and restart").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("on the computer it runs on, or from ComfyUI Manager");
+    expect(wrapper.text()).not.toContain("loopback");
   });
 });
