@@ -668,6 +668,9 @@ class ResourceArbiter:
             logger.debug("Could not read RAM: %s", exc)
             ram_now = {"total_mb": 0, "available_mb": 0}
         with self._lock:
+            # Numbered here, not with the ledger read: a stalled ledger read
+            # samples its tenants later than a read that started after it.
+            probe_read = next(self._reads)
             tenant_probes = dict(self._probes) if probes else {}
             last_devices = {
                 tenant: state.get("device")
@@ -705,8 +708,8 @@ class ResourceArbiter:
                 self._devices = devices
                 self._pixlstash_usage = usage
                 self._ram_now = ram_now
-            if probes and read > self._stored_probe_read:
-                self._stored_probe_read = read
+            if probes and probe_read > self._stored_probe_read:
+                self._stored_probe_read = probe_read
                 for tenant, state in states.items():
                     if tenant in self._probes:
                         self._probe_state[tenant] = state

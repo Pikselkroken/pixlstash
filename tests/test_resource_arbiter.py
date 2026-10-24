@@ -328,6 +328,34 @@ def test_a_cached_read_never_outranks_a_fresh_one_started_before_it():
     assert arb._devices[0].used_mb == 0
 
 
+def test_a_stalled_ledger_read_still_stores_the_tenants_it_read_after():
+    """Tenants are read after the card: a read stalled on the card reads them last."""
+    arb, fake, _ = make(thread=False)
+    comfy = FakeComfy(usage=5000)
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    started, go = threading.Event(), threading.Event()
+    devices = fake.devices
+
+    def stalled_devices(max_age_s=1.0):
+        if threading.current_thread().name == "stalled-read":
+            started.set()
+            go.wait(5)
+        return devices(max_age_s)
+
+    fake.devices = stalled_devices
+    stalled = threading.Thread(target=arb._refresh, name="stalled-read")
+    stalled.start()
+    try:
+        assert started.wait(5)
+        arb._refresh(cached=True)
+        assert arb._probe_state[Tenant.COMFYUI]["usage"] == 5000
+        comfy.usage = 0
+    finally:
+        go.set()
+        stalled.join(5)
+    assert arb._probe_state[Tenant.COMFYUI]["usage"] == 0
+
+
 def test_urgent_light_is_fit_checked_only():
     arb, _fake, _ = make(used_mb=23000)
     exclusive = arb.request(
