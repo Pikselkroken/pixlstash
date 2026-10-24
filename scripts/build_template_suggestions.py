@@ -23,6 +23,12 @@ shows, never a filter) and ``files``: every ``{name, url, directory}`` from
 ``definitions.subgraphs``. A template that downloads nothing (the paid API-node
 ones) is left out.
 
+**Each file's SHA-256** where Hugging Face states it (``X-Linked-Etag`` on the
+file's ``resolve`` link, which is the LFS object's digest), so a loader that
+names a model by digest alone (ComfyUI-PixlStash's) can be offered the same
+download. Read once per link: a link the previous list already holds keeps its
+digest, so a weekly run asks only about new links. A gated file has none.
+
 **The graphs are kept too**, one minified file per template in
 ``pixlstash/data/workflow_templates/``, so a workflow can be made from one with
 no ComfyUI reachable (#2000). One file each, so the weekly PR's file list says
@@ -48,6 +54,8 @@ import io
 import json
 import re
 import sys
+import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -62,6 +70,61 @@ GRAPHS = OUTPUT.with_suffix("")
 # A template name as a file name: the package is not ours, so a name that could
 # leave the folder (a slash, a leading dot) is not written.
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+DIGEST_HOST = "huggingface.co"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Hand each redirect back, so its own headers can be read."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _sha256_of(url: str) -> str | None:
+    """The file's SHA-256 as Hugging Face states it, or None.
+
+    The digest is on the answer that redirects to the file's storage, after
+    any rename redirect within Hugging Face; nothing past that host is asked.
+    """
+    opener = urllib.request.build_opener(_NoRedirect)
+    for _hop in range(5):
+        try:
+            response = opener.open(
+                urllib.request.Request(url, method="HEAD"), timeout=30
+            )
+        except urllib.error.HTTPError as exc:
+            response = exc
+        except OSError as exc:
+            print(f"No SHA-256 for {url}: {exc}")
+            return None
+        etag = (response.headers.get("X-Linked-Etag") or "").strip('"')
+        if _SHA256.match(etag):
+            return etag
+        location = response.headers.get("Location")
+        url = urllib.parse.urljoin(url, location) if location else ""
+        if urllib.parse.urlsplit(url).hostname != DIGEST_HOST:
+            return None
+    return None
+
+
+def add_digests(document: dict, old: dict) -> None:
+    """Give each file of *document* its ``sha256``, reusing *old*'s by link."""
+    known = {
+        entry["url"]: entry["sha256"]
+        for template in old.get("templates") or []
+        for entry in template.get("files") or []
+        if entry.get("url") and entry.get("sha256")
+    }
+    for template in document["templates"]:
+        for entry in template["files"]:
+            url = entry["url"]
+            if urllib.parse.urlsplit(url).hostname != DIGEST_HOST:
+                continue
+            if url not in known:
+                known[url] = _sha256_of(url)
+            if known[url]:
+                entry["sha256"] = known[url]
 
 
 def _fetch_wheel(version: str | None) -> tuple[bytes, str]:
@@ -242,6 +305,7 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError:
         old = {}
     old_graphs = _read_graphs(folder)
+    add_digests(document, old)
     args.output.write_text(
         json.dumps(document, indent=1, ensure_ascii=False) + "\n", encoding="utf-8"
     )
