@@ -370,6 +370,11 @@
                 >
               </template>
             </AppSelect>
+            <span v-else class="wftab-value"
+              ><Tooltip v-if="row.file" :text="row.file" activator="parent" />{{
+                row.savedLabel
+              }}</span
+            >
             <p
               v-if="row.verdictLine"
               class="wftab-verdict"
@@ -382,11 +387,6 @@
                 >{{ `mdi-${row.verdictIcon}` }}</v-icon
               ><span>{{ row.verdictLine }}</span>
             </p>
-            <span v-else class="wftab-value"
-              ><Tooltip v-if="row.file" :text="row.file" activator="parent" />{{
-                row.savedLabel
-              }}</span
-            >
             <!-- What the shelf files this loader's model as, where every
                  workflow loading it says it is this loader's kind (#1962): the
                  shelf's Kind menu, here too. It is the one note under the

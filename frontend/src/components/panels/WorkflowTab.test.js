@@ -1447,6 +1447,8 @@ describe("a checkpoint that will not load", () => {
     const field = wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="combobox"]');
     // The missing file is what the field reads, never an option.
     expect(field.text()).toContain("realvisXL_v5_fp8 (missing)");
+    // The picker stands in for the saved value's text, never beside it.
+    expect(wrapper.find('[data-testid="wftab-row-checkpoint"] .wftab-value').exists()).toBe(false);
     await field.trigger("click");
     const list = wrapper.find('[data-testid="wftab-pick-checkpoint"] [role="listbox"]');
     expect(list.find('[data-testid="wftab-replacing"]').text()).toBe(

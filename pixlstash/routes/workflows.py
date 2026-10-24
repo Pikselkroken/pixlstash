@@ -10825,7 +10825,9 @@ def create_router(server) -> APIRouter:
         found = loadable(candidates, object_info)
         if grouped and narrowed:
             # Nothing was held back, so narrowed says whether it would be.
-            narrowed = any(c.verdict == "likely" for c in found)
+            # The likely name match is offered ungrouped whatever its base
+            # model, so it counts here too.
+            narrowed = any(c.verdict == "likely" or c.likely for c in found)
         if found:
             return found, None, narrowed, base_model
         if wider:
