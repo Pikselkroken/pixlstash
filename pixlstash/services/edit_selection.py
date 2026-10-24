@@ -155,21 +155,34 @@ def _shape(step: SelectionStep, image: np.ndarray) -> np.ndarray:
     return shape
 
 
-def _ellipse_kernel(size: int) -> np.ndarray:
-    return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * size + 1, 2 * size + 1))
+# Grow and shrink by a disc through the distance transform rather than
+# cv2.dilate/erode: a disc kernel costs its area per pixel, about 1.5 s for a
+# 51px radius on a 7680 x 5120 picture, while the transform is one pass at any
+# radius. The mask is still 0/255 here, which is all the transform reads.
+# Outside the picture is ignored, as with OpenCV's default border: a shrink
+# keeps a selection that runs to the edge, a grow does not spill past it.
+def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Every pixel within *radius* of a selected one."""
+    dist = cv2.distanceTransform(255 - mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    return cv2.compare(dist, float(radius), cv2.CMP_LE)
+
+
+def _erode(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Every selected pixel further than *radius* from an unselected one."""
+    dist = cv2.distanceTransform(mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    return cv2.compare(dist, float(radius), cv2.CMP_GT)
 
 
 def _refine(mask: np.ndarray, refine: SelectionRefine) -> np.ndarray:
     if refine.fill_holes:
         # A closing with a disc of the size fills every gap and enclosed hole
         # the disc cannot fit in, so a speckled wand pick becomes solid.
-        mask = cv2.morphologyEx(
-            mask, cv2.MORPH_CLOSE, _ellipse_kernel(refine.fill_holes // 2)
-        )
+        radius = refine.fill_holes // 2
+        mask = _erode(_dilate(mask, radius), radius)
     if refine.grow > 0:
-        mask = cv2.dilate(mask, _ellipse_kernel(refine.grow))
+        mask = _dilate(mask, refine.grow)
     elif refine.grow < 0:
-        mask = cv2.erode(mask, _ellipse_kernel(-refine.grow))
+        mask = _erode(mask, -refine.grow)
     if refine.feather:
         mask = cv2.GaussianBlur(mask, (0, 0), refine.feather / 2)
     return mask

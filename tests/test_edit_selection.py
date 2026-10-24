@@ -86,6 +86,19 @@ def test_refine_fills_holes_grows_and_feathers():
     assert 0 < feathered[5, 20] < 255
 
 
+def test_refine_ignores_what_lies_outside_the_picture():
+    """Shrinking keeps a selection that runs to the edge, growing nothing
+    stays nothing, and growing reaches out by a disc, not a square."""
+    left = [{"tool": "rect", "mode": "new", "box": [0, 0, 0.5, 1]}]
+    shrunk = _mask(left, grow=-3)
+    assert shrunk[0, 0] == 255 and shrunk[10, 16] == 255 and shrunk[10, 17] == 0
+    assert not _mask([{"tool": "invert"}, {"tool": "invert"}], grow=5).any()
+    assert (_mask([{"tool": "invert"}], grow=-5) == 255).all()
+    dot = [{"tool": "rect", "mode": "new", "box": [0.5, 0.5, 0.025, 0.05]}]
+    grown = _mask(dot, grow=5)
+    assert grown[10, 15] == 255 and grown[5, 15] == 0
+
+
 def test_a_step_without_its_geometry_is_refused():
     with pytest.raises(ValidationError):
         Selection(steps=[{"tool": "rect"}])
