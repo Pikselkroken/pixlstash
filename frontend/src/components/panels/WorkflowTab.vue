@@ -4932,10 +4932,10 @@ async function checkInstalled(key, { quiet = false } = {}) {
   height: 14px;
 }
 
+/* Square: the smallest radius token is wider than the bar. */
 .wftab-peak {
   width: 3px;
   min-height: var(--space-1);
-  border-radius: 1px 1px 0 0;
   background: rgba(var(--v-theme-on-surface), 0.22);
 }
 
