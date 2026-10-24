@@ -1,5 +1,5 @@
-// The last run's pictures (#1868): marked New when their batch ends, offered
-// for selection once, and never a batch that ended before the page opened.
+// The last run's pictures (#1868): marked New when their batch ends, without a
+// notice, and never a batch that ended before the page opened.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick } from "vue";
@@ -34,22 +34,17 @@ beforeEach(() => {
 });
 
 describe("useNewBatchStore", () => {
-  it("marks a batch that ends and offers to select it", async () => {
+  it("marks a batch that ends without raising a notice", async () => {
     const store = useNewBatchStore();
     const tasks = useTasksStore();
     tasks.finishedRuns = [batch("b1")];
     await nextTick();
     expect(store.isNew(11)).toBe(true);
     expect(store.isNew(99)).toBe(false);
-    const [notice] = useNoticeStore().notices;
-    expect(notice.text).toBe(
-      "2 new from SDXL: Text to Image. Select them to pick the keepers.",
-    );
-    notice.action.handler();
-    expect(store.selectAsk).toBe(1);
+    expect(useNoticeStore().notices).toHaveLength(0);
   });
 
-  it("replaces the last batch with the next and tells each once", async () => {
+  it("replaces the last batch with the next", async () => {
     const store = useNewBatchStore();
     const tasks = useTasksStore();
     tasks.finishedRuns = [batch("b1")];
@@ -58,10 +53,6 @@ describe("useNewBatchStore", () => {
     await nextTick();
     expect(store.isNew(11)).toBe(false);
     expect(store.isNew(21)).toBe(true);
-    // The same list again tells nothing new.
-    tasks.finishedRuns = [...tasks.finishedRuns];
-    await nextTick();
-    expect(useNoticeStore().notices).toHaveLength(1);
   });
 
   it("leaves out an upscale, a failed run and one that ended before", async () => {
@@ -77,6 +68,5 @@ describe("useNewBatchStore", () => {
     ];
     await nextTick();
     expect([31, 32, 33].some((id) => store.isNew(id))).toBe(false);
-    expect(useNoticeStore().notices).toHaveLength(0);
   });
 });

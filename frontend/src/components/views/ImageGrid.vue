@@ -5875,14 +5875,8 @@ onUnmounted(() => {
   runDialogStore.context = {};
 });
 
-// "Select them" on the last run's notice (#1868).
+// The last run's pictures, marked New (#1868).
 const newBatch = useNewBatchStore();
-watch(
-  () => newBatch.selectAsk,
-  () => {
-    selectedImageIds.value = [...newBatch.ids];
-  },
-);
 
 // The locked-delete cards (`showLockedDeleteNotice`) are scoped to the context
 // they describe: the sentence is about THIS selection in THIS view, and it
