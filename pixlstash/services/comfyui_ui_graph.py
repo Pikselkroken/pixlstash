@@ -17,8 +17,15 @@ Recipe tab is for.
 at.** ``/object_info`` is the same map the frontend builds its widgets from: it
 names every input of every installed class, in declaration order, and marks the
 ones that carry an extra frontend-only widget (``control_after_generate`` after
-a seed, the upload button after a file picker). With it in hand the positional
+a seed, the upload button on a file picker). With it in hand the positional
 ``widgets_values`` array maps onto named inputs the way the editor maps it.
+
+What the map does not say is read from the frontend's own source (ComfyUI
+frontend 1.55.18) into small rules here: the widgets an extension adds to a
+class by name (``_EDITOR_WIDGETS``), the control a seed gets by its name, the
+custom widget types, and the deprecated ``PrimitiveNode``, which the editor
+resolves into the widgets it feeds. Each rule carries a guard, so a file laid
+out some other way is still refused rather than read shifted.
 
 **The safety property is that this refuses rather than approximates.** Every
 node must be a class this ComfyUI declares, and its widget values must be

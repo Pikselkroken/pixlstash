@@ -9,8 +9,9 @@ guess exists and is deliberately not made.
 Measured separately against the 15 editor/API workflow pairs shipped by
 comfyui-multigpu: 8 converted, 8 byte-identical to the API half, 0 wrong, 7
 refused. The refusals are node packs the machine did not have installed, the
-deprecated ``PrimitiveNode``, and two classes whose widget arrays this does not
-account for - each named in the report rather than papered over.
+deprecated ``PrimitiveNode`` (resolved since #2043), and two classes whose
+widget arrays this does not account for - each named in the report rather than
+papered over.
 """
 
 from copy import deepcopy
