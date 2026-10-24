@@ -97,8 +97,14 @@ _MEDIA_UPLOAD_OPTIONS = ("image_upload", "video_upload", "animated_image_upload"
 
 
 def _empty(value) -> bool:
-    """A button's slot, or a DOM widget's with no value of its own."""
+    """A button's slot."""
     return value is None
+
+
+def _blank(value) -> bool:
+    """A DOM widget's slot with no value of its own: ``None`` from older
+    frontends, ``""`` from 1.55."""
+    return value is None or value == ""
 
 
 def _anything(value) -> bool:
@@ -116,8 +122,8 @@ def _upload_value(value) -> bool:
 # each takes a trailing slot of `widgets_values` that no API input reads, in
 # this order, before the upload button. Each slot is OPTIONAL - a file saved
 # before the widget existed, or since the editor stopped saving it, has fewer
-# values - and CHECKED: an `_empty` slot holding a value means the file is laid
-# out some other way, and the node is refused rather than shifted. A layout is
+# values - and CHECKED: an `_empty` or `_blank` slot holding a value means the
+# file is laid out some other way, and the node is refused rather than shifted. A layout is
 # only as good as the version it was read from, which each group names.
 _EDITOR_WIDGETS = {
     # ComfyUI frontend 1.55.18, `extensions/core/`. A text preview and its
@@ -172,15 +178,15 @@ _EDITOR_WIDGETS = {
         (_empty,),
     ),
     # ComfyUI-PixlStash 9aeb116, `web/js/combo_widgets.js`: the Browse
-    # buttons, and the shelf rows and pictures beside them.
+    # buttons, and the shelf rows and pictures beside them (DOM widgets).
     "PixlStashPictureLoader": (_empty,),
-    "PixlStashAdapterLoader": (_empty, _empty),
-    "PixlStashMultiAdapterLoader": (_empty,),
-    "PixlStashVAELoader": (_empty,),
-    "PixlStashCLIPLoader": (_empty, _empty),
-    "PixlStashControlNetLoader": (_empty,),
-    "PixlStashUpscaleModelLoader": (_empty,),
-    "PixlStashCheckpointLoader": (_empty,),
+    "PixlStashAdapterLoader": (_empty, _blank),
+    "PixlStashMultiAdapterLoader": (_blank,),
+    "PixlStashVAELoader": (_blank,),
+    "PixlStashCLIPLoader": (_blank, _blank),
+    "PixlStashControlNetLoader": (_blank,),
+    "PixlStashUpscaleModelLoader": (_blank,),
+    "PixlStashCheckpointLoader": (_blank,),
 }
 
 # Editor furniture. These carry no class on the server and nothing a run needs,

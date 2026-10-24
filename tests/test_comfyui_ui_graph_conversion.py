@@ -1986,3 +1986,25 @@ class TestPackEditorNodes:
             "cannot expand: ungroup it in ComfyUI and save the workflow again"
         ]
         assert not any("no node class" in p for p in problems)
+
+
+class TestPackDomWidgetSlots:
+    INFO = {
+        "PixlStashVAELoader": {
+            "input": {"required": {"vae_sha256": ["STRING", {}]}},
+            "input_order": {"required": ["vae_sha256"]},
+        },
+    }
+
+    @pytest.mark.parametrize("saved", [None, ""])
+    def test_a_shelf_row_saves_null_or_empty_by_frontend_version(self, saved):
+        graph = _graph([_node(1, "PixlStashVAELoader", widgets=["abc", saved])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, self.INFO)
+        assert problems == []
+        assert prompt["1"]["inputs"] == {"vae_sha256": "abc"}
+
+    def test_a_shelf_row_holding_text_is_refused(self):
+        graph = _graph([_node(1, "PixlStashVAELoader", widgets=["abc", "vae"])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, self.INFO)
+        assert prompt is None
+        assert any("keeps a widget of its own" in p for p in problems)
