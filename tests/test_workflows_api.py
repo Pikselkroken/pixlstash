@@ -25046,6 +25046,31 @@ def test_the_template_list_reads_the_owners_comfyui(
     assert pack["pack_loaded"] is True
 
 
+def test_a_template_file_is_downloadable_only_where_the_server_can_fetch_it(
+    workflow_env, comfyui_templates_served, monkeypatch
+):
+    """`downloadable` is `POST /model-downloads`' own lookup, by the file's name.
+
+    Wrong if a file is offered for download from its template's `url` alone: a
+    pack's link is not one the server will fetch.
+    """
+    monkeypatch.setattr(
+        comfyui_module,
+        "download_source",
+        lambda name: (
+            {"url": "https://example.com/vae"}
+            if name == _TEMPLATE_SUBGRAPH_VAE
+            else None
+        ),
+    )
+    body = _templates(workflow_env.owner)
+    example = next(t for t in body["templates"] if t["key"] == "default/image_example")
+    assert {f["name"]: f["downloadable"] for f in example["files"]} == {
+        _SHELF_FILENAME.upper(): False,
+        _TEMPLATE_SUBGRAPH_VAE: True,
+    }
+
+
 def test_the_template_list_says_when_comfyui_does_not_answer(
     workflow_env, comfyui_templates_served
 ):
