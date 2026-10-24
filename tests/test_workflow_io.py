@@ -89,6 +89,7 @@ def _t2i_graph() -> dict:
         ("Flux2-Klein-t2i.json", (("9",), (), ("75:74",), ("75:67",))),
         # The negative is ConditioningZeroOut of the positive: no prompt.
         ("Inpaint-Flux2-Klein-9B.json", (("16",), ("1",), ("9",), ())),
+        ("Inpaint-Qwen-Image-2.1.json", (("16",), ("1",), ("9",), ())),
         ("Inpaint-Qwen-Image-Edit-2511.json", (("16",), ("1",), ("9",), ())),
         ("Upscale-2x-RealESRGAN.json", (("4",), ("3",), (), ())),
     ],
@@ -627,6 +628,11 @@ def test_an_unlistable_folder_does_not_stop_start_up(tmp_path, caplog):
             "Inpaint-Flux2-Klein-9B.json",
             [["1", "inputs", "image"]],
             [["9", "inputs", "text"]],
+        ),
+        (
+            "Inpaint-Qwen-Image-2.1.json",
+            [["1", "inputs", "image"]],
+            [["9", "inputs", "prompt"]],
         ),
         (
             "Inpaint-Qwen-Image-Edit-2511.json",
