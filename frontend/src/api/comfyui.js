@@ -222,8 +222,10 @@ export async function installComfyuiPack() {
   return unwrap(apiClient.post(comfyUrl("/pack/install")));
 }
 
-// The server's 180 s wait on Manager, plus its probes and the restart.
-const INSTALL_TIMEOUT_MS = 240000;
+// The server's worst case: its 180 s wait on Manager (which can overrun by one
+// 10 s status read), plus up to ten other calls of 10 s each, the probes and
+// the reboot attempts among them: about 290 s.
+const INSTALL_TIMEOUT_MS = 330000;
 
 /**
  * Have the saved ComfyUI's ComfyUI-Manager install a node pack PixlStash knows

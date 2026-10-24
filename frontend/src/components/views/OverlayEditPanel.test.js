@@ -142,6 +142,34 @@ describe("the Edit tab", () => {
       expect(wrapper.findComponent({ name: "RunReasonNotice" }).exists()).toBe(false);
     });
 
+    it("is offered when a re-check after a download turns one up", async () => {
+      let after = false;
+      preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+        groups: [
+          {
+            reasons:
+              target === "out"
+                ? []
+                : after
+                  ? [needsPack]
+                  : [{ code: "missing_models", models: [{ file: "a.safetensors" }] }],
+          },
+        ],
+      }));
+      const wrapper = await mountPanel();
+      expect(wrapper.text()).not.toContain("CropAndStitch");
+      after = true;
+      useTasksStore().downloadsLanded += 1;
+      await flush();
+      await flush();
+      const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+      expect(rows).toEqual(["Widen, Outpaint"]);
+      const offers = wrapper
+        .findAll("button")
+        .filter((b) => b.text() === "Install ComfyUI-Inpaint-CropAndStitch…");
+      expect(offers).toHaveLength(1);
+    });
+
     it("is not offered when the card also fails for something else", async () => {
       refuse({
         i2i: [needsPack, { code: "no_save_node" }],

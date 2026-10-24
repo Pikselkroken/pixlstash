@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
+import requests
 
 from pixlstash.services import comfyui_link_service, node_pack_install_service
 from pixlstash.services import node_packs
@@ -97,6 +98,10 @@ class _FakeManager:
         )
 
 
+def _timed_out():
+    raise requests.Timeout("read timed out")
+
+
 @pytest.fixture
 def comfy(monkeypatch):
     def at(manager="v3", **kwargs):
@@ -160,6 +165,14 @@ def test_a_comfyui_on_the_local_network_installs_through_its_own_manager(comfy):
                     {"is_legacy_manager_ui": True},
                 )
             },
+            "legacy mode",
+        ),
+        # Not knowing the answer is refused like a yes, never read as a no.
+        ("v4", {"GET v2/manager/is_legacy_manager_ui": _timed_out}, "legacy mode"),
+        ("v4", {"GET v2/manager/is_legacy_manager_ui": 404}, "legacy mode"),
+        (
+            "v4",
+            {"GET v2/manager/is_legacy_manager_ui": (200, {"other": False})},
             "legacy mode",
         ),
         ("v3", {"POST manager/queue/install": 403}, "security level"),

@@ -897,6 +897,7 @@ async function recheckMissing() {
   const still = new Map(missing.value);
   const fill = new Set(fillInPopup.value);
   const dropped = new Set();
+  const packs = packReason.value ? [packReason.value] : [];
   keys.forEach((key, index) => {
     const answer = runs[index];
     if (answer === NO_ANSWER) return;
@@ -908,9 +909,15 @@ async function recheckMissing() {
     if (answer === FILL) fill.add(key);
     // Another reason now, which a fresh read would have dropped the card for.
     if (!listed(answer)) dropped.add(key);
+    // A fresh read would also offer the pack that would bring it back.
+    if (answer?.code === MISSING_NODES) packs.push(answer);
   });
   missing.value = still;
   fillInPopup.value = fill;
+  // Only when the re-check found one: a notice mid-install keeps its reason.
+  if (packs.length > (packReason.value ? 1 : 0)) {
+    packReason.value = mergedPackReason(packs);
+  }
   if (dropped.size) {
     cards.value = cards.value.filter((card) => !dropped.has(card.id));
     unrunnable.value += dropped.size;

@@ -93,22 +93,29 @@ def _manager(pinned: str, pack: node_packs.NodePack) -> str:
     if found is not None and found.status_code == 200:
         legacy = _call("GET", pinned, "v2/manager/is_legacy_manager_ui")
         try:
-            is_legacy = bool(
-                legacy is not None and legacy.json()["is_legacy_manager_ui"]
-            )
+            if legacy is None or legacy.status_code != 200:
+                raise ValueError(
+                    f"HTTP {getattr(legacy, 'status_code', None)}, not an answer"
+                )
+            is_legacy = legacy.json()["is_legacy_manager_ui"]
         except (ValueError, KeyError, TypeError) as exc:
-            # An answer that is not the documented shape: not knowing which
-            # payload this Manager takes, PixlStash does not send one.
+            # No answer, or not the documented shape: not knowing which payload
+            # this Manager takes, PixlStash does not send one.
             logger.warning(
                 "ComfyUI-Manager at %s did not say whether it runs its legacy "
                 "UI (%s), so the install is refused.",
                 pinned,
                 exc,
             )
-            is_legacy = True
-        if is_legacy:
+            raise PackInstallRefused(
+                "ComfyUI-Manager did not say whether it runs in its legacy mode, "
+                f"which PixlStash cannot install through. {_yourself(pack)}"
+            ) from exc
+        if is_legacy is not False:
             logger.info(
-                "ComfyUI-Manager 4 at %s runs its legacy UI; not installing.", pinned
+                "ComfyUI-Manager 4 at %s runs its legacy UI (%r); not installing.",
+                pinned,
+                is_legacy,
             )
             raise PackInstallRefused(
                 "ComfyUI-Manager runs in its legacy mode here, which PixlStash "
