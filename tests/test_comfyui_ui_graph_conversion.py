@@ -6,9 +6,9 @@ ComfyUI accepts it, and it makes a different picture than the one the reader
 asked to make again. So every refusal case below is a case where a plausible
 guess exists and is deliberately not made.
 
-Measured separately against the 15 editor/API workflow pairs shipped by
-comfyui-multigpu: 8 converted, 8 byte-identical to the API half, 0 wrong, 7
-refused. The refusals are node packs the machine did not have installed, the
+Measured separately, before #2043, against the 15 editor/API workflow pairs
+shipped by comfyui-multigpu: 8 converted, 8 byte-identical to the API half, 0
+wrong, 7 refused. The refusals are node packs the machine did not have installed, the
 deprecated ``PrimitiveNode`` (resolved since #2043), and two classes whose
 widget arrays this does not account for - each named in the report rather than
 papered over.
@@ -2008,3 +2008,10 @@ class TestPackDomWidgetSlots:
         prompt, problems = convert_ui_graph_to_api(graph, self.INFO)
         assert prompt is None
         assert any("keeps a widget of its own" in p for p in problems)
+
+
+def test_an_upload_slot_holding_anything_but_the_buttons_value_is_refused():
+    graph = _graph([_node(1, "LoadImage", widgets=["a.png", "b.png"])], [])
+    prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+    assert prompt is None
+    assert any("keeps a widget of its own" in p for p in problems)

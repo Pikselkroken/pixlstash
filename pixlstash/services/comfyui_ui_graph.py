@@ -113,8 +113,9 @@ def _anything(value) -> bool:
 
 
 def _upload_value(value) -> bool:
-    """The upload button's slot: ``"image"`` for a picture, empty for audio."""
-    return value is None or isinstance(value, str)
+    """The upload button's slot: the picture/video button is made with the
+    value ``"image"`` (``useImageUploadWidget.ts``), the audio one with ``""``."""
+    return value in (None, "", "image")
 
 
 # Widgets the editor gives a class beyond what `/object_info` declares. An
@@ -395,10 +396,11 @@ def _has_upload_button(declared: list) -> bool:
 def _control_by_name(name: str, type_field, options: dict) -> bool:
     """Whether the editor gives this input a control widget by its name alone.
 
-    An INT named ``seed`` or ``noise_seed`` gets one whether or not it
-    declares ``control_after_generate``; only a declared ``False`` turns it
-    off (frontend ``useIntWidget.ts``: ``control_after_generate ?? name in
-    ['seed', 'noise_seed']``).
+    An INT named ``seed`` or ``noise_seed`` gets one when it does not
+    declare ``control_after_generate`` at all (frontend ``useIntWidget.ts``:
+    ``control_after_generate ?? name in ['seed', 'noise_seed']``). A declared
+    value decides on its own: ``True`` is counted by
+    :func:`_extra_widget_slots`, ``False`` means no control.
     """
     return (
         type_field == "INT"
@@ -812,9 +814,9 @@ class _Converter:
 
         Its first widget value; a seed primitive's control after it is not
         sent. **Only a direct wire.** The editor fills the widgets the
-        primitive's own links end at and follows nothing further, so a
-        primitive behind a reroute, a bypassed node or a Get/Set pair leaves
-        the widget's own value - which this does not try to second-guess.
+        primitive's own links end at and follows nothing further, so behind a
+        reroute, a bypassed node or a Get/Set pair the target would keep its
+        own value. That is refused rather than second-guessed.
         """
         where = f"{_PRIMITIVE_NODE} (node {node.get('id')})"
         values = node.get("widgets_values")
