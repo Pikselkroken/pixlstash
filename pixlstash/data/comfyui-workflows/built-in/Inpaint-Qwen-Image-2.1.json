@@ -51,7 +51,7 @@
   "3": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
+      "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
       "weight_dtype": "default"
     },
     "_meta": {
@@ -210,7 +210,7 @@
         0
       ],
       "inpainted_image": [
-        "14",
+        "17",
         0
       ]
     },
@@ -229,6 +229,18 @@
     },
     "_meta": {
       "title": "SaveImage"
+    }
+  },
+  "17": {
+    "class_type": "SplitImageWithAlpha",
+    "inputs": {
+      "image": [
+        "14",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Drop the alpha the 2.1 VAE decodes"
     }
   },
   "18": {
@@ -262,12 +274,18 @@
     }
   },
   "20": {
-    "class_type": "ManualSigmas",
+    "class_type": "BasicScheduler",
     "inputs": {
-      "sigmas": "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0"
+      "model": [
+        "4",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": 25,
+      "denoise": 1.0
     },
     "_meta": {
-      "title": "Turbo schedule (8 steps)"
+      "title": "BasicScheduler"
     }
   },
   "21": {
