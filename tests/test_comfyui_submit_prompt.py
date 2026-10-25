@@ -351,3 +351,16 @@ def test_following_a_run_never_drops_its_own_run_id(monkeypatch):
     # Followed again, so first in the map, with every run still going.
     comfyui_service.follow_run("p-a2", COMFY, run_id="run-a")
     assert comfyui_service._run_ids == {"run-a": "p-a2"}
+
+
+def test_an_ending_dropped_by_retention_is_still_announced(monkeypatch):
+    """Wrong if the ending raises KeyError because retention evicted it."""
+    monkeypatch.setattr(comfyui_service, "MAX_RUN_OUTCOMES", 1)
+    for name in ("_run_outcomes", "_run_ids", "_live_runs", "_held_cancels"):
+        monkeypatch.setattr(comfyui_service, name, {})
+    monkeypatch.setattr(comfyui_service, "_listening", {COMFY})
+    heard = []
+    monkeypatch.setattr(comfyui_service, "_ending_listener", heard.append)
+    comfyui_service.follow_run("p-long", COMFY, run_id="run-long")
+    comfyui_service.record_run_outcome("p-x", "failed", run_id="run-x")
+    assert [(o["run_id"], o["status"]) for o in heard] == [("run-x", "failed")]

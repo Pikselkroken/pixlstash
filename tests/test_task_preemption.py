@@ -333,6 +333,17 @@ def test_a_requeued_task_cancelled_by_stop_leaves_no_attempt_count():
     assert task.id not in runner._requeue_counts
 
 
+def test_a_queued_task_cancelled_after_a_requeue_leaves_no_attempt_count():
+    """Back on the queue, then cancelled there (preempted, drained)."""
+    runner = TaskRunner(
+        name="requeued-cancel", resource_arbiter=ResourceArbiter(_NoCard())
+    )
+    task = _QuickGpuTask()
+    runner._requeue_counts[task.id] = 3
+    runner._cancel_queued_task(task, "preempted by test")
+    assert task.id not in runner._requeue_counts
+
+
 @pytest.mark.parametrize(
     ("meanwhile", "stopped"),
     [
