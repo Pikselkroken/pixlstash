@@ -1,8 +1,9 @@
 <script setup>
 /**
- * Settings section for the LoRA training feature: ai-toolkit setup, the jobs
- * list (running/queued/terminal with lifecycle actions). A finished LoRA lands
- * on the model shelf, marked Trained, so it has no list of its own here.
+ * Settings section for the LoRA training feature: the ai-toolkit setup
+ * (AiToolkitSetup) and the jobs list (running/queued/terminal with lifecycle
+ * actions). A finished LoRA lands on the model shelf, marked Trained, so it
+ * has no list of its own here.
  *
  * Mirrors SnapshotsSection: fetch on open, poll while a job is running, per-item
  * actions with window.confirm for destructive ops. Owner-only; gated behind
@@ -13,6 +14,7 @@ import { useTrainingStore } from "../../stores/useTrainingStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useEntityNamesStore } from "../../stores/useEntityNamesStore";
 import Tooltip from "../widgets/Tooltip.vue";
+import AiToolkitSetup from "./AiToolkitSetup.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -23,7 +25,6 @@ const sidebarStore = useSidebarStore();
 const entityNames = useEntityNamesStore();
 
 // ── Local UI state ───────────────────────────────────────────────────────────
-const setupErrors = ref({}); // field → message
 const cancellingId = ref(null);
 const deletingJobId = ref(null);
 const actionError = ref("");
@@ -36,7 +37,6 @@ watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
-      store.fetchConfig();
       store.fetchJobs().then(maybeSchedulePoll);
     } else {
       stopPolling();
@@ -106,24 +106,6 @@ function scopeLabel(row) {
   return "-";
 }
 
-// ── ai-toolkit setup (optimistic PATCH + revert) ────────────────────────────────
-async function saveSetupField(field) {
-  setupErrors.value = { ...setupErrors.value, [field]: "" };
-  const valueMap = {
-    ai_toolkit_repo_path: store.aiToolkitRepoPath,
-    ai_toolkit_python: store.aiToolkitPython,
-  };
-  try {
-    await store.patchConfigField(field, valueMap[field]);
-  } catch (err) {
-    setupErrors.value = {
-      ...setupErrors.value,
-      [field]:
-        err?.response?.data?.detail || err?.message || "Failed to save.",
-    };
-  }
-}
-
 // ── Jobs lifecycle ─────────────────────────────────────────────────────────────
 function viewInTasks() {
   sidebarStore.showTasksTab();
@@ -174,54 +156,7 @@ async function deleteJob(job) {
 <template>
   <div class="settings-section training-section">
     <!-- ── (a) ai-toolkit setup ──────────────────────────────────────────── -->
-    <section class="training-block" aria-labelledby="training-setup-heading">
-      <h3 id="training-setup-heading" class="training-block-heading">
-        ai-toolkit setup
-      </h3>
-      <p class="training-block-hint">
-        Point PixlStash at your local
-        <a
-          href="https://github.com/ostris/ai-toolkit"
-          target="_blank"
-          rel="noopener noreferrer"
-          >ai-toolkit</a
-        >
-        checkout so it can run training jobs.
-      </p>
-
-      <v-text-field
-        :model-value="store.aiToolkitRepoPath"
-        label="ai-toolkit repo path"
-        placeholder="/home/you/ai-toolkit"
-        density="compact"
-        variant="outlined"
-        hide-details="auto"
-        class="mb-2"
-        :error-messages="setupErrors.ai_toolkit_repo_path || []"
-        @update:model-value="store.aiToolkitRepoPath = $event"
-        @blur="saveSetupField('ai_toolkit_repo_path')"
-      />
-      <v-text-field
-        :model-value="store.aiToolkitPython"
-        label="Python interpreter"
-        placeholder="/home/you/ai-toolkit/.venv/bin/python"
-        density="compact"
-        variant="outlined"
-        hide-details="auto"
-        class="mb-2"
-        :error-messages="setupErrors.ai_toolkit_python || []"
-        @update:model-value="store.aiToolkitPython = $event"
-        @blur="saveSetupField('ai_toolkit_python')"
-      />
-
-      <div
-        v-if="store.configLoaded && !store.aiToolkitConfigured"
-        class="training-inline-warn"
-      >
-        <v-icon size="14" class="mr-1">mdi-alert-outline</v-icon>
-        Set the repo path and Python interpreter to enable training.
-      </div>
-    </section>
+    <AiToolkitSetup :open="open" />
 
     <div v-if="actionError" class="training-inline-error">{{ actionError }}</div>
 
@@ -337,24 +272,6 @@ async function deleteJob(job) {
   font-size: var(--text-base);
   font-weight: 600;
   margin: 0 0 var(--space-2);
-}
-
-.training-block-hint {
-  font-size: var(--text-xs);
-  opacity: 0.75;
-  margin: 0 0 var(--space-3);
-}
-
-.training-block-hint a {
-  color: rgb(var(--v-theme-primary));
-}
-
-.training-inline-warn {
-  display: flex;
-  align-items: center;
-  font-size: var(--text-xs);
-  color: rgb(var(--v-theme-warning));
-  margin-top: var(--space-3);
 }
 
 .training-inline-error {

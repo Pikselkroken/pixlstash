@@ -2,8 +2,11 @@ import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 import {
   cancelTrainingJob,
+  checkAiToolkit,
   createTrainingJob,
   deleteTrainingJob,
+  discoverAiToolkit,
+  getAiToolkitStatus,
   getWorkerProgress,
   listTrainingJobs,
   listTrainingTemplates,
@@ -71,6 +74,11 @@ export const useTrainingStore = defineStore("training", () => {
   const aiToolkitRepoPath = ref("");
   const aiToolkitPython = ref("");
   const configLoaded = ref(false);
+
+  // ── ai-toolkit setup flow: the last discover, check and status replies ─────
+  const aiToolkitDiscovery = ref(null); // { found, repo_path, python, version, searched }
+  const aiToolkitCheck = ref(null); // { ok, version, torch, cuda, gpus, trial_ok, detail }
+  const aiToolkitStatus = ref(null); // { configured, repo_path, python, version, datasets, runs }
 
   // ── Deep-link request: open Settings on the Training entry ─────────────────
   const settingsTabRequest = ref(0); // bump to request; App.vue watches
@@ -295,24 +303,43 @@ export const useTrainingStore = defineStore("training", () => {
   }
 
   /**
-   * Optimistically PATCH one ai-toolkit config field; revert on failure (the
-   * config-sync contract, integration_architecture.md §12).
+   * Save the checkout and its python together, once the check has passed. A
+   * refusal (403 for a remote owner without host ops, 422) throws, and the
+   * caller shows the server's `detail`.
    */
-  async function patchConfigField(field, value) {
-    const refMap = {
-      ai_toolkit_repo_path: aiToolkitRepoPath,
-      ai_toolkit_python: aiToolkitPython,
-    };
-    const target = refMap[field];
-    if (!target) throw new Error(`Unknown config field: ${field}`);
-    const previous = target.value;
-    target.value = value; // optimistic
-    try {
-      await patchUserConfig({ [field]: value });
-    } catch (err) {
-      target.value = previous; // revert
-      throw err;
-    }
+  async function saveAiToolkitPaths(repoPath, python) {
+    await patchUserConfig({
+      ai_toolkit_repo_path: repoPath,
+      ai_toolkit_python: python,
+    });
+    aiToolkitRepoPath.value = repoPath;
+    aiToolkitPython.value = python;
+  }
+
+  /** Forget both paths; the install's check and status go with them. */
+  async function disconnectAiToolkit() {
+    await patchUserConfig({ ai_toolkit_repo_path: null, ai_toolkit_python: null });
+    aiToolkitRepoPath.value = "";
+    aiToolkitPython.value = "";
+    aiToolkitCheck.value = null;
+    aiToolkitStatus.value = null;
+  }
+
+  async function discoverInstall() {
+    aiToolkitDiscovery.value = await discoverAiToolkit();
+    return aiToolkitDiscovery.value;
+  }
+
+  /** Throws on a 422 (not a checkout); a failed trial comes back as `ok: false`. */
+  async function checkInstall(repoPath, python) {
+    aiToolkitCheck.value = null;
+    aiToolkitCheck.value = await checkAiToolkit({ repo_path: repoPath, python });
+    return aiToolkitCheck.value;
+  }
+
+  async function fetchInstallStatus() {
+    aiToolkitStatus.value = await getAiToolkitStatus();
+    return aiToolkitStatus.value;
   }
 
   // ── Cross-component coordination ──────────────────────────────────────────────
@@ -342,6 +369,9 @@ export const useTrainingStore = defineStore("training", () => {
     aiToolkitRepoPath.value = "";
     aiToolkitPython.value = "";
     configLoaded.value = false;
+    aiToolkitDiscovery.value = null;
+    aiToolkitCheck.value = null;
+    aiToolkitStatus.value = null;
     vramAvailableGb.value = null;
     vramTotalGb.value = null;
     trainMenuOpen.value = false;
@@ -397,7 +427,14 @@ export const useTrainingStore = defineStore("training", () => {
     aiToolkitConfigured,
     configLoaded,
     fetchConfig,
-    patchConfigField,
+    aiToolkitDiscovery,
+    aiToolkitCheck,
+    aiToolkitStatus,
+    discoverInstall,
+    checkInstall,
+    fetchInstallStatus,
+    saveAiToolkitPaths,
+    disconnectAiToolkit,
     // coordination
     settingsTabRequest,
     showQueuedToast,

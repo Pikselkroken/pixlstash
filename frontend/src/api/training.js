@@ -42,3 +42,23 @@ export function cancelTrainingJob(jobId) {
 export function deleteTrainingJob(jobId) {
   return unwrap(apiClient.delete(`/training/jobs/${jobId}`));
 }
+
+/** Find an ai-toolkit checkout on this computer; `searched` lists where it looked. */
+export function discoverAiToolkit() {
+  return unwrap(apiClient.get("/training/ai-toolkit/discover"));
+}
+
+/**
+ * Run the trainer's own start-up on a checkout and its python. A path that is
+ * not a checkout is refused with 422 and `detail`.
+ */
+export function checkAiToolkit({ repo_path, python }) {
+  return unwrap(
+    apiClient.post("/training/ai-toolkit/check", { repo_path, python }),
+  );
+}
+
+/** The saved install's version, and its dataset and runs folders. */
+export function getAiToolkitStatus() {
+  return unwrap(apiClient.get("/training/ai-toolkit/status"));
+}

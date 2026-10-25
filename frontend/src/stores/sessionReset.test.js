@@ -314,11 +314,17 @@ const STORES = [
       s.jobs = [{ id: 1, name: "Ada", status: "completed" }];
       s.aiToolkitRepoPath = "/srv/ai-toolkit";
       s.configLoaded = true;
+      s.aiToolkitDiscovery = { found: true, repo_path: "/srv/ai-toolkit" };
+      s.aiToolkitCheck = { ok: true, version: "0.13.34" };
+      s.aiToolkitStatus = { configured: true, runs: { run_count: 3 } };
     },
     isEmpty: (s) =>
       s.jobs.length === 0 &&
       s.aiToolkitRepoPath === "" &&
-      s.configLoaded === false,
+      s.configLoaded === false &&
+      s.aiToolkitDiscovery === null &&
+      s.aiToolkitCheck === null &&
+      s.aiToolkitStatus === null,
   },
   {
     name: "useDedupStore",

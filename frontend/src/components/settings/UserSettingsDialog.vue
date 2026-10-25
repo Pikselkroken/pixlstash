@@ -83,7 +83,7 @@ const navItems = computed(() =>
       // models; the ai-toolkit output folder itself is set under Models.
       id: "training",
       icon: "school-outline",
-      label: "Training",
+      label: "AI-toolkit",
       show: !isReadOnly.value,
     },
     {
