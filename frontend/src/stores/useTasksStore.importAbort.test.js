@@ -6,6 +6,7 @@ vi.mock("../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn() },
   isReadOnly: { value: false },
+  onSessionReset: () => () => {},
 }));
 
 import { useTasksStore } from "./useTasksStore";
