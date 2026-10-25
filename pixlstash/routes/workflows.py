@@ -8915,7 +8915,7 @@ def create_router(server) -> APIRouter:
                 message,
                 exc_info=not isinstance(exc, HTTPException),
             )
-            record_run_outcome(run_id, "failed", message=message)
+            record_run_outcome(run_id, "failed", message=message, run_id=run_id)
             announce = getattr(server, "vault", None)
             if announce is not None:
                 _emit_comfyui_failure_progress(
