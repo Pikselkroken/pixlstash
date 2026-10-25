@@ -1,4 +1,4 @@
-// LoRA training resource - /training/* and /loras*, plus /workers/progress for
+// LoRA training resource - /training/*, plus /workers/progress for
 // the VRAM hint. Every route is owner-only on the backend (routes/training.py).
 // The ai-toolkit paths are ordinary user config, so they go through api/config.js.
 //
@@ -38,27 +38,7 @@ export function cancelTrainingJob(jobId) {
   return unwrap(apiClient.post(`/training/jobs/${jobId}/cancel`, {}));
 }
 
-/** Delete a job, its work directory and the LoRAs it produced. */
+/** Delete a job and its work directory; its LoRA stays on the shelf. */
 export function deleteTrainingJob(jobId) {
   return unwrap(apiClient.delete(`/training/jobs/${jobId}`));
-}
-
-/** The trained-LoRA registry. */
-export function listLoras() {
-  return unwrap(apiClient.get("/loras"));
-}
-
-/** One trained LoRA. */
-export function getLora(loraId) {
-  return unwrap(apiClient.get(`/loras/${loraId}`));
-}
-
-/** Delete a trained LoRA's file and registry row. */
-export function deleteLora(loraId) {
-  return unwrap(apiClient.delete(`/loras/${loraId}`));
-}
-
-/** The absolute path of a LoRA file, for "copy path". */
-export function getLoraFilePath(loraId) {
-  return unwrap(apiClient.get(`/loras/${loraId}/file-path`));
 }

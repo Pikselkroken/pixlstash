@@ -312,13 +312,11 @@ const STORES = [
     use: useTrainingStore,
     seed: (s) => {
       s.jobs = [{ id: 1, name: "Ada", status: "completed" }];
-      s.loras = [{ id: 2, name: "Ada v1" }];
       s.aiToolkitRepoPath = "/srv/ai-toolkit";
       s.configLoaded = true;
     },
     isEmpty: (s) =>
       s.jobs.length === 0 &&
-      s.loras.length === 0 &&
       s.aiToolkitRepoPath === "" &&
       s.configLoaded === false,
   },

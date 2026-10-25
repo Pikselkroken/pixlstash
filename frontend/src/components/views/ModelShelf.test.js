@@ -4469,6 +4469,19 @@ describe("Escape", () => {
   });
 });
 
+describe("the trained label", () => {
+  it("marks a run PixlStash trained, and nothing found on disk", async () => {
+    const wrapper = await mountShelf([
+      adapter({ id: 611, display_name: "Ours", provenance: "trained" }),
+      adapter({ id: 612, display_name: "Theirs", provenance: "external" }),
+    ]);
+    const marked = wrapper
+      .findAll(".shelf-chip--trained")
+      .map((chip) => chip.text());
+    expect(marked).toEqual(["Trained"]);
+  });
+});
+
 describe("the training step", () => {
   it("shows the step on a row whose name had it stripped", async () => {
     // `deriveModelName` drops the trailing step on the stated grounds that it

@@ -3,13 +3,8 @@ import { defineStore } from "pinia";
 import {
   cancelTrainingJob,
   createTrainingJob,
-  deleteLora as apiDeleteLora,
   deleteTrainingJob,
-  getLora,
-  getLoraFilePath,
-  getTrainingJob,
   getWorkerProgress,
-  listLoras,
   listTrainingJobs,
   listTrainingTemplates,
 } from "../api/training";
@@ -67,16 +62,10 @@ export const useTrainingStore = defineStore("training", () => {
   const vramAvailableGb = ref(null);
   const vramTotalGb = ref(null);
 
-  // ── Registry / jobs (settings section) ──────────────────────────────────────
+  // ── Jobs (settings section) ──────────────────────────────────────
   const jobs = ref([]);
   const jobsLoading = ref(false);
   const jobsError = ref("");
-  const loras = ref([]);
-  const lorasLoading = ref(false);
-  const lorasError = ref("");
-  // Lazy-loaded LoRA detail + producing-job detail keyed by lora id.
-  const loraDetails = ref({}); // id → { lora, job }
-  const loraDetailLoading = ref({}); // id → bool
 
   // ── Setup config (ai-toolkit paths) ─────────────────────────────────────────
   const aiToolkitRepoPath = ref("");
@@ -282,51 +271,6 @@ export const useTrainingStore = defineStore("training", () => {
     }
   }
 
-  async function fetchLoras() {
-    lorasLoading.value = true;
-    lorasError.value = "";
-    try {
-      const data = await listLoras();
-      loras.value = Array.isArray(data) ? data : [];
-    } catch (err) {
-      lorasError.value =
-        err?.response?.data?.detail ||
-        err?.message ||
-        "Failed to load trained LoRAs.";
-    } finally {
-      lorasLoading.value = false;
-    }
-  }
-
-  /** Lazily load a LoRA's detail and its producing job's detail (loss curve). */
-  async function fetchLoraDetail(loraId) {
-    if (loraDetails.value[loraId]) return loraDetails.value[loraId];
-    loraDetailLoading.value = { ...loraDetailLoading.value, [loraId]: true };
-    try {
-      const lora = await getLora(loraId);
-      let job = null;
-      if (lora?.job_id != null) {
-        try {
-          job = await getTrainingJob(lora.job_id);
-        } catch (err) {
-          // The job may have been deleted; keep the LoRA detail usable.
-          console.warn(
-            `Failed to load job ${lora.job_id} for LoRA ${loraId}:`,
-            err,
-          );
-        }
-      }
-      const detail = { lora, job };
-      loraDetails.value = { ...loraDetails.value, [loraId]: detail };
-      return detail;
-    } finally {
-      loraDetailLoading.value = {
-        ...loraDetailLoading.value,
-        [loraId]: false,
-      };
-    }
-  }
-
   async function cancelJob(jobId) {
     await cancelTrainingJob(jobId);
     await fetchJobs();
@@ -335,21 +279,6 @@ export const useTrainingStore = defineStore("training", () => {
   async function deleteJob(jobId) {
     await deleteTrainingJob(jobId);
     jobs.value = jobs.value.filter((j) => j.id !== jobId);
-    // A deleted job removes its LoRAs too; refresh the registry.
-    await fetchLoras();
-  }
-
-  async function deleteLora(loraId) {
-    await apiDeleteLora(loraId);
-    loras.value = loras.value.filter((l) => l.id !== loraId);
-    const nextDetails = { ...loraDetails.value };
-    delete nextDetails[loraId];
-    loraDetails.value = nextDetails;
-  }
-
-  async function fetchLoraFilePath(loraId) {
-    const data = await getLoraFilePath(loraId);
-    return data?.file_path || "";
   }
 
   // ── Setup config (ai-toolkit paths) ───────────────────────────────────────────
@@ -404,15 +333,11 @@ export const useTrainingStore = defineStore("training", () => {
     settingsTabRequest.value += 1;
   }
 
-  // Every route here is owner-only, and the jobs, registry and ai-toolkit paths
+  // Every route here is owner-only, and the jobs and ai-toolkit paths
   // belong to the credential that read them: a change of credential empties them.
   function resetForSession() {
     jobs.value = [];
     jobsError.value = "";
-    loras.value = [];
-    lorasError.value = "";
-    loraDetails.value = {};
-    loraDetailLoading.value = {};
     templates.value = [];
     aiToolkitRepoPath.value = "";
     aiToolkitPython.value = "";
@@ -457,24 +382,15 @@ export const useTrainingStore = defineStore("training", () => {
     fetchVram,
     startTraining,
     buildConfigOverrides,
-    // registry / jobs
+    // jobs
     jobs,
     jobsLoading,
     jobsError,
-    loras,
-    lorasLoading,
-    lorasError,
-    loraDetails,
-    loraDetailLoading,
     hasRunningJob,
     isTerminalStatus,
     fetchJobs,
-    fetchLoras,
-    fetchLoraDetail,
     cancelJob,
     deleteJob,
-    deleteLora,
-    fetchLoraFilePath,
     // setup config
     aiToolkitRepoPath,
     aiToolkitPython,

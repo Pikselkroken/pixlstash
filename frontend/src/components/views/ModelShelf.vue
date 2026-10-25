@@ -1330,6 +1330,17 @@
                          because it is a state of the listing and not of the
                          file. -->
                     <span v-if="row.hidden" class="shelf-chip">Hidden</span>
+                    <!-- A run PixlStash trained and imported. Neutral, like
+                         Hidden: it says where the file came from, not that
+                         anything needs doing. -->
+                    <span
+                      v-if="row.provenance === 'trained'"
+                      class="shelf-chip shelf-chip--trained"
+                      ><Tooltip
+                        text="Trained in PixlStash"
+                        activator="parent"
+                      />Trained</span
+                    >
                     <!-- The filename, on its own line under the name. It is what
                          the file is actually called, which the name above it may
                          well not be, and it is the string the reader pastes into
