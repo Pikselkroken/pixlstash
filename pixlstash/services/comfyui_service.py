@@ -2440,6 +2440,7 @@ def _process_comfyui_outputs(
             settle_vram("failed")
             emit_failure(str(exc))
     except Exception as exc:
+        settle_vram("failed")
         logger.warning(
             "Failed to import ComfyUI outputs of prompt %s: %s", prompt_id, exc
         )
