@@ -23,6 +23,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import re
 from typing import Any, NamedTuple
 
 from pixlstash.pixl_logging import get_logger
@@ -347,11 +348,13 @@ def _substitute_placeholders(value: Any, replacements: dict[str, str]) -> Any:
     if isinstance(value, list):
         return [_substitute_placeholders(item, replacements) for item in value]
     if isinstance(value, str):
-        substituted = value
-        for token, replacement in replacements.items():
-            if token in substituted:
-                substituted = substituted.replace(token, replacement)
-        return substituted
+        # One pass over the original string. Sequential replace would re-scan
+        # text an earlier pass inserted, so a trigger word or job name naming a
+        # later token (e.g. "{{DATASET_FOLDER}}") would expand to a host path.
+        if not replacements:
+            return value
+        pattern = "|".join(re.escape(token) for token in replacements)
+        return re.sub(pattern, lambda match: replacements[match.group(0)], value)
     return value
 
 

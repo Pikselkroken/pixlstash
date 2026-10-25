@@ -68,6 +68,28 @@ describe("startTraining", () => {
     expect(body).not.toHaveProperty("config_overrides");
   });
 
+  it("sends a learning rate that is not a number as typed, for the server to refuse", async () => {
+    const store = useTrainingStore();
+    store.setScope({ type: "character", id: 4, name: "Grandad" });
+    store.learningRate = "fast";
+    store.steps = "";
+    await store.startTraining();
+
+    const body = training.createTrainingJob.mock.calls[0][0];
+    expect(body.pins).toEqual({ "train.lr": "fast" });
+  });
+
+  it("sends a typed exponent learning rate as a number", async () => {
+    const store = useTrainingStore();
+    store.setScope({ type: "character", id: 4, name: "Grandad" });
+    store.learningRate = "1e-4";
+    await store.startTraining();
+
+    expect(training.createTrainingJob.mock.calls[0][0].pins).toEqual({
+      "train.lr": 0.0001,
+    });
+  });
+
   it("shows the message of a run that fits nowhere", async () => {
     const store = useTrainingStore();
     store.setScope({ type: "character", id: 4, name: "Grandad" });

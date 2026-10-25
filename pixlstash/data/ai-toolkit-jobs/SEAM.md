@@ -28,7 +28,7 @@ group and a restart can reconcile by PID.
 
 One `JobConfig` tree (`ui/src/types.ts`). The template is the passthrough skeleton; the recipe in
 `pixlstash/data/training-presets/` supplies every value it owns (locked model keys, defaults, the
-choices' tables and the resolved memory profile, see `docs/backend_architecture.md` §25.15). The
+choices' tables and the resolved memory profile, see `docs/backend_architecture.md` §25.16). The
 placeholders are substituted last, recipe prompts included:
 
 | Placeholder | Goes to | Notes |

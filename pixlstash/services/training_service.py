@@ -340,14 +340,17 @@ class TrainingService:
 
         if info["status"] == "queued":
             # Not started yet: mark it stopped so the worker skips it, and drop
-            # the lease it may be waiting on so the worker moves on.
+            # the lease it may be waiting on so the worker moves on. The stop is
+            # written under the lock the worker clears its wait under, and the
+            # lease is released only while still waiting: one granted meanwhile
+            # belongs to the worker, which releases it when it sees the stop.
             with self._active_lock:
                 waiting = self._waiting
+                self._update_job(
+                    info["uuid"], status="stopped", error="Cancelled before start"
+                )
             if waiting is not None and waiting[0] == info["uuid"]:
-                waiting[1].release()
-            self._update_job(
-                info["uuid"], status="stopped", error="Cancelled before start"
-            )
+                waiting[1].release(only_waiting=True)
             self._emit_progress(
                 info["uuid"], status="stopped", message="Cancelled before start"
             )
@@ -608,9 +611,12 @@ class TrainingService:
                 self._active_job_uuid = None
                 self._waiting = None
             lease.release()
-            with self._pending_specs_lock:
-                self._pending_specs.pop(job_uuid, None)
-            self._remove_pending_sidecar(job_uuid)
+            # A job still queued at shutdown runs on the next start, and needs
+            # its spec then, so only drop it once the job has left the queue.
+            if self._job_status(job_uuid) != "queued":
+                with self._pending_specs_lock:
+                    self._pending_specs.pop(job_uuid, None)
+                self._remove_pending_sidecar(job_uuid)
 
     def _train_under_lease(
         self,
@@ -754,6 +760,17 @@ class TrainingService:
         """
         job_uuid = info["uuid"]
         status = progress.status
+
+        if self._stop.is_set() and status not in _TERMINAL_PROGRESS_STATUSES:
+            # Shutdown interrupted the poll while the trainer is still running.
+            # Leave the row as it is: reconcile_on_startup re-attaches to the
+            # live process, or finalizes it from disk once it has exited.
+            logger.info(
+                "Job %s is still %s at shutdown; leaving it for reconcile_on_startup.",
+                job_uuid,
+                status,
+            )
+            return
 
         if status == "completed" and progress.final_checkpoint:
             try:

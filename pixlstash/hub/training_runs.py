@@ -43,6 +43,9 @@ _MUTABLE_COLUMNS = frozenset(
 # Statuses a run holds while the trainer may still be alive.
 UNFINISHED_STATUSES = ("running", "stopping")
 
+# Statuses a run ends in: its trainer is gone and nothing more will write to it.
+FINISHED_STATUSES = ("completed", "stopped", "error")
+
 
 def create_run(
     hub: HubDatabase,
@@ -192,8 +195,15 @@ def update_run(hub: HubDatabase, run_uuid: str, **fields) -> bool:
         return cursor.rowcount > 0
 
 
-def delete_run(hub: HubDatabase, library_uuid: str, run_id: int) -> Optional[str]:
+def delete_run(
+    hub: HubDatabase, library_uuid: str, run_id: int, *, only_finished: bool = False
+) -> Optional[str]:
     """Delete one run of the library. Returns its uuid, or None when absent.
+
+    With *only_finished*, the status test is part of the DELETE itself, so a
+    run that is queued, running or stopping (its trainer may still write into
+    its folder) is left alone and None is returned. Checking the status in a
+    separate read would leave a window in which the worker can start the run.
 
     Models the run put on the shelf are not touched: they keep their
     ``training_run_id``, which then names nothing, the same as after any other
@@ -206,11 +216,19 @@ def delete_run(hub: HubDatabase, library_uuid: str, run_id: int) -> Optional[str
         ).fetchone()
         if row is None:
             return None
+        if only_finished:
+            marks = ", ".join("?" for _ in FINISHED_STATUSES)
+            deleted = conn.execute(
+                f"DELETE FROM training_run WHERE id = ? AND status IN ({marks})",
+                (run_id, *FINISHED_STATUSES),
+            )
+            return str(row[0]) if deleted.rowcount else None
         conn.execute("DELETE FROM training_run WHERE id = ?", (run_id,))
         return str(row[0])
 
 
 __all__ = [
+    "FINISHED_STATUSES",
     "UNFINISHED_STATUSES",
     "create_run",
     "delete_run",

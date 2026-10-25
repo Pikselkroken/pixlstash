@@ -17,9 +17,11 @@ this file backs.
 import gc
 import json
 import os
+import shutil
 import sys
 import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.hub import training_runs
@@ -494,6 +496,17 @@ def test_job_status_owner_works():
         _teardown(temp_dir, server)
 
 
+def test_job_status_progress_stops_at_one_past_the_planned_total():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, _ = _seed_job(server, step=3500, total_steps=3000)
+        r = owner.get(f"/training/jobs/{job_id}/status")
+        assert r.status_code == 200, r.text
+        assert r.json()["progress"] == 1.0
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_job_status_missing_is_404():
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -555,6 +568,26 @@ def test_cancel_job_terminal_is_409():
         _teardown(temp_dir, server)
 
 
+def test_cancel_409_names_the_status_the_service_saw():
+    """A job that finishes while cancel runs is reported as it is now, not as read before."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, job_uuid = _seed_job(server, status="running")
+        hub = server.vault.hub
+        service = server.vault.training_service
+
+        def finish_then_refuse(_job_id):
+            training_runs.update_run(hub, job_uuid, status="completed")
+            return False
+
+        service.cancel = finish_then_refuse
+        r = owner.post(f"/training/jobs/{job_id}/cancel")
+        assert r.status_code == 409, r.text
+        assert "completed" in r.json()["detail"], r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_cancel_job_scoped_token_forbidden():
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -600,6 +633,23 @@ def test_delete_job_missing_is_404():
     try:
         r = owner.delete("/training/jobs/999999")
         assert r.status_code == 404, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "stopping"])
+def test_delete_job_refuses_a_live_job(status):
+    """A job whose trainer may still run is never deleted; its work dir stays."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, job_uuid = _seed_job(server, status=status)
+        work_dir = os.path.join(server.vault.image_root, "training", job_uuid)
+        os.makedirs(work_dir, exist_ok=True)
+
+        r = owner.delete(f"/training/jobs/{job_id}")
+        assert r.status_code == 409, r.text
+        assert owner.get(f"/training/jobs/{job_id}").status_code == 200
+        assert os.path.isdir(work_dir)
     finally:
         _teardown(temp_dir, server)
 
@@ -1078,7 +1128,11 @@ def _venv_python(repo):
     bin_dir = os.path.join(repo, ".venv", "bin")
     os.makedirs(bin_dir, exist_ok=True)
     link = os.path.join(bin_dir, "python")
-    os.symlink(sys.executable, link)
+    try:
+        os.symlink(sys.executable, link)
+    except (OSError, NotImplementedError):
+        # Windows without developer mode or admin rights cannot make symlinks.
+        shutil.copy(sys.executable, link)
     return link
 
 

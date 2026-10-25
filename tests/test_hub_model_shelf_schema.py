@@ -1565,3 +1565,19 @@ class TestTrainingRunStore:
         assert training_runs.get_run(store, "lib-b", theirs) is not None
         assert training_runs.delete_run(store, "lib-b", theirs) == "run-b"
         assert training_runs.get_run(store, "lib-b", theirs) is None
+
+    def test_only_finished_delete_leaves_a_live_run_in_place(self, store):
+        """The status test is part of the DELETE: a live run is never removed."""
+        queued = _new_run(store, "lib-a", "run-queued")
+        done = _new_run(store, "lib-a", "run-done")
+        training_runs.update_run(store, "run-done", status="completed")
+
+        assert (
+            training_runs.delete_run(store, "lib-a", queued, only_finished=True) is None
+        )
+        assert training_runs.get_run(store, "lib-a", queued) is not None
+        assert (
+            training_runs.delete_run(store, "lib-a", done, only_finished=True)
+            == "run-done"
+        )
+        assert training_runs.get_run(store, "lib-a", done) is None

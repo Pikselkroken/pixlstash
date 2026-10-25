@@ -192,8 +192,10 @@ export const useTrainingStore = defineStore("training", () => {
       pins["network.linear"] = Number(networkRank.value);
     if (isFilledNumber(networkAlpha.value))
       pins["network.linear_alpha"] = Number(networkAlpha.value);
-    if (isFilledNumber(learningRate.value))
-      pins["train.lr"] = Number(learningRate.value);
+    // A typed value that is not a number is sent as typed, so the server
+    // refuses it with its own message instead of the field being dropped.
+    const lr = String(learningRate.value ?? "").trim();
+    if (lr) pins["train.lr"] = Number.isFinite(Number(lr)) ? Number(lr) : lr;
     if (isFilledNumber(batchSize.value))
       pins["train.batch_size"] = Number(batchSize.value);
     if (isFilledNumber(saveEvery.value))

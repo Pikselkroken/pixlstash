@@ -272,6 +272,11 @@ class RunImporter:
             sum(os.path.getsize(c.path) for c in wanted)
             + sum(_sample_bytes(s) for s in samples.values()),
         )
+        if subfolder:
+            # Containment was checked against the destination above, so this
+            # cannot create a folder outside it. Made only after every check has
+            # passed, so a refused batch leaves nothing behind.
+            os.makedirs(os.path.join(destination, subfolder), exist_ok=True)
 
         report = ImportReport(run_name=run.name)
         report.stack_id = self._create_stack(run.name)

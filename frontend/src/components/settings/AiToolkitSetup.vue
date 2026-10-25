@@ -224,8 +224,15 @@ async function checkTyped() {
   await runCheck();
 }
 
-function chooseFolder(path) {
+// The browser is opened from code, so closing it hands focus back to the
+// button that opened it (the project rule for programmatic overlays).
+function closeBrowser() {
   browseOpen.value = false;
+  nextTick(() => chooseButton.value?.focus());
+}
+
+function chooseFolder(path) {
+  closeBrowser();
   folderPath.value = path;
   checkTyped();
 }
@@ -547,7 +554,7 @@ watch(
     <FolderBrowser
       :open="browseOpen"
       @select="chooseFolder"
-      @close="browseOpen = false"
+      @close="closeBrowser"
     />
   </SettingsSection>
 </template>

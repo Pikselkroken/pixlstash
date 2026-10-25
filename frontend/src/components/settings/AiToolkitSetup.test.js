@@ -437,3 +437,19 @@ describe("choosing a folder", () => {
     });
   });
 });
+
+describe("closing the folder browser", () => {
+  it("returns focus to the Choose folder button that opened it", async () => {
+    training.discoverAiToolkit.mockResolvedValue(NOT_FOUND);
+    const w = await mountSetup();
+    await byTestId(w, "ait-choose-folder").trigger("click");
+    await flushPromises();
+
+    w.findComponent(FolderBrowser).vm.$emit("close");
+    await flushPromises();
+
+    expect(document.activeElement).toBe(
+      byTestId(w, "ait-choose-folder").element,
+    );
+  });
+});

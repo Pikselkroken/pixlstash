@@ -297,6 +297,32 @@ def test_an_import_records_trained_provenance_and_the_config_base_model(shelf):
     assert row["file_kind"] == "adapter"
 
 
+def test_a_subfolder_that_does_not_exist_yet_is_created_for_the_import(shelf):
+    """The subfolder need not exist: the import creates it and lands the run."""
+    subfolder = shelf["destination_dir"] / "loras"
+    assert not subfolder.exists()
+    report = RunImporter(shelf["hub"]).import_run(
+        str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+    )
+    assert {outcome.status for outcome in report.outcomes} == {STATUS_IMPORTED}
+    assert (subfolder / "Clementine.safetensors").is_file()
+    assert_no_dangling_rows(shelf["hub"])
+
+
+def test_a_refused_subfolder_import_creates_no_folder(shelf, monkeypatch):
+    """The subfolder is made only once every check has passed."""
+
+    def refuse(destination, bytes_to_copy):
+        raise MoveRefused("not enough space", status_code=507)
+
+    monkeypatch.setattr(importer_module, "require_space", refuse)
+    with pytest.raises(MoveRefused):
+        RunImporter(shelf["hub"]).import_run(
+            str(shelf["run_dir"]), shelf["destination_id"], subfolder="loras"
+        )
+    assert not (shelf["destination_dir"] / "loras").exists()
+
+
 def test_a_run_imported_into_a_subfolder_lands_under_it(shelf):
     """With a ``subfolder`` the files, their ``model_file`` rows and their
     previews all sit under it - the shape a LoRA download gives a file that
@@ -912,3 +938,70 @@ def test_a_run_outside_the_source_folder_keeps_its_files(shelf, tmp_path):
     )
 
     assert len(list(elsewhere.glob("*.safetensors"))) == 3
+
+
+def test_a_source_on_another_drive_is_skipped_not_fatal(shelf, monkeypatch):
+    """Windows: commonpath raises across drives. The run still imports.
+
+    The source that cannot share a path with the run is not the run's folder,
+    so its delete_after_import switch does not apply and the files stay.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+        conn.execute(
+            "UPDATE model_folder SET delete_after_import = 1 WHERE id = ?",
+            (shelf["source_id"],),
+        )
+    source_root = os.path.realpath(str(shelf["output_root"]))
+    real_commonpath = os.path.commonpath
+
+    def other_drive(paths):
+        if list(paths)[0] == source_root:
+            raise ValueError("Paths don't have the same drive")
+        return real_commonpath(paths)
+
+    monkeypatch.setattr(os.path, "commonpath", other_drive)
+
+    result = Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert len(list(shelf["run_dir"].glob("*.safetensors"))) == 3
+
+
+def test_a_cover_whose_row_vanished_does_not_fail_the_run(shelf, monkeypatch):
+    """The files have landed by the time the cover's hash is read.
+
+    A row that is gone then must not turn a finished import into a failed job:
+    the run still lands and the cover simply has no hash to attach.
+    """
+    run_id = _a_training_run(shelf["hub"])
+    with shelf["hub"].transaction() as conn:
+        conn.execute(
+            "UPDATE model_folder SET is_download_target = 1 WHERE id = ?",
+            (shelf["destination_id"],),
+        )
+    real_fetchone = shelf["hub"].fetchone
+
+    def vanished(sql, *args):
+        if sql.startswith("SELECT sha256 FROM model WHERE id"):
+            return None
+        return real_fetchone(sql, *args)
+
+    monkeypatch.setattr(shelf["hub"], "fetchone", vanished)
+
+    result = Vault._import_training_run(
+        SimpleNamespace(_hub=shelf["hub"]),
+        str(shelf["run_dir"]),
+        {"id": run_id, "name": "Clementine", "set_id": None, "character_id": None},
+    )
+
+    assert result["imported"] == 3
+    assert result["cover_sha256"] is None
