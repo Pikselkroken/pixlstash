@@ -995,7 +995,7 @@ class Vault:
         on this vault's legacy ``user`` table.
 
         Returns:
-            ``{"repo_path", "python", "commit"}`` (empty values if unset, or
+            ``{"repo_path", "python"}`` (empty values if unset, or
             ``{}`` when no owner row or AuthService is attached yet).
         """
         auth = self.auth_service
@@ -1011,7 +1011,6 @@ class Vault:
         return {
             "repo_path": user.ai_toolkit_repo_path,
             "python": user.ai_toolkit_python,
-            "commit": user.ai_toolkit_commit,
         }
 
     def _import_training_run(self, run_dir: str, info: dict) -> dict:

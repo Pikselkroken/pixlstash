@@ -37,6 +37,7 @@ from pixlstash.hub.db import HubDatabase, now_iso
 from pixlstash.pixl_logging import get_logger
 from pixlstash.resources.arbiter import Lease
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
+from pixlstash.training import ai_toolkit_install
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 
@@ -98,7 +99,7 @@ class TrainingService:
                 describing what landed. Raising marks the job ``error``.
             notify: Emits an event (``event_type, data``) to the UI/listeners.
             config_provider: Returns the owner's ai-toolkit config as
-                ``{"repo_path", "python", "commit"}``.
+                ``{"repo_path", "python"}``.
             dataset_builder: Builds the dataset snapshot; called as
                 ``dataset_builder(dest_dir=..., set_id=..., character_id=...,
                 trigger_word=...)`` and returns a manifest with ``image_count``
@@ -620,6 +621,14 @@ class TrainingService:
             gpu_ids=gpu_ids,
             training_folder=training_folder,
         )
+        # The commit is what the checkout holds when the job starts, read from
+        # git and never from the owner's config (review F6).
+        cfg = self._config_provider() or {}
+        commit = (
+            ai_toolkit_install.read_commit(cfg["repo_path"])
+            if cfg.get("repo_path")
+            else None
+        )
         handle = backend.prepare(spec)
         backend.submit(handle, spec)
 
@@ -629,14 +638,13 @@ class TrainingService:
 
         config = self._read_rendered_config(handle.config_path)
         total_steps = self._total_steps_from_config(config)
-        cfg = self._config_provider() or {}
         self._update_job(
             job_uuid,
             status="running",
             pid=handle.pid,
             training_folder=handle.training_folder,
             rendered_config=json.dumps(config) if config is not None else None,
-            ai_toolkit_commit=cfg.get("commit"),
+            ai_toolkit_commit=commit,
             total_steps=total_steps,
             started_at=now_iso(),
         )

@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -207,7 +208,6 @@ def _make_service(
             "repo_path": repo_dir,
             "python": sys.executable,
             "models_dir": "",
-            "commit": "deadbeef",
         },
         dataset_builder=dataset_builder,
         poll_interval_s=poll_interval_s,
@@ -316,6 +316,34 @@ def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
     )
     template = _write_template(repo_dir, steps=8, save_every=4)
     character_id = _CHARACTER_ID
+    # The job records the checkout's HEAD, read from git when it starts.
+    subprocess.run(["git", "init", "-q", repo_dir], check=True)
+    subprocess.run(
+        ["git", "-C", repo_dir, "add", "run.py"], check=True, capture_output=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            repo_dir,
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.run(
+        ["git", "-C", repo_dir, "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
     service.start()
     try:
@@ -345,7 +373,7 @@ def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
     assert final.total_steps == 8
     assert final.started_at is not None
     assert final.completed_at is not None
-    assert final.ai_toolkit_commit == "deadbeef"
+    assert final.ai_toolkit_commit == head
     assert final.dataset_picture_ids
     assert json.loads(final.dataset_picture_ids) == [1, 2, 3]
     # Loss curve populated.

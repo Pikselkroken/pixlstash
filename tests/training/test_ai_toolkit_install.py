@@ -7,6 +7,7 @@ test of :func:`run_host_process`, which runs the test interpreter for a moment.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 
 from pixlstash.training import ai_toolkit_install as install
@@ -263,3 +264,59 @@ def test_run_host_process_returns_output_and_reports_a_timeout(tmp_path):
     )
     assert code == -1
     assert "timed out" in err
+
+
+# ---------------------------------------------------------------------------
+# read_commit: the commit a job records, asked of git (review F6)
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd, *args):
+    """Run git with an argument list and a fixed identity; return its stdout."""
+    done = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return done.stdout.strip()
+
+
+def _init_repo(path):
+    """A git repository with one commit at *path*; returns its HEAD commit."""
+    os.makedirs(path, exist_ok=True)
+    _git(path, "init", "-q")
+    _git(path, "commit", "-q", "--allow-empty", "-m", "init")
+    return _git(path, "rev-parse", "HEAD")
+
+
+def test_read_commit_is_the_checkouts_head(tmp_path):
+    head = _init_repo(str(tmp_path / "kit"))
+    assert install.read_commit(str(tmp_path / "kit")) == head
+
+
+def test_read_commit_is_none_outside_a_git_checkout(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert install.read_commit(str(plain)) is None
+
+
+def test_read_commit_does_not_take_a_parent_repositorys_commit(tmp_path):
+    """A checkout folder inside some other git repository is not a checkout: the
+    parent's HEAD must not be recorded as the trainer's commit."""
+    _init_repo(str(tmp_path / "home"))
+    nested = tmp_path / "home" / "ai-toolkit"
+    nested.mkdir()
+    assert install.read_commit(str(nested)) is None
+
+
+def test_read_commit_is_none_when_git_cannot_run(tmp_path, monkeypatch):
+    head = _init_repo(str(tmp_path / "kit"))
+    assert head
+    monkeypatch.setattr(
+        install,
+        "run_host_process",
+        lambda argv, cwd, timeout: (-1, "", "git: not found"),
+    )
+    assert install.read_commit(str(tmp_path / "kit")) is None

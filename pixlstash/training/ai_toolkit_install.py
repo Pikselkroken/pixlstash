@@ -51,6 +51,10 @@ PROBE_SCRIPT = (
     "print(json.dumps({'torch': torch.__version__, 'cuda': cuda, 'gpus': gpus}))\n"
 )
 
+# A git object name: SHA-1 (40 hex) or SHA-256 (64 hex).
+_GIT_HEAD_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+# Seconds: rev-parse reads a few files; a hung filesystem must not hang a job start.
+_GIT_TIMEOUT_SECONDS = 10.0
 _VERSION_RE = re.compile(r"""^\s*VERSION\s*=\s*["']([^"'\r\n]+)["']""", re.MULTILINE)
 
 # (returncode, stdout, stderr). Injected by tests so no real Python is spawned.
@@ -95,6 +99,50 @@ def read_version(repo_path: str) -> str | None:
         return None
     match = _VERSION_RE.search(text)
     return match.group(1).strip() if match else None
+
+
+def read_commit(repo_path: str) -> str | None:
+    """The commit the checkout's HEAD is at, as git reports it.
+
+    Runs ``git -C <repo> rev-parse --show-toplevel HEAD`` as an argument list
+    with a timeout: no shell, and the path is never read as an option. The
+    toplevel must be the checkout itself, so a checkout inside some other git
+    repository does not record that repository's commit.
+
+    Args:
+        repo_path: The ai-toolkit checkout directory.
+
+    Returns:
+        The 40- or 64-character HEAD commit, or None when the directory is not a
+        git checkout, has no commit, or git cannot run (the reason is logged).
+    """
+    returncode, stdout, stderr = run_host_process(
+        ["git", "-C", repo_path, "rev-parse", "--show-toplevel", "HEAD"],
+        cwd=repo_path,
+        timeout=_GIT_TIMEOUT_SECONDS,
+    )
+    lines = stdout.splitlines()
+    if (
+        returncode == 0
+        and len(lines) == 2
+        and _GIT_HEAD_RE.fullmatch(lines[1])
+        and _same_path(lines[0], repo_path)
+    ):
+        return lines[1]
+    logger.warning(
+        "ai-toolkit checkout %s has no git HEAD to record (exit %s): %s",
+        repo_path,
+        returncode,
+        stderr.strip() or "no output",
+    )
+    return None
+
+
+def _same_path(a: str, b: str) -> bool:
+    """Whether two paths name the same directory, after resolving links."""
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
+        os.path.realpath(b)
+    )
 
 
 def find_python(
