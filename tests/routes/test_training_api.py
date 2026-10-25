@@ -23,6 +23,7 @@ import tempfile
 from fastapi.testclient import TestClient
 
 from pixlstash.hub import training_runs
+from pixlstash.routes.training import _redact_host_paths
 from pixlstash.server import Server
 
 
@@ -762,6 +763,41 @@ def test_job_responses_carry_no_absolute_host_paths():
         assert process["train"]["steps"] == 3000
         assert "<host path>" in detail["error"]
         assert "<host path>" in status["info"]
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_host_path_redaction_covers_spaces_file_uris_and_windows_paths():
+    """A path with spaces is redacted to its end, a file:// URI is redacted, and
+    a Windows path still is. Found by review F5: the old pattern stopped at the
+    first space and never matched a URI."""
+    assert _redact_host_paths("/Users/Alice Smith/AI Toolkit/run.py") == "<host path>"
+    assert _redact_host_paths("file:///home/alice/x") == "<host path>"
+    assert _redact_host_paths(r"C:\Users\alice\ai\run.py") == "<host path>"
+    assert (
+        _redact_host_paths('{"python": "/home/alice/.venv/bin/python"}')
+        == '{"python": "<host path>"}'
+    )
+    # URLs and ratios are not paths.
+    assert _redact_host_paths("https://example.com/a/b") == "https://example.com/a/b"
+    assert _redact_host_paths("1/2 and/or") == "1/2 and/or"
+
+
+def test_job_error_with_spaced_path_and_file_uri_is_redacted():
+    """The route-level half of the redaction test: a report and an error that
+    name a spaced path and a file:// URI carry neither name back."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, _ = _seed_job(
+            server,
+            report="wrote /Users/Alice Smith/AI Toolkit/run.py",
+            error="cannot open file:///home/alice/x",
+        )
+        detail = owner.get(f"/training/jobs/{job_id}").json()
+        assert detail["report"] == "wrote <host path>", detail["report"]
+        assert detail["error"] == "cannot open <host path>", detail["error"]
+        for text in _walk_strings(detail):
+            assert "Smith" not in text and "alice" not in text, text
     finally:
         _teardown(temp_dir, server)
 

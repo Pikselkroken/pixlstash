@@ -193,9 +193,16 @@ def _parse_json_field(raw: str | None, field_name: str, job_uuid: str | None = N
         return None
 
 
-# An absolute POSIX or Windows path, as it appears inside a string. The lookbehind
-# keeps URLs, ``1/2`` and ``and/or`` out of it.
-_HOST_PATH_RE = re.compile(r"(?<![\w./:])(?:[A-Za-z]:[\\/]|/)[^\s'\"<>|,;()\[\]{}]+")
+# An absolute host path, as it appears inside a string: a ``file://`` URI, or a
+# POSIX or Windows path. A path runs to the end of the line, a quote, a ``<>|``
+# or a closing bracket, so a name with spaces (``/Users/Alice Smith/...``) is
+# redacted whole. Text after a path on the same line is redacted with it: over-
+# redaction is the safe direction. The lookbehind keeps URLs, ``1/2`` and
+# ``and/or`` out of the path alternative.
+_HOST_PATH_RE = re.compile(
+    r"file://[^\r\n'\"<>|)\]}]*"
+    r"|(?<![\w./:])(?:[A-Za-z]:[\\/]|/)[^\r\n'\"<>|)\]}]+"
+)
 
 
 def _redact_host_paths(value):
