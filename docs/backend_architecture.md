@@ -35,7 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
-25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439), [25.10 The Downloads folder and the default folder](#2510-the-downloads-folder-and-the-default-folder), [25.11 The kind a workflow loads a model as (#1962)](#2511-the-kind-a-workflow-loads-a-model-as-1962), [25.12 Downloading a model a workflow is missing](#2512-downloading-a-model-a-workflow-is-missing), [25.13 Picking up a model that landed after the scan (#1985)](#2513-picking-up-a-model-that-landed-after-the-scan-1985), [25.14 Training runs: the record a trained model names](#2514-training-runs-the-record-a-trained-model-names), [25.15 The ai-toolkit install: find, check, and where runs land](#2515-the-ai-toolkit-install-find-check-and-where-runs-land), [25.16 Training recipes and the memory-profile resolver (#2116)](#2516-training-recipes-and-the-memory-profile-resolver-2116), [25.17 Sample prompts written from the dataset (#2117)](#2517-sample-prompts-written-from-the-dataset-2117)
 26. [Prompt match](#26-prompt-match)
 
 ---
@@ -809,6 +809,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/training/jobs/{job_id}/cancel                                         |                 | Cancel a training job                                         |
 | GET    | /api/v1/training/jobs/{job_id}/status                                         |                 | Poll training job status                                      |
 | GET    | /api/v1/training/presets                                                      |                 | List training recipes                                         |
+| GET    | /api/v1/training/sample-prompts                                               |                 | Default sample prompts for a training run                     |
 | GET    | /api/v1/workflows                                                             | workflows       | The Workflows grid                                            |
 | POST   | /api/v1/workflows/run                                                         | workflows       | Run a workflow                                                |
 | POST   | /api/v1/workflows/run/opening                                                 | workflows       | Hold a run for ComfyUI to open                                |
@@ -11369,8 +11370,8 @@ file fails at load and in `tests/training/test_presets.py`). Its parts:
   `data/ai-toolkit-jobs/built-in/`, which no longer carries any key a recipe
   owns.
 - The dialog's three tables (#2119): `subject` (person / style / thing: caption
-  dropout, `content_or_style`, sample prompts in pairs with and without the
-  trigger word), `effort` (gentle / standard / strong: steps per picture, min
+  dropout, `content_or_style`; the sample prompts are written from the
+  dataset, §25.17), `effort` (gentle / standard / strong: steps per picture, min
   and max steps, learning rate, rank; alpha = rank) and `fit` (auto / save
   memory / best quality: an ordered list of hardware profiles, least offloading
   first).
@@ -11388,7 +11389,7 @@ merges, `[*]` writing the single dataset and the prompt list becoming
 
 `presets.resolve` takes the choices, the picture count and the room, and
 returns every value with its source (`model`, `subject`, `effort`, `pictures`,
-`gpu`, `pinned`) for the dialog's "Comes from" column. Steps are
+`captions`, `gpu`, `pinned`) for the dialog's "Comes from" column. Steps are
 `steps_per_picture × pictures`, clamped. Pins win over every derived value;
 alpha follows a pinned rank unless pinned itself. The profile is the first one
 in the fit choice whose `max_bucket`, `max_rank` and `max_batch` cover the run
@@ -11419,6 +11420,45 @@ selection the dataset builder writes). The rendered config is the template, the
 resolved values (checked by `validate_tunables`) and the locked keys merged
 last; placeholders are substituted after the merge, so a recipe's prompts get
 the trigger word.
+
+### 25.17 Sample prompts written from the dataset (#2117)
+
+A run previews with prompts PixlStash writes, not ones the owner types:
+`pixlstash/training/sample_prompts.py`, `generate(subject, captions, tags)`,
+deterministic over the training pictures' captions (`picture.description`) and
+tags in picture-id order (`ExportUtils.training_captions`, the same selection
+the dataset builder writes).
+
+- **Two scenes, each with the trigger word and without it**, the one with it
+  first: four prompts. The prompt without the word shows whether the LoRA
+  changes pictures it was not asked for.
+- **Scenes** come from a fixed list per subject, each with the words that mean
+  the dataset already shows it. The two whose words occur least in the captions
+  and tags are used (list order breaks ties), so the samples test flexibility
+  rather than recall, and a set that shows every scene still gets two.
+- **What replaces the trigger word**: for a style, nothing (the `, <trigger>
+  style` suffix is dropped). For a person, the most common `a/an <up to two
+  words> <person noun>` phrase in the captions ("an elderly man"); for a thing,
+  the most common opening noun phrase that is not a framing word or a person
+  ("a gold ring" of "a close-up of a gold ring"). With no caption phrase it is
+  the most common matching tag, then the subject's generic noun ("a person",
+  "an object"). `description_source` says which.
+- The trigger word is written as `{{TRIGGER_WORD}}`, which the render fills in,
+  so the prompts follow an edited trigger word.
+
+`GET /training/sample-prompts?set_id|character_id&subject` returns them for the
+Train dialog (#2119), each as `{prompt, with_trigger, without_trigger}` so a
+click on the word swaps the two forms. At `POST /training/jobs` they are the run's
+prompts (source `captions`) unless the owner pinned `sample.samples[*].prompt`:
+the dialog's edited set (1 to 16 prompts) is sent as that pin and is the run's
+set, stored with it in `resolved_profile` and `advanced_pins` and in the
+rendered config.
+
+**Seeds.** The template samples every prompt at `sample.seed` (42) with
+`walk_seed` off, so each pair and each checkpoint compare like with like, and
+`skip_first_sample` is off, so ai-toolkit samples once before the first step:
+the "before" column. Steps, guidance and size come from the recipe's preview
+settings.
 
 ## 26. Prompt match
 

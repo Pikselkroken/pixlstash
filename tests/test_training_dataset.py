@@ -15,11 +15,12 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import select
 
-from pixlstash.db_models import Face, Picture
+from pixlstash.db_models import Face, Picture, Tag
 from pixlstash.server import Server
 from pixlstash.utils.service.export_utils import ExportUtils
-from tests.utils import upload_pictures_and_wait
+from tests.utils import quiesce_background_work, upload_pictures_and_wait
 
 PICTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "pictures")
 
@@ -231,3 +232,35 @@ def test_build_training_dataset_no_trigger_word(env):
         assert manifest["trigger_word"] is None
         # One pair, and no trigger assertion (no leading token required).
         _assert_pairs(dest_dir, expected_count=1)
+
+
+def test_training_captions_reads_each_pictures_caption_and_tags(env):
+    """The sample-prompt generator reads what the dataset holds: one caption
+    and one tag list per picture, in id order, "" for a picture with none.
+
+    Last in the module: it takes the finders out so the captioner and the
+    tagger cannot rewrite the rows it places.
+    """
+    client, server = env
+    set_id = _create_set(client, "CaptionSet")
+    pic_ids = sorted([_upload(client, "Bad1.png"), _upload(client, "Bad2.png")])
+    for pid in pic_ids:
+        _add_to_set(client, set_id, pid)
+    quiesce_background_work(server)
+
+    def place(session):
+        first, second = (session.get(Picture, pid) for pid in pic_ids)
+        first.description = "An elderly man reading in a garden."
+        second.description = None
+        for tag in session.exec(select(Tag).where(Tag.picture_id.in_(pic_ids))):
+            session.delete(tag)
+        session.add(Tag(picture_id=second.id, tag="old man"))
+        session.add(Tag(picture_id=second.id, tag="beard"))
+        session.commit()
+
+    server.vault.db.run_task(place)
+
+    captions, tags = ExportUtils.training_captions(server, set_id=set_id)
+    assert captions == ["An elderly man reading in a garden.", ""]
+    assert tags[0] == []
+    assert sorted(tags[1]) == ["beard", "old man"]

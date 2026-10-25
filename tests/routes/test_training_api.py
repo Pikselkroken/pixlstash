@@ -713,6 +713,99 @@ def test_list_presets_scoped_token_forbidden():
 
 
 # ---------------------------------------------------------------------------
+# GET /training/sample-prompts
+# ---------------------------------------------------------------------------
+
+
+def test_sample_prompts_are_two_pairs_and_become_the_runs_default():
+    """A character with no captions gets a person's generic noun; the same
+    prompts are what an unpinned run samples, and a pinned set wins."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        r = owner.get("/training/sample-prompts", params={"character_id": char_id})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["subject"] == "person"
+        assert body["description"] == "a person"
+        assert body["description_source"] == "generic"
+        written = [item["prompt"] for item in body["prompts"]]
+        assert len(written) == 4
+        assert sum("{{TRIGGER_WORD}}" in p for p in written) == 2
+        assert (
+            owner.get(
+                "/training/sample-prompts", params={"character_id": char_id}
+            ).json()
+            == body
+        )
+
+        r = owner.post(
+            "/training/jobs",
+            json={"character_id": char_id, "name": "x", "trigger_word": "tw"},
+        )
+        assert r.status_code == 200, r.text
+        values = r.json()["resolved_profile"]["values"]
+        assert values["sample.samples[*].prompt"] == {
+            "value": written,
+            "source": "captions",
+        }
+        call = server.vault.training_service.enqueue_calls[-1]
+        samples = call["config_overrides"]["config"]["process"][0]["sample"]
+        assert [s["prompt"] for s in samples["samples"]] == written
+
+        mine = ["{{TRIGGER_WORD}} on a boat"]
+        r = owner.post(
+            "/training/jobs",
+            json={
+                "character_id": char_id,
+                "name": "x",
+                "trigger_word": "tw",
+                "pins": {"sample.samples[*].prompt": mine},
+            },
+        )
+        assert r.status_code == 200, r.text
+        values = r.json()["resolved_profile"]["values"]
+        assert values["sample.samples[*].prompt"] == {
+            "value": mine,
+            "source": "pinned",
+        }
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_sample_prompts_for_a_set_need_a_subject_and_one_source():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        set_id = _make_picture_set(owner)
+        r = owner.get("/training/sample-prompts", params={"set_id": set_id})
+        assert r.status_code == 422, r.text
+        r = owner.get(
+            "/training/sample-prompts", params={"set_id": set_id, "subject": "style"}
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["prompts"][0]["prompt"].endswith("{{TRIGGER_WORD}} style")
+        assert r.json()["description"] is None
+        r = owner.get("/training/sample-prompts")
+        assert r.status_code == 400, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_sample_prompts_scoped_token_forbidden():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        char_id = _make_character(owner)
+        scoped = _scoped_client(server, read_token)
+        r = scoped.get("/training/sample-prompts", params={"character_id": char_id})
+        assert r.status_code == 403, r.text
+        # In-scope control: the same request as the owner resolves the route.
+        r = owner.get("/training/sample-prompts", params={"character_id": char_id})
+        assert r.status_code == 200, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+# ---------------------------------------------------------------------------
 # ALL + resource_type token footgun (CLAUDE.md §16.2)
 #
 # An ``ALL``-scope token narrowed to a ``resource_type`` leaves the middleware's

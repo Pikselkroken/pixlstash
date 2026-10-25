@@ -319,6 +319,7 @@ def resolve(
     vram_mb: int,
     ram_mb: int | None,
     pins: dict | None = None,
+    prompts: list[str] | None = None,
 ) -> dict:
     """Every value a run of *preset* uses on this machine, and where it came from.
 
@@ -335,12 +336,16 @@ def resolve(
             :func:`validate_pins`. They win over every derived value. The
             profile is chosen for the size, rank and batch they ask for, and a
             pinned memory setting limits it to profiles with that setting.
+        prompts: The sample prompts written from the dataset's captions
+            (:func:`pixlstash.training.sample_prompts.generate`); pinned
+            prompts win over them.
 
     Returns:
         ``{"preset", "subject", "effort", "fit", "picture_count", "profile",
         "profile_label", "evidence", "vram_mb", "ram_mb", "room", "values"}``;
         ``values`` maps each key to ``{"value", "source"}``, the source being
-        ``model``, ``subject``, ``effort``, ``pictures``, ``gpu`` or ``pinned``.
+        ``model``, ``subject``, ``effort``, ``pictures``, ``captions``, ``gpu``
+        or ``pinned``.
 
     Raises:
         ValueError: An unknown choice.
@@ -363,6 +368,8 @@ def resolve(
     put("model", preset["defaults"])
     put("model", preset["preview"][preset["inference_target"]])
     put("subject", preset["subject"][subject])
+    if prompts:
+        put("captions", {PROMPTS_KEY: list(prompts)})
     row = preset["effort"][effort]
     put("effort", {k: v for k, v in row.items() if k not in _EFFORT_STEPS})
     steps = math.ceil(row["steps_per_picture"] * max(0, picture_count))

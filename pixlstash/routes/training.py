@@ -29,7 +29,7 @@ from pixlstash.db_models import User
 from pixlstash.hub import training_runs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import SOURCE_FOLDER_KIND
-from pixlstash.training import ai_toolkit_install, presets
+from pixlstash.training import ai_toolkit_install, presets, sample_prompts
 from pixlstash.training.config_render import TunableOverrideError
 from pixlstash.utils.aitoolkit_run import read_output_root
 from pixlstash.utils.path_utils import path_is_within, resolve_path_within
@@ -415,6 +415,42 @@ def create_router(server) -> APIRouter:
             ),
         )
 
+    class SamplePromptItem(BaseModel):
+        """One sample prompt and the form clicking its trigger word gives."""
+
+        prompt: str = Field(..., description="The prompt as the run uses it.")
+        with_trigger: str = Field(
+            ..., description="The prompt with {{TRIGGER_WORD}} in it."
+        )
+        without_trigger: str = Field(
+            ..., description="The same scene without the trigger word."
+        )
+
+    class SamplePromptsResponse(BaseModel):
+        """The default sample prompts written from the dataset's captions."""
+
+        model_config = ConfigDict(extra="allow")
+
+        subject: str = Field(..., description="person / style / thing.")
+        prompts: list[SamplePromptItem] = Field(
+            ...,
+            description=(
+                "Two scenes, each with the trigger word and without it. The "
+                "trigger word is the {{TRIGGER_WORD}} placeholder."
+            ),
+        )
+        description: Optional[str] = Field(
+            default=None,
+            description=(
+                "What stands in for the trigger word in a person's or a "
+                "thing's prompt ('an elderly man'); None for a style."
+            ),
+        )
+        description_source: Optional[str] = Field(
+            default=None,
+            description="captions, tags or generic; None for a style.",
+        )
+
     class AiToolkitDiscoverResponse(BaseModel):
         """Where an ai-toolkit checkout was found, and where PixlStash looked."""
 
@@ -542,6 +578,23 @@ def create_router(server) -> APIRouter:
             }
         )
 
+    def _subject_for(subject, character_id) -> str:
+        """The subject asked for; a character's defaults to a person."""
+        if subject is not None:
+            return subject
+        if character_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Say what the LoRA should learn: person, style or thing.",
+            )
+        return "person"
+
+    def _default_prompts(set_id, character_id, subject) -> dict:
+        captions, tags = ExportUtils.training_captions(
+            server, set_id=set_id, character_id=character_id
+        )
+        return sample_prompts.generate(subject, captions, tags)
+
     # ── Training jobs ─────────────────────────────────────────────────────
 
     @router.post(
@@ -586,14 +639,7 @@ def create_router(server) -> APIRouter:
                     "the checkout."
                 ),
             )
-        subject = payload.subject
-        if subject is None:
-            if payload.character_id is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Say what the LoRA should learn: person, style or thing.",
-                )
-            subject = "person"
+        subject = _subject_for(payload.subject, payload.character_id)
         try:
             pins = presets.validate_pins(preset, payload.pins)
         except TunableOverrideError as exc:
@@ -606,6 +652,11 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=422,
                 detail="There are no pictures to train on.",
+            )
+        prompts = None
+        if presets.PROMPTS_KEY not in pins:
+            prompts = sample_prompts.prompt_texts(
+                _default_prompts(payload.set_id, payload.character_id, subject)
             )
         room = server.vault.training_room()
         if room["ram_mb"] is None:
@@ -633,6 +684,7 @@ def create_router(server) -> APIRouter:
                 vram_mb=room["vram_mb"],
                 ram_mb=room["ram_mb"],
                 pins=pins,
+                prompts=prompts,
             )
         except presets.NoProfileFits as exc:
             raise HTTPException(
@@ -1112,6 +1164,31 @@ def create_router(server) -> APIRouter:
         _ensure_secure(request)
         user = server.auth.get_user()
         return _preset_items(user.ai_toolkit_repo_path if user is not None else None)
+
+    @router.get(
+        "/training/sample-prompts",
+        summary="Default sample prompts for a training run",
+        response_model=SamplePromptsResponse,
+        description=(
+            "Writes the sample prompts a run of the set or character would "
+            "use if none are given: two scenes its captions do not show, each "
+            "with the trigger word and without it. Deterministic. Owner-only."
+        ),
+    )
+    def get_training_sample_prompts(
+        request: Request,
+        set_id: Optional[int] = None,
+        character_id: Optional[int] = None,
+        subject: Optional[Literal["person", "style", "thing"]] = None,
+    ):
+        _ensure_secure(request)
+        if (set_id is None) == (character_id is None):
+            raise HTTPException(
+                status_code=400,
+                detail="Exactly one of set_id / character_id must be provided.",
+            )
+        subject = _subject_for(subject, character_id)
+        return {"subject": subject, **_default_prompts(set_id, character_id, subject)}
 
     return router
 

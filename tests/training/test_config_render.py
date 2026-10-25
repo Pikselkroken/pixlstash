@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import re
 
-from pixlstash.training import presets
+from pixlstash.training import presets, sample_prompts
 from pixlstash.training.config_render import deep_merge, render_job_config
 
-# The shipped Z-Image Turbo recipe, resolved for 24 pictures on a 24 GB card:
-# what a real run renders over the template.
+# The shipped Z-Image Turbo recipe, resolved for 24 pictures on a 24 GB card
+# with the prompts an uncaptioned set gets: what a real run renders over the
+# template.
 _PRESET = presets.get_preset("zimage-turbo")
 _RESOLVED = presets.to_patch(
     presets.resolved_values(
@@ -21,6 +22,9 @@ _RESOLVED = presets.to_patch(
             picture_count=24,
             vram_mb=22_000,
             ram_mb=60_000,
+            prompts=sample_prompts.prompt_texts(
+                sample_prompts.generate("person", [], [])
+            ),
         )
     )
 )
@@ -61,7 +65,7 @@ def test_placeholders_substituted_everywhere():
     assert process["trigger_word"] == "ohwx_person"
     assert process["datasets"][0]["folder_path"] == "/work/dataset"
 
-    # The recipe's prompts arrive in the patch, after the template, and the
+    # The written prompts arrive in the patch, after the template, and the
     # trigger word is still substituted inside them: half carry it.
     prompts = [s["prompt"] for s in process["sample"]["samples"]]
     assert len(prompts) == 4
@@ -112,6 +116,16 @@ def test_required_invariants_preserved():
     process = _render()["config"]["process"][0]
     assert process["type"] == "diffusion_trainer"
     assert process["logging"]["use_ui_logger"] is True
+
+
+def test_every_prompt_samples_at_one_seed_from_step_zero():
+    """A pair and a step column compare like with like: one fixed seed for
+    every prompt, and a sample before the first step as the "before" column."""
+    process = _render()["config"]["process"][0]
+    assert isinstance(process["sample"]["seed"], int)
+    assert process["sample"]["walk_seed"] is False
+    assert process["train"]["skip_first_sample"] is False
+    assert process["train"]["disable_sampling"] is False
 
 
 def test_overrides_deep_merged():
