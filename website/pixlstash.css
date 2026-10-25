@@ -96,9 +96,10 @@ a {
 }
 
 /* ── Nav ──
-   DOM order (nav.js): brand, Home (direct child), .nav-links (the rest),
-   .nav-actions. Desktop packs left after the brand, actions pushed right.
-   Mobile: brand + Home + actions on row 1; the rest scroll on row 2. */
+   DOM order (nav.js): brand (the home link), Home (direct child), .nav-links
+   (the rest), .nav-actions. Desktop packs left after the brand, actions pushed
+   right. Mobile: brand + Try demo on row 1; the page links wrap onto two
+   centred rows below. */
 .nav {
   display: flex;
   flex-wrap: wrap;
@@ -522,25 +523,30 @@ a {
     padding: 8px 12px 60px;
   }
 
-  /* Keep the header to two rows: brand + Home + actions on row 1, the rest of
-     the links scroll on row 2. */
-  .nav-links {
-    order: 3;
-    flex-basis: 100%;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    justify-content: flex-start;
-    gap: 2px;
-    padding-top: 10px;
-    border-top: 1px solid var(--divider);
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-  .nav-links::-webkit-scrollbar {
+  /* Row 1 is the logo (the home link) and Try demo. Home, the theme toggle and
+     Install now are desktop-only: the logo already goes home, and the home page
+     has its own install buttons. */
+  .nav-link--home,
+  .theme-toggle,
+  .download-btn {
     display: none;
   }
   .nav-actions {
     order: 2;
+  }
+  /* Every page link visible: wrap onto two centred rows rather than one row
+     that scrolls three of them out of sight. */
+  .nav-links {
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 2px;
+    padding-top: 10px;
+    border-top: 1px solid var(--divider);
+  }
+  .nav-links a {
+    padding: 6px 8px;
   }
 }
 
@@ -557,6 +563,18 @@ a {
 @media (max-width: 480px) {
   .brand-name {
     font-size: 1.6rem;
+  }
+}
+
+/* Narrow phones (360px is the common Android width): a little less padding
+   and the smaller link size keep the page links to two rows. */
+@media (max-width: 400px) {
+  .nav-links {
+    gap: 0;
+  }
+  .nav-links a {
+    padding: 6px;
+    font-size: 0.9rem;
   }
 }
 

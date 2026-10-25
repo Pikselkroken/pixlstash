@@ -10,7 +10,7 @@
   }
 
   const links = [
-    { href: "index.html", label: "Home" },
+    { href: "index.html", label: "Home", className: "nav-link--home" },
     { href: "introduction.html", label: "Getting started" },
     { href: "features.html", label: "Features" },
     { href: "ai.html", label: "AI" },
@@ -41,8 +41,8 @@
     return `<a href="${link.href}" class="${classes.join(" ")}"${ext}>${link.label}</a>`;
   }
 
-  // "Home" is a direct child of the nav so it stays beside the wordmark on
-  // mobile; the rest become the scrolling second row.
+  // "Home" is a direct child of the nav so the desktop row reads brand, Home,
+  // links. On mobile the logo is the home link and Home is hidden.
   const home = links[0];
   const rest = links.slice(1);
 
@@ -54,10 +54,10 @@
   const nav = document.createElement("nav");
   nav.className = "nav";
   nav.innerHTML = `
-        <div class="brand">
-          <img src="assets/logo.png" alt="PixlStash logo" />
+        <a class="brand" href="index.html" aria-label="PixlStash home">
+          <img src="assets/logo.png" alt="" />
           <span class="brand-name">Pixl<span class="brand-stash">Stash</span></span>
-        </div>
+        </a>
         ${anchor(home)}
         <div class="nav-links">
           ${rest.map(anchor).join("\n          ")}
