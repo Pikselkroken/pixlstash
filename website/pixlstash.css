@@ -526,8 +526,10 @@ a {
   /* Row 1 is the logo (the home link), the theme toggle and Try demo. Home and
      Install now are desktop-only: the logo already goes home, and the home page
      has its own install buttons. */
-  .nav-link--home,
-  .download-btn {
+  /* Scoped to the header: pages use .download-btn for their own install
+     buttons (comfyui.html), which must stay. */
+  .nav .nav-link--home,
+  .nav .download-btn {
     display: none;
   }
   .nav-actions {
