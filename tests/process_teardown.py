@@ -43,14 +43,18 @@ finalization path keeps a canary for a teardown bug that is genuinely ours.
 directions, so anyone diagnosing this further can put Windows back on the
 normal path without editing code.
 
-This does not silence the crash class it cannot reach: ``ExitProcess`` still
-runs each DLL's ``DLL_PROCESS_DETACH``. If 139 survives this change, that is
-where to look next, and the remaining step is
-``TerminateProcess``, which runs no detach handler at all.
+``os._exit`` was not enough. It still goes through ``ExitProcess``, which runs
+each DLL's ``DLL_PROCESS_DETACH``, and 139 outlived it: run 35500778675
+(``backend-windows shard 2``) printed ``Windows fatal exception: access
+violation`` with ``_end_process`` on the stack, inside ``os._exit`` itself. So
+on Windows the process now ends with ``TerminateProcess`` on itself, which
+runs no detach handler and no user-mode code at all after the call. Other
+platforms keep ``os._exit``.
 """
 
 from __future__ import annotations
 
+import ctypes.wintypes
 import os
 import sys
 import traceback
@@ -165,4 +169,25 @@ def _end_process(config: Any, status: int, reason: str) -> NoReturn:
         except Exception as exc:
             print(f"Could not flush {stream!r} before exit: {exc!r}", file=sys.stderr)
 
+    if sys.platform == "win32":
+        _terminate_this_process(status)
     os._exit(status)
+
+
+def _terminate_this_process(status: int) -> None:
+    """End this Windows process now: no ``DLL_PROCESS_DETACH``, no CRT exit.
+
+    Returns only if ``TerminateProcess`` failed, in which case the caller's
+    ``os._exit`` is the path this module took before.
+    """
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = ctypes.wintypes.HANDLE
+    kernel32.TerminateProcess.argtypes = (ctypes.wintypes.HANDLE, ctypes.wintypes.UINT)
+    kernel32.TerminateProcess.restype = ctypes.wintypes.BOOL
+    kernel32.TerminateProcess(kernel32.GetCurrentProcess(), status)
+    print(
+        f"TerminateProcess failed (Windows error {ctypes.get_last_error()}); "
+        "ending with os._exit, which runs DLL detach handlers.",
+        file=sys.stderr,
+    )
+    sys.stderr.flush()

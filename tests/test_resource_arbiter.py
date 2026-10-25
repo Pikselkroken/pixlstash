@@ -785,7 +785,7 @@ def test_an_unreachable_comfyui_is_not_taken_for_a_remote_one(monkeypatch):
     def unreachable(path):
         raise requests.ConnectionError("test-unreachable")
 
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
     probe._get = unreachable
@@ -863,7 +863,7 @@ def test_a_read_failing_partway_through_the_card_match_is_not_cached_as_remote(
         except StopIteration:
             raise requests.ConnectionError("test-timeout") from None
 
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
@@ -896,7 +896,7 @@ def test_a_comfyui_reporting_cudas_smaller_card_total_is_still_on_this_card(
     from pixlstash.resources import comfyui_tenant
     from pixlstash.resources.comfyui_tenant import ComfyUIProbe
 
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
@@ -1003,13 +1003,65 @@ def test_the_ledger_lists_one_cards_processes_without_its_own():
     assert ledger.processes() == {4242: 13254, 5151: 800}
 
 
+def test_a_local_comfyui_loading_a_model_is_still_on_this_card(monkeypatch):
+    """Mid-load, ComfyUI's free memory and NVML's disagree by GBs; read as
+    remote, its runs would be granted unchecked for a minute."""
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    class Listening:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def net_connections(self, kind="inet"):
+            return [
+                SimpleNamespace(
+                    status=psutil.CONN_LISTEN, laddr=SimpleNamespace(port=8188)
+                )
+            ]
+
+    fake = _ProcessLedger({CARD: {4242: 9000}})
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: fake)
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    monkeypatch.setattr(comfyui_tenant.psutil, "Process", Listening)
+    loading = _comfy_stats(TOTAL, TOTAL - 8000)
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://127.0.0.1:8188")
+    probe._get = lambda path: loading
+    assert probe.device() == CARD
+
+    # Not on a loopback address: a remote ComfyUI may share its port with a
+    # local one, so likeness still decides, and it misses.
+    remote = ComfyUIProbe("test-client")
+    remote.watch("http://comfy.invalid:8188")
+    remote._get = lambda path: loading
+    assert remote.device() is None
+
+
 def test_a_comfyui_on_a_card_a_gb_off_in_size_is_not_on_this_card(monkeypatch):
     from pixlstash.resources import comfyui_tenant
     from pixlstash.resources.comfyui_tenant import ComfyUIProbe
 
-    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
     monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
     probe = ComfyUIProbe("test-client")
     probe.watch("http://comfy.invalid")
     probe._get = lambda path: _comfy_stats(TOTAL - 1100, TOTAL)
+    assert probe.device() is None
+
+
+def test_an_identical_card_elsewhere_is_told_apart_by_a_fresh_second_read(
+    monkeypatch,
+):
+    """Same name, size and free memory on the first read; only the second
+    read, taken fresh, shows the other machine's card moving."""
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    reads = iter([_comfy_stats(TOTAL, TOTAL), _comfy_stats(TOTAL, TOTAL)])
+    monkeypatch.setattr(comfyui_tenant, "ledger", FakeLedger)
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid")
+    probe._get = lambda path: next(reads, _comfy_stats(TOTAL, TOTAL - 3000))
     assert probe.device() is None

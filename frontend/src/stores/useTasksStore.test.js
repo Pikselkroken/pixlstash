@@ -12,6 +12,7 @@ import { abortRun } from "../api/comfyui";
 import { cancelModelDownload } from "../api/modelDownloads";
 import { cancelLease, freeComfyui, runLeaseAnyway } from "../api/resources";
 import { useNoticeStore } from "./useNoticeStore";
+import { notifySessionReset } from "../utils/apiClient";
 
 vi.mock("../api/workers", () => ({ getWorkerProgress: vi.fn() }));
 vi.mock("../api/comfyui", () => ({ abortRun: vi.fn(async () => ({})) }));
@@ -39,6 +40,43 @@ function answer(runs) {
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+});
+
+describe("a credential change", () => {
+  it("drops the owner's runs and readings", async () => {
+    const store = useTasksStore();
+    getWorkerProgress.mockResolvedValue({
+      ...answer([RUN]),
+      resources: { devices: [], leases: [] },
+    });
+    store.startPolling();
+    await flushPromises();
+    try {
+      expect(store.comfyuiRuns).toEqual([RUN]);
+      notifySessionReset("test");
+      expect(store.comfyuiRuns).toEqual([]);
+      expect(store.resources).toBeNull();
+    } finally {
+      store.stopPolling();
+    }
+  });
+
+  it("drops a poll that was already on the wire", async () => {
+    const store = useTasksStore();
+    let answerPoll;
+    getWorkerProgress.mockImplementation(
+      () => new Promise((resolve) => (answerPoll = resolve)),
+    );
+    store.startPolling();
+    try {
+      notifySessionReset("test");
+      answerPoll(answer([RUN]));
+      await flushPromises();
+      expect(store.comfyuiRuns).toEqual([]);
+    } finally {
+      store.stopPolling();
+    }
+  });
 });
 
 describe("the runs in flight", () => {

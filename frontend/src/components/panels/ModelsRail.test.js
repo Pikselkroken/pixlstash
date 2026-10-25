@@ -48,6 +48,14 @@ vi.mock("../../api/modelShelf", () => ({
   setModelsHidden: (...args) => setModelsHidden(...args),
 }));
 
+// Unmocked, the favourites read goes to the network; on CI nothing answers and
+// its warning can land after the file's teardown, which fails the run.
+const listFavourites = vi.fn();
+vi.mock("../../api/favourites", () => ({
+  listFavourites: (...args) => listFavourites(...args),
+  setFavourites: vi.fn(),
+}));
+
 vi.mock("../../api/modelIcons", () => ({
   setModelIcon: vi.fn(),
   clearModelIcons: vi.fn(),
@@ -209,6 +217,7 @@ beforeEach(() => {
   setModelsHidden.mockReset();
   listAdapters.mockReset().mockResolvedValue([]);
   listCheckpoints.mockReset().mockResolvedValue([]);
+  listFavourites.mockReset().mockResolvedValue({ model: [], workflow: [], set: [] });
   fetchWorkflowSets
     .mockReset()
     .mockResolvedValue({ combinations: [], no_set: [], hand_made: [] });

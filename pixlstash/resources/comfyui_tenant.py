@@ -62,6 +62,7 @@ _MB = 1024 * 1024
 # What ``_map_device`` answers when a read failed partway: unknown, not remote.
 _UNREAD = object()
 _NO_PROXY = {"http": None, "https": None, "all": None}
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
 class ComfyUIProbe:
@@ -152,8 +153,8 @@ class ComfyUIProbe:
             if isinstance(item, (list, tuple))
         ]
 
-    def _device_row(self) -> dict | None:
-        stats = self.stats()
+    def _device_row(self, max_age_s: float = STATS_TTL_S) -> dict | None:
+        stats = self.stats(max_age_s)
         devices = (stats or {}).get("devices") or []
         return devices[0] if devices and isinstance(devices[0], dict) else None
 
@@ -185,17 +186,17 @@ class ComfyUIProbe:
         return mapped if checked_at else ledger().pixlstash_device()
 
     def _map_device(self) -> str | None | object:
-        first = self._device_row()
+        # Fresh, as the NVML read below is: a cached row compared with a live
+        # card misses by whatever a model load moved in between.
+        first = self._device_row(max_age_s=0.0)
         if first is None:
             return _UNREAD
         cards = ledger().devices(max_age_s=0.0)
+        loopback = (urlparse(self._base_url or "").hostname or "") in _LOOPBACK_HOSTS
         if cards and not cards[0].measurable:
             # No NVML to compare with (Metal, ROCm). A ComfyUI on a loopback
             # address shares this machine's one unmeasurable device.
-            host = urlparse(self._base_url or "").hostname or ""
-            if host in ("localhost", "127.0.0.1", "::1"):
-                return UNMEASURED_DEVICE
-            return None
+            return UNMEASURED_DEVICE if loopback else None
         name = str(first.get("name") or "")
         total = int(first.get("vram_total") or 0) // _MB
         candidates = [
@@ -207,10 +208,25 @@ class ComfyUIProbe:
         ]
         if not candidates:
             return None
+        if loopback:
+            # Proof rather than likeness: the process on the card that listens
+            # on ComfyUI's port. Free memory cannot tell while a model loads,
+            # and a miss there reads as remote, granted unchecked. Loopback
+            # only: a remote ComfyUI may share its port with a local one.
+            for card in candidates:
+                if self._listening_pid(ledger().processes(card.uuid)) is not None:
+                    logger.info(
+                        "ComfyUI at %s runs on this machine's %s (%s): its "
+                        "process is on that card",
+                        self._base_url,
+                        card.name,
+                        card.uuid,
+                    )
+                    return card.uuid
         # Two reads a moment apart: an identical card on another machine has
         # the same name and size, but not the same free memory twice over.
         for attempt in range(2):
-            row = first if attempt == 0 else self._device_row()
+            row = first if attempt == 0 else self._device_row(max_age_s=0.0)
             if row is None:
                 return _UNREAD
             free = int(row.get("vram_free") or 0) // _MB
@@ -226,7 +242,6 @@ class ComfyUIProbe:
                 return None
             if attempt == 0:
                 time.sleep(0.3)
-                self._stats = (0.0, None)
         logger.info(
             "ComfyUI at %s runs on this machine's %s (%s)",
             self._base_url,
