@@ -370,15 +370,14 @@ def keep_template_thumbnail(
     try:
         content, _media_type = comfyui_templates.fetch_thumbnail(comfyui_url, template)
         digest = store_icon(hub.path, content)
-    except (LookupError, IconRefused, OSError) as exc:
+        workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=False)
+    except (LookupError, IconRefused, OSError, sqlite3.Error) as exc:
         logger.info(
             "Template %s is stored as workflow %s without a thumbnail: %s",
             template.key,
             workflow_id,
             exc,
         )
-        return
-    workflow_thumbnails.set_thumbnail(hub, workflow_id, digest, pinned=False)
 
 
 def store_over_workflow(

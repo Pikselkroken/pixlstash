@@ -26100,6 +26100,20 @@ def test_a_template_arrives_with_its_picture_as_an_unpinned_thumbnail(
     )
 
 
+def test_a_template_whose_thumbnail_cannot_be_written_is_still_added(
+    workflow_env, comfyui_templates_served, monkeypatch
+):
+    """Wrong if a failed thumbnail write turns a stored workflow into a 500."""
+    comfyui_templates_served.served["/templates/image_example-1.webp"] = _THUMBNAIL_WEBP
+
+    def refuse(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(comfyui_module.workflow_thumbnails, "set_thumbnail", refuse)
+    (added,) = _add_templates(workflow_env.owner, ("default", "image_example"))["added"]
+    assert _card(workflow_env.owner, added["workflow_id"])["thumbnail"] is None
+
+
 def test_a_workflow_takes_an_uploaded_thumbnail_and_the_owner_unpins_it(
     workflow_env,
 ):
