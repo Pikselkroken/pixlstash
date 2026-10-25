@@ -11434,22 +11434,27 @@ the dataset builder writes).
   changes pictures it was not asked for.
 - **Scenes** come from a fixed list per subject, each with the words that mean
   the dataset already shows it. The two whose words occur least in the captions
-  and tags are used (list order breaks ties), so the samples test flexibility
+  and tags (whole words, or their plural: "outdoor" counts "outdoors", "sea"
+  does not count "season") are used (list order breaks ties), so the samples test flexibility
   rather than recall, and a set that shows every scene still gets two.
 - **What replaces the trigger word**: for a style, nothing (the `, <trigger>
   style` suffix is dropped). For a person, the most common `a/an <up to two
   words> <person noun>` phrase in the captions ("an elderly man"); for a thing,
   the most common opening noun phrase that is not a framing word or a person
-  ("a gold ring" of "a close-up of a gold ring"). With no caption phrase it is
-  the most common matching tag, then the subject's generic noun ("a person",
-  "an object"). `description_source` says which.
+  ("a gold ring" of "a close-up of a gold ring"). Punctuation ends a phrase,
+  and the trigger word is read past, so a caption that carries it never puts
+  it in the prompt written without it. With no caption phrase it is the most
+  common matching tag (plain words, at most four, not holding the trigger
+  word), then the subject's generic noun ("a person", "an object").
+  `description_source` says which.
 - The trigger word is written as `{{TRIGGER_WORD}}`, which the render fills in,
   so the prompts follow an edited trigger word.
 
-`GET /training/sample-prompts?set_id|character_id&subject` returns them for the
+`GET /training/sample-prompts?set_id|character_id&subject&trigger_word` returns them for the
 Train dialog (#2119), each as `{prompt, with_trigger, without_trigger}` so a
 click on the word swaps the two forms. At `POST /training/jobs` they are the run's
-prompts (source `captions`) unless the owner pinned `sample.samples[*].prompt`:
+prompts (source `captions`, checked against the prompt rule like a pin) unless
+the owner pinned `sample.samples[*].prompt`:
 the dialog's edited set (1 to 16 prompts) is sent as that pin and is the run's
 set, stored with it in `resolved_profile` and `advanced_pins` and in the
 rendered config.

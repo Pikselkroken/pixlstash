@@ -337,8 +337,8 @@ def resolve(
             profile is chosen for the size, rank and batch they ask for, and a
             pinned memory setting limits it to profiles with that setting.
         prompts: The sample prompts written from the dataset's captions
-            (:func:`pixlstash.training.sample_prompts.generate`); pinned
-            prompts win over them.
+            (:func:`pixlstash.training.sample_prompts.generate`), checked
+            like a pin; pinned prompts win over them.
 
     Returns:
         ``{"preset", "subject", "effort", "fit", "picture_count", "profile",
@@ -369,6 +369,7 @@ def resolve(
     put("model", preset["preview"][preset["inference_target"]])
     put("subject", preset["subject"][subject])
     if prompts:
+        check_tunable(PROMPTS_KEY, list(prompts))
         put("captions", {PROMPTS_KEY: list(prompts)})
     row = preset["effort"][effort]
     put("effort", {k: v for k, v in row.items() if k not in _EFFORT_STEPS})

@@ -91,6 +91,37 @@ def test_no_captions_falls_back_to_tags_then_the_generic_noun():
     assert sample_prompts.describe("thing", [], []) == ("an object", "generic")
 
 
+def test_the_trigger_word_never_reaches_the_prompt_without_it():
+    captions = ["a photo of a ohwx elderly man smiling", "ohwx, an elderly man"]
+    result = sample_prompts.generate("person", captions, [[], []], "ohwx")
+    assert result["description"] == "an elderly man"
+    tags = [["ohwx man", "old man"], ["ohwx man"]]
+    assert sample_prompts.describe("person", [], tags, "ohwx") == (
+        "an old man",
+        "tags",
+    )
+
+
+def test_punctuation_ends_a_phrase():
+    assert sample_prompts.describe("thing", ["a ring, sunny day"], [[]]) == (
+        "a ring",
+        "captions",
+    )
+
+
+def test_a_tag_that_cannot_stand_in_a_prompt_is_passed_over():
+    tags = [["{{TRIGGER_WORD}} man", "x" * 2100, "a very long old man", "man"]]
+    assert sample_prompts.describe("person", [], tags) == ("a man", "tags")
+
+
+def test_a_scene_word_must_be_a_whole_word():
+    """ "sea" is not in "season", but "outdoor" is in "outdoors"."""
+    assert sample_prompts._seen("in season", ("sea",)) == 0
+    assert sample_prompts._seen("a cupboard", ("cup",)) == 0
+    assert sample_prompts._seen("standing outdoors", ("outdoor",)) == 1
+    assert sample_prompts._seen("two beaches", ("beach",)) == 1
+
+
 def test_an_unknown_subject_is_refused():
     with pytest.raises(ValueError, match="subject"):
         sample_prompts.generate("pet", [], [])

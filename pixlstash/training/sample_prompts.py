@@ -136,7 +136,11 @@ _STOP = {
     "placed",
     "made",
 }
-_WORD = re.compile(r"[a-z][a-z'-]*")
+# Words, and the punctuation that ends a phrase ("a ring, sunny day").
+_WORD = re.compile(r"[a-z][a-z'-]*|[,.;:!?()]")
+# A tag that can stand in a prompt: plain words, at most four.
+_PLAIN_TAG = re.compile(r"[a-z][a-z' -]*")
+_MAX_TAG_WORDS = 4
 _MAX_MODIFIERS = 2
 
 
@@ -144,22 +148,23 @@ def _article(phrase: str) -> str:
     return f"{'an' if phrase[0] in 'aeiou' else 'a'} {phrase}"
 
 
-def _phrases(caption: str, nouns: set[str] | None) -> list[str]:
+def _phrases(caption: str, nouns: set[str] | None, skip: set[str]) -> list[str]:
     """Every ``a/an <up to three words>`` noun phrase in *caption*, in order.
 
     With *nouns* the phrase must end on one of them ("an elderly man"). Without
     it the phrase runs to the first stop word ("a red bicycle" of "a red bicycle
     leaning on"), and one ending on a framing word ("a close-up") or a person
-    ("a woman" wearing the dress) is not one.
+    ("a woman" wearing the dress) is not one. Words in *skip* (the trigger
+    word) are read past, so "a ohwx woman" is "a woman".
     """
-    words = _WORD.findall(caption.lower())
+    words = [w for w in _WORD.findall(caption.lower()) if w not in skip]
     found = []
     for i, word in enumerate(words):
         if word not in ("a", "an"):
             continue
         tail = []
         for nxt in words[i + 1 : i + 2 + _MAX_MODIFIERS]:
-            if nxt in _STOP:
+            if nxt in _STOP or not nxt[0].isalpha():
                 break
             tail.append(nxt)
             if nouns is not None and nxt in nouns:
@@ -171,17 +176,24 @@ def _phrases(caption: str, nouns: set[str] | None) -> list[str]:
         else:
             keep = tail[-1] not in _FRAMING and tail[-1] not in _PERSON_NOUNS
         if keep:
-            found.append(f"{word} {' '.join(tail)}")
+            found.append(_article(" ".join(tail)))
     return found
 
 
-def describe(subject: str, captions: list[str], tags: list[list[str]]):
+def describe(
+    subject: str,
+    captions: list[str],
+    tags: list[list[str]],
+    trigger_word: str | None = None,
+):
     """A plain description of the subject, and where it came from.
 
     Args:
         subject: ``person`` or ``thing``.
         captions: One caption per picture (empty strings allowed).
         tags: One tag list per picture.
+        trigger_word: Never part of the description: the prompt without the
+            word must not carry it.
 
     Returns:
         ``(description, source)``, source being ``captions``, ``tags`` or
@@ -189,9 +201,10 @@ def describe(subject: str, captions: list[str], tags: list[list[str]]):
         first, so the answer follows the pictures' order.
     """
     nouns = _PERSON_NOUNS if subject == "person" else None
+    skip = set(_WORD.findall((trigger_word or "").lower()))
     counts: Counter = Counter()
     for caption in captions:
-        phrases = _phrases(caption or "", nouns)
+        phrases = _phrases(caption or "", nouns, skip)
         if nouns is None:
             # A thing is what the caption opens with; later phrases are its
             # surroundings ("a red bicycle ... against a wall").
@@ -203,7 +216,13 @@ def describe(subject: str, captions: list[str], tags: list[list[str]]):
 
     tag_counts: Counter = Counter()
     for picture_tags in tags:
-        names = {t.strip().lower() for t in picture_tags if t and t.strip()}
+        names = {
+            t
+            for t in (raw.strip().lower() for raw in picture_tags if raw)
+            if _PLAIN_TAG.fullmatch(t)
+            and len(t.split()) <= _MAX_TAG_WORDS
+            and not skip.intersection(t.split())
+        }
         if nouns is not None:
             names = {t for t in names if t.split()[-1] in nouns}
         tag_counts.update(sorted(names))
@@ -222,17 +241,23 @@ def describe(subject: str, captions: list[str], tags: list[list[str]]):
 
 
 def _seen(text: str, words: tuple[str, ...]) -> int:
-    """How many of *words* start a word somewhere in *text*."""
-    return sum(1 for w in words if re.search(rf"\b{re.escape(w)}", text))
+    """How many of *words* occur in *text*, alone or plural ("outdoors")."""
+    return sum(1 for w in words if re.search(rf"\b{re.escape(w)}(?:e?s)?\b", text))
 
 
-def generate(subject: str, captions: list[str], tags: list[list[str]]) -> dict:
+def generate(
+    subject: str,
+    captions: list[str],
+    tags: list[list[str]],
+    trigger_word: str | None = None,
+) -> dict:
     """The default sample prompts for a run: two scenes, with and without.
 
     Args:
         subject: ``person`` / ``style`` / ``thing``.
         captions: One caption per training picture, in a stable order.
         tags: One tag list per training picture, in the same order.
+        trigger_word: Kept out of the description (:func:`describe`).
 
     Returns:
         ``{"prompts", "description", "description_source"}``. ``prompts`` is
@@ -260,7 +285,7 @@ def generate(subject: str, captions: list[str], tags: list[list[str]]) -> dict:
 
     description = source = None
     if subject != "style":
-        description, source = describe(subject, captions, tags)
+        description, source = describe(subject, captions, tags, trigger_word)
     prompts = []
     for scene in scenes:
         if subject == "style":

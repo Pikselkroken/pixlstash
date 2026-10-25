@@ -937,6 +937,9 @@ class ExportUtils:
             ``(captions, tags)``, one entry per picture in id order; a picture
             with no caption has ``""``.
         """
+        # ponytail: reads every picture's row and stats its file on each call,
+        # like count_training_pictures; cache per set if large sets make the
+        # Train dialog slow to open.
         params = {
             "only_deleted": False,
             "picture_ids": [],

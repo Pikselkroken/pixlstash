@@ -773,6 +773,34 @@ def test_sample_prompts_are_two_pairs_and_become_the_runs_default():
         _teardown(temp_dir, server)
 
 
+def test_sample_prompts_keep_the_trigger_word_out_of_the_description():
+    """Captions that carry the trigger word must not put it in the prompt
+    written without it, on the GET and on a queued run alike."""
+    temp_dir, owner, server, read_token = _setup()
+    real = ExportUtils.training_captions
+    ExportUtils.training_captions = staticmethod(
+        lambda server, **kwargs: (["a photo of an ohwx elderly man reading"], [[]])
+    )
+    try:
+        char_id = _make_character(owner)
+        r = owner.get(
+            "/training/sample-prompts",
+            params={"character_id": char_id, "trigger_word": "ohwx"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["description"] == "an elderly man"
+        r = owner.post(
+            "/training/jobs",
+            json={"character_id": char_id, "name": "x", "trigger_word": "ohwx"},
+        )
+        assert r.status_code == 200, r.text
+        written = r.json()["resolved_profile"]["values"]["sample.samples[*].prompt"]
+        assert not any("ohwx" in prompt for prompt in written["value"])
+    finally:
+        ExportUtils.training_captions = staticmethod(real)
+        _teardown(temp_dir, server)
+
+
 def test_sample_prompts_for_a_set_need_a_subject_and_one_source():
     temp_dir, owner, server, read_token = _setup()
     try:

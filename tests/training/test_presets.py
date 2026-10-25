@@ -183,6 +183,8 @@ def test_prompts_written_from_the_captions_come_from_captions_unless_pinned():
     written = ["{{TRIGGER_WORD}} at a cafe", "an old man at a cafe"]
     values = _resolve(prompts=written)["values"]
     assert values[presets.PROMPTS_KEY] == {"value": written, "source": "captions"}
+    with pytest.raises(TunableOverrideError, match="prompt"):
+        _resolve(prompts=["x" * 2001])
     pinned = _resolve(prompts=written, pins={presets.PROMPTS_KEY: ["only this"]})
     assert pinned["values"][presets.PROMPTS_KEY] == {
         "value": ["only this"],

@@ -589,11 +589,11 @@ def create_router(server) -> APIRouter:
             )
         return "person"
 
-    def _default_prompts(set_id, character_id, subject) -> dict:
+    def _default_prompts(set_id, character_id, subject, trigger_word) -> dict:
         captions, tags = ExportUtils.training_captions(
             server, set_id=set_id, character_id=character_id
         )
-        return sample_prompts.generate(subject, captions, tags)
+        return sample_prompts.generate(subject, captions, tags, trigger_word)
 
     # ── Training jobs ─────────────────────────────────────────────────────
 
@@ -656,7 +656,9 @@ def create_router(server) -> APIRouter:
         prompts = None
         if presets.PROMPTS_KEY not in pins:
             prompts = sample_prompts.prompt_texts(
-                _default_prompts(payload.set_id, payload.character_id, subject)
+                _default_prompts(
+                    payload.set_id, payload.character_id, subject, payload.trigger_word
+                )
             )
         room = server.vault.training_room()
         if room["ram_mb"] is None:
@@ -1172,7 +1174,8 @@ def create_router(server) -> APIRouter:
         description=(
             "Writes the sample prompts a run of the set or character would "
             "use if none are given: two scenes its captions do not show, each "
-            "with the trigger word and without it. Deterministic. Owner-only."
+            "with the trigger word and without it. The trigger word, when "
+            "given, is kept out of the description. Deterministic. Owner-only."
         ),
     )
     def get_training_sample_prompts(
@@ -1180,6 +1183,7 @@ def create_router(server) -> APIRouter:
         set_id: Optional[int] = None,
         character_id: Optional[int] = None,
         subject: Optional[Literal["person", "style", "thing"]] = None,
+        trigger_word: Optional[str] = None,
     ):
         _ensure_secure(request)
         if (set_id is None) == (character_id is None):
@@ -1188,7 +1192,10 @@ def create_router(server) -> APIRouter:
                 detail="Exactly one of set_id / character_id must be provided.",
             )
         subject = _subject_for(subject, character_id)
-        return {"subject": subject, **_default_prompts(set_id, character_id, subject)}
+        return {
+            "subject": subject,
+            **_default_prompts(set_id, character_id, subject, trigger_word),
+        }
 
     return router
 
