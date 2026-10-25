@@ -3,14 +3,14 @@
 The :class:`TrainingService` is the layer between PixlStash's data model and the
 trainer adapter (:class:`~pixlstash.training.local_ai_toolkit.LocalAiToolkit`).
 It owns the job lifecycle: pick the oldest queued :class:`TrainingJob`, snapshot
-its dataset, take the GPU lease, drive the adapter (``prepare`` → ``submit`` →
+its dataset, wait for the VRAM arbiter's lease, drive the adapter (``prepare`` → ``submit`` →
 poll → finalize), and persist a :class:`TrainedLora` into the vault when the run
 completes. Exactly one job runs at a time because a single GPU is the binding
 constraint.
 
 It is built with **dependency injection** so the whole thing is testable without
 a GPU (or even a full Vault): every external collaborator is a callable handed
-to the constructor: the GPU lease, the event emitter, the owner-config reader,
+to the constructor: the VRAM lease request, the event emitter, the owner-config reader,
 the dataset builder, and the trainer-backend factory. The default backend
 factory builds a real :class:`LocalAiToolkit`; tests pass one pointed at a CPU
 stub.
@@ -19,7 +19,7 @@ Shutdown policy (important): :meth:`stop` does **not** terminate a running
 external trainer. The trainer runs in its own process group and is expected to
 survive a PixlStash restart; :meth:`stop` only halts the poll thread and joins
 it with a timeout. On the next startup, :meth:`reconcile_on_startup` re-attaches
-to any still-alive run (re-acquiring the GPU lease and resuming polling) so a
+to any still-alive run (asking for its lease again and resuming polling) so a
 multi-hour run is never killed by a server bounce. The only thing that stops a
 run is an explicit :meth:`cancel` (a user action).
 """
@@ -42,6 +42,7 @@ from pixlstash.db_models.trained_lora import TrainedLora
 from pixlstash.db_models.training_job import TrainingJob
 from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
+from pixlstash.resources.arbiter import Lease
 from pixlstash.training.backend import TrainerBackend, TrainingProgress, TrainingSpec
 from pixlstash.training.local_ai_toolkit import LocalAiToolkit
 
@@ -52,9 +53,6 @@ _TERMINAL_JOB_STATUSES = frozenset({"completed", "stopped", "error"})
 # Adapter progress statuses that mean the external process has reached an end
 # state; the poll loop exits once the process is dead AND status is terminal.
 _TERMINAL_PROGRESS_STATUSES = frozenset({"completed", "stopped", "error"})
-# How long to back off before re-trying a queued job whose GPU lease was denied
-# (the drain timed out). Avoids a hot spin while another GPU task drains.
-_GPU_BACKOFF_SECONDS = 10.0
 # Cap on the trainer log tail we persist onto the job row.
 _LOG_TAIL_BYTES = 8192
 
@@ -75,8 +73,7 @@ class TrainingService:
         db,
         image_root: str,
         *,
-        gpu_acquire: Callable[[], bool],
-        gpu_release: Callable[[], None],
+        request_gpu: Callable[[str, str], Lease],
         notify: Callable[[EventType, dict], None],
         config_provider: Callable[[], dict],
         dataset_builder: Callable[..., dict],
@@ -91,10 +88,9 @@ class TrainingService:
                 ``run_immediate_read_task``).
             image_root: Vault root. LoRAs land in ``<image_root>/loras/`` and
                 per-job work dirs in ``<image_root>/training/<job_uuid>/``.
-            gpu_acquire: Acquires the GPU training lease; returns ``True`` on
-                success, ``False`` if the GPU did not drain in time.
-            gpu_release: Releases the GPU training lease (paired with
-                ``gpu_acquire`` in a ``finally`` block).
+            request_gpu: Asks the VRAM arbiter for a run's memory, called as
+                ``request_gpu(label, job_uuid)``; returns the arbiter's
+                :class:`~pixlstash.resources.arbiter.Lease`, granted or waiting.
             notify: Emits an event (``event_type, data``) to the UI/listeners.
             config_provider: Returns the owner's ai-toolkit config as
                 ``{"repo_path", "python", "commit"}``.
@@ -111,8 +107,7 @@ class TrainingService:
         """
         self._db = db
         self._image_root = image_root
-        self._gpu_acquire = gpu_acquire
-        self._gpu_release = gpu_release
+        self._request_gpu = request_gpu
         self._notify = notify
         self._config_provider = config_provider
         self._dataset_builder = dataset_builder
@@ -144,6 +139,8 @@ class TrainingService:
         # (surfaced via /workers/progress). Set/cleared alongside the active job.
         self._active_job_name: str | None = None
         self._latest_progress: TrainingProgress | None = None
+        # The lease a claimed job is still waiting on, so cancel() can drop it.
+        self._waiting: tuple[str, Lease] | None = None
         self._active_lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -313,7 +310,12 @@ class TrainingService:
             return False
 
         if info["status"] == "queued":
-            # Not started yet: just mark it stopped so the worker skips it.
+            # Not started yet: mark it stopped so the worker skips it, and drop
+            # the lease it may be waiting on so the worker moves on.
+            with self._active_lock:
+                waiting = self._waiting
+            if waiting is not None and waiting[0] == info["uuid"]:
+                waiting[1].release()
             self._update_job(
                 info["uuid"], status="stopped", error="Cancelled before start"
             )
@@ -387,7 +389,7 @@ class TrainingService:
         """Resolve jobs left ``running`` / ``stopping`` across a restart.
 
         For each such job: reconstruct its handle and check liveness. If the
-        external trainer is still alive, re-attach: re-acquire the GPU lease and
+        external trainer is still alive, re-attach: ask for its VRAM lease again and
         resume polling it on the worker thread (a restart must not kill an
         in-flight multi-hour run). If it is dead, finalize from its persisted
         status / on-disk checkpoints (completed → :class:`TrainedLora`, else
@@ -453,24 +455,21 @@ class TrainingService:
         handle = self._handle_for_job(backend, info)
         if backend.is_alive(handle):
             logger.info(
-                "reconcile: job %s still alive (pid=%s); re-attaching under GPU lease.",
+                "reconcile: job %s still alive (pid=%s); re-attaching.",
                 info["uuid"],
                 info["pid"],
             )
-            if not self._gpu_acquire():
-                logger.warning(
-                    "reconcile: could not re-acquire GPU lease for live job %s; "
-                    "leaving it for a later cycle.",
-                    info["uuid"],
-                )
-                return
+            # ponytail: asked for, not adopted. The run already holds the card,
+            # so the lease is granted once PixlStash has yielded; the plan's
+            # adopt() would grant it at once, with a boot quiet period.
+            lease = self._request_gpu(self._lease_label(info), info["uuid"])
             # Resume polling on the worker thread, owning the lease until the
             # run ends. We deliberately hand off to a fresh thread so startup is
             # not blocked by a multi-hour run.
             self._wake.set()  # ensure the worker is awake to also pick queued work
             reattach = threading.Thread(
                 target=self._poll_and_finalize_reattached,
-                args=(backend, handle, info),
+                args=(backend, handle, info, lease),
                 name=f"TrainingReattach-{info['uuid'][:8]}",
                 daemon=True,
             )
@@ -484,7 +483,7 @@ class TrainingService:
         self._finalize(backend, handle, info, progress)
 
     def _poll_and_finalize_reattached(
-        self, backend: TrainerBackend, handle, info: dict
+        self, backend: TrainerBackend, handle, info: dict, lease: Lease
     ) -> None:
         """Resume polling a re-attached live job, then finalize and release GPU.
 
@@ -492,6 +491,7 @@ class TrainingService:
             backend: The backend bound to the live run.
             handle: The reconstructed handle.
             info: Persisted job fields.
+            lease: The run's VRAM lease, released when the run ends.
         """
         with self._active_lock:
             self._active_backend = backend
@@ -511,7 +511,7 @@ class TrainingService:
                 self._active_job_uuid = None
                 self._active_job_name = None
                 self._latest_progress = None
-            self._gpu_release()
+            lease.release()
 
     # ------------------------------------------------------------------
     # Worker loop
@@ -593,24 +593,27 @@ class TrainingService:
             dataset_picture_ids=json.dumps(manifest.get("picture_ids") or []),
         )
 
-        # 2. Acquire the GPU lease (back off + retry if the drain timed out).
-        if not self._gpu_acquire():
-            logger.info(
-                "Job %s: GPU lease denied (drain timeout); leaving queued, "
-                "backing off %.0fs.",
-                job_uuid,
-                _GPU_BACKOFF_SECONDS,
-            )
-            # Leave status queued and wait; the worker will retry on the next
-            # cycle. Release defensively in case the lease left the queue paused.
-            self._gpu_release()
-            self._stop.wait(_GPU_BACKOFF_SECONDS)
-            return
-
+        # 2. Wait for the arbiter: PixlStash yields the card, an idle ComfyUI
+        # frees it, and the Tasks tab shows the job waiting until then.
+        lease = self._request_gpu(self._lease_label(info), job_uuid)
         try:
+            with self._active_lock:
+                self._waiting = (job_uuid, lease)
+            granted = lease.wait(self._stop)
+            with self._active_lock:
+                self._waiting = None
+            if self._job_status(job_uuid) != "queued":
+                return  # cancelled while it waited
+            if not granted:
+                if not self._stop.is_set():
+                    # Cancelled from the Tasks tab's waiting row.
+                    msg = "Cancelled while waiting for the GPU"
+                    self._update_job(job_uuid, status="stopped", error=msg)
+                    self._emit_progress(job_uuid, status="stopped", message=msg)
+                return  # on shutdown it stays queued for the next start
             backend = self._make_backend()
             handle, progress = self._train_under_lease(
-                backend, info, work_dir, manifest
+                backend, info, work_dir, manifest, gpu_ids=lease.device or "0"
             )
             self._finalize(backend, handle, info, progress)
         except Exception:
@@ -623,13 +626,19 @@ class TrainingService:
                 self._active_job_uuid = None
                 self._active_job_name = None
                 self._latest_progress = None
-            self._gpu_release()
+                self._waiting = None
+            lease.release()
             with self._pending_specs_lock:
                 self._pending_specs.pop(job_uuid, None)
             self._remove_pending_sidecar(job_uuid)
 
     def _train_under_lease(
-        self, backend: TrainerBackend, info: dict, work_dir: str, manifest: dict
+        self,
+        backend: TrainerBackend,
+        info: dict,
+        work_dir: str,
+        manifest: dict,
+        gpu_ids: str = "0",
     ) -> tuple[object, TrainingProgress]:
         """Prepare + submit + poll a run while the GPU lease is held.
 
@@ -638,6 +647,8 @@ class TrainingService:
             info: Queued-job fields.
             work_dir: The per-job work directory.
             manifest: The dataset manifest (provides ``dest_dir``).
+            gpu_ids: ``CUDA_VISIBLE_DEVICES`` for the trainer: the leased
+                card's UUID, so it trains on the card the arbiter cleared.
 
         Returns:
             A ``(handle, progress)`` tuple: the launched handle and the terminal
@@ -654,6 +665,7 @@ class TrainingService:
             work_dir=work_dir,
             hf_token=os.environ.get("HF_TOKEN") or None,
             config_overrides=pending.get("config_overrides"),
+            gpu_ids=gpu_ids,
         )
         handle = backend.prepare(spec)
         backend.submit(handle, spec)
@@ -896,6 +908,22 @@ class TrainingService:
     # ------------------------------------------------------------------
     # Persistence helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _lease_label(info: dict) -> str:
+        """The name a job's lease carries in the Tasks tab."""
+        return f"LoRA training '{info.get('name') or info['uuid'][:8]}'"
+
+    def _job_status(self, job_uuid: str) -> str | None:
+        """A job's persisted status, or None when it is gone."""
+
+        def _read(session: Session) -> str | None:
+            job = session.exec(
+                select(TrainingJob).where(TrainingJob.uuid == job_uuid)
+            ).first()
+            return job.status if job is not None else None
+
+        return self._db.run_immediate_read_task(_read)
 
     def _update_job(self, job_uuid: str, **fields) -> None:
         """Update columns on a :class:`TrainingJob` by uuid.

@@ -4,7 +4,7 @@ These drive the real :class:`~pixlstash.services.training_service.TrainingServic
 end to end against the CPU stub trainer (``fake_run.py``, symlinked as ``run.py``
 into a temp "repo", exactly as ``test_local_ai_toolkit.py`` sets it up) and a
 real temp-SQLite :class:`~pixlstash.database.VaultDatabase`. Every external
-dependency is injected: a stub GPU lease (recording acquire/release order), a
+dependency is injected: a stub VRAM lease (recording request/release order), a
 capturing ``notify``, a ``config_provider`` returning the temp repo + venv
 python, and a ``dataset_builder`` stub that writes fake image/caption pairs.
 
@@ -65,7 +65,13 @@ def _write_template(dest_dir, *, steps: int, save_every: int) -> str:
 
 
 class _StubLease:
-    """Stub GPU lease recording acquire/release order, with a controllable grant."""
+    """Stub arbiter and its lease, recording request/release order.
+
+    ``request`` stands in for ``request_gpu`` and answers this object as the
+    lease; ``wait`` answers whether it was granted.
+    """
+
+    device = None
 
     def __init__(self, grant: bool = True):
         self.events: list[str] = []
@@ -73,9 +79,12 @@ class _StubLease:
         self.acquire_count = 0
         self.release_count = 0
 
-    def acquire(self) -> bool:
+    def request(self, label: str, job_uuid: str) -> "_StubLease":
         self.acquire_count += 1
         self.events.append("acquire")
+        return self
+
+    def wait(self, cancel_event=None, timeout=None) -> bool:
         return self.grant
 
     def release(self) -> None:
@@ -163,8 +172,7 @@ def _make_service(
     return TrainingService(
         db,
         db.image_root,
-        gpu_acquire=lease.acquire,
-        gpu_release=lease.release,
+        request_gpu=lease.request,
         notify=notify,
         config_provider=lambda: {
             "repo_path": repo_dir,
@@ -426,6 +434,82 @@ def test_zero_image_dataset_marks_error_no_lease_leak(db, repo_dir):
     # The lease was never taken (we bailed before acquire) → no leak.
     assert lease.acquire_count == 0
     assert lease.release_count == 0
+
+
+class _WaitingLease(_StubLease):
+    """A lease the arbiter never grants: ``wait`` blocks until it is released."""
+
+    def wait(self, cancel_event=None, timeout=None) -> bool:
+        while not self.release_count and not (cancel_event and cancel_event.is_set()):
+            time.sleep(0.01)
+        return False
+
+
+def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(db, repo_dir):
+    """A waiting lease cancelled from the Tasks tab ends the job, never trained."""
+    lease = _StubLease(grant=False)
+    service = _make_service(
+        db,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    set_id = _make_set(db)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=set_id,
+            name="refused",
+            base_model="m",
+            trigger_word="t",
+            template_path=template,
+        )
+        assert _poll_until(lambda: _job_status(db, job.uuid).status == "stopped"), (
+            f"status={_job_status(db, job.uuid).status!r}"
+        )
+    finally:
+        service.stop()
+
+    final = _job_status(db, job.uuid)
+    assert final.pid is None and final.started_at is None
+    assert lease.events == ["acquire", "release"]
+
+
+def test_cancel_queued_job_drops_the_lease_it_waits_on(db, repo_dir):
+    """Cancelling a job that waits for the GPU releases its lease, never trains."""
+    lease = _WaitingLease()
+    service = _make_service(
+        db,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    set_id = _make_set(db)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=set_id,
+            name="waiting",
+            base_model="m",
+            trigger_word="t",
+            template_path=template,
+        )
+        assert _poll_until(lambda: service._waiting is not None)
+        assert service.cancel(_job_status(db, job.uuid).id)
+        assert _poll_until(lambda: service._waiting is None)
+    finally:
+        service.stop()
+
+    final = _job_status(db, job.uuid)
+    assert final.status == "stopped"
+    assert final.pid is None and final.started_at is None
+    assert lease.acquire_count == 1 and lease.release_count >= 1
 
 
 def test_reconcile_on_startup_dead_running_job_finalizes(db, repo_dir):

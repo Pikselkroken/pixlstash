@@ -46,7 +46,8 @@ from .tasks.smart_score_task import SmartScoreTask
 from .utils.likeness.likeness_parameter_utils import LikenessParameterUtils
 from .tasks.base_task import TaskStatus
 from .task_runner import TaskRunner
-from .resources.arbiter import arbiter
+from .resources.arbiter import Lease, LeaseKind, Tenant, arbiter
+from .resources.ledger import ledger
 from .work_planner import WorkPlanner
 from .tasks import TaskType
 from .utils.reference_folder_watcher import ReferenceFolderWatcher
@@ -84,6 +85,9 @@ logger = get_logger(__name__)
 #: How long making room waits, on the arbiter's thread, for the GPU batch in
 #: flight to end; past it the models are unloaded off that thread.
 YIELD_WAIT_S = 2.0
+#: What a LoRA training run asks the arbiter for: an estimate for the shipped
+#: template (Z-Image Turbo, quantized, low-VRAM), not a measurement.
+TRAINING_NEED_MB = 16 * 1024
 
 
 class Vault:
@@ -210,12 +214,6 @@ class Vault:
         self._insightface_model_pack = insightface_model_pack
         self._last_aggressive_unload_at = 0.0
         self._keep_models_in_memory = True
-        # GPU training lease state.  ``acquire_training_gpu_lease`` pauses the GPU
-        # queue and unloads models so an external training run owns the GPU; the
-        # lock + count make nested/concurrent acquire/release reentrant-safe.
-        self._gpu_lease_lock = threading.Lock()
-        self._gpu_lease_count = 0
-        self._gpu_lease_prev_keep_models: bool | None = None
         self._max_vram_gb = None
         self._wd14_tagger_enabled = False
         self._pixlstash_tagger_enabled = True
@@ -455,9 +453,9 @@ class Vault:
         self._arbiter.add_listener(self._on_resource_lease)
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
-        # Start the training worker after the task runner so the GPU lease it
-        # acquires can pause an already-running GPU queue.  reconcile_on_startup
-        # re-attaches any trainer that survived a restart (or finalizes a dead
+        # Start the training worker after the yielder is registered, so the
+        # arbiter can move PixlStash's GPU work off the card for a run.
+        # reconcile_on_startup re-attaches any trainer that survived a restart (or finalizes a dead
         # one) before new queued jobs are picked up.
         self.training_service.start()
         self.training_service.reconcile_on_startup()
@@ -936,8 +934,8 @@ class Vault:
         """Construct the TrainingService with vault-bound dependencies injected.
 
         The service is decoupled from the Vault: it takes callables, not the
-        Vault itself.  Here we bind those callables to this vault: the GPU
-        lease, the event emitter, the owner-config reader, and the dataset
+        Vault itself.  Here we bind those callables to this vault: the VRAM
+        lease request, the event emitter, the owner-config reader, and the dataset
         builder (``ExportUtils.build_training_dataset``, which needs an object
         exposing ``.vault``; a tiny shim provides that).
 
@@ -970,8 +968,7 @@ class Vault:
         return TrainingService(
             self.db,
             self.image_root,
-            gpu_acquire=self.acquire_training_gpu_lease,
-            gpu_release=self.release_training_gpu_lease,
+            request_gpu=self._request_training_gpu,
             notify=self.notify,
             config_provider=self._training_config_provider,
             dataset_builder=dataset_builder,
@@ -1005,117 +1002,28 @@ class Vault:
             "commit": user.ai_toolkit_commit,
         }
 
-    # -------------------------------------------------------------------------
-    # GPU training lease
-    # -------------------------------------------------------------------------
+    def _request_training_gpu(self, label: str, job_uuid: str) -> Lease:
+        """Ask the arbiter for a training run's card: the one PixlStash uses.
 
-    GPU_LEASE_DRAIN_TIMEOUT_S = 120.0
-
-    def acquire_training_gpu_lease(self, drain_timeout_s: float | None = None) -> bool:
-        """Quiesce the GPU so an external training run can own it.
-
-        Pauses the GPU task queue (waiting for any in-flight GPU task to drain),
-        records the current ``keep_models_in_memory`` setting, then forces a
-        model unload so VRAM is freed for the training process.  Pair every call
-        with :meth:`release_training_gpu_lease`, ideally in a ``finally`` block.
-
-        Reentrant: nested acquires increment a lease count and only the first
-        actually pauses + unloads; the matching number of releases restores the
-        prior state.  Thread-safe via an internal lock.
-
-        When the vault was created with ``disable_background_workers=True`` there
-        is no TaskRunner or engine to manage, so this is a logged no-op.
-
-        Args:
-            drain_timeout_s: Seconds to wait for an in-flight GPU task to finish
-                before giving up.  Defaults to ``GPU_LEASE_DRAIN_TIMEOUT_S``.
-
-        Returns:
-            True if the GPU is leased (queue paused, models unloaded), or if a
-            lease was already held.  False only if the in-flight GPU task did not
-            drain within ``drain_timeout_s`` (the queue stays paused so the
-            caller can retry or release).
+        Exclusive, so PixlStash yields its own GPU work first and an idle
+        ComfyUI frees its cache; the run's own process then has the card.
         """
-        if drain_timeout_s is None:
-            drain_timeout_s = self.GPU_LEASE_DRAIN_TIMEOUT_S
-        with self._gpu_lease_lock:
-            if self._task_runner is None:
-                logger.info(
-                    "acquire_training_gpu_lease: background workers disabled; "
-                    "no GPU queue or engine to lease (no-op)."
-                )
-                return True
-            if self._gpu_lease_count > 0:
-                self._gpu_lease_count += 1
-                logger.debug(
-                    "GPU training lease re-entered (count=%d).",
-                    self._gpu_lease_count,
-                )
-                return True
-
-            drained = self._task_runner.pause_gpu_queue(
-                wait=True, timeout=drain_timeout_s
-            )
-            if not drained:
-                logger.warning(
-                    "GPU training lease: in-flight GPU task did not drain within "
-                    "%.1fs; leaving GPU queue paused, models NOT unloaded.",
-                    drain_timeout_s,
-                )
-                return False
-
-            self._gpu_lease_prev_keep_models = self._keep_models_in_memory
-            # Force an unload to free VRAM for training.  set_keep_models_in_memory
-            # propagates to the engine and triggers _maybe_aggressive_unload, which
-            # calls engine.aggressive_unload() once all workers are idle (the GPU
-            # queue is now drained, so nothing reloads behind us).
-            self.set_keep_models_in_memory(False)
-            self._gpu_lease_count = 1
-            logger.info(
-                "GPU leased for training: queue paused, models unloaded "
-                "(prior keep_models_in_memory=%s).",
-                self._gpu_lease_prev_keep_models,
-            )
-            return True
-
-    def release_training_gpu_lease(self) -> None:
-        """Release a GPU training lease: restore models + resume the GPU queue.
-
-        Restores the ``keep_models_in_memory`` value captured at acquire time and
-        resumes the GPU task queue.  Idempotent and safe to call from a
-        ``finally`` block: releasing when no lease is held logs a note and does
-        nothing.  Reentrant: only the final matching release actually restores
-        state.
-        """
-        with self._gpu_lease_lock:
-            if self._task_runner is None:
-                logger.debug(
-                    "release_training_gpu_lease: background workers disabled (no-op)."
-                )
-                return
-            if self._gpu_lease_count == 0:
-                logger.info(
-                    "release_training_gpu_lease called with no active lease (no-op)."
-                )
-                return
-            self._gpu_lease_count -= 1
-            if self._gpu_lease_count > 0:
-                logger.debug(
-                    "GPU training lease still held (count=%d); not yet released.",
-                    self._gpu_lease_count,
-                )
-                return
-
-            prev_keep = self._gpu_lease_prev_keep_models
-            if prev_keep is not None:
-                self.set_keep_models_in_memory(prev_keep)
-            self._gpu_lease_prev_keep_models = None
-            self._task_runner.resume_gpu_queue()
-            logger.info(
-                "GPU lease released: queue resumed (restored "
-                "keep_models_in_memory=%s).",
-                prev_keep,
-            )
+        device = ledger().pixlstash_device()
+        reading = next((d for d in ledger().devices() if d.uuid == device), None)
+        need = TRAINING_NEED_MB
+        if reading is not None:
+            # ponytail: a fixed estimate capped at 60% of the card, so a small
+            # card running a low-VRAM config does not wait forever; the
+            # per-model presets replace it with each model's measured need.
+            need = min(need, int(reading.total_mb * 0.6))
+        return self._arbiter.request(
+            Tenant.AITOOLKIT,
+            label,
+            need_mb=need,
+            kind=LeaseKind.EXCLUSIVE,
+            device=device,
+            job_id=job_uuid,
+        )
 
     def set_max_vram_usage_gb(self, max_vram_gb: Optional[float]):
         """The most PixlStash's own GPU work may hold, and its batch sizing.
