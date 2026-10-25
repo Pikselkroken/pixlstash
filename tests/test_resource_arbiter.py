@@ -203,6 +203,22 @@ def test_a_comfyui_that_cannot_be_read_waits_on_its_last_card():
     lease.release()
 
 
+def test_a_comfyui_unreadable_from_its_first_read_waits_on_pixlstashs_card():
+    """Never read is not remote either: no last card, so PixlStash's own."""
+    arb, _fake, _ = make(used_mb=TOTAL - 1000, thread=False)
+    comfy = FakeComfy(usage=0)
+
+    def unreadable():
+        raise RuntimeError("ComfyUI did not answer")
+
+    comfy.device = unreadable
+    arb.register_probe(Tenant.COMFYUI, comfy)
+    lease = arb.request(Tenant.COMFYUI, "run", need_mb=4000)
+    assert lease.device == CARD
+    assert lease.state is LeaseState.WAITING
+    lease.release()
+
+
 def test_heavy_is_strict_fifo_per_device():
     arb, fake, _ = make(used_mb=10000)
     big = arb.request(Tenant.AITOOLKIT, "big", device=CARD, need_mb=20000)

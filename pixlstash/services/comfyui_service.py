@@ -197,7 +197,7 @@ def record_run_outcome(
     Finished row a tab reads on hearing of it is there.
     """
     with _run_outcomes_lock:
-        _record_run_outcome_locked(
+        outcome = _record_run_outcome_locked(
             prompt_id,
             status,
             message,
@@ -207,7 +207,6 @@ def record_run_outcome(
             code,
             run_id,
         )
-        outcome = dict(_run_outcomes[prompt_id])
     listener = _ending_listener
     if listener is None or status in ("running", "waiting"):
         return
@@ -233,14 +232,18 @@ def _record_run_outcome_locked(
     library_uuid: str | None = None,
     code: str | None = None,
     run_id: str | None = None,
-) -> None:
-    """``record_run_outcome``'s body; call under ``_run_outcomes_lock``."""
+) -> dict:
+    """``record_run_outcome``'s body; call under ``_run_outcomes_lock``.
+
+    Returns a copy of the outcome, which the retention below may already have
+    dropped when every other run is still going.
+    """
     if status not in ("running", "waiting"):
         _live_runs.pop(prompt_id, None)
         _held_cancels.pop(prompt_id, None)
     previous = _run_outcomes.pop(prompt_id, None) or {}
     run_id = run_id or previous.get("run_id")
-    _run_outcomes[prompt_id] = {
+    outcome = {
         "run_id": run_id,
         "prompt_id": None if prompt_id == run_id else prompt_id,
         "status": status,
@@ -250,6 +253,7 @@ def _record_run_outcome_locked(
         "library_uuid": library_uuid or previous.get("library_uuid"),
         "code": code,
     }
+    _run_outcomes[prompt_id] = outcome
     while len(_run_outcomes) > MAX_RUN_OUTCOMES:
         ended = (
             key
@@ -257,6 +261,7 @@ def _record_run_outcome_locked(
             if outcome["status"] not in ("running", "waiting")
         )
         del _run_outcomes[next(ended, None) or next(iter(_run_outcomes))]
+    return dict(outcome)
 
 
 def run_outcome(run_or_prompt_id: str) -> dict | None:

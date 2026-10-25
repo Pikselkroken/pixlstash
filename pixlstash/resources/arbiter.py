@@ -692,9 +692,12 @@ class ResourceArbiter:
                     exc,
                 )
                 # Its last card, not None: None means a remote tenant, which
-                # is granted unchecked. Busy keeps its leases waiting.
+                # is granted unchecked. Never read yet, PixlStash's own card,
+                # as ComfyUIProbe assumes. Busy keeps its leases waiting.
                 states[tenant] = {
-                    "device": last_devices.get(tenant),
+                    "device": last_devices[tenant]
+                    if tenant in last_devices
+                    else self._ledger.pixlstash_device(),
                     "usage": None,
                     "busy": True,
                     "idle": False,

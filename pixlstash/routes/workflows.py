@@ -8689,30 +8689,42 @@ def create_router(server) -> APIRouter:
             # once the arbiter grants it (`_dispatch_held_run`).
             prompt_id = None
             status = "waiting"
-            cancel = hold_run(
-                run_id,
-                comfyui_url,
-                label=label,
-                workflow_id=workflow_id,
-                library_uuid=library_uuid,
-            )
-            threading.Thread(
-                target=_dispatch_held_run,
-                args=(
-                    comfyui_url,
-                    instance,
-                    output_node_ids,
-                    stack_id,
-                    source_id,
+            try:
+                cancel = hold_run(
                     run_id,
-                    vram_lease,
-                    model_set,
-                    poll_kwargs,
-                    cancel,
-                ),
-                name=f"held-run-{run_id}",
-                daemon=True,
-            ).start()
+                    comfyui_url,
+                    label=label,
+                    workflow_id=workflow_id,
+                    library_uuid=library_uuid,
+                )
+                threading.Thread(
+                    target=_dispatch_held_run,
+                    args=(
+                        comfyui_url,
+                        instance,
+                        output_node_ids,
+                        stack_id,
+                        source_id,
+                        run_id,
+                        vram_lease,
+                        model_set,
+                        poll_kwargs,
+                        cancel,
+                    ),
+                    name=f"held-run-{run_id}",
+                    daemon=True,
+                ).start()
+            except BaseException as exc:
+                # As above: a waiting lease left behind keeps the card
+                # from every other tenant, and its row going forever.
+                vram_lease.release()
+                logger.exception(
+                    "[workflows] Held run %s of %s could not be parked.",
+                    run_id,
+                    workflow_id,
+                )
+                record_run_outcome(run_id, "failed", message=str(exc), run_id=run_id)
+                raise
         return {
             "workflow_id": workflow_id,
             "run_id": run_id,

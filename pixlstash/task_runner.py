@@ -411,7 +411,6 @@ class TaskRunner:
             return
         task = entry[1]
         if self._stop.is_set():
-            self._requeue_counts.pop(task_id, None)
             self._cancel_queued_task(task, "runner stopped")
             return
         work_queue.put((task.priority, next(self._queue_seq), task))
@@ -756,6 +755,7 @@ class TaskRunner:
             task: The task being cancelled; it has been taken off its queue.
             reason: Why it was cancelled, for the log and the callback error.
         """
+        self._requeue_counts.pop(task.id, None)
         try:
             task.on_cancel()
         except Exception as exc:
