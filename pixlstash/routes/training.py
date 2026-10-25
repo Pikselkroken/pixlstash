@@ -567,6 +567,94 @@ def create_router(server) -> APIRouter:
             default=None, description="Short, secret-free summary of the template."
         )
 
+    class AiToolkitDiscoverResponse(BaseModel):
+        """Where an ai-toolkit checkout was found, and where PixlStash looked."""
+
+        model_config = ConfigDict(extra="allow")
+
+        found: bool = Field(..., description="Whether a checkout was found.")
+        repo_path: Optional[str] = Field(
+            default=None, description="The checkout directory, when found."
+        )
+        python: Optional[str] = Field(
+            default=None, description="The interpreter AI-toolkit would use."
+        )
+        version: Optional[str] = Field(
+            default=None, description="AI-toolkit's version from version.py."
+        )
+        searched: list[str] = Field(
+            default_factory=list, description="Every directory looked in, in order."
+        )
+
+    class AiToolkitGpu(BaseModel):
+        """One CUDA device the checkout's torch can see."""
+
+        name: str = Field(..., description="The device name torch reports.")
+        total_mb: int = Field(..., description="Total device memory in MiB.")
+
+    class AiToolkitDatasetsFolder(BaseModel):
+        """The folder PixlStash writes datasets into."""
+
+        path: str = Field(..., description="The checkout's datasets folder.")
+        writable: bool = Field(..., description="Whether PixlStash can write to it.")
+
+    class AiToolkitRunsFolder(BaseModel):
+        """The folder training runs land in."""
+
+        path: str = Field(
+            ...,
+            description=(
+                "The shelf's ai-toolkit folder when one is registered, else the "
+                "checkout's output folder."
+            ),
+        )
+        run_count: int = Field(..., description="Run folders it holds.")
+        on_shelf: bool = Field(
+            ..., description="Whether the folder is registered on the model shelf."
+        )
+
+    class AiToolkitCheckResponse(BaseModel):
+        """Whether the checkout can train, and the folders it would use."""
+
+        model_config = ConfigDict(extra="allow")
+
+        ok: bool = Field(..., description="Torch has CUDA and run.py --help ran.")
+        python: Optional[str] = Field(
+            default=None, description="The interpreter that was checked."
+        )
+        version: Optional[str] = Field(default=None, description="AI-toolkit version.")
+        torch: Optional[str] = Field(default=None, description="Torch version.")
+        cuda: bool = Field(..., description="Whether torch sees a CUDA GPU.")
+        gpus: list[AiToolkitGpu] = Field(
+            default_factory=list, description="The CUDA devices torch sees."
+        )
+        trial_ok: bool = Field(..., description="Whether run.py --help exited 0.")
+        detail: Optional[str] = Field(
+            default=None, description="One plain sentence on what failed."
+        )
+        datasets: Optional[AiToolkitDatasetsFolder] = None
+        runs: Optional[AiToolkitRunsFolder] = None
+
+    class AiToolkitStatusResponse(BaseModel):
+        """The configured ai-toolkit install and its folders."""
+
+        model_config = ConfigDict(extra="allow")
+
+        configured: bool = Field(
+            ..., description="Whether a checkout and its Python are saved."
+        )
+        repo_path: Optional[str] = Field(default=None, description="The checkout.")
+        python: Optional[str] = Field(default=None, description="Its interpreter.")
+        version: Optional[str] = Field(default=None, description="AI-toolkit version.")
+        datasets: Optional[AiToolkitDatasetsFolder] = None
+        runs: Optional[AiToolkitRunsFolder] = None
+
+    class AiToolkitConfigResponse(BaseModel):
+        """The ai-toolkit install as saved."""
+
+        repo_path: Optional[str] = Field(default=None, description="The checkout.")
+        python: Optional[str] = Field(default=None, description="Its interpreter.")
+
     # ── Serialisation helpers ─────────────────────────────────────────────
 
     def _job_to_summary(job: dict) -> dict:
@@ -887,6 +975,7 @@ def create_router(server) -> APIRouter:
 
     @router.get(
         "/training/ai-toolkit/discover",
+        response_model=AiToolkitDiscoverResponse,
         summary="Find an ai-toolkit checkout on this computer",
         description=(
             "Looks for an ai-toolkit checkout in the parent of each shelf "
@@ -906,6 +995,7 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/training/ai-toolkit/check",
+        response_model=AiToolkitCheckResponse,
         summary="Check that an ai-toolkit install can train",
         description=(
             "Runs the checkout's own Python to see whether torch imports with a "
@@ -938,6 +1028,7 @@ def create_router(server) -> APIRouter:
 
     @router.get(
         "/training/ai-toolkit/status",
+        response_model=AiToolkitStatusResponse,
         summary="The configured ai-toolkit install and its folders",
         description=(
             "Whether an ai-toolkit install is configured, its paths and version, "
@@ -991,6 +1082,7 @@ def create_router(server) -> APIRouter:
 
     @router.put(
         "/training/ai-toolkit/config",
+        response_model=AiToolkitConfigResponse,
         summary="Save or disconnect the ai-toolkit install",
         description=(
             "Stores the ai-toolkit checkout and the Python that runs its trainer. "
