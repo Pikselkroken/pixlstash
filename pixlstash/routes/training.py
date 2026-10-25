@@ -891,15 +891,19 @@ def create_router(server) -> APIRouter:
         if job is None:
             raise HTTPException(status_code=404, detail="Training job not found")
         # Deleting the work dir under a live trainer would orphan the process,
-        # which keeps writing into the removed paths. Cancel it first.
-        if job["status"] not in ("completed", "stopped", "error"):
+        # which keeps writing into the removed paths. The status test is in the
+        # DELETE itself, so the job cannot start between a check and the delete.
+        job_uuid = training_runs.delete_run(
+            hub, library_uuid, job_id, only_finished=True
+        )
+        if job_uuid is None:
+            current = training_runs.get_run(hub, library_uuid, job_id)
+            if current is None:
+                raise HTTPException(status_code=404, detail="Training job not found")
             raise HTTPException(
                 status_code=409,
-                detail=(f"Job is still {job['status']}; cancel it before deleting."),
+                detail=f"Job is still {current['status']}; cancel it before deleting.",
             )
-        job_uuid = training_runs.delete_run(hub, library_uuid, job_id)
-        if job_uuid is None:
-            raise HTTPException(status_code=404, detail="Training job not found")
 
         # Remove the job's work dir (validated under training/).
         _safe_remove_dir(training_root, job_uuid)
