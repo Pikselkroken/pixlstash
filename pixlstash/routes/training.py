@@ -821,7 +821,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Training job not found")
         loss_curve = _parse_json_field(job["loss_curve"], "loss_curve", job["uuid"])
         total = job["total_steps"] or 0
-        progress = (job["step"] / total) if total > 0 else 0.0
+        # A trainer can report a step past its planned total; the fraction stops at 1.
+        progress = min(job["step"] / total, 1.0) if total > 0 else 0.0
         return _redact_host_paths(
             {
                 "id": job["id"],
@@ -859,10 +860,14 @@ def create_router(server) -> APIRouter:
         cancelled = server.vault.training_service.cancel(job_id)
         if not cancelled:
             # Existence was already confirmed, so a False return means the job
-            # was in a terminal state (completed/stopped/error).
+            # was in a terminal state (completed/stopped/error). Name the state
+            # cancel() saw: the one read above may be stale by now.
+            latest = training_runs.get_run(hub, library_uuid, job_id)
+            if latest is None:
+                raise HTTPException(status_code=404, detail="Training job not found")
             raise HTTPException(
                 status_code=409,
-                detail=f"Job is already in a terminal state ({current_status}).",
+                detail=f"Job is already in a terminal state ({latest['status']}).",
             )
         logger.info("Cancelled training job id=%s (was %s).", job_id, current_status)
         return {"status": "cancelled", "job_id": job_id}

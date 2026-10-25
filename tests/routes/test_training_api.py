@@ -461,6 +461,17 @@ def test_job_status_owner_works():
         _teardown(temp_dir, server)
 
 
+def test_job_status_progress_stops_at_one_past_the_planned_total():
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, _ = _seed_job(server, step=3500, total_steps=3000)
+        r = owner.get(f"/training/jobs/{job_id}/status")
+        assert r.status_code == 200, r.text
+        assert r.json()["progress"] == 1.0
+    finally:
+        _teardown(temp_dir, server)
+
+
 def test_job_status_missing_is_404():
     temp_dir, owner, server, read_token = _setup()
     try:
@@ -518,6 +529,26 @@ def test_cancel_job_terminal_is_409():
         server.vault.training_service.cancel_result = False
         r = owner.post(f"/training/jobs/{job_id}/cancel")
         assert r.status_code == 409, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+def test_cancel_409_names_the_status_the_service_saw():
+    """A job that finishes while cancel runs is reported as it is now, not as read before."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, job_uuid = _seed_job(server, status="running")
+        hub = server.vault.hub
+        service = server.vault.training_service
+
+        def finish_then_refuse(_job_id):
+            training_runs.update_run(hub, job_uuid, status="completed")
+            return False
+
+        service.cancel = finish_then_refuse
+        r = owner.post(f"/training/jobs/{job_id}/cancel")
+        assert r.status_code == 409, r.text
+        assert "completed" in r.json()["detail"], r.text
     finally:
         _teardown(temp_dir, server)
 
