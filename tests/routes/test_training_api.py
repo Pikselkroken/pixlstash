@@ -17,6 +17,7 @@ this file backs.
 import gc
 import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -933,7 +934,11 @@ def _venv_python(repo):
     bin_dir = os.path.join(repo, ".venv", "bin")
     os.makedirs(bin_dir, exist_ok=True)
     link = os.path.join(bin_dir, "python")
-    os.symlink(sys.executable, link)
+    try:
+        os.symlink(sys.executable, link)
+    except (OSError, NotImplementedError):
+        # Windows without developer mode or admin rights cannot make symlinks.
+        shutil.copy(sys.executable, link)
     return link
 
 
