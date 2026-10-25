@@ -5,6 +5,7 @@ vi.mock("../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
   apiClient: { get: vi.fn() },
   isReadOnly: { value: false },
+  onSessionReset: () => () => {},
 }));
 vi.mock("../api/workers", () => ({ getWorkerProgress: vi.fn() }));
 

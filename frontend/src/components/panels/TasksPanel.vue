@@ -96,7 +96,7 @@
             <span class="tm-name">{{ entry.run.label }}</span>
             <span class="tm-figure">
               <span class="tm-fig-text">{{ formatGb(entry.figureMb) }}</span>
-              <span class="tm-acts">
+              <span v-if="!isReadOnly" class="tm-acts">
                 <button
                   class="tm-act"
                   type="button"
@@ -407,6 +407,7 @@
         <span class="tm-group-col tm-head-swap">
           <span class="tm-head-col" aria-hidden="true">Made</span>
           <button
+            v-if="!isReadOnly"
             class="tm-head-act"
             type="button"
             data-testid="tm-finished-clear"
@@ -453,6 +454,7 @@
               </span>
               <span class="tm-acts">
                 <button
+                  v-if="!isReadOnly"
                   class="tm-act"
                   type="button"
                   data-testid="tm-finished-dismiss"
@@ -833,7 +835,8 @@ function pctText(value) {
 }
 
 function actionsOf(entry) {
-  return entry.actions ?? [];
+  // Every action writes; a read-only session is offered none.
+  return isReadOnly.value ? [] : (entry.actions ?? []);
 }
 
 function needText(entry) {

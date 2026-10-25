@@ -1373,6 +1373,49 @@ describe("the GPU queue in the task manager", () => {
     expect(children[1].find(".tm-mark").attributes("data-state")).toBe("stopped");
   });
 
+  it("offers a read-only session no action on a run, waiting or running", () => {
+    readOnly.ref.value = true;
+    setGpu(
+      gpuAnswer({
+        leases: [
+          gpuLease({
+            id: "lease-b",
+            tenant: "comfyui",
+            label: "ComfyUI 'Klein inpaint'",
+            kind: "heavy",
+            state: "waiting",
+            device: null,
+            need_mb: 14600,
+            run_id: "run-b",
+            waiting_reason: {
+              code: "vram",
+              text: "Needs 14.6 GB; 11.5 GB is free.",
+              need_mb: 14600,
+              free_mb: 11500,
+              short_by_mb: 3100,
+              position: 1,
+              blocked_by: [],
+              actions: ["run_anyway", "cancel", "free_comfyui"],
+            },
+          }),
+        ],
+      }),
+      [{ run_id: "run-b", prompt_id: null, label: "Klein inpaint", status: "waiting", percent: 0 }],
+    );
+    useTasksStore().comfyuiRuns.push({
+      prompt_id: "p-2",
+      label: "Cinematic portrait",
+      status: "running",
+      percent: 40,
+    });
+    const wrapper = mount(TasksPanel, globalOpts);
+    expect(wrapper.findAll('[data-testid="tm-waiting-row"]')).toHaveLength(1);
+    expect(wrapper.find('[data-testid="tm-run-anyway"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-cancel-wait"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="tm-free-comfyui"]').exists()).toBe(false);
+    expect(wrapper.find('button[aria-label="Stop ComfyUI"]').exists()).toBe(false);
+  });
+
   it("lists the waiting run in the order the queue runs it, with its need and no units", () => {
     setGpu(
       gpuAnswer({

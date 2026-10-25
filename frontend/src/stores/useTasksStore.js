@@ -1,6 +1,6 @@
-import { computed, reactive, ref } from "vue";
+import { computed, onScopeDispose, reactive, ref } from "vue";
 import { defineStore } from "pinia";
-import { isReadOnly } from "../utils/apiClient";
+import { isReadOnly, onSessionReset } from "../utils/apiClient";
 import { getWorkerProgress } from "../api/workers";
 import { abortRun } from "../api/comfyui";
 import { cancelModelDownload } from "../api/modelDownloads";
@@ -669,6 +669,9 @@ export const useTasksStore = defineStore("tasks", () => {
   let polling = false;
   let fetchInFlight = false;
   let timer = null;
+  // Bumped on a credential change: a poll already on the wire answers for the
+  // session that sent it, so its answer is dropped.
+  let generation = 0;
 
   function desiredInterval() {
     return tasksTabOpen.value || hasActiveTasks.value
@@ -682,8 +685,10 @@ export const useTasksStore = defineStore("tasks", () => {
     // skip the request entirely rather than poll a guaranteed failure.
     if (isReadOnly.value) return;
     fetchInFlight = true;
+    const asked = generation;
     try {
       const progress = await getWorkerProgress();
+      if (asked !== generation) return;
       const workers = progress?.workers || {};
       systemUsage.value = progress?.process || progress?.system || null;
       comfyuiRuns.value = Array.isArray(progress?.runs) ? progress.runs : [];
@@ -780,6 +785,28 @@ export const useTasksStore = defineStore("tasks", () => {
     if (typeof document !== "undefined" && document.hidden) return;
     reschedule(true);
   }
+
+  // The owner's runs, downloads and card readings are not the next session's
+  // to see. A tab's own imports (importRuns) are its uploads, not server data.
+  function reset() {
+    generation += 1;
+    workerSnapshots.value = {};
+    systemUsage.value = null;
+    series.value = {};
+    lastSnapshot.clear();
+    lastActiveAtByWorker.clear();
+    lastProgressAtByWorker.clear();
+    comfyuiRuns.value = [];
+    finishedRuns.value = [];
+    finishedOpen.value = {};
+    offersSeen.clear();
+    finishedPolled = false;
+    resources.value = null;
+    modelDownloads.value = [];
+    seenDownloadStatus.clear();
+  }
+
+  onScopeDispose(onSessionReset(reset));
 
   function stopPolling() {
     polling = false;

@@ -1003,6 +1003,41 @@ def test_the_ledger_lists_one_cards_processes_without_its_own():
     assert ledger.processes() == {4242: 13254, 5151: 800}
 
 
+def test_a_local_comfyui_loading_a_model_is_still_on_this_card(monkeypatch):
+    """Mid-load, ComfyUI's free memory and NVML's disagree by GBs; read as
+    remote, its runs would be granted unchecked for a minute."""
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    class Listening:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def net_connections(self, kind="inet"):
+            return [
+                SimpleNamespace(
+                    status=psutil.CONN_LISTEN, laddr=SimpleNamespace(port=8188)
+                )
+            ]
+
+    fake = _ProcessLedger({CARD: {4242: 9000}})
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: fake)
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    monkeypatch.setattr(comfyui_tenant.psutil, "Process", Listening)
+    loading = _comfy_stats(TOTAL, TOTAL - 8000)
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://127.0.0.1:8188")
+    probe._get = lambda path: loading
+    assert probe.device() == CARD
+
+    # Not on a loopback address: a remote ComfyUI may share its port with a
+    # local one, so likeness still decides, and it misses.
+    remote = ComfyUIProbe("test-client")
+    remote.watch("http://comfy.invalid:8188")
+    remote._get = lambda path: loading
+    assert remote.device() is None
+
+
 def test_a_comfyui_on_a_card_a_gb_off_in_size_is_not_on_this_card(monkeypatch):
     from pixlstash.resources import comfyui_tenant
     from pixlstash.resources.comfyui_tenant import ComfyUIProbe
