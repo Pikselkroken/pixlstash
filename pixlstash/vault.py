@@ -1046,15 +1046,24 @@ class Vault:
         subfolder = (
             "loras" if os.path.isdir(os.path.join(folder["path"], "loras")) else None
         )
-        # ponytail: the run's checkpoints stay in the work dir (delete_source off)
-        # because the shelf holds its own copy; step 3 will read the source
-        # folder's delete_after_import here instead.
+        # The run sits in the shelf's ai-toolkit folder, so that folder's
+        # `delete_after_import` decides whether its files stay, exactly as for
+        # an import the owner starts from the shelf.
+        run_real = os.path.realpath(run_dir)
+        delete_source = False
+        for row in hub.fetchall(
+            "SELECT path, delete_after_import FROM model_folder WHERE kind = 'source'"
+        ):
+            root = os.path.realpath(row["path"])
+            if os.path.commonpath([root, run_real]) == root:
+                delete_source = bool(row["delete_after_import"])
+                break
         with SHELF_IO_LOCK:
             report = RunImporter(hub).import_run(
                 run_dir,
                 folder["id"],
                 subfolder=subfolder,
-                delete_source=False,
+                delete_source=delete_source,
                 training_run_id=info["id"],
             )
         landed = [o for o in report.outcomes if o.status == STATUS_IMPORTED]
