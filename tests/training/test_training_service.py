@@ -593,6 +593,52 @@ def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(hub, repo_dir):
     assert lease.events == ["acquire", "release"]
 
 
+class _ShutdownLease(_StubLease):
+    """A lease that is never granted and gives up only when the service stops."""
+
+    def wait(self, cancel_event=None, timeout=None) -> bool:
+        while not (cancel_event and cancel_event.is_set()):
+            time.sleep(0.01)
+        return False
+
+
+def test_shutdown_while_queued_keeps_the_spec_for_the_next_start(hub, repo_dir):
+    """A job still queued at shutdown keeps its spec, so the next start can train it."""
+    lease = _ShutdownLease()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=_SET_ID,
+            name="kept",
+            base_model="m",
+            trigger_word="t",
+            template_path=template,
+        )
+        assert _poll_until(lambda: lease.acquire_count == 1), "lease never requested"
+    finally:
+        service.stop()
+
+    assert _job_status(hub, job["uuid"]).status == "queued"
+    # A fresh service has no in-memory spec, so it must read the sidecar.
+    restarted = _make_service(
+        hub,
+        repo_dir,
+        lease=_StubLease(),
+        notify=_CapturingNotify(),
+        dataset_builder=_make_dataset_builder(),
+    )
+    assert restarted._load_pending_spec(job["uuid"])["template_path"] == template
+
+
 def test_cancel_queued_job_drops_the_lease_it_waits_on(hub, repo_dir):
     """Cancelling a job that waits for the GPU releases its lease, never trains."""
     lease = _WaitingLease()

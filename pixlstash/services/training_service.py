@@ -577,9 +577,12 @@ class TrainingService:
                 self._active_job_uuid = None
                 self._waiting = None
             lease.release()
-            with self._pending_specs_lock:
-                self._pending_specs.pop(job_uuid, None)
-            self._remove_pending_sidecar(job_uuid)
+            # A job still queued at shutdown runs on the next start, and needs
+            # its spec then, so only drop it once the job has left the queue.
+            if self._job_status(job_uuid) != "queued":
+                with self._pending_specs_lock:
+                    self._pending_specs.pop(job_uuid, None)
+                self._remove_pending_sidecar(job_uuid)
 
     def _train_under_lease(
         self,
