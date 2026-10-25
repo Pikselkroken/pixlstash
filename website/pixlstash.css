@@ -562,8 +562,15 @@ a {
 }
 
 @media (max-width: 480px) {
+  .brand {
+    gap: 8px;
+  }
+  .brand img {
+    width: 30px;
+    height: 30px;
+  }
   .brand-name {
-    font-size: 1.6rem;
+    font-size: 1.4rem;
   }
 }
 
