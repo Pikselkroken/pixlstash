@@ -409,6 +409,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useFavouritesStore } from "../../stores/useFavouritesStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import {
   assignmentRing,
   formatModelSize,
@@ -459,6 +460,7 @@ const emit = defineEmits([
 ]);
 
 const store = useModelShelfStore();
+const tasksStore = useTasksStore();
 const {
   dropKey: fileDropKey,
   onDragOver: onFileDragOver,
@@ -1295,7 +1297,15 @@ const chooserSections = computed(() => {
   if (mode === "set") {
     return fillSections(fillSetItems.value, (item) => item.from.join(", "));
   }
-  const added = new Set(picked.value.map((entry) => entry.model_id));
+  const added = new Set(picked.value.map(pickKey));
+  return [
+    ...slotSections(set, added),
+    ...comingSection(chooser.value.held ?? set, chooser.value.slotId, added),
+  ];
+});
+
+/** The ranked shelf sections of a slot's picker. */
+function slotSections(set, added) {
   return slotSuggestions({
     // Ranked by the set's members as they stood when the popup opened, so an
     // add neither drops its row out of the list nor reshuffles the rows around
@@ -1319,7 +1329,37 @@ const chooserSections = computed(() => {
           checked: added.has(row.id),
         })),
   }));
-});
+}
+
+/** What a picker item stands for: a shelf model's id, or a download's key. */
+function pickKey(entry) {
+  return entry.download ?? entry.model_id;
+}
+
+/**
+ * The models still downloading that would fill this slot, under their own
+ * heading after the shelf's: a set holds a member by its digest, so one on
+ * its way can join now and is on the shelf the moment it lands. Only a
+ * download whose digest the template list records: without one there is
+ * nothing to hold it by until it has landed.
+ */
+function comingSection(set, slotId, added) {
+  const held = new Set((set?.members ?? []).map((m) => m.sha256));
+  const needle = chooserQuery.value.trim().toLowerCase();
+  const items = tasksStore.runningDownloads
+    .filter((d) => d.sha256 && d.slot === slotId && !held.has(d.sha256))
+    .map((d) => ({
+      id: `download:${d.id}`,
+      row: { filename: d.file, sha256: d.sha256 },
+      download: d,
+      detail: d.percent ? `${Math.round(d.percent)}%` : "",
+      checked: added.has(`download:${d.id}`),
+    }))
+    .filter((item) => rowMatches(item.row, needle));
+  return items.length
+    ? [{ id: "downloading", label: "Downloading", items, total: items.length }]
+    : [];
+}
 
 const chooserLabel = computed(() => {
   const name = openHand.value ? handMadeName(openHand.value.set) : "";
@@ -1736,13 +1776,27 @@ async function pickIntoSlot(set, slotId, ids) {
   fresh.forEach((id) => picking.add(id));
   const single = slotId === "checkpoint";
   if (single) closeChooser();
+  // A download joins by the digest it will land with, named by its file.
+  // Every download the last poll listed, ended ones too: one that landed
+  // since the picker drew it is still added by its digest, which the shelf
+  // row now carries. A key no listing knows any more adds nothing.
+  const coming = new Map(
+    tasksStore.modelDownloads
+      .filter((d) => d.sha256)
+      .map((d) => [`download:${d.id}`, d]),
+  );
+  const members = fresh.flatMap((id) => {
+    const d = coming.get(id);
+    if (d) return [{ sha256: d.sha256, slot: slotId, label: d.file }];
+    return String(id).startsWith("download:")
+      ? []
+      : [{ model_id: id, slot: slotId }];
+  });
   let result;
   try {
-    result = await store.addToHandMadeSet(
-      set,
-      fresh.map((id) => ({ model_id: id, slot: slotId })),
-      { quiet: !single },
-    );
+    result = members.length
+      ? await store.addToHandMadeSet(set, members, { quiet: !single })
+      : null;
   } finally {
     fresh.forEach((id) => picking.delete(id));
   }
@@ -1751,14 +1805,27 @@ async function pickIntoSlot(set, slotId, ids) {
     // held is not an add, and must not be undone as one.
     const stored = new Set(result?.added ?? []);
     const added = fresh
-      .map((id) => rowsById.value.get(id))
-      .filter((row) => row && stored.has(row.sha256))
-      .map((row) => ({
-        model_id: row.id,
-        slot: slotId,
-        sha256: row.sha256,
-        name: modelName(row).text || row.filename,
-      }));
+      .map((id) => {
+        const d = coming.get(id);
+        if (d) {
+          return {
+            download: id,
+            slot: slotId,
+            sha256: d.sha256,
+            name: d.file,
+          };
+        }
+        const row = rowsById.value.get(id);
+        return (
+          row && {
+            model_id: row.id,
+            slot: slotId,
+            sha256: row.sha256,
+            name: modelName(row).text || row.filename,
+          }
+        );
+      })
+      .filter((entry) => entry && stored.has(entry.sha256));
     // The popup may have closed while the add was out - or another opened on
     // the same set - so its receipt is gone and this one is raised on its own.
     const open = chooser.value;
@@ -1783,7 +1850,9 @@ async function pickIntoSlot(set, slotId, ids) {
     }
     return;
   }
-  const sha = store.rows.find((row) => row.id === fresh[0])?.sha256;
+  const sha =
+    coming.get(fresh[0])?.sha256 ??
+    store.rows.find((row) => row.id === fresh[0])?.sha256;
   const at = flatRows.value.findIndex((entry) => entry.id === `slot:m:${sha}`);
   if (at >= 0) moveCursor(at);
 }
@@ -1795,7 +1864,7 @@ async function pickIntoSlot(set, slotId, ids) {
 async function unpick([modelId]) {
   const { setId, slotId } = chooser.value ?? {};
   const set = store.handMadeSets.find((candidate) => candidate.id === setId);
-  const entry = picked.value.find((candidate) => candidate.model_id === modelId);
+  const entry = picked.value.find((candidate) => pickKey(candidate) === modelId);
   if (!set || !entry || picking.has(modelId)) return;
   picking.add(modelId);
   picked.value = picked.value.filter((candidate) => candidate !== entry);

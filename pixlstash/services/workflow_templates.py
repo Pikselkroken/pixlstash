@@ -122,8 +122,13 @@ def _shelf(hub) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
     return by_name, by_quantless
 
 
+def directory_slot(directory: Optional[str]) -> str:
+    """The set slot a file in ComfyUI's *directory* fills, ``other`` if unknown."""
+    return _SLOT_BY_DIRECTORY.get(directory or "", "other")
+
+
 def _slot(directory: str, model: Optional[dict]) -> str:
-    slot = _SLOT_BY_DIRECTORY.get(directory, "other")
+    slot = directory_slot(directory)
     # The create route refuses a checkpoint slot for a file the shelf knows
     # is something else; such a file still joins, as "other".
     if (

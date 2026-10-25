@@ -155,6 +155,37 @@ export const useTasksStore = defineStore("tasks", () => {
       ),
   );
 
+  /** The downloads still on their way, as the last poll listed them. */
+  const runningDownloads = computed(() =>
+    modelDownloads.value.filter((d) => d.status === "running"),
+  );
+
+  /**
+   * The running download of *file* (by its own name, any case, as the server
+   * matches it) or of *sha256*, or null. What a workflow row or a set member
+   * asks to say it is on its way rather than missing.
+   *
+   * *slot*, the set slot the asker's kind fills, keeps a name match to a
+   * download of that kind, as the server's `running_download` does with a
+   * folder: a VAE named like a checkpoint being fetched is not on its way.
+   * Nor is a file asked for by a digest the download does not have.
+   */
+  function runningDownload({ file = "", sha256 = "", slot = "" } = {}) {
+    const name = String(file).split(/[\\/]/).pop().toLowerCase();
+    const digest = String(sha256 || "").toLowerCase();
+    return (
+      runningDownloads.value.find(
+        (d) =>
+          (digest && d.sha256 === digest) ||
+          (name &&
+            (!slot || !d.slot || d.slot === slot) &&
+            // Two known digests that differ are two files, named alike or not.
+            !(digest && d.sha256) &&
+            String(d.file).toLowerCase() === name),
+      ) ?? null
+    );
+  }
+
   function noteDownloads(list) {
     modelDownloads.value = list;
     const notices = useNoticeStore();
@@ -778,6 +809,8 @@ export const useTasksStore = defineStore("tasks", () => {
     // model downloads
     modelDownloads,
     runningDownloadFiles,
+    runningDownloads,
+    runningDownload,
     downloadsLanded,
     downloadStarted,
     cancelDownload,

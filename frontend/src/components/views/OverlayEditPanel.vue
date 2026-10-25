@@ -417,6 +417,7 @@ import { errorMessage } from "../../utils/apiError";
 import {
   MISSING_MODELS,
   MISSING_NODES,
+  MODELS_DOWNLOADING,
   PICTURE_INPUT_UNFILLED,
   UNCHECKED_CODES,
   readReason,
@@ -546,8 +547,10 @@ const chosenMissing = computed(
 );
 
 function missingTip(key) {
-  const count = missing.value.get(key)?.models?.length || 0;
-  return `${count} ${count === 1 ? "model" : "models"} missing`;
+  const models = missing.value.get(key)?.models || [];
+  const gone = models.filter((model) => !model.downloading).length;
+  if (!gone) return "Still downloading a model it needs";
+  return `${gone} ${gone === 1 ? "model" : "models"} missing`;
 }
 
 const hasSelection = computed(() => !!props.paint?.hasSelection.value);
@@ -840,10 +843,19 @@ async function verdict(key) {
   if (reasons.every((reason) => reason.code === PICTURE_INPUT_UNFILLED)) {
     return FILL;
   }
-  if (reasons.every((reason) => reason.code === MISSING_MODELS)) {
+  // A model still downloading is a wait like a missing one, and the card
+  // stays listed through it: one notice, the files on their way marked so.
+  const waits = [MISSING_MODELS, MODELS_DOWNLOADING];
+  if (reasons.every((reason) => waits.includes(reason.code))) {
     return {
       code: MISSING_MODELS,
-      models: reasons.flatMap((reason) => reason.models || []),
+      models: reasons.flatMap((reason) =>
+        (reason.models || []).map((model) =>
+          reason.code === MODELS_DOWNLOADING
+            ? { ...model, downloading: true }
+            : model,
+        ),
+      ),
     };
   }
   // Only when the packs cover every missing node: installing them must make

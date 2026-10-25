@@ -106,6 +106,7 @@ import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useOperationStore } from "../../stores/useOperationStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 const globalOpts = {
   global: {
@@ -2171,6 +2172,118 @@ describe("hand-made sets (#1520)", () => {
     expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
       shaOf(3),
       shaOf(5),
+    ]);
+  });
+
+  it("offers a LoRA still downloading, adds it by digest, and marks its tile", async () => {
+    // A download carrying no digest has nothing to hold it by; one for
+    // another slot is not this slot's. Mixed case: the file keeps its own.
+    const coming = "d".repeat(64);
+    useTasksStore().modelDownloads = [
+      { id: "a", file: "Coming_LoRA.safetensors", status: "running", sha256: coming, slot: "lora", percent: 40 },
+      { id: "b", file: "gated.safetensors", status: "running", sha256: null, slot: "lora" },
+      { id: "c", file: "other_vae.safetensors", status: "running", sha256: "e".repeat(64), slot: "vae" },
+    ];
+    let held = [SET_CKPT];
+    addWorkflowSetMembers.mockReset().mockImplementation((id, members) => {
+      held = [
+        ...held,
+        ...members.map((m) => ({
+          sha256: m.sha256,
+          slot: m.slot,
+          label: m.label,
+          on_shelf: false,
+          id: null,
+          name: m.label,
+        })),
+      ];
+      fetchWorkflowSets.mockResolvedValue({
+        combinations: [],
+        no_set: [],
+        hand_made: [handSet(10, held)],
+      });
+      return Promise.resolve({
+        set: handSet(10, held),
+        added: members.map((m) => m.sha256),
+      });
+    });
+    removeWorkflowSetMembers.mockReset().mockResolvedValue({ removed: [coming] });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    expect(chooser.text()).toContain("Downloading");
+    const options = chooser.findAll('[role="option"]');
+    const option = options.find((o) => o.text().includes("Coming_LoRA"));
+    expect(option.find('[data-testid="downloading-mark"]').exists()).toBe(true);
+    expect(options.some((o) => o.text().includes("gated"))).toBe(false);
+    expect(options.some((o) => o.text().includes("other_vae"))).toBe(false);
+
+    await option.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers.mock.calls).toEqual([
+      [10, [{ sha256: coming, slot: "lora", label: "Coming_LoRA.safetensors" }]],
+    ]);
+    expect(option.attributes("aria-selected")).toBe("true");
+    await chooser.trigger("keydown", { key: "Escape" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Held by its digest, the tile says it is on its way, not gone.
+    const tile = wrapper
+      .findAll(".mss__tile")
+      .find((t) => t.text().includes("Coming LoRA"));
+    expect(tile.find('[data-testid="downloading-mark"]').exists()).toBe(true);
+    expect(tile.text()).not.toContain("Not on shelf");
+    expect(tile.classes()).not.toContain("mss__tile--gone");
+
+    // Undo takes it out by digest; Redo puts it back the same way, since it
+    // has no shelf id to go back in by.
+    const operations = useOperationStore();
+    await operations.takeLocalReceiptAction();
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [coming]);
+    await operations.takeLocalReceiptAction();
+    expect(addWorkflowSetMembers).toHaveBeenLastCalledWith(10, [
+      { sha256: coming, slot: "lora", label: "Coming_LoRA.safetensors" },
+    ]);
+  });
+
+  it("still adds a download by its digest when it lands between draw and click", async () => {
+    const late = "9".repeat(64);
+    const tasks = useTasksStore();
+    tasks.modelDownloads = [
+      { id: "z", file: "late.safetensors", status: "running", sha256: late, slot: "lora" },
+    ];
+    addWorkflowSetMembers.mockReset().mockResolvedValue({
+      set: handSet(10, [SET_CKPT]),
+      added: [late],
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const option = wrapper
+      .find('[data-testid="workflow-set-chooser"]')
+      .findAll('[role="option"]')
+      .find((o) => o.text().includes("late"));
+    // The poll says it finished; the row on screen is the one clicked.
+    tasks.modelDownloads = [{ ...tasks.modelDownloads[0], status: "done" }];
+    await option.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers.mock.calls).toEqual([
+      [10, [{ sha256: late, slot: "lora", label: "late.safetensors" }]],
     ]);
   });
 

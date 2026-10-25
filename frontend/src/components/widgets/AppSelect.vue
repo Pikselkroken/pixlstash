@@ -55,8 +55,12 @@
           current ? optionSpoken(current) : placeholder
         }}</span>
         <!-- The picked row's group mark stays with it (`groupIcon`). -->
+        <DownloadingMark
+          v-if="current?.groupDownloading"
+          class="app-select__mark"
+        />
         <v-icon
-          v-if="current?.groupIcon"
+          v-else-if="current?.groupIcon"
           size="16"
           class="app-select__mark"
           :class="toneClass(current.groupTone)"
@@ -109,8 +113,9 @@
               :id="`${listId}-g${s}`"
               class="ctx-label app-select__group"
             >
+              <DownloadingMark v-if="section.downloading" />
               <v-icon
-                v-if="section.icon"
+                v-else-if="section.icon"
                 size="16"
                 :class="toneClass(section.tone)"
                 aria-hidden="true"
@@ -179,6 +184,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 import ChipRow from "./ChipRow.vue";
+import DownloadingMark from "./DownloadingMark.vue";
 import FieldLabel from "./FieldLabel.vue";
 
 const props = defineProps({
@@ -191,7 +197,8 @@ const props = defineProps({
   // turns the field into a listbox that can draw them. A group's first option
   // may give its heading a mark and a note (`groupIcon`, an mdi name without
   // the prefix; `groupTone`, success|warning|error|info; `groupNote`), and the
-  // mark stays beside the value once picked. `quiet` draws a name in
+  // mark stays beside the value once picked. `groupDownloading` draws the
+  // animated download mark in its place, for models still on their way. `quiet` draws a name in
   // secondary ink.
   options: { type: Array, default: () => [] },
   // What a listbox field reads while its value is none of the options.
@@ -233,6 +240,7 @@ const sections = computed(() => {
         icon: opt.groupIcon,
         tone: opt.groupTone,
         note: opt.groupNote,
+        downloading: opt.groupDownloading,
         rows: [{ opt, i }],
       });
   });

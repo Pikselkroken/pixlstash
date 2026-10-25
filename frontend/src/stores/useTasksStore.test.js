@@ -552,3 +552,27 @@ describe("the GPU queue", () => {
   });
 });
 
+
+describe("runningDownload", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("matches a running one by name of its kind, or by digest of any", () => {
+    // Wrong if a VAE named like a checkpoint being fetched reads as on its
+    // way, if a digest match is held to a kind, or if an ended one matches.
+    const store = useTasksStore();
+    const sha = "a".repeat(64);
+    store.modelDownloads = [
+      { id: "1", file: "Shared.safetensors", status: "running", slot: "checkpoint", sha256: sha },
+      { id: "2", file: "done.safetensors", status: "done", slot: "vae" },
+    ];
+    expect(store.runningDownload({ file: "sdxl/shared.safetensors", slot: "checkpoint" })?.id).toBe("1");
+    expect(store.runningDownload({ file: "shared.safetensors" })?.id).toBe("1");
+    expect(store.runningDownload({ file: "shared.safetensors", slot: "vae" })).toBe(null);
+    expect(store.runningDownload({ sha256: sha.toUpperCase(), slot: "vae" })?.id).toBe("1");
+    expect(store.runningDownload({ file: "done.safetensors" })).toBe(null);
+    // Asked for by another digest: another file, though named the same.
+    expect(
+      store.runningDownload({ file: "shared.safetensors", sha256: "b".repeat(64) }),
+    ).toBe(null);
+  });
+});

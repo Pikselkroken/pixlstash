@@ -268,7 +268,7 @@
               :id="`${panelId}-row-${item.key}`"
               class="mss__tile msp__member"
               :class="{
-                'mss__tile--gone': !item.member.on_shelf,
+                'mss__tile--gone': !item.member.on_shelf && !coming(item.member),
                 'mss__tile--on': isSelected(item.member),
               }"
               role="row"
@@ -314,8 +314,18 @@
                     activator="parent"
                   />{{ quantBadge(item.member.quant).label }}</span
                 >
+                <!-- Held by its digest while it downloads: on its way, not
+                     gone, and on the shelf the moment it lands. -->
                 <span
-                  v-if="!item.member.on_shelf"
+                  v-if="coming(item.member)"
+                  class="mss__coming"
+                  aria-hidden="true"
+                  ><DownloadingMark
+                    :percent="coming(item.member).percent"
+                  />Downloading</span
+                >
+                <span
+                  v-else-if="!item.member.on_shelf"
                   class="mss__gone"
                   aria-hidden="true"
                   >Not on shelf</span
@@ -461,6 +471,7 @@
 import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { useTasksStore } from "../../stores/useTasksStore";
 import { isReadOnly } from "../../utils/apiClient";
 import { modelFileTitle, quantBadge } from "../../utils/modelShelf";
 import { memberVerdictOf, memberVerdictText } from "../../utils/setVerdicts";
@@ -476,6 +487,7 @@ import {
 } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
+import DownloadingMark from "../widgets/DownloadingMark.vue";
 import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -744,11 +756,24 @@ function withQuant(model) {
   return [model.name, quantBadge(model.quant)?.label].filter(Boolean).join(" ");
 }
 
+const tasksStore = useTasksStore();
+
+/** The download an off-shelf member is, by its digest, or null. */
+function coming(member) {
+  return member.on_shelf
+    ? null
+    : tasksStore.runningDownload({ sha256: member.sha256 });
+}
+
 function tileName(member, slot) {
   return [
     withQuant(member),
     slot.label,
-    member.on_shelf ? member.base_model : "not on shelf, kept by its hash",
+    member.on_shelf
+      ? member.base_model
+      : coming(member)
+        ? "still downloading"
+        : "not on shelf, kept by its hash",
     member.new
       ? "new: the pictures started using it"
       : member.origin === "added"
@@ -994,6 +1019,15 @@ const notchStyle = computed(() => {
   flex-shrink: 0;
   font-size: var(--text-2xs);
   color: rgb(var(--v-theme-surface-warning));
+}
+
+.mss__coming {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 
 .mss__tile--add {

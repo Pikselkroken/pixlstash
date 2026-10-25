@@ -11193,6 +11193,18 @@ an address of its choosing.
   **A cancel wins only before the publish**: once the file is committed under
   the lock, `cancel_download` answers `false` and the file lands.
   `models_arrived` (integration §8) announces the new model.
+- **A model on its way can be put in before it lands.** Each entry carries
+  the listed `sha256` (null for a link with none), the ComfyUI `directory` and
+  the set `slot` that folder fills (`workflow_templates.directory_slot`). A
+  hand-made set holds a member by digest, so the set's slot picker adds a
+  download with a digest as `{sha256, slot, label}` and the member resolves
+  when the file registers; the Workflow tab offers a download of a row's folder
+  as a pick. `judge` moves any missing model `running_download` matches (by
+  name, case folded, to a download of the same kind, the slot each folder
+  fills; or by digest, lowercased, alone) out of `missing_models` into
+  `models_downloading` with its `percent`, which blocks the batch like a
+  missing model, and `bypass_missing_loras` leaves a LoRA on its way in the
+  graph, so the run is refused rather than quietly made without it.
 - **Followed in memory, one thread each**, like the ComfyUI runs in flight:
   `live_downloads()` is `downloads` on `GET /workers/progress` (owner only),
   and an ended one stays listed for `FINISHED_KEEP_SECONDS` (30 s) so every

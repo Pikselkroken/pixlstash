@@ -27,6 +27,8 @@ vi.mock("../../api/favourites", () => ({
 }));
 
 import WorkflowUseSetMenu from "./WorkflowUseSetMenu.vue";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 // Vuetify is not installed in the test app, so `v-menu` is stubbed with the
 // two behaviours the component relies on: the activator's click toggles it,
@@ -380,6 +382,42 @@ describe("choosing a set", () => {
       ],
     ]);
     expect(menu(wrapper).exists()).toBe(false);
+  });
+
+  it("says loudly that a member still downloading was left out", async () => {
+    // Held by its digest, with no shelf id the plan could use: the set is
+    // used without it, and that is said on the row and once it is chosen.
+    const sha = "f".repeat(64);
+    fetchWorkflowSets.mockResolvedValue({
+      ...SHELF,
+      hand_made: SHELF.hand_made.map((set) =>
+        set.id === 7
+          ? {
+              ...set,
+              members: [
+                ...set.members,
+                { id: null, slot: "lora", on_shelf: false, sha256: sha, name: "Coming LoRA" },
+              ],
+            }
+          : set,
+      ),
+    });
+    const wrapper = mountMenu();
+    useTasksStore().modelDownloads = [
+      { id: "d", file: "coming.safetensors", status: "running", sha256: sha },
+    ];
+    await openMenu(wrapper);
+    expect(meta(wrapper, "hand:7")).toContain(
+      "Coming LoRA still downloading, left out",
+    );
+    expect(meta(wrapper, "hand:9")).not.toContain("downloading");
+    await row(wrapper, "hand:7").trigger("click");
+    expect(wrapper.emitted("use")).toHaveLength(1);
+    const warned = useNoticeStore().notices.find((n) => n.level === "warning");
+    expect(warned?.text).toBe(
+      'Coming LoRA is still downloading, so "Portraits" was used without it. ' +
+        "Use the set again once the download has finished.",
+    );
   });
 
   describe("over a row that already has an unsaved pick", () => {

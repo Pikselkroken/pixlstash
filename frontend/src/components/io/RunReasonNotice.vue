@@ -17,6 +17,11 @@
       <ul v-if="read.files.length" class="rrn-files">
         <li v-for="file in read.files" :key="file.file">
           <span class="rrn-mono">{{ file.file }}</span>
+          <template v-if="file.downloading">
+            <DownloadingMark :percent="file.percent" class="rrn-dl" />{{
+              file.percent ? ` ${Math.round(file.percent)}%` : ""
+            }}</template
+          >
           <template v-if="file.reason"> — {{ file.reason }}</template>
           <template v-if="file.folder">
             , expected in <span class="rrn-mono">models/{{ file.folder }}</span>
@@ -178,6 +183,7 @@ import {
   readReason,
 } from "../../utils/runReasons";
 import AppButton from "../widgets/AppButton.vue";
+import DownloadingMark from "../widgets/DownloadingMark.vue";
 import ModelDownloadButton from "../widgets/ModelDownloadButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
@@ -371,6 +377,10 @@ onBeforeUnmount(stopPolling);
 .rrn-mono {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+}
+
+.rrn-dl {
+  margin-left: var(--space-2);
 }
 
 .rrn-acts {

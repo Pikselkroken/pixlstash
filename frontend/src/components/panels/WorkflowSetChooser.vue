@@ -128,7 +128,15 @@
               <span v-if="pick" class="wsc__fav">
                 <FavouriteHeart v-if="item.favourite" passive />
               </span>
-              <span class="wsc__detail">{{ item.detail }}</span>
+              <!-- A model still downloading: its mark and how far, where a
+                   shelf model's size is. -->
+              <span class="wsc__detail"
+                ><DownloadingMark
+                  v-if="item.download"
+                  :percent="item.download.percent"
+                  class="wsc__dl"
+                />{{ item.detail }}</span
+              >
               <!-- What Enter would add, where the size was: says which row
                    the key acts on without making it look pressed. -->
               <span
@@ -214,6 +222,7 @@ import {
   PICK_ORDERS,
 } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
+import DownloadingMark from "../widgets/DownloadingMark.vue";
 import FavouriteHeart from "../widgets/FavouriteHeart.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 import Segmented from "../widgets/Segmented.vue";
@@ -233,8 +242,9 @@ const props = defineProps({
   /** A line under the field, for why the list is not ranked. */
   note: { type: String, default: "" },
   /**
-   * `[{id, label, total?, items: [{id, row, detail?, checked?}], collapsed?,
-   * held?}]`. `row` is the shelf row. `checked` is a checklist's pre-tick, or
+   * `[{id, label, total?, items: [{id, row, detail?, checked?, download?}],
+   * collapsed?, held?}]`. `row` is the shelf row; `download` marks a model
+   * still on its way, whose `row` is only its file and digest. `checked` is a checklist's pre-tick, or
    * in `pick` mode a model this popup has added. `collapsed` is the text a
    * section starts folded behind; `held` sections list matches the set
    * already holds.
@@ -738,6 +748,10 @@ function onKeydown(event) {
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wsc__dl {
+  margin-right: var(--space-2);
 }
 
 .wsc__r--enter .wsc__detail {

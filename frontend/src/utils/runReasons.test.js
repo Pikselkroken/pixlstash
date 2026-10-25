@@ -90,6 +90,35 @@ describe("pack_outdated says restart ComfyUI", () => {
   });
 });
 
+describe("models_downloading refuses until the download lands", () => {
+  it("says it is on its way, marks each file, and blocks the batch", () => {
+    const files = [{ file: "flux1-dev.safetensors", folder: "checkpoints", percent: 40 }];
+    const read = readReason({ code: "models_downloading", models: files });
+    expect(read.text).toBe(
+      "A model it needs is still downloading. Run it once it has finished: " +
+        "the Tasks tab shows how far.",
+    );
+    expect(read.files).toEqual([{ ...files[0], downloading: true }]);
+    expect(read.blocking).toBe(true);
+    expect(BLOCKS_BATCH).toContain("models_downloading");
+  });
+
+  it("counts a file folded into missing_models as downloading, not missing", () => {
+    const read = readReason({
+      code: "missing_models",
+      models: [
+        { file: "a.safetensors" },
+        { file: "b.safetensors", downloading: true },
+      ],
+    });
+    expect(read.text).toBe("1 model is missing. 1 model is still downloading.");
+    expect(
+      readReason({ code: "missing_models", models: [{ file: "a.safetensors" }] })
+        .text,
+    ).toBe("1 model is missing.");
+  });
+});
+
 describe("missing_nodes names our own pack", () => {
   it("says a PixlStash node comes from the pack, and how to install it", () => {
     const read = readReason({
