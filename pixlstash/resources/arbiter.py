@@ -566,6 +566,35 @@ class ResourceArbiter:
                 },
             }
 
+    def training_room(self, device: str | None) -> dict:
+        """What an exclusive run on *device* can be given: ``{vram_mb, ram_mb}``.
+
+        The card less the safety margin and what other apps hold: PixlStash
+        yields its own work for an exclusive lease, and ComfyUI's and a
+        finished AI-toolkit run's memory are given back before it is granted,
+        so neither counts against it. ``vram_mb`` is None for a card that
+        cannot be measured; ``ram_mb`` is available physical RAM (swap never
+        counts), None when unreadable.
+        """
+        self._refresh(cached=True)
+        with self._lock:
+            reading = next((d for d in self._devices if d.uuid == device), None)
+            vram = None
+            if reading is not None and reading.measurable:
+                other = sum(
+                    row["used_mb"]
+                    for row in self._holders_locked(reading)
+                    if row["tenant"] == "unattributed"
+                )
+                vram = max(
+                    0, reading.total_mb - other - safety_margin_mb(reading.total_mb)
+                )
+            ram_now = dict(self._ram_now)
+        return {
+            "vram_mb": vram,
+            "ram_mb": ram_now["available_mb"] if ram_now.get("total_mb") else None,
+        }
+
     def _lease_row(self, lease: Lease) -> dict:
         return {
             "id": lease.id,

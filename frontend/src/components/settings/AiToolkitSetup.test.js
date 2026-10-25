@@ -66,6 +66,14 @@ const CHECK_OK = {
   python: PY,
   datasets: DATASETS,
   runs: RUNS,
+  presets: [
+    {
+      id: "zimage-turbo",
+      label: "Z-Image Turbo",
+      requires_arch: "z_image",
+      offered: true,
+    },
+  ],
 };
 const STATUS = {
   configured: true,
@@ -155,6 +163,24 @@ describe("when a checkout is found", () => {
     expect(byTestId(w, "ait-check-sentence").text()).toBe(SENTENCE_ONE_GPU);
     expect(connectButton(w).exists()).toBe(true);
     expect(liveRegion(w)).toContain("AI-toolkit can train.");
+  });
+
+  it("says which recipes the checkout can train", async () => {
+    const w = await mountSetup();
+    expect(byTestId(w, "ait-recipes-sentence").text()).toBe(
+      "It can train Z-Image Turbo.",
+    );
+  });
+
+  it("says a checkout without the model code cannot train the recipes", async () => {
+    training.checkAiToolkit.mockResolvedValue({
+      ...CHECK_OK,
+      presets: [{ ...CHECK_OK.presets[0], offered: false }],
+    });
+    const w = await mountSetup();
+    const sentence = byTestId(w, "ait-recipes-sentence").text();
+    expect(sentence).toContain("(z_image)");
+    expect(sentence).toContain("cannot train any of them yet");
   });
 
   it("pluralises the GPUs and says each when they match", async () => {

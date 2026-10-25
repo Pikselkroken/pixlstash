@@ -69,7 +69,7 @@ class TrainingService:
         library_uuid: str | None,
         image_root: str,
         *,
-        request_gpu: Callable[[str, str], Lease],
+        request_gpu: Callable[[str, str, int, int], Lease],
         import_run: Callable[[str, dict], dict],
         notify: Callable[[EventType, dict], None],
         config_provider: Callable[[], dict],
@@ -91,8 +91,10 @@ class TrainingService:
             image_root: Vault root. Per-job work dirs live in
                 ``<image_root>/training/<job_uuid>/``.
             request_gpu: Asks the VRAM arbiter for a run's memory, called as
-                ``request_gpu(label, job_uuid)``; returns the arbiter's
-                :class:`~pixlstash.resources.arbiter.Lease`, granted or waiting.
+                ``request_gpu(label, job_uuid, vram_mb, ram_mb)`` with the
+                needs of the run's resolved memory profile; returns the
+                arbiter's :class:`~pixlstash.resources.arbiter.Lease`, granted
+                or waiting.
             import_run: Brings a completed run onto the model shelf, called as
                 ``import_run(run_dir, job_info)`` where ``run_dir`` is the
                 ai-toolkit run folder holding the checkpoints. Returns a dict
@@ -215,6 +217,9 @@ class TrainingService:
         trigger_word: str,
         template_path: str,
         config_overrides: dict | None = None,
+        locked: dict | None = None,
+        resolution: dict | None = None,
+        pins: dict | None = None,
     ) -> dict:
         """Create a queued training run and wake the worker.
 
@@ -231,8 +236,14 @@ class TrainingService:
             base_model: Base checkpoint the LoRA trains against.
             trigger_word: Caption trigger word baked into the dataset.
             template_path: Path to the golden ai-toolkit config template.
-            config_overrides: Optional deep-merge config patch (stored on the
-                job for the run; not persisted as a column).
+            config_overrides: The run's tunable values as a config patch
+                (kept in the pending spec, not a column).
+            locked: The recipe's locked keys as a config patch (pending spec).
+            resolution: The resolver's result
+                (:func:`pixlstash.training.presets.resolve`). Recorded on the
+                row with its ``preset``; its ``vram_mb`` / ``ram_mb`` are what
+                the run asks the arbiter for.
+            pins: The owner's Advanced values, recorded on the row.
 
         Returns:
             The persisted run, as the hub row (a dict of its columns).
@@ -259,12 +270,19 @@ class TrainingService:
             character_id=character_id,
             base_model=base_model,
             trigger_word=trigger_word,
+            preset=(resolution or {}).get("preset"),
+            resolved_profile=json.dumps(resolution) if resolution else None,
+            advanced_pins=json.dumps(pins or {}),
         )
         job = training_runs.get_run(hub, library_uuid, run_id)
-        # The template path + config overrides have no dedicated column. Keep
-        # them in memory for the common (no-restart) case and also persist a
-        # sidecar so a restart can recover a still-queued job's spec.
-        pending = {"template_path": template_path, "config_overrides": config_overrides}
+        # The template path and the config patches have no column. Keep them
+        # in memory for the common (no-restart) case and also persist a sidecar
+        # so a restart can recover a still-queued job's spec.
+        pending = {
+            "template_path": template_path,
+            "config_overrides": config_overrides,
+            "locked": locked,
+        }
         with self._pending_specs_lock:
             self._pending_specs[job_uuid] = pending
         self._write_pending_sidecar(job_uuid, pending)
@@ -419,8 +437,14 @@ class TrainingService:
             )
             # ponytail: asked for, not adopted. The run already holds the card,
             # so the lease is granted once PixlStash has yielded; the plan's
-            # adopt() would grant it at once, with a boot quiet period.
-            lease = self._request_gpu(self._lease_label(info), info["uuid"])
+            # adopt() would grant it at once, with a boot quiet period. A live
+            # run without a profile (started before recipes) still takes the
+            # exclusive lease at 0 MB: it keeps other GPU work off the card
+            # under the running trainer, and is released when the run ends.
+            vram_mb, ram_mb = self._lease_need(info) or (0, 0)
+            lease = self._request_gpu(
+                self._lease_label(info), info["uuid"], vram_mb, ram_mb
+            )
             # Resume polling on the worker thread, owning the lease until the
             # run ends. We deliberately hand off to a fresh thread so startup is
             # not blocked by a multi-hour run.
@@ -524,6 +548,13 @@ class TrainingService:
             self._emit_progress(job_uuid, status="error", message=str(exc))
             return
 
+        need = self._lease_need(info)
+        if need is None:
+            msg = "Queued before training recipes existed; queue it again."
+            self._update_job(job_uuid, status="error", error=msg)
+            self._emit_progress(job_uuid, status="error", message=msg)
+            return
+
         # 1. Build the dataset snapshot.
         manifest = self._build_dataset(info, dataset_dir)
         if manifest is None:
@@ -543,7 +574,7 @@ class TrainingService:
 
         # 2. Wait for the arbiter: PixlStash yields the card, an idle ComfyUI
         # frees it, and the Tasks tab shows the job waiting until then.
-        lease = self._request_gpu(self._lease_label(info), job_uuid)
+        lease = self._request_gpu(self._lease_label(info), job_uuid, *need)
         try:
             with self._active_lock:
                 self._waiting = (job_uuid, lease)
@@ -624,6 +655,7 @@ class TrainingService:
             work_dir=work_dir,
             hf_token=os.environ.get("HF_TOKEN") or None,
             config_overrides=pending.get("config_overrides"),
+            locked=pending.get("locked"),
             gpu_ids=gpu_ids,
             training_folder=training_folder,
         )
@@ -821,6 +853,21 @@ class TrainingService:
     # ------------------------------------------------------------------
     # Persistence helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _lease_need(info: dict) -> tuple[int, int] | None:
+        """``(vram_mb, ram_mb)`` of the run's resolved profile, or None.
+
+        None for a row without one (queued before recipes existed).
+        """
+        try:
+            resolution = json.loads(info.get("resolved_profile") or "null")
+            return int(resolution["vram_mb"]), int(resolution["ram_mb"])
+        except (TypeError, KeyError, ValueError) as exc:
+            logger.warning(
+                "Job %s has no readable memory profile: %s", info.get("uuid"), exc
+            )
+            return None
 
     @staticmethod
     def _lease_label(info: dict) -> str:

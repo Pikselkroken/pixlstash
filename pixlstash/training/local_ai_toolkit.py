@@ -278,6 +278,7 @@ class LocalAiToolkit(TrainerBackend):
             trigger_word=spec.trigger_word,
             dataset_dir=spec.dataset_dir,
             overrides=spec.config_overrides,
+            locked=spec.locked,
         )
         # write_json_atomic uses json.dump, whose default ensure_ascii=True
         # already escapes non-ASCII to \uXXXX, matching the SEAM requirement.

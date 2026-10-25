@@ -7,9 +7,9 @@
 import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
-/** The shipped and user training templates. */
-export function listTrainingTemplates() {
-  return unwrap(apiClient.get("/training/templates"));
+/** The training recipes, each saying whether the saved checkout can run it. */
+export function listTrainingPresets() {
+  return unwrap(apiClient.get("/training/presets"));
 }
 
 /** Queue a training job (XOR set_id / character_id in the body). */

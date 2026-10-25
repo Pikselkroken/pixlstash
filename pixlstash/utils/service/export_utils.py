@@ -892,6 +892,42 @@ class ExportUtils:
                         )
 
     @staticmethod
+    def _training_pictures(server, set_id, character_id, params):
+        """The pictures a training dataset of the set or character holds.
+
+        The same skips the writer applies, so a manifest's ids and count
+        describe exactly what gets written.
+        """
+        pics = ExportUtils._gather_export_pictures(
+            server,
+            None,
+            None,
+            {"set_id": set_id, "character_id": character_id},
+            params,
+        )
+        return [
+            pic
+            for pic in pics
+            if getattr(pic, "file_path", None)
+            and os.path.exists(
+                ImageUtils.resolve_picture_path(server.vault.image_root, pic.file_path)
+            )
+            and not VideoUtils.is_video_file(
+                ImageUtils.resolve_picture_path(server.vault.image_root, pic.file_path)
+            )
+        ]
+
+    @staticmethod
+    def count_training_pictures(server, *, set_id=None, character_id=None) -> int:
+        """How many pictures :meth:`build_training_dataset` would write."""
+        params = {
+            "only_deleted": False,
+            "picture_ids": [],
+            "select_fields": Picture.metadata_fields(),
+        }
+        return len(ExportUtils._training_pictures(server, set_id, character_id, params))
+
+    @staticmethod
     def build_training_dataset(
         server,
         *,
@@ -968,26 +1004,7 @@ class ExportUtils:
             "trigger_word": trigger,
         }
 
-        pics = ExportUtils._gather_export_pictures(
-            server,
-            None,
-            None,
-            {"set_id": set_id, "character_id": character_id},
-            params,
-        )
-        # Same skips the writer applies, done here so the manifest's ids and
-        # count describe exactly what gets written.
-        pics = [
-            pic
-            for pic in pics
-            if getattr(pic, "file_path", None)
-            and os.path.exists(
-                ImageUtils.resolve_picture_path(server.vault.image_root, pic.file_path)
-            )
-            and not VideoUtils.is_video_file(
-                ImageUtils.resolve_picture_path(server.vault.image_root, pic.file_path)
-            )
-        ]
+        pics = ExportUtils._training_pictures(server, set_id, character_id, params)
 
         feature_faces_by_pic, face_tags_by_face, detections_by_pic, _ = (
             ExportUtils._prepare_feature_maps_and_total(server, pics, params)

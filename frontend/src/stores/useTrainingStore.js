@@ -8,7 +8,7 @@ import {
   discoverAiToolkit,
   getAiToolkitStatus,
   listTrainingJobs,
-  listTrainingTemplates,
+  listTrainingPresets,
   putAiToolkitConfig,
 } from "../api/training";
 import { getUserConfig } from "../api/config";
@@ -39,23 +39,25 @@ export const useTrainingStore = defineStore("training", () => {
   const scopeName = ref(""); // display name for the panel header
   const scopePictureCount = ref(0); // pictures currently in view (header hint)
 
-  // ── Panel: config form (seeded from defaults / the chosen template) ─────────
-  const templates = ref([]);
-  const templatesLoading = ref(false);
-  const selectedTemplate = ref(null); // template `name` (with .json)
+  // ── Panel: config form (the recipe and the three choices it resolves) ──────
+  const presets = ref([]); // GET /training/presets: { id, label, offered, … }
+  const presetsLoading = ref(false);
+  const selectedPreset = ref(null); // recipe id
   const triggerWord = ref("");
-  const steps = ref(3000);
+  // What the LoRA learns; a character is always a person, a set must choose.
+  const subject = ref(null); // "person" | "style" | "thing"
+  const effort = ref("standard"); // "gentle" | "standard" | "strong"
+  const fit = ref("auto"); // "auto" | "save_memory" | "best_quality"
   // Advanced settings. Left blank by default so an untouched panel sends NO
-  // override for them and the chosen template's golden values apply (the design
-  // rule: the only field most users touch is the trigger word). A field is only
-  // included in config_overrides when the user actually fills it in.
+  // pin and the recipe's derived values apply. A field is only sent as a pin
+  // when the user actually fills it in.
+  const steps = ref(null);
   const networkRank = ref(null);
   const networkAlpha = ref(null);
   const learningRate = ref("");
   const batchSize = ref(null);
   const saveEvery = ref(null);
   const samplePrompts = ref(""); // newline-separated
-  const rawConfig = ref(""); // JSON passthrough → config_overrides
 
   const submitting = ref(false);
   const submitError = ref("");
@@ -113,6 +115,7 @@ export const useTrainingStore = defineStore("training", () => {
     if (pictureCount != null) scopePictureCount.value = Number(pictureCount) || 0;
     // Default the trigger word to the scope name (normalised lazily by backend).
     triggerWord.value = (name || "").trim();
+    subject.value = type === "character" ? "person" : null;
     submitError.value = "";
   }
 
@@ -122,23 +125,21 @@ export const useTrainingStore = defineStore("training", () => {
     trainMenuOpen.value = true;
   }
 
-  async function fetchTemplates() {
-    templatesLoading.value = true;
+  async function fetchPresets() {
+    presetsLoading.value = true;
     try {
-      const data = await listTrainingTemplates();
-      templates.value = Array.isArray(data) ? data : [];
-      // Default to Z-Image-Turbo if present, else the first template.
-      if (!selectedTemplate.value && templates.value.length) {
-        const zimage = templates.value.find((t) =>
-          (t.name || "").toLowerCase().includes("zimage-turbo"),
-        );
-        selectedTemplate.value = (zimage || templates.value[0]).name;
+      const data = await listTrainingPresets();
+      presets.value = Array.isArray(data) ? data : [];
+      // Default to the first recipe the checkout can run, else the first.
+      if (!selectedPreset.value && presets.value.length) {
+        const usable = presets.value.find((p) => p.offered);
+        selectedPreset.value = (usable || presets.value[0]).id;
       }
     } catch (err) {
       // Non-fatal for the panel; submit still works against the server default.
-      console.warn("Failed to load training templates:", err);
+      console.warn("Failed to load training recipes:", err);
     } finally {
-      templatesLoading.value = false;
+      presetsLoading.value = false;
     }
   }
 
@@ -150,26 +151,28 @@ export const useTrainingStore = defineStore("training", () => {
     submitting.value = true;
     submitError.value = "";
     try {
-      // CreateJobRequest forbids extra fields: only set_id/character_id, name,
-      // trigger_word, template, config_overrides are accepted. The base model is
-      // the template's, read by the server.
-      // `steps` (and the advanced fields) go inside config_overrides, never at
-      // the top level, or the API rejects the body with a 422.
+      // CreateJobRequest forbids extra fields. The base model is the
+      // recipe's, read by the server, and the advanced fields go in `pins`.
       const body = {
         ...scopePayload.value,
         name: `${scopeName.value || "LoRA"} (${triggerWord.value})`.trim(),
         trigger_word: triggerWord.value.trim(),
+        effort: effort.value,
+        fit: fit.value,
       };
-      if (selectedTemplate.value) body.template = selectedTemplate.value;
+      if (selectedPreset.value) body.preset = selectedPreset.value;
+      if (subject.value) body.subject = subject.value;
 
-      const overrides = buildConfigOverrides();
-      if (overrides && Object.keys(overrides).length)
-        body.config_overrides = overrides;
+      const pins = buildPins();
+      if (Object.keys(pins).length) body.pins = pins;
 
       return await createTrainingJob(body);
     } catch (err) {
+      // A run that fits nowhere answers { message, budget, need_mb, free_mb }.
+      const detail = err?.response?.data?.detail;
       submitError.value =
-        err?.response?.data?.detail ||
+        detail?.message ||
+        (typeof detail === "string" ? detail : "") ||
         err?.message ||
         "Failed to queue training job.";
       throw err;
@@ -179,63 +182,31 @@ export const useTrainingStore = defineStore("training", () => {
   }
 
   /**
-   * Build the config_overrides patch from advanced fields + raw JSON. Raw JSON
-   * (when valid) takes precedence and is merged last so a power user can
-   * override anything. Throws a friendly error if the raw JSON is malformed.
+   * The owner's Advanced values as pins, keyed by the server's tunable names.
+   * Only filled-in fields are sent; the rest come from the recipe.
    */
-  function buildConfigOverrides() {
-    // A field is only emitted when the user actually provided it, so untouched
-    // advanced fields fall through to the template's golden defaults. `steps` is
-    // a primary field, sent whenever it holds a number. A cleared field is
-    // skipped, not sent as 0 (Number("") is 0), so the template default applies.
-    const overrides = {};
-    const process = {};
-    const network = {};
+  function buildPins() {
+    const pins = {};
+    if (isFilledNumber(steps.value)) pins["train.steps"] = Number(steps.value);
     if (isFilledNumber(networkRank.value))
-      network.linear = Number(networkRank.value);
+      pins["network.linear"] = Number(networkRank.value);
     if (isFilledNumber(networkAlpha.value))
-      network.linear_alpha = Number(networkAlpha.value);
-    if (Object.keys(network).length) process.network = network;
-
-    const train = {};
+      pins["network.linear_alpha"] = Number(networkAlpha.value);
+    // A typed value that is not a number is sent as typed, so the server
+    // refuses it with its own message instead of the field being dropped.
     const lr = String(learningRate.value ?? "").trim();
-    // The API tunables take a number. A typed value that is not one is sent as
-    // typed, so the server refuses it with its own message.
-    if (lr) train.lr = Number.isFinite(Number(lr)) ? Number(lr) : lr;
+    if (lr) pins["train.lr"] = Number.isFinite(Number(lr)) ? Number(lr) : lr;
     if (isFilledNumber(batchSize.value))
-      train.batch_size = Number(batchSize.value);
-    if (isFilledNumber(steps.value)) train.steps = Number(steps.value);
-    if (Object.keys(train).length) process.train = train;
-
-    const save = {};
+      pins["train.batch_size"] = Number(batchSize.value);
     if (isFilledNumber(saveEvery.value))
-      save.save_every = Number(saveEvery.value);
-    if (Object.keys(save).length) process.save = save;
-
+      pins["save.save_every"] = Number(saveEvery.value);
     const prompts = samplePrompts.value
       .split("\n")
       .map((p) => p.trim())
       .filter(Boolean);
-    // ai-toolkit expects sample.samples as a list of { prompt } objects (the
-    // {{TRIGGER_WORD}} placeholder is substituted server-side). When the user
-    // leaves this blank we send nothing and the template's default prompts run.
-    if (prompts.length)
-      process.sample = { samples: prompts.map((prompt) => ({ prompt })) };
-
-    if (Object.keys(process).length)
-      overrides.config = { process: [process] };
-
-    const raw = rawConfig.value.trim();
-    if (raw) {
-      let parsed;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        throw new Error("Raw config is not valid JSON.");
-      }
-      return deepMerge(overrides, parsed);
-    }
-    return overrides;
+    // {{TRIGGER_WORD}} in a prompt is filled in by the server.
+    if (prompts.length) pins["sample.samples[*].prompt"] = prompts;
+    return pins;
   }
 
   // ── Registry / jobs actions ───────────────────────────────────────────────────
@@ -339,7 +310,7 @@ export const useTrainingStore = defineStore("training", () => {
   function resetForSession() {
     jobs.value = [];
     jobsError.value = "";
-    templates.value = [];
+    presets.value = [];
     aiToolkitRepoPath.value = "";
     aiToolkitPython.value = "";
     configLoaded.value = false;
@@ -363,10 +334,13 @@ export const useTrainingStore = defineStore("training", () => {
     setScope,
     openForScope,
     // panel config
-    templates,
-    templatesLoading,
-    selectedTemplate,
+    presets,
+    presetsLoading,
+    selectedPreset,
     triggerWord,
+    subject,
+    effort,
+    fit,
     steps,
     networkRank,
     networkAlpha,
@@ -374,12 +348,11 @@ export const useTrainingStore = defineStore("training", () => {
     batchSize,
     saveEvery,
     samplePrompts,
-    rawConfig,
     submitting,
     submitError,
-    fetchTemplates,
+    fetchPresets,
     startTraining,
-    buildConfigOverrides,
+    buildPins,
     // jobs
     jobs,
     jobsLoading,
@@ -414,23 +387,4 @@ export const useTrainingStore = defineStore("training", () => {
 function isFilledNumber(value) {
   if (value === null || value === undefined || value === "") return false;
   return Number.isFinite(Number(value));
-}
-
-/** Recursive deep-merge of plain objects (arrays/scalars in `b` replace `a`). */
-function deepMerge(a, b) {
-  if (
-    typeof a !== "object" ||
-    a === null ||
-    Array.isArray(a) ||
-    typeof b !== "object" ||
-    b === null ||
-    Array.isArray(b)
-  ) {
-    return b;
-  }
-  const out = { ...a };
-  for (const key of Object.keys(b)) {
-    out[key] = key in a ? deepMerge(a[key], b[key]) : b[key];
-  }
-  return out;
 }

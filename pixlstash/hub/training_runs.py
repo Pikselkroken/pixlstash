@@ -57,6 +57,9 @@ def create_run(
     character_id: Optional[int],
     base_model: Optional[str],
     trigger_word: Optional[str],
+    preset: Optional[str] = None,
+    resolved_profile: Optional[str] = None,
+    advanced_pins: Optional[str] = None,
 ) -> int:
     """Insert a queued run and return its id.
 
@@ -69,6 +72,9 @@ def create_run(
         character_id: Character trained on (a vault id), or None.
         base_model: Base checkpoint the LoRA trains against.
         trigger_word: Caption trigger word.
+        preset: The recipe as ``id@version``.
+        resolved_profile: The resolver's result, as JSON.
+        advanced_pins: The owner's Advanced values, as JSON.
 
     Returns:
         The new ``training_run.id``.
@@ -76,8 +82,9 @@ def create_run(
     with hub.transaction() as conn:
         cursor = conn.execute(
             "INSERT INTO training_run (uuid, library_uuid, name, status, set_id, "
-            "character_id, base_model, trigger_word, created_at) "
-            "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
+            "character_id, base_model, trigger_word, preset, resolved_profile, "
+            "advanced_pins, created_at) "
+            "VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 uuid,
                 library_uuid,
@@ -86,6 +93,9 @@ def create_run(
                 character_id,
                 base_model,
                 trigger_word,
+                preset,
+                resolved_profile,
+                advanced_pins,
                 now_iso(),
             ),
         )

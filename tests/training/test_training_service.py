@@ -41,6 +41,8 @@ _FAST_TEMPLATE_PATH = os.path.join(_THIS_DIR, "fast_template.json")
 # ids, so none of them need to exist for the service to train.
 _LIBRARY_UUID = "library-under-test"
 _SET_ID = 11
+# What the route records from the resolver; the service reads its needs.
+_RESOLUTION = {"preset": "zimage-turbo@1", "vram_mb": 12000, "ram_mb": 16000}
 _CHARACTER_ID = 22
 
 
@@ -90,9 +92,12 @@ class _StubLease:
         self.release_count = 0
         self.progress_calls: list[dict] = []
 
-    def request(self, label: str, job_uuid: str) -> "_StubLease":
+    def request(
+        self, label: str, job_uuid: str, vram_mb: int, ram_mb: int
+    ) -> "_StubLease":
         self.acquire_count += 1
         self.events.append("acquire")
+        self.need = (vram_mb, ram_mb)
         return self
 
     def wait(self, cancel_event=None, timeout=None) -> bool:
@@ -270,6 +275,33 @@ def _fast_step_delay(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_a_run_without_a_memory_profile_errors_instead_of_training(hub, repo_dir):
+    """A row queued before recipes existed has no profile to lease against."""
+    lease, notify = _StubLease(), _CapturingNotify()
+    service = _make_service(
+        hub,
+        repo_dir,
+        lease=lease,
+        notify=notify,
+        dataset_builder=_make_dataset_builder(),
+    )
+    template = _write_template(repo_dir, steps=4, save_every=2)
+    service.start()
+    try:
+        job = service.enqueue(
+            set_id=_SET_ID,
+            name="legacy",
+            base_model="m",
+            trigger_word="t",
+            template_path=template,
+        )
+        assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "error")
+    finally:
+        service.stop()
+    assert "queue it again" in _job_status(hub, job["uuid"]).error
+    assert lease.acquire_count == 0
+
+
 def test_enqueue_validates_exactly_one_scope(hub, repo_dir):
     lease, notify = _StubLease(), _CapturingNotify()
     service = _make_service(
@@ -293,6 +325,7 @@ def test_enqueue_validates_exactly_one_scope(hub, repo_dir):
             base_model="m",
             trigger_word="t",
             template_path=template,
+            resolution=_RESOLUTION,
         )
 
     set_id = _SET_ID
@@ -302,6 +335,7 @@ def test_enqueue_validates_exactly_one_scope(hub, repo_dir):
         base_model="m",
         trigger_word="t",
         template_path=template,
+        resolution=_RESOLUTION,
     )
     assert job["status"] == "queued"
     assert job["uuid"]
@@ -359,6 +393,7 @@ def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
             base_model="Z-Image",
             trigger_word="ohwx_person",
             template_path=template,
+            resolution=_RESOLUTION,
         )
 
         # It progresses to running with a real step.
@@ -375,6 +410,10 @@ def test_full_lifecycle_queued_to_completed_lora(hub, repo_dir):
 
     final = _job_status(hub, job["uuid"])
     assert final.status == "completed"
+    # The lease asked for the resolved profile's memory, and the row keeps it.
+    assert lease.need == (12000, 16000)
+    assert final.preset == "zimage-turbo@1"
+    assert json.loads(final.resolved_profile) == _RESOLUTION
     assert final.step == 8
     assert final.total_steps == 8
     assert final.started_at is not None
@@ -441,6 +480,7 @@ def test_cancel_midrun_ends_stopped_and_releases_lease(hub, repo_dir, monkeypatc
             base_model="m",
             trigger_word="t",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         # Wait until it is genuinely running with a recorded pid.
         assert _poll_until(
@@ -491,6 +531,7 @@ def test_shutdown_mid_run_leaves_the_live_job_running(hub, repo_dir, monkeypatch
             base_model="m",
             trigger_word="t",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         assert _poll_until(
             lambda: (
@@ -541,6 +582,7 @@ def test_zero_image_dataset_marks_error_no_lease_leak(hub, repo_dir):
             base_model="m",
             trigger_word="t",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "error"), (
             f"status={_job_status(hub, job['uuid']).status!r}"
@@ -586,6 +628,7 @@ def test_lease_cancelled_while_waiting_stops_the_job_unlaunched(hub, repo_dir):
             base_model="m",
             trigger_word="t",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         assert _poll_until(lambda: _job_status(hub, job["uuid"]).status == "stopped"), (
             f"status={_job_status(hub, job['uuid']).status!r}"
@@ -660,6 +703,7 @@ def test_shutdown_while_queued_keeps_the_spec_for_the_next_start(hub, repo_dir):
             base_model="m",
             trigger_word="t",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         assert _poll_until(lambda: lease.acquire_count == 1), "lease never requested"
     finally:
@@ -698,6 +742,7 @@ def test_cancel_queued_job_drops_the_lease_it_waits_on(hub, repo_dir):
             base_model="m",
             trigger_word="t",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         assert _poll_until(lambda: service._waiting is not None)
         assert service.cancel(_job_status(hub, job["uuid"]).id)
@@ -742,6 +787,7 @@ def test_completed_run_is_handed_to_the_importer_and_the_job_completes(hub, repo
         base_model="m",
         trigger_word="t",
         template_path=template,
+        resolution=_RESOLUTION,
     )
 
     _run_to_terminal(hub, service, job, expect="completed")
@@ -781,6 +827,7 @@ def test_an_importer_failure_marks_the_completed_job_error(hub, repo_dir):
         base_model="m",
         trigger_word="t",
         template_path=template,
+        resolution=_RESOLUTION,
     )
 
     _run_to_terminal(hub, service, job, expect="error")
@@ -1014,6 +1061,7 @@ def test_first_job_registers_the_checkouts_output_as_the_shelf_source_folder(
             base_model="Z-Image",
             trigger_word="ohwx_person",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         _run_to_terminal(hub, service, job, expect="completed")
     finally:
@@ -1063,6 +1111,7 @@ def test_a_later_job_uses_the_registered_source_folder_and_does_not_register_aga
             base_model="Z-Image",
             trigger_word="ohwx_style",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         _run_to_terminal(hub, service, job, expect="completed")
     finally:
@@ -1103,6 +1152,7 @@ def test_a_job_with_no_shelf_folder_and_no_registrar_fails_without_training(
             base_model="Z-Image",
             trigger_word="ohwx_style",
             template_path=template,
+            resolution=_RESOLUTION,
         )
         _run_to_terminal(hub, service, job, expect="error")
     finally:
