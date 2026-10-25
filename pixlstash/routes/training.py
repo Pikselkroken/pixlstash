@@ -876,7 +876,8 @@ def create_router(server) -> APIRouter:
             "PixlStash wrote for it. The run folder in the model shelf's "
             "ai-toolkit folder is left where it is, and so is anything else "
             "there: the run is listed by the shelf and its LoRA is a shelf "
-            "model with its own copy. Returns 404 if the job is unknown. "
+            "model with its own copy. Returns 404 if the job is unknown, and "
+            "409 while it is queued, running or stopping: cancel it first. "
             "Owner-only."
         ),
     )
@@ -889,6 +890,13 @@ def create_router(server) -> APIRouter:
         job = training_runs.get_run(hub, library_uuid, job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Training job not found")
+        # Deleting the work dir under a live trainer would orphan the process,
+        # which keeps writing into the removed paths. Cancel it first.
+        if job["status"] not in ("completed", "stopped", "error"):
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Job is still {job['status']}; cancel it before deleting."),
+            )
         job_uuid = training_runs.delete_run(hub, library_uuid, job_id)
         if job_uuid is None:
             raise HTTPException(status_code=404, detail="Training job not found")

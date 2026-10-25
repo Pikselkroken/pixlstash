@@ -20,6 +20,7 @@ import os
 import sys
 import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash.hub import training_runs
@@ -565,6 +566,23 @@ def test_delete_job_missing_is_404():
     try:
         r = owner.delete("/training/jobs/999999")
         assert r.status_code == 404, r.text
+    finally:
+        _teardown(temp_dir, server)
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "stopping"])
+def test_delete_job_refuses_a_live_job(status):
+    """A job whose trainer may still run is never deleted; its work dir stays."""
+    temp_dir, owner, server, read_token = _setup()
+    try:
+        job_id, job_uuid = _seed_job(server, status=status)
+        work_dir = os.path.join(server.vault.image_root, "training", job_uuid)
+        os.makedirs(work_dir, exist_ok=True)
+
+        r = owner.delete(f"/training/jobs/{job_id}")
+        assert r.status_code == 409, r.text
+        assert owner.get(f"/training/jobs/{job_id}").status_code == 200
+        assert os.path.isdir(work_dir)
     finally:
         _teardown(temp_dir, server)
 
