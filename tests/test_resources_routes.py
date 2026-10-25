@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pixlstash import gpu_select
+from pixlstash.routes import config as config_routes
 from pixlstash.resources.arbiter import LeaseKind, Tenant, arbiter
 from pixlstash.server import Server
 from tests.authz_guard import assert_real_route
@@ -122,6 +123,24 @@ def test_a_lease_label_reaches_only_the_owner(env, tokens):
             assert "Secret workflow" not in body
     finally:
         lease.release()
+
+
+def test_a_model_download_reaches_only_the_owner(env, tokens, monkeypatch):
+    """A download names a folder on this machine and its source host."""
+    monkeypatch.setattr(
+        config_routes,
+        "live_downloads",
+        lambda: [
+            {"id": "dl-1", "folder_path": "/home/me/models", "host": "example.com"}
+        ],
+    )
+    owner_view = env.owner.get(f"{API}/workers/progress").json()["downloads"]
+    assert [d["id"] for d in owner_view] == ["dl-1"]
+    for name, headers in tokens.headers.items():
+        r = tokens.anon.get(f"{API}/workers/progress", headers=headers)
+        assert r.status_code == 200, (name, r.text)
+        assert r.json()["downloads"] == [], name
+        assert "/home/me/models" not in r.text, name
 
 
 @pytest.mark.parametrize(
