@@ -1048,3 +1048,20 @@ def test_a_comfyui_on_a_card_a_gb_off_in_size_is_not_on_this_card(monkeypatch):
     probe.watch("http://comfy.invalid")
     probe._get = lambda path: _comfy_stats(TOTAL - 1100, TOTAL)
     assert probe.device() is None
+
+
+def test_an_identical_card_elsewhere_is_told_apart_by_a_fresh_second_read(
+    monkeypatch,
+):
+    """Same name, size and free memory on the first read; only the second
+    read, taken fresh, shows the other machine's card moving."""
+    from pixlstash.resources import comfyui_tenant
+    from pixlstash.resources.comfyui_tenant import ComfyUIProbe
+
+    reads = iter([_comfy_stats(TOTAL, TOTAL), _comfy_stats(TOTAL, TOTAL)])
+    monkeypatch.setattr(comfyui_tenant, "ledger", lambda: FakeLedger())
+    monkeypatch.setattr(comfyui_tenant.time, "sleep", lambda s: None)
+    probe = ComfyUIProbe("test-client")
+    probe.watch("http://comfy.invalid")
+    probe._get = lambda path: next(reads, _comfy_stats(TOTAL, TOTAL - 3000))
+    assert probe.device() is None

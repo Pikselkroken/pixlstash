@@ -54,12 +54,11 @@ platforms keep ``os._exit``.
 
 from __future__ import annotations
 
-import ctypes
+import ctypes.wintypes
 import os
 import sys
 import traceback
 from collections.abc import Mapping
-from ctypes import wintypes
 from typing import Any, NoReturn
 
 # "1" forces the fast exit on any platform, "0" forces full interpreter
@@ -182,9 +181,9 @@ def _terminate_this_process(status: int) -> None:
     ``os._exit`` is the path this module took before.
     """
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-    kernel32.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
-    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.restype = ctypes.wintypes.HANDLE
+    kernel32.TerminateProcess.argtypes = (ctypes.wintypes.HANDLE, ctypes.wintypes.UINT)
+    kernel32.TerminateProcess.restype = ctypes.wintypes.BOOL
     kernel32.TerminateProcess(kernel32.GetCurrentProcess(), status)
     print(
         f"TerminateProcess failed (Windows error {ctypes.get_last_error()}); "
