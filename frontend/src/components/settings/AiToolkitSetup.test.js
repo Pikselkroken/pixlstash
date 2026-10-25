@@ -50,6 +50,12 @@ const NOT_FOUND = {
   searched: ["/home/me/ai-toolkit", "/home/me/Projects/ai-toolkit"],
 };
 const ONE_GPU = [{ name: "RTX 4090", total_mb: 24576 }];
+const DATASETS = { path: "/home/me/ai-toolkit/datasets", writable: true };
+const RUNS = {
+  path: "/home/me/ai-toolkit/output",
+  run_count: 3,
+  on_shelf: true,
+};
 const CHECK_OK = {
   ok: true,
   version: "0.13.34",
@@ -58,18 +64,17 @@ const CHECK_OK = {
   gpus: ONE_GPU,
   trial_ok: true,
   detail: "",
+  python: PY,
+  datasets: DATASETS,
+  runs: RUNS,
 };
 const STATUS = {
   configured: true,
   repo_path: REPO,
   python: PY,
   version: "0.13.34",
-  datasets: { path: "/home/me/ai-toolkit/datasets", writable: true },
-  runs: {
-    path: "/home/me/ai-toolkit/output",
-    run_count: 3,
-    on_shelf: true,
-  },
+  datasets: DATASETS,
+  runs: RUNS,
 };
 const SENTENCE_ONE_GPU =
   "Its venv has torch 2.13 with CUDA and sees one GPU with 24 GB. A trial start loaded the trainer and exited without training.";
@@ -221,6 +226,78 @@ describe("when a checkout is found", () => {
   });
 });
 
+describe("the folders, before Connect", () => {
+  it("shows the Folders from the check before anything is saved", async () => {
+    const w = await mountSetup();
+
+    expect(byTestId(w, "ait-folders").exists()).toBe(true);
+    expect(byTestId(w, "ait-datasets-writable").text()).toBe("writable");
+    expect(byTestId(w, "ait-runs-count").text()).toBe("3 runs");
+    expect(config.patchUserConfig).not.toHaveBeenCalled();
+    expect(connectButton(w).exists()).toBe(true);
+  });
+
+  it("says the runs will join the shelf when the folder is not on it yet", async () => {
+    training.checkAiToolkit.mockResolvedValue({
+      ...CHECK_OK,
+      runs: { ...RUNS, on_shelf: false },
+    });
+    const w = await mountSetup();
+
+    expect(byTestId(w, "ait-shelf-line").text()).toBe(
+      "Runs land in your model shelf's ai-toolkit folder. PixlStash adds this folder to the shelf when the first run starts.",
+    );
+  });
+});
+
+describe("the python Connect saves", () => {
+  it("is the one the check resolved, not the one discovery gave", async () => {
+    training.discoverAiToolkit.mockResolvedValue({
+      ...FOUND,
+      python: "/usr/bin/python3",
+    });
+    const w = await mountSetup();
+    await connectButton(w).trigger("click");
+    await flushPromises();
+
+    expect(config.patchUserConfig).toHaveBeenCalledWith(CONNECTED);
+  });
+
+  it("lets a hand-picked folder connect once the check resolves its python", async () => {
+    training.discoverAiToolkit.mockResolvedValue(NOT_FOUND);
+    const w = await mountSetup();
+    training.checkAiToolkit.mockResolvedValue({
+      ...CHECK_OK,
+      python: "/srv/ai-toolkit/.venv/bin/python",
+    });
+    w.findComponent(FolderBrowser).vm.$emit("select", "/srv/ai-toolkit");
+    await flushPromises();
+
+    expect(training.checkAiToolkit).toHaveBeenLastCalledWith({
+      repo_path: "/srv/ai-toolkit",
+      python: null,
+    });
+    expect(connectButton(w).attributes("disabled")).toBeUndefined();
+    await connectButton(w).trigger("click");
+    await flushPromises();
+    expect(config.patchUserConfig).toHaveBeenCalledWith({
+      ai_toolkit_repo_path: "/srv/ai-toolkit",
+      ai_toolkit_python: "/srv/ai-toolkit/.venv/bin/python",
+    });
+  });
+
+  it("is not offered when the check resolves no python", async () => {
+    training.discoverAiToolkit.mockResolvedValue(NOT_FOUND);
+    training.checkAiToolkit.mockResolvedValue({ ...CHECK_OK, python: null });
+    const w = await mountSetup();
+    w.findComponent(FolderBrowser).vm.$emit("select", "/srv/ai-toolkit");
+    await flushPromises();
+
+    expect(byTestId(w, "ait-no-python").exists()).toBe(true);
+    expect(connectButton(w).attributes("disabled")).toBeDefined();
+  });
+});
+
 describe("connecting", () => {
   it("saves both paths in one PATCH and shows the Ready card", async () => {
     const w = await mountSetup();
@@ -273,7 +350,7 @@ describe("when connected", () => {
     expect(w.text()).toContain("CUDA");
     expect(byTestId(w, "ait-datasets-writable").text()).toBe("writable");
     expect(byTestId(w, "ait-runs-count").text()).toBe("3 runs");
-    expect(w.text()).toContain(
+    expect(byTestId(w, "ait-shelf-line").text()).toBe(
       "Runs land in your model shelf's ai-toolkit folder.",
     );
   });

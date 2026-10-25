@@ -71,8 +71,15 @@ const checkPassed = computed(() => {
   return !!c?.ok && c.trial_ok !== false;
 });
 
-const canConnect = computed(
-  () => checkPassed.value && !!candidate.value?.python,
+// The python Connect saves is the one the check resolved, so a hand-picked
+// folder (python not given) connects once the check says where its python is.
+const checkedPython = computed(() => store.aiToolkitCheck?.python || null);
+const canConnect = computed(() => checkPassed.value && !!checkedPython.value);
+const showNoPython = computed(
+  () =>
+    (phase.value === "found" || phase.value === "not-found") &&
+    checkPassed.value &&
+    !checkedPython.value,
 );
 
 const gpuSentence = computed(() => {
@@ -99,6 +106,27 @@ const checkSentence = computed(() => {
 
 const discovery = computed(() => store.aiToolkitDiscovery);
 const status = computed(() => store.aiToolkitStatus);
+
+// The folders: from the check before Connect, from the saved install's status
+// after it (the check's own folders while the status is still loading).
+const folders = computed(() =>
+  phase.value === "connected"
+    ? status.value || store.aiToolkitCheck
+    : store.aiToolkitCheck,
+);
+const showFolders = computed(
+  () =>
+    !!folders.value &&
+    !!(folders.value.datasets || folders.value.runs) &&
+    (phase.value === "found" ||
+      phase.value === "connected" ||
+      (phase.value === "not-found" && checkPassed.value)),
+);
+const shelfLine = computed(() =>
+  folders.value?.runs?.on_shelf === false
+    ? "Runs land in your model shelf's ai-toolkit folder. PixlStash adds this folder to the shelf when the first run starts."
+    : "Runs land in your model shelf's ai-toolkit folder.",
+);
 
 // ── Flow ─────────────────────────────────────────────────────────────────────
 
@@ -198,7 +226,7 @@ async function connect() {
   try {
     await store.saveAiToolkitPaths(
       candidate.value.repo_path,
-      candidate.value.python,
+      checkedPython.value,
     );
   } catch (e) {
     connectError.value = errorMessage(e, "Could not save AI-toolkit.");
@@ -267,7 +295,7 @@ watch(
         </p>
       </div>
 
-      <!-- Found, or Checking: the two steps before Connect. -->
+      <!-- Found: the two steps before Connect. -->
       <template v-if="phase === 'found'">
         <span class="ait-pip">
           <v-icon size="16">mdi-circle-outline</v-icon>
@@ -327,7 +355,7 @@ watch(
         </div>
       </template>
 
-      <!-- Connected: the Ready to train card. -->
+      <!-- Connected: the Ready to train card's header and install facts. -->
       <template v-if="phase === 'connected'">
         <div class="ait-row">
           <span v-if="checkPassed" class="ait-pip ait-pip--ok">
@@ -357,79 +385,53 @@ watch(
               CUDA
             </span>
           </dd>
-          <template v-if="status?.datasets">
+        </dl>
+      </template>
+
+      <!-- Folders: from the check before Connect, from the status after it. -->
+      <div v-if="showFolders" class="ait-stack" data-testid="ait-folders">
+        <p class="ait-title">Folders</p>
+        <dl class="ait-facts">
+          <template v-if="folders.datasets">
             <dt>Datasets</dt>
             <dd>
-              <span class="ait-mono">{{ status.datasets.path }}</span>
+              <span class="ait-mono">{{ folders.datasets.path }}</span>
               <span
-                :class="status.datasets.writable ? 'ait-pip ait-pip--ok' : 'ait-pip ait-pip--bad'"
+                :class="folders.datasets.writable ? 'ait-pip ait-pip--ok' : 'ait-pip ait-pip--bad'"
                 data-testid="ait-datasets-writable"
               >
-                {{ status.datasets.writable ? "writable" : "not writable" }}
+                {{ folders.datasets.writable ? "writable" : "not writable" }}
               </span>
             </dd>
           </template>
-          <template v-if="status?.runs">
+          <template v-if="folders.runs">
             <dt>Runs</dt>
             <dd>
-              <span class="ait-mono">{{ status.runs.path }}</span>
+              <span class="ait-mono">{{ folders.runs.path }}</span>
               <span class="ait-pip ait-pip--ok" data-testid="ait-runs-count">
-                {{ status.runs.run_count }} runs
+                {{ folders.runs.run_count }} runs
               </span>
             </dd>
           </template>
         </dl>
-        <p v-if="status?.runs" class="ait-small ait-muted">
-          Runs land in your model shelf's ai-toolkit folder.
+        <p v-if="folders.runs" class="ait-small ait-muted" data-testid="ait-shelf-line">
+          {{ shelfLine }}
         </p>
-        <p v-if="checkError" class="ait-error" role="alert">
-          <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
-          <span>{{ checkError }}</span>
-        </p>
-        <p v-if="statusError" class="ait-error" role="alert">
-          <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
-          <span>{{ statusError }}</span>
-        </p>
-        <div class="ait-row">
-          <AppButton
-            ref="checkAgainButton"
-            variant="secondary"
-            :loading="busy || checking"
-            data-testid="ait-check-again"
-            @click="checkAgain"
-          >
-            Check again
-          </AppButton>
-          <span class="ait-spacer" />
-          <AppButton
-            variant="ghost"
-            :disabled="busy || checking"
-            data-testid="ait-disconnect"
-            @click="disconnect"
-          >
-            Disconnect
-          </AppButton>
-        </div>
-      </template>
+      </div>
 
-      <!-- Found or not found: the failure, when there is one, and the actions. -->
-      <p
-        v-if="phase !== 'connected' && checkError"
-        class="ait-error"
-        role="alert"
-        data-testid="ait-check-error"
-      >
+      <p v-if="checkError" class="ait-error" role="alert" data-testid="ait-check-error">
         <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
         <span>{{ checkError }}</span>
+      </p>
+      <p v-if="statusError" class="ait-error" role="alert">
+        <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
+        <span>{{ statusError }}</span>
       </p>
       <p v-if="connectError" class="ait-error" role="alert" data-testid="ait-connect-error">
         <v-icon size="16" class="ait-error__icon">mdi-alert-rhombus-outline</v-icon>
         <span>{{ connectError }}</span>
       </p>
-      <p
-        v-if="(phase === 'found' || phase === 'not-found') && checkPassed && !candidate?.python"
-        class="ait-small ait-muted"
-      >
+      <p v-if="showNoPython" class="ait-small ait-muted" data-testid="ait-no-python">
         PixlStash could not find a Python for this folder, so it cannot connect it.
       </p>
 
@@ -472,6 +474,27 @@ watch(
           @click="detect"
         >
           Search again
+        </AppButton>
+      </div>
+
+      <div v-if="phase === 'connected'" class="ait-row">
+        <AppButton
+          ref="checkAgainButton"
+          variant="secondary"
+          :loading="busy || checking"
+          data-testid="ait-check-again"
+          @click="checkAgain"
+        >
+          Check again
+        </AppButton>
+        <span class="ait-spacer" />
+        <AppButton
+          variant="ghost"
+          :disabled="busy || checking"
+          data-testid="ait-disconnect"
+          @click="disconnect"
+        >
+          Disconnect
         </AppButton>
       </div>
 
